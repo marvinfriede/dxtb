@@ -1,0 +1,411 @@
+[
+ {
+  "workload": "W1",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 510
+  },
+  "total_seconds": 41.955,
+  "stages_seconds": {
+   "setup": 0.231,
+   "energy": 16.509,
+   "forces (backward)": 25.199
+  },
+  "dxtb_timer_seconds": {
+   "total": 41.9553,
+   "Calculator": 0.2312,
+   "Classicals": 0.1286,
+   "Integrals": 0.9879,
+   "SCF": 15.383
+  },
+  "peak_rss_mb": 8274.3,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 15:58"
+ },
+ {
+  "workload": "W4",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 33
+  },
+  "total_seconds": 60.494,
+  "stages_seconds": {
+   "hessian (autograd)": 58.319
+  },
+  "dxtb_timer_seconds": {
+   "total": 60.4938,
+   "Calculator": 0.1781,
+   "Classicals": 0.0229,
+   "Integrals": 0.057,
+   "SCF": 0.1777,
+   "Forces": 0.1476
+  },
+  "peak_rss_mb": 9286.9,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 16:31"
+ },
+ {
+  "workload": "W5",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 10
+  },
+  "total_seconds": 9.601,
+  "stages_seconds": {
+   "hyperpolarizability (autograd)": 8.829
+  },
+  "dxtb_timer_seconds": {
+   "total": 9.6017,
+   "Calculator": 0.1811,
+   "Classicals": 0.0241,
+   "Integrals": 0.0553,
+   "SCF": 0.1194
+  },
+  "peak_rss_mb": 1314.4,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 16:31"
+ },
+ {
+  "workload": "W2",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nconformers": 8,
+   "natoms": 69,
+   "max_diff_batch_vs_loop": 1.4210854715202004e-14
+  },
+  "total_seconds": 94.6,
+  "stages_seconds": {
+   "batch_mode=2 (energy+forces)": 42.734,
+   "loop (energy+forces)": 51.861
+  },
+  "dxtb_timer_seconds": {
+   "total": 94.6005,
+   "Calculator": 1.7507,
+   "Classicals": 0.5449,
+   "Integrals": 2.0196,
+   "SCF": 44.9738
+  },
+  "peak_rss_mb": 7329.1,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 17:15"
+ },
+ {
+  "workload": "W3",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nsystems": 12,
+   "max_atoms": 16,
+   "parameter_leaves": 2261,
+   "leaves_with_gradient": 159
+  },
+  "total_seconds": 6.673,
+  "stages_seconds": {
+   "setup": 0.049,
+   "energy+forces (create_graph)": 2.199,
+   "loss backward (parameters)": 4.149
+  },
+  "dxtb_timer_seconds": {
+   "total": 6.6737,
+   "Calculator": 0.0487,
+   "Classicals": 0.0364,
+   "Integrals": 0.779,
+   "SCF": 0.3668
+  },
+  "peak_rss_mb": 1161.5,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 17:15"
+ },
+ {
+  "workload": "W5",
+  "method": "gfn2",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 10
+  },
+  "total_seconds": 18.728,
+  "stages_seconds": {
+   "hyperpolarizability (autograd)": 17.286
+  },
+  "dxtb_timer_seconds": {
+   "total": 18.7282,
+   "Calculator": 0.1961,
+   "Classicals": 0.0176,
+   "Integrals": 0.0682,
+   "SCF": 0.2182
+  },
+  "peak_rss_mb": 1794.3,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 17:46"
+ },
+ {
+  "workload": "W3",
+  "method": "gfn2",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nsystems": 12,
+   "max_atoms": 16,
+   "parameter_leaves": 1402,
+   "leaves_with_gradient": 215
+  },
+  "total_seconds": 26.656,
+  "stages_seconds": {
+   "setup": 0.08,
+   "energy+forces (create_graph)": 10.167,
+   "loss backward (parameters)": 15.775
+  },
+  "dxtb_timer_seconds": {
+   "total": 26.6566,
+   "Calculator": 0.0799,
+   "Classicals": 0.0342,
+   "Integrals": 3.1231,
+   "SCF": 1.4415
+  },
+  "peak_rss_mb": 2692.3,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 17:49"
+ },
+ {
+  "workload": "W1",
+  "method": "gfn1",
+  "driver": "libcint",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 510
+  },
+  "total_seconds": 25.689,
+  "stages_seconds": {
+   "setup": 0.54,
+   "energy": 12.591,
+   "forces (backward)": 12.538
+  },
+  "dxtb_timer_seconds": {
+   "total": 25.6892,
+   "Calculator": 0.5401,
+   "Classicals": 0.1191,
+   "Integrals": 0.2366,
+   "SCF": 12.2247
+  },
+  "peak_rss_mb": 7266.1,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 17:49"
+ },
+ {
+  "workload": "W1",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 510
+  },
+  "total_seconds": 66.06,
+  "stages_seconds": {
+   "setup": 0.219,
+   "energy": 52.591,
+   "forces (backward)": 13.23
+  },
+  "dxtb_timer_seconds": {
+   "total": 66.0603,
+   "Calculator": 0.2192,
+   "Classicals": 0.1139,
+   "Integrals": 0.7483,
+   "SCF": 16.0248
+  },
+  "peak_rss_mb": 9098.2,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [
+   [
+    "aten::_linalg_eigh",
+    6.464
+   ],
+   [
+    "aten::mm",
+    3.192
+   ],
+   [
+    "aten::copy_",
+    1.0
+   ],
+   [
+    "aten::mul",
+    0.883
+   ],
+   [
+    "aten::linalg_lu_solve",
+    0.803
+   ],
+   [
+    "aten::bmm",
+    0.657
+   ],
+   [
+    "aten::add",
+    0.558
+   ],
+   [
+    "aten::fill_",
+    0.469
+   ],
+   [
+    "aten::linalg_lu_factor_ex",
+    0.402
+   ],
+   [
+    "aten::tril",
+    0.376
+   ],
+   [
+    "aten::sub",
+    0.303
+   ],
+   [
+    "aten::abs",
+    0.241
+   ],
+   [
+    "aten::linalg_cholesky_ex",
+    0.162
+   ],
+   [
+    "aten::index",
+    0.145
+   ],
+   [
+    "aten::all",
+    0.111
+   ],
+   [
+    "aten::select",
+    0.111
+   ],
+   [
+    "aten::exp",
+    0.067
+   ],
+   [
+    "aten::as_strided",
+    0.056
+   ],
+   [
+    "aten::clone",
+    0.053
+   ],
+   [
+    "aten::eq",
+    0.052
+   ],
+   [
+    "aten::empty",
+    0.051
+   ],
+   [
+    "aten::cat",
+    0.046
+   ],
+   [
+    "aten::where",
+    0.039
+   ],
+   [
+    "aten::empty_like",
+    0.039
+   ],
+   [
+    "aten::sum",
+    0.034
+   ]
+  ],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.7.0"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-04 18:09"
+ }
+]

@@ -72,6 +72,19 @@ component caches and the integral driver now also check the gradient
 tracking state of the positions.
 
 
+Batched calculations hang with several CPU threads
+--------------------------------------------------
+
+On CPU, batched SCF calculations (``batch_mode`` 1 or 2) with more than one
+PyTorch thread can stall in the eigensolver: batched LU factorizations
+(``torch.linalg.solve``) of matrices of a few hundred orbitals did not finish
+with four threads in the baseline environment (PyTorch 2.14 wheel, MKL
+2024.2), while they take a fraction of a second with one thread.
+
+**Workaround:** ``torch.set_num_threads(1)`` for batched calculations on CPU,
+or loop over the systems.
+
+
 Repeated derivatives on the same tensor raise an error
 ------------------------------------------------------
 
