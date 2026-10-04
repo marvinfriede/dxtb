@@ -76,6 +76,7 @@ from dxtb._src.typing import (
     override,
 )
 from dxtb._src.typing.exceptions import DeviceError
+from dxtb._src.utils.tensors import grad_key
 
 from ..base import Interaction, InteractionCache
 from .born import get_born_radii
@@ -291,7 +292,7 @@ class GeneralizedBorn(Interaction):
 
         cachvars = (numbers.detach().clone(), positions.detach().clone())
 
-        if self.cache_is_latest(cachvars) is True:
+        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
             if not isinstance(self.cache, GeneralizedBornCache):
                 raise TypeError(
                     f"Cache in {self.label} is not of type '{self.label}."
@@ -302,6 +303,7 @@ class GeneralizedBorn(Interaction):
 
         # if the cache is built, store the positions for validation
         self._cachevars = cachvars
+        self._cachegrad = grad_key(positions)
 
         born = get_born_radii(numbers, positions, **self.born_kwargs)
         eps = torch.tensor(torch.finfo(positions.dtype).eps, **self.dd)

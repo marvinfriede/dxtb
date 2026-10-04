@@ -23,12 +23,15 @@ Collection of utility functions for matrices/tensors.
 
 from __future__ import annotations
 
+import weakref
+from typing import Optional, Tuple
+
 import torch
 from tad_mctc.autograd.checks import is_batched, is_gradtracking
 
 from dxtb._src.typing import Tensor
 
-__all__ = ["t2int", "tensor_id"]
+__all__ = ["t2int", "tensor_id", "GradKey", "grad_key", "grad_key_matches"]
 
 
 def t2int(x: Tensor) -> int:
@@ -72,3 +75,66 @@ def tensor_id(x: Tensor) -> str:
             return f"batched_tensor(id={id(x)},v={v},grad={grad},dtype={dtype})"
 
     return f"tensor(ptr={x.data_ptr()},v={v},grad={grad},dtype={dtype})"
+
+
+GradKey = Tuple[Tuple[bool, Optional["weakref.ReferenceType[Tensor]"]], ...]
+"""Gradient-tracking state of the tensors a cache was built from."""
+
+
+def grad_key(*tensors: Tensor) -> GradKey:
+    """
+    Record the gradient-tracking state of the tensors a cache is built from.
+
+    Caches that are validated by comparing tensor *values* return results
+    whose autograd graph belongs to the tensors of the call that built the
+    cache. Such a result is only valid for a later call if that call's
+    tensors have the same ``requires_grad`` flag and, if they require
+    gradients, are the very same tensor objects.
+
+    Stopgap for the stale-graph bug (T0.5 in ``docs/plan``); removed with the
+    caches.
+
+    Parameters
+    ----------
+    *tensors : Tensor
+        Tensors the cache depends on.
+
+    Returns
+    -------
+    GradKey
+        Per tensor, the ``requires_grad`` flag and, if set, a weak reference
+        to the tensor.
+    """
+    return tuple(
+        (t.requires_grad, weakref.ref(t) if t.requires_grad else None)
+        for t in tensors
+    )
+
+
+def grad_key_matches(key: GradKey | None, *tensors: Tensor) -> bool:
+    """
+    Check whether a cache built for ``key`` may be reused for ``tensors``.
+
+    Parameters
+    ----------
+    key : GradKey | None
+        Key recorded with :func:`grad_key` when the cache was built.
+    *tensors : Tensor
+        Tensors of the current call (same order as for :func:`grad_key`).
+
+    Returns
+    -------
+    bool
+        ``False`` if no key was recorded, if a ``requires_grad`` flag differs,
+        or if a tensor that requires gradients is not the recorded object.
+    """
+    if key is None or len(key) != len(tensors):
+        return False
+
+    for (flag, ref), t in zip(key, tensors):
+        if flag != t.requires_grad:
+            return False
+        if ref is not None and ref() is not t:
+            return False
+
+    return True

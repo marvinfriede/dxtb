@@ -40,6 +40,7 @@ from dxtb._src.typing import (
     get_default_dtype,
     override,
 )
+from dxtb._src.utils.tensors import grad_key
 
 from ..base import Interaction, InteractionCache
 
@@ -305,7 +306,7 @@ class AES2(Interaction):
 
         cachvars = (numbers.detach().clone(), positions.detach().clone())
 
-        if self.cache_is_latest(cachvars) is True:
+        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
             if not isinstance(self.cache, AES2Cache):
                 raise TypeError(
                     f"Cache in {self.label} is not of type '{self.label}."
@@ -316,6 +317,7 @@ class AES2(Interaction):
 
         # if the cache is built, store the cachvar for validation
         self._cachevars = cachvars
+        self._cachegrad = grad_key(positions)
 
         dkernel = ihelp.spread_uspecies_to_atom(self.dkernel).unsqueeze(-1)
         qkernel = ihelp.spread_uspecies_to_atom(self.qkernel).unsqueeze(-1)

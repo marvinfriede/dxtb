@@ -25,6 +25,7 @@ pythonpath = ["src"]
 markers = [
   "grad: Marks tests which perform 'gradcheck' evaluations, this can be slow.",
   "large: Marks tests for large molecules, this can be slow.",
+  "cache: Exercises the calculator, component or integral driver caches.",
 ]
 
 

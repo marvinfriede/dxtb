@@ -31,6 +31,7 @@ import torch
 from dxtb import IndexHelper, labels
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import TYPE_CHECKING, Any, Tensor, TensorLike
+from dxtb._src.utils.tensors import grad_key
 
 if TYPE_CHECKING:
     from ..base import IntDriver
@@ -148,14 +149,19 @@ class DriverManager(TensorLike):
         """
         logger.debug("Integral Driver: Start setup.")
 
+        # gradient-tracking state is taken from the caller's tensor, not from
+        # the CPU copy for libcint, which is a new tensor on every call
+        grad_source = positions
+
         if self.force_cpu_for_libcint is True:
             positions = positions.to(device=torch.device("cpu"))
 
-        if self.driver.is_latest(positions) is True:
+        if self.driver.is_latest(positions, grad_source=grad_source) is True:
             logger.debug("Integral Driver: Skip setup. Already done.")
             return
 
         self.driver.setup(positions, **kwargs)
+        self.driver._grad_key = grad_key(grad_source)
         logger.debug("Integral Driver: Finished setup.")
 
     def invalidate_driver(self) -> None:

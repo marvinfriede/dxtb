@@ -27,6 +27,7 @@ import torch
 
 from dxtb._src.typing import Any, Tensor, TensorLike
 from dxtb._src.utils.misc import get_all_slots
+from dxtb._src.utils.tensors import GradKey, grad_key_matches
 
 __all__ = ["Component", "ComponentCache"]
 
@@ -64,10 +65,23 @@ class Component(TensorLike):
     If this variable changes, the cache has to be rebuild.
     """
 
+    _cachegrad: GradKey | None
+    """
+    Gradient-tracking state of the tensors the cache was built from (see
+    :func:`~dxtb._src.utils.tensors.grad_key`). Only set by caches that hold
+    an autograd graph of the positions or fields.
+    """
+
     _cache_enabled: bool
     """Flag to enable or disable the cache."""
 
-    __slots__ = ["label", "_cache", "_cachevars", "_cache_enabled"]
+    __slots__ = [
+        "label",
+        "_cache",
+        "_cachevars",
+        "_cachegrad",
+        "_cache_enabled",
+    ]
 
     def __init__(
         self,
@@ -81,6 +95,7 @@ class Component(TensorLike):
         self.label = self.__class__.__name__
         self._cache = _cache
         self._cachevars = _cachevars
+        self._cachegrad = None
         self._cache_enabled = True
 
     ############################################################################
@@ -184,15 +199,24 @@ class Component(TensorLike):
     ############################################################################
 
     def cache_is_latest(
-        self, cvars: tuple[Tensor, ...], tol: float | None = None
+        self,
+        cvars: tuple[Tensor, ...],
+        tol: float | None = None,
+        grad: tuple[Tensor, ...] = (),
     ) -> bool:
         """
-        Check if the driver is set up and updated.
+        Check if the cache is set up and updated.
 
         Parameters
         ----------
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
+        cvars : tuple[Tensor, ...]
+            Detached copies of the tensors the cache depends on.
+        tol : float | None, optional
+            Tolerance for the comparison of floating point values.
+        grad : tuple[Tensor, ...], optional
+            The original tensors whose autograd graph the cache holds (e.g.,
+            the positions). The cache is only valid if they have the
+            gradient-tracking state recorded in :attr:`_cachegrad`.
 
         Returns
         -------
@@ -206,6 +230,11 @@ class Component(TensorLike):
             return False
 
         if self._cachevars is None:
+            return False
+
+        # Equal values are not enough for a cache that holds an autograd
+        # graph (stale-graph stopgap, T0.5).
+        if len(grad) > 0 and not grad_key_matches(self._cachegrad, *grad):
             return False
 
         for v1, v2 in zip(cvars, self._cachevars):
@@ -237,6 +266,7 @@ class Component(TensorLike):
         """Invalidate the cache to require renewed setup."""
         self._cache = None
         self._cachevars = None
+        self._cachegrad = None
 
     @property
     def cache_is_setup(self) -> bool:

@@ -81,6 +81,7 @@ from dxtb._src.typing import (
     get_default_dtype,
     override,
 )
+from dxtb._src.utils.tensors import grad_key
 
 from ..base import Interaction, InteractionCache
 from .average import AveragingFunction, averaging_function, harmonic_average
@@ -252,7 +253,7 @@ class ES2(Interaction):
 
         cachvars = (numbers.detach().clone(), positions.detach().clone())
 
-        if self.cache_is_latest(cachvars) is True:
+        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
             if not isinstance(self.cache, ES2Cache):
                 raise TypeError(
                     f"Cache in {self.label} is not of type '{self.label}."
@@ -263,6 +264,7 @@ class ES2(Interaction):
 
         # if the cache is built, store the cachvar for validation
         self._cachevars = cachvars
+        self._cachegrad = grad_key(positions)
 
         self.cache = ES2Cache(
             (

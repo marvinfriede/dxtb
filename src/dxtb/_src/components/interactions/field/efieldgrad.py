@@ -29,6 +29,7 @@ from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Slicers, Tensor, override
+from dxtb._src.utils.tensors import grad_key
 
 from ..base import Interaction, InteractionCache
 
@@ -192,7 +193,10 @@ class ElectricFieldGrad(Interaction):
             self.field_grad.detach().clone(),
         )
 
-        if self.cache_is_latest(cachvars) is True:
+        if (
+            self.cache_is_latest(cachvars, grad=(positions, self.field_grad))
+            is True
+        ):
             if not isinstance(self.cache, ElectricFieldGradCache):
                 raise TypeError(
                     f"Cache in {self.label} is not of type '{self.label}."
@@ -202,6 +206,7 @@ class ElectricFieldGrad(Interaction):
             return self.cache
 
         self._cachevars = cachvars
+        self._cachegrad = grad_key(positions, self.field_grad)
 
         grad = self.field_grad
 

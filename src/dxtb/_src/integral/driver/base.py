@@ -31,6 +31,7 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Literal, Tensor, TensorLike
+from dxtb._src.utils.tensors import GradKey, grad_key_matches
 
 __all__ = ["IntDriver"]
 
@@ -60,6 +61,7 @@ class IntDriver(TensorLike):
         "family",
         "_basis",
         "_positions",
+        "_grad_key",
         "__label",
     ]
 
@@ -83,6 +85,7 @@ class IntDriver(TensorLike):
 
         self._basis = None
         self._positions = None
+        self._grad_key: GradKey | None = None
         self.__label = self.__class__.__name__
 
     @property
@@ -113,7 +116,13 @@ class IntDriver(TensorLike):
     def basis(self, bas: Basis) -> None:
         self._basis = bas
 
-    def is_latest(self, positions: Tensor, tol: float | None = None) -> bool:
+    def is_latest(
+        self,
+        positions: Tensor,
+        tol: float | None = None,
+        *,
+        grad_source: Tensor | None = None,
+    ) -> bool:
         """
         Check if the driver is set up and updated.
 
@@ -121,6 +130,12 @@ class IntDriver(TensorLike):
         ----------
         positions : Tensor
             Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
+        tol : float | None, optional
+            Tolerance for the comparison of the positions.
+        grad_source : Tensor | None, optional
+            Tensor whose gradient-tracking state is compared with the one
+            recorded at setup (see :attr:`_grad_key`). Defaults to
+            ``positions``.
 
         Returns
         -------
@@ -128,6 +143,12 @@ class IntDriver(TensorLike):
             Flag for set up status.
         """
         if self._positions is None:
+            return False
+
+        # The setup holds the autograd graph of the positions it was built
+        # with; equal values are not enough (stale-graph stopgap, T0.5).
+        src = positions if grad_source is None else grad_source
+        if not grad_key_matches(self._grad_key, src):
             return False
 
         try:
@@ -166,6 +187,7 @@ class IntDriver(TensorLike):
         Invalidate the integral driver to require new setup.
         """
         self._positions = None
+        self._grad_key = None
 
     def is_setup(self) -> bool:
         """Check if the driver is set up."""

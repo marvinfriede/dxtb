@@ -44,6 +44,7 @@ from tad_mctc.typing import (
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Slicers
+from dxtb._src.utils.tensors import grad_key
 
 from ..base import Interaction, InteractionCache
 
@@ -254,7 +255,7 @@ class DispersionD4SC(Interaction):
 
         cachvars = (numbers.detach().clone(), positions.detach().clone())
 
-        if self.cache_is_latest(cachvars) is True:
+        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
             if not isinstance(self.cache, DispersionD4SCCache):
                 raise TypeError(
                     f"Cache in {self.label} is not of type '{self.label}."
@@ -265,6 +266,7 @@ class DispersionD4SC(Interaction):
 
         # if the cache is built, store the cachevar for validation
         self._cachevars = cachvars
+        self._cachegrad = grad_key(positions)
 
         en = PAULING(**self.dd)[numbers]
         endiff = torch.abs(en.unsqueeze(-2) - en.unsqueeze(-1))
