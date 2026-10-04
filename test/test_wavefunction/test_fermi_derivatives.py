@@ -47,23 +47,6 @@ from ..conftest import DEVICE
 dd: DD = {"device": DEVICE, "dtype": torch.double}
 
 
-def _preload_jvp_decompositions() -> None:
-    """
-    Forward-mode transforms load their decompositions lazily, which needs
-    TorchScript. The tests disable it (see ``conftest.py``), so load them now.
-    """
-    state = torch.jit._state  # type: ignore
-    was_enabled = state._enabled.enabled
-    state.enable()
-    try:
-        from torch._decomp import decompositions_for_jvp  # noqa: F401
-    finally:
-        if not was_enabled:
-            state.disable()
-
-
-_preload_jvp_decompositions()
-
 TEMPERATURES = [300.0, 25000.0]
 STEPS = [0, 1, 2]
 

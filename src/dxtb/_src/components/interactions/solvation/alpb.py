@@ -91,7 +91,6 @@ DEFAULT_BORN_OFFSET = 0.0
 __all__ = ["GeneralizedBorn", "new_solvation"]
 
 
-# @torch.jit.script
 def p16_kernel(r1: Tensor, ab: Tensor) -> Tensor:
     """
     Evaluate P16 interaction kernel: 1 / (R + √ab / (1 + ζR/(16·√ab))¹⁶)
@@ -115,7 +114,6 @@ def p16_kernel(r1: Tensor, ab: Tensor) -> Tensor:
     return 1.0 / (r1 + ab * arg)
 
 
-# @torch.jit.script
 def still_kernel(r1: Tensor, ab: Tensor) -> Tensor:
     """
     Evaluate Still interaction kernel: 1 / √(R² + ab · exp[R²/(4·ab)])

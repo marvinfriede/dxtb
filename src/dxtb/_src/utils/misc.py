@@ -22,13 +22,10 @@ Utility: Miscellaneous
 Collection of miscellaneous utility functions containing:
 
 - Type guards
-- JIT enabler
 - Memoization decorators
 """
 
 from __future__ import annotations
-
-import torch
 
 from dxtb._src.typing import TYPE_CHECKING, Any, TypeGuard
 
@@ -44,7 +41,6 @@ __all__ = [
     "is_int_list",
     "is_float_list",
     "is_basis_list",
-    "set_jit_enabled",
 ]
 
 
@@ -120,18 +116,3 @@ def is_basis_list(x: Any) -> TypeGuard[list[libcint.AtomCGTOBasis]]:
     from dxtb._src.exlibs import libcint
 
     return all(isinstance(i, libcint.AtomCGTOBasis) for i in x)
-
-
-def set_jit_enabled(enabled: bool) -> None:
-    """
-    Enables/disables JIT.
-
-    Parameters
-    ----------
-    enabled : bool
-        State to set JIT to.
-    """
-    if enabled:
-        torch.jit._state.enable()  # type: ignore
-    else:
-        torch.jit._state.disable()  # type: ignore

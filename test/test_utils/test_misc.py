@@ -34,7 +34,6 @@ from dxtb._src.utils import (
     is_integer,
     is_numeric,
     is_str_list,
-    set_jit_enabled,
 )
 
 
@@ -119,21 +118,6 @@ def test_is_basis_list() -> None:
     assert is_basis_list([]) is True
     assert is_basis_list("basis") is False
     assert is_basis_list(None) is False
-
-
-def test_jit_settings() -> None:
-    """Test the JIT settings."""
-    # save current state
-    state = torch.jit._state._enabled.enabled  # type: ignore
-
-    set_jit_enabled(True)
-    assert torch.jit._state._enabled.enabled  # type: ignore
-
-    set_jit_enabled(False)
-    assert not torch.jit._state._enabled.enabled  # type: ignore
-
-    # restore initial state
-    set_jit_enabled(state)
 
 
 def test_exceptions() -> None:

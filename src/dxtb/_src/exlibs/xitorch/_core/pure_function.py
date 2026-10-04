@@ -215,7 +215,7 @@ def get_pure_function(fcn) -> PureFunction:
     if isinstance(fcn, PureFunction):
         return fcn
 
-    elif inspect.isfunction(fcn) or isinstance(fcn, torch.jit.ScriptFunction):
+    elif inspect.isfunction(fcn):
         return FunctionPureFunction(fcn)
 
     # if it is a method from an object, unroll the parameters and add
