@@ -20,6 +20,8 @@ Setup for pytest.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -192,6 +194,75 @@ def pytest_runtest_setup(item: pytest.Function) -> None:
             pytest.skip(
                 "Torch not compiled with CUDA or no CUDA device available."
             )
+
+
+# Test-suite inventory (T0.10 in docs/plan/01-T0-baseline.md): layer markers
+# by location, so that the work packages that rewrite a layer can select the
+# affected tests (``pytest -m cache``). The most specific prefix wins; the
+# keyword rules below are added on top.
+LAYER_MARKERS: dict[str, tuple[str, ...]] = {
+    "test_a_memory_leak": ("api_calculator", "cache"),
+    "test_baseline": ("baseline",),
+    "test_basis": ("integrals",),
+    "test_calculator": ("api_calculator",),
+    "test_calculator/test_cache": ("api_calculator", "cache"),
+    "test_classical": ("physics_values",),
+    "test_cli": ("api_calculator",),
+    "test_components": ("cache",),
+    "test_config": ("api_calculator",),
+    "test_coulomb": ("physics_values",),
+    "test_external": ("efield",),
+    "test_hamiltonian": ("integrals", "physics_values"),
+    "test_indexhelper/test_culling.py": ("batch_mode",),
+    "test_integrals": ("integrals",),
+    "test_interaction": ("physics_values",),
+    "test_interaction/test_cache.py": ("cache",),
+    "test_io": ("api_calculator",),
+    "test_libcint": ("integrals",),
+    "test_loader": ("param",),
+    "test_overlap": ("integrals", "physics_values"),
+    "test_param": ("param",),
+    "test_properties": ("api_calculator", "physics_values"),
+    "test_scf": ("scf",),
+    "test_singlepoint": ("api_calculator", "physics_values"),
+    "test_solvation": ("physics_values",),
+    "test_wavefunction": ("scf",),
+}
+
+KEYWORD_MARKERS: dict[str, str] = {
+    "batch": "batch_mode",
+    "field": "efield",
+    "cache": "cache",
+    "param": "param",
+}
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Add the layer markers of the test-suite inventory."""
+    root = Path(__file__).parent
+    for item in items:
+        try:
+            rel = Path(str(item.fspath)).resolve().relative_to(root).as_posix()
+        except ValueError:  # pragma: no cover
+            continue
+
+        best = ""
+        for prefix in LAYER_MARKERS:
+            if (rel == prefix or rel.startswith(prefix + "/")) and len(
+                prefix
+            ) > len(best):
+                best = prefix
+
+        names = set(LAYER_MARKERS.get(best, ()))
+        nodeid = item.nodeid.lower()
+        for keyword, marker in KEYWORD_MARKERS.items():
+            if keyword in nodeid:
+                names.add(marker)
+
+        for name in sorted(names):
+            item.add_marker(getattr(pytest.mark, name))
 
 
 @pytest.fixture(autouse=True)

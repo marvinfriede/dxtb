@@ -26,6 +26,7 @@ markers = [
   "grad: Marks tests which perform 'gradcheck' evaluations, this can be slow.",
   "large: Marks tests for large molecules, this can be slow.",
   "slow: Slow baseline cells (third order, larger molecules); run nightly.",
+  "baseline: Track 0 baseline tests (test/test_baseline); recorded with the versions of constraints/baseline.txt.",
   # Layer markers of the test-suite inventory (T0.10 in docs/plan)
   "api_calculator: Asserts behaviour of the Calculator API.",
   "cache: Exercises the calculator, component or integral driver caches.",

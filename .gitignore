@@ -246,4 +246,6 @@ src/wandb/*
 # gfn reparametrisations
 src/parametrisations/*
 
-/benchmarks
+/benchmarks/*
+# Track 0 performance baseline (docs/plan/01-T0-baseline.md, T0.8)
+!/benchmarks/baseline/
