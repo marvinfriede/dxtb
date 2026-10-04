@@ -223,15 +223,7 @@ def test_func_hessian(algorithm: str) -> None:
     ref = torch.autograd.functional.hessian(scalar, positions)
     assert torch.allclose(jacrev(jacrev(scalar))(positions), ref, atol=1e-10)
 
-    # the test suite disables the TorchScript JIT, but torch scripts its
-    # forward-mode decompositions on first use
-    jit_was_enabled = torch.jit._state._enabled.enabled  # type: ignore
-    torch.jit._state.enable()  # type: ignore
-    try:
-        fwd_rev = jacfwd(jacrev(scalar))(positions)
-    finally:
-        if not jit_was_enabled:
-            torch.jit._state.disable()  # type: ignore
+    fwd_rev = jacfwd(jacrev(scalar))(positions)
     assert torch.allclose(fwd_rev, ref, atol=1e-10)
 
 

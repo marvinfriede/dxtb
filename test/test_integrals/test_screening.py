@@ -309,16 +309,8 @@ def test_jacrev_pairs() -> None:
         torch.func.jacrev(scalar(g))(positions),
     )
 
-    # the test suite disables the TorchScript JIT, but torch scripts its
-    # forward-mode decompositions on first use
-    jit_was_enabled = torch.jit._state._enabled.enabled  # type: ignore
-    torch.jit._state.enable()  # type: ignore
-    try:
-        fwd = torch.func.jacfwd(scalar(f))(positions)
-        hess = torch.func.jacfwd(torch.func.jacrev(scalar(f)))(positions)
-    finally:
-        if not jit_was_enabled:
-            torch.jit._state.disable()  # type: ignore
+    fwd = torch.func.jacfwd(scalar(f))(positions)
+    hess = torch.func.jacfwd(torch.func.jacrev(scalar(f)))(positions)
 
     assert torch.allclose(
         fwd, torch.func.jacrev(scalar(g))(positions), atol=1e-9, rtol=1e-12

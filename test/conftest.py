@@ -64,12 +64,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
     parser.addoption(
-        "--jit",
-        action="store_true",
-        help="Enable JIT during tests (default = False).",
-    )
-
-    parser.addoption(
         "--fast",
         action="store_true",
         help="Use `fast_mode` for gradient checks (default = True).",
@@ -131,13 +125,6 @@ def pytest_configure(config: pytest.Config) -> None:
 
     if config.getoption("--detect-anomaly"):
         torch.autograd.anomaly_mode.set_detect_anomaly(True)
-
-    if config.getoption("--jit"):
-        # pylint: disable-next=protected-access
-        torch.jit._state.enable()  # type: ignore
-    else:
-        # pylint: disable-next=protected-access
-        torch.jit._state.disable()  # type: ignore
 
     if config.getoption("--fast"):
         FAST_MODE = True
