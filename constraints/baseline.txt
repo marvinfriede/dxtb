@@ -1,0 +1,60 @@
+# This file is part of dxtb.
+#
+# SPDX-Identifier: Apache-2.0
+# Copyright (C) 2024 Grimme Group
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Constraints for the Track 0 baseline (T0.1 in docs/plan/01-T0-baseline.md).
+#
+# The versions the reference data, the derivative status matrix and the
+# baseline report were produced with. Install with
+#
+#   pip install torch==2.14.0 -c constraints/baseline.txt
+#   pip install -e ".[tox,libcint,pyscf]" -c constraints/baseline.txt
+#
+# Python 3.11. The baseline was recorded on CPU with the PyPI wheel of torch
+# 2.14.0 (build 2.14.0+cu130, CUDA 13.0, cuDNN 9.24; no GPU present). CI
+# installs the CPU wheel (2.14.0+cpu) of the same release; both satisfy the
+# pin below.
+
+# coordinated tad-* releases (pinned exactly in setup.cfg)
+tad-dftd3==0.6.0
+tad-dftd4==0.8.0
+tad-mctc==0.7.0
+tad-multicharge==0.5.0
+tad-libcint==0.3.0
+
+# numerics
+torch==2.14.0
+numpy==1.26.4
+scipy==1.17.1
+opt-einsum==3.4.0
+pyscf==2.14.0
+h5py==3.16.0
+
+# runtime
+pydantic==2.13.5
+pydantic-core==2.46.5
+tomli==2.4.1
+tomli-w==1.2.0
+typing-extensions==4.16.0
+
+# test
+covdefaults==2.3.0
+coverage==7.16.2
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-random-order==1.2.0
+pytest-xdist==3.8.0
+pyyaml==6.0.3
