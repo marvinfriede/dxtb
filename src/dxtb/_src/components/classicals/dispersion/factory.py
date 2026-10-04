@@ -109,6 +109,8 @@ def new_dispersion(
             "s9": par.get("dispersion.d4.s9"),
             "s10": par.get("dispersion.d4.s10"),
         }
+        if "alp" in par.get("dispersion.d4"):
+            param["alp"] = par.get("dispersion.d4.alp")
 
         # None values are not set in `DiffParam`
         sc_is_set = "sc" in par.get("dispersion.d4")
