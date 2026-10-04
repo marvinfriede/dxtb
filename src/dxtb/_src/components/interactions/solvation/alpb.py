@@ -76,7 +76,7 @@ from dxtb._src.typing import (
     override,
 )
 from dxtb._src.typing.exceptions import DeviceError
-from dxtb._src.utils.tensors import grad_key
+from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 from .born import get_born_radii
@@ -388,7 +388,7 @@ def new_solvation(
         return None
 
     if device is not None:
-        if device != numbers.device:
+        if normalize_device(device) != numbers.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of electric field "
                 f"({numbers.device}) do not match."

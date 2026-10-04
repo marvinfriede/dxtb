@@ -31,7 +31,14 @@ from tad_mctc.autograd.checks import is_batched, is_gradtracking
 
 from dxtb._src.typing import Tensor
 
-__all__ = ["t2int", "tensor_id", "GradKey", "grad_key", "grad_key_matches"]
+__all__ = [
+    "t2int",
+    "tensor_id",
+    "GradKey",
+    "grad_key",
+    "grad_key_matches",
+    "normalize_device",
+]
 
 
 def t2int(x: Tensor) -> int:
@@ -138,3 +145,34 @@ def grad_key_matches(key: GradKey | None, *tensors: Tensor) -> bool:
             return False
 
     return True
+
+
+def normalize_device(
+    device: torch.device | str | int | None,
+) -> torch.device | None:
+    """
+    Convert a device specification to the :class:`torch.device` that tensors
+    created on it report.
+
+    Strings (``"cpu"``) and CUDA devices without index (``"cuda"``) do not
+    compare equal to ``tensor.device`` (``torch.device("cpu")``,
+    ``torch.device("cuda:0")``), which made device checks fail.
+
+    Parameters
+    ----------
+    device : torch.device | str | int | None
+        Device specification. ``None`` is returned unchanged.
+
+    Returns
+    -------
+    torch.device | None
+        Normalized device.
+    """
+    if device is None:
+        return None
+
+    dev = torch.device(device)
+    if dev.type == "cuda" and dev.index is None:
+        index = torch.cuda.current_device() if torch.cuda.is_available() else 0
+        dev = torch.device("cuda", index)
+    return dev

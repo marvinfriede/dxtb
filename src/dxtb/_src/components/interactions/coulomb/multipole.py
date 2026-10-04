@@ -40,7 +40,7 @@ from dxtb._src.typing import (
     get_default_dtype,
     override,
 )
-from dxtb._src.utils.tensors import grad_key
+from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 
@@ -676,7 +676,7 @@ def new_aes2(
         return None
 
     if device is not None:
-        if device != unique.device:
+        if normalize_device(device) != unique.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of `unique` tensor "
                 f"({unique.device}) do not match."

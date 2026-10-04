@@ -58,6 +58,7 @@ from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
+from dxtb._src.utils.tensors import normalize_device
 from dxtb.config import Config
 from dxtb.integrals import Integrals
 
@@ -533,7 +534,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.numbers = numbers
         unique: Tensor = torch.unique(numbers)
 
-        super().__init__(device, dtype)
+        # "cpu" or "cuda" would not compare equal to `tensor.device`
+        super().__init__(normalize_device(device), dtype)
         dd = {"device": self.device, "dtype": self.dtype}
 
         # Internally, we will always use the differentiable parameter model.

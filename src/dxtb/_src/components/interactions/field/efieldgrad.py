@@ -29,7 +29,7 @@ from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Slicers, Tensor, override
-from dxtb._src.utils.tensors import grad_key
+from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 
@@ -321,7 +321,7 @@ def new_efield_grad(
         raise RuntimeError("Electric field gradient must be a 3 by 3 matrix.")
 
     if device is not None:
-        if device != field_grad.device:
+        if normalize_device(device) != field_grad.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of electric field "
                 f"gradient ({field_grad.device}) do not match."

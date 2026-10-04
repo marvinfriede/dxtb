@@ -29,7 +29,7 @@ from tad_mctc.math import einsum
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Slicers, Tensor, TensorOrTensors, override
 from dxtb._src.typing.exceptions import DeviceError, DtypeError
-from dxtb._src.utils.tensors import grad_key
+from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 
@@ -353,7 +353,7 @@ def new_efield(
         raise RuntimeError("Electric field must be a vector of length 3.")
 
     if device is not None:
-        if device != field.device:
+        if normalize_device(device) != field.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of electric field "
                 f"({field.device}) do not match."

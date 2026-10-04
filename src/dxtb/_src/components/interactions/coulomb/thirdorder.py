@@ -81,6 +81,7 @@ from dxtb._src.typing import (
     get_default_dtype,
     override,
 )
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
@@ -392,7 +393,7 @@ def new_es3(
         return None
 
     if device is not None:
-        if device != unique.device:
+        if normalize_device(device) != unique.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of `unique` tensor "
                 f"({unique.device}) do not match."

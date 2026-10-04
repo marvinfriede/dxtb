@@ -26,9 +26,40 @@ backward pass contains :math:`1/(\epsilon_i - \epsilon_j)`. The broadening
 that keeps it finite for degenerate pairs does not give the correct limit at
 higher orders.
 
+Forward-mode differentiation (``torch.func.jacfwd``, ``jvp``) through the
+SCF gives ``NaN`` for such systems (e.g., the dipole moment of a linear
+molecule like OH-).
+
+A related limitation: the broadening also biases derivatives when the
+HOMO-LUMO gap is very small (about 1.5% at a gap of 1e-3 Hartree).
+
 **Workaround:** use finite differences of first derivatives (e.g.,
 ``Calculator.hessian_numerical``), or break the symmetry slightly (a
 displacement of 0.01 bohr already gives correct derivatives).
+
+
+Second derivatives with the implicit SCF modes are wrong
+--------------------------------------------------------
+
+With ``scf_mode="implicit"`` or ``"nonpure"``, the SCF is differentiated with
+the implicit function theorem, which is only implemented for first
+derivatives. Second and higher derivatives (Hessian, polarizability, dipole
+derivatives, derivatives of forces with respect to parameters, ...) are
+silently wrong (e.g., the polarizability is missing entirely, Hessians are
+off by 10-40%). First derivatives are correct.
+
+**Workaround:** use the default ``scf_mode="full"`` for derivatives beyond
+first order.
+
+
+Padded batches with the implicit SCF modes (fixed)
+--------------------------------------------------
+
+Up to dxtb 0.4.0, the implicit SCF modes put electrons into the padding
+orbitals of a batch if a system had an occupied orbital close to zero
+energy (e.g., an anion), which gave wrong energies (OH- next to water:
+8e-6 Eh too low with GFN2-xTB). The default ``scf_mode="full"`` was not
+affected.
 
 
 Cached results after a call without gradient tracking (fixed)
@@ -108,15 +139,12 @@ device).
 (``Calculator(..., device=device)``).
 
 
-``"cuda"`` and ``"cuda:0"`` are different devices
--------------------------------------------------
+Device given as a string (fixed)
+--------------------------------
 
-Device checks compare ``torch.device`` objects, and
-``torch.device("cuda") != torch.device("cuda:0")``. A calculator created with
-``device="cuda"`` can therefore reject positions on ``cuda:0`` (which is what
-tensors on the default GPU report) with a ``DeviceError``.
-
-**Workaround:** always pass an explicit index (``device="cuda:0"``).
+Up to dxtb 0.4.0, ``Calculator(..., device="cpu")`` (a string instead of a
+``torch.device``) and ``device="cuda"`` (without index, while tensors report
+``cuda:0``) raised a ``DeviceError``. Devices are now normalized.
 
 
 Analytical repulsion: parameter gradients do not terminate

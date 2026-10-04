@@ -96,7 +96,15 @@ class ConfigSCF:
     """
 
     scf_mode: int
-    """SCF convergence approach (denoted by backward strategy)."""
+    """
+    SCF convergence approach (denoted by backward strategy).
+
+    .. warning::
+
+        The implicit modes (``"implicit"``, ``"nonpure"``) give correct first
+        derivatives only; second and higher derivatives are wrong. Use the
+        default (``"full"``) for those. See :ref:`help_known_issues`.
+    """
 
     scp_mode: int
     """SCF convergence target (self-consistent property)."""

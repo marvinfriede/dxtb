@@ -44,7 +44,7 @@ from tad_mctc.typing import (
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Slicers
-from dxtb._src.utils.tensors import grad_key
+from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 
@@ -409,7 +409,7 @@ def new_d4sc(
         return None
 
     if device is not None:
-        if device != numbers.device:
+        if normalize_device(device) != numbers.device:
             raise DeviceError(
                 f"Passed device ({device}) and device of `numbers` tensor "
                 f"({numbers.device}) do not match."

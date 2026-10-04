@@ -58,3 +58,14 @@ def test_several_tensors() -> None:
     assert grad_key_matches(key, x, y) is True
     assert grad_key_matches(key, x) is False
     assert grad_key_matches(key, x, y.requires_grad_(True)) is False
+
+
+def test_normalize_device() -> None:
+    # pylint: disable=import-outside-toplevel
+    from dxtb._src.utils.tensors import normalize_device
+
+    assert normalize_device(None) is None
+    assert normalize_device("cpu") == torch.device("cpu")
+    assert normalize_device(torch.device("cpu")) == torch.zeros(1).device
+    assert normalize_device("cuda:1") == torch.device("cuda", 1)
+    assert normalize_device("cuda").index is not None
