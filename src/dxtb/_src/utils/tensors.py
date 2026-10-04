@@ -166,12 +166,17 @@ def normalize_device(
     Returns
     -------
     torch.device | None
-        Normalized device.
+        Normalized device (an invalid specification is returned unchanged).
     """
     if device is None:
         return None
 
-    dev = torch.device(device)
+    try:
+        dev = torch.device(device)
+    except (RuntimeError, TypeError):
+        # invalid specification: leave it to the caller's device check
+        return device  # type: ignore[return-value]
+
     if dev.type == "cuda" and dev.index is None:
         index = torch.cuda.current_device() if torch.cuda.is_available() else 0
         dev = torch.device("cuda", index)
