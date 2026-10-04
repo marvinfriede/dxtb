@@ -38,6 +38,7 @@
     :maxdepth: 2
 
     Common Errors <04_help/errors>
+    Known Issues <04_help/known_issues>
 
 .. toctree::
     :hidden:

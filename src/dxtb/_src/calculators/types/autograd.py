@@ -129,6 +129,12 @@ class AutogradCalculator(EnergyCalculator):
         -------
         Tensor
             Atomic forces of shape ``(..., nat, 3)``.
+
+        Warning
+        -------
+        For batched input, the ``"autograd"`` and ``"backward"`` modes raise
+        an error (non-scalar energy). Differentiate ``energy.sum()`` instead.
+        See :ref:`help_known_issues`.
         """
         OutputHandler.write_stdout("\nForces", v=5)
         OutputHandler.write_stdout("------\n", v=5)

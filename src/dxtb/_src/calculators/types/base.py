@@ -418,6 +418,12 @@ class CalculatorCache(TensorLike):
 class BaseCalculator(GetPropertiesMixin, TensorLike):
     """
     Base calculator for the extended tight-binding (xTB) models.
+
+    .. warning::
+
+        ``Calculator.to(device)`` does not move all internal state (e.g., the
+        :class:`~dxtb.IndexHelper`). Create the calculator on the target
+        device instead (``device=...``). See :ref:`help_known_issues`.
     """
 
     numbers: Tensor
@@ -756,7 +762,16 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         timer.stop("Calculator")
 
     def reset(self) -> None:
-        """Reset the calculator to its initial state."""
+        """
+        Reset the calculator to its initial state.
+
+        .. warning::
+
+            The tensors of the components are replaced by detached copies,
+            which cuts gradients to tensors passed in by the user (e.g., an
+            electric field with ``requires_grad=True``). Pass them again
+            after the reset. See :ref:`help_known_issues`.
+        """
         self.classicals.reset_all()
         self.interactions.reset_all()
         self.integrals.reset_all()

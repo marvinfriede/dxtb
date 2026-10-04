@@ -92,7 +92,16 @@ class ConfigCache:
     """
 
     enabled: bool
-    """Enable or disable the cache."""
+    """
+    Enable or disable the cache.
+
+    .. warning::
+
+        With the cache enabled, numerical derivatives with respect to the
+        electric field return zero, and a view of a previously calculated
+        batch (e.g., ``positions[0]``) returns the cached batch result. See
+        :ref:`help_known_issues`.
+    """
 
     store: ConfigCacheStore
     """Container for which quantities to store."""
