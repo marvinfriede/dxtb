@@ -1,0 +1,902 @@
+{
+ "aes2.dipoles:forward": {
+  "status": "pass",
+  "seconds": 3.2111846899997545,
+  "message": "",
+  "peak_rss_mb": 702.4
+ },
+ "aes2.dipoles:jvp": {
+  "status": "pass",
+  "seconds": 2.741765096000563,
+  "message": "",
+  "peak_rss_mb": 703.6
+ },
+ "aes2.dipoles:order1": {
+  "status": "pass",
+  "seconds": 1.232157745999757,
+  "message": "",
+  "peak_rss_mb": 586.6
+ },
+ "aes2.dipoles:order2": {
+  "status": "pass",
+  "seconds": 1.359669466000014,
+  "message": "",
+  "peak_rss_mb": 586.7
+ },
+ "aes2.dipoles:order3": {
+  "status": "pass",
+  "seconds": 1.4970047169999816,
+  "message": "",
+  "peak_rss_mb": 586.9
+ },
+ "aes2.dipoles:vmap": {
+  "status": "error",
+  "seconds": 0.23388755999985733,
+  "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/components/interactions/base.py:352]",
+  "peak_rss_mb": 558.5
+ },
+ "coulomb_matrix_ag.hubbard:forward": {
+  "status": "error",
+  "seconds": 0.6533651179997833,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 575.3
+ },
+ "coulomb_matrix_ag.hubbard:jvp": {
+  "status": "error",
+  "seconds": 0.5626394319997416,
+  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 570.4
+ },
+ "coulomb_matrix_ag.hubbard:order1": {
+  "status": "pass",
+  "seconds": 0.937951627000075,
+  "message": "",
+  "peak_rss_mb": 588.5
+ },
+ "coulomb_matrix_ag.hubbard:order2": {
+  "status": "pass",
+  "seconds": 0.8719200379991889,
+  "message": "",
+  "peak_rss_mb": 587.5
+ },
+ "coulomb_matrix_ag.hubbard:order3": {
+  "status": "pass",
+  "seconds": 0.7967880639998839,
+  "message": "",
+  "peak_rss_mb": 587.8
+ },
+ "coulomb_matrix_ag.hubbard:vmap": {
+  "status": "error",
+  "seconds": 0.330440123999324,
+  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 552.2
+ },
+ "coulomb_matrix_ag.positions:forward": {
+  "status": "error",
+  "seconds": 0.42711766400043416,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 575.5
+ },
+ "coulomb_matrix_ag.positions:jvp": {
+  "status": "error",
+  "seconds": 0.5196754400003556,
+  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 570.4
+ },
+ "coulomb_matrix_ag.positions:order1": {
+  "status": "pass",
+  "seconds": 0.8128681110001708,
+  "message": "",
+  "peak_rss_mb": 586.2
+ },
+ "coulomb_matrix_ag.positions:order2": {
+  "status": "pass",
+  "seconds": 1.5107998829998905,
+  "message": "",
+  "peak_rss_mb": 588.4
+ },
+ "coulomb_matrix_ag.positions:order3": {
+  "status": "pass",
+  "seconds": 0.9251416250008333,
+  "message": "",
+  "peak_rss_mb": 588.6
+ },
+ "coulomb_matrix_ag.positions:vmap": {
+  "status": "error",
+  "seconds": 0.31661421499939024,
+  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
+  "peak_rss_mb": 552.2
+ },
+ "d4sc.charges:forward": {
+  "status": "pass",
+  "seconds": 3.228545099999792,
+  "message": "",
+  "peak_rss_mb": 705.2
+ },
+ "d4sc.charges:jvp": {
+  "status": "pass",
+  "seconds": 2.9826257820004685,
+  "message": "",
+  "peak_rss_mb": 705.1
+ },
+ "d4sc.charges:order1": {
+  "status": "pass",
+  "seconds": 0.745448977999331,
+  "message": "",
+  "peak_rss_mb": 589.4
+ },
+ "d4sc.charges:order2": {
+  "status": "pass",
+  "seconds": 0.9787488800002393,
+  "message": "",
+  "peak_rss_mb": 589.8
+ },
+ "d4sc.charges:order3": {
+  "status": "pass",
+  "seconds": 1.3919189230000484,
+  "message": "",
+  "peak_rss_mb": 590.0
+ },
+ "d4sc.charges:vmap": {
+  "status": "pass",
+  "seconds": 0.3210385459997269,
+  "message": "",
+  "peak_rss_mb": 558.0
+ },
+ "dipint_os.positions:forward": {
+  "status": "pass",
+  "seconds": 6.183214872999997,
+  "message": "",
+  "peak_rss_mb": 708.4
+ },
+ "dipint_os.positions:jvp": {
+  "status": "pass",
+  "seconds": 5.9268293700006325,
+  "message": "",
+  "peak_rss_mb": 708.6
+ },
+ "dipint_os.positions:order1": {
+  "status": "pass",
+  "seconds": 2.291333764999763,
+  "message": "",
+  "peak_rss_mb": 592.9
+ },
+ "dipint_os.positions:order2": {
+  "status": "pass",
+  "seconds": 5.400146624000627,
+  "message": "",
+  "peak_rss_mb": 595.8
+ },
+ "dipint_os.positions:order3": {
+  "status": "pass",
+  "seconds": 3.202398519999406,
+  "message": "",
+  "peak_rss_mb": 597.6
+ },
+ "dipint_os.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.5533361039997544,
+  "message": "",
+  "peak_rss_mb": 555.2
+ },
+ "dispersion_d3.positions:forward": {
+  "status": "error",
+  "seconds": 3.874644124000042,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "peak_rss_mb": 708.8
+ },
+ "dispersion_d3.positions:jvp": {
+  "status": "error",
+  "seconds": 3.4757500590003474,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "peak_rss_mb": 709.7
+ },
+ "dispersion_d3.positions:order1": {
+  "status": "pass",
+  "seconds": 1.1649521210001694,
+  "message": "",
+  "peak_rss_mb": 592.2
+ },
+ "dispersion_d3.positions:order2": {
+  "status": "pass",
+  "seconds": 1.2952989340001295,
+  "message": "",
+  "peak_rss_mb": 593.2
+ },
+ "dispersion_d3.positions:order3": {
+  "status": "pass",
+  "seconds": 2.0390302610003346,
+  "message": "",
+  "peak_rss_mb": 594.4
+ },
+ "dispersion_d3.positions:vmap": {
+  "status": "error",
+  "seconds": 0.4190685070007021,
+  "message": "ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "peak_rss_mb": 560.6
+ },
+ "dispersion_d4.positions:forward": {
+  "status": "pass",
+  "seconds": 5.748753288000444,
+  "message": "",
+  "peak_rss_mb": 707.5
+ },
+ "dispersion_d4.positions:jvp": {
+  "status": "pass",
+  "seconds": 4.969312209000236,
+  "message": "",
+  "peak_rss_mb": 708.3
+ },
+ "dispersion_d4.positions:order1": {
+  "status": "pass",
+  "seconds": 2.5961607279996315,
+  "message": "",
+  "peak_rss_mb": 591.7
+ },
+ "dispersion_d4.positions:order2": {
+  "status": "pass",
+  "seconds": 8.340309453999907,
+  "message": "",
+  "peak_rss_mb": 704.5
+ },
+ "dispersion_d4.positions:order3": {
+  "status": "pass",
+  "seconds": 8.634684061000371,
+  "message": "",
+  "peak_rss_mb": 708.7
+ },
+ "dispersion_d4.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.5155455550002443,
+  "message": "",
+  "peak_rss_mb": 559.5
+ },
+ "eigensolver.degenerate_aufbau:forward": {
+  "status": "error",
+  "seconds": 1.8881638809998549,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 703.9
+ },
+ "eigensolver.degenerate_aufbau:jvp": {
+  "status": "error",
+  "seconds": 1.5654235510000944,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 704.0
+ },
+ "eigensolver.degenerate_aufbau:order1": {
+  "status": "pass",
+  "seconds": 0.5719271139996636,
+  "message": "",
+  "peak_rss_mb": 587.5
+ },
+ "eigensolver.degenerate_aufbau:order2": {
+  "status": "fail",
+  "seconds": 1.675572101000398,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 700.0
+ },
+ "eigensolver.degenerate_aufbau:order3": {
+  "status": "fail",
+  "seconds": 1.9671846830005961,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 700.3
+ },
+ "eigensolver.degenerate_aufbau:vmap": {
+  "status": "error",
+  "seconds": 0.010023754999565426,
+  "message": "RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html",
+  "peak_rss_mb": 548.9
+ },
+ "eigensolver.degenerate_fermi:forward": {
+  "status": "error",
+  "seconds": 1.8561178610007119,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 707.8
+ },
+ "eigensolver.degenerate_fermi:jvp": {
+  "status": "error",
+  "seconds": 1.7353466610002215,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 704.3
+ },
+ "eigensolver.degenerate_fermi:order1": {
+  "status": "pass",
+  "seconds": 0.7132064150000588,
+  "message": "",
+  "peak_rss_mb": 591.0
+ },
+ "eigensolver.degenerate_fermi:order2": {
+  "status": "fail",
+  "seconds": 2.2197433340006683,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 702.8
+ },
+ "eigensolver.degenerate_fermi:order3": {
+  "status": "fail",
+  "seconds": 2.833353703999819,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 703.8
+ },
+ "eigensolver.degenerate_fermi:vmap": {
+  "status": "error",
+  "seconds": 0.006909200000336568,
+  "message": "RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html",
+  "peak_rss_mb": 548.7
+ },
+ "eigensolver.small_gap_aufbau:forward": {
+  "status": "error",
+  "seconds": 1.8108136789996934,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 704.1
+ },
+ "eigensolver.small_gap_aufbau:jvp": {
+  "status": "error",
+  "seconds": 1.699194382999849,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 703.9
+ },
+ "eigensolver.small_gap_aufbau:order1": {
+  "status": "fail",
+  "seconds": 0.4967203390006034,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 588.2
+ },
+ "eigensolver.small_gap_aufbau:order2": {
+  "status": "fail",
+  "seconds": 1.905163595999511,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 699.9
+ },
+ "eigensolver.small_gap_aufbau:order3": {
+  "status": "fail",
+  "seconds": 1.8969520489999923,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 700.2
+ },
+ "eigensolver.small_gap_aufbau:vmap": {
+  "status": "error",
+  "seconds": 0.006664429000011296,
+  "message": "RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html",
+  "peak_rss_mb": 548.8
+ },
+ "eigensolver.small_gap_fermi:forward": {
+  "status": "error",
+  "seconds": 2.0481310029999804,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 707.8
+ },
+ "eigensolver.small_gap_fermi:jvp": {
+  "status": "error",
+  "seconds": 1.5334580449998612,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.",
+  "peak_rss_mb": 704.0
+ },
+ "eigensolver.small_gap_fermi:order1": {
+  "status": "fail",
+  "seconds": 0.6375428580004154,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 591.1
+ },
+ "eigensolver.small_gap_fermi:order2": {
+  "status": "fail",
+  "seconds": 2.132667508999475,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 702.8
+ },
+ "eigensolver.small_gap_fermi:order3": {
+  "status": "fail",
+  "seconds": 3.001538986999549,
+  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
+  "peak_rss_mb": 703.7
+ },
+ "eigensolver.small_gap_fermi:vmap": {
+  "status": "error",
+  "seconds": 0.014794636000260653,
+  "message": "RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html",
+  "peak_rss_mb": 548.8
+ },
+ "es2.charges:forward": {
+  "status": "pass",
+  "seconds": 4.401459082000656,
+  "message": "",
+  "peak_rss_mb": 703.0
+ },
+ "es2.charges:jvp": {
+  "status": "pass",
+  "seconds": 4.044291365999925,
+  "message": "",
+  "peak_rss_mb": 702.9
+ },
+ "es2.charges:order1": {
+  "status": "pass",
+  "seconds": 1.297663227999692,
+  "message": "",
+  "peak_rss_mb": 587.2
+ },
+ "es2.charges:order2": {
+  "status": "pass",
+  "seconds": 1.1549148060003063,
+  "message": "",
+  "peak_rss_mb": 587.1
+ },
+ "es2.charges:order3": {
+  "status": "pass",
+  "seconds": 1.159542856000371,
+  "message": "",
+  "peak_rss_mb": 587.2
+ },
+ "es2.charges:vmap": {
+  "status": "pass",
+  "seconds": 0.35982657200020185,
+  "message": "",
+  "peak_rss_mb": 557.1
+ },
+ "es2.positions:forward": {
+  "status": "pass",
+  "seconds": 3.6302178559999447,
+  "message": "",
+  "peak_rss_mb": 703.6
+ },
+ "es2.positions:jvp": {
+  "status": "pass",
+  "seconds": 2.716516124000009,
+  "message": "",
+  "peak_rss_mb": 704.2
+ },
+ "es2.positions:order1": {
+  "status": "pass",
+  "seconds": 0.8483108360005644,
+  "message": "",
+  "peak_rss_mb": 587.7
+ },
+ "es2.positions:order2": {
+  "status": "pass",
+  "seconds": 0.9030730059994312,
+  "message": "",
+  "peak_rss_mb": 588.2
+ },
+ "es2.positions:order3": {
+  "status": "pass",
+  "seconds": 1.1899529519996577,
+  "message": "",
+  "peak_rss_mb": 588.4
+ },
+ "es2.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.4031131500005358,
+  "message": "",
+  "peak_rss_mb": 557.6
+ },
+ "es3.charges:forward": {
+  "status": "pass",
+  "seconds": 3.5799529320001966,
+  "message": "",
+  "peak_rss_mb": 699.1
+ },
+ "es3.charges:jvp": {
+  "status": "pass",
+  "seconds": 4.236496808999618,
+  "message": "",
+  "peak_rss_mb": 699.5
+ },
+ "es3.charges:order1": {
+  "status": "pass",
+  "seconds": 1.141081574999589,
+  "message": "",
+  "peak_rss_mb": 583.8
+ },
+ "es3.charges:order2": {
+  "status": "pass",
+  "seconds": 1.3158815679998952,
+  "message": "",
+  "peak_rss_mb": 584.0
+ },
+ "es3.charges:order3": {
+  "status": "pass",
+  "seconds": 1.366972660999636,
+  "message": "",
+  "peak_rss_mb": 584.1
+ },
+ "es3.charges:vmap": {
+  "status": "pass",
+  "seconds": 0.3517478399999163,
+  "message": "",
+  "peak_rss_mb": 553.3
+ },
+ "halogen.positions:forward": {
+  "status": "pass",
+  "seconds": 2.9466281280001567,
+  "message": "",
+  "peak_rss_mb": 701.1
+ },
+ "halogen.positions:jvp": {
+  "status": "pass",
+  "seconds": 3.211526968999351,
+  "message": "",
+  "peak_rss_mb": 701.3
+ },
+ "halogen.positions:order1": {
+  "status": "pass",
+  "seconds": 0.893419628000629,
+  "message": "",
+  "peak_rss_mb": 584.6
+ },
+ "halogen.positions:order2": {
+  "status": "pass",
+  "seconds": 1.105376150999291,
+  "message": "",
+  "peak_rss_mb": 585.7
+ },
+ "halogen.positions:order3": {
+  "status": "pass",
+  "seconds": 1.994098066999868,
+  "message": "",
+  "peak_rss_mb": 586.7
+ },
+ "halogen.positions:vmap": {
+  "status": "error",
+  "seconds": 0.36293916599970544,
+  "message": "RuntimeError: vmap: It looks like you're attempting to use a Tensor in some data-dependent control flow. We don't support that yet, please file an issue at https://github.com/pytorch/pytorch/issues . [dxtb/_src/components/classicals/halogen/hal.py:242]",
+  "peak_rss_mb": 555.8
+ },
+ "hcore_gfn1.positions:forward": {
+  "status": "pass",
+  "seconds": 3.777098059000309,
+  "message": "",
+  "peak_rss_mb": 713.2
+ },
+ "hcore_gfn1.positions:jvp": {
+  "status": "pass",
+  "seconds": 2.6792685569998866,
+  "message": "",
+  "peak_rss_mb": 712.9
+ },
+ "hcore_gfn1.positions:order1": {
+  "status": "pass",
+  "seconds": 1.714365818999795,
+  "message": "",
+  "peak_rss_mb": 597.6
+ },
+ "hcore_gfn1.positions:order2": {
+  "status": "pass",
+  "seconds": 4.122318647999236,
+  "message": "",
+  "peak_rss_mb": 600.0
+ },
+ "hcore_gfn1.positions:order3": {
+  "status": "pass",
+  "seconds": 2.716014883999378,
+  "message": "",
+  "peak_rss_mb": 603.2
+ },
+ "hcore_gfn1.positions:vmap": {
+  "status": "error",
+  "seconds": 0.26233904600030655,
+  "message": "RuntimeError: vmap over torch.allclose isn't supported yet. Please file an issue at https://github.com/pytorch/pytorch/issues if you need this feature. [dxtb/_src/xtb/base.py:370]",
+  "peak_rss_mb": 561.8
+ },
+ "hcore_gfn2.positions:forward": {
+  "status": "pass",
+  "seconds": 3.440110581999761,
+  "message": "",
+  "peak_rss_mb": 710.6
+ },
+ "hcore_gfn2.positions:jvp": {
+  "status": "pass",
+  "seconds": 4.143999433000317,
+  "message": "",
+  "peak_rss_mb": 710.9
+ },
+ "hcore_gfn2.positions:order1": {
+  "status": "pass",
+  "seconds": 1.3099333390000538,
+  "message": "",
+  "peak_rss_mb": 594.9
+ },
+ "hcore_gfn2.positions:order2": {
+  "status": "pass",
+  "seconds": 2.4456568189998507,
+  "message": "",
+  "peak_rss_mb": 596.8
+ },
+ "hcore_gfn2.positions:order3": {
+  "status": "pass",
+  "seconds": 2.481702055999449,
+  "message": "",
+  "peak_rss_mb": 599.5
+ },
+ "hcore_gfn2.positions:vmap": {
+  "status": "error",
+  "seconds": 0.3672655259997555,
+  "message": "RuntimeError: vmap over torch.allclose isn't supported yet. Please file an issue at https://github.com/pytorch/pytorch/issues if you need this feature. [dxtb/_src/xtb/base.py:370]",
+  "peak_rss_mb": 559.3
+ },
+ "overlap.slater:forward": {
+  "status": "pass",
+  "seconds": 4.277647767999952,
+  "message": "",
+  "peak_rss_mb": 711.2
+ },
+ "overlap.slater:jvp": {
+  "status": "pass",
+  "seconds": 6.298399710000012,
+  "message": "",
+  "peak_rss_mb": 711.8
+ },
+ "overlap.slater:order1": {
+  "status": "pass",
+  "seconds": 5.782859554999959,
+  "message": "",
+  "peak_rss_mb": 595.7
+ },
+ "overlap.slater:order2": {
+  "status": "pass",
+  "seconds": 25.597929831999863,
+  "message": "",
+  "peak_rss_mb": 601.4
+ },
+ "overlap.slater:order3": {
+  "status": "pass",
+  "seconds": 6.669881441000143,
+  "message": "",
+  "peak_rss_mb": 610.4
+ },
+ "overlap.slater:vmap": {
+  "status": "error",
+  "seconds": 0.3702742550003677,
+  "message": "RuntimeError: vmap: It looks like you're attempting to use a Tensor in some data-dependent control flow. We don't support that yet, please file an issue at https://github.com/pytorch/pytorch/issues . [dxtb/_src/basis/slater.py:101]",
+  "peak_rss_mb": 557.6
+ },
+ "overlap_md.positions:forward": {
+  "status": "pass",
+  "seconds": 3.5160477480003465,
+  "message": "",
+  "peak_rss_mb": 708.3
+ },
+ "overlap_md.positions:jvp": {
+  "status": "pass",
+  "seconds": 3.1550026519998937,
+  "message": "",
+  "peak_rss_mb": 708.5
+ },
+ "overlap_md.positions:order1": {
+  "status": "pass",
+  "seconds": 0.8986315709998962,
+  "message": "",
+  "peak_rss_mb": 592.7
+ },
+ "overlap_md.positions:order2": {
+  "status": "pass",
+  "seconds": 2.520075745000213,
+  "message": "",
+  "peak_rss_mb": 594.3
+ },
+ "overlap_md.positions:order3": {
+  "status": "pass",
+  "seconds": 1.9797574029998941,
+  "message": "",
+  "peak_rss_mb": 594.4
+ },
+ "overlap_md.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.22572383099941362,
+  "message": "",
+  "peak_rss_mb": 555.2
+ },
+ "overlap_os.positions:forward": {
+  "status": "pass",
+  "seconds": 3.4164638399997784,
+  "message": "",
+  "peak_rss_mb": 708.5
+ },
+ "overlap_os.positions:jvp": {
+  "status": "pass",
+  "seconds": 2.8907240510006886,
+  "message": "",
+  "peak_rss_mb": 708.5
+ },
+ "overlap_os.positions:order1": {
+  "status": "pass",
+  "seconds": 1.3292342290005763,
+  "message": "",
+  "peak_rss_mb": 592.8
+ },
+ "overlap_os.positions:order2": {
+  "status": "pass",
+  "seconds": 1.6938428710000153,
+  "message": "",
+  "peak_rss_mb": 594.2
+ },
+ "overlap_os.positions:order3": {
+  "status": "pass",
+  "seconds": 1.569734869000058,
+  "message": "",
+  "peak_rss_mb": 594.5
+ },
+ "overlap_os.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.610531362999609,
+  "message": "",
+  "peak_rss_mb": 555.4
+ },
+ "quadint_os.positions:forward": {
+  "status": "pass",
+  "seconds": 6.767392376999851,
+  "message": "",
+  "peak_rss_mb": 708.7
+ },
+ "quadint_os.positions:jvp": {
+  "status": "pass",
+  "seconds": 5.5547864729996945,
+  "message": "",
+  "peak_rss_mb": 708.5
+ },
+ "quadint_os.positions:order1": {
+  "status": "pass",
+  "seconds": 11.52148268899964,
+  "message": "",
+  "peak_rss_mb": 593.1
+ },
+ "quadint_os.positions:order2": {
+  "status": "pass",
+  "seconds": 31.887190723000458,
+  "message": "",
+  "peak_rss_mb": 597.5
+ },
+ "quadint_os.positions:order3": {
+  "status": "pass",
+  "seconds": 5.620030004,
+  "message": "",
+  "peak_rss_mb": 601.5
+ },
+ "quadint_os.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.5785956390000138,
+  "message": "",
+  "peak_rss_mb": 555.1
+ },
+ "repulsion.positions:forward": {
+  "status": "pass",
+  "seconds": 3.1373450090004553,
+  "message": "",
+  "peak_rss_mb": 702.8
+ },
+ "repulsion.positions:jvp": {
+  "status": "pass",
+  "seconds": 4.0315887919996385,
+  "message": "",
+  "peak_rss_mb": 703.1
+ },
+ "repulsion.positions:order1": {
+  "status": "pass",
+  "seconds": 0.685187073000634,
+  "message": "",
+  "peak_rss_mb": 587.2
+ },
+ "repulsion.positions:order2": {
+  "status": "pass",
+  "seconds": 0.8878553760005161,
+  "message": "",
+  "peak_rss_mb": 587.6
+ },
+ "repulsion.positions:order3": {
+  "status": "pass",
+  "seconds": 1.0356634490008219,
+  "message": "",
+  "peak_rss_mb": 588.1
+ },
+ "repulsion.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.24808276000021579,
+  "message": "",
+  "peak_rss_mb": 557.0
+ },
+ "repulsion_ag.arep:forward": {
+  "status": "error",
+  "seconds": 0.5686416030002874,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
+  "peak_rss_mb": 575.3
+ },
+ "repulsion_ag.arep:jvp": {
+  "status": "error",
+  "seconds": 0.47138137300044036,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
+  "peak_rss_mb": 572.2
+ },
+ "repulsion_ag.arep:order1": {
+  "status": "error",
+  "seconds": 1.325990329999513,
+  "message": "RuntimeError: Resource temporarily unavailable [dxtb/_src/components/classicals/repulsion/rep.py:214]",
+  "peak_rss_mb": 622.2
+ },
+ "repulsion_ag.arep:order2": {
+  "status": "error",
+  "seconds": 1.3772692640004607,
+  "message": "RuntimeError: Resource temporarily unavailable [dxtb/_src/components/classicals/repulsion/rep.py:214]",
+  "peak_rss_mb": 622.4
+ },
+ "repulsion_ag.arep:order3": {
+  "status": "error",
+  "seconds": 1.4819822090003072,
+  "message": "RuntimeError: Resource temporarily unavailable [dxtb/_src/components/classicals/repulsion/rep.py:214]",
+  "peak_rss_mb": 622.5
+ },
+ "repulsion_ag.arep:vmap": {
+  "status": "pass",
+  "seconds": 0.19907890999911615,
+  "message": "",
+  "peak_rss_mb": 557.1
+ },
+ "repulsion_ag.positions:forward": {
+  "status": "error",
+  "seconds": 0.8861966340000436,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
+  "peak_rss_mb": 575.5
+ },
+ "repulsion_ag.positions:jvp": {
+  "status": "error",
+  "seconds": 0.9608517209999263,
+  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
+  "peak_rss_mb": 572.1
+ },
+ "repulsion_ag.positions:order1": {
+  "status": "pass",
+  "seconds": 1.607777327999429,
+  "message": "",
+  "peak_rss_mb": 586.2
+ },
+ "repulsion_ag.positions:order2": {
+  "status": "pass",
+  "seconds": 1.802399386999241,
+  "message": "",
+  "peak_rss_mb": 587.5
+ },
+ "repulsion_ag.positions:order3": {
+  "status": "pass",
+  "seconds": 2.6528399019998687,
+  "message": "",
+  "peak_rss_mb": 587.9
+ },
+ "repulsion_ag.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.5614715510000678,
+  "message": "",
+  "peak_rss_mb": 557.1
+ },
+ "repulsion_gfn2.positions:forward": {
+  "status": "pass",
+  "seconds": 5.208425209999405,
+  "message": "",
+  "peak_rss_mb": 702.8
+ },
+ "repulsion_gfn2.positions:jvp": {
+  "status": "pass",
+  "seconds": 5.284720920999462,
+  "message": "",
+  "peak_rss_mb": 703.3
+ },
+ "repulsion_gfn2.positions:order1": {
+  "status": "pass",
+  "seconds": 1.6162283650000973,
+  "message": "",
+  "peak_rss_mb": 587.0
+ },
+ "repulsion_gfn2.positions:order2": {
+  "status": "pass",
+  "seconds": 1.5639051990001462,
+  "message": "",
+  "peak_rss_mb": 587.5
+ },
+ "repulsion_gfn2.positions:order3": {
+  "status": "pass",
+  "seconds": 1.9063107510000918,
+  "message": "",
+  "peak_rss_mb": 588.0
+ },
+ "repulsion_gfn2.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.31661694400008855,
+  "message": "",
+  "peak_rss_mb": 554.7
+ }
+}
