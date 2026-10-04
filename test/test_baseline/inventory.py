@@ -47,7 +47,10 @@ def main(path: str) -> None:
     bad = []
     for case in tree.iter("testcase"):
         cls = case.get("classname", "")
-        file = cls.replace(".", "/").rsplit("/", 1)[0] + ".py"
+        parts = cls.split(".")
+        if parts and parts[-1][:1].isupper():  # test class inside the module
+            parts = parts[:-1]
+        file = "/".join(parts) + ".py"
         if not file.startswith("test/"):
             file = "test/" + file
         per_file[file].append(float(case.get("time", 0.0)))
