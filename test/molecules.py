@@ -26,9 +26,11 @@ replaced by the structure store.
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from tad_mctc.convert import symbol_to_number
-from tad_mctc.typing import Any, Molecule
+from tad_mctc.typing import Molecule
 
 __all__ = ["mols", "merge_nested_dicts"]
 

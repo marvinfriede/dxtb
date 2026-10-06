@@ -136,6 +136,34 @@ class BaseTSCF(BaseSCF):
             smat.new_ones(*smat.shape[:-2], 1) * mask
         )
 
+    def _get_inv_cholesky(self) -> Tensor:
+        """
+        Inverse of the Cholesky factor of the overlap matrix.
+
+        The overlap matrix does not change during the SCF, so the factor is
+        computed once and passed to the eigensolver in every iteration
+        (``eighb(..., l_inv=...)``) instead of solving with the overlap each
+        time. It is recomputed if the overlap tensor is replaced (culling of
+        converged systems of a batch) or if the gradient mode changed (a
+        factor built without gradient tracking, as in a detached solve, has no
+        graph for the differentiated steps). The factor keeps the graph of the
+        overlap matrix.
+
+        Returns
+        -------
+        Tensor
+            Inverse Cholesky factor of the (regularized) overlap matrix.
+        """
+        smat = self._data.ints.overlap
+        grad = torch.is_grad_enabled()
+        cached = getattr(self, "_inv_cholesky", None)
+        if cached is not None and cached[0] is smat and cached[1] == grad:
+            return cached[2]
+
+        l_inv = storch.inv_cholesky_factor(self.get_overlap(), is_posdef=True)
+        self._inv_cholesky = (smat, grad, l_inv)
+        return l_inv
+
     @timer_decorator("Diagonalize", "SCF")
     def diagonalize(self, hamiltonian: Tensor) -> tuple[Tensor, Tensor]:
         """
@@ -156,17 +184,18 @@ class BaseTSCF(BaseSCF):
         evecs : Tensor
             Eigenvectors of the Hamiltonian.
         """
-        o = self.get_overlap()
+        l_inv = self._get_inv_cholesky()
 
         # We only need to use a broadening method if gradients are required.
-        if hamiltonian.requires_grad is False and o.requires_grad is False:
+        if hamiltonian.requires_grad is False and l_inv.requires_grad is False:
             broadening_method = None
         else:
             broadening_method = "lorn"
 
         return storch.eighb(
             a=hamiltonian,
-            b=o,
+            b=None,
+            l_inv=l_inv,
             is_posdef=True,
             factor=torch.finfo(self.dtype).eps ** 0.5,
             broadening_method=broadening_method,

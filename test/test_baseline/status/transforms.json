@@ -2,169 +2,169 @@
  "gfn1-pytorch": {
   "vmap(energy) single": {
    "status": "error",
-   "seconds": 0.20677480500125967,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.08866576999935205,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "vmap(forces) single": {
    "status": "error",
-   "seconds": 0.10286470099890721,
+   "seconds": 0.29577592500027095,
    "message": "ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension. [tad_dftd3/model/c6.py:456]"
   },
   "vmap(energy) conformer batch": {
    "status": "error",
-   "seconds": 0.1694462380000914,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.06542219899893098,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "jacrev(energy)": {
    "status": "works",
-   "seconds": 1.7906396479993418,
+   "seconds": 0.27364906199909456,
    "message": ""
   },
   "jacfwd(energy)": {
    "status": "error",
-   "seconds": 0.36705153699949733,
+   "seconds": 0.39648252700135345,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_dftd3/model/c6.py:95]"
   },
   "hessian(energy)": {
    "status": "error",
-   "seconds": 0.0916225740002119,
+   "seconds": 0.3022625049998169,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_dftd3/model/c6.py:95]"
   },
   "torch.compile(energy)": {
    "status": "error",
-   "seconds": 54.9264453199994,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 23.370181537999088,
+   "message": "RuntimeError: No wrappers present!"
   },
   "torch.compile(calc.energy)": {
    "status": "error",
-   "seconds": 38.961093699999765,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 0.7855104959999153,
+   "message": "RuntimeError: No wrappers present!"
   }
  },
  "gfn1-libcint": {
   "vmap(energy) single": {
    "status": "error",
-   "seconds": 0.30332472099871666,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.35127982500125654,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "vmap(forces) single": {
    "status": "error",
-   "seconds": 0.903317504998995,
+   "seconds": 0.1198516499989637,
    "message": "ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension. [tad_dftd3/model/c6.py:456]"
   },
   "vmap(energy) conformer batch": {
    "status": "error",
-   "seconds": 0.09321030499995686,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.42715084299925365,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "jacrev(energy)": {
    "status": "works",
-   "seconds": 0.2745610519996262,
+   "seconds": 0.2942626929998369,
    "message": ""
   },
   "jacfwd(energy)": {
    "status": "error",
-   "seconds": 0.13667221300056553,
+   "seconds": 0.42836991700096405,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_dftd3/model/c6.py:95]"
   },
   "hessian(energy)": {
    "status": "error",
-   "seconds": 0.13465792999886617,
+   "seconds": 0.13250951999907556,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_dftd3/model/c6.py:95]"
   },
   "torch.compile(energy)": {
    "status": "error",
-   "seconds": 56.04301675100032,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 21.984610801999224,
+   "message": "RuntimeError: No wrappers present!"
   },
   "torch.compile(calc.energy)": {
    "status": "error",
-   "seconds": 37.922424727999896,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 0.1842336259996955,
+   "message": "RuntimeError: No wrappers present!"
   }
  },
  "gfn2-pytorch": {
   "vmap(energy) single": {
    "status": "error",
-   "seconds": 0.08068835499943816,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.7575489400005608,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "vmap(forces) single": {
    "status": "error",
-   "seconds": 0.10363362299904111,
-   "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:163]"
+   "seconds": 0.09124108200012415,
+   "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:165]"
   },
   "vmap(energy) conformer batch": {
    "status": "error",
-   "seconds": 0.08492261900028097,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.07110642500083486,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "jacrev(energy)": {
    "status": "works",
-   "seconds": 0.4621832600005291,
+   "seconds": 0.4934236459994281,
    "message": ""
   },
   "jacfwd(energy)": {
    "status": "works",
-   "seconds": 0.990626216000237,
+   "seconds": 1.5600909899985709,
    "message": ""
   },
   "hessian(energy)": {
-   "status": "error",
-   "seconds": 1.6774934889999713,
-   "message": "RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [tad_mctc/storch/linalg.py:744]"
+   "status": "works",
+   "seconds": 2.1400393759995495,
+   "message": ""
   },
   "torch.compile(energy)": {
    "status": "error",
-   "seconds": 40.14941425300094,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 19.714037466999798,
+   "message": "RuntimeError: No wrappers present!"
   },
   "torch.compile(calc.energy)": {
    "status": "error",
-   "seconds": 23.82631847599987,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 0.157520876999115,
+   "message": "RuntimeError: No wrappers present!"
   }
  },
  "gfn2-libcint": {
   "vmap(energy) single": {
    "status": "error",
-   "seconds": 0.08150834400112217,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.08440410200091719,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "vmap(forces) single": {
    "status": "error",
-   "seconds": 0.08549634800147032,
-   "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:163]"
+   "seconds": 0.7945062779999716,
+   "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:165]"
   },
   "vmap(energy) conformer batch": {
    "status": "error",
-   "seconds": 0.07160100699911709,
-   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71]"
+   "seconds": 0.0665216879988293,
+   "message": "RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92]"
   },
   "jacrev(energy)": {
    "status": "works",
-   "seconds": 0.4607896849993267,
+   "seconds": 0.43936496499918576,
    "message": ""
   },
   "jacfwd(energy)": {
    "status": "error",
-   "seconds": 0.1530379530013306,
+   "seconds": 0.14413389999936044,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_libcint/interface/integrals/int_2c1e.py:353]"
   },
   "hessian(energy)": {
    "status": "error",
-   "seconds": 0.1482632499992178,
+   "seconds": 0.6162588249990222,
    "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_libcint/interface/integrals/int_2c1e.py:353]"
   },
   "torch.compile(energy)": {
    "status": "error",
-   "seconds": 42.31468880399916,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 19.14621801800058,
+   "message": "RuntimeError: No wrappers present!"
   },
   "torch.compile(calc.energy)": {
    "status": "error",
-   "seconds": 26.614160637998793,
-   "message": "InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant"
+   "seconds": 0.18650007600081153,
+   "message": "RuntimeError: No wrappers present!"
   }
  }
 }
