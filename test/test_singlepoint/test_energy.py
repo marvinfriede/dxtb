@@ -68,7 +68,8 @@ def single(
 
     base = Path(Path(__file__).parent, "mols", name)
 
-    numbers, positions = read(Path(base, "coord"), **dd)
+    _struct = read(Path(base, "coord"), **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     ref = samples[name][f"e{gfn}"].to(**dd)
@@ -133,7 +134,8 @@ def single_large(
 
     base = Path(Path(__file__).parent, "mols", name)
 
-    numbers, positions = read(Path(base, "coord"), **dd)
+    _struct = read(Path(base, "coord"), **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     ref = samples[name][f"e{gfn}"].to(**dd)
@@ -202,7 +204,8 @@ def batch(
     numbers, positions, charge = [], [], []
     for name in [name1, name2, name3]:
         base = Path(Path(__file__).parent, "mols", name)
-        nums, pos = read(Path(base, "coord"), **dd)
+        _struct = read(Path(base, "coord"), **dd)
+        nums, pos = _struct.numbers, _struct.positions
         chrg = read_chrg(Path(base, ".CHRG"), **dd)
 
         numbers.append(nums)
@@ -284,7 +287,8 @@ def batch_large(
     for name in [name1, name2, name3]:
         base = Path(Path(__file__).parent, "mols", name)
 
-        nums, pos = read(Path(base, "coord"), dtype_int=torch.long, **dd)
+        _struct = read(Path(base, "coord"), dtype_int=torch.long, **dd)
+        nums, pos = _struct.numbers, _struct.positions
         chrg = read_chrg(Path(base, ".CHRG"), **dd)
 
         numbers.append(nums)
@@ -364,9 +368,8 @@ def uhf_single(dtype: torch.dtype, name: str, gfn: str) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
     base = Path(Path(__file__).parent, "mols", name)
-    numbers, positions = read(
-        Path(base, "coord"), **dd, raise_padding_warning=False
-    )
+    _struct = read(Path(base, "coord"), **dd, raise_padding_warning=False)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     ref = samples[name][f"e{gfn}"].to(**dd)

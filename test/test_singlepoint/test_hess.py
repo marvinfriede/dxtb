@@ -58,7 +58,8 @@ def test_single(dtype: torch.dtype, name: str) -> None:
 
     # read from file
     base = Path(Path(__file__).parent, "mols", name)
-    numbers, positions = read(Path(base, "coord"), **dd)
+    _struct = read(Path(base, "coord"), **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     ref = reshape_fortran(

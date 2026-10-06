@@ -60,7 +60,8 @@ def test_scf_full_unconverged_warning(dtype: torch.dtype) -> None:
         "int_driver": labels.INTDRIVER_PYTORCH,
     }
 
-    numbers, positions = read(coordfile_lih, **dd)
+    _struct = read(coordfile_lih, **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     energy = calc.get_energy(positions).sum(-1)
@@ -94,7 +95,8 @@ def test_scf_full_unconverged_error(dtype: torch.dtype) -> None:
         "force_convergence": True,
     }
 
-    numbers, positions = read(coordfile_lih, **dd)
+    _struct = read(coordfile_lih, **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     with pytest.raises(SCFConvergenceError):

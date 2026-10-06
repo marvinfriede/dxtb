@@ -33,7 +33,7 @@ from ..conftest import DEVICE
 opts = {"verbosity": 0, "int_level": 2}
 
 
-@pytest.mark.filterwarnings("ignore::tad_mctc.exceptions.MoleculeWarning")
+@pytest.mark.filterwarnings("ignore::tad_mctc.exceptions.StructureWarning")
 def test_uhf_fail() -> None:
     # Singlepoint starts SCF timer, but exception is thrown before the SCF
     # timer is stopped, so we must disable it here.
@@ -43,7 +43,8 @@ def test_uhf_fail() -> None:
 
     base = Path(Path(__file__).parent, "mols", "H")
 
-    numbers, positions = read(Path(base, "coord"), device=DEVICE)
+    _struct = read(Path(base, "coord"), device=DEVICE)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), device=DEVICE)
 
     calc = Calculator(numbers, GFN1_XTB, opts=opts, device=DEVICE)

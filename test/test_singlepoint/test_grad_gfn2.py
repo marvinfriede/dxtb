@@ -57,7 +57,8 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 
     # read from file
     base = Path(Path(__file__).parent, "mols", name)
-    numbers, positions = read(Path(base, "coord"), **dd)
+    _struct = read(Path(base, "coord"), **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     positions = positions.clone().requires_grad_(True)
@@ -104,7 +105,8 @@ def test_num(name: str, scf_mode: str) -> None:
 
     # read from file
     base = Path(Path(__file__).parent, "mols", name)
-    numbers, positions = read(Path(base, "coord"), **dd)
+    _struct = read(Path(base, "coord"), **dd)
+    numbers, positions = _struct.numbers, _struct.positions
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     # do calc

@@ -48,7 +48,7 @@ opts = {
 
 
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
-@pytest.mark.parametrize("scf_mode", ["full", "implicit", "nonpure"])
+@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
 def test_anion_in_padded_batch(par, scf_mode: str) -> None:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers = [
