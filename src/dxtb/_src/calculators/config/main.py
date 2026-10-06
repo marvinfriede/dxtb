@@ -14,22 +14,36 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+Config: Main
+============
+
+Main configuration of the calculation.
+
+The configuration is immutable. A changed setting is a new object, created
+with :func:`dataclasses.replace`, e.g., to change the SCF mixer::
+
+    cfg = dataclasses.replace(
+        cfg, scf=dataclasses.replace(cfg.scf, mixer=labels.MIXER_ANDERSON)
+    )
+
+User input (strings, lists) is converted by :meth:`Config.create`, the
+constructor only accepts the final values. The configuration holds neither the
+device and data type (they follow the tensors) nor the batch mode (it follows
+the shape of the atomic numbers).
+"""
+
 from __future__ import annotations
 
 import sys
 from argparse import Namespace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
 
 from dxtb._src.constants import defaults, labels
-from dxtb._src.typing import (
-    Any,
-    PathLike,
-    Self,
-    get_default_device,
-    get_default_dtype,
-)
+from dxtb._src.typing import Any, PathLike, Self
 
 from .cache import ConfigCache
 from .integral import ConfigIntegrals
@@ -38,60 +52,70 @@ from .scf import ConfigSCF
 __all__ = ["Config"]
 
 
+@dataclass(frozen=True, kw_only=True)
 class Config:
     """
     Configuration of the calculation.
     """
 
-    file: PathLike | None
+    file: PathLike | None = None
     """The input file or directory."""
 
-    strict: bool = False
+    strict: bool = defaults.STRICT
     """Strict mode for SCF configuration. Always throws errors if ``True``."""
 
-    exclude: str | list[str]
+    exclude: tuple[str, ...] = ()
     """The tight-binding components to exclude from the calculation."""
 
-    method: int
+    method: int = defaults.METHOD
     """The xTB method to use."""
 
-    grad: bool
+    grad: bool = False
     """Whether to compute the gradient."""
 
-    max_element: int
+    max_element: int = defaults.MAX_ELEMENT
     """The maximum element number in the system."""
 
     # PyTorch
 
-    anomaly: bool
+    anomaly: bool = False
     """Whether to run PyTorch in anomaly detection mode."""
-
-    device: torch.device
-    """The device to use for the calculation."""
-
-    dtype: torch.dtype
-    """The data type to use for the calculation."""
 
     # configs
 
-    cache: ConfigCache
+    cache: ConfigCache = field(default_factory=ConfigCache)
     """The cache configuration."""
 
-    ints: ConfigIntegrals
+    ints: ConfigIntegrals = field(default_factory=ConfigIntegrals)
     """The integral configuration."""
 
-    scf: ConfigSCF
+    scf: ConfigSCF = field(default_factory=ConfigSCF)
     """The SCF configuration."""
 
-    def __init__(
-        self,
+    def __post_init__(self) -> None:
+        if self.method not in (
+            labels.GFN0_XTB,
+            labels.GFN1_XTB,
+            labels.GFN2_XTB,
+        ):
+            raise ValueError(f"Unknown xtb method '{self.method}'.")
+
+        if not isinstance(self.exclude, tuple):
+            raise TypeError(
+                "The excluded components must be given as a tuple (use "
+                "`Config.create` for strings and lists), but "
+                f"'{type(self.exclude)}' was given."
+            )
+
+    @classmethod
+    def create(
+        cls,
         *,
-        file=None,
+        file: PathLike | None = None,
         strict: bool = defaults.STRICT,
-        exclude: str | list[str] = defaults.EXCLUDE,
+        exclude: str | list[str] | tuple[str, ...] = defaults.EXCLUDE,
         method: str | int = defaults.METHOD,
         grad: bool = False,
-        batch_mode: int = defaults.BATCH_MODE,
         # integrals
         int_cutoff: float = defaults.INTCUTOFF,
         int_driver: str | int = defaults.INTDRIVER,
@@ -100,8 +124,6 @@ class Config:
         int_algorithm: str | None = None,
         # PyTorch
         anomaly: bool = False,
-        device: torch.device = get_default_device(),
-        dtype: torch.dtype = get_default_dtype(),
         # SCF
         maxiter: int = defaults.MAXITER,
         mixer: str | int = defaults.MIXER,
@@ -141,75 +163,41 @@ class Config:
         cache_potential: bool = defaults.CACHE_STORE_POTENTIAL,
         # misc
         max_element: int = defaults.MAX_ELEMENT,
-        skip_compat_checks: bool = False,
-    ) -> None:
-        self.file = file
-        self.strict = strict
-        self.exclude = exclude
-        self.grad = grad
+    ) -> Self:
+        """
+        Create the configuration from user input (flat list of options).
 
-        self.anomaly = anomaly
-        self.device = device
-        self.dtype = dtype
+        Strings are converted to integer labels, a single excluded component
+        or a list of them to a tuple.
 
-        # use property to also set the batch mode in SCF config
-        self._batch_mode = batch_mode
-
-        self.max_element = max_element
-
+        Raises
+        ------
+        ValueError
+            An option is unknown.
+        TypeError
+            An option has the wrong type.
+        """
         if isinstance(method, str):
             if method.casefold() in labels.GFN0_XTB_STRS:
-                self.method = labels.GFN0_XTB
+                method = labels.GFN0_XTB
             elif method.casefold() in labels.GFN1_XTB_STRS:
-                self.method = labels.GFN1_XTB
+                method = labels.GFN1_XTB
             elif method.casefold() in labels.GFN2_XTB_STRS:
-                self.method = labels.GFN2_XTB
+                method = labels.GFN2_XTB
             else:
                 raise ValueError(f"Unknown xtb method '{method}'.")
-        elif isinstance(method, int):
-            if method not in (
-                labels.GFN0_XTB,
-                labels.GFN1_XTB,
-                labels.GFN2_XTB,
-            ):
-                raise ValueError(f"Unknown xtb method '{method}'.")
-
-            self.method = method
-        else:
+        elif not isinstance(method, int):
             raise TypeError(
                 "The method must be of type 'int' or 'str', but "
                 f"'{type(method)}' was given."
             )
 
-        self.cache = ConfigCache(
-            enabled=cache_enabled,
-            #
-            hcore=cache_hcore,
-            overlap=cache_overlap,
-            dipole=cache_dipole,
-            quadrupole=cache_quadrupole,
-            #
-            charges=cache_charges,
-            coefficients=cache_coefficients,
-            density=cache_density,
-            fock=cache_fock,
-            iterations=cache_iterations,
-            mo_energies=cache_mo_energies,
-            occupation=cache_occupation,
-            potential=cache_potential,
-        )
+        if isinstance(exclude, str):
+            exclude = (exclude,)
 
-        self.ints = ConfigIntegrals(
-            level=int_level,
-            cutoff=int_cutoff,
-            driver=int_driver,
-            uplo=int_uplo,
-            algorithm=int_algorithm,
-        )
-
-        self.scf = ConfigSCF(
+        scf = ConfigSCF.create(
             strict=strict,
-            method=self.method,
+            method=method,
             guess=guess,
             maxiter=maxiter,
             mixer=mixer,
@@ -227,16 +215,44 @@ class Config:
             x_atol_max=x_atol_max,
             f_atol=f_atol,
             force_convergence=force_convergence,
-            batch_mode=batch_mode,
-            # SCF: Fermi
             fermi_etemp=fermi_etemp,
             fermi_maxiter=fermi_maxiter,
             fermi_thresh=fermi_thresh,
             fermi_diff_order=fermi_diff_order,
             fermi_partition=fermi_partition,
-            # SCF: PyTorch
-            device=device,
-            dtype=dtype,
+        )
+
+        return cls(
+            file=file,
+            strict=strict,
+            exclude=tuple(exclude),
+            method=method,
+            grad=grad,
+            max_element=max_element,
+            anomaly=anomaly,
+            cache=ConfigCache.create(
+                enabled=cache_enabled,
+                hcore=cache_hcore,
+                overlap=cache_overlap,
+                dipole=cache_dipole,
+                quadrupole=cache_quadrupole,
+                charges=cache_charges,
+                coefficients=cache_coefficients,
+                density=cache_density,
+                fock=cache_fock,
+                iterations=cache_iterations,
+                mo_energies=cache_mo_energies,
+                occupation=cache_occupation,
+                potential=cache_potential,
+            ),
+            ints=ConfigIntegrals.create(
+                level=int_level,
+                cutoff=int_cutoff,
+                driver=int_driver,
+                uplo=int_uplo,
+                algorithm=int_algorithm,
+            ),
+            scf=scf,
         )
 
     @classmethod
@@ -254,7 +270,7 @@ class Config:
         Self
             The configuration object.
         """
-        return cls(
+        return cls.create(
             # general
             file=args.file,
             strict=args.strict,
@@ -269,8 +285,6 @@ class Config:
             int_algorithm=getattr(args, "int_algorithm", None),
             # PyTorch
             anomaly=args.detect_anomaly,
-            device=args.device,
-            dtype=args.dtype,
             # SCF
             maxiter=args.maxiter,
             mixer=args.mixer,
@@ -349,48 +363,7 @@ class Config:
             The configuration object.
         """
         # TODO: More sophisticated validation
-        return cls(**cfg)
-
-    @property
-    def batch_mode(self) -> int:
-        """
-        Whether multiple systems or a single one are handled.
-
-        The following batch modes are available:
-
-        - 0: Single system
-        - 1: Multiple systems with padding
-        - 2: Multiple systems with no padding (conformer ensemble)
-
-        Returns
-        -------
-        int
-            The batch mode.
-        """
-        return self._batch_mode
-
-    @batch_mode.setter
-    def batch_mode(self, value: int) -> None:
-        """
-        Set the batch mode.
-
-        Parameters
-        ----------
-        value : int
-            The batch mode.
-
-        Raises
-        ------
-        ValueError
-            If the batch mode is invalid.
-        """
-        if value not in (0, 1, 2):
-            raise ValueError(
-                f"Invalid batch mode '{value}'. Must be one of [0, 1, 2]."
-            )
-
-        self._batch_mode = value
-        self.scf.batch_mode = value
+        return cls.create(**cfg)
 
     def info(self) -> dict[str, dict[str, Any]]:
         """
@@ -409,8 +382,6 @@ class Config:
                 "Excluded": False if len(self.exclude) == 0 else self.exclude,
                 "Gradient": self.grad,
                 "Integral driver": labels.INTDRIVER_MAP[self.ints.driver],
-                "FP accuracy": str(self.dtype),
-                "Device": str(self.device),
             },
             **self.scf.info(),
         }

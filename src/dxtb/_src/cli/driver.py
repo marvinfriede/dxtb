@@ -21,6 +21,7 @@ Driver class for running dxtb.
 from __future__ import annotations
 
 from argparse import Namespace
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -153,12 +154,21 @@ class Driver:
         io.OutputHandler.write(config.info(), v=5)
         io.OutputHandler.write_stdout("", v=5)
 
-        # Broyden is not supported in full SCF mode
-        if (
-            config.scf.scf_mode == labels.SCF_MODE_FULL
-            and config.scf.mixer == labels.MIXER_BROYDEN
+        # The analytical IR, Raman and dipole calculations need the full SCF
+        # with the Anderson mixer. Broyden is not supported in full SCF mode.
+        scf = config.scf
+        if args.ir is True or args.raman is True or args.dipole is True:
+            scf = replace(
+                scf,
+                scf_mode=labels.SCF_MODE_FULL,
+                mixer=labels.MIXER_ANDERSON,
+            )
+        elif (
+            scf.scf_mode == labels.SCF_MODE_FULL
+            and scf.mixer == labels.MIXER_BROYDEN
         ):
-            config.scf.mixer = labels.MIXER_ANDERSON
+            scf = replace(scf, mixer=labels.MIXER_ANDERSON)
+        config = replace(config, scf=scf)
 
         # first tensor when using CUDA takes a long time to initialize...
         if "cuda" in str(dd["device"]):
@@ -304,9 +314,6 @@ class Driver:
         if args.ir is True:
             # TODO: Better handling here
             positions.requires_grad_(True)
-            calc.opts.scf.scf_mode = labels.SCF_MODE_FULL
-            calc.opts.scf.mixer = labels.MIXER_ANDERSON
-
             timer.start("IR")
             ir_result = calc.ir(positions, chrg)
             ir_result.use_common_units()
@@ -326,9 +333,6 @@ class Driver:
         if args.raman is True:
             # TODO: Better handling here
             positions.requires_grad_(True)
-            calc.opts.scf.scf_mode = labels.SCF_MODE_FULL
-            calc.opts.scf.mixer = labels.MIXER_ANDERSON
-
             # TODO: Better print handling
             timer.start("Raman")
             raman_result = calc.raman(positions, chrg)
@@ -346,9 +350,6 @@ class Driver:
             timer.stop("Raman Num")
 
         if args.dipole is True:
-            calc.opts.scf.scf_mode = labels.SCF_MODE_FULL
-            calc.opts.scf.mixer = labels.MIXER_ANDERSON
-
             timer.start("Dipole")
             mu = calc.dipole_analytical(positions, chrg)
             timer.stop("Dipole")

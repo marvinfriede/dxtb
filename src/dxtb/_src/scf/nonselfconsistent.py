@@ -94,7 +94,7 @@ def solve_nonselfconsistent(
         integrals=integrals,
     )
 
-    config.eigen_options = {
+    data.eigen_options = {
         "method": "exacteig",
         **kwargs.pop("eigen_options", {}),
     }
@@ -126,6 +126,6 @@ def solve_nonselfconsistent(
         "fenergy": fenergy,
         "hamiltonian": data.hamiltonian,
         "occupation": data.occupation,
-        "potential": _zero_potential(charges, config.batch_mode),
+        "potential": _zero_potential(charges, ihelp.batch_mode),
         "iterations": 0,
     }

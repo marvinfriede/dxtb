@@ -24,6 +24,7 @@ Calculator for the extended tight-binding model with automatic gradients.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 import torch
 
@@ -249,7 +250,7 @@ class AutogradCalculator(EnergyCalculator):
         RuntimeError
             Positions tensor does not have ``requires_grad=True``.
         """
-        if self.opts.batch_mode > 0:
+        if self.ihelp.batch_mode > 0:
             raise NotImplementedError(
                 "Hessian calculation is not supported in batch mode. "
                 "Please use the single system mode."
@@ -1082,7 +1083,12 @@ class AutogradCalculator(EnergyCalculator):
                 "implementation error."
             )
 
-        self.opts.cache.store.dipole = True
+        self.opts = replace(
+            self.opts,
+            cache=replace(
+                self.opts.cache, store=replace(self.opts.cache.store, dipole=True)
+            ),
+        )
 
         return self.dipole_analytical  # type: ignore
 

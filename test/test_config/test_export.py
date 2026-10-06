@@ -24,6 +24,6 @@ from dxtb.config import Config
 
 
 def test_export() -> None:
-    cfg = Config()
+    cfg = Config.create()
     jstr = cfg.to_json()
     assert isinstance(jstr, str)

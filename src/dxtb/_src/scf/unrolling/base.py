@@ -24,6 +24,7 @@ backward pass, i.e., the implicit function theorem is not used.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -67,7 +68,7 @@ class BaseTSCF(BaseSCF):
     ) -> None:
         super().__init__(interactions, *args, **kwargs)
 
-        batched = self.config.batch_mode
+        batched = self._data.ihelp.batch_mode
 
         # Mixers should be specified by integer code in the config
         if isinstance(self.config.mixer, Mixer):
@@ -115,7 +116,9 @@ class BaseTSCF(BaseSCF):
                 OutputHandler.warn(
                     msg + " Changing to Fock matrix automatically."
                 )
-                self.config.scp_mode = labels.SCP_MODE_FOCK
+                self.config = replace(
+                    self.config, scp_mode=labels.SCP_MODE_FOCK
+                )
 
     def get_overlap(self) -> Tensor:
         """

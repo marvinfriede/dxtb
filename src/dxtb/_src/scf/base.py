@@ -46,6 +46,7 @@ from dxtb._src.typing import (
     overload,
 )
 from dxtb._src.wavefunction import filling, mulliken
+from dxtb._src.calculators.config.scf import check_tols
 from dxtb.config import ConfigSCF
 
 from .pure import conversions, iterations
@@ -146,6 +147,7 @@ class BaseSCF:
             self.ints = integrals
             self.occupation = occupation
             self.nel = occupation.sum(-1) if nel is None else nel
+            self.eigen_options: dict[str, Any] = {"method": "exacteig"}
             self.n0 = n0
             self.numbers = numbers
             self.ihelp = ihelp
@@ -247,9 +249,6 @@ class BaseSCF:
     eigen_options: dict[str, Any]
     """Options for eigensolver"""
 
-    batch_mode: int
-    """Whether multiple systems or a single one are handled"""
-
     def __init__(
         self,
         interactions: InteractionList,
@@ -263,33 +262,9 @@ class BaseSCF:
         else:
             self.config = ConfigSCF()
 
-        # TODO: Move these settings to config
-        self.bck_options = {"posdef": True, **kwargs.pop("bck_options", {})}
-        self.fwd_options = {
-            "force_convergence": False,
-            "method": "broyden1",
-            "alpha": -0.5,
-            "damp": self.config.damp,
-            "damp_init": self.config.damp_init,
-            "damp_dynamic": self.config.damp_dynamic,
-            "damp_dynamic_factor": self.config.damp_dynamic_factor,
-            "damp_generations": self.config.damp_generations,
-            "damp_soft_start": self.config.damp_soft_start,
-            "f_tol": self.config.f_atol,
-            "x_tol": self.config.x_atol,
-            "x_tol_max": self.config.x_atol_max,
-            "f_rtol": float("inf"),
-            "x_rtol": float("inf"),
-            "maxiter": self.config.maxiter,
-            "verbose": False,
-            "line_search": False,
-            **kwargs.pop("fwd_options", {}),
-        }
-
-        self.eigen_options = {
-            "method": "exacteig",
-            **kwargs.pop("eigen_options", {}),
-        }
+        bck_options = kwargs.pop("bck_options", {})
+        fwd_options = kwargs.pop("fwd_options", {})
+        eigen_options = kwargs.pop("eigen_options", {})
 
         # validate early; the iteration function is selected in `_fcn`
         if self.config.scp_mode not in (
@@ -302,6 +277,36 @@ class BaseSCF:
             )
 
         self._data = self._Data(*args, **kwargs)
+
+        # The tolerances are checked against the precision of the tensors,
+        # which the configuration does not know.
+        dtype = self.dtype
+
+        # TODO: Move these settings to config
+        self.bck_options = {"posdef": True, **bck_options}
+        self.fwd_options = {
+            "force_convergence": False,
+            "method": "broyden1",
+            "alpha": -0.5,
+            "damp": self.config.damp,
+            "damp_init": self.config.damp_init,
+            "damp_dynamic": self.config.damp_dynamic,
+            "damp_dynamic_factor": self.config.damp_dynamic_factor,
+            "damp_generations": self.config.damp_generations,
+            "damp_soft_start": self.config.damp_soft_start,
+            "f_tol": check_tols(self.config.f_atol, dtype),
+            "x_tol": check_tols(self.config.x_atol, dtype),
+            "x_tol_max": check_tols(self.config.x_atol_max, dtype),
+            "f_rtol": float("inf"),
+            "x_rtol": float("inf"),
+            "maxiter": self.config.maxiter,
+            "verbose": False,
+            "line_search": False,
+            **fwd_options,
+        }
+
+        self.eigen_options = {"method": "exacteig", **eigen_options}
+        self._data.eigen_options = self.eigen_options
 
         self.kt = torch.tensor(self.config.fermi.etemp * KELVIN2AU, **self.dd)
 
@@ -398,7 +403,7 @@ class BaseSCF:
 
         # initialize Charge container depending on given integrals
         if isinstance(charges, Tensor):
-            charges = Charges(mono=charges, batch_mode=self.config.batch_mode)
+            charges = Charges(mono=charges, batch_mode=self._data.ihelp.batch_mode)
             self._data.charges["mono"] = charges.mono_shape
 
             if self._data.ints.dipole is not None:

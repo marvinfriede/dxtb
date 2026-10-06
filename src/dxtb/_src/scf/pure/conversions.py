@@ -66,7 +66,7 @@ def converged_to_charges(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``cfg.eigen_options``.
+        :mod:`.ovlp_diag` with ``data.eigen_options``.
 
     Returns
     -------
@@ -81,12 +81,12 @@ def converged_to_charges(
 
     if config.scp_mode == labels.SCP_MODE_CHARGE:
         return Charges.from_tensor(
-            x, data.charges, batch_mode=config.batch_mode
+            x, data.charges, batch_mode=data.ihelp.batch_mode
         )
 
     if config.scp_mode == labels.SCP_MODE_POTENTIAL:
         pot = Potential.from_tensor(
-            x, data.potential, batch_mode=config.batch_mode
+            x, data.potential, batch_mode=data.ihelp.batch_mode
         )
         return potential_to_charges(pot, data, config, diagonalizer)
 
@@ -155,7 +155,7 @@ def potential_to_charges(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``cfg.eigen_options``.
+        :mod:`.ovlp_diag` with ``data.eigen_options``.
 
     Returns
     -------
@@ -187,7 +187,7 @@ def potential_to_density(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``cfg.eigen_options``.
+        :mod:`.ovlp_diag` with ``data.eigen_options``.
 
     Returns
     -------
@@ -225,7 +225,7 @@ def density_to_charges(density: Tensor, data: _Data, cfg: ConfigSCF) -> Charges:
 
     # monopolar charges
     populations = einsum("...ik,...ki->...i", density, data.ints.overlap)
-    charges = Charges(mono=data.n0 - populations, batch_mode=cfg.batch_mode)
+    charges = Charges(mono=data.n0 - populations, batch_mode=data.ihelp.batch_mode)
 
     # Atomic dipole moments (dipole charges)
     if data.ints.dipole is not None:
@@ -317,7 +317,7 @@ def hamiltonian_to_density(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``cfg.eigen_options``.
+        :mod:`.ovlp_diag` with ``data.eigen_options``.
 
     Returns
     -------
@@ -327,7 +327,7 @@ def hamiltonian_to_density(
 
     if diagonalizer is None:
         data.evals, data.evecs = diagonalize(
-            hamiltonian, data.ints.overlap, cfg.eigen_options
+            hamiltonian, data.ints.overlap, data.eigen_options
         )
     else:
         data.evals, data.evecs = diagonalizer(hamiltonian)

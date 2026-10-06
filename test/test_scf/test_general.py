@@ -20,6 +20,8 @@ General tests for SCF setup.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -90,14 +92,13 @@ def test_full_change_scp() -> None:
         "numbers": dummy,
         "occupation": dummy,
         "n0": dummy,
-        "ihelp": dummy,
+        "ihelp": SimpleNamespace(batch_mode=2),  # only the mode is read
         "cache": dummy,
         "integrals": IntegralMatrices(_hcore=dummy, _overlap=dummy),
     }
 
     config = ConfigSCF(
         method=labels.GFN2_XTB,
-        batch_mode=2,
         scp_mode=labels.SCP_MODE_CHARGE,
         # Broyden mixer is not supported in full SCF
         scf_mode=labels.SCF_MODE_IMPLICIT,

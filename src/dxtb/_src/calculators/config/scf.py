@@ -16,86 +16,271 @@
 # limitations under the License.
 """
 SCF configuration.
+
+The configurations are immutable. A changed setting is a new object, created
+with :func:`dataclasses.replace`. User input (strings, NumPy integers) is
+converted by the ``create`` class methods; the constructors only accept the
+final values.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from operator import index
 
-import torch
-
-from dxtb import OutputHandler
 from dxtb._src.constants import defaults, labels
-from dxtb._src.typing import Any, get_default_device, get_default_dtype
+from dxtb._src.typing import Any
 
 __all__ = ["ConfigSCF", "ConfigFermi"]
 
 
+def _label(
+    value: str | int,
+    name: str,
+    table: dict[int, tuple[str, ...]],
+    unknown: str,
+) -> int:
+    """
+    Convert a string (or integer) option to its integer label.
+
+    Parameters
+    ----------
+    value : str | int
+        User input.
+    name : str
+        Name of the option for the error message of a wrong type.
+    table : dict[int, tuple[str, ...]]
+        Integer label and the strings that select it.
+    unknown : str
+        Beginning of the error message for an unknown option.
+
+    Returns
+    -------
+    int
+        Integer label.
+    """
+    choices = ", ".join(s for strs in table.values() for s in strs)
+
+    if isinstance(value, str):
+        for code, strs in table.items():
+            if value.casefold() in strs:
+                return code
+    elif isinstance(value, int):
+        if value in table:
+            return value
+    else:
+        raise TypeError(
+            f"The {name} must be of type 'int' or 'str', but "
+            f"'{type(value)}' was given."
+        )
+
+    raise ValueError(f"{unknown} '{value}'. Use one of '{choices}'.")
+
+
+_GUESS = {
+    labels.GUESS_EEQ: labels.GUESS_EEQ_STRS,
+    labels.GUESS_SAD: labels.GUESS_SAD_STRS,
+}
+_SCF_MODE = {
+    labels.SCF_MODE_IMPLICIT: labels.SCF_MODE_IMPLICIT_STRS,
+    labels.SCF_MODE_FULL: labels.SCF_MODE_FULL_STRS,
+    labels.SCF_MODE_EXPERIMENTAL: labels.SCF_MODE_EXPERIMENTAL_STRS,
+}
+_SCP_MODE = {
+    labels.SCP_MODE_CHARGE: labels.SCP_MODE_CHARGE_STRS,
+    labels.SCP_MODE_POTENTIAL: labels.SCP_MODE_POTENTIAL_STRS,
+    labels.SCP_MODE_FOCK: labels.SCP_MODE_FOCK_STRS,
+}
+_MIXER = {
+    labels.MIXER_LINEAR: labels.MIXER_LINEAR_STRS,
+    labels.MIXER_ANDERSON: labels.MIXER_ANDERSON_STRS,
+    labels.MIXER_BROYDEN: labels.MIXER_BROYDEN_STRS,
+}
+_PARTITION = {
+    labels.FERMI_PARTITION_EQUAL: labels.FERMI_PARTITION_EQUAL_STRS,
+    labels.FERMI_PARTITION_ATOMIC: labels.FERMI_PARTITION_ATOMIC_STRS,
+}
+
+
+def _check_label(value: Any, name: str, table: dict, unknown: str) -> None:
+    """Check that a final value is a known integer label."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(
+            f"The {name} must be an integer label (use `create` for "
+            f"strings), but '{type(value)}' was given."
+        )
+    if value not in table:
+        raise ValueError(f"{unknown} '{value}'.")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigFermi:
+    """
+    Configuration for fermi smearing.
+    """
+
+    etemp: float | int = defaults.FERMI_ETEMP
+    """Electronic temperature for Fermi smearing (in Kelvin)."""
+
+    maxiter: int = defaults.FERMI_MAXITER
+    """Maximum number of iterations for Fermi smearing."""
+
+    thresh: float | int | None = defaults.FERMI_THRESH
+    """Threshold for Fermi iterations."""
+
+    diff_order: int = defaults.FERMI_DIFF_ORDER
+    """
+    Highest order of the derivatives of the Fermi occupations that is exact.
+    It sets the number of differentiable Newton steps of the Fermi energy.
+    """
+
+    partition: int = defaults.FERMI_PARTITION
+    """Partitioning scheme for electronic free energy."""
+
+    def __post_init__(self) -> None:
+        if isinstance(self.diff_order, bool) or not isinstance(
+            self.diff_order, int
+        ):
+            raise TypeError(
+                "The derivative order of the Fermi occupations must be of "
+                f"type 'int', but '{type(self.diff_order)}' was given."
+            )
+        if self.diff_order < 0:
+            raise ValueError(
+                "The derivative order of the Fermi occupations must not be "
+                f"negative ({self.diff_order})."
+            )
+
+        _check_label(
+            self.partition,
+            "partition",
+            _PARTITION,
+            "Unknown partitioning scheme for the free energy in Fermi "
+            "smearing",
+        )
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        etemp: float | int = defaults.FERMI_ETEMP,
+        maxiter: int = defaults.FERMI_MAXITER,
+        thresh: float | int | None = defaults.FERMI_THRESH,
+        diff_order: int = defaults.FERMI_DIFF_ORDER,
+        partition: str | int = defaults.FERMI_PARTITION,
+    ) -> ConfigFermi:
+        """Create the configuration from user input."""
+        # integers of any kind (e.g., NumPy), but not bool
+        if not isinstance(diff_order, bool):
+            try:
+                diff_order = index(diff_order)
+            except TypeError:
+                pass
+
+        return cls(
+            etemp=etemp,
+            maxiter=maxiter,
+            thresh=thresh,
+            diff_order=diff_order,
+            partition=_label(
+                partition,
+                "partition",
+                _PARTITION,
+                "Unknown partitioning scheme for the free energy in Fermi "
+                "smearing",
+            ),
+        )
+
+    def info(self) -> dict[str, dict[str, None | float | int | str]]:
+        """
+        Return a dictionary with the Fermi smearing configuration.
+
+        Returns
+        -------
+        dict[str, dict[str, float | int | str]]
+            Dictionary with the Fermi smearing configuration.
+        """
+        return {
+            "Fermi Smearing": {
+                "Temperature": self.etemp,
+                "Maxiter": self.maxiter,
+                "Threshold": self.thresh,
+                "Derivative order": self.diff_order,
+                "Partioning": labels.FERMI_PARTITION_MAP[self.partition],
+            }
+        }
+
+
+@dataclass(frozen=True, kw_only=True)
 class ConfigSCF:
     """
     Configuration for the SCF.
 
     All configuration options are represented as integers. String options are
-    converted to integers in the constructor.
+    converted to integers by :meth:`create`.
 
     The settings for Fermi smearing are stored separately in the
     :class:`ConfigFermi` class, which can be accessed via the :attr:`fermi`
     attribute.
+
+    The configuration does not know the data type of the calculation. The
+    tolerances are checked against the precision of the tensors by the SCF
+    (:func:`check_tols`).
     """
 
     strict: bool = False
     """Strict mode for SCF configuration. Always throws errors if ``True``."""
 
-    method: int
+    method: int = defaults.METHOD
     """Integer code for tight-binding method."""
 
-    guess: int
+    guess: int = defaults.GUESS
     """Initial guess for the SCF."""
 
-    maxiter: int
+    maxiter: int = defaults.MAXITER
     """Maximum number of SCF iterations."""
 
-    mixer: int
+    mixer: int = defaults.MIXER
     """Mixing scheme for SCF iterations."""
 
-    mix_guess: bool
+    mix_guess: bool = defaults.MIX_GUESS
     """Include the initial guess in the mixing scheme."""
 
-    damp: float
+    damp: float = defaults.DAMP
     """Damping factor for the SCF iterations."""
 
-    damp_init: float
+    damp_init: float = defaults.DAMP_INIT
     """Initial damping factor for the SCF iterations."""
 
-    damp_dynamic: bool
+    damp_dynamic: bool = defaults.DAMP_DYNAMIC
     """Whether to use dynamic damping in the SCF iterations."""
 
-    damp_dynamic_factor: float
+    damp_dynamic_factor: float = defaults.DAMP_DYNAMIC_FACTOR
     """
     Damping factor for dynamic damping in the SCF iterations, i.e., when
     the norm of the error falls below a threshold.
     """
 
-    damp_soft_start: bool
+    damp_soft_start: bool = defaults.DAMP_SOFT_START
     """
     If enabled, then simple mixing will be used for the first ``generations``
     number of steps, otherwise only for the first (in Anderson mixing only).
     """
 
-    damp_generations: int
+    damp_generations: int = defaults.DAMP_GENERATIONS
     """
     Number of generations to use during mixing.
     Defaults to 5 as suggested by Eyert.
     """
 
-    damp_diagonal_offset: float
+    damp_diagonal_offset: float = defaults.DAMP_DIAGONAL_OFFSET
     """
     Offset added to the equation system's diagonal's to prevent a linear
     dependence during the mixing process. If set to ``None`` then rescaling
     will be disabled.
     """
 
-    scf_mode: int
+    scf_mode: int = defaults.SCF_MODE
     """
     SCF convergence approach (denoted by backward strategy).
 
@@ -107,59 +292,38 @@ class ConfigSCF:
         those. See :ref:`help_known_issues`.
     """
 
-    scp_mode: int
+    scp_mode: int = defaults.SCP_MODE
     """SCF convergence target (self-consistent property)."""
 
-    x_atol: float
+    x_atol: float = defaults.X_ATOL
     """Absolute tolerance for argument (x) in SCF solver."""
 
-    x_atol_max: float
+    x_atol_max: float = defaults.X_ATOL_MAX
     """Absolute tolerance for max norm (L∞) of the error in the SCF."""
 
-    f_atol: float
+    f_atol: float = defaults.F_ATOL
     """Absolute tolerance for function value (f(x)) the SCF solver."""
 
-    force_convergence: bool
+    force_convergence: bool = defaults.SCF_FORCE_CONVERGENCE
     """Force convergence of the SCF iterations."""
 
-    batch_mode: int
-    """
-    Batch mode for the SCF iterations.
-    - 0: Single system
-    - 1: Multiple systems with padding
-    - 2: Multiple systems with no padding (conformer ensemble)
-    """
+    fermi: ConfigFermi = field(default_factory=ConfigFermi)
+    """Configuration of the Fermi smearing."""
 
-    # Fermi
+    def __post_init__(self) -> None:
+        _check_label(self.guess, "guess", _GUESS, "Unknown guess method")
+        _check_label(self.scf_mode, "scf_mode", _SCF_MODE, "Unknown SCF mode")
+        _check_label(
+            self.scp_mode,
+            "scp_mode",
+            _SCP_MODE,
+            "Unknown convergence target (SCP mode)",
+        )
+        _check_label(self.mixer, "mixer", _MIXER, "Unknown mixer")
 
-    fermi_etemp: float
-    """Electronic temperature for Fermi smearing."""
-
-    fermi_maxiter: int
-    """Maximum number of iterations for Fermi smearing."""
-
-    fermi_thresh: dict
-    """Threshold for Fermi iterations."""
-
-    fermi_diff_order: int
-    """Highest order of exact derivatives of the Fermi occupations."""
-
-    fermi_partition: int
-    """Partitioning scheme for electronic free energy."""
-
-    # PyTorch
-
-    device: torch.device
-    """Device for calculations."""
-
-    dtype: torch.dtype
-    """Data type for calculations."""
-
-    eigen_options: dict[str, Any]
-    """Internal generalized eigensolver options populated by SCF dispatch."""
-
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         *,
         strict: bool = False,
         method: int = defaults.METHOD,
@@ -180,206 +344,63 @@ class ConfigSCF:
         x_atol_max: float = defaults.X_ATOL_MAX,
         f_atol: float = defaults.F_ATOL,
         force_convergence: bool = defaults.SCF_FORCE_CONVERGENCE,
-        batch_mode: int = defaults.BATCH_MODE,
         # Fermi
-        fermi_etemp: float = defaults.FERMI_ETEMP,
+        fermi_etemp: float | int = defaults.FERMI_ETEMP,
         fermi_maxiter: int = defaults.FERMI_MAXITER,
         fermi_thresh: float | int | None = defaults.FERMI_THRESH,
         fermi_diff_order: int = defaults.FERMI_DIFF_ORDER,
         fermi_partition: str | int = defaults.FERMI_PARTITION,
-        # PyTorch
-        device: torch.device = get_default_device(),
-        dtype: torch.dtype = get_default_dtype(),
-    ) -> None:
-        self.strict = strict
-        self.method = method
-
-        if isinstance(guess, str):
-            if guess.casefold() in labels.GUESS_EEQ_STRS:
-                self.guess = labels.GUESS_EEQ
-            elif guess.casefold() in labels.GUESS_SAD_STRS:
-                self.guess = labels.GUESS_SAD
-            else:
-                guess_labels = labels.GUESS_EEQ_STRS + labels.GUESS_SAD_STRS
-                raise ValueError(
-                    f"Unknown guess method '{guess}'. "
-                    f"Use one of '{', '.join(guess_labels)}'."
-                )
-        elif isinstance(guess, int):
-            if guess not in (labels.GUESS_EEQ, labels.GUESS_SAD):
-                guess_labels = labels.GUESS_EEQ_STRS + labels.GUESS_SAD_STRS
-                raise ValueError(
-                    f"Unknown guess method '{guess}'. "
-                    f"Use one of '{', '.join(guess_labels)}'."
-                )
-
-            self.guess = guess
-        else:
-            raise TypeError(
-                "The guess must be of type 'int' or 'str', but "
-                f"'{type(guess)}' was given."
+    ) -> ConfigSCF:
+        """Create the configuration from user input."""
+        if isinstance(scf_mode, str) and (
+            scf_mode.casefold() in labels.SCF_MODE_REMOVED_STRS
+        ):
+            raise ValueError(
+                f"The SCF mode '{scf_mode}' was removed. Use "
+                f"'{labels.SCF_MODE_REMOVED_STRS[scf_mode.casefold()]}' "
+                "instead."
+            )
+        if scf_mode == labels.SCF_MODE_REMOVED and not isinstance(
+            scf_mode, bool
+        ):
+            raise ValueError(
+                f"The SCF mode with integer code {scf_mode} (non-pure "
+                f"implicit) was removed. Use '{labels.SCF_MODE_REPLACEMENT}' "
+                f"(code {labels.SCF_MODE_IMPLICIT}) instead."
             )
 
-        if isinstance(scf_mode, str):
-            if scf_mode.casefold() in labels.SCF_MODE_IMPLICIT_STRS:
-                self.scf_mode = labels.SCF_MODE_IMPLICIT
-            elif scf_mode.casefold() in labels.SCF_MODE_REMOVED_STRS:
-                raise ValueError(
-                    f"The SCF mode '{scf_mode}' was removed. Use "
-                    f"'{labels.SCF_MODE_REMOVED_STRS[scf_mode.casefold()]}' "
-                    "instead."
-                )
-            elif scf_mode.casefold() in labels.SCF_MODE_FULL_STRS:
-                self.scf_mode = labels.SCF_MODE_FULL
-            elif scf_mode.casefold() in labels.SCF_MODE_EXPERIMENTAL_STRS:
-                self.scf_mode = labels.SCF_MODE_EXPERIMENTAL
-            else:
-                scf_mode_labels = (
-                    labels.SCF_MODE_IMPLICIT_STRS
-                    + labels.SCF_MODE_FULL_STRS
-                    + labels.SCF_MODE_EXPERIMENTAL_STRS
-                )
-                raise ValueError(
-                    f"Unknown SCF mode '{scf_mode}'. "
-                    f"Use one of '{', '.join(scf_mode_labels)}'."
-                )
-        elif isinstance(scf_mode, int):
-            if scf_mode == labels.SCF_MODE_REMOVED:
-                raise ValueError(
-                    f"The SCF mode with integer code {scf_mode} (non-pure "
-                    f"implicit) was removed. Use '{labels.SCF_MODE_REPLACEMENT}' "
-                    f"(code {labels.SCF_MODE_IMPLICIT}) instead."
-                )
-            if scf_mode not in (
-                labels.SCF_MODE_IMPLICIT,
-                labels.SCF_MODE_FULL,
-                labels.SCF_MODE_EXPERIMENTAL,
-            ):
-                scf_mode_labels = (
-                    labels.SCF_MODE_IMPLICIT_STRS
-                    + labels.SCF_MODE_FULL_STRS
-                    + labels.SCF_MODE_EXPERIMENTAL_STRS
-                )
-                raise ValueError(
-                    f"Unknown SCF mode '{scf_mode}'. "
-                    f"Use one of '{', '.join(scf_mode_labels)}'."
-                )
-
-            self.scf_mode = scf_mode
-
-        else:
-            raise TypeError(
-                "The scf_mode must be of type 'int' or 'str', but "
-                f"'{type(scf_mode)}' was given."
-            )
-
-        if isinstance(scp_mode, str):
-            if scp_mode.casefold() in labels.SCP_MODE_CHARGE_STRS:
-                self.scp_mode = labels.SCP_MODE_CHARGE
-            elif scp_mode.casefold() in labels.SCP_MODE_POTENTIAL_STRS:
-                self.scp_mode = labels.SCP_MODE_POTENTIAL
-            elif scp_mode.casefold() in labels.SCP_MODE_FOCK_STRS:
-                self.scp_mode = labels.SCP_MODE_FOCK
-            else:
-                scp_mode_labels = (
-                    labels.SCP_MODE_CHARGE_STRS
-                    + labels.SCP_MODE_POTENTIAL_STRS
-                    + labels.SCP_MODE_FOCK_STRS
-                )
-                raise ValueError(
-                    f"Unknown convergence target (SCP mode) '{scp_mode}'. "
-                    f"Use one of '{', '.join(scp_mode_labels)}'."
-                )
-        elif isinstance(scp_mode, int):
-            if scp_mode not in (
-                labels.SCP_MODE_CHARGE,
-                labels.SCP_MODE_POTENTIAL,
-                labels.SCP_MODE_FOCK,
-            ):
-                scp_mode_labels = (
-                    labels.SCP_MODE_CHARGE_STRS
-                    + labels.SCP_MODE_POTENTIAL_STRS
-                    + labels.SCP_MODE_FOCK_STRS
-                )
-                raise ValueError(
-                    f"Unknown convergence target (SCP mode) '{scp_mode}'. "
-                    f"Use one of '{', '.join(scp_mode_labels)}'."
-                )
-
-            self.scp_mode = scp_mode
-        else:
-            raise TypeError(
-                "The scp_mode must be of type 'int' or 'str', but "
-                f"'{type(scp_mode)}' was given."
-            )
-
-        if isinstance(mixer, str):
-            if mixer.casefold() in labels.MIXER_LINEAR_STRS:
-                self.mixer = labels.MIXER_LINEAR
-            elif mixer.casefold() in labels.MIXER_ANDERSON_STRS:
-                self.mixer = labels.MIXER_ANDERSON
-            elif mixer.casefold() in labels.MIXER_BROYDEN_STRS:
-                self.mixer = labels.MIXER_BROYDEN
-            else:
-                mixer_labels = (
-                    labels.MIXER_LINEAR_STRS
-                    + labels.MIXER_ANDERSON_STRS
-                    + labels.MIXER_BROYDEN_STRS
-                )
-                raise ValueError(
-                    f"Unknown mixer '{mixer}'. Choose from "
-                    f"'{', '.join(mixer_labels)}'."
-                )
-        elif isinstance(mixer, int):
-            if mixer not in (
-                labels.MIXER_LINEAR,
-                labels.MIXER_ANDERSON,
-                labels.MIXER_BROYDEN,
-            ):
-                mixer_labels = (
-                    labels.MIXER_LINEAR_STRS
-                    + labels.MIXER_ANDERSON_STRS
-                    + labels.MIXER_BROYDEN_STRS
-                )
-                raise ValueError(
-                    f"Unknown mixer '{mixer}'. Choose from "
-                    f"'{', '.join(mixer_labels)}'."
-                )
-
-            self.mixer = mixer
-        else:
-            raise TypeError(
-                "The mixer must be of type 'int' or 'str', but "
-                f"'{type(mixer)}' was given."
-            )
-
-        self.maxiter = maxiter
-        self.mix_guess = mix_guess
-        self.damp = damp
-        self.damp_init = damp_init
-        self.damp_dynamic = damp_dynamic
-        self.damp_dynamic_factor = damp_dynamic_factor
-        self.damp_soft_start = damp_soft_start
-        self.damp_generations = damp_generations
-        self.damp_diagonal_offset = damp_diagonal_offset
-        self.force_convergence = force_convergence
-        self.batch_mode = batch_mode
-
-        self.device = device
-        self.dtype = dtype
-
-        self.x_atol = check_tols(x_atol, dtype)
-        self.x_atol_max = check_tols(x_atol_max, dtype)
-        self.f_atol = check_tols(f_atol, dtype)
-
-        self.fermi = ConfigFermi(
-            etemp=fermi_etemp,
-            maxiter=fermi_maxiter,
-            thresh=fermi_thresh,
-            diff_order=fermi_diff_order,
-            partition=fermi_partition,
-            device=device,
-            dtype=dtype,
+        return cls(
+            strict=strict,
+            method=method,
+            guess=_label(guess, "guess", _GUESS, "Unknown guess method"),
+            maxiter=maxiter,
+            mixer=_label(mixer, "mixer", _MIXER, "Unknown mixer"),
+            mix_guess=mix_guess,
+            damp=damp,
+            damp_init=damp_init,
+            damp_dynamic=damp_dynamic,
+            damp_dynamic_factor=damp_dynamic_factor,
+            damp_soft_start=damp_soft_start,
+            damp_generations=damp_generations,
+            damp_diagonal_offset=damp_diagonal_offset,
+            scf_mode=_label(scf_mode, "scf_mode", _SCF_MODE, "Unknown SCF mode"),
+            scp_mode=_label(
+                scp_mode,
+                "scp_mode",
+                _SCP_MODE,
+                "Unknown convergence target (SCP mode)",
+            ),
+            x_atol=x_atol,
+            x_atol_max=x_atol_max,
+            f_atol=f_atol,
+            force_convergence=force_convergence,
+            fermi=ConfigFermi.create(
+                etemp=fermi_etemp,
+                maxiter=fermi_maxiter,
+                thresh=fermi_thresh,
+                diff_order=fermi_diff_order,
+                partition=fermi_partition,
+            ),
         )
 
     @property
@@ -388,7 +409,7 @@ class ConfigSCF:
         Whether the selected tight-binding method requires SCF iterations.
 
         GFN0-xTB is a non-self-consistent method. This property is derived
-        solely from :attr:`method` and intentionally has no setter.
+        solely from :attr:`method`.
         """
         return self.method != labels.GFN0_XTB
 
@@ -417,30 +438,8 @@ class ConfigSCF:
             }
         }
 
-    def __str__(self):  # pragma: no cover
-        config_str = [
-            f"Configuration for SCF:",
-            f"  TB Method: {labels.GFN_XTB_MAP[self.method]}",
-            f"  Guess Method: {self.guess}",
-            f"  SCF Mode: {self.scf_mode} (Convergence approach)",
-            f"  SCP Mode: {self.scp_mode} (Convergence target)",
-            f"  Maximum Iterations: {self.maxiter}",
-            f"  Mixer: {self.mixer}",
-            f"  Damping Factor: {self.damp}",
-            f"  Force Convergence: {self.force_convergence}",
-            f"  Device: {self.device}",
-            f"  Data Type: {self.dtype}",
-            f"  xitorch absolute Tolerance: {self.x_atol}",
-            f"  xitorch Functional Tolerance: {self.f_atol}",
-            f"  Fermi Configuration: {self.fermi}",
-        ]
-        return "\n".join(config_str)
 
-    def __repr__(self) -> str:  # pragma: no cover
-        return str(self)
-
-
-def check_tols(value: float, dtype: torch.dtype) -> float:
+def check_tols(value: float, dtype: Any) -> float:
     """
     Set tolerances to catch unreasonably small values.
 
@@ -456,6 +455,11 @@ def check_tols(value: float, dtype: torch.dtype) -> float:
     float
         Possibly corrected tolerance.
     """
+    # pylint: disable=import-outside-toplevel
+    import torch
+
+    from dxtb import OutputHandler
+
     eps = torch.finfo(dtype).eps
 
     if value < eps:
@@ -467,135 +471,3 @@ def check_tols(value: float, dtype: torch.dtype) -> float:
         return 100 * eps
 
     return value
-
-
-class ConfigFermi:
-    """
-    Configuration for fermi smearing.
-    """
-
-    etemp: float | int
-    """Electronic temperature (in a.u.) for Fermi smearing."""
-
-    maxiter: int
-    """Maximum number of iterations for Fermi smearing."""
-
-    thresh: float | int | None
-    """Float data type dependent threshold for Fermi iterations."""
-
-    diff_order: int
-    """
-    Highest order of the derivatives of the Fermi occupations that is exact.
-    It sets the number of differentiable Newton steps of the Fermi energy.
-    """
-
-    partition: int
-    """Partitioning scheme for electronic free energy."""
-
-    # PyTorch
-
-    device: torch.device
-    """Device for calculations."""
-
-    dtype: torch.dtype
-    """Data type for calculations."""
-
-    def __init__(
-        self,
-        *,
-        etemp: float | int = defaults.FERMI_ETEMP,
-        maxiter: int = defaults.FERMI_MAXITER,
-        thresh: float | int | None = defaults.FERMI_THRESH,
-        diff_order: int = defaults.FERMI_DIFF_ORDER,
-        partition: str | int = defaults.FERMI_PARTITION,
-        # PyTorch
-        device: torch.device = get_default_device(),
-        dtype: torch.dtype = get_default_dtype(),
-    ) -> None:
-        self.device = device
-        self.dtype = dtype
-        self.etemp = etemp
-        self.maxiter = maxiter
-        self.thresh = thresh
-
-        # integers of any kind (e.g., NumPy), but not bool
-        msg = (
-            "The derivative order of the Fermi occupations must be of type "
-            f"'int', but '{type(diff_order)}' was given."
-        )
-        if isinstance(diff_order, bool):
-            raise TypeError(msg)
-        try:
-            diff_order = index(diff_order)
-        except TypeError as e:
-            raise TypeError(msg) from e
-        if diff_order < 0:
-            raise ValueError(
-                "The derivative order of the Fermi occupations must not be "
-                f"negative ({diff_order})."
-            )
-        self.diff_order = diff_order
-
-        if isinstance(partition, str):
-            if partition.casefold() in labels.FERMI_PARTITION_EQUAL_STRS:
-                self.partition = labels.FERMI_PARTITION_EQUAL
-            elif partition.casefold() in labels.FERMI_PARTITION_ATOMIC_STRS:
-                self.partition = labels.FERMI_PARTITION_ATOMIC
-            else:
-                fermi_partition_labels = (
-                    labels.FERMI_PARTITION_EQUAL_STRS
-                    + labels.FERMI_PARTITION_ATOMIC_STRS
-                )
-                raise ValueError(
-                    "Unknown partitioning scheme for the free energy in Fermi "
-                    f"smearing '{partition}'. Use one of "
-                    f"'{', '.join(fermi_partition_labels)}'."
-                )
-        elif isinstance(partition, int):
-            if partition not in (
-                labels.FERMI_PARTITION_EQUAL,
-                labels.FERMI_PARTITION_ATOMIC,
-            ):
-                fermi_partition_labels = (
-                    labels.FERMI_PARTITION_EQUAL_STRS
-                    + labels.FERMI_PARTITION_ATOMIC_STRS
-                )
-                raise ValueError(
-                    "Unknown partitioning scheme for the free energy in Fermi "
-                    f"smearing '{partition}'. Use one of "
-                    f"'{', '.join(fermi_partition_labels)}'."
-                )
-
-            self.partition = partition
-        else:
-            raise TypeError(
-                "The partition must be of type 'int' or 'str', but "
-                f"'{type(partition)}' was given."
-            )
-
-    def info(self) -> dict[str, dict[str, None | float | int | str]]:
-        """
-        Return a dictionary with the Fermi smearing configuration.
-
-        Returns
-        -------
-        dict[str, dict[str, float | int | str]]
-            Dictionary with the Fermi smearing configuration.
-        """
-        return {
-            "Fermi Smearing": {
-                "Temperature": self.etemp,
-                "Maxiter": self.maxiter,
-                "Threshold": self.thresh,
-                "Derivative order": self.diff_order,
-                "Partioning": labels.FERMI_PARTITION_MAP[self.partition],
-            }
-        }
-
-    def __str__(self) -> str:  # pragma: no cover
-        info = self.info()["Fermi Smearing"]
-        info_str = ", ".join(f"{key}={value}" for key, value in info.items())
-        return f"{self.__class__.__name__}({info_str})"
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return str(self)

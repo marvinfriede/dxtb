@@ -75,7 +75,7 @@ class SelfConsistentFieldFull(BaseTSCF):
         fcn = self._fcn
 
         maxiter = self.config.maxiter
-        batched = self.config.batch_mode
+        batched = self._data.ihelp.batch_mode
 
         # Evaluate initial guess outside of SCF loop to make maxiter=0 possible.
         q_new = fcn(guess)

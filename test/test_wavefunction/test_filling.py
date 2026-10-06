@@ -21,6 +21,8 @@ Reference values obtained with tbmalt.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from math import sqrt
 
 import numpy as np
@@ -273,7 +275,7 @@ def test_kt(dtype: torch.dtype, kt: float):
         ihelp=_IndexHelper(),  # type: ignore
         cache=d,
         integrals=IntegralMatrices(_hcore=d, _overlap=d, **dd),
-        config=ConfigSCF(fermi_etemp=kt),
+        config=ConfigSCF.create(fermi_etemp=kt),
     )
 
     scf._data.evals = emo[..., 0, :]  # the entropy reads the orbital energies
@@ -281,7 +283,7 @@ def test_kt(dtype: torch.dtype, kt: float):
     ref = ref_fenergy[kt]
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == fenergy.cpu()
 
-    scf.config.fermi.partition = -3
+    scf.config = replace(scf.config, fermi=replace(scf.config.fermi, partition=-3))
     with pytest.raises(ValueError):
         scf.get_electronic_free_energy()
 

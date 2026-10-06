@@ -15,10 +15,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Integral configuration.
+Config: Integrals
+=================
+
+Configuration for the integrals.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from dxtb._src.constants import defaults, labels
 from dxtb._src.typing import Literal
@@ -26,24 +31,17 @@ from dxtb._src.typing import Literal
 __all__ = ["ConfigIntegrals"]
 
 
+@dataclass(frozen=True, kw_only=True)
 class ConfigIntegrals:
     """
     Configuration for the integrals.
 
     All configuration options are represented as integers. String options are
-    converted to integers in the constructor.
+    converted to integers by :meth:`create`, which is the entry point for
+    user input. The constructor only accepts final values.
     """
 
-    cutoff: float
-    """
-    Real-space cutoff (in Bohr) for integral evaluation for PyTorch.
-    The ``libint`` driver ignores this option.
-    """
-
-    driver: int
-    """Type of integral driver."""
-
-    level: int
+    level: int = defaults.INTLEVEL
     """
     Indicator for integrals to compute.
 
@@ -54,36 +52,80 @@ class ConfigIntegrals:
     - 4: +quadrupole
     """
 
-    uplo: Literal["n", "l", "u"]
+    cutoff: float = defaults.INTCUTOFF
+    """
+    Real-space cutoff (in Bohr) for integral evaluation for PyTorch.
+    The ``libint`` driver ignores this option.
+    """
+
+    driver: int = defaults.INTDRIVER
+    """Type of integral driver."""
+
+    uplo: Literal["n", "l", "u"] = defaults.INTUPLO  # type: ignore
     """Integral mode for PyTorch integral calculation."""
 
-    algorithm: str | None
+    algorithm: str | None = None
     """
     1D kernel of the PyTorch integral driver (``None``: the default,
     ``os``).
     """
 
-    def __init__(
-        self,
+    def __post_init__(self) -> None:
+        if not isinstance(self.level, int):
+            raise TypeError(
+                f"The received integral level (`{self.level}`) is not an "
+                f"integer, but {type(self.level)}."
+            )
+
+        if self.uplo not in ("n", "u", "l"):
+            raise ValueError(
+                f"Unknown option for `uplo` chosen: '{self.uplo}'."
+            )
+
+        if not isinstance(self.driver, int):
+            raise TypeError(
+                "The driver must be of type 'int' (use `ConfigIntegrals."
+                f"create` for strings), but '{type(self.driver)}' was given."
+            )
+        if self.driver not in (labels.INTDRIVER_LIBCINT, labels.INTDRIVER_PYTORCH):
+            raise ValueError(f"Unknown integral driver '{self.driver}'.")
+
+        if self.algorithm is not None:
+            if self.algorithm not in labels.INTALGORITHM_CHOICES:
+                raise ValueError(
+                    f"Unknown integral algorithm '{self.algorithm}'. Choose "
+                    f"one of: {', '.join(labels.INTALGORITHM_CHOICES)}."
+                )
+            if self.driver == labels.INTDRIVER_LIBCINT:
+                raise ValueError(
+                    "The integral algorithm can only be chosen for the "
+                    "PyTorch integral driver, not for `libcint`."
+                )
+
+    @classmethod
+    def create(
+        cls,
         *,
         level: int = defaults.INTLEVEL,
         cutoff: float = defaults.INTCUTOFF,
         driver: str | int = defaults.INTDRIVER,
         uplo: str = defaults.INTUPLO,
         algorithm: str | None = None,
-    ) -> None:
-        self.cutoff = cutoff
+    ) -> ConfigIntegrals:
+        """
+        Create the configuration from user input (strings are converted).
 
-        if not isinstance(level, int):
-            raise TypeError(
-                f"The received integral level (`{level}`) is not an integer, "
-                f"but {type(level)}."
-            )
-        self.level = level
-
+        Raises
+        ------
+        ValueError
+            An option is unknown, or the libcint driver was requested
+            explicitly, but is not installed.
+        TypeError
+            An option has the wrong type.
+        """
         if uplo not in ("n", "N", "u", "U", "l", "L"):
             raise ValueError(f"Unknown option for `uplo` chosen: '{uplo}'.")
-        self.uplo = uplo.casefold()  # type: ignore
+        uplo = uplo.casefold()
 
         if isinstance(driver, str):
             if driver.casefold() in labels.INTDRIVER_LIBCINT_STRS:
@@ -101,12 +143,11 @@ class ConfigIntegrals:
                         "interface is not installed."
                     )
 
-                self.driver = labels.INTDRIVER_LIBCINT
+                driver = labels.INTDRIVER_LIBCINT
             elif driver.casefold() in labels.INTDRIVER_PYTORCH_STRS:
-                self.driver = labels.INTDRIVER_PYTORCH
+                driver = labels.INTDRIVER_PYTORCH
             else:
                 raise ValueError(f"Unknown integral driver '{driver}'.")
-
         elif isinstance(driver, int):
             if driver not in (
                 labels.INTDRIVER_LIBCINT,
@@ -127,10 +168,7 @@ class ConfigIntegrals:
                         "The libcint interface is not installed. "
                         "Falling back to the PyTorch driver."
                     )
-
                     driver = labels.INTDRIVER_PYTORCH
-
-            self.driver = driver
         else:
             raise TypeError(
                 "The driver must be of type 'int' or 'str', but "
@@ -145,20 +183,12 @@ class ConfigIntegrals:
                     f"Unknown integral algorithm '{algorithm}'. Choose one "
                     f"of: {', '.join(labels.INTALGORITHM_CHOICES)}."
                 )
-            if self.driver == labels.INTDRIVER_LIBCINT:
-                raise ValueError(
-                    "The integral algorithm can only be chosen for the "
-                    "PyTorch integral driver, not for `libcint`."
-                )
             algorithm = algorithm.casefold()
-        self.algorithm = algorithm
 
-    def __str__(self) -> str:  # pragma: no cover
-        return (
-            f"ConfigIntegrals(level={self.level}, cutoff={self.cutoff}, "
-            f"driver={self.driver}, uplo={self.uplo}, "
-            f"algorithm={self.algorithm})"
+        return cls(
+            level=level,
+            cutoff=cutoff,
+            driver=driver,
+            uplo=uplo,  # type: ignore
+            algorithm=algorithm,
         )
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return str(self)

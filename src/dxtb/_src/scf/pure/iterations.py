@@ -63,7 +63,7 @@ def iterate_charges(
     Tensor
         New orbital-resolved partial charges vector.
     """
-    q = Charges.from_tensor(charges, data.charges, batch_mode=cfg.batch_mode)
+    q = Charges.from_tensor(charges, data.charges, batch_mode=data.ihelp.batch_mode)
 
     potential = charges_to_potential(q, interactions, data)
     new_charges = potential_to_charges(potential, data, cfg, diagonalizer)
@@ -101,7 +101,7 @@ def iterate_potential(
         New potential vector for each orbital partial charge.
     """
     pot = Potential.from_tensor(
-        potential, data.potential, batch_mode=cfg.batch_mode
+        potential, data.potential, batch_mode=data.ihelp.batch_mode
     )
 
     charges = potential_to_charges(pot, data, cfg, diagonalizer)

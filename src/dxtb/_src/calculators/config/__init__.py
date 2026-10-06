@@ -34,8 +34,9 @@ created.
     calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts)
 
 The :class:`~dxtb.Calculator` stores the configuration in the
-:attr:`~dxtb.Calculator.opts` attribute.
-All options can be accessed and modified directly using the attribute.
+:attr:`~dxtb.Calculator.opts` attribute. The configuration is immutable: the
+options can be read from the attribute, and a changed configuration is a new
+object (:func:`dataclasses.replace`) that is passed to a new calculator.
 
 Note that the options are passed to separate configuration classes within the
 main configuration class. The maximum number of SCF iterations is passed to the

@@ -44,6 +44,7 @@ class _MapData:
     """
 
     def __init__(self, data: BaseSCF._Data) -> None:
+        self.eigen_options = data.eigen_options
         self.ints = copy.copy(data.ints)
         self.n0 = data.n0
         self.occupation = data.occupation
@@ -121,8 +122,7 @@ class BaseXSCF(BaseSCF):
             The map for the current convergence target (SCP mode).
         """
         template = _MapData(self._data)
-        cfg = copy.copy(self.config)
-        cfg.eigen_options = self.eigen_options
+        cfg = self.config
         interactions = self.interactions
         fcn = iter_options[self.config.scp_mode]
 

@@ -92,7 +92,7 @@ def run_problem(
     """Run the non-self-consistent solver for one neutral molecule."""
     sample, numbers, positions, ihelp, hcore, integrals = build_problem(name)
     if config is None:
-        config = ConfigSCF(method=labels.GFN0_XTB, dtype=torch.float64)
+        config = ConfigSCF(method=labels.GFN0_XTB)
     if interactions is None:
         interactions = InteractionList()
 
@@ -168,7 +168,6 @@ def test_exactly_one_diagonalization_and_no_initial_guess() -> None:
         method=labels.GFN0_XTB,
         maxiter=999,
         mixer=labels.MIXER_BROYDEN,
-        dtype=torch.float64,
     )
 
     with patch(
@@ -201,7 +200,6 @@ def test_mixer_and_maxiter_are_inert(maxiter: int, mixer: int) -> None:
             method=labels.GFN0_XTB,
             maxiter=maxiter,
             mixer=mixer,
-            dtype=torch.float64,
         ),
     )
 
@@ -279,8 +277,6 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
         ihelp,
         ConfigSCF(
             method=labels.GFN0_XTB,
-            batch_mode=1,
-            dtype=torch.float64,
         ),
         integrals,
         hcore.refocc,

@@ -27,6 +27,7 @@ the :attr:`implemented_properties` attribute.
 from __future__ import annotations
 
 from abc import abstractmethod
+from dataclasses import replace
 
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
@@ -63,6 +64,11 @@ from dxtb.config import Config
 from dxtb.integrals import Integrals
 
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
+
+
+def _with_int_level(opts: Config, level: int) -> Config:
+    """Configuration with a different integral level."""
+    return replace(opts, ints=replace(opts.ints, level=level))
 
 
 class CalculatorCache(TensorLike):
@@ -514,9 +520,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         # setup verbosity first
         opts = opts if opts is not None else {}
+        batch_mode = kwargs.pop("batch_mode", None)
         if isinstance(opts, dict):
             opts = dict(opts)
             OutputHandler.verbosity = opts.pop("verbosity", 1)
+            batch_mode = opts.pop("batch_mode", batch_mode)
 
         OutputHandler.write_stdout("===========", v=4)
         OutputHandler.write_stdout("CALCULATION", v=4)
@@ -551,7 +559,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         # setup calculator options
         if isinstance(opts, dict):
-            opts = Config(**opts, **dd)
+            opts = Config.create(**opts)
         self.opts = opts
 
         # Set integral level based on parametrization. For the tests, we want
@@ -567,19 +575,26 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                     method in par.meta.name.casefold()
                     for method in ("gfn0", "gfn1")
                 ):
-                    self.opts.ints.level = max(
-                        labels.INTLEVEL_HCORE, self.opts.ints.level
+                    self.opts = _with_int_level(
+                        self.opts, max(labels.INTLEVEL_HCORE, self.opts.ints.level)
                     )
                 elif "gfn2" in par.meta.name.casefold():
-                    self.opts.ints.level = max(
-                        labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level
+                    self.opts = _with_int_level(
+                        self.opts,
+                        max(labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level),
                     )
 
         # create cache
         self.cache = CalculatorCache(**dd) if cache is None else cache
 
-        if self.opts.batch_mode == 0 and numbers.ndim > 1:
-            self.opts.batch_mode = 1
+        # The batch mode is not a setting but follows the shape of the atomic
+        # numbers; mode 2 (conformers without padding) can be requested.
+        if batch_mode is None or (batch_mode == 0 and numbers.ndim > 1):
+            batch_mode = 1 if numbers.ndim > 1 else 0
+        if batch_mode not in (0, 1, 2):
+            raise ValueError(
+                f"Invalid batch mode '{batch_mode}'. Must be one of [0, 1, 2]."
+            )
 
         # PERF: The IndexHelper is created on CPU and moved to the device of the
         # `number` tensor. This is required for the instantiation of the
@@ -591,9 +606,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         # then move IndexHelper to the device and compute Hamiltonian. However,
         # this would require a change in the code structure. So we take the
         # very small performance hit here.)
-        self.ihelp = IndexHelper.from_numbers(
-            numbers, par, self.opts.batch_mode
-        )
+        self.ihelp = IndexHelper.from_numbers(numbers, par, batch_mode)
 
         ################
         # INTERACTIONS #
@@ -715,8 +728,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                     f"({labels.INTLEVEL_DIPOLE}) due to electric field "
                     "interaction."
                 )
-            self.opts.ints.level = max(
-                labels.INTLEVEL_DIPOLE, self.opts.ints.level
+            self.opts = _with_int_level(
+                self.opts, max(labels.INTLEVEL_DIPOLE, self.opts.ints.level)
             )
 
         if efield_grad.LABEL_EFIELD_GRAD in self.interactions.labels:
@@ -726,8 +739,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                     f"{labels.INTLEVEL_DIPOLE} due to electric field "
                     "gradient interaction."
                 )
-            self.opts.ints.level = max(
-                labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level
+            self.opts = _with_int_level(
+                self.opts, max(labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level)
             )
 
         # setup integral driver and integral container
@@ -945,9 +958,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.interactions = self.interactions.type(dtype)
         self.integrals = self.integrals.type(dtype)
         self.cache = self.cache.type(dtype)
-
-        # simple override in config
-        self.opts.dtype = dtype
 
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)

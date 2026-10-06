@@ -28,14 +28,14 @@ from dxtb.config import ConfigIntegrals as Cfg
 
 
 def test_default() -> None:
-    cfg = Cfg()
+    cfg = Cfg.create()
     assert cfg.cutoff == defaults.INTCUTOFF
     assert cfg.level == defaults.INTLEVEL
     assert cfg.uplo == defaults.INTUPLO
 
 
 def test_default_driver() -> None:
-    cfg = Cfg()
+    cfg = Cfg.create()
 
     if has_libcint is True:
         assert cfg.driver == defaults.INTDRIVER
@@ -44,7 +44,7 @@ def test_default_driver() -> None:
 
 
 def test_driver_pytorch() -> None:
-    cfg = Cfg(driver=labels.INTDRIVER_PYTORCH_STRS[0])
+    cfg = Cfg.create(driver=labels.INTDRIVER_PYTORCH_STRS[0])
     assert cfg.driver == labels.INTDRIVER_PYTORCH
 
 
@@ -52,33 +52,33 @@ def test_driver_libcint() -> None:
 
     if has_libcint is False:
         with pytest.raises(ValueError):
-            Cfg(driver=labels.INTDRIVER_LIBCINT_STRS[0])
+            Cfg.create(driver=labels.INTDRIVER_LIBCINT_STRS[0])
     else:
-        cfg = Cfg(driver=labels.INTDRIVER_LIBCINT_STRS[0])
+        cfg = Cfg.create(driver=labels.INTDRIVER_LIBCINT_STRS[0])
         assert cfg.driver == labels.INTDRIVER_LIBCINT
 
 
 def test_fail_driver() -> None:
     with pytest.raises(ValueError):
-        Cfg(driver=-999)
+        Cfg.create(driver=-999)
 
     with pytest.raises(ValueError):
-        Cfg(driver="-999")
+        Cfg.create(driver="-999")
 
     # unknown driver names
     for driver in ("analytical", "legacy"):
         with pytest.raises(ValueError):
-            Cfg(driver=driver)
+            Cfg.create(driver=driver)
 
     with pytest.raises(TypeError):
-        Cfg(driver=1.0)  # type: ignore
+        Cfg.create(driver=1.0)  # type: ignore
 
 
 def test_fail_level() -> None:
     with pytest.raises(TypeError):
-        Cfg(level="overlap")  # type: ignore
+        Cfg.create(level="overlap")  # type: ignore
 
 
 def test_fail_uplo() -> None:
     with pytest.raises(ValueError):
-        Cfg(uplo="symmetric")  # type: ignore
+        Cfg.create(uplo="symmetric")  # type: ignore

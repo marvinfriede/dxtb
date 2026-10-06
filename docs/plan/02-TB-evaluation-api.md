@@ -49,11 +49,13 @@
 
 1. Convert `Config` and all sub-configs to frozen dataclasses with value equality and hashing.
 2. Remove `device` and `dtype` from the configuration.
-3. Remove `batch_mode` (superseded by B1 item 5).
+3. Remove `batch_mode` from the configuration (superseded by B1 item 5). The calculator derives it from the shape of `numbers` (the `batch_mode` option, mode 2 for conformers, stays a constructor option) and the index helper carries it; the SCF reads it from there. The mode itself is removed with the batching rewrite (E6), because conformer throughput (G2) still depends on mode 2.
 4. Replace post-construction adjustments (integral level from the method) with construction-time derivation.
 5. Change the CLI to build a new configuration with `replace()`.
 
 **Done when.** No assignment to a configuration attribute anywhere outside construction; equal settings compare equal.
+
+**Status: done.** Frozen dataclasses (`Config`, `ConfigSCF`, `ConfigFermi`, `ConfigIntegrals`, `ConfigCache`, `ConfigCacheStore`); user input (strings, lists) is converted by the `create` class methods, the constructors take final values only. Changes use `dataclasses.replace`. Device, dtype and batch mode are not fields; tolerances are checked against the tensor dtype in the SCF; the eigensolver options live on the SCF data. Calculator-level state that changes after construction (`opts` rebinding for the integral level and the cache flags of the analytical gradient) disappears with B5/B6.
 
 **Needs.** B1. **Size.** M.
 

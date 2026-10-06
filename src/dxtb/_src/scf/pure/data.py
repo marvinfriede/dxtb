@@ -19,7 +19,7 @@ from dxtb import IndexHelper
 from dxtb._src.components.interactions import InteractionListCache
 from dxtb._src.components.interactions.container import ContainerData
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Slicers, Tensor
+from dxtb._src.typing import Any, Slicers, Tensor
 
 __all__ = ["_Data"]
 
@@ -99,6 +99,7 @@ class _Data:
         self.ints = integrals
         self.occupation = occupation
         self.nel = occupation.sum(-1) if nel is None else nel
+        self.eigen_options: dict[str, Any] = {"method": "exacteig"}
         self.n0 = n0
         self.numbers = numbers
         self.ihelp = ihelp

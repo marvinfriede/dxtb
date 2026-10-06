@@ -23,6 +23,8 @@ Calculator for the extended tight-binding model with analytical gradients.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.math import einsum
@@ -110,7 +112,9 @@ class AnalyticalCalculator(EnergyCalculator):
         # calculation will use the cached value and the properties of
         # interest are not calculated.
         if self.opts.cache.is_setup_for_analytical_gradient() is False:
-            self.opts.cache.setup_for_analytical_gradient()
+            self.opts = replace(
+                self.opts, cache=self.opts.cache.for_analytical_gradient()
+            )
             self.cache.reset_all()
 
         self.energy(positions, chrg, spin, **kwargs)
@@ -481,7 +485,7 @@ class AnalyticalCalculator(EnergyCalculator):
         result.total += scf_results["energy"] + scf_results["fenergy"]
         result.iter = scf_results["iterations"]
 
-        if self.opts.batch_mode == 0:
+        if self.ihelp.batch_mode == 0:
             OutputHandler.write_stdout(
                 f"SCF Energy  : {result.scf.sum(-1):.14f} Hartree.",
                 v=2,

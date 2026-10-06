@@ -33,20 +33,17 @@ from ..conftest import DEVICE
 
 
 def test_default() -> None:
-    cfg = Cfg()
+    cfg = Cfg.create()
     assert cfg.strict == defaults.STRICT
-    assert cfg.exclude == defaults.EXCLUDE
+    assert cfg.exclude == tuple(defaults.EXCLUDE)
     assert cfg.method == defaults.METHOD
     assert cfg.grad == False
-    assert cfg.batch_mode == defaults.BATCH_MODE
 
     assert cfg.ints.cutoff == defaults.INTCUTOFF
     assert cfg.ints.level == defaults.INTLEVEL
     assert cfg.ints.uplo == defaults.INTUPLO
 
     assert cfg.anomaly == False
-    assert cfg.device == torch.device("cpu") if DEVICE is None else DEVICE
-    assert cfg.dtype == get_default_dtype()
 
     assert cfg.scf.maxiter == defaults.MAXITER
     assert cfg.scf.mixer == defaults.MIXER
@@ -87,28 +84,28 @@ def test_default() -> None:
 
 
 def test_method() -> None:
-    cfg = Cfg(method=labels.GFN1_XTB_STRS[0])
+    cfg = Cfg.create(method=labels.GFN1_XTB_STRS[0])
     assert cfg.method == labels.GFN1_XTB
 
-    cfg = Cfg(method=labels.GFN1_XTB)
+    cfg = Cfg.create(method=labels.GFN1_XTB)
     assert cfg.method == labels.GFN1_XTB
 
     # GFN2 needs multipoles, which libcint and the PyTorch drivers provide
-    cfg = Cfg(method=labels.GFN2_XTB)
+    cfg = Cfg.create(method=labels.GFN2_XTB)
     assert cfg.method == labels.GFN2_XTB
 
-    cfg = Cfg(method=labels.GFN2_XTB_STRS[0])
+    cfg = Cfg.create(method=labels.GFN2_XTB_STRS[0])
     assert cfg.method == labels.GFN2_XTB
 
 
 def test_method_fail() -> None:
     with pytest.raises(ValueError):
-        Cfg(method="invalid")
+        Cfg.create(method="invalid")
 
 
 def test_fermi_diff_order() -> None:
     """The derivative order of the Fermi occupations is passed through."""
-    cfg = Cfg(fermi_diff_order=np.int64(1))
+    cfg = Cfg.create(fermi_diff_order=np.int64(1))
     assert cfg.scf.fermi.diff_order == 1
     assert isinstance(cfg.scf.fermi.diff_order, int)
     assert cfg.scf.fermi.info()["Fermi Smearing"]["Derivative order"] == 1
@@ -118,37 +115,37 @@ def test_fermi_diff_order() -> None:
 def test_fermi_diff_order_type_fail(order) -> None:
     """The derivative order must be an integer."""
     with pytest.raises(TypeError):
-        Cfg(fermi_diff_order=order)
+        Cfg.create(fermi_diff_order=order)
 
 
 def test_fermi_diff_order_value_fail() -> None:
     """The derivative order must not be negative."""
     with pytest.raises(ValueError):
-        Cfg(fermi_diff_order=-1)
+        Cfg.create(fermi_diff_order=-1)
 
     with pytest.raises(ValueError):
-        Cfg(method=-999)
+        Cfg.create(method=-999)
 
     with pytest.raises(TypeError):
-        Cfg(method=1.0)  # type: ignore
+        Cfg.create(method=1.0)  # type: ignore
 
 
 def test_gfn2_with_pytorch_drivers() -> None:
-    cfg = Cfg(method=labels.GFN2_XTB, int_driver=labels.INTDRIVER_PYTORCH)
+    cfg = Cfg.create(method=labels.GFN2_XTB, int_driver=labels.INTDRIVER_PYTORCH)
     assert cfg.ints.driver == labels.INTDRIVER_PYTORCH
 
 
 def test_int_algorithm() -> None:
-    cfg = Cfg(int_driver=labels.INTDRIVER_PYTORCH, int_algorithm="OS")
+    cfg = Cfg.create(int_driver=labels.INTDRIVER_PYTORCH, int_algorithm="OS")
     assert cfg.ints.algorithm == "os"
-    assert Cfg().ints.algorithm is None
+    assert Cfg.create().ints.algorithm is None
 
     with pytest.raises(ValueError):
-        Cfg(int_driver=labels.INTDRIVER_PYTORCH, int_algorithm="nope")
+        Cfg.create(int_driver=labels.INTDRIVER_PYTORCH, int_algorithm="nope")
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_int_algorithm_fail_libcint() -> None:
     # the algorithm only exists for the PyTorch drivers
     with pytest.raises(ValueError):
-        Cfg(int_driver=labels.INTDRIVER_LIBCINT, int_algorithm="os")
+        Cfg.create(int_driver=labels.INTDRIVER_LIBCINT, int_algorithm="os")

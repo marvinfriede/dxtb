@@ -19,70 +19,66 @@ Config: Cache
 =============
 
 Configuration for the cache.
+
+The configuration is immutable: a changed setting is a new object, created
+with :func:`dataclasses.replace`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from dxtb._src.constants import defaults
 
-__all__ = ["ConfigCache"]
+__all__ = ["ConfigCache", "ConfigCacheStore"]
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class ConfigCacheStore:
     """
     Configuration for the cache store.
     """
 
-    hcore: bool
+    hcore: bool = defaults.CACHE_STORE_HCORE
     """Whether to store the core Hamiltonian matrix."""
-    overlap: bool
+
+    overlap: bool = defaults.CACHE_STORE_OVERLAP
     """Whether to store the overlap matrix."""
-    dipole: bool
+
+    dipole: bool = defaults.CACHE_STORE_DIPOLE
     """Whether to store the dipole moment."""
-    quadrupole: bool
+
+    quadrupole: bool = defaults.CACHE_STORE_QUADRUPOLE
     """Whether to store the quadrupole moment."""
+
     #
-    charges: bool
+
+    charges: bool = defaults.CACHE_STORE_CHARGES
     """Whether to store the atomic charges."""
-    coefficients: bool
+
+    coefficients: bool = defaults.CACHE_STORE_COEFFICIENTS
     """Whether to store the MO coefficients."""
-    density: bool
+
+    density: bool = defaults.CACHE_STORE_DENSITY
     """Whether to store the density matrix."""
-    fock: bool
+
+    fock: bool = defaults.CACHE_STORE_FOCK
     """Whether to store the Fock matrix."""
-    iterations: bool
+
+    iterations: bool = defaults.CACHE_STORE_ITERATIONS
     """Whether to store the number of SCF iterations."""
-    mo_energies: bool
+
+    mo_energies: bool = defaults.CACHE_STORE_MO_ENERGIES
     """Whether to store the MO energies."""
-    occupation: bool
+
+    occupation: bool = defaults.CACHE_STORE_OCCUPATIONS
     """Whether to store the occupation numbers."""
-    potential: bool
+
+    potential: bool = defaults.CACHE_STORE_POTENTIAL
     """Whether to store the potential matrix."""
 
-    def set(self, key: str, value: bool) -> None:
-        """
-        Set configuration options using keyword arguments.
 
-        Parameters
-        ----------
-        key : str
-            The configuration key.
-        value : bool
-            The configuration value.
-
-        Example
-        -------
-        config.set("hcore", True)
-        """
-        if not hasattr(self, key):
-            raise ValueError(f"Unknown configuration key: {key}")
-
-        setattr(self, key, value)
-
-
+@dataclass(frozen=True, kw_only=True)
 class ConfigCache:
     """
     Configuration for the cache of the calculator.
@@ -91,7 +87,7 @@ class ConfigCache:
     storage class that flags all properties which should be cached.
     """
 
-    enabled: bool
+    enabled: bool = defaults.CACHE_ENABLED
     """
     Enable or disable the cache.
 
@@ -103,11 +99,12 @@ class ConfigCache:
         :ref:`help_known_issues`.
     """
 
-    store: ConfigCacheStore
+    store: ConfigCacheStore = field(default_factory=ConfigCacheStore)
     """Container for which quantities to store."""
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         *,
         enabled: bool = defaults.CACHE_ENABLED,
         #
@@ -124,42 +121,52 @@ class ConfigCache:
         mo_energies: bool = defaults.CACHE_STORE_MO_ENERGIES,
         occupation: bool = defaults.CACHE_STORE_OCCUPATIONS,
         potential: bool = defaults.CACHE_STORE_POTENTIAL,
-    ) -> None:
-        self.enabled = enabled
-
-        self.store = ConfigCacheStore(
-            hcore=hcore,
-            overlap=overlap,
-            dipole=dipole,
-            quadrupole=quadrupole,
-            #
-            charges=charges,
-            coefficients=coefficients,
-            density=density,
-            fock=fock,
-            iterations=iterations,
-            mo_energies=mo_energies,
-            occupation=occupation,
-            potential=potential,
+    ) -> ConfigCache:
+        """Create the configuration from the flat list of options."""
+        return cls(
+            enabled=enabled,
+            store=ConfigCacheStore(
+                hcore=hcore,
+                overlap=overlap,
+                dipole=dipole,
+                quadrupole=quadrupole,
+                #
+                charges=charges,
+                coefficients=coefficients,
+                density=density,
+                fock=fock,
+                iterations=iterations,
+                mo_energies=mo_energies,
+                occupation=occupation,
+                potential=potential,
+            ),
         )
 
     # Helpers for analytical gradient calculations
 
-    def setup_for_analytical_gradient(self) -> None:
+    def for_analytical_gradient(self) -> ConfigCache:
         """
-        Enable all quantities required for an analytical gradient calculation.
+        Configuration that also stores all quantities required for an
+        analytical gradient calculation.
         """
-        self.store.charges = True
-        self.store.coefficients = True
-        self.store.density = True
-        self.store.mo_energies = True
-        self.store.occupation = True
-        self.store.overlap = True
-        self.store.potential = True
+        return replace(
+            self,
+            store=replace(
+                self.store,
+                charges=True,
+                coefficients=True,
+                density=True,
+                mo_energies=True,
+                occupation=True,
+                overlap=True,
+                potential=True,
+            ),
+        )
 
     def is_setup_for_analytical_gradient(self) -> bool:
         """
         Check if all quantities required for an analytical gradient calculation
+        are stored.
 
         Returns
         -------
@@ -177,12 +184,3 @@ class ConfigCache:
                 self.store.potential,
             ]
         )
-
-    # Pretty printing
-
-    def __str__(self) -> str:  # pragma: no cover
-        """Custom print representation showing all available slots."""
-        return f"{self.__class__.__name__}({self.__dict__})"
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return str(self)

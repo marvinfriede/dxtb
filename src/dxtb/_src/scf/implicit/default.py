@@ -64,7 +64,7 @@ class SelfConsistentFieldImplicit(BaseXSCF):
             fcn=self.stateless_map(),
             y0=guess,
             bck_options=self.bck_options,
-            batched=self.config.batch_mode > 0,
+            batched=self._data.ihelp.batch_mode > 0,
             **self.fwd_options,
         )
         self._data.iter += niter

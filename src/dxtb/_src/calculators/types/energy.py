@@ -336,7 +336,7 @@ class EnergyCalculator(BaseCalculator):
         scf_energy = scf_results["energy"] + scf_results["fenergy"]
         result.total += scf_energy
 
-        if self.opts.batch_mode == 0:
+        if self.ihelp.batch_mode == 0:
             OutputHandler.write_stdout(
                 "SCF Energy  : %.14f Hartree.",
                 scf_results["energy"].sum(-1),
@@ -482,7 +482,7 @@ class EnergyCalculator(BaseCalculator):
         ovlp_msg = (
             "Overlap matrix not found in cache. The overlap is not saved "
             "per default. Enable saving either via the calculator options "
-            "(`calc.opts.cache.store.overlap = True`) or by passing the "
+            "(`opts={\"cache_overlap\": True}`) or by passing the "
             "`store_overlap=True` keyword argument to called method, e.g., "
             "`calc.energy(positions, store_overlap=True)`"
         )
@@ -503,7 +503,7 @@ class EnergyCalculator(BaseCalculator):
             raise RuntimeError(
                 "Density matrix not found in cache. The density is not saved "
                 "per default. Enable saving either via the calculator options "
-                "(`calc.opts.cache.store.density = True`) or by passing the "
+                "(`opts={\"cache_density\": True}`) or by passing the "
                 "`store_density=True` keyword argument to called method, e.g., "
                 "`calc.energy(positions, store_density=True)`"
             )
