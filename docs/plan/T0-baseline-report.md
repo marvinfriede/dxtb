@@ -303,49 +303,69 @@ setup included, the first graph breaks are `.item()` in
 
 CPU only (4 vCPU, 15 GB; no GPU in this environment, GPU runs remain to be
 done). Script `benchmarks/baseline/workloads.py`; raw results in
-`benchmarks/baseline/results/`. Unrolled SCF, thresholds 1e-8.
+`benchmarks/baseline/results/`: `T0-cpu-4vcpu.json` (first baseline, `a132ec8`
+with tad-mctc 0.7.0) and `T0-cpu-4vcpu-mctc0.9.1.json` (this branch on `main`
+at `3b6a90f` with tad-mctc 0.9.1; its last entry is a profiled run, whose
+stage times are inflated by the profiler). Unrolled SCF, thresholds 1e-8,
+PyTorch integral driver, one workload at a time with no other load.
 
-| workload | GFN1 (PyTorch driver) | GFN2 (PyTorch driver) | libcint |
-| --- | --- | --- | --- |
-| W1 water cluster, 510 atoms: energy + forces (4 threads) | 16.5 s + 25.2 s, peak 8.3 GB | **out of memory** (> 14 GB) | GFN1 12.6 s + 12.5 s, 7.3 GB; GFN2 out of memory |
-| W2 conformers (tmpda, 69 atoms), energy + forces, 1 thread | 8 conformers: batch 42.7 s, loop 51.9 s, 7.3 GB (batch = loop to 1e-14) | 8 conformers: out of memory | - |
-| W2 with 20 conformers | out of memory (> 14 GB) | - | - |
-| W2 with 4 threads | hangs (see below) | - | - |
-| W3 training step, padded batch, 1 thread | 12 molecules (<= 16 atoms): 2.2 s forward + 4.1 s parameter backward, 1.2 GB; 159 of 2261 leaves get a gradient | 10.2 s + 15.8 s, 2.7 GB; 215 of 1402 leaves | - |
-| W3 with 32 molecules (incl. 69 atoms) | out of memory | - | - |
-| W4 Hessian, LYS_xao (33 atoms), 4 threads | 58 s, 9.3 GB | **out of memory** after 30 min | - |
-| W5 hyperpolarizability, glycine, 4 threads | 8.8 s, 1.3 GB | 17.3 s, 1.8 GB | - |
+| workload | before (tad-mctc 0.7.0) | now (tad-mctc 0.9.1) |
+| --- | --- | --- |
+| W1 GFN1, water cluster, 510 atoms: energy + forces (4 threads) | 16.5 s + 25.2 s, 8.3 GB | 14.2 s + 10.6 s, 6.5 GB |
+| W2 GFN1, 8 conformers of tmpda (69 atoms), energy + forces, batch vs loop (1 thread) | batch 42.7 s, loop 51.9 s, 7.3 GB | batch 32.5 s, loop 40.7 s, 5.5 GB |
+| W2, 4 threads | **hangs** (see below) | batch 17.3 s, loop 31.2 s, 5.5 GB (batch = loop to 0.0) |
+| W3 GFN1, training step, 12 molecules (<= 16 atoms), 1 thread | 2.2 s forward + 4.1 s parameter backward, 1.2 GB | 2.5 s + 2.7 s, 1.1 GB; 159 of 2261 leaves get a gradient |
+| W3 GFN2, 10 molecules, 1 thread | 10.2 s + 15.8 s, 2.7 GB; 215 of 1402 leaves | 5.5 s + 7.9 s, 1.9 GB; 215 of 1402 leaves |
+| W4 GFN1, Hessian, LYS_xao (33 atoms), 4 threads | 58 s, 9.3 GB | 58.6 s, 8.1 GB |
+| W5 hyperpolarizability, glycine, 4 threads, GFN1 / GFN2 | 8.8 s, 1.3 GB / 17.3 s, 1.8 GB | 8.4 s, 1.3 GB / 16.6 s, 1.8 GB |
 
-Stage breakdown (W1, GFN1, dxtb timer and `torch.profiler`): SCF 16.0 s,
-integrals 0.75 s, classical terms 0.11 s, setup 0.2 s. In the SCF,
-`linalg_eigh` is the largest operation (6.5 s self CPU), followed by matrix
-products (3.2 s) and the inversion of the Cholesky factor of the overlap,
-which `storch.eighb` recomputes in every iteration with a general LU solve
-(1.2 s), although the overlap does not change during the SCF. The pair
-loop of the old overlap (plan: `overlap.py:225`) no longer exists.
+Not repeated (the limits did not change in a way that would move them, and
+each takes up to 30 minutes until it runs out of memory): GFN2 for W1 (out of
+memory, more than 14 GB), W2 (8 conformers) and W4 (out of memory after 30
+minutes); W2 with 20 conformers and W3 with 32 molecules including a 69-atom
+system (out of memory, GFN1); the libcint driver (before: W1 12.6 s + 12.5 s,
+7.3 GB; GFN2 out of memory). The script defaults (`--nconf 100`, the whole
+training set) are far above these sizes; pass `--nconf 8 --nsys 12`.
+
+Stage breakdown (W1, GFN1, `torch.profiler`): in the SCF, `linalg_eigh` is
+the largest operation (6.5 s self CPU), followed by matrix products (3.2 s).
+Before, the inversion of the Cholesky factor of the overlap, which
+`storch.eighb` recomputed in every iteration with a general LU solve (1.2 s),
+came after them; the unrolled SCF now computes it once (`l_inv`), and it no
+longer appears among the operations. Measured on the new stack, passing
+`l_inv` instead of the overlap saves about 20% of the time and 1.5 GB for W1
+(energy 18.3 s -> 14.2 s, forces 13.5 s -> 10.6 s, 8.0 GB -> 6.5 GB). The
+rest of the improvement over the first baseline (forces 25.2 s) comes from
+the move to tad-mctc 0.9.1 and the changes on `main`; it was not attributed
+further. The pair loop of the old overlap (plan: `overlap.py:225`) no longer
+exists.
 
 Findings:
 
 1. **Memory is the limit, not time.** The unrolled SCF keeps every
-   iteration on the graph: 8-9 GB for forces of 510 atoms (GFN1) or the
+   iteration on the graph: 6.5-8 GB for forces of 510 atoms (GFN1) or the
    Hessian of 33 atoms; GFN2 (multipole integrals and potentials) exceeds
    14 GB in the same workloads. Batched forces need roughly the memory of
-   one big system of the same total size (8 x 69 atoms: 7.3 GB). This
+   one big system of the same total size (8 x 69 atoms: 5.5 GB). This
    matters for E3 (implicit differentiation stores only the fixed point) and
    E6a.
-2. **Batched SCF hangs with more than one thread.** Batched
-   `torch.linalg.lu_factor` (behind `linalg.solve`/`inv`) does not finish
-   with 4 torch threads for batches of 8 matrices of size 230 (0.12 s with
-   one thread), and MKL reports "Parameter 6 was incorrect on entry to
+2. **The batched stall with several threads is fixed for the unrolled SCF.**
+   Batched `torch.linalg.lu_factor` (behind `linalg.solve`/`inv`) does not
+   finish with 4 torch threads for batches of 8 matrices of size 230 (0.12 s
+   with one thread), and MKL reports "Parameter 6 was incorrect on entry to
    DLASWP" on the way; `cholesky`, `eigh` and `solve_triangular` are fine.
    Reproduction without dxtb:
    `torch.set_num_threads(4); torch.linalg.solve(L, I)` with `L` of shape
-   `(8, 230, 230)` (torch 2.14.0 PyPI wheel, MKL 2024.2). `storch.eighb`
-   uses this path for `L^-1`; a triangular solve, computed once per
-   geometry, would avoid it (tad-mctc; D-track). Not reproduced on other
-   hardware yet.
-3. **Batching does not pay on CPU** for conformers: `batch_mode=2` is only
-   18% faster than a loop at one thread (W2), and slower in memory.
+   `(8, 230, 230)` (torch 2.14.0 PyPI wheel, MKL 2024.2; not reproduced on
+   other hardware). `storch.eighb` of tad-mctc 0.9.1 still stalls in the same
+   way when it gets the overlap (`b`), but takes 0.04 s (forward) and 0.02 s
+   (backward) with the inverse Cholesky factor (`l_inv`) computed beforehand
+   (which takes 0.01 s). dxtb passes `l_inv` in the unrolled SCF. The
+   implicit SCF mode does not use `storch.eighb`; a batched run of 4 x 33
+   atoms with 4 threads completes there as well.
+3. **Batching pays little on CPU** for conformers: `batch_mode=2` is 20-45%
+   faster than a loop (W2: 32.5 s against 40.7 s with one thread, 17.3 s
+   against 31.2 s with four), with the same memory as one big system.
 4. Integral evaluation is negligible next to the SCF for large systems with
    the new pair builder; `eigh` dominates (relevant for D6).
 

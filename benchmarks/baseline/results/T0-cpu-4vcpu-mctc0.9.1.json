@@ -1,0 +1,412 @@
+[
+ {
+  "workload": "W1",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 510
+  },
+  "total_seconds": 25.319,
+  "stages_seconds": {
+   "setup": 0.334,
+   "energy": 14.165,
+   "forces (backward)": 10.583
+  },
+  "dxtb_timer_seconds": {
+   "total": 25.32,
+   "Calculator": 0.3336,
+   "Classicals": 0.1698,
+   "Integrals": 1.0029,
+   "SCF": 12.9906
+  },
+  "peak_rss_mb": 6521.7,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:52"
+ },
+ {
+  "workload": "W2",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "nconformers": 8,
+   "natoms": 69,
+   "max_diff_batch_vs_loop": 2.886579864025407e-14
+  },
+  "total_seconds": 48.517,
+  "stages_seconds": {
+   "batch_mode=2 (energy+forces)": 17.274,
+   "loop (energy+forces)": 31.241
+  },
+  "dxtb_timer_seconds": {
+   "total": 48.5168,
+   "Calculator": 1.7554,
+   "Classicals": 0.4481,
+   "Integrals": 1.8271,
+   "SCF": 26.2928
+  },
+  "peak_rss_mb": 5532.9,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:53"
+ },
+ {
+  "workload": "W2",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nconformers": 8,
+   "natoms": 69,
+   "max_diff_batch_vs_loop": 2.5979218776228663e-14
+  },
+  "total_seconds": 73.143,
+  "stages_seconds": {
+   "batch_mode=2 (energy+forces)": 32.487,
+   "loop (energy+forces)": 40.655
+  },
+  "dxtb_timer_seconds": {
+   "total": 73.1438,
+   "Calculator": 1.6836,
+   "Classicals": 0.4862,
+   "Integrals": 1.9824,
+   "SCF": 36.6198
+  },
+  "peak_rss_mb": 5523.8,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:54"
+ },
+ {
+  "workload": "W3",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nsystems": 12,
+   "max_atoms": 16,
+   "parameter_leaves": 2261,
+   "leaves_with_gradient": 159
+  },
+  "total_seconds": 5.57,
+  "stages_seconds": {
+   "setup": 0.059,
+   "energy+forces (create_graph)": 2.489,
+   "loss backward (parameters)": 2.659
+  },
+  "dxtb_timer_seconds": {
+   "total": 5.5702,
+   "Calculator": 0.0592,
+   "Classicals": 0.0379,
+   "Integrals": 1.0864,
+   "SCF": 0.3856
+  },
+  "peak_rss_mb": 1122.1,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:54"
+ },
+ {
+  "workload": "W3",
+  "method": "gfn2",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 1,
+  "quick": false,
+  "info": {
+   "nsystems": 10,
+   "max_atoms": 16,
+   "parameter_leaves": 1402,
+   "leaves_with_gradient": 215
+  },
+  "total_seconds": 13.952,
+  "stages_seconds": {
+   "setup": 0.061,
+   "energy+forces (create_graph)": 5.514,
+   "loss backward (parameters)": 7.867
+  },
+  "dxtb_timer_seconds": {
+   "total": 13.9523,
+   "Calculator": 0.0604,
+   "Classicals": 0.0268,
+   "Integrals": 1.6564,
+   "SCF": 0.9723
+  },
+  "peak_rss_mb": 1923.1,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:55"
+ },
+ {
+  "workload": "W4",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 33
+  },
+  "total_seconds": 61.024,
+  "stages_seconds": {
+   "hessian (autograd)": 58.577
+  },
+  "dxtb_timer_seconds": {
+   "total": 61.0245,
+   "Calculator": 0.2756,
+   "Classicals": 0.0227,
+   "Integrals": 0.0521,
+   "SCF": 0.1825,
+   "Forces": 0.1356
+  },
+  "peak_rss_mb": 8128.6,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:56"
+ },
+ {
+  "workload": "W5",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 10
+  },
+  "total_seconds": 9.34,
+  "stages_seconds": {
+   "hyperpolarizability (autograd)": 8.446
+  },
+  "dxtb_timer_seconds": {
+   "total": 9.3408,
+   "Calculator": 0.2804,
+   "Classicals": 0.0206,
+   "Integrals": 0.0565,
+   "SCF": 0.1725
+  },
+  "peak_rss_mb": 1321.5,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:56"
+ },
+ {
+  "workload": "W5",
+  "method": "gfn2",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 10
+  },
+  "total_seconds": 18.153,
+  "stages_seconds": {
+   "hyperpolarizability (autograd)": 16.609
+  },
+  "dxtb_timer_seconds": {
+   "total": 18.1536,
+   "Calculator": 0.2439,
+   "Classicals": 0.0112,
+   "Integrals": 0.0647,
+   "SCF": 0.2204
+  },
+  "peak_rss_mb": 1797.7,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:56"
+ },
+ {
+  "workload": "W1",
+  "method": "gfn1",
+  "driver": "pytorch",
+  "device": "cpu",
+  "threads": 4,
+  "quick": false,
+  "info": {
+   "natoms": 510
+  },
+  "total_seconds": 67.341,
+  "stages_seconds": {
+   "setup": 0.316,
+   "energy": 56.385,
+   "forces (backward)": 10.611
+  },
+  "dxtb_timer_seconds": {
+   "total": 67.3415,
+   "Calculator": 0.3157,
+   "Classicals": 0.1303,
+   "Integrals": 0.9543,
+   "SCF": 13.1896
+  },
+  "peak_rss_mb": 7793.5,
+  "peak_cuda_mb": null,
+  "top_ops_self_cpu_seconds": [
+   [
+    "aten::_linalg_eigh",
+    6.481
+   ],
+   [
+    "aten::mm",
+    3.188
+   ],
+   [
+    "aten::mul",
+    0.922
+   ],
+   [
+    "aten::bmm",
+    0.618
+   ],
+   [
+    "aten::copy_",
+    0.57
+   ],
+   [
+    "aten::add",
+    0.452
+   ],
+   [
+    "aten::sub",
+    0.27
+   ],
+   [
+    "aten::abs",
+    0.224
+   ],
+   [
+    "aten::index",
+    0.161
+   ],
+   [
+    "aten::select",
+    0.11
+   ],
+   [
+    "aten::exp",
+    0.077
+   ],
+   [
+    "aten::all",
+    0.072
+   ],
+   [
+    "aten::as_strided",
+    0.064
+   ],
+   [
+    "aten::sum",
+    0.058
+   ],
+   [
+    "aten::clone",
+    0.057
+   ],
+   [
+    "aten::empty",
+    0.056
+   ],
+   [
+    "aten::cat",
+    0.054
+   ],
+   [
+    "aten::where",
+    0.048
+   ],
+   [
+    "aten::fill_",
+    0.041
+   ],
+   [
+    "aten::empty_like",
+    0.041
+   ],
+   [
+    "aten::eq",
+    0.04
+   ],
+   [
+    "aten::gather",
+    0.023
+   ],
+   [
+    "aten::neg",
+    0.021
+   ],
+   [
+    "aten::linalg_solve_triangular",
+    0.017
+   ],
+   [
+    "aten::pow",
+    0.017
+   ]
+  ],
+  "versions": {
+   "dxtb": "0.4.0",
+   "torch": "2.14.0+cu130",
+   "tad-mctc": "0.9.1"
+  },
+  "cpu": "x86_64",
+  "date": "2026-10-06 16:58"
+ }
+]
