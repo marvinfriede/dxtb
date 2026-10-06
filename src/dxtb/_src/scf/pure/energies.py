@@ -15,7 +15,7 @@ from tad_mctc.units.energy import KELVIN2AU
 from dxtb._src.components.interactions import Charges, InteractionList
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
-from dxtb._src.wavefunction import mulliken
+from dxtb._src.wavefunction import filling, mulliken
 from dxtb.config import ConfigSCF
 
 from .data import _Data
@@ -108,16 +108,9 @@ def get_electronic_free_energy(data: _Data, cfg: ConfigSCF) -> Tensor:
     (`scf_options["fermi_fenergy_partition"]`).
     Defaults to an equal partitioning to all atoms (`"equal"`).
     """
-    eps = torch.tensor(
-        torch.finfo(data.occupation.dtype).eps,
-        device=cfg.device,
-        dtype=cfg.dtype,
-    )
-
     kt = data.ints.hcore.new_tensor(cfg.fermi.etemp * KELVIN2AU)
-    occ = torch.clamp(data.occupation, min=eps)
-    occ1 = torch.clamp(1 - data.occupation, min=eps)
-    g = torch.log(occ**occ * occ1**occ1).sum(-2) * kt
+    mask = data.ihelp.spread_shell_to_orbital(data.ihelp.orbitals_per_shell)
+    g = filling.get_fermi_entropy(data.occupation, data.evals, kt, mask)
 
     # partition to atoms equally
     if cfg.fermi.partition == labels.FERMI_PARTITION_EQUAL:

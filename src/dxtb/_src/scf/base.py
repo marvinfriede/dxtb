@@ -45,7 +45,7 @@ from dxtb._src.typing import (
     Tensor,
     overload,
 )
-from dxtb._src.wavefunction import mulliken
+from dxtb._src.wavefunction import filling, mulliken
 from dxtb.config import ConfigSCF
 
 from .pure import conversions, iterations
@@ -579,15 +579,11 @@ class BaseSCF:
         (`config.fermi.partition`).
         Defaults to an equal partitioning to all atoms (`"equal"`).
         """
-        eps = torch.tensor(
-            torch.finfo(self._data.occupation.dtype).eps,
-            device=self.device,
-            dtype=self.dtype,
+        ihelp = self._data.ihelp
+        mask = ihelp.spread_shell_to_orbital(ihelp.orbitals_per_shell)
+        g = filling.get_fermi_entropy(
+            self._data.occupation, self._data.evals, self.kt, mask
         )
-
-        occ = torch.clamp(self._data.occupation, min=eps)
-        occ1 = torch.clamp(1 - self._data.occupation, min=eps)
-        g = torch.log(occ**occ * occ1**occ1).sum(-2) * self.kt
 
         mode = self.config.fermi.partition
 

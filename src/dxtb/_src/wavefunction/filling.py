@@ -52,6 +52,7 @@ __all__ = [
     "get_alpha_beta_occupation",
     "get_aufbau_occupation",
     "get_fermi_energy",
+    "get_fermi_entropy",
     "get_fermi_occupation",
 ]
 
@@ -748,6 +749,106 @@ def get_fermi_occupation(
         torch.ones_like(fermi) if valid is None else valid.to(fermi.dtype)
     )
     return torch.where(full, full_occ, torch.where(active, fermi, 0.0))
+
+
+def get_fermi_entropy(
+    occupation: Tensor, emo: Tensor, kt: Tensor, mask: Tensor | None = None
+) -> Tensor:
+    r"""
+    Orbital-resolved electronic free energy :math:`G = -TS` of the occupations.
+
+    .. math::
+
+        G = k_B T \sum_i f_i \ln f_i + (1 - f_i) \ln (1 - f_i)
+
+    The occupations are clamped to the machine precision to keep the
+    logarithms finite. The clamp also removes the derivative with respect to
+    occupations in the tails of the Fermi function, where it is
+    :math:`k_B T \ln(f / (1 - f)) = \mu - \epsilon_i` and does not vanish,
+    although the occupation is tiny (the hole of the orbitals below is also
+    lost to rounding). This matters if the occupations respond to a change of the electron
+    count in a gap (see `get_fermi_occupation`): the entropy then supplies the
+    difference between the Fermi energy and the average orbital energy of the
+    response, i.e., the derivative of the free energy with respect to the
+    number of electrons is the Fermi energy.
+
+    The derivative is restored for channels in which all orbitals are in the
+    tails (a gap) with a term of value zero, using the Fermi energy of the
+    gap, which follows from equal tails above and below,
+    :math:`\mu = (k_B T / 2) [\mathrm{LSE}_\text{below}(\epsilon / k_B T)
+    - \mathrm{LSE}_\text{above}(-\epsilon / k_B T)]`. It has the graph of
+    the orbital energies.
+
+    Parameters
+    ----------
+    occupation : Tensor
+        Occupation numbers of the alpha and beta channels (``[b, 2, n]``).
+    emo : Tensor
+        Orbital energies (``[b, n]``), the same for both channels.
+    kt : Tensor
+        Electronic temperature in atomic units (scalar).
+    mask : Tensor | None, optional
+        Existing orbitals (``[b, n]``), ``0`` for padding.
+
+    Returns
+    -------
+    Tensor
+        Orbital-resolved free energy, summed over the channels (``[b, n]``).
+    """
+    eps = torch.tensor(
+        torch.finfo(occupation.dtype).eps,
+        device=occupation.device,
+        dtype=occupation.dtype,
+    )
+
+    occ = torch.clamp(occupation, min=eps)
+    occ1 = torch.clamp(1 - occupation, min=eps)
+    g = torch.log(occ**occ * occ1**occ1)
+
+    # at (almost) zero temperature, the occupations are integers, there is no
+    # tail to restore, and the energy scale kt vanishes
+    if torch.all(kt < 3e-7):
+        return g.sum(-2) * kt
+
+    emo = emo.unsqueeze(-2).expand_as(occupation)
+    valid = (
+        torch.ones_like(occupation, dtype=torch.bool)
+        if mask is None
+        else (mask != 0).unsqueeze(-2).expand_as(occupation)
+    )
+
+    # Tails: orbitals far from the Fermi energy, where the occupation (or the
+    # hole) is below the square root of the machine precision. The entropy
+    # derivative is evaluated from the logarithm of the occupation, which loses
+    # the hole of the orbitals below to rounding long before that.
+    f = occupation.detach()
+    thr = eps.sqrt()
+    tail = (f < thr) | (1 - f < thr)
+    above = valid & (f < 0.5)
+    below = valid & (f >= 0.5)
+
+    # a gap: all existing orbitals are in the tails, orbitals on both sides
+    in_gap = (tail | ~valid).all(-1, keepdim=True)
+    in_gap = in_gap & above.any(-1, keepdim=True) & below.any(-1, keepdim=True)
+
+    def lse(x: Tensor, m: Tensor) -> Tensor:
+        return torch.logsumexp(torch.where(m, x, -torch.inf), -1, True)
+
+    # rows without a gap would give infinities (and NaN in the backward pass)
+    safe = torch.where(in_gap, emo, 0.0) / kt
+    mu = 0.5 * kt * (lse(safe, below) - lse(-safe, above))
+    mu = torch.where(in_gap, mu, 0.0)
+
+    # The channels in a gap keep the value, and get the derivative with
+    # respect to f_i of the exact entropy, mu - emo_i. The correction has the
+    # value zero.
+    gap = in_gap & valid
+    restore = torch.where(
+        gap, (mu - emo) * (occupation - occupation.detach()), 0.0
+    )
+    g = torch.where(gap, g.detach(), g)
+
+    return (g * kt + restore).sum(-2)
 
 
 def _fermi_distribution(
