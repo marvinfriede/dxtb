@@ -41,17 +41,23 @@ starting points that have changed (section 9a).
 | `test/test_baseline/status/` | T0.3-T0.9 | Recorded status (`python -m test.test_baseline.status ...`) |
 | `test/test_baseline/tables.py` | T0.11 | Tables of the report |
 
-Regenerating (repository root, environment from the constraints file):
+Regenerating (repository root, environment from the constraints file; tad-dftd3
+and tad-dftd4 are installed with `pip install --no-deps` until they are
+released for tad-mctc 0.9, see `dxtb/_src/mctc_shim.py`). Use one thread per
+process (`OMP_NUM_THREADS=1`) when several run in parallel (`pytest -n`,
+the parallel status runs): the default of four threads each oversubscribes four
+cores and makes the runs about ten times slower.
 
 ```sh
 python -m test.test_baseline.generate            # T0.2 dxtb references
 python -m test.test_baseline.generate_tblite     # T0.2 tblite references (pip install tblite)
 python -m test.test_baseline.matrix_refs         # T0.3 finite difference references
-python -m test.test_baseline.status matrix       # T0.3 status (about 45 min, 4 jobs)
+python -m test.test_baseline.status matrix       # T0.3 status (about 35 min, 4 jobs)
 python -m test.test_baseline.status components   # T0.4 status
 python -m test.test_baseline.scans               # T0.3 step size and convergence scans
 python -m test.test_baseline.transforms          # T0.7
 python -m test.test_baseline.params              # T0.9
-python benchmarks/baseline/workloads.py all      # T0.8
+python benchmarks/baseline/workloads.py W3 --nsys 12 --threads 1   # T0.8, one workload per call;
+                                                                   # W2: --nconf 8, W3 GFN2: --nsys 10
 python -m test.test_baseline.tables              # tables for the report
 ```
