@@ -416,62 +416,70 @@ every test of a layer without editing the test files.
 
 | marker | tests | rewritten or affected by |
 | --- | --- | --- |
-| `api_calculator` | 765 | B1-B8 (calculator API, property functions) |
+| `api_calculator` | 650 | B1-B8 (calculator API, property functions) |
 | `cache` | 119 | B5, B6 (result object, no component caches) |
-| `batch_mode` | 1858 | E4, E6 (masked SCF loop, `vmap` batching) |
-| `efield` | 999 | B7 (fields as inputs) |
-| `integrals` | 1346 | E2, E5 (fixed-shape kernels), C5 |
-| `scf` | 2972 | E3, E4 (SCF differentiation, masked loop) |
-| `param` | 226 | F1, C5 (parameter storage, nodes) |
-| `physics_values` | 1740 | kept; migrate to the T0.2 utility where possible |
-| `baseline` | 1583 | Track 0 itself (reference data, status matrix) |
+| `batch_mode` | 1592 | E4, E6 (masked SCF loop, `vmap` batching) |
+| `efield` | 769 | B7 (fields as inputs) |
+| `integrals` | 1291 | E2, E5 (fixed-shape kernels), C5 |
+| `scf` | 2754 | E3, E4 (SCF differentiation, masked loop) |
+| `param` | 264 | F1, C5 (parameter storage, nodes) |
+| `physics_values` | 1610 | kept; migrate to the T0.2 utility where possible |
+| `baseline` | 1171 | Track 0 itself (reference data, status matrix) |
 
-Counts overlap (a test can have several layers); the total is 6359 tests
-(1047 `large`, 1136 `slow`). `batch_mode` and `scf` include the derivative matrix cells.
+Counts overlap (a test can have several layers); the total is 5971 tests
+(1131 `large`, 771 `slow`), 4069 of them in the CI marker set `not large and
+not slow`. `batch_mode` and `scf` include the derivative matrix cells. Main
+reduced the suite (#274) from 6359 tests since the first baseline.
 
 **Runtime per file** (JUnit report of the CI marker set `not large and
-not slow`, 4 workers; 4176 tests, 28153 s of test time; wall time
-1 h 59 min on the baseline machine). The 30 most expensive files; the full
-table is in the appendix:
+not slow`, including the baseline tests, 4 xdist workers with one thread each;
+4069 tests, 2152 s of test time; wall time 10 min on the baseline machine, down
+from 4176 tests, 28153 s and 1 h 59 min before: the suite is smaller (#274)
+and the workers no longer oversubscribe the cores). The 30 most expensive
+files; the full table is in the appendix:
 
 | file | tests | time (s) | markers |
 | --- | --- | --- | --- |
-| `test/test_baseline/test_derivatives.py` | 206 | 3614.3 | baseline |
-| `test/test_scf/test_scf.py` | 141 | 3506.8 | scf |
-| `test/test_singlepoint/test_grad_pos_withfield.py` | 18 | 2031.1 | api_calculator, efield, physics_values |
-| `test/test_properties/test_quadrupole.py` | 99 | 1990.6 | api_calculator, physics_values |
-| `test/test_wavefunction/test_fermi_derivatives.py` | 180 | 1922.2 | scf |
-| `test/test_scf/test_full_tracking.py` | 68 | 1750.0 | scf |
-| `test/test_scf/test_scp.py` | 63 | 1240.9 | scf |
-| `test/test_singlepoint/test_grad_gfn2.py` | 27 | 1229.3 | api_calculator, physics_values |
-| `test/test_baseline/test_reference.py` | 117 | 812.2 | baseline |
-| `test/test_singlepoint/test_grad_fieldgrad.py` | 24 | 810.8 | api_calculator, efield, physics_values |
-| `test/test_scf/test_fermi_derivatives.py` | 19 | 773.5 | scf |
-| `test/test_singlepoint/test_grad_field.py` | 40 | 695.2 | api_calculator, efield, physics_values |
-| `test/test_properties/test_quadrupole_fieldgrad.py` | 14 | 680.6 | api_calculator, efield, physics_values |
-| `test/test_baseline/test_components.py` | 124 | 510.0 | baseline |
-| `test/test_singlepoint/test_grad_gfn1.py` | 45 | 465.6 | api_calculator, physics_values |
-| `test/test_properties/test_pol_deriv.py` | 2 | 430.0 | api_calculator, physics_values |
-| `test/test_libcint/test_coeff_grad.py` | 22 | 425.1 | integrals |
-| `test/test_scf/test_hess.py` | 4 | 420.2 | scf |
-| `test/test_properties/test_raman.py` | 1 | 363.9 | api_calculator, physics_values |
-| `test/test_integrals/test_pytorch_forces_fd.py` | 8 | 348.3 | integrals |
-| `test/test_external/test_field.py` | 54 | 303.6 | efield |
-| `test/test_properties/test_forces.py` | 5 | 276.4 | api_calculator, physics_values |
-| `test/test_singlepoint/test_energy.py` | 112 | 273.2 | api_calculator, physics_values |
-| `test/test_properties/test_hyperpol.py` | 2 | 268.3 | api_calculator, physics_values |
-| `test/test_a_memory_leak/test_scf.py` | 16 | 241.5 | api_calculator, cache |
-| `test/test_properties/test_dipole.py` | 24 | 235.1 | api_calculator, physics_values |
-| `test/test_scf/test_charged.py` | 34 | 207.0 | scf |
-| `test/test_integrals/test_tblite_reference.py` | 24 | 186.9 | integrals |
-| `test/test_calculator/test_cache/test_properties.py` | 30 | 159.6 | api_calculator, cache |
-| `test/test_classical/test_dispersion/test_d4sc.py` | 40 | 133.0 | physics_values |
+| `test/test_baseline/test_derivatives.py` | 158 | 600.8 | baseline |
+| `test/test_baseline/test_components.py` | 125 | 233.7 | baseline |
+| `test/test_scf/test_implicit_matrix.py` | 94 | 85.5 | scf |
+| `test/test_singlepoint/test_grad_pos_withfield.py` | 14 | 75.6 | api_calculator, efield, physics_values |
+| `test/test_scf/test_scf.py` | 141 | 75.1 | scf |
+| `test/test_properties/test_pol_deriv.py` | 2 | 64.8 | api_calculator, physics_values |
+| `test/test_scf/test_full_tracking.py` | 68 | 47.7 | scf |
+| `test/test_properties/test_raman.py` | 1 | 47.2 | api_calculator, physics_values |
+| `test/test_properties/test_hyperpol.py` | 2 | 47.0 | api_calculator, physics_values |
+| `test/test_baseline/test_reference.py` | 117 | 46.8 | baseline |
+| `test/test_libcint/test_coeff_grad.py` | 22 | 46.3 | integrals |
+| `test/test_singlepoint/test_grad_field.py` | 40 | 40.6 | api_calculator, efield, physics_values |
+| `test/test_wavefunction/test_fermi_derivatives.py` | 127 | 37.5 | scf |
+| `test/test_scf/test_fermi_derivatives.py` | 9 | 35.8 | scf |
+| `test/test_properties/test_forces.py` | 5 | 34.0 | api_calculator, physics_values |
+| `test/test_singlepoint/test_grad_fieldgrad.py` | 24 | 33.7 | api_calculator, efield, physics_values |
+| `test/test_singlepoint/test_grad_gfn2.py` | 18 | 33.2 | api_calculator, physics_values |
+| `test/test_scf/test_scp.py` | 63 | 31.4 | scf |
+| `test/test_properties/test_quadrupole.py` | 47 | 27.4 | api_calculator, physics_values |
+| `test/test_a_memory_leak/test_scf.py` | 16 | 26.2 | api_calculator, cache |
+| `test/test_a_memory_leak/test_higher_deriv.py` | 16 | 23.2 | api_calculator, cache |
+| `test/test_scf/test_hess.py` | 4 | 21.8 | scf |
+| `test/test_integrals/test_pytorch_forces_fd.py` | 4 | 21.1 | integrals |
+| `test/test_properties/test_quadrupole_fieldgrad.py` | 12 | 20.6 | api_calculator, efield, physics_values |
+| `test/test_calculator/test_cache/test_properties.py` | 30 | 16.3 | api_calculator, cache |
+| `test/test_integrals/test_screening.py` | 47 | 14.5 | integrals |
+| `test/test_properties/test_dipole.py` | 24 | 14.3 | api_calculator, physics_values |
+| `test/test_scf/test_charge_derivative.py` | 15 | 13.3 | scf |
+| `test/test_properties/test_ir.py` | 1 | 12.6 | api_calculator, physics_values |
+| `test/test_scf/test_stateless_map.py` | 22 | 11.4 | scf |
 
-**Flaky tests:** none observed: the run had no failure (4021 passed,
-29 skipped, 126 xfailed, all of them recorded known issues). The SCF
-derivative tests (`test_scf`, `test_singlepoint/test_grad_*`,
-`test_wavefunction/test_fermi_derivatives.py`) dominate the runtime besides
-the baseline itself.
+**Flaky tests:** none observed in the final run: no failure (3939 passed,
+29 skipped, 100 xfailed, 1 xpassed; the xfailed tests are recorded known
+issues). Earlier runs showed two harness effects, not test flakiness: with
+four threads per xdist worker the runs were about ten times slower, and a
+test that aborts its worker (here, an invalid warning filter) makes xdist stop
+with an internal error and hide the remaining results. The SCF derivative
+tests (`test_scf`, `test_singlepoint/test_grad_*`,
+`test_wavefunction/test_fermi_derivatives.py`, `test_scf/test_implicit_matrix.py`)
+dominate the runtime besides the baseline itself.
 
 
 ## 9. Open questions for B1 and E0
@@ -644,16 +652,16 @@ Each entry aggregates method × driver × SCF mode (✓ pass, ✗ wrong value, E
 
 | quantity | order | analytical | autograd | functorch | forward | numerical |
 | --- | --- | --- | --- | --- | --- | --- |
-| forces | 1 | E9 ✓3 | ✓ | E4 ✓8 | E11 ✓1 | ✓ |
-| dipole | 1 | ✓ | E4 ✓8 | E4 ✓8 | E8 ✓4 | ✓ |
-| dE_dparam | 1 | n/a | ✓ | n/a | E10 ✓2 | n/a |
-| hessian | 2 | n/a | ✗8 ✓4 | E4 ✗4 ✓4 | E | E9 ✓3 |
-| polarizability | 2 | E4 ✗4 ✓4 | E4 ✗4 ✓4 | E4 ✗4 ✓4 | E | ✓ |
-| dipole_deriv | 2 | ✗8 ✓4 | ✗8 ✓4 | E4 ✗4 ✓4 | E | ✓ |
-| dforces_dparam | 2 | n/a | E6 ✗4 ✓2 | n/a | E | n/a |
-| third_order | 3 | n/a | ✗8 ✓4 | E | E | n/a |
-| hyperpolarizability | 3 | n/a | E4 ✗4 ✓4 | E4 ✗4 ✓4 | E | ✗2 ✓10 |
-| pol_deriv | 3 | n/a | E8 ✓4 | E4 ✗4 ✓4 | E | ✓ |
+| forces | 1 | E6 ✓2 | ✓ | E4 ✓4 | E7 ✓1 | ✓ |
+| dipole | 1 | ✓ | ✓ | E4 ✓4 | E4 ✓4 | ✓ |
+| dE_dparam | 1 | n/a | ✗ | n/a | E6 ✗2 | n/a |
+| hessian | 2 | n/a | ✓ | E4 ✓4 | E7 ✓1 | E6 ✓2 |
+| polarizability | 2 | ✓ | ✓ | E4 ✓4 | E4 ✓4 | ✓ |
+| dipole_deriv | 2 | ✓ | ✓ | E4 ✓4 | E7 ✓1 | ✓ |
+| dforces_dparam | 2 | n/a | E4 ✗4 | n/a | E7 ✗1 | n/a |
+| third_order | 3 | n/a | ✓ | E7 ✓1 | E7 ✗1 | n/a |
+| hyperpolarizability | 3 | n/a | ✓ | E4 ✓4 | E4 ✗4 | ✗2 ✓6 |
+| pol_deriv | 3 | n/a | ✓ | E4 ✓4 | E7 ✗1 | ✓ |
 
 ##### Input: padded
 
@@ -661,13 +669,13 @@ Each entry aggregates method × driver × SCF mode (✓ pass, ✗ wrong value, E
 
 | quantity | order | analytical | autograd | functorch | forward | numerical |
 | --- | --- | --- | --- | --- | --- | --- |
-| forces | 1 | E9 ✓3 | E | E8 ✗4 | E11 ✓1 | ✓ |
-| dipole | 1 | ✓ | E4 ✓8 | E8 ✓4 | E10 ✗1 NaN1 | ✓ |
-| hessian | 2 | n/a | E | E | E | E9 ✓3 |
-| polarizability | 2 | E4 ✗4 ✓4 | E4 ✗4 ✓4 | E8 ✗2 ✓2 | E | ✓ |
-| dipole_deriv | 2 | E | E | E8 ✗4 | E | ✓ |
-| hyperpolarizability | 3 | n/a | E4 ✗4 ✓4 | E8 ✗2 ✓2 | E | ✗2 ✓10 |
-| pol_deriv | 3 | n/a | E | E8 ✗4 | E | ✓ |
+| forces | 1 | E6 ✓2 | E | E6 ✗2 | E7 ✓1 | ✓ |
+| dipole | 1 | ✓ | ✓ | E6 ✓2 | E6 NaN1 ✓1 | ✓ |
+| hessian | 2 | n/a | E | E | E7 ✓1 | E6 ✓2 |
+| polarizability | 2 | ✓ | ✓ | E6 ✓2 | E6 ✓2 | ✓ |
+| dipole_deriv | 2 | E | E | E6 ✗2 | E7 ✓1 | ✓ |
+| hyperpolarizability | 3 | n/a | ✓ | E6 ✓2 | E6 ✗2 | ✗2 ✓6 |
+| pol_deriv | 3 | n/a | E | E6 ✗2 | E7 ✗1 | ✓ |
 
 ##### Input: conformer
 
@@ -675,31 +683,27 @@ Each entry aggregates method × driver × SCF mode (✓ pass, ✗ wrong value, E
 
 | quantity | order | analytical | autograd | functorch | forward | numerical |
 | --- | --- | --- | --- | --- | --- | --- |
-| forces | 1 | E9 ✓3 | E | E8 ✗4 | E11 ✓1 | ✓ |
-| dipole | 1 | ✓ | E4 ✓8 | E8 ✓4 | E10 ✓2 | ✓ |
-| hessian | 2 | n/a | E | E | E | E9 ✓3 |
-| polarizability | 2 | E4 ✗4 ✓4 | E4 ✗4 ✓4 | E8 ✗2 ✓2 | E | ✓ |
-| dipole_deriv | 2 | E | E | E8 ✗4 | E | ✓ |
-| hyperpolarizability | 3 | n/a | E4 ✗4 ✓4 | E8 ✗2 ✓2 | E | ✗2 ✓10 |
-| pol_deriv | 3 | n/a | E | E8 ✗4 | E | ✓ |
+| forces | 1 | E6 ✓2 | E | E6 ✗2 | E7 ✓1 | ✓ |
+| dipole | 1 | ✓ | ✓ | E6 ✓2 | E6 ✓2 | ✓ |
+| hessian | 2 | n/a | E | E | E7 ✓1 | E6 ✓2 |
+| polarizability | 2 | ✓ | ✓ | E6 ✓2 | E6 ✓2 | ✓ |
+| dipole_deriv | 2 | E | E | E6 ✗2 | E7 ✓1 | ✓ |
+| hyperpolarizability | 3 | n/a | ✓ | E6 ✓2 | E6 ✗2 | ✗2 ✓6 |
+| pol_deriv | 3 | n/a | E | E6 ✗2 | E7 ✗1 | ✓ |
 
 
 ##### Single system by setting
 
 | method | driver | SCF mode | ✓ | ✗ | E | NaN |
 | --- | --- | --- | --- | --- | --- | --- |
-| gfn1 | libcint | full | 28 | 0 | 11 | 0 |
-| gfn1 | libcint | implicit | 14 | 12 | 13 | 0 |
-| gfn1 | libcint | nonpure | 11 | 4 | 24 | 0 |
-| gfn1 | pytorch | full | 28 | 0 | 11 | 0 |
-| gfn1 | pytorch | implicit | 12 | 13 | 14 | 0 |
-| gfn1 | pytorch | nonpure | 9 | 5 | 25 | 0 |
-| gfn2 | libcint | full | 25 | 1 | 13 | 0 |
-| gfn2 | libcint | implicit | 12 | 12 | 15 | 0 |
-| gfn2 | libcint | nonpure | 9 | 4 | 26 | 0 |
-| gfn2 | pytorch | full | 28 | 1 | 10 | 0 |
-| gfn2 | pytorch | implicit | 12 | 13 | 14 | 0 |
-| gfn2 | pytorch | nonpure | 9 | 5 | 25 | 0 |
+| gfn1 | libcint | full | 28 | 2 | 9 | 0 |
+| gfn1 | libcint | implicit | 19 | 1 | 19 | 0 |
+| gfn1 | pytorch | full | 26 | 5 | 8 | 0 |
+| gfn1 | pytorch | implicit | 17 | 2 | 20 | 0 |
+| gfn2 | libcint | full | 25 | 3 | 11 | 0 |
+| gfn2 | libcint | implicit | 17 | 1 | 21 | 0 |
+| gfn2 | pytorch | full | 29 | 7 | 3 | 0 |
+| gfn2 | pytorch | implicit | 17 | 2 | 20 | 0 |
 
 ##### Cost of the cells
 
@@ -707,90 +711,76 @@ GFN2, PyTorch driver, unrolled SCF, water:
 
 | quantity | path | status | max abs. dev. | wall time (s) | peak RSS (MB) |
 | --- | --- | --- | --- | --- | --- |
-| forces | analytical | E | – | 0.7 | 610 |
-| forces | autograd | ✓ | 1.4e-09 | 0.4 | 576 |
-| forces | functorch | ✓ | 1.4e-09 | 2.6 | 739 |
-| forces | forward | ✓ | 1.4e-09 | 2.9 | 720 |
-| forces | numerical | ✓ | 1.3e-09 | 4.5 | 566 |
-| dipole | analytical | ✓ | 5.9e-09 | 0.5 | 570 |
-| dipole | autograd | ✓ | 5.9e-09 | 0.6 | 576 |
-| dipole | functorch | ✓ | 5.9e-09 | 3.1 | 727 |
-| dipole | forward | ✓ | 5.9e-09 | 2.8 | 719 |
-| dipole | numerical | ✓ | 5.9e-09 | 1.7 | 566 |
-| dE_dparam | autograd | ✓ | 5.3e-10 | 8.6 | 580 |
-| dE_dparam | forward | ✓ | 5.3e-10 | 54.0 | 726 |
-| hessian | autograd | ✓ | 4.7e-09 | 7.2 | 953 |
-| hessian | functorch | ✓ | 4.7e-09 | 4.2 | 806 |
-| hessian | forward | E | – | 2.9 | 723 |
-| hessian | numerical | E | – | 0.8 | 610 |
-| polarizability | analytical | ✓ | 3.1e-06 | 0.6 | 585 |
-| polarizability | autograd | ✓ | 2.4e-08 | 4.5 | 756 |
-| polarizability | functorch | ✓ | 2.4e-08 | 4.8 | 746 |
-| polarizability | forward | E | – | 3.2 | 718 |
-| polarizability | numerical | ✓ | 1.3e-06 | 2.3 | 565 |
-| dipole_deriv | analytical | ✓ | 1.4e-07 | 0.8 | 601 |
-| dipole_deriv | autograd | ✓ | 1.4e-09 | 3.9 | 776 |
-| dipole_deriv | functorch | ✓ | 1.4e-09 | 3.3 | 769 |
-| dipole_deriv | forward | E | – | 2.6 | 719 |
-| dipole_deriv | numerical | ✓ | 1.1e-07 | 6.1 | 565 |
-| dforces_dparam | autograd | ✓ | 5.4e-11 | 14.2 | 738 |
-| dforces_dparam | forward | E | – | 2.8 | 728 |
-| third_order | autograd | ✓ | 5.1e-09 | 4.5 | 759 |
-| third_order | functorch | E | – | 2.5 | 731 |
-| third_order | forward | E | – | 2.9 | 729 |
-| hyperpolarizability | autograd | ✓ | 2.0e-07 | 11.1 | 1354 |
-| hyperpolarizability | functorch | ✓ | 2.0e-07 | 4.2 | 904 |
-| hyperpolarizability | forward | E | – | 1.9 | 718 |
-| hyperpolarizability | numerical | ✗ | 4.1e-02 | 16.9 | 565 |
-| pol_deriv | autograd | ✓ | 8.3e-09 | 11.6 | 1466 |
-| pol_deriv | functorch | ✓ | 8.3e-09 | 6.5 | 860 |
-| pol_deriv | forward | E | – | 4.3 | 719 |
-| pol_deriv | numerical | ✓ | 1.2e-03 | 22.3 | 566 |
+| forces | analytical | E | – | 0.3 | 699 |
+| forces | autograd | ✓ | 1.4e-09 | 0.3 | 700 |
+| forces | functorch | ✓ | 1.4e-09 | 0.6 | 718 |
+| forces | forward | ✓ | 1.4e-09 | 1.3 | 707 |
+| forces | numerical | ✓ | 1.4e-09 | 4.8 | 690 |
+| dipole | analytical | ✓ | 5.9e-09 | 0.4 | 694 |
+| dipole | autograd | ✓ | 5.9e-09 | 0.3 | 700 |
+| dipole | functorch | ✓ | 5.9e-09 | 0.5 | 706 |
+| dipole | forward | ✓ | 5.9e-09 | 1.1 | 707 |
+| dipole | numerical | ✓ | 5.9e-09 | 1.7 | 690 |
+| dE_dparam | autograd | ✗ | 3.6e-01 | 6.6 | 705 |
+| dE_dparam | forward | ✗ | 3.6e-01 | 42.6 | 704 |
+| hessian | autograd | ✓ | 4.7e-09 | 3.5 | 922 |
+| hessian | functorch | ✓ | 4.7e-09 | 1.5 | 781 |
+| hessian | forward | ✓ | 4.7e-09 | 3.0 | 718 |
+| hessian | numerical | E | – | 0.3 | 699 |
+| polarizability | analytical | ✓ | 3.1e-06 | 0.4 | 708 |
+| polarizability | autograd | ✓ | 2.4e-08 | 0.8 | 734 |
+| polarizability | functorch | ✓ | 2.4e-08 | 0.9 | 725 |
+| polarizability | forward | ✓ | 2.4e-08 | 1.7 | 708 |
+| polarizability | numerical | ✓ | 1.3e-06 | 1.6 | 690 |
+| dipole_deriv | analytical | ✓ | 1.4e-07 | 0.9 | 724 |
+| dipole_deriv | autograd | ✓ | 1.4e-09 | 1.1 | 753 |
+| dipole_deriv | functorch | ✓ | 1.4e-09 | 0.9 | 746 |
+| dipole_deriv | forward | ✓ | 1.4e-09 | 2.3 | 710 |
+| dipole_deriv | numerical | ✓ | 1.1e-07 | 5.0 | 690 |
+| dforces_dparam | autograd | ✗ | 3.4e-01 | 7.1 | 717 |
+| dforces_dparam | forward | E | – | 3.1 | 728 |
+| third_order | autograd | ✓ | 5.1e-09 | 1.6 | 740 |
+| third_order | functorch | ✓ | 5.1e-09 | 4.9 | 779 |
+| third_order | forward | ✗ | 3.4e-01 | 6.8 | 732 |
+| hyperpolarizability | autograd | ✓ | 2.0e-07 | 11.9 | 1330 |
+| hyperpolarizability | functorch | ✓ | 2.0e-07 | 3.1 | 879 |
+| hyperpolarizability | forward | ✗ | 1.1e+02 | 4.0 | 712 |
+| hyperpolarizability | numerical | ✗ | 4.1e-02 | 9.6 | 689 |
+| pol_deriv | autograd | ✓ | 8.3e-09 | 12.8 | 1438 |
+| pol_deriv | functorch | ✓ | 8.3e-09 | 2.0 | 836 |
+| pol_deriv | forward | ✗ | 8.9e+00 | 5.6 | 718 |
+| pol_deriv | numerical | ✓ | 1.2e-03 | 33.2 | 689 |
 
 ##### Distinct outcomes of the cells that do not pass
 
 | cells | status | message | example cell |
 | --- | --- | --- | --- |
-| 122 | error | NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward m | `dE_dparam-forward-gfn1-libcint-full-single` |
-| 78 | error | ValueError: cannot reshape array of size 8 into shape (4,) | `dipole-forward-gfn2-libcint-full-conformer` |
-| 73 | error | RuntimeError: You tried to vmap over RootFinder, but it does not have vmap support. Please override and implem | `dipole-forward-gfn1-libcint-implicit-single` |
-| 54 | error | RuntimeError: You are attempting to call Tensor.requires_grad_() (or perhaps using torch.autograd.functional.* | `dforces_dparam-forward-gfn1-libcint-nonpure-single` |
-| 54 | error | ValueError: cannot reshape array of size 12 into shape (6,) | `dipole-forward-gfn1-libcint-full-conformer` |
-| 48 | error | RuntimeError: `inputs` argument to `grad()` cannot be empty. | `dipole-autograd-gfn1-libcint-nonpure-conformer` |
-| 48 | error | RuntimeError: shape '[2, 3, 3, 3]' is invalid for input of size 108 | `dipole_deriv-analytical-gfn1-libcint-full-conformer` |
-| 48 | error | NotImplementedError: Hessian calculation is not supported in batch mode. Please use the single system mode. | `hessian-autograd-gfn1-libcint-full-conformer` |
-| 36 | error | NotImplementedError: The PyTorch integral driver has no analytical overlap gradient. Use autograd on the overl | `forces-analytical-gfn1-pytorch-full-conformer` |
-| 26 | error | RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and i | `dipole_deriv-forward-gfn2-pytorch-full-conformer` |
-| 24 | error | RuntimeError: grad can be implicitly created only for scalar outputs | `forces-autograd-gfn1-libcint-full-conformer` |
-| 24 | error | RuntimeError: The differentiated Tensor at index 0 appears to not have been used in the graph. Set allow_unuse | `pol_deriv-autograd-gfn1-libcint-implicit-conformer` |
-| 18 | error | NotImplementedError: GFN2 not implemented yet. | `forces-analytical-gfn2-libcint-full-conformer` |
-| 18 | fail | wrong value (max_abs=5.2e+00) | `pol_deriv-functorch-gfn2-libcint-implicit-single` |
-| 16 | fail | wrong value (max_abs=3.8e+00) | `polarizability-analytical-gfn1-libcint-implicit-conformer` |
-| 10 | fail | wrong value (max_abs=1.3e-01) | `dipole_deriv-analytical-gfn1-libcint-nonpure-single` |
-| 8 | fail | shape (2, 3, 2, 3, 3) != (2, 3, 3, 3) | `dipole_deriv-functorch-gfn1-pytorch-full-conformer` |
-| 8 | fail | shape (2, 2, 3, 3) != (2, 3, 3) | `forces-functorch-gfn1-pytorch-full-conformer` |
-| 8 | error | RuntimeError: shape '[3, 3, 3, 3]' is invalid for input of size 324 | `pol_deriv-autograd-gfn1-libcint-full-conformer` |
-| 8 | fail | shape (2, 3, 3, 2, 3, 3) != (2, 3, 3, 3, 3) | `pol_deriv-functorch-gfn1-pytorch-full-conformer` |
-| 7 | fail | wrong value (max_abs=7.2e+00) | `hyperpolarizability-autograd-gfn1-libcint-implicit-conformer` |
-| 7 | fail | wrong value (max_abs=8.1e+00) | `hyperpolarizability-autograd-gfn2-libcint-implicit-conformer` |
-| 6 | error | AttributeError: The integral int1e_rripovlp is not available from libcint, please add it | `dforces_dparam-autograd-gfn1-libcint-full-single` |
-| 6 | fail | wrong value (max_abs=1.5e-01) | `dipole_deriv-analytical-gfn1-libcint-implicit-single` |
-| 4 | fail | wrong value (max_abs=2.2e-01) | `dipole_deriv-analytical-gfn2-libcint-nonpure-single` |
-| 4 | fail | wrong value (max_abs=1.6e-02) | `hessian-autograd-gfn1-libcint-implicit-single` |
-| 4 | fail | wrong value (max_abs=4.5e-03) | `hessian-autograd-gfn2-libcint-implicit-single` |
+| 102 | error | NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward m | `dE_dparam-forward-gfn1-libcint-full-single` |
+| 54 | error | RuntimeError: You are attempting to call Tensor.requires_grad_() (or perhaps using torch.autograd.functional.* | `dforces_dparam-forward-gfn1-libcint-implicit-single` |
+| 52 | error | ValueError: cannot reshape array of size 8 into shape (4,) | `dipole-forward-gfn2-libcint-full-conformer` |
+| 36 | error | ValueError: cannot reshape array of size 12 into shape (6,) | `dipole-forward-gfn1-libcint-full-conformer` |
+| 32 | error | RuntimeError: shape '[2, 3, 3, 3]' is invalid for input of size 108 | `dipole_deriv-analytical-gfn1-libcint-full-conformer` |
+| 32 | error | NotImplementedError: Hessian calculation is not supported in batch mode. Please use the single system mode. | `hessian-autograd-gfn1-libcint-full-conformer` |
+| 24 | error | NotImplementedError: The PyTorch integral driver has no analytical overlap gradient. Use autograd on the overl | `forces-analytical-gfn1-pytorch-full-conformer` |
+| 16 | error | RuntimeError: grad can be implicitly created only for scalar outputs | `forces-autograd-gfn1-libcint-full-conformer` |
+| 16 | error | RuntimeError: shape '[3, 3, 3, 3]' is invalid for input of size 324 | `pol_deriv-autograd-gfn1-libcint-full-conformer` |
+| 15 | fail | leaves: element.H.refocc, element.O.refocc | `dE_dparam-autograd-gfn1-libcint-full-single` |
+| 12 | error | NotImplementedError: GFN2 not implemented yet. | `forces-analytical-gfn2-libcint-full-conformer` |
+| 11 | error | AssertionError: flat_bdims must not be None | `hyperpolarizability-forward-gfn1-libcint-implicit-single` |
+| 4 | error | AttributeError: The integral int1e_rripovlp is not available from libcint, please add it | `dforces_dparam-autograd-gfn1-libcint-full-single` |
+| 4 | fail | shape (2, 3, 2, 3, 3) != (2, 3, 3, 3) | `dipole_deriv-functorch-gfn1-pytorch-full-conformer` |
+| 4 | fail | shape (2, 2, 3, 3) != (2, 3, 3) | `forces-functorch-gfn1-pytorch-full-conformer` |
+| 4 | fail | wrong value (max_abs=1.0e+02) | `hyperpolarizability-forward-gfn1-libcint-full-single` |
+| 4 | fail | wrong value (max_abs=1.1e+02) | `hyperpolarizability-forward-gfn2-libcint-full-single` |
 | 4 | fail | wrong value (max_abs=2.1e-02) | `hyperpolarizability-numerical-gfn2-libcint-full-conformer` |
-| 3 | fail | wrong value (max_abs=9.6e+00) | `hyperpolarizability-autograd-gfn1-libcint-implicit-padded` |
-| 3 | fail | wrong value (max_abs=9.9e+00) | `hyperpolarizability-autograd-gfn2-libcint-implicit-padded` |
-| 3 | error | ValueError: treespec.unflatten(leaves): `leaves` has length 6 but the spec refers to a pytree that holds 7 ite | `pol_deriv-forward-gfn2-libcint-full-single` |
-| 2 | fail | wrong value (max_abs=1.3e-02) | `hessian-autograd-gfn1-libcint-nonpure-single` |
-| 2 | fail | wrong value (max_abs=2.0e-02) | `hessian-autograd-gfn2-libcint-nonpure-single` |
+| 4 | fail | shape (2, 3, 3, 2, 3, 3) != (2, 3, 3, 3, 3) | `pol_deriv-functorch-gfn1-pytorch-full-conformer` |
+| 2 | error | RuntimeError: level.has_value() && level <= current_level INTERNAL ASSERT FAILED at "/__w/pytorch/pytorch/aten | `dforces_dparam-forward-gfn2-libcint-full-single` |
 | 2 | fail | wrong value (max_abs=4.1e-02) | `hyperpolarizability-numerical-gfn2-libcint-full-single` |
-| 2 | fail | wrong value (max_abs=4.0e+00) | `pol_deriv-functorch-gfn1-libcint-implicit-single` |
-| 2 | fail | wrong value (max_abs=9.8e-03) | `third_order-autograd-gfn1-libcint-implicit-single` |
-| 2 | fail | wrong value (max_abs=7.7e-03) | `third_order-autograd-gfn1-libcint-nonpure-single` |
-| 2 | fail | wrong value (max_abs=4.0e-03) | `third_order-autograd-gfn2-libcint-implicit-single` |
-| 2 | fail | wrong value (max_abs=1.2e-02) | `third_order-autograd-gfn2-libcint-nonpure-single` |
-| 1 | fail | leaves: hamiltonian.xtb.kpol, hamiltonian.xtb.enscale, hamiltonian.xtb.shell.ss, hamiltonian.xtb.shell.pp, ham | `dforces_dparam-autograd-gfn1-pytorch-implicit-single` |
+| 2 | error | ValueError: treespec.unflatten(leaves): `leaves` has length 6 but the spec refers to a pytree that holds 7 ite | `pol_deriv-forward-gfn2-libcint-full-single` |
+| 2 | fail | wrong value (max_abs=8.9e+00) | `pol_deriv-forward-gfn2-pytorch-full-padded` |
+| 1 | nonfinite | non-finite values | `dipole-forward-gfn1-pytorch-full-padded` |
+| 1 | fail | wrong value (max_abs=9.4e+00) | `pol_deriv-forward-gfn2-pytorch-full-conformer` |
+| 1 | fail | wrong value (max_abs=3.4e-01) | `third_order-forward-gfn2-pytorch-full-single` |
 
 #### Component-level checks (T0.4)
 
@@ -817,22 +807,26 @@ GFN2, PyTorch driver, unrolled SCF, water:
 | `aes2.dipoles` | ✓ | ✓ | ✓ | ✓ | ✓ | E |
 | `d4sc.charges` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `es2.positions` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `eigensolver.degenerate_aufbau` | ✓ | ✗ | ✗ | E | E | E |
-| `eigensolver.degenerate_fermi` | ✓ | ✗ | ✗ | E | E | E |
-| `eigensolver.small_gap_aufbau` | ✗ | ✗ | ✗ | E | E | E |
-| `eigensolver.small_gap_fermi` | ✗ | ✗ | ✗ | E | E | E |
+| `eigensolver.degenerate_aufbau` | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ |
+| `eigensolver.degenerate_fermi` | ✓ | ✗ | ✗ | ✓ | ✓ | E |
+| `eigensolver.small_gap_aufbau` | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+| `eigensolver.small_gap_fermi` | ✗ | ✗ | ✗ | ✗ | ✗ | E |
 
 Messages of the checks that do not pass:
 
-- NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.: `coulomb_matrix_ag.hubbard:forward`, `coulomb_matrix_ag.positions:forward`, `dispersion_d3.positions:forward`, `dispersion_d3.positions:jvp`, `eigensolver.degenerate_aufbau:forward`, `eigensolver.degenerate_aufbau:jvp`, `eigensolver.degenerate_fermi:forward`, `eigensolver.degenerate_fermi:jvp`, `eigensolver.small_gap_aufbau:forward`, `eigensolver.small_gap_aufbau:jvp`, `eigensolver.small_gap_fermi:forward`, `eigensolver.small_gap_fermi:jvp`, `repulsion_ag.arep:forward`, `repulsion_ag.arep:jvp`, `repulsion_ag.positions:forward`, `repulsion_ag.positions:jvp`
 - GradcheckError: Jacobian mismatch for output 0 with respect to input 0,: `eigensolver.degenerate_aufbau:order2`, `eigensolver.degenerate_aufbau:order3`, `eigensolver.degenerate_fermi:order2`, `eigensolver.degenerate_fermi:order3`, `eigensolver.small_gap_aufbau:order1`, `eigensolver.small_gap_aufbau:order2`, `eigensolver.small_gap_aufbau:order3`, `eigensolver.small_gap_fermi:order1`, `eigensolver.small_gap_fermi:order2`, `eigensolver.small_gap_fermi:order3`
+- NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD.: `coulomb_matrix_ag.hubbard:forward`, `coulomb_matrix_ag.positions:forward`, `dispersion_d3.positions:forward`, `dispersion_d3.positions:jvp`, `repulsion_ag.arep:forward`, `repulsion_ag.arep:jvp`, `repulsion_ag.positions:forward`, `repulsion_ag.positions:jvp`
 - RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context static: `coulomb_matrix_ag.hubbard:jvp`, `coulomb_matrix_ag.hubbard:vmap`, `coulomb_matrix_ag.positions:jvp`, `coulomb_matrix_ag.positions:vmap`
-- RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set ge: `eigensolver.degenerate_aufbau:vmap`, `eigensolver.degenerate_fermi:vmap`, `eigensolver.small_gap_aufbau:vmap`, `eigensolver.small_gap_fermi:vmap`
-- RuntimeError: Resource temporarily unavailable: `repulsion_ag.arep:order1`, `repulsion_ag.arep:order2`, `repulsion_ag.arep:order3`
+- RuntimeError: vmap: It looks like you're calling .item() on a Tensor. We don't support vmap over calling .item() on a Tensor, please try to rewrite wh: `eigensolver.degenerate_fermi:vmap`, `eigensolver.small_gap_fermi:vmap`
+- GradcheckError: Jacobian computed with forward mode mismatch for output 0 with respect to input 0,: `eigensolver.small_gap_aufbau:forward`, `eigensolver.small_gap_fermi:forward`
 - RuntimeError: vmap: It looks like you're attempting to use a Tensor in some data-dependent control flow. We don't support that yet, please file an iss: `halogen.positions:vmap`, `overlap.slater:vmap`
 - RuntimeError: vmap over torch.allclose isn't supported yet. Please file an issue at https://github.com/pytorch/pytorch/issues if you need this feature: `hcore_gfn1.positions:vmap`, `hcore_gfn2.positions:vmap`
+- RuntimeError: std::bad_alloc: `repulsion_ag.arep:order1`, `repulsion_ag.arep:order2`
 - RuntimeError: output with shape: `aes2.dipoles:vmap`
 - ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension.: `dispersion_d3.positions:vmap`
+- AssertionError: jvp differs from finite differences by 1.85e+01: `eigensolver.small_gap_aufbau:jvp`
+- AssertionError: jvp differs from finite differences by 4.75e+00: `eigensolver.small_gap_fermi:jvp`
+- RuntimeError: Resource temporarily unavailable: `repulsion_ag.arep:order3`
 
 #### Transform status (T0.7)
 
@@ -843,218 +837,240 @@ Messages of the checks that do not pass:
 | vmap(energy) conformer batch | error | error | error | error |
 | jacrev(energy) | works | works | works | works |
 | jacfwd(energy) | error | error | works | error |
-| hessian(energy) | error | error | error | error |
+| hessian(energy) | error | error | works | error |
 | torch.compile(energy) | error | error | error | error |
 | torch.compile(calc.energy) | error | error | error | error |
 
 Messages:
 
-- RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:71] (gfn1-pytorch: vmap(energy) single; gfn1-pytorch: vmap(energy) conformer batch; gfn1-libcint: vmap(energy) single; gfn1-libcint: vmap(energy) conformer batch; gfn2-pytorch: vmap(energy) single; gfn2-pytorch: vmap(energy) conformer batch; gfn2-libcint: vmap(energy) single; gfn2-libcint: vmap(energy) conformer batch)
+- RuntimeError: Cannot access data pointer of Tensor that doesn't have storage [dxtb/_src/utils/tensors.py:92] (gfn1-pytorch: vmap(energy) single; gfn1-pytorch: vmap(energy) conformer batch; gfn1-libcint: vmap(energy) single; gfn1-libcint: vmap(energy) conformer batch; gfn2-pytorch: vmap(energy) single; gfn2-pytorch: vmap(energy) conformer batch; gfn2-libcint: vmap(energy) single; gfn2-libcint: vmap(energy) conformer batch)
 - ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension. [tad_dftd3/model/c6.py:456] (gfn1-pytorch: vmap(forces) single; gfn1-libcint: vmap(forces) single)
 - NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_dftd3/model/c6.py:95] (gfn1-pytorch: jacfwd(energy); gfn1-pytorch: hessian(energy); gfn1-libcint: jacfwd(energy); gfn1-libcint: hessian(energy))
-- InternalTorchDynamoError: AsPythonConstantNotImplementedError: SymNodeVariable() is not a constant (gfn1-pytorch: torch.compile(energy); gfn1-pytorch: torch.compile(calc.energy); gfn1-libcint: torch.compile(energy); gfn1-libcint: torch.compile(calc.energy); gfn2-pytorch: torch.compile(energy); gfn2-pytorch: torch.compile(calc.energy); gfn2-libcint: torch.compile(energy); gfn2-libcint: torch.compile(calc.energy))
-- RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:163] (gfn2-pytorch: vmap(forces) single; gfn2-libcint: vmap(forces) single)
-- RuntimeError: You tried to vmap over _SymEigBroad_V2, but it does not have vmap support. Please override and implement the vmap staticmethod or set generate_vmap_rule=True. For mor (gfn2-pytorch: hessian(energy))
+- RuntimeError: No wrappers present! (gfn1-pytorch: torch.compile(energy); gfn1-pytorch: torch.compile(calc.energy); gfn1-libcint: torch.compile(energy); gfn1-libcint: torch.compile(calc.energy); gfn2-pytorch: torch.compile(energy); gfn2-pytorch: torch.compile(calc.energy); gfn2-libcint: torch.compile(energy); gfn2-libcint: torch.compile(calc.energy))
+- RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/calculators/types/energy.py:165] (gfn2-pytorch: vmap(forces) single; gfn2-libcint: vmap(forces) single)
 - NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [tad_libcint/interface/integrals/int_2c1e.py:353] (gfn2-libcint: jacfwd(energy); gfn2-libcint: hessian(energy))
 
 #### Parameter-gradient coverage (T0.9)
 
-**gfn1**: gradient path cut: 1, no effect on this set: 41, not checked (element not in set): 2114, ok: 105
+**gfn1**: gradient path cut: 1, no effect on this set: 41, not checked (element not in set): 2114, ok: 99, wrong gradient: 6
 
 | leaf | verdict | energy grad | forces grad |
 | --- | --- | --- | --- |
 | `dispersion.d3.s9` | gradient path cut | none | none |
+| `element.Br.refocc` | wrong gradient | nonzero | nonzero |
+| `element.C.refocc` | wrong gradient | nonzero | nonzero |
+| `element.Fe.refocc` | wrong gradient | nonzero | nonzero |
+| `element.H.refocc` | wrong gradient | nonzero | nonzero |
+| `element.N.refocc` | wrong gradient | nonzero | nonzero |
+| `element.O.refocc` | wrong gradient | nonzero | nonzero |
 
 No effect on the set (autograd and finite difference zero): `element.Bi.dkernel`, `element.Bi.mprad`, `element.Bi.mpvcn`, `element.Bi.qkernel`, `element.Bi.xbond`, `element.Br.dkernel`, `element.Br.mprad`, `element.Br.mpvcn`, `element.Br.qkernel`, `element.C.dkernel`, `element.C.mprad`, `element.C.mpvcn`, `element.C.qkernel`, `element.C.xbond`, `element.Fe.dkernel`, `element.Fe.mprad`, `element.Fe.mpvcn`, `element.Fe.qkernel`, `element.Fe.xbond`, `element.H.dkernel`, `element.H.mprad`, `element.H.mpvcn`, `element.H.qkernel`, `element.H.xbond`, `element.N.dkernel`, `element.N.mprad`, `element.N.mpvcn`, `element.N.qkernel`, `element.N.xbond`, `element.O.dkernel`, `element.O.mprad`, `element.O.mpvcn`, `element.O.qkernel`, `element.O.xbond`, `element.Pb.dkernel`, `element.Pb.mprad`, `element.Pb.mpvcn`, `element.Pb.qkernel`, `element.Pb.xbond`, `hamiltonian.xtb.kpair.Fe-Fe`, `hamiltonian.xtb.wexp`
 
-**gfn2**: no effect on this set: 13, not checked (element not in set): 1248, ok: 141
+**gfn2**: no effect on this set: 13, not checked (element not in set): 1248, ok: 135, wrong gradient: 6
+
+| leaf | verdict | energy grad | forces grad |
+| --- | --- | --- | --- |
+| `element.Br.refocc` | wrong gradient | nonzero | nonzero |
+| `element.C.refocc` | wrong gradient | nonzero | nonzero |
+| `element.Fe.refocc` | wrong gradient | nonzero | nonzero |
+| `element.H.refocc` | wrong gradient | nonzero | nonzero |
+| `element.N.refocc` | wrong gradient | nonzero | nonzero |
+| `element.O.refocc` | wrong gradient | nonzero | nonzero |
 
 No effect on the set (autograd and finite difference zero): `element.Bi.mpvcn`, `element.Bi.xbond`, `element.Br.xbond`, `element.C.xbond`, `element.Fe.dkernel`, `element.Fe.mpvcn`, `element.Fe.xbond`, `element.H.xbond`, `element.N.xbond`, `element.O.xbond`, `element.Pb.mpvcn`, `element.Pb.xbond`, `hamiltonian.xtb.kpol`
+
 
 #### Test-suite inventory (T0.10), all files
 
 | file | tests | time (s) | markers |
 | --- | --- | --- | --- |
-| `test/test_baseline/test_derivatives.py` | 206 | 3614.3 | baseline |
-| `test/test_scf/test_scf.py` | 141 | 3506.8 | scf |
-| `test/test_singlepoint/test_grad_pos_withfield.py` | 18 | 2031.1 | api_calculator, efield, physics_values |
-| `test/test_properties/test_quadrupole.py` | 99 | 1990.6 | api_calculator, physics_values |
-| `test/test_wavefunction/test_fermi_derivatives.py` | 180 | 1922.2 | scf |
-| `test/test_scf/test_full_tracking.py` | 68 | 1750.0 | scf |
-| `test/test_scf/test_scp.py` | 63 | 1240.9 | scf |
-| `test/test_singlepoint/test_grad_gfn2.py` | 27 | 1229.3 | api_calculator, physics_values |
-| `test/test_baseline/test_reference.py` | 117 | 812.2 | baseline |
-| `test/test_singlepoint/test_grad_fieldgrad.py` | 24 | 810.8 | api_calculator, efield, physics_values |
-| `test/test_scf/test_fermi_derivatives.py` | 19 | 773.5 | scf |
-| `test/test_singlepoint/test_grad_field.py` | 40 | 695.2 | api_calculator, efield, physics_values |
-| `test/test_properties/test_quadrupole_fieldgrad.py` | 14 | 680.6 | api_calculator, efield, physics_values |
-| `test/test_baseline/test_components.py` | 124 | 510.0 | baseline |
-| `test/test_singlepoint/test_grad_gfn1.py` | 45 | 465.6 | api_calculator, physics_values |
-| `test/test_properties/test_pol_deriv.py` | 2 | 430.0 | api_calculator, physics_values |
-| `test/test_libcint/test_coeff_grad.py` | 22 | 425.1 | integrals |
-| `test/test_scf/test_hess.py` | 4 | 420.2 | scf |
-| `test/test_properties/test_raman.py` | 1 | 363.9 | api_calculator, physics_values |
-| `test/test_integrals/test_pytorch_forces_fd.py` | 8 | 348.3 | integrals |
-| `test/test_external/test_field.py` | 54 | 303.6 | efield |
-| `test/test_properties/test_forces.py` | 5 | 276.4 | api_calculator, physics_values |
-| `test/test_singlepoint/test_energy.py` | 112 | 273.2 | api_calculator, physics_values |
-| `test/test_properties/test_hyperpol.py` | 2 | 268.3 | api_calculator, physics_values |
-| `test/test_a_memory_leak/test_scf.py` | 16 | 241.5 | api_calculator, cache |
-| `test/test_properties/test_dipole.py` | 24 | 235.1 | api_calculator, physics_values |
-| `test/test_scf/test_charged.py` | 34 | 207.0 | scf |
-| `test/test_integrals/test_tblite_reference.py` | 24 | 186.9 | integrals |
-| `test/test_calculator/test_cache/test_properties.py` | 30 | 159.6 | api_calculator, cache |
-| `test/test_classical/test_dispersion/test_d4sc.py` | 40 | 133.0 | physics_values |
-| `test/test_calculator/test_cache/test_stale.py` | 11 | 100.3 | api_calculator, cache |
-| `test/test_wavefunction/test_filling.py` | 185 | 99.1 | scf |
-| `test/test_properties/test_ir.py` | 1 | 99.0 | api_calculator, physics_values |
-| `test/test_scf/test_elements_gfn2.py` | 14 | 89.8 | scf |
-| `test/test_properties/test_dipole_deriv.py` | 2 | 88.1 | api_calculator, physics_values |
-| `test/test_integrals/test_pytorch_gfn2.py` | 7 | 87.1 | integrals |
-| `test/test_scf/test_padding_ghosts.py` | 6 | 85.4 | scf |
-| `test/test_scf/test_elements_gfn1.py` | 14 | 79.2 | scf |
-| `test/test_properties/test_hessian.py` | 1 | 66.8 | api_calculator, physics_values |
-| `test/test_scf/test_gfn1_grad.py` | 19 | 64.5 | scf |
-| `test/test_properties/test_vibration.py` | 1 | 63.9 | api_calculator, physics_values |
-| `test/test_properties/test_pol.py` | 2 | 56.5 | api_calculator, physics_values |
-| `test/test_solvation/test_alpb.py` | 10 | 49.5 | physics_values |
-| `test/test_integrals/test_quadrupole_getter.py` | 6 | 47.9 | integrals |
-| `test/test_integrals/test_screening.py` | 71 | 41.3 | integrals |
-| `test/test_solvation/test_grad.py` | 2 | 32.4 | physics_values |
-| `test/test_integrals/test_multipole_matrix.py` | 15 | 32.3 | integrals |
-| `test/test_integrals/test_multipole_kernels.py` | 34 | 29.7 | integrals |
-| `test/test_classical/test_repulsion/test_grad_param.py` | 20 | 27.9 | param, physics_values |
-| `test/test_libcint/test_gradcheck.py` | 63 | 27.6 | integrals |
-| `test/test_calculator/test_cache/test_invalid.py` | 6 | 25.1 | api_calculator, cache |
-| `test/test_a_memory_leak/test_higher_deriv.py` | 16 | 24.8 | api_calculator, cache |
-| `test/test_integrals/test_param_grad.py` | 3 | 23.6 | integrals, param |
-| `test/test_integrals/test_pyscf_reference.py` | 26 | 20.6 | integrals |
-| `test/test_libcint/test_multipole.py` | 128 | 16.3 | integrals |
-| `test/test_classical/test_dispersion/test_hess.py` | 4 | 16.0 | physics_values |
-| `test/test_properties/test_vibration_ref.py` | 1 | 15.2 | api_calculator, physics_values |
-| `test/test_overlap/test_overlap_molecules.py` | 24 | 13.9 | integrals, physics_values |
-| `test/test_overlap/test_uplo.py` | 12 | 13.6 | integrals, physics_values |
-| `test/test_classical/test_dispersion/test_d4_2b.py` | 20 | 13.5 | physics_values |
-| `test/test_hamiltonian/test_gfn1.py` | 23 | 13.4 | integrals, physics_values |
-| `test/test_calculator/test_cache/test_integrals.py` | 6 | 13.2 | api_calculator, cache |
-| `test/test_interaction/test_grad.py` | 20 | 12.2 | physics_values |
-| `test/test_classical/test_dispersion/test_d4.py` | 4 | 12.1 | physics_values |
-| `test/test_param/test_module.py` | 35 | 11.8 | param |
-| `test/test_overlap/test_grad.py` | 21 | 11.7 | integrals, physics_values |
-| `test/test_calculator/test_device_spec.py` | 3 | 11.6 | api_calculator |
-| `test/test_scf/test_guess_grad.py` | 40 | 11.4 | scf |
-| `test/test_hamiltonian/test_grad_pos.py` | 24 | 11.1 | integrals, physics_values |
-| `test/test_overlap/test_overlap_pairs.py` | 24 | 10.9 | integrals, physics_values |
-| `test/test_basis/test_export.py` | 176 | 10.9 | integrals |
-| `test/test_classical/test_dispersion/test_d3.py` | 5 | 10.4 | physics_values |
-| `test/test_calculator/test_cache/test_optional.py` | 4 | 9.1 | api_calculator, cache |
-| `test/test_overlap/test_grad_pos.py` | 28 | 8.3 | integrals, physics_values |
-| `test/test_classical/test_repulsion/test_grad_pos.py` | 48 | 8.2 | physics_values |
-| `test/test_classical/test_dispersion/test_d4sc_grad.py` | 10 | 7.9 | physics_values |
-| `test/test_hamiltonian/test_gfn2.py` | 16 | 7.7 | integrals, physics_values |
-| `test/test_scf/test_nonselfconsistent.py` | 10 | 7.1 | scf |
-| `test/test_integrals/test_wrappers.py` | 7 | 6.6 | integrals |
-| `test/test_param/test_param.py` | 21 | 6.5 | param |
-| `test/test_a_memory_leak/test_repulsion.py` | 4 | 6.1 | api_calculator, cache |
-| `test/test_classical/test_repulsion/test_energy.py` | 84 | 6.0 | physics_values |
-| `test/test_classical/test_dispersion/test_general.py` | 10 | 6.0 | physics_values |
-| `test/test_cli/test_driver.py` | 9 | 5.8 | api_calculator |
-| `test/test_scf/test_warnings_errors.py` | 4 | 5.8 | scf |
-| `test/test_integrals/test_driver_precision.py` | 7 | 5.5 | integrals |
-| `test/test_libcint/test_shape.py` | 56 | 5.3 | integrals |
-| `test/test_calculator/test_dd.py` | 2 | 5.2 | api_calculator |
-| `test/test_integrals/test_multipole_options.py` | 4 | 5.1 | integrals |
-| `test/test_classical/test_dispersion/test_grad_param.py` | 8 | 5.1 | param, physics_values |
-| `test/test_coulomb/test_grad_shell.py` | 16 | 4.7 | physics_values |
-| `test/test_wavefunction/test_mulliken.py` | 96 | 4.7 | scf |
-| `test/test_integrals/test_driver/test_manager.py` | 19 | 4.7 | integrals |
-| `test/test_classical/test_dispersion/test_grad_pos.py` | 18 | 4.6 | physics_values |
-| `test/test_overlap/test_overlap_atoms.py` | 10 | 4.4 | integrals, physics_values |
-| `test/test_integrals/test_general.py` | 16 | 4.3 | integrals |
-| `test/test_param/test_shared.py` | 7 | 4.2 | param |
-| `test/test_coulomb/test_es2_general.py` | 14 | 4.2 | physics_values |
-| `test/test_integrals/test_libcint.py` | 8 | 4.2 | integrals |
-| `test/test_libcint/test_overlap.py` | 36 | 4.1 | integrals |
-| `test/test_interaction/test_list.py` | 5 | 4.1 | physics_values |
-| `test/test_coulomb/test_es3_general.py` | 11 | 4.1 | physics_values |
-| `test/test_classical/test_halogen/test_grad_param.py` | 12 | 3.9 | param, physics_values |
-| `test/test_coulomb/test_es3_shell.py` | 19 | 3.8 | physics_values |
-| `test/test_classical/test_shortrangebond/test_general.py` | 10 | 3.5 | physics_values |
-| `test/test_calculator/test_general.py` | 6 | 3.4 | api_calculator |
-| `test/test_classical/test_halogen/test_grad_pos.py` | 22 | 3.1 | physics_values |
-| `test/test_integrals/test_driver/test_pytorch.py` | 14 | 3.1 | integrals |
-| `test/test_classical/test_ies/test_general.py` | 8 | 3.0 | physics_values |
-| `test/test_coulomb/test_grad_atom.py` | 12 | 2.9 | physics_values |
-| `test/test_singlepoint/test_hess.py` | 3 | 2.9 | api_calculator, physics_values |
-| `test/test_coulomb/test_es2_shell.py` | 30 | 2.9 | physics_values |
-| `test/test_hamiltonian/test_general.py` | 12 | 2.9 | integrals, physics_values |
-| `test/test_cli/test_entrypoint.py` | 4 | 2.8 | api_calculator |
-| `test/test_classical/test_repulsion/test_general.py` | 9 | 2.4 | physics_values |
-| `test/test_libcint/test_overlap_grad.py` | 20 | 2.2 | integrals |
-| `test/test_libcint/test_symmetry.py` | 24 | 2.2 | integrals |
-| `test/test_classical/test_ies/test_energy.py` | 20 | 2.1 | physics_values |
-| `test/test_integrals/test_factory.py` | 16 | 2.0 | integrals |
-| `test/test_interaction/test_cache.py` | 6 | 2.0 | cache |
-| `test/test_classical/test_halogen/test_general.py` | 9 | 2.0 | physics_values |
-| `test/test_classical/test_shortrangebond/test_energy.py` | 24 | 1.9 | physics_values |
-| `test/test_basis/test_general.py` | 13 | 1.9 | integrals |
-| `test/test_coulomb/test_es2_atom.py` | 30 | 1.8 | physics_values |
-| `test/test_classical/test_halogen/test_hess.py` | 6 | 1.7 | physics_values |
-| `test/test_coulomb/test_es3_atom.py` | 27 | 1.7 | physics_values |
-| `test/test_coulomb/test_grad_shell_pos.py` | 7 | 1.6 | physics_values |
-| `test/test_integrals/test_pytorch.py` | 4 | 1.5 | integrals |
-| `test/test_classical/test_dispersion/test_grad_general.py` | 4 | 1.3 | physics_values |
-| `test/test_integrals/test_driver/test_factory.py` | 5 | 1.3 | integrals |
-| `test/test_indexhelper/test_general.py` | 14 | 1.3 | - |
-| `test/test_wavefunction/test_wiberg.py` | 24 | 1.2 | scf |
-| `test/test_coulomb/test_aes2_general.py` | 1 | 1.2 | physics_values |
-| `test/test_coulomb/test_grad_atom_pos.py` | 12 | 1.1 | physics_values |
-| `test/test_basis/test_normalization.py` | 182 | 1.1 | integrals |
-| `test/test_components/test_cache.py` | 4 | 1.0 | cache |
-| `test/test_hamiltonian/test_base.py` | 2 | 1.0 | integrals, physics_values |
-| `test/test_classical/test_halogen/test_energy.py` | 20 | 0.9 | physics_values |
-| `test/test_classical/test_repulsion/test_hess.py` | 3 | 0.9 | physics_values |
-| `test/test_classical/test_halogen/test_grad_general.py` | 1 | 0.9 | physics_values |
-| `test/test_classical/test_dispersion/test_energy.py` | 2 | 0.9 | physics_values |
-| `test/test_coulomb/test_grad_atom_param.py` | 12 | 0.8 | param, physics_values |
+| `test/test_baseline/test_derivatives.py` | 158 | 600.8 | baseline |
+| `test/test_baseline/test_components.py` | 125 | 233.7 | baseline |
+| `test/test_scf/test_implicit_matrix.py` | 94 | 85.5 | scf |
+| `test/test_singlepoint/test_grad_pos_withfield.py` | 14 | 75.6 | api_calculator, efield, physics_values |
+| `test/test_scf/test_scf.py` | 141 | 75.1 | scf |
+| `test/test_properties/test_pol_deriv.py` | 2 | 64.8 | api_calculator, physics_values |
+| `test/test_scf/test_full_tracking.py` | 68 | 47.7 | scf |
+| `test/test_properties/test_raman.py` | 1 | 47.2 | api_calculator, physics_values |
+| `test/test_properties/test_hyperpol.py` | 2 | 47.0 | api_calculator, physics_values |
+| `test/test_baseline/test_reference.py` | 117 | 46.8 | baseline |
+| `test/test_libcint/test_coeff_grad.py` | 22 | 46.3 | integrals |
+| `test/test_singlepoint/test_grad_field.py` | 40 | 40.6 | api_calculator, efield, physics_values |
+| `test/test_wavefunction/test_fermi_derivatives.py` | 127 | 37.5 | scf |
+| `test/test_scf/test_fermi_derivatives.py` | 9 | 35.8 | scf |
+| `test/test_properties/test_forces.py` | 5 | 34.0 | api_calculator, physics_values |
+| `test/test_singlepoint/test_grad_fieldgrad.py` | 24 | 33.7 | api_calculator, efield, physics_values |
+| `test/test_singlepoint/test_grad_gfn2.py` | 18 | 33.2 | api_calculator, physics_values |
+| `test/test_scf/test_scp.py` | 63 | 31.4 | scf |
+| `test/test_properties/test_quadrupole.py` | 47 | 27.4 | api_calculator, physics_values |
+| `test/test_a_memory_leak/test_scf.py` | 16 | 26.2 | api_calculator, cache |
+| `test/test_a_memory_leak/test_higher_deriv.py` | 16 | 23.2 | api_calculator, cache |
+| `test/test_scf/test_hess.py` | 4 | 21.8 | scf |
+| `test/test_integrals/test_pytorch_forces_fd.py` | 4 | 21.1 | integrals |
+| `test/test_properties/test_quadrupole_fieldgrad.py` | 12 | 20.6 | api_calculator, efield, physics_values |
+| `test/test_calculator/test_cache/test_properties.py` | 30 | 16.3 | api_calculator, cache |
+| `test/test_integrals/test_screening.py` | 47 | 14.5 | integrals |
+| `test/test_properties/test_dipole.py` | 24 | 14.3 | api_calculator, physics_values |
+| `test/test_scf/test_charge_derivative.py` | 15 | 13.3 | scf |
+| `test/test_properties/test_ir.py` | 1 | 12.6 | api_calculator, physics_values |
+| `test/test_scf/test_stateless_map.py` | 22 | 11.4 | scf |
+| `test/test_integrals/test_multipole_matrix.py` | 15 | 11.0 | integrals |
+| `test/test_properties/test_dipole_deriv.py` | 2 | 10.7 | api_calculator, physics_values |
+| `test/test_singlepoint/test_grad_gfn1.py` | 30 | 10.5 | api_calculator, physics_values |
+| `test/test_calculator/test_cache/test_stale.py` | 11 | 9.8 | api_calculator, cache |
+| `test/test_external/test_field.py` | 54 | 9.7 | efield |
+| `test/test_singlepoint/test_energy.py` | 84 | 9.6 | api_calculator, physics_values |
+| `test/test_wavefunction/test_filling.py` | 183 | 9.2 | scf |
+| `test/test_hamiltonian/test_gfn1.py` | 23 | 7.9 | integrals, physics_values |
+| `test/test_properties/test_pol.py` | 2 | 7.3 | api_calculator, physics_values |
+| `test/test_integrals/test_pytorch_gfn2.py` | 7 | 7.2 | integrals |
+| `test/test_properties/test_hessian.py` | 1 | 6.9 | api_calculator, physics_values |
+| `test/test_overlap/test_uplo.py` | 12 | 6.8 | integrals, physics_values |
+| `test/test_properties/test_vibration.py` | 1 | 6.1 | api_calculator, physics_values |
+| `test/test_integrals/test_tblite_reference.py` | 12 | 6.1 | integrals |
+| `test/test_param/test_module.py` | 35 | 5.5 | param |
+| `test/test_scf/test_charged.py` | 34 | 5.4 | scf |
+| `test/test_scf/test_elements_gfn2.py` | 14 | 5.2 | scf |
+| `test/test_scf/test_fixed_point.py` | 26 | 5.0 | scf |
+| `test/test_integrals/test_multipole_kernels.py` | 34 | 5.0 | integrals |
+| `test/test_overlap/test_overlap_molecules.py` | 24 | 4.8 | integrals, physics_values |
+| `test/test_a_memory_leak/test_repulsion.py` | 4 | 4.7 | api_calculator, cache |
+| `test/test_overlap/test_overlap_pairs.py` | 24 | 4.6 | integrals, physics_values |
+| `test/test_integrals/test_pyscf_reference.py` | 11 | 4.4 | integrals |
+| `test/test_scf/test_padding_ghosts.py` | 4 | 4.4 | scf |
+| `test/test_integrals/test_quadrupole_getter.py` | 6 | 4.2 | integrals |
+| `test/test_classical/test_dispersion/test_d4sc.py` | 40 | 4.2 | physics_values |
+| `test/test_hamiltonian/test_grad_pos.py` | 24 | 3.9 | integrals, physics_values |
+| `test/test_classical/test_dispersion/test_d4_2b.py` | 20 | 3.7 | physics_values |
+| `test/test_scf/test_elements_gfn1.py` | 14 | 3.7 | scf |
+| `test/test_basis/test_export.py` | 176 | 3.7 | integrals |
+| `test/test_scf/test_nonselfconsistent.py` | 10 | 3.6 | scf |
+| `test/test_integrals/test_driver/test_manager.py` | 19 | 3.6 | integrals |
+| `test/test_param/test_param.py` | 21 | 3.5 | param |
+| `test/test_hamiltonian/test_gfn2.py` | 16 | 3.4 | integrals, physics_values |
+| `test/test_overlap/test_grad_pos.py` | 28 | 3.4 | integrals, physics_values |
+| `test/test_libcint/test_gradcheck.py` | 63 | 3.3 | integrals |
+| `test/test_config/test_scf_mode_removed.py` | 15 | 3.3 | api_calculator |
+| `test/test_libcint/test_multipole.py` | 128 | 3.0 | integrals |
+| `test/test_overlap/test_grad.py` | 21 | 2.8 | integrals, physics_values |
+| `test/test_integrals/test_general.py` | 16 | 2.4 | integrals |
+| `test/test_coulomb/test_es2_general.py` | 14 | 2.4 | physics_values |
+| `test/test_integrals/test_multipole_options.py` | 4 | 2.4 | integrals |
+| `test/test_scf/test_gfn1_grad.py` | 15 | 2.3 | scf |
+| `test/test_coulomb/test_es3_shell.py` | 19 | 2.2 | physics_values |
+| `test/test_hamiltonian/test_general.py` | 12 | 2.2 | integrals, physics_values |
+| `test/test_classical/test_repulsion/test_energy.py` | 84 | 2.2 | physics_values |
+| `test/test_integrals/test_driver/test_pytorch.py` | 14 | 1.9 | integrals |
+| `test/test_classical/test_dispersion/test_hess.py` | 4 | 1.9 | physics_values |
+| `test/test_classical/test_dispersion/test_general.py` | 10 | 1.8 | physics_values |
+| `test/test_classical/test_dispersion/test_d4sc_grad.py` | 10 | 1.8 | physics_values |
+| `test/test_calculator/test_cache/test_invalid.py` | 6 | 1.7 | api_calculator, cache |
+| `test/test_coulomb/test_es3_general.py` | 11 | 1.7 | physics_values |
+| `test/test_classical/test_repulsion/test_grad_param.py` | 20 | 1.7 | param, physics_values |
+| `test/test_integrals/test_driver_precision.py` | 7 | 1.7 | integrals |
+| `test/test_solvation/test_alpb.py` | 10 | 1.5 | physics_values |
+| `test/test_param/test_shared.py` | 7 | 1.5 | param |
+| `test/test_integrals/test_wrappers.py` | 7 | 1.5 | integrals |
+| `test/test_classical/test_repulsion/test_grad_pos.py` | 48 | 1.5 | physics_values |
+| `test/test_classical/test_shortrangebond/test_general.py` | 10 | 1.5 | physics_values |
+| `test/test_overlap/test_overlap_atoms.py` | 10 | 1.5 | integrals, physics_values |
+| `test/test_wavefunction/test_mulliken.py` | 96 | 1.5 | scf |
+| `test/test_classical/test_repulsion/test_general.py` | 9 | 1.5 | physics_values |
+| `test/test_basis/test_general.py` | 13 | 1.5 | integrals |
+| `test/test_classical/test_halogen/test_grad_param.py` | 12 | 1.4 | param, physics_values |
+| `test/test_integrals/test_factory.py` | 16 | 1.4 | integrals |
+| `test/test_classical/test_dispersion/test_d4.py` | 4 | 1.4 | physics_values |
+| `test/test_libcint/test_overlap.py` | 36 | 1.3 | integrals |
+| `test/test_calculator/test_cache/test_integrals.py` | 6 | 1.3 | api_calculator, cache |
+| `test/test_solvation/test_grad.py` | 2 | 1.3 | physics_values |
+| `test/test_classical/test_ies/test_general.py` | 8 | 1.3 | physics_values |
+| `test/test_integrals/test_param_grad.py` | 3 | 1.3 | integrals, param |
+| `test/test_classical/test_halogen/test_general.py` | 9 | 1.2 | physics_values |
+| `test/test_coulomb/test_es2_atom.py` | 30 | 1.2 | physics_values |
+| `test/test_classical/test_shortrangebond/test_energy.py` | 24 | 1.1 | physics_values |
+| `test/test_classical/test_halogen/test_grad_pos.py` | 22 | 1.1 | physics_values |
+| `test/test_libcint/test_shape.py` | 56 | 1.1 | integrals |
+| `test/test_interaction/test_grad.py` | 20 | 1.1 | physics_values |
+| `test/test_calculator/test_cache/test_optional.py` | 4 | 1.1 | api_calculator, cache |
+| `test/test_calculator/test_device_spec.py` | 3 | 1.1 | api_calculator |
+| `test/test_interaction/test_list.py` | 5 | 1.1 | physics_values |
+| `test/test_cli/test_driver.py` | 9 | 1.1 | api_calculator |
+| `test/test_properties/test_vibration_ref.py` | 1 | 1.0 | api_calculator, physics_values |
+| `test/test_integrals/test_libcint.py` | 8 | 1.0 | integrals |
+| `test/test_coulomb/test_grad_atom.py` | 12 | 0.9 | physics_values |
+| `test/test_classical/test_dispersion/test_d3.py` | 5 | 0.9 | physics_values |
+| `test/test_scf/test_warnings_errors.py` | 4 | 0.9 | scf |
+| `test/test_libcint/test_symmetry.py` | 24 | 0.9 | integrals |
+| `test/test_classical/test_halogen/test_hess.py` | 6 | 0.9 | physics_values |
+| `test/test_scf/test_implicit_batch.py` | 2 | 0.9 | batch_mode, scf |
+| `test/test_coulomb/test_grad_shell.py` | 16 | 0.9 | physics_values |
+| `test/test_indexhelper/test_general.py` | 14 | 0.8 | - |
+| `test/test_components/test_cache.py` | 4 | 0.8 | cache |
+| `test/test_classical/test_dispersion/test_grad_pos.py` | 18 | 0.8 | physics_values |
+| `test/test_calculator/test_dd.py` | 2 | 0.7 | api_calculator |
+| `test/test_classical/test_dispersion/test_grad_general.py` | 4 | 0.7 | physics_values |
+| `test/test_classical/test_dispersion/test_grad_param.py` | 8 | 0.7 | param, physics_values |
+| `test/test_calculator/test_general.py` | 6 | 0.7 | api_calculator |
 | `test/test_basis/test_setup.py` | 26 | 0.7 | integrals |
-| `test/test_solvation/test_born.py` | 29 | 0.7 | physics_values |
-| `test/test_coulomb/test_aes2.py` | 4 | 0.7 | physics_values |
-| `test/test_coulomb/test_grad_shell_param.py` | 8 | 0.6 | param, physics_values |
-| `test/test_classical/test_dispersion/test_d4_alp.py` | 1 | 0.5 | physics_values |
-| `test/test_integrals/test_ao_ordering.py` | 16 | 0.5 | integrals |
-| `test/test_scf/test_mixer.py` | 9 | 0.4 | scf |
-| `test/test_utils/test_eigh.py` | 2 | 0.3 | - |
-| `test/test_scf/test_general.py` | 4 | 0.3 | scf |
-| `test/test_integrals/test_types.py` | 3 | 0.3 | integrals |
-| `test/test_singlepoint/test_general.py` | 1 | 0.2 | api_calculator, physics_values |
-| `test/test_classical/test_repulsion/test_grad_general.py` | 1 | 0.2 | physics_values |
-| `test/test_cli/test_args.py` | 20 | 0.1 | api_calculator |
+| `test/test_singlepoint/test_hess.py` | 3 | 0.7 | api_calculator, physics_values |
+| `test/test_integrals/test_driver/test_factory.py` | 5 | 0.7 | integrals |
+| `test/test_coulomb/test_aes2.py` | 4 | 0.6 | physics_values |
+| `test/test_classical/test_repulsion/test_hess.py` | 3 | 0.6 | physics_values |
+| `test/test_coulomb/test_es2_shell.py` | 30 | 0.6 | physics_values |
+| `test/test_scf/test_guess_grad.py` | 40 | 0.6 | scf |
+| `test/test_basis/test_normalization.py` | 182 | 0.5 | integrals |
+| `test/test_libcint/test_overlap_grad.py` | 20 | 0.5 | integrals |
+| `test/test_classical/test_halogen/test_energy.py` | 20 | 0.5 | physics_values |
+| `test/test_classical/test_repulsion/test_grad_general.py` | 1 | 0.5 | physics_values |
+| `test/test_classical/test_ies/test_energy.py` | 20 | 0.5 | physics_values |
+| `test/test_coulomb/test_es3_atom.py` | 27 | 0.4 | physics_values |
+| `test/test_interaction/test_cache.py` | 6 | 0.4 | cache |
+| `test/test_scf/test_inv_cholesky.py` | 2 | 0.4 | scf |
+| `test/test_integrals/test_pytorch.py` | 4 | 0.3 | integrals |
+| `test/test_cli/test_entrypoint.py` | 4 | 0.3 | api_calculator |
+| `test/test_coulomb/test_grad_atom_param.py` | 12 | 0.3 | param, physics_values |
+| `test/test_coulomb/test_grad_shell_param.py` | 8 | 0.2 | param, physics_values |
+| `test/test_coulomb/test_grad_atom_pos.py` | 12 | 0.2 | physics_values |
+| `test/test_classical/test_dispersion/test_d4_alp.py` | 1 | 0.2 | physics_values |
+| `test/test_wavefunction/test_wiberg.py` | 24 | 0.2 | scf |
+| `test/test_classical/test_dispersion/test_energy.py` | 2 | 0.1 | physics_values |
+| `test/test_scf/test_general.py` | 4 | 0.1 | scf |
+| `test/test_hamiltonian/test_base.py` | 2 | 0.1 | integrals, physics_values |
+| `test/test_utils/test_eigh.py` | 2 | 0.1 | - |
+| `test/test_coulomb/test_aes2_general.py` | 1 | 0.1 | physics_values |
 | `test/test_mol/test_external.py` | 14 | 0.1 | - |
-| `test/test_indexhelper/test_spread_reduce.py` | 10 | 0.1 | - |
-| `test/test_interaction/test_potential.py` | 12 | 0.1 | physics_values |
-| `test/test_utils/test_rules.py` | 1 | 0.1 | - |
+| `test/test_solvation/test_born.py` | 29 | 0.1 | physics_values |
+| `test/test_singlepoint/test_general.py` | 1 | 0.1 | api_calculator, physics_values |
+| `test/test_coulomb/test_grad_shell_pos.py` | 7 | 0.1 | physics_values |
+| `test/test_classical/test_halogen/test_grad_general.py` | 1 | 0.1 | physics_values |
 | `test/test_loader/test_lazy/test_param.py` | 5 | 0.1 | param |
-| `test/test_scf/test_guess.py` | 5 | 0.0 | scf |
-| `test/test_coulomb/test_average.py` | 6 | 0.0 | physics_values |
-| `test/test_config/test_main.py` | 11 | 0.0 | api_calculator |
-| `test/test_utils/test_timer.py` | 7 | 0.0 | - |
-| `test/test_param/test_util.py` | 5 | 0.0 | param |
-| `test/test_config/test_integral.py` | 7 | 0.0 | api_calculator |
-| `test/test_io/test_outputs.py` | 7 | 0.0 | api_calculator |
+| `test/test_cli/test_args.py` | 20 | 0.1 | api_calculator |
+| `test/test_integrals/test_ao_ordering.py` | 16 | 0.1 | integrals |
+| `test/test_integrals/test_types.py` | 3 | 0.1 | integrals |
+| `test/test_utils/test_rules.py` | 1 | 0.0 | - |
+| `test/test_indexhelper/test_spread_reduce.py` | 10 | 0.0 | - |
 | `test/test_indexhelper/test_extra.py` | 7 | 0.0 | - |
+| `test/test_scf/test_mixer.py` | 9 | 0.0 | scf |
+| `test/test_scf/test_guess.py` | 5 | 0.0 | scf |
+| `test/test_interaction/test_potential.py` | 12 | 0.0 | physics_values |
+| `test/test_param/test_util.py` | 5 | 0.0 | param |
+| `test/test_config/test_main.py` | 11 | 0.0 | api_calculator |
+| `test/test_coulomb/test_average.py` | 6 | 0.0 | physics_values |
+| `test/test_io/test_outputs.py` | 7 | 0.0 | api_calculator |
 | `test/test_utils/test_misc.py` | 8 | 0.0 | - |
-| `test/test_external/test_general.py` | 8 | 0.0 | efield |
-| `test/test_config/test_exlibs_available.py` | 3 | 0.0 | api_calculator |
-| `test/test_components/test_list.py` | 2 | 0.0 | cache |
+| `test/test_utils/test_timer.py` | 7 | 0.0 | - |
+| `test/test_config/test_integral.py` | 7 | 0.0 | api_calculator |
 | `test/test_indexhelper/test_culling.py` | 2 | 0.0 | batch_mode |
-| `test/test_param/test_tensor.py` | 3 | 0.0 | param |
 | `test/test_loader/test_lazy/test_attach_var.py` | 4 | 0.0 | param |
+| `test/test_external/test_general.py` | 8 | 0.0 | efield |
+| `test/test_basis/test_orthogonalize.py` | 2 | 0.0 | integrals |
+| `test/test_utils/test_tensors.py` | 6 | 0.0 | - |
+| `test/test_config/test_exlibs_available.py` | 3 | 0.0 | api_calculator |
+| `test/test_param/test_tensor.py` | 3 | 0.0 | param |
+| `test/test_interaction/test_base.py` | 2 | 0.0 | physics_values |
+| `test/test_components/test_list.py` | 2 | 0.0 | cache |
+| `test/test_loader/test_lazy/test_attach_module.py` | 2 | 0.0 | param |
 | `test/test_classical/test_list.py` | 1 | 0.0 | physics_values |
 | `test/test_io/test_logging.py` | 1 | 0.0 | api_calculator |
 | `test/test_overlap/test_general.py` | 1 | 0.0 | integrals, physics_values |
-| `test/test_basis/test_orthogonalize.py` | 2 | 0.0 | integrals |
-| `test/test_utils/test_tensors.py` | 6 | 0.0 | - |
-| `test/test_interaction/test_base.py` | 2 | 0.0 | physics_values |
-| `test/test_loader/test_lazy/test_attach_module.py` | 2 | 0.0 | param |
 | `test/test_config/test_export.py` | 1 | 0.0 | api_calculator |
