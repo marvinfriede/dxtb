@@ -426,7 +426,9 @@ def main() -> None:
         }
         data.append(entry)
         print(json.dumps(entry, indent=1))
-    path.write_text(json.dumps(data, indent=1) + "\n")
+        # save after every workload: a crash (e.g., out of memory) in a later
+        # one must not lose the results of the earlier ones
+        path.write_text(json.dumps(data, indent=1) + "\n")
 
 
 if __name__ == "__main__":

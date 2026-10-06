@@ -12,17 +12,30 @@ recorded status with `python -m test.test_baseline.tables`.
   atom, systematic), forces to 1e-8, charges and dipoles to 2e-8, for GFN1
   and GFN2 with both integral drivers. The two drivers agree with each other
   to 1e-11 (first derivatives).
-- **Higher derivatives are wrong in three situations**, silently:
+- **Higher derivatives are wrong in two situations**, silently:
   1. *exactly degenerate orbitals* (benzene, Fe(CO)5): second and third
      derivatives through the eigensolver (e.g., GFN2 polarizability of benzene
      24 and -33 instead of 57 a.u.). Reproduced on a 5x5 matrix (T0.4).
-  2. *implicit SCF modes* (`implicit`, `nonpure`): only first derivatives are
-     right; Hessians off by 10-40%, the polarizability is missing entirely.
-  3. *third order of the open-shell NO2 with GFN2* (hyperpolarizability and
+  2. *third order of the open-shell NO2 with GFN2* (hyperpolarizability and
      polarizability derivatives).
 
   In addition, the Lorentzian broadening of the eigensolver biases even first
   derivatives when the HOMO-LUMO gap is small (1.5% at a gap of 1e-3 Eh).
+- **The implicit SCF mode was fixed on `main` (#272).** At `a132ec8`, the
+  implicit modes were right only to first order (Hessians off by 10-40%, the
+  polarizability missing). With the new fixed-point solver, `scf_mode="implicit"`
+  matches the unrolled SCF cell by cell with autograd (single systems and
+  batches, up to third order), and the `nonpure` mode is gone. What remains:
+  every `torch.func` and forward-mode cell errors with the implicit mode
+  (`requires_grad_()` inside a transformed function), so it is autograd only.
+- **New on `main` since #271: the derivative with respect to `refocc` is
+  wrong.** The reference occupation (`element.<X>.refocc`) now also sets the
+  fractional number of electrons, which keeps its graph, but autograd misses a
+  contribution: for water (GFN1), `dE/d refocc(H)` is -0.0036 with autograd
+  and -0.2259 with central differences (stable between steps of 1e-3 and
+  1e-4), `O`: 0.076 against 0.234. All six `refocc` leaves of both methods
+  fail, every other parameter leaf is unchanged (section 7). Before #271 the
+  electron count was rounded and detached, so both agreed. Not fixed here.
 - **Bugs fixed in this track** (T0 rules: they contaminated the baseline or
   gave wrong results with a small fix):
   - stale autograd graphs from the component and integral-driver caches:
@@ -32,40 +45,54 @@ recorded status with `python -m test.test_baseline.tables`.
     (anions; 8e-6 Eh for OH- with GFN2);
   - `device="cpu"` (string) and `device="cuda"` raised a `DeviceError`;
   - the D4 three-body exponent `alp` was not passed to tad-dftd4 (no effect,
-    no gradient).
+    no gradient);
+  - the batched eigensolver stall (below): the unrolled SCF now computes the
+    inverse Cholesky factor of the overlap once and passes it to
+    `storch.eighb` (`l_inv`, tad-mctc 0.9.1).
 
   Also removed: all TorchScript code (deprecated; compiling goes through
   `torch.compile`).
 - **Memory limits the workloads, not time.** The unrolled SCF needs 8-9 GB
   for forces of 510 atoms or the Hessian of 33 atoms (GFN1); GFN2 runs out
-  of 14 GB in the same workloads. Batched SCF with several threads hangs in
-  batched LU factorizations (torch/MKL, reproduced without dxtb).
+  of 14 GB in the same workloads (section 6).
 - **Forward mode and `vmap` do not work end to end.** `jacrev` of the energy
-  works; `jacfwd`/`hessian` stop at custom autograd functions without `jvp`
-  (eigensolver, tad-dftd3, tad-libcint, `CoulombMatrixAG`, `RepulsionAG`);
-  `vmap` stops at the cache keys (`data_ptr`), batch-size heuristics and
-  data-dependent control flow. `torch.compile` fails inside Dynamo.
-- **`Node` (tad-mctc 0.9.0) covers what the plan needs**; two small helpers
-  are worth adding in dxtb when containers migrate (section 10). dxtb cannot
-  install tad-mctc 0.9 until the tad-* dependants are re-released.
+  works; `jacfwd`/`hessian` work only for GFN2 with the PyTorch driver and
+  stop at custom autograd functions without `jvp` elsewhere (tad-dftd3,
+  tad-libcint, `CoulombMatrixAG`, `RepulsionAG`); `vmap` stops at the cache
+  keys (`data_ptr`), batch-size heuristics and data-dependent control flow.
+  `torch.compile` fails inside Dynamo.
+- **`Node` (tad-mctc 0.9) covers what the plan needs**; two small helpers
+  are worth adding in dxtb when containers migrate (section 10). dxtb now
+  runs on tad-mctc 0.9.1 and tad-multicharge 0.7.0; tad-dftd3 and tad-dftd4
+  are not released for it yet and are bridged by a temporary shim
+  (`dxtb/_src/mctc_shim.py`, section 1).
 
 ## 1. Environment and commit
 
 | Item | Value |
 | --- | --- |
-| dxtb | `main` at `a132ec8` (#270) plus this branch; reference data at `fc571e4` (physics identical to `a132ec8`) |
+| dxtb | `main` at `3b6a90f` (#274) plus this branch; the status data and references were regenerated on this branch after the move to tad-mctc 0.9.1 |
 | Python | 3.11.15 |
 | torch | 2.14.0 (PyPI wheel, build `2.14.0+cu130`; run on CPU, no GPU present) |
-| tad-* | tad-mctc 0.7.0, tad-dftd3 0.6.0, tad-dftd4 0.8.0, tad-multicharge 0.5.0, tad-libcint 0.3.0 |
+| tad-* | tad-mctc 0.9.1, tad-multicharge 0.7.0, tad-dftd3 0.6.0 and tad-dftd4 0.8.0 (installed with `--no-deps`, bridged by `dxtb/_src/mctc_shim.py`), tad-libcint 0.3.0 |
 | numpy / scipy / pyscf | 1.26.4 / 1.17.1 / 2.14.0 |
 | tblite (reference only) | 0.7.0 (PyPI) |
 | Hardware | 4 vCPU Intel Xeon @ 2.8 GHz, 15 GB RAM, MKL 2024.2 |
 
 `constraints/baseline.txt` pins these versions; the workflow
 `.github/workflows/baseline.yaml` installs from it and runs the suite
-(`large`/`slow` nightly). The plan's code references point to `46af7bc`;
-`main` has moved on by #268 (CCA ordering), #269 (Fermi smearing) and #270
-(PyTorch multipole integrals). `OverlapAG` and `EFunction` of the plan no
+(`large`/`slow` nightly). The first baseline was recorded with tad-mctc
+0.7.0 and tad-multicharge 0.5.0 on `a132ec8`; moving to tad-mctc 0.9.1
+shifts the dxtb energies by up to 4e-7 Eh (the CODATA constants were
+refreshed in tad-mctc 0.8: `EV2AU` changes by 8e-9 relative; forces and
+charges by about 2e-9). The dxtb references were regenerated and still agree
+with tblite within the recorded tolerances. Run the suite with one thread per
+xdist worker (`OMP_NUM_THREADS=1`): four workers with four threads each
+oversubscribe four cores, which made the suite about ten times slower here.
+The plan's code references point to `46af7bc`; `main` has moved on by #268
+(CCA ordering), #269 (Fermi smearing), #270 (PyTorch multipole integrals),
+#271 (fractional electrons), #272 (implicit solver, `nonpure` removed) and
+#274 (smaller test suite). `OverlapAG` and `EFunction` of the plan no
 longer exist: the PyTorch integrals are plain torch code now, and GFN2 runs
 with the PyTorch driver. T0.1 step 1 (`fix/type-conversion`) is on `main`
 (#266).
@@ -148,36 +175,43 @@ and 1e-5 (parameters); see the step-size scan in the appendix.
 
 ### 3.1 Matrix
 
-1236 cells: 10 quantities x up to 5 paths x 2 methods x 2 drivers x 3 SCF
+824 cells: 10 quantities x up to 5 paths x 2 methods x 2 drivers x 2 SCF
 modes x 3 inputs (water; padded water/OH-; two water geometries), each
 compared with finite differences of the quantity one order lower. The full
 tables are in the appendix; the outcome per cell is in
 `test/test_baseline/status/matrix.json` and drives `test_derivatives.py`
 (non-passing cells are `xfail(strict=True)`).
 
-Outcome over all 1236 cells: 430 pass, 129 wrong value, 676 exception,
-1 not finite. By path and setting:
+Outcome over all 824 cells: 383 pass, 45 wrong value, 395 exception,
+1 not finite (unrolled SCF: 221 / 39 / 151 / 1; implicit: 162 / 6 / 244 / 0).
+By path and setting:
 
 - **Unrolled SCF (`full`) + autograd, single system: correct to third
   order** for every quantity, both methods and both drivers (deviation from
   finite differences 1e-10 to 7e-7; 0.4 s for forces, 4-7 s for Hessians,
   7-22 s for third order, water). The only exception is the derivative of
   the forces with respect to parameters with libcint (`int1e_rripovlp` not
-  available).
+  available), and the derivative with respect to the parameters `refocc`
+  (section 7), which is wrong since #271.
 - **`functorch` paths** of the Calculator API match autograd for single
   systems with the unrolled SCF; for batches they return cross-system blocks
   (`(nb, nb, ...)`), and `pol_deriv`/`dipole_deriv` fail to reshape.
-- **Implicit SCF modes** (`implicit`, `nonpure`): first derivatives right;
-  every second and third derivative wrong (Hessian 10-40%, polarizability
-  missing, contracted third order 10-30%), or an error in the xitorch
-  `RootFinder` under `torch.func` (no vmap rule).
-- **Forward mode** (`jacfwd`, `jvp`) works for first derivatives only:
-  the dipole (both drivers), the GFN2 forces with the PyTorch driver (GFN1
-  stops at the D3 custom function, libcint at its integrals) and the
-  parameter derivatives of the energy with the PyTorch driver. Every second
-  and third derivative stops at custom autograd functions without `jvp`
-  or vmap rule (eigensolver, tad-dftd3, tad-libcint, `CoulombMatrixAG`,
-  `RepulsionAG`), and through the plain `eigh` it gives NaN for degenerate
+- **Implicit SCF mode** (`implicit`; the `nonpure` mode was removed in
+  #272): with autograd, the status of every cell equals the unrolled SCF
+  (single systems: 32 pass, 6 wrong value, 2 exceptions, in both modes), so
+  all positional and field derivatives are right up to third order. At
+  `a132ec8` the Hessian, the polarizability and the third derivatives were
+  wrong (10-40%) or missing. The `functorch` and forward-mode paths do not
+  work at all with the implicit mode: all 28-40 cells per input error
+  (`requires_grad_()` inside a transformed function, no `vmap` rule,
+  `flat_bdims must not be None`).
+- **Forward mode** (`jacfwd`, `jvp`) works for the dipole and the
+  polarizability (all methods and drivers) and, with GFN2 and the PyTorch
+  driver, also for forces, the Hessian and the dipole derivatives. The
+  hyperpolarizability, the third derivative and the polarizability
+  derivative give wrong values, and GFN1 and libcint stop at custom autograd
+  functions without `jvp` (tad-dftd3, tad-libcint, `CoulombMatrixAG`,
+  `RepulsionAG`); through the plain `eigh` it gives NaN for degenerate
   orbitals (OH-, GFN1).
 - **Analytical paths**: analytical forces exist only for GFN1 with libcint
   ("GFN2 not implemented", "no analytical overlap gradient" for the PyTorch
@@ -189,8 +223,7 @@ Outcome over all 1236 cells: 430 pass, 129 wrong value, 676 exception,
   only for scalar outputs"); `hessian` is not supported in batch mode;
   `dipole_deriv`/`pol_deriv` (autograd and analytical) fail to reshape;
   dipole, polarizability and hyperpolarizability work with the unrolled
-  SCF (autograd and `functorch`). The `nonpure` mode fails for batched
-  dipoles ("`inputs` argument to `grad()` cannot be empty").
+  SCF (autograd and `functorch`).
 
 Step-size scan (water): central differences show clean `h^2` behaviour down
 to `h = 1e-5` (forces 1.5e-10, Hessian 6e-11 at 1e-5); the references use
@@ -217,8 +250,10 @@ every classical and interaction energy, the eigensolver), 6 checks each
   `vmap` fails at a batch-size heuristic on `numbers`.
 - **Eigensolver** (`storch.eighb`, Lorentzian broadening): exactly
   degenerate occupied pair - first order right, second and third order
-  wrong; HOMO-LUMO gap 1e-3 Eh - already first order wrong (broadening
-  bias); no `jvp`, no vmap rule.
+  wrong (forward mode, `jvp` and `vmap` pass the check for the first
+  derivative); HOMO-LUMO gap 1e-3 Eh - already first order wrong in reverse
+  and forward mode (broadening bias); no vmap rule with Fermi smearing
+  (`.item()`).
 - `vmap` additionally fails for H0 (`torch.allclose`), the halogen bond and
   the basis setup (data-dependent control flow) and AES2 (in-place
   broadcast).
@@ -246,7 +281,7 @@ fallback warnings are errors.
 | --- | --- | --- | --- | --- |
 | `jacrev(energy)` | works | works | works | works |
 | `jacfwd(energy)` | error (D3 `jvp`) | error (D3 `jvp`) | **works** | error (libcint `jvp`) |
-| `hessian(energy)` (`jacfwd(jacrev)`) | error | error | error (eigensolver vmap rule) | error |
+| `hessian(energy)` (`jacfwd(jacrev)`) | error (D3 `jvp`) | error (D3 `jvp`) | **works** | error (libcint `jvp`) |
 | `vmap(energy)`, single | error | error | error | error |
 | `vmap(forces)`, single | error | error | error | error |
 | `vmap(energy)`, conformer batch | error | error | error | error |
@@ -323,11 +358,20 @@ global leaf, the autograd directional derivative is compared with a central
 finite difference (`test/test_baseline/params.py`,
 `status/param_coverage.json`).
 
-| method | correct gradient | no effect on the set | gradient path cut | not checked (element absent) |
-| --- | --- | --- | --- | --- |
-| GFN1 | 105 | 41 | 1 | 2114 |
-| GFN2 | 141 | 13 | 0 | 1248 |
+| method | correct gradient | wrong gradient | no effect on the set | gradient path cut | not checked (element absent) |
+| --- | --- | --- | --- | --- | --- |
+| GFN1 | 99 | 6 | 41 | 1 | 2114 |
+| GFN2 | 135 | 6 | 13 | 0 | 1248 |
 
+- **Bug on `main` (since #271), not fixed:** the six `element.<X>.refocc`
+  leaves (H, C, N, O, Br, Fe) of both methods have a wrong gradient (these
+  six were correct at `a132ec8`: 105 and 141 correct leaves). Water, GFN1,
+  autograd against central differences: H -0.0036 against -0.2259, O 0.0757
+  against 0.2335; the finite differences do not change between steps of
+  1e-3 and 1e-4. The reference occupation now also determines the fractional
+  number of electrons (`get_refocc`, `nel`), which is differentiated in the
+  SCF through the graph of the total charge; a contribution is lost on the
+  way from `refocc`. Relevant if `refocc` is trained (F2).
 - **Bug, fixed:** `dispersion.d4.alp` (GFN2) was not passed to tad-dftd4,
   which used its built-in default (the same value): no effect, no gradient.
 - **Bug, subproject:** `dispersion.d3.s9` (GFN1) has no gradient. GFN1 sets
@@ -417,12 +461,14 @@ evidence above.
 
 **E0 (SCF differentiation and integrals)**
 
-1. *Implicit differentiation is first order only.* The xitorch-based
-   implicit modes give wrong second and third derivatives (3.1). Either the
-   implicit path gets higher-order rules (differentiate the fixed-point
-   condition recursively, with forward-mode support), or the unrolled SCF is
-   the only higher-order path. The cost columns of the matrix give the
-   unrolled baseline to beat.
+1. *Implicit differentiation works with autograd, not with transforms.* The
+   fixed-point solver of #272 gives correct derivatives to third order
+   (3.1), but no `torch.func` or forward-mode transform runs through it
+   (`requires_grad_()` inside the transformed function). Either the implicit
+   path becomes transform-compatible (differentiate the fixed-point
+   condition with `torch.func` rules), or the unrolled SCF is the only path
+   for transforms. The cost columns of the matrix give the unrolled baseline
+   to beat.
 2. *Eigenvector-based backward at degeneracies and small gaps.* The
    broadened `1/(e_i - e_j)` backward of the eigensolver is wrong at exact
    degeneracies from second order on (benzene, Fe(CO)5, 5x5 reproduction in
@@ -476,26 +522,30 @@ evidence above.
 
 ## 9a. Starting points of the later tracks on current `main`
 
-The track files describe the code at `46af7bc`. On `main` (`a132ec8` plus
+The track files describe the code at `46af7bc`. On `main` (`3b6a90f` plus
 this branch) some starting points have moved:
 
 | Track item | At `46af7bc` (plan) | Now |
 | --- | --- | --- |
 | E5 PyTorch multipole integrals | missing; GFN2 needs libcint | **done** (#270): dipole and quadrupole integrals in the PyTorch driver; GFN2 runs without libcint and passes every T0.4 check (third order, forward mode, `vmap`) |
-| E1 custom autograd functions | `RepulsionAG`, `CoulombMatrixAG`, `OverlapAG`, `EFunction` | `OverlapAG` and `EFunction` are gone (#268/#270). Remaining in dxtb: `RepulsionAG` (opt-in, unbounded recursion for parameters), `CoulombMatrixAG`. Also without `jvp`/vmap rule and on the default path: `storch.eighb` (tad-mctc), the C6 model of tad-dftd3, the libcint integrals (tad-libcint), the xitorch `RootFinder` (implicit modes) |
+| E1 custom autograd functions | `RepulsionAG`, `CoulombMatrixAG`, `OverlapAG`, `EFunction` | `OverlapAG` and `EFunction` are gone (#268/#270). Remaining in dxtb: `RepulsionAG` (opt-in, unbounded recursion for parameters), `CoulombMatrixAG`. Also without `jvp`/vmap rule and on the default path: `storch.eighb` (tad-mctc), the C6 model of tad-dftd3, the libcint integrals (tad-libcint). The implicit mode no longer uses the xitorch `RootFinder` (#272, `scf/implicit/fixed_point.py`), but no transform runs through it either |
 | E2 fixed-shape pair kernels | per-pair Python loop, geometry-dependent `unique_shell_pairs` | pair builder (`impls/pairs.py`) groups by ordered unique-shell-pair class, built from the index helper; Python loop over classes, not pairs; distance screening exists but is opt-in and refuses to run under `torch.compile`. Still to do for E2: setup in B3, scatter per class, the H0 build, the per-entry loop over batch members in `driver.py` |
 | TB table, component caches | keyed on values | additionally check gradient-tracking state (T0.5 stopgap; B6 deletes it) |
-| TE starting point, eigensolver | not covered | broadened `eighb` wrong at degeneracies (order >= 2) and biased at small gaps (T0.4); recomputes `L^-1` of the overlap by a general LU solve in every SCF iteration (T0.8) |
+| TE starting point, eigensolver | not covered | broadened `eighb` wrong at degeneracies (order >= 2) and biased at small gaps (T0.4); the unrolled SCF now computes `L^-1` of the overlap once and passes it to `eighb` (`l_inv`, tad-mctc 0.9.1); the implicit SCF modes still use the xitorch `lsymeig` |
 | B2 configuration | mutable | unchanged |
+| E0 SCF modes | `full`, `implicit`, `nonpure` | `nonpure` removed (#272); `implicit` has a new fixed-point solver with correct higher derivatives under autograd (3.1) |
+| E0 occupations | rounded electron count | fractional electron count that keeps its graph (#271); the derivative with respect to `refocc` is wrong (section 7) |
+| C2-C4 tad-mctc 0.9 | not released | tad-mctc 0.9.1 and tad-multicharge 0.7.0 are in use; tad-dftd3 and tad-dftd4 are bridged by `dxtb/_src/mctc_shim.py` and `dxtb/_src/ncoord/legacy.py` (functional coordination numbers of tad-mctc 0.7), to be removed with their releases |
 | T0.6 "cuda" vs "cuda:0" | known issue | fixed (device normalization), also for `device="cpu"` strings |
 | TorchScript | present | removed (`set_jit_enabled`, test switch); compiling goes through `torch.compile` (TD) |
 
-## 10. Review of `Node` (tad-mctc 0.9.0) for the dxtb tracks
+## 10. Review of `Node` (tad-mctc 0.9) for the dxtb tracks
 
 `Node`, `ModuleNode` and the tree utilities (`partition`, `combine`,
 `stack`, `leaf_paths`) of tad-mctc 0.9.0 were probed against the patterns
-the plan needs (script in the report appendix; tad-mctc 0.9.0 installed
-separately, dxtb itself still runs on 0.7.0).
+the plan needs (probed with 0.9.0, before dxtb moved to 0.9.1; the probes
+were not repeated, but `tree/node.py` of 0.9.1 differs from the current
+tad-mctc source only in a comment).
 
 | Pattern (plan reference) | Result |
 | --- | --- |
@@ -554,11 +604,12 @@ Limits found (none blocks a work package; all have a workaround):
    a node without floating point tensors.
 
 **Port to dxtb:** nothing is needed for Track 0, which does not use `Node`.
-dxtb cannot install tad-mctc 0.9 yet: tad-dftd3 0.6.0/0.7.0,
-tad-dftd4 0.8.0 and tad-multicharge 0.5.0/0.6.0 pin `tad-mctc==0.7.0` or
-`==0.8.0`, so the dependants have to be released first (C2–C4, excluded
-here). Items 1 and 2 are dxtb-side helpers to add with the first container
-migrated to `Node` (C5), not changes to tad-mctc.
+dxtb now runs on tad-mctc 0.9.1 and tad-multicharge 0.7.0 (it uses
+`Structure`, `CNModel` through the EEQ guess, and `EEQModel`). tad-dftd3
+0.6.0 and tad-dftd4 0.8.0 pin older tad-mctc releases and are bridged by a
+temporary shim until they are released (C2–C4, excluded here). Items 1 and 2
+are dxtb-side helpers to add with the first container migrated to `Node`
+(C5), not changes to tad-mctc.
 
 
 ## Appendix: generated tables

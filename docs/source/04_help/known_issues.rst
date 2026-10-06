@@ -38,22 +38,38 @@ HOMO-LUMO gap is very small (about 1.5% at a gap of 1e-3 Hartree).
 displacement of 0.01 bohr already gives correct derivatives).
 
 
-Second derivatives with the implicit SCF modes are wrong
---------------------------------------------------------
+The implicit SCF mode does not work with ``torch.func`` transforms
+-------------------------------------------------------------------
 
-With ``scf_mode="implicit"`` or ``"nonpure"``, the SCF is differentiated with
-the implicit function theorem, which is only implemented for first
-derivatives. Second and higher derivatives (Hessian, polarizability, dipole
-derivatives, derivatives of forces with respect to parameters, ...) are
-silently wrong (e.g., the polarizability is missing entirely, Hessians are
-off by 10-40%). First derivatives are correct.
+With ``scf_mode="implicit"``, the SCF is differentiated with the implicit
+function theorem (fixed-point solver). Derivatives with ``torch.autograd``
+are correct up to third order (Hessian, polarizability, dipole derivatives,
+hyperpolarizability). In dxtb 0.4.0, second and higher derivatives were
+wrong with the implicit modes, and ``scf_mode="nonpure"`` existed; that mode
+was removed.
 
-**Workaround:** use the default ``scf_mode="full"`` for derivatives beyond
-first order.
+Transforms of ``torch.func`` (``jacrev``, ``jacfwd``, ``vmap``, ...) fail
+with the implicit mode, e.g., ``You are attempting to call
+Tensor.requires_grad_() ... inside of a function being transformed``. This
+includes the ``functorch`` and ``forward`` paths of the calculator.
+
+**Workaround:** use the default ``scf_mode="full"`` with transforms.
 
 
-Padded batches with the implicit SCF modes (fixed)
---------------------------------------------------
+Derivative with respect to ``refocc`` is wrong
+----------------------------------------------
+
+The gradient of the energy with respect to the reference occupation of an
+element (``element.<X>.refocc`` of the parametrization, relevant when training
+parameters) is wrong since the fractional number of electrons was introduced:
+for water with GFN1-xTB, autograd gives -0.0036 for hydrogen where central
+differences give -0.2259. All other parameters are not affected.
+
+**Workaround:** keep ``refocc`` fixed, or use finite differences for it.
+
+
+Padded batches with the implicit SCF mode (fixed)
+-------------------------------------------------
 
 Up to dxtb 0.4.0, the implicit SCF modes put electrons into the padding
 orbitals of a batch if a system had an occupied orbital close to zero
@@ -72,17 +88,21 @@ component caches and the integral driver now also check the gradient
 tracking state of the positions.
 
 
-Batched calculations hang with several CPU threads
---------------------------------------------------
+Batched calculations hang with several CPU threads (fixed)
+----------------------------------------------------------
 
-On CPU, batched SCF calculations (``batch_mode`` 1 or 2) with more than one
-PyTorch thread can stall in the eigensolver: batched LU factorizations
-(``torch.linalg.solve``) of matrices of a few hundred orbitals did not finish
-with four threads in the baseline environment (PyTorch 2.14 wheel, MKL
-2024.2), while they take a fraction of a second with one thread.
+Up to dxtb 0.4.0, batched SCF calculations (``batch_mode`` 1 or 2) on CPU with
+more than one PyTorch thread could stall in the eigensolver: batched LU
+factorizations (``torch.linalg.solve``) of matrices of a few hundred orbitals
+did not finish with four threads in the baseline environment (PyTorch 2.14
+wheel, MKL 2024.2), while they take a fraction of a second with one thread.
+The unrolled SCF (``scf_mode="full"``) now computes the inverse Cholesky
+factor of the overlap matrix once and passes it to the eigensolver, which
+avoids the solve (requires tad-mctc 0.9.1). A batched ``torch.linalg.solve``
+in your own code can still stall in such an environment.
 
-**Workaround:** ``torch.set_num_threads(1)`` for batched calculations on CPU,
-or loop over the systems.
+Running the test suite with several ``pytest-xdist`` workers is also much
+slower if each worker uses several threads; set ``OMP_NUM_THREADS=1``.
 
 
 Repeated derivatives on the same tensor raise an error
