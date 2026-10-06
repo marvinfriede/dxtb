@@ -249,7 +249,7 @@ Short documents (one to two pages), written before the packages that depend on t
 
 | Note | Decides | Written in | Blocks |
 | --- | --- | --- | --- |
-| B1 Evaluation API and state | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8, F1 |
+| [B1 Evaluation API and state](B1-decision-note.md) (proposal) | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8, F1 |
 | E0 SCF differentiation and integrals | unrolled versus implicit; replacement for xitorch; whether PyTorch multipole integrals are needed | TE | E3, E5 |
 | F2a Element structure | shell layout for actinides; which parameters are structural and which trainable | TF | F2b–F2e |
 | D4 Compile policy | minimum torch for compiled use; enforcement | TD | D-track releases |
