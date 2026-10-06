@@ -13,7 +13,7 @@ API.
 | `04-TE-differentiable-core.md` | Track E: higher-order and forward-mode derivatives, `vmap` batching |
 | `05-TF-machine-learning.md` | Track F: parameter training, ML terms |
 | `06-TD-performance.md` | Track D: compiling and performance |
-| `B1-decision-note.md` | Decision note B1 (proposal): model/system/result, results, property functions, batching |
+| `B1-decision-note.md` | Decision note B1 (agreed): model/system/result, results, property functions, batching |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
 
 The design review referenced by the plan is not in the repository.

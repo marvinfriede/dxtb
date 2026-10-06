@@ -1,12 +1,13 @@
 # B1 Decision note: evaluation API and state
 
-Status: **proposal, for agreement.** Package B1 of `02-TB-evaluation-api.md`.
+Status: **agreed**, except the conformer entry point in section 5 (proposal: plain `vmap`) (decided: short property names, setup data of
+self-consistent terms in `System`, `refocc` fix as requirement T0.12). Package B1 of `02-TB-evaluation-api.md`.
 Written against `main` at `3b6a90f` plus the Track 0 branch. Evidence for each
 point is in `T0-baseline-report.md` (section numbers in brackets).
 
 The note fixes the shape of the API so that B2-B8 and C8/F1 can start. Where a
 choice is open, the proposal comes first, then the alternative and why it was
-not taken. Items marked **[decide]** need an explicit answer before B2 starts.
+not taken. Items marked **[decide]** needed an explicit answer before B2 starts; the remaining ones are listed in section 5 and 12.
 
 ## 0. Constraints from the baseline
 
@@ -196,9 +197,9 @@ tree structure and are never stacked.
 ## 12. Open questions the proposal leaves
 
 1. ~~Short or long names~~ Decided: short names (section 3).
-2. **[decide]** Whether `System` also holds the *geometry-independent data of
-   the self-consistent terms* (ES2, ES3) or only that of the classical terms.
-   Proposal: both. Explained in section 14.
+2. ~~Setup data of the self-consistent terms~~ Decided: `System` holds the
+   element-only data of the classical **and** the self-consistent terms (ES2
+   hardness, ES3 derivatives); see section 14.
 3. **Per-call data.** The Coulomb matrices, the Cholesky factor `l_inv`, the
    integrals depend on positions. They live in the per-call interaction cache
    inside `singlepoint` and in the result (B6), not in the system. The
@@ -212,7 +213,7 @@ tree structure and are never stacked.
 ## 13. Acceptance
 
 The note is agreed when sections 1-10 are confirmed or amended and the items
-marked **[decide]** are answered. Then `00-overview.md` links it and B2 starts.
+marked **[decide]** are answered (only section 5 remains). Then `00-overview.md` links it and B2 starts.
 
 ## 14. Explanation: what "geometry-independent data of the self-consistent terms" means
 
