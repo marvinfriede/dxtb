@@ -23,7 +23,9 @@ which carries its graph since the electron count is not rounded anymore. For
 a molecule with a large HOMO-LUMO gap (water: about 300 kT at 300 K), the
 derivative with respect to the number of electrons used to be dropped by the
 Fermi occupation, and the derivative with respect to ``refocc`` missed the
-second part (water, GFN1: -0.0036 instead of -0.2259 for hydrogen).
+second part (water, GFN1: -0.0036 instead of -0.2259 for hydrogen). The
+entropy term needs the Fermi energy in the gap for the same derivative
+(degenerate HOMO: error of kT ln(g)/2, about 0.1%).
 """
 
 from __future__ import annotations
@@ -47,9 +49,14 @@ ATOL = 1e-7
 
 
 def _energy(
-    method: str, scf_mode: str, symbol: str, value: torch.Tensor, dd: DD
+    method: str,
+    scf_mode: str,
+    name: str,
+    symbol: str,
+    value: torch.Tensor,
+    dd: DD,
 ) -> torch.Tensor:
-    mol = mols["H2O"]
+    mol = mols[name]
     numbers = mol["numbers"].to(DEVICE)
     positions = mol["positions"].to(**dd)
 
@@ -60,13 +67,27 @@ def _energy(
 
     opts = {"scf_mode": scf_mode, "int_driver": "pytorch"}
     calc = Calculator(numbers, par, opts=opts, **dd)
-    return calc.energy(positions)
+    spin = 1 if name == "NO2" else None
+    return calc.energy(positions, spin=spin)
 
 
 @pytest.mark.parametrize("method", ["gfn1", "gfn2"])
 @pytest.mark.parametrize("scf_mode", ["full", "implicit"])
-@pytest.mark.parametrize("symbol", ["H", "O"])
-def test_refocc_gradient(method: str, scf_mode: str, symbol: str) -> None:
+@pytest.mark.parametrize(
+    "name, symbol",
+    [
+        ("H2O", "H"),
+        ("H2O", "O"),
+        # degenerate HOMO: the Fermi energy is not the midpoint of the gap
+        ("CH4", "C"),
+        ("CH4", "H"),
+        # open shell: separate Fermi energies of the alpha and beta channels
+        ("NO2", "N"),
+    ],
+)
+def test_refocc_gradient(
+    method: str, scf_mode: str, name: str, symbol: str
+) -> None:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
 
     base = ParamModule(PARAMS[method], **dd)
@@ -76,13 +97,13 @@ def test_refocc_gradient(method: str, scf_mode: str, symbol: str) -> None:
     direction = torch.linspace(0.3, 1.0, ref.numel(), **dd).reshape(ref.shape)
 
     x = ref.clone().requires_grad_(True)
-    energy = _energy(method, scf_mode, symbol, x, dd)
+    energy = _energy(method, scf_mode, name, symbol, x, dd)
     (grad,) = torch.autograd.grad(energy, x)
     autograd = (grad * direction).sum()
 
     with torch.no_grad():
-        plus = _energy(method, scf_mode, symbol, ref + STEP * direction, dd)
-        minus = _energy(method, scf_mode, symbol, ref - STEP * direction, dd)
+        plus = _energy(method, scf_mode, name, symbol, ref + STEP * direction, dd)
+        minus = _energy(method, scf_mode, name, symbol, ref - STEP * direction, dd)
     numerical = (plus - minus) / (2 * STEP)
 
     assert pytest.approx(numerical.item(), rel=RTOL, abs=ATOL) == autograd.item()

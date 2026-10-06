@@ -256,17 +256,27 @@ def test_kt(dtype: torch.dtype, kt: float):
 
     # electronic free energy
     d = torch.zeros_like(focc)  # dummy
+
+    class _IndexHelper:
+        """Every orbital exists (the entropy only reads the mask)."""
+
+        orbitals_per_shell = torch.ones(emo.shape[-1], device=DEVICE)
+
+        def spread_shell_to_orbital(self, x: torch.Tensor) -> torch.Tensor:
+            return x
+
     scf = SCF(
         d,  # type: ignore
         focc,
         d,
         numbers=numbers,
-        ihelp=d,
+        ihelp=_IndexHelper(),  # type: ignore
         cache=d,
         integrals=IntegralMatrices(_hcore=d, _overlap=d, **dd),
         config=ConfigSCF(fermi_etemp=kt),
     )
 
+    scf._data.evals = emo[..., 0, :]  # the entropy reads the orbital energies
     fenergy = scf.get_electronic_free_energy().sum(-1)
     ref = ref_fenergy[kt]
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == fenergy.cpu()
