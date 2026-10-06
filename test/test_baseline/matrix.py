@@ -58,12 +58,12 @@ from typing import Any, Callable
 import numpy as np
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
 from dxtb._src.typing import Tensor
 from dxtb.components.field import new_efield
 
+from ..molecules import mols
 from .molecules import get_system
 from .refdata import REFERENCE_DIR
 
@@ -83,7 +83,7 @@ DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
 METHODS = ("gfn1", "gfn2")
 DRIVERS = ("pytorch", "libcint")
-SCF_MODES = ("full", "implicit", "nonpure")
+SCF_MODES = ("full", "implicit")
 INPUTS = ("single", "padded", "conformer")
 
 PARAMS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}

@@ -101,7 +101,7 @@ class ConfigSCF:
 
     .. warning::
 
-        The implicit modes (``"implicit"``, ``"nonpure"``) give correct first
+        The implicit mode (``"implicit"``) gives correct first
         derivatives only; second and higher derivatives are wrong. Use the
         default (``"full"``) for those. See :ref:`help_known_issues`.
     """

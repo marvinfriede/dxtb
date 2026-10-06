@@ -48,6 +48,7 @@ import math
 import platform
 import resource
 import socket
+import sys
 import time
 from collections import defaultdict
 from importlib.metadata import version
@@ -56,12 +57,14 @@ from typing import Any, Callable
 
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
 from tad_mctc.units import AA2AU
 
 import dxtb
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
 from dxtb.components.field import new_efield
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from test.molecules import mols  # noqa: E402  # isort: skip
 
 RESULTS = Path(__file__).parent / "results"
 PARAMS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}

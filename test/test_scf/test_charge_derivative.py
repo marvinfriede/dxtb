@@ -30,13 +30,13 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols
 from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..molecules import mols
 
 MODES = ["full", "implicit", "experimental"]
 

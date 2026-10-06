@@ -28,12 +28,12 @@ from __future__ import annotations
 import pytest
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..molecules import mols
 
 # OH- (bohr)
 OH_NUMBERS = [8, 1]

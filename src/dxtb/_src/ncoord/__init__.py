@@ -21,23 +21,26 @@ Coordination Number
 Functions for calculating the coordination numbers.
 """
 
-from tad_mctc.ncoord.count import (
+from tad_mctc.ncoord.count import erf_count, exp_count, gfn2_count
+
+from .legacy import (
+    cn_d3,
+    cn_d3_gradient,
+    cn_d4,
+    cn_gfn2,
+    coordination_number,
     derf_count,
     dexp_count,
     dgfn2_count,
-    erf_count,
-    exp_count,
-    gfn2_count,
 )
-from tad_mctc.ncoord.d3 import cn_d3, cn_d3_gradient
-from tad_mctc.ncoord.d4 import cn_d4
-
 from .utils import get_dcn
 
 __all__ = [
+    "coordination_number",
     "cn_d3",
     "cn_d3_gradient",
     "cn_d4",
+    "cn_gfn2",
     "erf_count",
     "derf_count",
     "exp_count",

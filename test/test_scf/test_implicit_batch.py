@@ -24,9 +24,10 @@ from __future__ import annotations
 import pytest
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler
+
+from ..molecules import mols
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

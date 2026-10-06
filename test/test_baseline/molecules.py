@@ -35,7 +35,8 @@ from dataclasses import dataclass, field
 
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
+
+from ..molecules import mols
 
 __all__ = ["System", "SYSTEMS", "get_system"]
 

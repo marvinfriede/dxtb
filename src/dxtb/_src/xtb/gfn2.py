@@ -60,7 +60,7 @@ class GFN2Hamiltonian(BaseHamiltonian):
             self.cn = kwargs.pop("cn")
         else:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.ncoord import cn_d3, gfn2_count
+            from dxtb._src.ncoord import cn_d3, gfn2_count
 
             self.cn = partial(cn_d3, counting_function=gfn2_count)
 
@@ -101,8 +101,8 @@ class GFN2Hamiltonian(BaseHamiltonian):
         z = par.get_elem_param(self.unique, "slater", pad_val=PAD)
         zi = z.unsqueeze(-1)
         zj = z.unsqueeze(-2)
-        zmat = storch.pow(
-            2 * storch.divide(storch.sqrt(zi * zj), (zi + zj)), wexp
+        zmat = storch.safe_pow(
+            2 * storch.safe_divide(storch.safe_sqrt(zi * zj), (zi + zj)), wexp
         )
 
         ksh = torch.ones((len(ushells), len(ushells)), **self.dd)

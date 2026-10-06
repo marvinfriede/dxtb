@@ -27,11 +27,13 @@ from typing import Any
 
 import tad_dftd4 as d4
 import torch
+from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import radii
 from tad_mctc.ncoord import erf_count
 from tad_mctc.typing import CountingFunction, Tensor, override
 
 from dxtb import IndexHelper
+from dxtb._src.ncoord import cn_d4
 
 from ..base import ClassicalCache, ComponentCache
 from .base import Dispersion
@@ -201,6 +203,19 @@ class DispersionD4(Dispersion):
         else:
             charge = kwargs.pop("charge", self.charge)
 
+        q = cache.q if q is None else q
+        if q is None:
+            # tad-dftd4 0.8 calls the removed tad-multicharge 0.5 interface
+            # for its default EEQ charges (temporary, see ``mctc_shim``)
+            from dxtb._src.scf.guess import get_eeq_guess
+
+            q = get_eeq_guess(
+                self.numbers,
+                positions,
+                any_to_tensor(charge, **self.dd),
+                cutoff=cache.cutoff.cn_eeq,
+            )
+
         return d4.dftd4(
             self.numbers,
             positions,
@@ -209,7 +224,8 @@ class DispersionD4(Dispersion):
             model=cache.model,
             rcov=cache.rcov,
             r4r2=cache.r4r2,
-            q=cache.q if q is None else q,
+            q=q,
+            cn_function=cn_d4,
             cutoff=cache.cutoff,
             counting_function=cache.counting_function,
             damping_function=cache.damping_function,

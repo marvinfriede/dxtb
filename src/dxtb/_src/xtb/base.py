@@ -29,11 +29,12 @@ from tad_mctc.batch import real_pairs
 from tad_mctc.convert import symmetrize
 from tad_mctc.data.radii import ATOMIC_RADII
 from tad_mctc.exceptions import DeviceError, DtypeError
-from tad_mctc.typing import CNFunc, PathLike, Tensor, TensorLike
+from tad_mctc.typing import PathLike, Tensor, TensorLike
 from tad_mctc.units import EV2AU
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
+from dxtb._src.typing import CNFunc
 
 from .abc import HamiltonianABC
 
@@ -309,9 +310,11 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         distances = storch.cdist(positions, positions, p=2)
         rad = self.ihelp.spread_uspecies_to_atom(self.rad)
 
-        rr = storch.divide(distances, rad.unsqueeze(-1) + rad.unsqueeze(-2))
+        rr = storch.safe_divide(
+            distances, rad.unsqueeze(-1) + rad.unsqueeze(-2)
+        )
         rr_shell = self.ihelp.spread_atom_to_shell(
-            torch.where(mask_atom_diagonal, storch.sqrt(rr), zero),
+            torch.where(mask_atom_diagonal, storch.safe_sqrt(rr), zero),
             (-2, -1),
         )
 

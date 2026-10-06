@@ -21,7 +21,7 @@ Data for testing repulsion taken from https://github.com/grimme-lab/mstore.
 from __future__ import annotations
 
 import torch
-from tad_mctc.data.molecules import merge_nested_dicts, mols
+from ...molecules import merge_nested_dicts, mols
 
 from dxtb._src.typing import Molecule, Tensor, TypedDict
 

@@ -59,7 +59,7 @@ class GFN1Hamiltonian(BaseHamiltonian):
             self.cn = kwargs.pop("cn")
         else:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.ncoord import cn_d3, exp_count
+            from dxtb._src.ncoord import cn_d3, exp_count
 
             self.cn = partial(cn_d3, counting_function=exp_count)
 
@@ -267,9 +267,11 @@ class GFN1Hamiltonian(BaseHamiltonian):
         distances = storch.cdist(positions, positions, p=2)
         rad = self.ihelp.spread_uspecies_to_atom(self.rad)
 
-        rr = storch.divide(distances, rad.unsqueeze(-1) + rad.unsqueeze(-2))
+        rr = storch.safe_divide(
+            distances, rad.unsqueeze(-1) + rad.unsqueeze(-2)
+        )
         rr_shell = self.ihelp.spread_atom_to_shell(
-            torch.where(mask_atom_diagonal, storch.sqrt(rr), zero),
+            torch.where(mask_atom_diagonal, storch.safe_sqrt(rr), zero),
             (-2, -1),
         )
 

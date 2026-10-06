@@ -31,7 +31,6 @@ import torch
 from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
-from tad_mctc.ncoord import coordination_number, erf_count
 from tad_mctc.typing import (
     DD,
     CountingFunction,
@@ -42,6 +41,7 @@ from tad_mctc.typing import (
 )
 
 from dxtb import IndexHelper
+from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Slicers
 from dxtb._src.utils.tensors import grad_key, normalize_device

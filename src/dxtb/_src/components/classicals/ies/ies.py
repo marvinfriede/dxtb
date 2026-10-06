@@ -26,11 +26,12 @@ This module implements the isotropic electrostatics class. The
 from __future__ import annotations
 
 import torch
+from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
-from tad_mctc.ncoord import coordination_number, erf_count
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
+from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.typing import Any, Tensor, override
 
 from ..base import Classical, ClassicalCache, ComponentCache
@@ -169,11 +170,10 @@ class IES(Classical):
         self._cachevars = cachvars
 
         eeq = EEQModel(
-            self.chi,
-            self.eeq_kcn,
-            self.eta,
-            self.rad,
-            **self.dd,
+            chi=self.chi.to(**self.dd),
+            kcn=self.eeq_kcn.to(**self.dd),
+            eta=self.eta.to(**self.dd),
+            rad=self.rad.to(**self.dd),
         )
         self.cache = IESCache(numbers, eeq, self.rcov[numbers], **self.dd)
         return self.cache
@@ -222,11 +222,8 @@ class IES(Classical):
             cn_max=self.cn_max,
             kcn=self.cn_kcn,
         )
-        _charges, energy = cache.eeq.solve(
-            cache.numbers,
-            positions,
-            total_charge,
-            cn,
-            return_energy=True,
+        structure = Structure(
+            numbers=cache.numbers, positions=positions, charge=total_charge
         )
+        _charges, energy = cache.eeq.solve(structure, cn, return_energy=True)
         return energy

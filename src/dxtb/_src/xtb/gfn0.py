@@ -26,16 +26,16 @@ from __future__ import annotations
 from functools import partial
 
 import torch
-from tad_mctc import storch
+from tad_mctc import Structure, storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor, symmetrize
 from tad_mctc.data import radii
-from tad_mctc.ncoord import coordination_number, erf_count
 from tad_mctc.units import EV2AU
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import Potential
+from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
 
@@ -86,11 +86,18 @@ class GFN0Hamiltonian(BaseHamiltonian):
             max_element + 1, dtype=numbers.dtype, device=numbers.device
         )
         self.eeq_model = EEQModel(
-            par.get_elem_param(elements, "eeq_chi", pad_val=0),
-            par.get_elem_param(elements, "eeq_kcn", pad_val=0),
-            par.get_elem_param(elements, "eeq_eta", pad_val=0),
-            par.get_elem_param(elements, "eeq_rad", pad_val=0),
-            **self.dd,
+            chi=par.get_elem_param(elements, "eeq_chi", pad_val=0).to(
+                **self.dd
+            ),
+            kcn=par.get_elem_param(elements, "eeq_kcn", pad_val=0).to(
+                **self.dd
+            ),
+            eta=par.get_elem_param(elements, "eeq_eta", pad_val=0).to(
+                **self.dd
+            ),
+            rad=par.get_elem_param(elements, "eeq_rad", pad_val=0).to(
+                **self.dd
+            ),
         )
 
         self.cn_radii = radii.COV_D3(**self.dd)[numbers]
@@ -155,12 +162,10 @@ class GFN0Hamiltonian(BaseHamiltonian):
 
         model = self.eeq_model
         new.eeq_model = EEQModel(
-            model.chi.to(device=target_device, dtype=target_dtype),
-            model.kcn.to(device=target_device, dtype=target_dtype),
-            model.eta.to(device=target_device, dtype=target_dtype),
-            model.rad.to(device=target_device, dtype=target_dtype),
-            device=target_device,
-            dtype=target_dtype,
+            chi=model.chi.to(device=target_device, dtype=target_dtype),
+            kcn=model.kcn.to(device=target_device, dtype=target_dtype),
+            eta=model.eta.to(device=target_device, dtype=target_dtype),
+            rad=model.rad.to(device=target_device, dtype=target_dtype),
         )
         new._set_cn_callable()
         return new
@@ -185,8 +190,8 @@ class GFN0Hamiltonian(BaseHamiltonian):
         zeta = par.get_elem_param(self.unique, "slater", pad_val=1)
         zi = zeta.unsqueeze(-1)
         zj = zeta.unsqueeze(-2)
-        zeta_weight = storch.pow(
-            2.0 * storch.divide(storch.sqrt(zi * zj), zi + zj), wexp
+        zeta_weight = storch.safe_pow(
+            2.0 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
         )
 
         kscale = torch.ones((len(angular), len(angular)), **self.dd)
@@ -219,9 +224,10 @@ class GFN0Hamiltonian(BaseHamiltonian):
     ) -> Tensor:
         """Solve the coordinate-local main GFN0 EEQ model."""
         total_charge = any_to_tensor(charge, **self.dd)
-        charges = self.eeq_model.solve(
-            self.numbers, positions, total_charge, cn
+        structure = Structure(
+            numbers=self.numbers, positions=positions, charge=total_charge
         )
+        charges = self.eeq_model.solve(structure, cn)
         assert isinstance(charges, Tensor)
         return charges
 
@@ -275,11 +281,11 @@ class GFN0Hamiltonian(BaseHamiltonian):
         # values already contain the reference function's factor of 0.01.
         distances = storch.cdist(positions, positions, p=2)
         h0rad = self.ihelp.spread_uspecies_to_atom(self.h0rad)
-        reduced = storch.divide(
+        reduced = storch.safe_divide(
             distances, h0rad.unsqueeze(-1) + h0rad.unsqueeze(-2)
         )
         root_reduced = self.ihelp.spread_atom_to_shell(
-            torch.where(atom_pairs, storch.sqrt(reduced), zero),
+            torch.where(atom_pairs, storch.safe_sqrt(reduced), zero),
             dim=(-2, -1),
         )
         shpoly = self.ihelp.spread_ushell_to_shell(self.shpoly)

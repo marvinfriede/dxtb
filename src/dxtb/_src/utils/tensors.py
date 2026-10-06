@@ -27,7 +27,7 @@ import weakref
 from typing import Optional, Tuple
 
 import torch
-from tad_mctc.autograd.checks import is_batched, is_gradtracking
+from tad_mctc.autograd.checks import is_gradtracking
 
 from dxtb._src.typing import Tensor
 

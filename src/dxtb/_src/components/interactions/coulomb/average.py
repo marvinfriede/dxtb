@@ -52,7 +52,7 @@ def harmonic_average(hubbard: Tensor) -> Tensor:
     Tensor
         Harmonic average of the Hubbard parameters.
     """
-    hubbard1 = storch.reciprocal(hubbard)
+    hubbard1 = storch.safe_reciprocal(hubbard)
     return 2.0 / (hubbard1.unsqueeze(-1) + hubbard1.unsqueeze(-2))
 
 
@@ -87,7 +87,7 @@ def geometric_average(hubbard: Tensor) -> Tensor:
     Tensor
         Geometric average of the Hubbard parameters.
     """
-    return storch.sqrt(hubbard.unsqueeze(-1) * hubbard.unsqueeze(-2))
+    return storch.safe_sqrt(hubbard.unsqueeze(-1) * hubbard.unsqueeze(-2))
 
 
 averaging_function: dict[str, AveragingFunction] = {

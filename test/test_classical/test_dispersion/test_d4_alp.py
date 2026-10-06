@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.components.classicals import new_dispersion
+
+from ...molecules import mols
 
 
 def _energy(par: ParamModule, numbers, positions) -> torch.Tensor:

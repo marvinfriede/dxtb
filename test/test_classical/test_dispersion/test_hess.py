@@ -24,9 +24,9 @@ from math import sqrt
 
 import pytest
 import torch
-from tad_mctc.autograd import jacrev
 from tad_mctc.batch import pack
 from tad_mctc.convert import reshape_fortran
+from torch.func import jacrev
 
 from dxtb import GFN1_XTB
 from dxtb._src.components.classicals.dispersion import new_dispersion

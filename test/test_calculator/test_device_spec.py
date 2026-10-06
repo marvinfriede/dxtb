@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb.components.coulomb import new_es2, new_es3
 from dxtb.components.field import new_efield
+
+from ..molecules import mols
 
 
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])

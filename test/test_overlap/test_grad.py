@@ -24,8 +24,8 @@ from math import sqrt
 
 import pytest
 import torch
-from tad_mctc.autograd import jacrev
 from tad_mctc.convert import tensor_to_numpy
+from torch.func import jacrev
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.basis.slater import slater_to_gauss

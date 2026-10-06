@@ -50,12 +50,12 @@ from typing import Callable
 import pytest
 import torch
 from tad_mctc.batch import pack
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, Calculator, ParamModule
 from dxtb._src.components.interactions import new_efield
 
 from ..conftest import DEVICE
+from ..molecules import mols
 
 DD = {"device": DEVICE, "dtype": torch.double}
 

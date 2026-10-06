@@ -322,7 +322,7 @@ class AES2(Interaction):
         dkernel = ihelp.spread_uspecies_to_atom(self.dkernel).unsqueeze(-1)
         qkernel = ihelp.spread_uspecies_to_atom(self.qkernel).unsqueeze(-1)
 
-        from tad_mctc.ncoord import cn_d3, gfn2_count
+        from dxtb._src.ncoord import cn_d3, gfn2_count
 
         vcn = ihelp.spread_uspecies_to_atom(self.vcn)
         rad = ihelp.spread_uspecies_to_atom(self.rad)
@@ -379,7 +379,7 @@ class AES2(Interaction):
         dist = storch.cdist(positions, positions, p=2)
 
         # (nb, nat, nat)
-        g1 = storch.reciprocal(dist)
+        g1 = storch.safe_reciprocal(dist)
         g3 = g1 * g1 * g1
         g5 = g3 * g1 * g1
 

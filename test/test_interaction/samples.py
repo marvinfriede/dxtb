@@ -20,6 +20,6 @@ Molecules for testing.
 
 from __future__ import annotations
 
-from tad_mctc.data.molecules import mols
+from ..molecules import mols
 
 samples = mols

@@ -30,9 +30,9 @@ from pathlib import Path
 
 import numpy as np
 from pyscf import gto  # type: ignore
+from tad_mctc import Structure
 from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.data import pse
-from tad_mctc.molecule.container import Mol
 
 from dxtb._src.typing import Tensor
 
@@ -135,7 +135,7 @@ class PyscfMol(gto.Mole):
 
     @classmethod
     def from_mol(
-        cls, mol: Mol, xtb_version: str = "gfn1", **kwargs
+        cls, mol: Structure, xtb_version: str = "gfn1", **kwargs
     ) -> PyscfMol:
         return cls(mol.numbers, mol.positions, xtb_version, **kwargs)
 

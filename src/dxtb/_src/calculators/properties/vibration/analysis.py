@@ -28,8 +28,8 @@ import torch
 from tad_mctc import storch
 from tad_mctc.data.mass import ATOMIC_MASS
 from tad_mctc.math import einsum
-from tad_mctc.molecule.geometry import is_linear
-from tad_mctc.molecule.property import inertia_moment, positions_rel_com
+from tad_mctc.properties.general import inertia_moment, positions_rel_com
+from tad_mctc.properties.geometry import is_linear
 
 from dxtb._src.typing import Any, Literal, NoReturn, Tensor
 from dxtb._src.utils.math import qr
@@ -128,7 +128,7 @@ class VibResult(BaseResult):
 
 def _get_translational_modes(mass: Tensor):
     """Translational modes"""
-    massp = storch.sqrt(mass)
+    massp = storch.safe_sqrt(mass)
     Tx = einsum("...m,x->...mx", massp, torch.tensor([1, 0, 0]))
     Ty = einsum("...m,y->...my", massp, torch.tensor([0, 1, 0]))
     Tz = einsum("...m,z->...mz", massp, torch.tensor([0, 0, 1]))
@@ -152,7 +152,7 @@ def _get_rotational_modes(mass: Tensor, positions: Tensor):
     coords_rot_frame = mpos @ paxes  # einsum("...ij,...jk->...ik", mpos, paxes)
     cx, cy, cz = coords_rot_frame.mT
 
-    massp = storch.sqrt(mass)
+    massp = storch.safe_sqrt(mass)
     _massp = massp[..., :, None]
     _cx = cx[..., :, None]
     _cy = cy[..., :, None]
@@ -219,7 +219,7 @@ def vib_analysis(
 
     # 1/sqrt(m) of shape (..., nat) -> (..., nat*3)
     invsqrtmass = torch.repeat_interleave(
-        storch.reciprocal(storch.sqrt(mass)), 3, dim=-1
+        storch.safe_reciprocal(storch.safe_sqrt(mass)), 3, dim=-1
     )
 
     # mass-weighted Hessian

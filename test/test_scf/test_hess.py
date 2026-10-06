@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.autograd import jacrev
 from tad_mctc.convert import reshape_fortran
+from torch.func import jacrev
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.constants import labels

@@ -64,7 +64,7 @@ SYSTEMS = (
 def _system(name: str):
     if name == "br2nh3":
         # pylint: disable=import-outside-toplevel
-        from tad_mctc.data.molecules import mols
+        from ..molecules import mols
 
         m = mols[name]
         return (

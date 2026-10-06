@@ -26,9 +26,9 @@ from __future__ import annotations
 import tad_dftd3 as d3
 import torch
 from tad_mctc.data import radii
-from tad_mctc.ncoord import coordination_number, exp_count
 
 from dxtb import IndexHelper
+from dxtb._src.ncoord import coordination_number, exp_count
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import ClassicalCache, ComponentCache

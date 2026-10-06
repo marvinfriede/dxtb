@@ -75,6 +75,8 @@ jobs:
             --index-url https://download.pytorch.org/whl/cpu
           python3 -m pip install -e ".[tox,libcint,pyscf]" \
             -c constraints/baseline.txt
+          # pin older tad-mctc releases, see dxtb._src.mctc_shim
+          python3 -m pip install --no-deps tad-dftd3==0.6.0 tad-dftd4==0.8.0
           python3 -m pip freeze
 
       - name: Select tests

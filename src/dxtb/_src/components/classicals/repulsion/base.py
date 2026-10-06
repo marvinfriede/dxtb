@@ -353,7 +353,7 @@ def repulsion_energy(
     # Eq.13: repulsion energy
     return torch.where(
         mask * (distances <= _cutoff),
-        storch.divide(zeff * exp_term, distances),
+        storch.safe_divide(zeff * exp_term, distances),
         zero,
     )
 
@@ -423,7 +423,7 @@ def repulsion_gradient(
     r2 = torch.pow(distances, 2)
 
     # (n_batch, n_atoms, n_atoms, 3)
-    grad = torch.where(mask, storch.divide(grad, r2), eps)
+    grad = torch.where(mask, storch.safe_divide(grad, r2), eps)
     grad = grad.unsqueeze(-1) * rij
 
     # reduction gives (n_batch, n_atoms, 3)

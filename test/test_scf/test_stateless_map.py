@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.constants import defaults
@@ -31,6 +30,7 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.scf.implicit import SelfConsistentFieldImplicit as SCF
 
 from ..conftest import DEVICE
+from ..molecules import mols
 
 DD = {"device": DEVICE, "dtype": torch.double}
 

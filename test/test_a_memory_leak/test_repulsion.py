@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols as samples
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.components.classicals import Repulsion
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..molecules import mols as samples
 from ..utils import get_elem_param
 from .util import garbage_collect, has_memleak_tensor
 

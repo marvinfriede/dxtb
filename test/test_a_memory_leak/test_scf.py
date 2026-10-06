@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.data.molecules import mols as samples
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..molecules import mols as samples
 from .util import garbage_collect, has_memleak_tensor
 
 opts = {"verbosity": 0, "maxiter": 50, "exclude": ["rep", "disp", "hal"]}

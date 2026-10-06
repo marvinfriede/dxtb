@@ -24,12 +24,67 @@ Project-specific type annotations.
 from __future__ import annotations
 
 import torch
-from tad_mctc.typing import CNFunction, CNGradFunction
+from tad_mctc.typing import CountingFunction, Tensor
 
-from .builtin import TypedDict
+from .builtin import Any, Protocol, TypedDict
 from .compat import Slicer
 
-__all__ = ["CNFunction", "CNGradFunction", "ContainerData", "Slicers"]
+__all__ = [
+    "CNFunc",
+    "CNFunction",
+    "CNGradFunction",
+    "ContainerData",
+    "Slicers",
+]
+
+
+# tad-mctc 0.8 removed these protocols together with the functional
+# coordination number API (see ``dxtb._src.ncoord.legacy``).
+
+
+class CNFunc(Protocol):
+    """Type annotation for a specific coordination number function."""
+
+    def __call__(
+        self,
+        numbers: Tensor,
+        positions: Tensor,
+        counting_function: CountingFunction | None = None,
+    ) -> Tensor: ...
+
+
+class CNFunction(Protocol):
+    """Type annotation for a general coordination number function."""
+
+    def __call__(
+        self,
+        numbers: Tensor,
+        positions: Tensor,
+        *,
+        counting_function: CountingFunction | None = None,
+        rcov: Tensor | None = None,
+        en: Tensor | None = None,
+        cutoff: Tensor | None = None,
+        kcn: float = 7.5,
+        **kwargs: Any,
+    ) -> Tensor: ...
+
+
+class CNGradFunction(Protocol):
+    """Type annotation for a coordination number gradient function."""
+
+    def __call__(
+        self,
+        numbers: Tensor,
+        positions: Tensor,
+        *,
+        dcounting_function: CountingFunction | None = None,
+        rcov: Tensor | None = None,
+        en: Tensor | None = None,
+        cutoff: Tensor | None = None,
+        kcn: float = 7.5,
+        **kwargs: Any,
+    ) -> Tensor: ...
 
 
 class Slicers(TypedDict):

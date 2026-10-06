@@ -168,7 +168,7 @@ class AutogradCalculator(EnergyCalculator):
 
         elif grad_mode == "functorch":
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             # jacrev requires a scalar from `self.energy`!
             deriv = jacrev(self.energy, argnums=0)(
@@ -259,7 +259,7 @@ class AutogradCalculator(EnergyCalculator):
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             # jacrev requires a scalar from `self.energy`!
             if derived_quantity == "forces":
@@ -301,9 +301,17 @@ class AutogradCalculator(EnergyCalculator):
 
             elif derived_quantity == "energy":
                 # pylint: disable=import-outside-toplevel
-                from tad_mctc.autograd import hessian
+                from torch.func import jacrev
 
-                hess = hessian(self.energy, (positions, chrg, spin), argnums=0)
+                def _grad(pos: Tensor) -> Tensor:
+                    # sum over the batch: the systems are independent
+                    e = self.energy(pos, chrg, spin).sum()
+                    if e.grad_fn is None:
+                        return torch.zeros_like(pos)
+                    (g,) = torch.autograd.grad(e, pos, create_graph=True)
+                    return g
+
+                hess = jacrev(_grad)(positions)
 
             else:
                 raise ValueError(
@@ -447,7 +455,7 @@ class AutogradCalculator(EnergyCalculator):
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             def wrapped_energy(f: Tensor) -> Tensor:
                 self.interactions.update_efield(field=f)
@@ -526,7 +534,7 @@ class AutogradCalculator(EnergyCalculator):
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             def wrapped_energy(g: Tensor) -> Tensor:
                 self.interactions.update_efield_grad(field_grad=g)
@@ -600,7 +608,7 @@ class AutogradCalculator(EnergyCalculator):
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             # d(3) / d(nat, 3) = (3, nat, 3)
             dmu_dr = jacrev(dip_fcn, argnums=0)(
@@ -696,7 +704,7 @@ class AutogradCalculator(EnergyCalculator):
             return jac(mu, field)
 
         # pylint: disable=import-outside-toplevel
-        from tad_mctc.autograd import jacrev
+        from torch.func import jacrev
 
         if derived_quantity == "dipole":
 
@@ -805,7 +813,7 @@ class AutogradCalculator(EnergyCalculator):
 
         else:
             # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jacrev
+            from torch.func import jacrev
 
             chi = jacrev(self.polarizability, argnums=0)(
                 positions,
@@ -892,7 +900,7 @@ class AutogradCalculator(EnergyCalculator):
             return jac(alpha, field)
 
         # pylint: disable=import-outside-toplevel
-        from tad_mctc.autograd import jacrev
+        from torch.func import jacrev
 
         if derived_quantity == "pol":
 

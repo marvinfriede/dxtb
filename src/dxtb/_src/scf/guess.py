@@ -115,9 +115,13 @@ def get_eeq_guess(
         Atomic charges.
     """
     # pylint: disable=import-outside-toplevel
+    from tad_mctc import Structure
+    from tad_mctc.ncoord import cn_eeq
     from tad_multicharge import get_eeq_charges
 
-    return get_eeq_charges(numbers, positions, chrg, cutoff=cutoff)
+    structure = Structure(numbers=numbers, positions=positions, charge=chrg)
+    cn = cn_eeq if cutoff is None else cn_eeq.replace(cutoff=float(cutoff))
+    return get_eeq_charges(structure, cn=cn)
 
 
 def spread_charges_atomic_to_orbital(

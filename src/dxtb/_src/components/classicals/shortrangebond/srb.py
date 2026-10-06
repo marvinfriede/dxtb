@@ -30,9 +30,9 @@ from tad_mctc import storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import en as element_en
-from tad_mctc.ncoord import coordination_number
 
 from dxtb import IndexHelper
+from dxtb._src.ncoord import coordination_number
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import Classical, ClassicalCache, ComponentCache

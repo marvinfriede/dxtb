@@ -26,8 +26,8 @@ from pathlib import Path
 import pytest
 import torch
 from tad_mctc import read, read_chrg
-from tad_mctc.autograd import jacrev
 from tad_mctc.convert import reshape_fortran
+from torch.func import jacrev
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.constants import labels

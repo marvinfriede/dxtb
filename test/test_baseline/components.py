@@ -48,10 +48,11 @@ from functools import lru_cache
 from typing import Any, Callable, Tuple
 
 import torch
-from tad_mctc.data.molecules import mols
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.typing import Tensor
+
+from ..molecules import mols
 
 __all__ = ["TARGETS", "CHECKS", "ComponentResult", "run_check"]
 
