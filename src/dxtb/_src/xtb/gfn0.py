@@ -38,6 +38,7 @@ from dxtb._src.components.interactions import Potential
 from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
+from dxtb._src.utils.tensors import structure_charge
 
 from .base import PAD, BaseHamiltonian
 
@@ -225,7 +226,9 @@ class GFN0Hamiltonian(BaseHamiltonian):
         """Solve the coordinate-local main GFN0 EEQ model."""
         total_charge = any_to_tensor(charge, **self.dd)
         structure = Structure(
-            numbers=self.numbers, positions=positions, charge=total_charge
+            numbers=self.numbers,
+            positions=positions,
+            charge=structure_charge(total_charge, self.numbers),
         )
         charges = self.eeq_model.solve(structure, cn)
         assert isinstance(charges, Tensor)

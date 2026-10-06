@@ -53,7 +53,7 @@ def test_construction(dtype: torch.dtype, name: str) -> None:
     mol1 = _pyscf.mol.M(numbers, positions, parse_arg=False)
 
     # pyscf molecule from dxtb's molecule
-    mol_dxtb = Structure(numbers, positions)
+    mol_dxtb = Structure(numbers=numbers, positions=positions)
     mol2 = _pyscf.mol.PyscfMol.from_mol(mol_dxtb)
 
     for a1, a2 in zip(mol1.atom, mol2.atom):

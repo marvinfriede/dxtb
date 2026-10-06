@@ -169,14 +169,13 @@ class Driver:
 
         timer.start("Read Files", parent_uid="Setup")
 
-        if len(args.file) > 1:
-            _n, _p = zip(
-                *[read(f, ftype=args.filetype, **dd) for f in args.file]
-            )
-            numbers = pack(_n)
-            positions = pack(_p)
+        # `read` returns a `Structure` since tad-mctc 0.8
+        structs = [read(f, ftype=args.filetype, **dd) for f in args.file]
+        if len(structs) > 1:
+            numbers = pack([s.numbers for s in structs])
+            positions = pack([s.positions for s in structs])
         else:
-            numbers, positions = read(args.file[0], args.filetype, **dd)
+            numbers, positions = structs[0].numbers, structs[0].positions
 
         timer.stop("Read Files")
 

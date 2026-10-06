@@ -32,6 +32,8 @@ from tad_mctc.autograd.checks import is_gradtracking
 from dxtb._src.typing import Tensor
 
 __all__ = [
+    "is_batched",
+    "structure_charge",
     "t2int",
     "tensor_id",
     "GradKey",
@@ -56,6 +58,25 @@ def t2int(x: Tensor) -> int:
         Integer value of the tensor.
     """
     return int(x.item())
+
+
+def is_batched(x: Tensor) -> bool:
+    """
+    Check if the tensor is a ``vmap`` batched tensor (only the outermost
+    functorch layer). Formerly provided by ``tad_mctc.autograd.checks``.
+    """
+    return torch._C._functorch.is_batchedtensor(x)
+
+
+def structure_charge(charge: Tensor, numbers: Tensor) -> Tensor:
+    """
+    Shape the total charge as ``tad_mctc.Structure`` expects it: a scalar or
+    one value per system, i.e., ``numbers.shape[:-1]``. dxtb passes the charge
+    of a batch as ``(nbatch, 1)``.
+    """
+    if charge.ndim >= numbers.ndim:
+        return charge.reshape(numbers.shape[:-1])
+    return charge
 
 
 def tensor_id(x: Tensor) -> str:

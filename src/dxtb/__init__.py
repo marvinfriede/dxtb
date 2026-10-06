@@ -23,10 +23,11 @@ A fully differentiable extended tight-binding package.
 
 # pylint: disable=C0411,C0412,C0413,C0414
 
-from os import getenv
-
 # import timer first to get correct total time
-from dxtb._src.timing import kill_timer, timer
+from dxtb._src.timing import timer, kill_timer
+
+
+from os import getenv
 
 if getenv("DXTB_TIMER", "False").lower() not in ("true", "1", "yes", "on"):
     timer.disable()
@@ -45,9 +46,20 @@ timer.start("dxtb", parent_uid="Import")
 from dxtb.__version__ import __version__
 
 # temporary: must precede the first import of tad-dftd3/tad-dftd4
-from dxtb._src import mctc_shim as _mctc_shim
+from dxtb._src import mctc_shim as _mctc_shim  # noqa: F401
 
 del _mctc_shim
+
+# order is important here
+from dxtb._src.io import OutputHandler as OutputHandler
+from dxtb._src.basis.indexhelper import IndexHelper as IndexHelper
+from dxtb._src.calculators.base import Calculator
+from dxtb._src.param import Param as Param
+from dxtb._src.param import ParamModule as ParamModule
+from dxtb._src.param.gfn0 import GFN0_XTB as GFN0_XTB
+from dxtb._src.param.gfn1 import GFN1_XTB as GFN1_XTB
+from dxtb._src.param.gfn2 import GFN2_XTB as GFN2_XTB
+
 
 from dxtb import calculators as calculators
 from dxtb import components as components
@@ -55,16 +67,6 @@ from dxtb import config as config
 from dxtb import integrals as integrals
 from dxtb import labels as labels
 from dxtb import typing as typing
-from dxtb._src.basis.indexhelper import IndexHelper as IndexHelper
-from dxtb._src.calculators.base import Calculator
-
-# order is important here
-from dxtb._src.io import OutputHandler as OutputHandler
-from dxtb._src.param import Param as Param
-from dxtb._src.param import ParamModule as ParamModule
-from dxtb._src.param.gfn0 import GFN0_XTB as GFN0_XTB
-from dxtb._src.param.gfn1 import GFN1_XTB as GFN1_XTB
-from dxtb._src.param.gfn2 import GFN2_XTB as GFN2_XTB
 
 ###############################################################################
 

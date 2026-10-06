@@ -33,6 +33,7 @@ from tad_multicharge.model.eeq import EEQModel
 from dxtb import IndexHelper
 from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.typing import Any, Tensor, override
+from dxtb._src.utils.tensors import structure_charge
 
 from ..base import Classical, ClassicalCache, ComponentCache
 
@@ -223,7 +224,9 @@ class IES(Classical):
             kcn=self.cn_kcn,
         )
         structure = Structure(
-            numbers=cache.numbers, positions=positions, charge=total_charge
+            numbers=cache.numbers,
+            positions=positions,
+            charge=structure_charge(total_charge, cache.numbers),
         )
         _charges, energy = cache.eeq.solve(structure, cn, return_energy=True)
         return energy

@@ -34,6 +34,8 @@ from dxtb._src.components.classicals.dispersion import (
     new_dispersion,
 )
 from dxtb._src.param.gfn2 import GFN2_XTB
+from dxtb._src.ncoord import cn_d4
+from dxtb._src.scf.guess import get_eeq_guess
 from dxtb._src.typing import DD, Tensor
 
 from ...conftest import DEVICE
@@ -72,7 +74,10 @@ def test_batch(dtype: torch.dtype) -> None:
         s9=torch.tensor(1.00000000, **dd),
     )
 
-    energy = d4.dftd4(numbers, positions, charge, param)
+    # tad-dftd4 0.8 needs the legacy coordination number and EEQ charges
+    # (see `dxtb._src.mctc_shim`)
+    q = get_eeq_guess(numbers, positions, charge)
+    energy = d4.dftd4(numbers, positions, charge, param, q=q, cn_function=cn_d4)
     assert energy.dtype == dtype
 
     # create copy as `par` lives in global scope

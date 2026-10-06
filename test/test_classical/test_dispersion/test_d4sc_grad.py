@@ -28,9 +28,9 @@ import torch
 from tad_mctc.autograd import dgradcheck
 from tad_mctc.batch import pack
 from tad_mctc.typing import Tensor
-from tad_multicharge import get_eeq_charges
 
 from dxtb import GFN2_XTB
+from dxtb._src.scf.guess import get_eeq_guess
 from dxtb._src.typing import DD
 from dxtb.components.dispersion import new_d4sc
 
@@ -53,7 +53,7 @@ def test_single(name: str) -> None:
     assert disp is not None
 
     chrg = torch.tensor(0.0, **dd)
-    qat = get_eeq_charges(numbers, positions, chrg)
+    qat = get_eeq_guess(numbers, positions, chrg)
 
     positions.requires_grad_(True)
 
@@ -89,7 +89,7 @@ def test_batch(name1: str, name2: str) -> None:
     assert disp is not None
 
     chrg = torch.tensor([0.0, 0.0], **dd)
-    qat = get_eeq_charges(numbers, positions, chrg)
+    qat = get_eeq_guess(numbers, positions, chrg)
 
     positions.requires_grad_(True)
 

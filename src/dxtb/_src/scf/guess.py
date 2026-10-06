@@ -117,9 +117,14 @@ def get_eeq_guess(
     # pylint: disable=import-outside-toplevel
     from tad_mctc import Structure
     from tad_mctc.ncoord import cn_eeq
+    from dxtb._src.utils.tensors import structure_charge
     from tad_multicharge import get_eeq_charges
 
-    structure = Structure(numbers=numbers, positions=positions, charge=chrg)
+    structure = Structure(
+        numbers=numbers,
+        positions=positions,
+        charge=structure_charge(chrg, numbers),
+    )
     cn = cn_eeq if cutoff is None else cn_eeq.replace(cutoff=float(cutoff))
     return get_eeq_charges(structure, cn=cn)
 
