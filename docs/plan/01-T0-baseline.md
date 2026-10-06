@@ -284,7 +284,9 @@ Add to the docstrings and a "Known issues" page:
 
 ---
 
-## T0.12 `refocc` gradient fix (requirement)
+## T0.12 `refocc` gradient fix (requirement) — done
+
+**Result.** Cause: the Fermi occupations dropped the derivative with respect to the electron count in wide gaps (water: about 300 kT); they now return the exact linear response there. Autograd and finite differences agree for H and O of water, GFN1 and GFN2, unrolled and implicit (`test/test_scf/test_refocc_grad.py`); 15 matrix cells of the parameter derivatives changed from fail to pass, none changed the other way.
 
 **Goal.** The derivative of the energy with respect to `element.<X>.refocc` is right again. Since #271 the reference occupation also sets the fractional number of electrons, and autograd misses a contribution (water, GFN1: `dE/d refocc(H)` is -0.0036 with autograd and -0.2259 with central differences; all six `refocc` leaves of both methods fail, baseline report section 7).
 

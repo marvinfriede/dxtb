@@ -18,7 +18,7 @@ not taken. Items marked **[decide]** needed an explicit answer before B2 starts;
 | `vmap` stops at `data_ptr` cache keys, batch-size heuristics on `numbers`, data-dependent control flow [5] | Everything that depends on `numbers` alone moves into `setup`. The per-call path has fixed shapes. |
 | `reset()` detaches user tensors; field updates mutate a component [9] | Field, charge and spin are call inputs. |
 | Implicit SCF is right under autograd but not under `torch.func` [3.1, 9 E0.1] | The result and property functions must not assume which SCF mode produced them. The mode is a model setting. |
-| Parameter gradients reach every leaf except `refocc` (since #271) [7] | The model keeps parameters as leaves a transform can differentiate. `refocc` must be fixed before F1 relies on it. |
+| Parameter gradients reached every leaf except `refocc` (#271 until T0.12, fixed) [7] | The model keeps parameters as leaves a transform can differentiate. |
 | Batched eigensolver stall solved by a per-call `l_inv` [6] | The overlap-dependent factorisation belongs to the per-call data, not to the system. |
 
 ## 1. Levels (question 1)
@@ -205,8 +205,8 @@ tree structure and are never stacked.
    inside `singlepoint` and in the result (B6), not in the system. The
    Cholesky factor is the one place where this costs repeated work in a
    transformed function; measure before adding anything (P10).
-4. **Requirement (decided): the `refocc` derivative is fixed in T0.12**,
-   before B3. It is not excluded and not left to F1.
+4. **Requirement (decided, done): the `refocc` derivative is fixed in T0.12**,
+   before B3. It was not excluded and not left to F1.
 5. **Release placement.** The new API is dxtb release 1 (overview, section 8).
    The old API raises with a migration pointer for that release only.
 

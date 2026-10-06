@@ -1,258 +1,258 @@
 {
  "dE_dparam-autograd-gfn1-libcint-full-single": {
-  "status": "fail",
-  "max_abs": 0.2222736420699171,
-  "max_rel": 0.9841683803276825,
-  "seconds": 7.791526343999067,
-  "peak_rss_mb": 740.3,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 2.8247536526526673e-07,
+  "max_rel": 1.2095077850493445e-06,
+  "seconds": 7.776257303999955,
+  "peak_rss_mb": 738.3,
+  "message": ""
  },
  "dE_dparam-autograd-gfn1-libcint-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.22227364206991682,
-  "max_rel": 0.9841683803276813,
-  "seconds": 7.924580314000195,
-  "peak_rss_mb": 739.8,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 2.824753652930223e-07,
+  "max_rel": 1.2095077851681888e-06,
+  "seconds": 7.602237914000398,
+  "peak_rss_mb": 737.3,
+  "message": ""
  },
  "dE_dparam-autograd-gfn1-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.22227364202550828,
-  "max_rel": 0.9841683803245701,
-  "seconds": 7.640209978999337,
-  "peak_rss_mb": 708.2,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 2.8237544519305047e-07,
+  "max_rel": 1.2090799450809386e-06,
+  "seconds": 7.838701019999917,
+  "peak_rss_mb": 705.9,
+  "message": ""
  },
  "dE_dparam-autograd-gfn1-pytorch-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.22227364202550792,
-  "max_rel": 0.9841683803245684,
-  "seconds": 8.01445550399876,
-  "peak_rss_mb": 706.8,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 2.823754453873395e-07,
+  "max_rel": 1.2090799459128487e-06,
+  "seconds": 7.653194906999943,
+  "peak_rss_mb": 704.7,
+  "message": ""
  },
  "dE_dparam-autograd-gfn2-libcint-full-single": {
-  "status": "fail",
-  "max_abs": 0.36264772098559134,
-  "max_rel": 0.9881041485586718,
-  "seconds": 6.566194908000398,
-  "peak_rss_mb": 735.7,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.1220213100848753e-06,
+  "max_rel": 3.057164976117831e-06,
+  "seconds": 6.619099795999773,
+  "peak_rss_mb": 734.0,
+  "message": ""
  },
  "dE_dparam-autograd-gfn2-libcint-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.3626477209855892,
-  "max_rel": 0.9881041485586659,
-  "seconds": 6.977807504001248,
-  "peak_rss_mb": 731.8,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.1220213102514087e-06,
+  "max_rel": 3.057164976571584e-06,
+  "seconds": 6.505944942000042,
+  "peak_rss_mb": 729.7,
+  "message": ""
  },
  "dE_dparam-autograd-gfn2-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.36264772098559356,
-  "max_rel": 0.9881041485586779,
-  "seconds": 6.592531816000701,
-  "peak_rss_mb": 704.6,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.1220213101958976e-06,
+  "max_rel": 3.057164976420333e-06,
+  "seconds": 6.3536897720000525,
+  "peak_rss_mb": 702.5,
+  "message": ""
  },
  "dE_dparam-autograd-gfn2-pytorch-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.36264772098559234,
-  "max_rel": 0.9881041485586746,
-  "seconds": 6.127074427999105,
-  "peak_rss_mb": 700.8,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.1220213100293641e-06,
+  "max_rel": 3.05716497596658e-06,
+  "seconds": 6.361376781999752,
+  "peak_rss_mb": 698.8,
+  "message": ""
  },
  "dE_dparam-forward-gfn1-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 10.481473502000881,
-  "peak_rss_mb": 749.4,
+  "seconds": 10.94088638600033,
+  "peak_rss_mb": 748.0,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dE_dparam-forward-gfn1-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 1.6024095039992972,
-  "peak_rss_mb": 748.9,
+  "seconds": 1.9660709919999135,
+  "peak_rss_mb": 747.6,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dE_dparam-forward-gfn1-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.22227364202550826,
-  "max_rel": 0.98416838032457,
-  "seconds": 27.094005341999946,
-  "peak_rss_mb": 715.3,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 2.8237544510978374e-07,
+  "max_rel": 1.2090799447244057e-06,
+  "seconds": 25.88068836399998,
+  "peak_rss_mb": 713.7,
+  "message": ""
  },
  "dE_dparam-forward-gfn1-pytorch-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 1.4104187649991218,
-  "peak_rss_mb": 716.6,
+  "seconds": 1.7188705419998769,
+  "peak_rss_mb": 712.9,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dE_dparam-forward-gfn2-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 18.498211412999808,
-  "peak_rss_mb": 737.6,
+  "seconds": 18.791883841999606,
+  "peak_rss_mb": 736.4,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dE_dparam-forward-gfn2-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.807086454000455,
-  "peak_rss_mb": 736.6,
+  "seconds": 0.9573359719997825,
+  "peak_rss_mb": 735.0,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dE_dparam-forward-gfn2-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.36264772098559317,
-  "max_rel": 0.9881041485586768,
-  "seconds": 42.58640529600052,
-  "peak_rss_mb": 703.5,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.1220213099183418e-06,
+  "max_rel": 3.0571649756640783e-06,
+  "seconds": 42.889292974,
+  "peak_rss_mb": 702.9,
+  "message": ""
  },
  "dE_dparam-forward-gfn2-pytorch-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.6543808820006234,
-  "peak_rss_mb": 703.6,
+  "seconds": 0.6558940169998095,
+  "peak_rss_mb": 702.0,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dforces_dparam-autograd-gfn1-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.7787740670009953,
-  "peak_rss_mb": 739.3,
+  "seconds": 0.6849319150001065,
+  "peak_rss_mb": 737.9,
   "message": "AttributeError: The integral int1e_rripovlp is not available from libcint, please add it [/home/user/venv/lib/python3.11/site-packages/tad_libcint/interface/integrals/utils.py:101]"
  },
  "dforces_dparam-autograd-gfn1-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.8938445339990722,
-  "peak_rss_mb": 734.9,
+  "seconds": 0.8036765759998161,
+  "peak_rss_mb": 733.9,
   "message": "AttributeError: The integral int1e_rripovlp is not available from libcint, please add it [/home/user/venv/lib/python3.11/site-packages/tad_libcint/interface/integrals/utils.py:101]"
  },
  "dforces_dparam-autograd-gfn1-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.009302935504154557,
-  "max_rel": 2.838420421313095,
-  "seconds": 8.402832186999149,
-  "peak_rss_mb": 712.4,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.539832553132392e-08,
+  "max_rel": 6.557771818900293e-06,
+  "seconds": 7.296841163999943,
+  "peak_rss_mb": 711.6,
+  "message": ""
  },
  "dforces_dparam-autograd-gfn1-pytorch-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.009302935504154473,
-  "max_rel": 2.8384204213130695,
-  "seconds": 8.091922784999042,
-  "peak_rss_mb": 708.5,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.53983255521406e-08,
+  "max_rel": 6.557771818900293e-06,
+  "seconds": 7.481597600999976,
+  "peak_rss_mb": 707.5,
+  "message": ""
  },
  "dforces_dparam-autograd-gfn2-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.6225092669992591,
-  "peak_rss_mb": 742.2,
+  "seconds": 0.5948281050000332,
+  "peak_rss_mb": 741.2,
   "message": "AttributeError: The integral int1e_rripovlp is not available from libcint, please add it [/home/user/venv/lib/python3.11/site-packages/tad_libcint/interface/integrals/utils.py:101]"
  },
  "dforces_dparam-autograd-gfn2-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.8319190149995848,
-  "peak_rss_mb": 731.7,
+  "seconds": 0.8146732790000897,
+  "peak_rss_mb": 730.4,
   "message": "AttributeError: The integral int1e_rripovlp is not available from libcint, please add it [/home/user/venv/lib/python3.11/site-packages/tad_libcint/interface/integrals/utils.py:101]"
  },
  "dforces_dparam-autograd-gfn2-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.3371369351984257,
-  "max_rel": 1.0359258465478547,
-  "seconds": 7.1242030119992705,
-  "peak_rss_mb": 716.8,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 6.931786548924901e-08,
+  "max_rel": 3.835249610211681e-06,
+  "seconds": 6.6160108330000185,
+  "peak_rss_mb": 715.8,
+  "message": ""
  },
  "dforces_dparam-autograd-gfn2-pytorch-implicit-single": {
-  "status": "fail",
-  "max_abs": 0.33713693519842597,
-  "max_rel": 1.0359258465478556,
-  "seconds": 7.407628865999868,
-  "peak_rss_mb": 707.6,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 6.931786547537122e-08,
+  "max_rel": 3.83524962150641e-06,
+  "seconds": 6.702098398000089,
+  "peak_rss_mb": 706.7,
+  "message": ""
  },
  "dforces_dparam-forward-gfn1-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 15.38343629100018,
-  "peak_rss_mb": 755.6,
+  "seconds": 13.541707268999744,
+  "peak_rss_mb": 758.6,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dforces_dparam-forward-gfn1-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 1.6792678159999923,
-  "peak_rss_mb": 745.5,
+  "seconds": 1.6139667749998807,
+  "peak_rss_mb": 744.4,
   "message": "RuntimeError: You are attempting to call Tensor.requires_grad_() (or perhaps using torch.autograd.functional.* APIs) inside of a function being transformed by a functorch transform. This is unsupported, please attempt to use the functorch transforms (e.g. grad, vjp, jacrev, jacfwd, hessian) or call requires_grad_ [dxtb/_src/scf/implicit/fixed_point.py:533]"
  },
  "dforces_dparam-forward-gfn1-pytorch-full-single": {
-  "status": "fail",
-  "max_abs": 0.009302935504154522,
-  "max_rel": 2.838420421313084,
-  "seconds": 42.58255072599968,
-  "peak_rss_mb": 724.7,
-  "message": "leaves: element.H.refocc, element.O.refocc"
+  "status": "pass",
+  "max_abs": 1.539832551571141e-08,
+  "max_rel": 6.557771819414452e-06,
+  "seconds": 40.10142884999959,
+  "peak_rss_mb": 726.1,
+  "message": ""
  },
  "dforces_dparam-forward-gfn1-pytorch-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 1.2613691370006563,
-  "peak_rss_mb": 713.5,
+  "seconds": 1.1020432260002053,
+  "peak_rss_mb": 712.4,
   "message": "RuntimeError: You are attempting to call Tensor.requires_grad_() (or perhaps using torch.autograd.functional.* APIs) inside of a function being transformed by a functorch transform. This is unsupported, please attempt to use the functorch transforms (e.g. grad, vjp, jacrev, jacfwd, hessian) or call requires_grad_ [dxtb/_src/scf/implicit/fixed_point.py:533]"
  },
  "dforces_dparam-forward-gfn2-libcint-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 2.5313472470006673,
-  "peak_rss_mb": 757.4,
+  "seconds": 2.4765600390001055,
+  "peak_rss_mb": 756.3,
   "message": "RuntimeError: level.has_value() && level <= current_level INTERNAL ASSERT FAILED at \"/__w/pytorch/pytorch/aten/src/ATen/functorch/ADInterpreters.cpp\":46, please report a bug to PyTorch. escaped? [/home/user/venv/lib/python3.11/site-packages/tad_dftd4/model/base.py:381]"
  },
  "dforces_dparam-forward-gfn2-libcint-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.8971197909995681,
-  "peak_rss_mb": 738.6,
+  "seconds": 0.8821324079999613,
+  "peak_rss_mb": 737.2,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dforces_dparam-forward-gfn2-pytorch-full-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 3.1274482640001224,
-  "peak_rss_mb": 727.8,
+  "seconds": 2.57528726999999,
+  "peak_rss_mb": 726.8,
   "message": "RuntimeError: level.has_value() && level <= current_level INTERNAL ASSERT FAILED at \"/__w/pytorch/pytorch/aten/src/ATen/functorch/ADInterpreters.cpp\":46, please report a bug to PyTorch. escaped? [/home/user/venv/lib/python3.11/site-packages/tad_dftd4/model/base.py:381]"
  },
  "dforces_dparam-forward-gfn2-pytorch-implicit-single": {
   "status": "error",
   "max_abs": null,
   "max_rel": null,
-  "seconds": 0.6982372359998408,
-  "peak_rss_mb": 707.3,
+  "seconds": 0.5920984290000888,
+  "peak_rss_mb": 705.9,
   "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [/home/user/venv/lib/python3.11/site-packages/torch/autograd/function.py:549]"
  },
  "dipole-analytical-gfn1-libcint-full-conformer": {

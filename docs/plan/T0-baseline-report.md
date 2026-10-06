@@ -28,14 +28,19 @@ recorded status with `python -m test.test_baseline.tables`.
   batches, up to third order), and the `nonpure` mode is gone. What remains:
   every `torch.func` and forward-mode cell errors with the implicit mode
   (`requires_grad_()` inside a transformed function), so it is autograd only.
-- **New on `main` since #271: the derivative with respect to `refocc` is
-  wrong.** The reference occupation (`element.<X>.refocc`) now also sets the
-  fractional number of electrons, which keeps its graph, but autograd misses a
-  contribution: for water (GFN1), `dE/d refocc(H)` is -0.0036 with autograd
-  and -0.2259 with central differences (stable between steps of 1e-3 and
-  1e-4), `O`: 0.076 against 0.234. All six `refocc` leaves of both methods
-  fail, every other parameter leaf is unchanged (section 7). Before #271 the
-  electron count was rounded and detached, so both agreed. Not fixed here.
+- **The derivative with respect to `refocc` was wrong since #271; fixed
+  (T0.12).** The reference occupation (`element.<X>.refocc`) also sets the
+  fractional number of electrons, which keeps its graph, but autograd missed
+  that contribution: for water (GFN1), `dE/d refocc(H)` was -0.0036 with
+  autograd and -0.2259 with central differences, `O`: 0.076 against 0.234,
+  for all six `refocc` leaves of both methods (section 7). Cause: the Fermi
+  occupations drop the derivative with respect to the number of electrons in
+  gaps too wide for the differentiable Newton steps (water: about 300 kT), so
+  the electron-count path contributed exactly zero. Those gaps now get the
+  exact linear response of the occupations to the electron count (a softmax
+  over the tails, independent of the Fermi energy). Autograd and finite
+  differences agree again (1e-5 relative) for GFN1 and GFN2, unrolled and
+  implicit; `test/test_scf/test_refocc_grad.py` guards it.
 - **Bugs fixed in this track** (T0 rules: they contaminated the baseline or
   gave wrong results with a small fix):
   - stale autograd graphs from the component and integral-driver caches:
@@ -191,8 +196,8 @@ By path and setting:
   finite differences 1e-10 to 7e-7; 0.4 s for forces, 4-7 s for Hessians,
   7-22 s for third order, water). The only exception is the derivative of
   the forces with respect to parameters with libcint (`int1e_rripovlp` not
-  available), and the derivative with respect to the parameters `refocc`
-  (section 7), which is wrong since #271.
+  available). The `refocc` derivative, wrong between #271 and T0.12, is right
+  again (section 7).
 - **`functorch` paths** of the Calculator API match autograd for single
   systems with the unrolled SCF; for batches they return cross-system blocks
   (`(nb, nb, ...)`), and `pol_deriv`/`dipole_deriv` fail to reshape.
@@ -383,15 +388,12 @@ finite difference (`test/test_baseline/params.py`,
 | GFN1 | 99 | 6 | 41 | 1 | 2114 |
 | GFN2 | 135 | 6 | 13 | 0 | 1248 |
 
-- **Bug on `main` (since #271), not fixed:** the six `element.<X>.refocc`
-  leaves (H, C, N, O, Br, Fe) of both methods have a wrong gradient (these
-  six were correct at `a132ec8`: 105 and 141 correct leaves). Water, GFN1,
-  autograd against central differences: H -0.0036 against -0.2259, O 0.0757
-  against 0.2335; the finite differences do not change between steps of
-  1e-3 and 1e-4. The reference occupation now also determines the fractional
-  number of electrons (`get_refocc`, `nel`), which is differentiated in the
-  SCF through the graph of the total charge; a contribution is lost on the
-  way from `refocc`. Relevant if `refocc` is trained (F2).
+- **Bug on `main` (since #271), fixed in T0.12:** the six `element.<X>.refocc`
+  leaves (H, C, N, O, Br, Fe) of both methods had a wrong gradient (water,
+  GFN1: H -0.0036 against -0.2259, O 0.0757 against 0.2335). The reference
+  occupation also determines the fractional number of electrons
+  (`get_refocc`, `nel`), whose derivative the Fermi occupations dropped in
+  wide gaps (see the summary). The table below is the status after the fix.
 - **Bug, fixed:** `dispersion.d4.alp` (GFN2) was not passed to tad-dftd4,
   which used its built-in default (the same value): no effect, no gradient.
 - **Bug, subproject:** `dispersion.d3.s9` (GFN1) has no gradient. GFN1 sets
@@ -562,7 +564,7 @@ this branch) some starting points have moved:
 | TE starting point, eigensolver | not covered | broadened `eighb` wrong at degeneracies (order >= 2) and biased at small gaps (T0.4); the unrolled SCF now computes `L^-1` of the overlap once and passes it to `eighb` (`l_inv`, tad-mctc 0.9.1); the implicit SCF modes still use the xitorch `lsymeig` |
 | B2 configuration | mutable | unchanged |
 | E0 SCF modes | `full`, `implicit`, `nonpure` | `nonpure` removed (#272); `implicit` has a new fixed-point solver with correct higher derivatives under autograd (3.1) |
-| E0 occupations | rounded electron count | fractional electron count that keeps its graph (#271); the derivative with respect to `refocc` is wrong (section 7) |
+| E0 occupations | rounded electron count | fractional electron count that keeps its graph (#271); the derivative with respect to `refocc` was wrong, fixed in T0.12 (section 7) |
 | C2-C4 tad-mctc 0.9 | not released | tad-mctc 0.9.1 and tad-multicharge 0.7.0 are in use; tad-dftd3 and tad-dftd4 are bridged by `dxtb/_src/mctc_shim.py` and `dxtb/_src/ncoord/legacy.py` (functional coordination numbers of tad-mctc 0.7), to be removed with their releases |
 | T0.6 "cuda" vs "cuda:0" | known issue | fixed (device normalization), also for `device="cpu"` strings |
 | TorchScript | present | removed (`set_jit_enabled`, test switch); compiling goes through `torch.compile` (TD) |

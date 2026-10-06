@@ -56,16 +56,15 @@ includes the ``functorch`` and ``forward`` paths of the calculator.
 **Workaround:** use the default ``scf_mode="full"`` with transforms.
 
 
-Derivative with respect to ``refocc`` is wrong
-----------------------------------------------
+Derivative with respect to ``refocc`` (fixed)
+---------------------------------------------
 
-The gradient of the energy with respect to the reference occupation of an
-element (``element.<X>.refocc`` of the parametrization, relevant when training
-parameters) is wrong since the fractional number of electrons was introduced:
-for water with GFN1-xTB, autograd gives -0.0036 for hydrogen where central
-differences give -0.2259. All other parameters are not affected.
-
-**Workaround:** keep ``refocc`` fixed, or use finite differences for it.
+Between the introduction of the fractional number of electrons and the fix,
+the gradient of the energy with respect to the reference occupation of an
+element (``element.<X>.refocc``) was wrong for molecules with a wide
+HOMO-LUMO gap (water, GFN1-xTB: -0.0036 instead of -0.2259 for hydrogen). The
+derivative of the Fermi occupations with respect to the number of electrons
+was dropped in such gaps.
 
 
 Padded batches with the implicit SCF mode (fixed)
