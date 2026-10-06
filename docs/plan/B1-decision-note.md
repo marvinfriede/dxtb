@@ -87,9 +87,8 @@ dxtb.bond_orders(system, result)
   result (analytical forces, bond orders). Their input is a result.
 - `ir`/`raman`/`vibration` compose the lower-order functions; no manual resets
   (B6 step 5).
-- Names follow the current methods (`dipole_deriv` becomes `dipole_derivative`,
-  `pol_deriv` becomes `polarizability_derivative`) because the migration guide
-  lists renames anyway **[decide: keep the short names?]**.
+- **Decided: short names stay** (`dipole_deriv`, `pol_deriv`, as in the
+  current methods), so the migration guide lists fewer renames.
 - Method versions on `System` (`system.forces(positions)`) are thin
   delegates, documented as sugar. They hold no logic.
 
@@ -143,7 +142,7 @@ former is just `vmap` over positions and needs no extra function.
   the T0.9 table; B3 gates on it.
 
 `Param`/`ParamModule` stay as the file format and the default constructor input
-until F1; the model converts once in its constructor.
+until the training work (F1, now the last package of the plan); the model converts once in its constructor.
 
 ## 7. Dtype and device (question 7)
 
@@ -196,17 +195,17 @@ tree structure and are never stacked.
 
 ## 12. Open questions the proposal leaves
 
-1. **[decide]** Short or long names for the derivative properties (section 3).
-2. **[decide]** Whether `System` also holds the *geometry-independent
-   interaction data* of the self-consistent terms (ES2 shell hardness gather,
-   ES3 parameters) or only the classical terms. Proposal: both; the
-   T0.9 test already covers them.
+1. ~~Short or long names~~ Decided: short names (section 3).
+2. **[decide]** Whether `System` also holds the *geometry-independent data of
+   the self-consistent terms* (ES2, ES3) or only that of the classical terms.
+   Proposal: both. Explained in section 14.
 3. **Per-call data.** The Coulomb matrices, the Cholesky factor `l_inv`, the
    integrals depend on positions. They live in the per-call interaction cache
    inside `singlepoint` and in the result (B6), not in the system. The
    Cholesky factor is the one place where this costs repeated work in a
    transformed function; measure before adding anything (P10).
-4. **The `refocc` derivative** must be fixed or the leaf excluded before F1.
+4. **Requirement (decided): the `refocc` derivative is fixed in T0.12**,
+   before B3. It is not excluded and not left to F1.
 5. **Release placement.** The new API is dxtb release 1 (overview, section 8).
    The old API raises with a migration pointer for that release only.
 
@@ -214,3 +213,53 @@ tree structure and are never stacked.
 
 The note is agreed when sections 1-10 are confirmed or amended and the items
 marked **[decide]** are answered. Then `00-overview.md` links it and B2 starts.
+
+## 14. Explanation: what "geometry-independent data of the self-consistent terms" means
+
+Every energy term has two kinds of input. Take the self-consistent terms, which
+change the Fock matrix and are iterated in the SCF:
+
+- **ES2** (second-order electrostatics) builds a Coulomb matrix `J[i, j]` between
+  atoms (or shells). Its entries combine two things: the *hardness* of each atom
+  or shell, which depends only on the element (`hubbard`, `lhubbard`, looked up
+  per atom with `ihelp.spread_uspecies_to_atom`), and the *distance* between
+  them, which depends on `positions`.
+- **ES3** (third-order) needs one vector of Hubbard derivatives per atom (or
+  per shell, times a shell scaling). It has no position dependence at all.
+
+Today both are built lazily in `get_cache(numbers, positions, ihelp)`, with a
+value-based cache. For ES3 the cache depends on `numbers` only. For ES2 the
+element lookup is buried inside the function that also computes distances
+(`get_atom_coulomb_matrix`, `get_shell_coulomb_matrix`), so the element
+part is recomputed on every call.
+
+The choice is where the element-only part lives after B3:
+
+| Option | `setup(numbers)` holds | Per call |
+| --- | --- | --- |
+| **Both (proposed)** | classical setup data **and** the gathered ES2 hardness vectors and ES3 derivative vectors | the distance part of ES2, combined with the stored hardness |
+| Classical only | classical setup data | all of ES2 and ES3, including the element lookup |
+
+Why both:
+
+1. **P3 and `vmap`.** The element lookup uses the index helper, which is
+   data-dependent. It must not run inside a transformed function. Having the
+   system hold the gathered vectors keeps the per-call path free of it.
+2. **Training.** The gather is the one place where gradients reach the Hubbard
+   parameters. If it sits in `setup`, `setup` is the single differentiable
+   gateway from parameter tables to everything else, and the T0.9 test checks
+   one place, not several.
+3. **Cost.** The lookup is small, but in a transformed function it would be
+   repeated per call (and per batch entry); in `setup` it runs once per
+   composition.
+
+Cost of choosing both: `System` grows by the term list. A system then belongs to
+one model's set of terms, so adding a term (for example an external ML term,
+F3) means building a new model and a new system, not mutating the old one. That
+matches P4 and is why it is the proposal; "classical only" would keep `System`
+smaller, but leaves the lookup in the per-call path and the gather outside the
+single gateway.
+
+What does **not** go into the system under either option: the Coulomb matrix
+itself, ALPB and D4SC data, and anything else that depends on `positions`. Those
+are per-call data (B6).

@@ -177,7 +177,7 @@ grads = torch.func.grad(loss)(params)
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
 | TC Node migration | `03-TC-node-migration.md` | C1 immediately | `Node` in tad-mctc, all containers migrated, `TensorLike` deleted |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
-| TF Machine learning | `05-TF-machine-learning.md` | F1 after B3 | training workflow, new elements, ML interaction interface |
+| TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
 | TD Performance | `06-TD-performance.md` | after E4/E6 | compiled step and derivatives, size buckets, conditional optimisations |
 
 ---
@@ -208,7 +208,8 @@ graph LR
   B6 --> C6 & C7
   C6 & C7 & B5 --> C8 --> C9
   C8 --> E6
-  B3 --> F1 --> F2a --> F2b --> F2d
+  T0R --> T012[T0.12 refocc fix] --> B3
+  B8 & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
   F2c --> F2d
   E3 --> F2d --> F2e
   C1b & B6 & E3 --> F3 --> F4
@@ -223,8 +224,8 @@ graph LR
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8 → E8 |
 | G2 | T0.8 → B3 → E2 → E4 → E6a → E6 (with C8 for stacked mixed batches) → D1 |
-| G3 | T0.9 → B3 → F1 → F2a–F2c → F2d (needs E3 for force matching) → F2e |
-| G4 | B6 → C1b → F3 (needs E3 for consistent derivatives) |
+| G3 | T0.9 → T0.12 → B3 → … all of Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (G3 is last by decision) |
+| G4 | T0.12 → B6 → C1b → F3 (needs E3 for consistent derivatives) |
 
 Two packages can start immediately with no dependencies: C1 (`Node` in tad-mctc) and all of T0.
 
@@ -249,7 +250,7 @@ Short documents (one to two pages), written before the packages that depend on t
 
 | Note | Decides | Written in | Blocks |
 | --- | --- | --- | --- |
-| [B1 Evaluation API and state](B1-decision-note.md) (proposal) | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8, F1 |
+| [B1 Evaluation API and state](B1-decision-note.md) (proposal) | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8, F2a |
 | E0 SCF differentiation and integrals | unrolled versus implicit; replacement for xitorch; whether PyTorch multipole integrals are needed | TE | E3, E5 |
 | F2a Element structure | shell layout for actinides; which parameters are structural and which trainable | TF | F2b–F2e |
 | D4 Compile policy | minimum torch for compiled use; enforcement | TD | D-track releases |

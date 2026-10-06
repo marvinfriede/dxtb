@@ -284,6 +284,22 @@ Add to the docstrings and a "Known issues" page:
 
 ---
 
+## T0.12 `refocc` gradient fix (requirement)
+
+**Goal.** The derivative of the energy with respect to `element.<X>.refocc` is right again. Since #271 the reference occupation also sets the fractional number of electrons, and autograd misses a contribution (water, GFN1: `dE/d refocc(H)` is -0.0036 with autograd and -0.2259 with central differences; all six `refocc` leaves of both methods fail, baseline report section 7).
+
+**Steps.**
+
+1. Locate where the electron count loses the path from `refocc` (the occupation, the Fermi level search, the energy of the occupation term), with the two-parameter water case as the reproduction.
+2. Fix it on the unrolled SCF first, then check the implicit modes.
+3. Turn the `refocc` rows of the T0.9 test from recorded failures into requirements, and add the finite-difference check to CI.
+
+**Done when.** Autograd and central differences agree for every `refocc` leaf, GFN1 and GFN2, unrolled and implicit, within the T0.3 tolerances; the T0.9 table has no bug entry.
+
+**Needs.** T0.9. **Blocks.** B3 (its gradient check covers every parameter leaf), and every package that trains parameters. **Size.** S.
+
+---
+
 ## T0.11 Baseline report
 
 **Goal.** One document that records the state of dxtb before the refactor and feeds the decision notes B1 and E0.
@@ -321,5 +337,6 @@ Add to the docstrings and a "Known issues" page:
 | T0.9 | Parameter-gradient coverage | T0.1 | S |
 | T0.10 | Test-suite inventory | T0.1 | S |
 | T0.11 | Baseline report | T0.2–T0.10 | S |
+| T0.12 | `refocc` gradient fix (requirement) | T0.9 | S |
 
 Sizes: S up to a few days, M up to two weeks, L more than two weeks.

@@ -18,14 +18,14 @@
 
 **Steps.**
 
-1. Fix every bug-class entry from the T0.9 coverage table.
+1. Confirm the T0.9 coverage table has no bug entries (`refocc` is fixed in T0.12, before B3).
 2. Reparametrize positive-only parameters (exponents, scalings) through `log` or `softplus`, so an optimiser can't push them out of range. Provide the transform in the model, not in user code.
 3. Minimal training loop with `torch.func` (`partition`/`combine` once C1/C8 land; plain `ParamModule` before): energies of a small set against reference energies.
 4. Recovery test: perturb the parameters of one element, train against values computed with the original parameters, and check the original values are recovered.
 
 **Done when.** Coverage table has no bug entries; the recovery test passes in CI.
 
-**Needs.** T0.9, B3. **Unblocks.** F2a–F2e. **Size.** M.
+**Needs.** T0.12, B8, C9, E8, D1, D2 (everything except the training-dependent D3; F1 is the last package of the plan). **Unblocks.** F2a–F2e. **Size.** M.
 
 ---
 
@@ -173,7 +173,7 @@
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| F1 | Training basics | T0.9, B3 | M |
+| F1 | Training basics (last) | T0.12, B8, C9, E8, D1, D2 | M |
 | F2a | Structure and element range | F1 | M |
 | F2b | Defaults and constraints | F2a | S |
 | F2c | Train only new elements | B3, C1 | M |

@@ -77,10 +77,10 @@
 **Done when.**
 
 - `setup` contains every numbers-only computation; classical components have no `get_cache` keyed on `numbers`.
-- Gradients flow from energies to every parameter leaf the method uses (T0.9 table).
+- Gradients flow from energies to every parameter leaf the method uses and match finite differences, `refocc` included (T0.9 table, T0.12).
 - T0.2 reference reproduced.
 
-**Needs.** B1, B2. **Unblocks.** B5, C5, F1, E2 (index lists in setup). **Size.** L.
+**Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2 (index lists in setup). **Size.** L.
 
 ---
 
