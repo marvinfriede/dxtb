@@ -597,14 +597,19 @@ def get_fermi_occupation(
       of order ``2**k`` with respect to `nel` would overflow, since the
       ``m``-th one grows like ``g'**(1 - m)`` in a gap. The missing terms for
       the orbital energies and `kt` are of the order of ``f (1 - f)``, i.e.,
-      negligible. For `nel`, the derivative of that channel is zero instead
-      of summing to one over the orbitals. With the Fermi energy in the
+      negligible. For `nel`, the first derivative is the linear response
+      of `_gap_response` there (an additional electron is shared between the
+      tails above and below, exactly as in a narrower gap); the derivatives
+      of higher order along `nel` are zero. With the Fermi energy in the
       middle of a gap and ``kT = 1e-3``, this happens for gaps of more than
       about 690, 355 and 180 kT for the orders 1, 3 and 7 in double
       precision and 87 and 55 kT for the orders 1 and 3 in single
       precision (measured). Up to order ``2**k`` (one beyond the exact
       ones), the derivatives stay finite (measured); higher orders may
-      overflow in a gap, since their true values do.
+      overflow in a gap, since their true values do. Before this response
+      existed, the derivative with respect to `nel` was zero in such gaps,
+      which made the derivative of the energy with respect to the reference
+      occupations (``refocc``) wrong for most molecules.
     - The search reads its convergence flags on the host, i.e., the function
       has data-dependent control flow. Autograd and the transforms
       ``jacrev``, ``jacfwd``, ``hessian`` and ``jvp`` of ``torch.func`` work,
@@ -715,8 +720,9 @@ def get_fermi_occupation(
     # and `shift` the Fermi energy after the steps relative to the converged
     # one ([b, 2, 1]), i.e., `rel - shift` is the exact distance to the Fermi
     # energy, with the graph of the orbital energies and the electrons.
-    rel, shift = _attach_implicit_derivative(
-        e_fermi, emo, kt, target - n0, below, active, valid, steps
+    delta = target - n0
+    rel, shift, gap = _attach_implicit_derivative(
+        e_fermi, emo, kt, delta, below, active, valid, steps
     )
 
     _, tail, _ = _fermi_distribution(rel, shift, kt, valid, below)
@@ -733,6 +739,8 @@ def get_fermi_occupation(
     )
     tail = torch.where(tail < flush, 0.0, tail)
     fermi = torch.where(below, 1.0 - tail, tail)
+    if steps > 0:
+        fermi = fermi + _gap_response(rel, delta, kt, below, above, gap)
 
     # channels without electrons (e.g., beta channel of an H atom) are not
     # occupied here; completely filled channels are
@@ -1297,14 +1305,82 @@ def _attach_implicit_derivative(
     shift = torch.zeros_like(ref)  # Fermi energy relative to the converged
 
     floor = _diff_floor(emo.dtype, steps)
-    for _ in range(steps):
+    # channels in a gap too wide to divide by the derivative of the number of
+    # electrons; they get the linear response instead (`_gap_response`)
+    gap = torch.zeros_like(active)
+    for i in range(steps):
         _, tail, dfermi = _fermi_distribution(emo, shift, kt, valid, below)
         _, change, ok = _newton_step(delta, tail, dfermi, below, floor)
+        if i == 0:
+            gap = active & ~ok
         # keep the Fermi energy where the step is meaningless (see above)
         take = ok & active & (torch.abs(change) <= _MAX_DIFF_STEP_KT * kt)
         shift = shift + torch.where(take, change, 0.0)
 
-    return emo, shift
+    return emo, shift, gap
+
+
+def _gap_response(
+    rel: Tensor,
+    delta: Tensor,
+    kt: Tensor,
+    below: Tensor,
+    above: Tensor,
+    gap: Tensor,
+) -> Tensor:
+    """
+    Linear response of the occupations to the number of electrons in a gap.
+
+    In a gap (integer number of electrons), the Fermi energy is determined by
+    the equal tails of the Fermi function, i.e., ``A = B`` for the electrons
+    ``A`` above and the holes ``B`` below. An additional electron is then
+    distributed as ``d f_i / d N = tail_i / (A + B)``, which is half the
+    softmax of the tails above (and of the holes below). The Fermi energy
+    cancels, and no division by the vanishing derivative of the number of
+    electrons is needed, which the differentiable Newton steps cannot do
+    beyond a certain gap without overflow (see `_diff_floor`).
+
+    The value of the correction is zero. Its first derivative with respect to
+    the number of electrons is exact, all higher ones are zero (the true ones
+    grow like ``(A + B)**(1 - m)``), and the dependence on the orbital
+    energies is exact.
+
+    Parameters
+    ----------
+    rel : Tensor
+        Orbital energies relative to the Fermi energy, with their graph.
+    delta : Tensor
+        Number of electrons relative to the integer of the partition, with
+        its graph.
+    kt : Tensor
+        Electronic temperature in atomic units (positive).
+    below : Tensor
+        Orbitals below the integer number of electrons.
+    above : Tensor
+        Orbitals above the integer number of electrons.
+    gap : Tensor
+        Channels to which the correction applies ([b, 2, 1]).
+
+    Returns
+    -------
+    Tensor
+        Correction of the occupations ([b, 2, n]).
+    """
+
+    def softmax(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+        # rows without members would give NaN (also in the backward pass)
+        has = mask.any(-1, keepdim=True)
+        logits = torch.where(mask, x, -torch.inf)
+        logits = torch.where(has, logits, 0.0)
+        return torch.where(mask, torch.softmax(logits, -1), 0.0), has
+
+    # electrons go to the lowest orbitals above, holes to the highest below
+    w_above, has_above = softmax(-rel / kt, above)
+    w_below, has_below = softmax(rel / kt, below)
+    norm = has_above.to(rel.dtype) + has_below.to(rel.dtype)
+    weights = (w_above + w_below) / torch.where(norm > 0, norm, 1.0)
+
+    return torch.where(gap, weights * (delta - delta.detach()), 0.0)
 
 
 def _aufbau_occupation(

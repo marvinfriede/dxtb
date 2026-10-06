@@ -1,6 +1,6 @@
 # B1 Decision note: evaluation API and state
 
-Status: **agreed**, except the conformer entry point in section 5 (proposal: plain `vmap`) (decided: short property names, setup data of
+Status: **agreed** (conformers: plain `vmap`, no extra entry point; short property names, setup data of
 self-consistent terms in `System`, `refocc` fix as requirement T0.12). Package B1 of `02-TB-evaluation-api.md`.
 Written against `main` at `3b6a90f` plus the Track 0 branch. Evidence for each
 point is in `T0-baseline-report.md` (section numbers in brackets).
@@ -213,7 +213,7 @@ tree structure and are never stacked.
 ## 13. Acceptance
 
 The note is agreed when sections 1-10 are confirmed or amended and the items
-marked **[decide]** are answered (only section 5 remains). Then `00-overview.md` links it and B2 starts.
+marked **[decide]** are answered (none remain). Then `00-overview.md` links it and B2 starts.
 
 ## 14. Explanation: what "geometry-independent data of the self-consistent terms" means
 

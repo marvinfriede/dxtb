@@ -865,9 +865,10 @@ def test_electron_number_gap(dtype: torch.dtype, gap: float):
     """
     Integer electrons in a gap of `gap` kT: the thermal weight is far below
     the threshold (1e-12 to 1e-64), but an additional electron still goes to
-    the HOMO and LUMO in the exact ratio. Beyond the floor of the steps
-    (here: all gaps in single precision), the derivative is zero, and all
-    derivatives are finite.
+    the HOMO and LUMO in the exact ratio. Beyond the floor of the steps, the
+    first derivative is the linear response of `_gap_response`, which is
+    exact as well; the higher derivatives along the electrons are zero there.
+    All derivatives are finite.
     """
     kt = 1e-3
     half = gap * kt / 2
@@ -885,12 +886,8 @@ def test_electron_number_gap(dtype: torch.dtype, gap: float):
 
     _, w = exact_occupation(case, kt / KELVIN2AU)
     ref = (w / w.sum(-1, keepdim=True))[0, 0]
-    floor = filling._diff_floor(dtype, filling._diff_steps(3))
-    if w[0, 0].sum() / kt >= 10 * floor:
-        tol = 1e-12 if dtype == torch.double else 1e-5
-        assert (jac.double() - ref).abs().max() <= tol
-    else:
-        assert (jac == 0).all()
+    tol = 1e-12 if dtype == torch.double else 1e-5
+    assert (jac.double() - ref).abs().max() <= tol
 
     # higher orders along the electrons are finite, too
     v = torch.ones_like(case.nab).to(dtype)
