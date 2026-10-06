@@ -62,3 +62,13 @@ python benchmarks/baseline/workloads.py W3 --nsys 12 --threads 1   # T0.8, one w
                                                                    # W2: --nconf 8, W3 GFN2: --nsys 10
 python -m test.test_baseline.tables              # tables for the report
 ```
+
+## Known test flake
+
+`test/test_a_memory_leak/test_scf.py::test_xitorch[False-False-*]` (implicit
+SCF mode, no garbage collection between runs) fails intermittently and not
+reproducibly: it passed in some full runs and failed in others, also without
+the Fermi changes of T0.12 and at earlier commits. The leaked object is one
+tensor per call, freed by the garbage collector (the variants with
+`run_gc=True` pass), i.e., a reference cycle in the implicit solver. It is not
+investigated; the implicit solver is replaced or reworked in E0/E3.

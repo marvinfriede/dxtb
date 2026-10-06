@@ -20,6 +20,7 @@ General tests for SCF setup.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -54,18 +55,12 @@ def test_properties() -> None:
 
 
 def test_fail() -> None:
-    numbers = torch.tensor([1])
-    positions = torch.tensor([[0.0, 0.0, 0.0]])
-
-    calc = EnergyCalculator(numbers, GFN1_XTB)
+    # invalid modes are rejected when the configuration is created
+    with pytest.raises(ValueError):
+        ConfigSCF.create(scf_mode=-1)
 
     with pytest.raises(ValueError):
-        calc.opts.scf.scf_mode = -1
-        calc.singlepoint(positions)
-
-    with pytest.raises(ValueError):
-        calc.opts.scf.scf_mode = "fail"  # type: ignore
-        calc.singlepoint(positions)
+        ConfigSCF.create(scf_mode="fail")
 
 
 def test_full_mixer_error() -> None:
@@ -121,7 +116,7 @@ def test_full_change_scp() -> None:
 
     ##########################################################################
 
-    config.scp_mode = labels.SCP_MODE_FOCK
+    config = replace(config, scp_mode=labels.SCP_MODE_FOCK)
     _ = SelfConsistentFieldFull(ilist, **kwargs, config=config)
 
     assert len(OutputHandler.warnings) == 0

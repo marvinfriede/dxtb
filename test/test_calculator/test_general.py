@@ -51,7 +51,6 @@ def run_asserts(c: Calculator, dtype: torch.dtype) -> None:
     assert c.dtype == dtype
     assert c.classicals.dtype == dtype
     assert c.interactions.dtype == dtype
-    assert c.opts.dtype == dtype
 
     assert c.integrals.dtype == dtype
     assert c.integrals.hcore is not None

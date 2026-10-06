@@ -60,7 +60,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     ref = sample["edisp_d4sc"].to(**dd)
     charges = torch.tensor(0.0, **dd)
 
-    options = {**opts, "skip_compat_checks": True}
+    options = opts
     calc = Calculator(
         numbers,
         get_param_module("gfn2", **dd),
@@ -105,7 +105,7 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         )
     )
 
-    options = {**opts, "skip_compat_checks": True}
+    options = opts
     calc = Calculator(
         numbers,
         get_param_module("gfn2", **dd),

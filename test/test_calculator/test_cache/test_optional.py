@@ -38,11 +38,11 @@ def test_density(dtype: torch.dtype) -> None:
     numbers = torch.tensor([3, 1], device=DEVICE)
     positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], **dd)
 
-    calc = GFN1Calculator(numbers, opts=opts, **dd)
-    assert calc._ncalcs == 0
-
     # enable density caching
-    calc.opts.cache.store.density = True
+    calc = GFN1Calculator(
+        numbers, opts={**opts, "cache_density": True}, **dd
+    )
+    assert calc._ncalcs == 0
 
     energy = calc.get_energy(positions)
     assert calc._ncalcs == 1
@@ -60,12 +60,13 @@ def test_bond_orders(dtype: torch.dtype) -> None:
     numbers = torch.tensor([3, 1], device=DEVICE)
     positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], **dd)
 
-    calc = GFN1Calculator(numbers, opts=opts, **dd)
-    assert calc._ncalcs == 0
-
     # enable caching of properties required for bond orders
-    calc.opts.cache.store.density = True
-    calc.opts.cache.store.overlap = True
+    calc = GFN1Calculator(
+        numbers,
+        opts={**opts, "cache_density": True, "cache_overlap": True},
+        **dd,
+    )
+    assert calc._ncalcs == 0
 
     energy = calc.get_bond_orders(positions)
     assert calc._ncalcs == 1

@@ -283,9 +283,8 @@ def test_kt(dtype: torch.dtype, kt: float):
     ref = ref_fenergy[kt]
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == fenergy.cpu()
 
-    scf.config = replace(scf.config, fermi=replace(scf.config.fermi, partition=-3))
     with pytest.raises(ValueError):
-        scf.get_electronic_free_energy()
+        replace(scf.config.fermi, partition=-3)
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
