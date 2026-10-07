@@ -146,20 +146,7 @@ class ShortRangeBond(Classical):
                 "IndexHelper is required for short-range bond correction."
             )
 
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars):
-            if not isinstance(self.cache, ShortRangeBondCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
-        self.cache = ShortRangeBondCache(
+        return ShortRangeBondCache(
             numbers=numbers,
             r0=ihelp.spread_uspecies_to_atom(self.r0),
             cnfak=ihelp.spread_uspecies_to_atom(self.cnfak),
@@ -167,7 +154,6 @@ class ShortRangeBond(Classical):
             pauling=element_en.PAULING(**self.dd)[numbers],
             rcov=self.rcov[numbers],
         )
-        return self.cache
 
     @override
     def get_energy(

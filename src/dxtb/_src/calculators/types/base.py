@@ -34,7 +34,7 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import IndexHelper, OutputHandler
 from dxtb import integrals as ints
-from dxtb import labels
+from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.properties.vibration import (
     IRResult,
     RamanResult,
@@ -43,18 +43,9 @@ from dxtb._src.calculators.properties.vibration import (
 from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
-    new_dispersion,
-    new_halogen,
-    new_ies,
-    new_repulsion,
-    new_srb,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.container import Charges, Potential
-from dxtb._src.components.interactions.coulomb import new_aes2, new_es2, new_es3
-from dxtb._src.components.interactions.dispersion import new_d4sc
-from dxtb._src.components.interactions.field import efield
-from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
@@ -64,11 +55,6 @@ from dxtb.config import Config
 from dxtb.integrals import Integrals
 
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
-
-
-def _with_int_level(opts: Config, level: int) -> Config:
-    """Configuration with a different integral level."""
-    return replace(opts, ints=replace(opts.ints, level=level))
 
 
 class CalculatorCache(TensorLike):
@@ -540,7 +526,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"but is '{numbers.dtype}'"
             )
         self.numbers = numbers
-        unique: Tensor = torch.unique(numbers)
 
         # "cpu" or "cuda" would not compare equal to `tensor.device`
         super().__init__(normalize_device(device), dtype)
@@ -562,149 +547,15 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             opts = Config.create(**opts)
         self.opts = opts
 
-        # Set integral level based on parametrization. For the tests, we want
-        # to turn this off. Otherwise, all GFN2-xTB tests will fail without
-        # `libcint`, even when integrals are not tested (e.g. D4SC). This
-        # cannot be avoided becaused this constructor always calls the
-        # integral factories later.
-        # If the user sets the level manually, we will still set it to the
-        # maximum level required for the respective parametrization.
-        if kwargs.pop("auto_int_level", True):
-            if par.meta is not None and par.meta.name is not None:
-                if any(
-                    method in par.meta.name.casefold()
-                    for method in ("gfn0", "gfn1")
-                ):
-                    self.opts = _with_int_level(
-                        self.opts, max(labels.INTLEVEL_HCORE, self.opts.ints.level)
-                    )
-                elif "gfn2" in par.meta.name.casefold():
-                    self.opts = _with_int_level(
-                        self.opts,
-                        max(labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level),
-                    )
-
-        # create cache
-        self.cache = CalculatorCache(**dd) if cache is None else cache
-
-        # The batch mode is not a setting but follows the shape of the atomic
-        # numbers; mode 2 (conformers without padding) can be requested.
-        if batch_mode is None or (batch_mode == 0 and numbers.ndim > 1):
-            batch_mode = 1 if numbers.ndim > 1 else 0
-        if batch_mode not in (0, 1, 2):
-            raise ValueError(
-                f"Invalid batch mode '{batch_mode}'. Must be one of [0, 1, 2]."
-            )
-
-        # PERF: The IndexHelper is created on CPU and moved to the device of the
-        # `number` tensor. This is required for the instantiation of the
-        # integral classes later in this constructor. However, if the `libcint`
-        # interface is used, we need to transfer the IndexHelper to the CPU
-        # again. Correspondingly, we have one unnecessary transfer.
-        # (It could be circumvented if the intgrals are calculated immediately
-        # after instantiation, i.e., compute integrals with `libcint` first,
-        # then move IndexHelper to the device and compute Hamiltonian. However,
-        # this would require a change in the code structure. So we take the
-        # very small performance hit here.)
-        self.ihelp = IndexHelper.from_numbers(numbers, par, batch_mode)
-
-        ################
-        # INTERACTIONS #
-        ################
-
-        # setup self-consistent contributions
-        OutputHandler.write_stdout_nf(" - Interactions      ... ", v=4)
-
-        es2 = (
-            new_es2(unique, par, **dd)
-            if not {"all", "es2"} & set(self.opts.exclude)
-            else None
-        )
-        aes2 = (
-            new_aes2(unique, par, **dd)
-            if not {"all", "aes2"} & set(self.opts.exclude)
-            else None
-        )
-        es3 = (
-            new_es3(unique, par, **dd)
-            if not {"all", "es3"} & set(self.opts.exclude)
-            else None
-        )
-        d4sc = (
-            new_d4sc(numbers, par, **dd)
-            if not {"all", "d4sc", "disp"} & set(self.opts.exclude)
-            else None
-        )
-
-        if interaction is None:
-            self.interactions = InteractionList(es2, aes2, es3, d4sc, **dd)
-        elif isinstance(interaction, Interaction):
-            self.interactions = InteractionList(
-                es2, aes2, es3, d4sc, interaction, **dd
-            )
-        elif isinstance(interaction, (list, tuple)):
-            self.interactions = InteractionList(
-                es2, aes2, es3, d4sc, *interaction, **dd
-            )
-        else:
-            raise TypeError(
-                "Expected 'interaction' to be 'None' or of type 'Interaction', "
-                "'list[Interaction]', or 'tuple[Interaction]', but got "
-                f"'{type(interaction).__name__}'."
-            )
-
-        OutputHandler.write_stdout("done", v=4)
-
-        ##############
-        # CLASSICALS #
-        ##############
-
-        # setup non-self-consistent contributions
-        OutputHandler.write_stdout_nf(" - Classicals        ... ", v=4)
-
-        halogen = (
-            new_halogen(unique, par, **dd)
-            if not {"all", "hal"} & set(self.opts.exclude)
-            else None
-        )
-        ies = (
-            new_ies(numbers, par, **dd)
-            if not {"all", "ies"} & set(self.opts.exclude)
-            else None
-        )
-        dispersion = (
-            new_dispersion(
-                numbers,
-                par,
-                charge=torch.tensor(defaults.CHRG, **dd),
-                **dd,
-            )
-            if not {"all", "disp"} & set(self.opts.exclude)
-            else None
-        )
-        repulsion = (
-            new_repulsion(unique, par, **dd)
-            if not {"all", "rep"} & set(self.opts.exclude)
-            else None
-        )
-        srb = (
-            new_srb(unique, par, **dd)
-            if not {"all", "srb"} & set(self.opts.exclude)
-            else None
-        )
-
+        # Everything that depends on the atomic numbers only is set up by
+        # the model; the calculator keeps the parts as attributes (B5 removes
+        # the calculator state).
         if classical is None:
-            self.classicals = ClassicalList(
-                halogen, ies, dispersion, repulsion, srb, **dd
-            )
+            classical = ()
         elif isinstance(classical, Classical):
-            self.classicals = ClassicalList(
-                halogen, ies, dispersion, repulsion, srb, classical, **dd
-            )
+            classical = (classical,)
         elif isinstance(classical, (list, tuple)):
-            self.classicals = ClassicalList(
-                halogen, ies, dispersion, repulsion, srb, *classical, **dd
-            )
+            classical = tuple(classical)
         else:
             raise TypeError(
                 "Expected 'classical' to be 'None' or of type 'Classical', "
@@ -712,66 +563,36 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"'{type(classical).__name__}'."
             )
 
-        OutputHandler.write_stdout("done", v=4)
-
-        #############
-        # INTEGRALS #
-        #############
-
-        OutputHandler.write_stdout_nf(" - Integrals         ... ", v=4)
-
-        # figure out integral level from interactions
-        if efield.LABEL_EFIELD in self.interactions.labels:
-            if self.opts.ints.level < labels.INTLEVEL_DIPOLE:
-                OutputHandler.warn(
-                    "Setting integral level to DIPOLE "
-                    f"({labels.INTLEVEL_DIPOLE}) due to electric field "
-                    "interaction."
-                )
-            self.opts = _with_int_level(
-                self.opts, max(labels.INTLEVEL_DIPOLE, self.opts.ints.level)
+        if interaction is None:
+            interaction = ()
+        elif isinstance(interaction, Interaction):
+            interaction = (interaction,)
+        elif isinstance(interaction, (list, tuple)):
+            interaction = tuple(interaction)
+        else:
+            raise TypeError(
+                "Expected 'interaction' to be 'None' or of type 'Interaction', "
+                "'list[Interaction]', or 'tuple[Interaction]', but got "
+                f"'{type(interaction).__name__}'."
             )
 
-        if efield_grad.LABEL_EFIELD_GRAD in self.interactions.labels:
-            if self.opts.ints.level < labels.INTLEVEL_DIPOLE:
-                OutputHandler.warn(
-                    "Setting integral level to QUADRUPOLE "
-                    f"{labels.INTLEVEL_DIPOLE} due to electric field "
-                    "gradient interaction."
-                )
-            self.opts = _with_int_level(
-                self.opts, max(labels.INTLEVEL_QUADRUPOLE, self.opts.ints.level)
-            )
-
-        # setup integral driver and integral container
-        mgr = ints.DriverManager(
-            self.opts.ints.driver, algorithm=self.opts.ints.algorithm, **dd
+        self.model = Model(
+            par=par,
+            config=self.opts,
+            classical=classical,
+            interaction=interaction,
+            auto_int_level=kwargs.pop("auto_int_level", True),
         )
-        mgr.create_driver(numbers, par, self.ihelp)
+        self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
 
-        self.integrals = ints.Integrals(
-            mgr, intlevel=self.opts.ints.level, **dd
-        )
+        self.opts = self.system.config
+        self.ihelp = self.system.ihelp
+        self.classicals = self.system.classicals
+        self.interactions = self.system.interactions
+        self.integrals = self.system.integrals
 
-        if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
-            self.integrals.hcore = ints.factories.new_hcore(
-                numbers, par, self.ihelp, **dd
-            )
-            self.integrals.overlap = ints.factories.new_overlap(
-                driver=mgr.driver_type, **dd
-            )
-
-        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-            self.integrals.dipole = ints.factories.new_dipint(
-                driver=mgr.driver_type, **dd
-            )
-
-        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            self.integrals.quadrupole = ints.factories.new_quadint(
-                driver=mgr.driver_type, **dd
-            )
-
-        OutputHandler.write_stdout("done\n", v=4)
+        # create cache
+        self.cache = CalculatorCache(**dd) if cache is None else cache
 
         self._ncalcs = 0
         timer.stop("Calculator")
@@ -957,6 +778,17 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
         self.integrals = self.integrals.type(dtype)
+
+        # Keep the system consistent with the converted components. Its
+        # classical data is not converted (running the calculator after
+        # `type` is a known issue, see the class docstring).
+        self.system = replace(
+            self.system,
+            classicals=self.classicals,
+            interactions=self.interactions,
+            integrals=self.integrals,
+            dd={**self.system.dd, "dtype": dtype},
+        )
         self.cache = self.cache.type(dtype)
 
         # hard override of the dtype in TensorLike

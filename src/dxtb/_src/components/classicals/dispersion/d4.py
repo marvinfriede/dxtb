@@ -112,19 +112,6 @@ class DispersionD4(Dispersion):
         DispersionD4Cache
             Cache for the D4 dispersion.
         """
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars) is True:
-            if not isinstance(self.cache, DispersionD4Cache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
         model = kwargs.pop("model", None)
         if model is not None and not isinstance(model, d4.model.D4Model):
             raise TypeError("D4: Model is not of type 'd4.model.D4Model'.")
@@ -164,8 +151,7 @@ class DispersionD4(Dispersion):
         cf = kwargs.pop("counting_function", erf_count)
         df = kwargs.pop("damping_function", d4.damping.RationalDamping())
 
-        self.cache = DispersionD4Cache(q, model, rcov, r4r2, cutoff, cf, df)
-        return self.cache
+        return DispersionD4Cache(q, model, rcov, r4r2, cutoff, cf, df)
 
     @override
     def get_energy(

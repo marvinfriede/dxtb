@@ -147,22 +147,8 @@ class Halogen(Classical):
                 "IndexHelper is required for halogen bond correction."
             )
 
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars) is True:
-            if not isinstance(self.cache, HalogenCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
         xbond = ihelp.spread_uspecies_to_atom(self.bond_strength)
-        self.cache = HalogenCache(numbers, xbond)
-        return self.cache
+        return HalogenCache(numbers, xbond)
 
     @override
     def get_energy(

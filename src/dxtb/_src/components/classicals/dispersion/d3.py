@@ -111,19 +111,6 @@ class DispersionD3(Dispersion):
         DispersionD3Cache
             Cache for the D3 dispersion.
         """
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars) is True:
-            if not isinstance(self.cache, DispersionD3Cache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
         ref = kwargs.pop(
             "ref",
             d3.reference.Reference(),
@@ -155,10 +142,9 @@ class DispersionD3(Dispersion):
         wf = kwargs.pop("weighting_function", d3.model.gaussian_weight)
         df = kwargs.pop("damping_function", d3.damping.rational_damping)
 
-        self.cache = DispersionD3Cache(
+        return DispersionD3Cache(
             ref, rcov, rvdw, r4r2, cutoff, cf, wf, df
         )
-        return self.cache
 
     @override
     def get_energy(

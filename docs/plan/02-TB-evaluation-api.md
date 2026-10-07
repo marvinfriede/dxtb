@@ -84,6 +84,12 @@
 
 **Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2 (index lists in setup). **Size.** L.
 
+**Status: done in two parts.**
+
+Part 1 (done): `dxtb.calculators.Model` (parameters, configuration, additional components) and `System`; `Model.setup(numbers)` builds the index helper, the interactions and classicals with their element parameters gathered, the integral container and the data of the classical terms that depends on the numbers only (`system.classical_cache`, computed once in setup). The effective configuration (integral level derived from the parametrization and the interactions) is part of the system. The classical components' `get_cache` is a pure function now (no value-keyed internal cache); the calculator constructor is a thin wrapper around `setup` (`calc.model`, `calc.system`), and the tests of the removed cache behaviour were deleted. `setup` is differentiable with respect to the parameters (test), the T0.9 parameter coverage and the parameter-derivative cells are unchanged.
+
+Part 2 (deferred, with the packages that remove the code involved): the element-only data of the self-consistent terms (ES2 hardness gather, ES3 derivatives) stays in the per-call interaction caches. The ES2 gather sits inside the custom autograd function `CoulombMatrixAG` (forward and hand-written backward), which E1 replaces by plain torch code; ES3 and the others follow with the per-call caches in B6. `System.integrals` is the integral container with its mutable state until B4. The dtype conversion `Calculator.type()` does not convert the classical data (running a calculator after `type()` was already broken: the components lose their `label`; gone with TensorLike, track C).
+
 ---
 
 ## B4 Pure integral builders

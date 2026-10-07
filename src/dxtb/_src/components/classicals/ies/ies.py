@@ -157,27 +157,13 @@ class IES(Classical):
         IESCache
             Cache object containing coordinate-independent data for the EEQ solve.
         """
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars):
-            if not isinstance(self.cache, IESCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
         eeq = EEQModel(
             chi=self.chi.to(**self.dd),
             kcn=self.eeq_kcn.to(**self.dd),
             eta=self.eta.to(**self.dd),
             rad=self.rad.to(**self.dd),
         )
-        self.cache = IESCache(numbers, eeq, self.rcov[numbers], **self.dd)
-        return self.cache
+        return IESCache(numbers, eeq, self.rcov[numbers], **self.dd)
 
     @override
     def get_energy(

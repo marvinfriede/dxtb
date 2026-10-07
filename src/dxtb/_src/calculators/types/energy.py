@@ -157,7 +157,7 @@ class EnergyCalculator(BaseCalculator):
             OutputHandler.write_stdout_nf(" - Classicals        ... ", v=3)
             timer.start("Classicals")
 
-            ccaches = self.classicals.get_cache(self.numbers, self.ihelp)
+            ccaches = self.system.classical_cache
             cenergies = self.classicals.get_energy(
                 positions, ccaches, charge=_chrg
             )

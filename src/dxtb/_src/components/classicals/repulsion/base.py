@@ -216,19 +216,6 @@ class BaseRepulsion(Classical):
         if ihelp is None:
             raise ValueError("IndexHelper must be passed for repulsion.")
 
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars) is True:
-            if not isinstance(self.cache, BaseRepulsionCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        self._cachevars = cachvars
-
         # spread
         arep = ihelp.spread_uspecies_to_atom(self.arep)
         zeff = ihelp.spread_uspecies_to_atom(self.zeff)
@@ -263,8 +250,7 @@ class BaseRepulsion(Classical):
             kmask = ~real_pairs(numbers <= 2)
             k = torch.where(kmask, k, self.klight) * mask
 
-        self.cache = BaseRepulsionCache(mask, a, z, k)
-        return self.cache
+        return BaseRepulsionCache(mask, a, z, k)
 
     @abstractmethod
     def get_energy(

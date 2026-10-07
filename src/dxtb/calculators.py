@@ -117,6 +117,8 @@ enable caching, pass ``{"cache_enabled": True}`` to the calculator options.
 from dxtb._src.calculators.gfn0 import GFN0Calculator as GFN0Calculator
 from dxtb._src.calculators.gfn1 import GFN1Calculator as GFN1Calculator
 from dxtb._src.calculators.gfn2 import GFN2Calculator as GFN2Calculator
+from dxtb._src.calculators.model import Model as Model
+from dxtb._src.calculators.model import System as System
 from dxtb._src.calculators.types import (
     AnalyticalCalculator as AnalyticalCalculator,
 )
@@ -134,4 +136,6 @@ __all__ = [
     "AutogradCalculator",
     "EnergyCalculator",
     "NumericalCalculator",
+    "Model",
+    "System",
 ]
