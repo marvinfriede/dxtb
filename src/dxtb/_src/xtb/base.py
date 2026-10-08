@@ -30,7 +30,12 @@ from tad_mctc.typing import PathLike, Tensor, TensorLike
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import CNFunc
-from dxtb._src.xtb.h0 import H0Setup, build_hcore, setup_h0
+from dxtb._src.xtb.h0 import (
+    H0Setup,
+    build_hcore,
+    build_hcore_raw,
+    setup_h0,
+)
 
 from .abc import HamiltonianABC
 
@@ -281,6 +286,10 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         Tensor
             Hamiltonian (always symmetric).
         """
-        h0, _ = build_hcore(self.setup, positions, overlap, charge)
+        if overlap is None:
+            # Preserve the legacy pre-overlap form for analytical-force users.
+            h0, _ = build_hcore_raw(self.setup, positions, charge)
+        else:
+            h0, _ = build_hcore(self.setup, positions, overlap, charge)
         self.matrix = h0
         return h0

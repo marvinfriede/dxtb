@@ -49,7 +49,6 @@ from dataclasses import dataclass, field, replace
 import torch
 
 from dxtb import IndexHelper, OutputHandler
-from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src.components.classicals import (
     Classical,
@@ -67,11 +66,14 @@ from dxtb._src.components.interactions.dispersion import new_d4sc
 from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
+from dxtb._src.integral.evaluation import (
+    IntegralSetup,
+    setup_integral_evaluation,
+)
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import DD, Tensor
 from dxtb._src.xtb.h0 import H0Setup, setup_h0
 from dxtb.config import Config
-from dxtb.integrals import Integrals
 
 __all__ = ["Model", "System"]
 
@@ -83,9 +85,6 @@ class System:
 
     Instances are created by :meth:`Model.setup`.
     """
-
-    model: Model
-    """The model the system was set up with."""
 
     numbers: Tensor
     """Atomic numbers (shape: ``(..., nat)``)."""
@@ -112,8 +111,8 @@ class System:
     interactions: InteractionList
     """Self-consistent contributions with their parameters gathered."""
 
-    integrals: Integrals
-    """Integral container (drivers and the empty integrals)."""
+    integral_setup: IntegralSetup | None
+    """Immutable backend setup used by pure integral evaluation."""
 
     h0_setup: H0Setup | None
     """Composition-dependent H0 data for pure matrix construction."""
@@ -333,45 +332,36 @@ class Model:
                 config, max(labels.INTLEVEL_QUADRUPOLE, config.ints.level)
             )
 
-        # setup integral driver and integral container
-        mgr = ints.DriverManager(
-            config.ints.driver, algorithm=config.ints.algorithm, **dd
-        )
-        mgr.create_driver(numbers, par, ihelp)
-
-        integrals = ints.Integrals(mgr, intlevel=config.ints.level, **dd)
-
         h0_setup = None
+        integral_setup = None
         if config.ints.level >= labels.INTLEVEL_OVERLAP:
             h0_setup = setup_h0(numbers, par, ihelp, **dd)
-            integrals.hcore = ints.factories.new_hcore(
-                numbers, par, ihelp, setup=h0_setup, **dd
-            )
-            integrals.overlap = ints.factories.new_overlap(
-                driver=mgr.driver_type, **dd
-            )
-
-        if config.ints.level >= labels.INTLEVEL_DIPOLE:
-            integrals.dipole = ints.factories.new_dipint(
-                driver=mgr.driver_type, **dd
-            )
-
-        if config.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            integrals.quadrupole = ints.factories.new_quadint(
-                driver=mgr.driver_type, **dd
-            )
+            # B4's pure evaluation core handles one system. Keep existing
+            # Calculator batching on its legacy adapter until the later
+            # batching package supplies stacked-System/vmap evaluation.
+            if batch_mode == 0:
+                integral_setup = setup_integral_evaluation(
+                    numbers,
+                    par,
+                    ihelp,
+                    driver_type=config.ints.driver,
+                    intlevel=config.ints.level,
+                    algorithm=config.ints.algorithm,
+                    force_cpu_for_libcint=(
+                        config.ints.driver == labels.INTDRIVER_LIBCINT
+                    ),
+                )
 
         OutputHandler.write_stdout("done\n", v=4)
 
         return System(
-            model=self,
             numbers=numbers,
             config=config,
             batch_mode=batch_mode,
             ihelp=ihelp,
             classicals=classicals,
             interactions=interactions,
-            integrals=integrals,
+            integral_setup=integral_setup,
             h0_setup=h0_setup,
             classical_cache=classical_cache,
             dd=dd,

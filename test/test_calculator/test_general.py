@@ -25,7 +25,6 @@ import torch
 from tad_mctc.exceptions import DtypeError
 
 from dxtb import GFN1_XTB, Calculator, labels
-from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
 from dxtb._src.timing import timer
 from dxtb.typing import DD
 
@@ -99,18 +98,11 @@ def test_change_type_after_energy(int_driver: str) -> None:
 
     # extra asserts on initialized
     driver = calc_64.integrals.mgr.driver
-    if int_driver == labels.INTDRIVER_PYTORCH:
-        bas = driver.basis
-        assert bas.dtype == dtype
-        assert bas.ngauss.dtype == DEFAULT_BASIS_INT
-        assert bas.pqn.dtype == DEFAULT_BASIS_INT
-        assert bas.slater.dtype == dtype
-    else:
-        # Libcint creates its parameter-dependent basis data per call and
-        # must not retain that basis on the persistent driver.
-        assert driver.is_setup() is False
-        with pytest.raises(RuntimeError, match="Basis has not been setup"):
-            _ = driver.basis
+    # Matrix construction uses System setup values; the compatibility driver
+    # retains no current geometry or basis state after singlepoint.
+    assert driver.is_setup() is False
+    with pytest.raises(RuntimeError, match="Basis has not been setup"):
+        _ = driver.basis
 
     assert calc_64.integrals.hcore is not None
     assert calc_64.integrals.hcore.dtype == dtype
@@ -121,5 +113,12 @@ def test_change_type_after_energy(int_driver: str) -> None:
 
     calc_32 = calc_64.type(torch.float32)
     run_asserts(calc_32, torch.float32)
+    setup = calc_32.system.integral_setup
+    assert setup is not None
+    if setup.pytorch is not None:
+        assert setup.pytorch.alphas[0].dtype == torch.float32
+    else:
+        assert setup.libcint is not None
+        assert setup.libcint.basis_setups[0].slater.dtype == torch.float32
 
     timer.reset()

@@ -23,7 +23,9 @@ Composition-dependent data for PyTorch integral construction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+import torch
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
@@ -44,6 +46,25 @@ class PytorchIntegralSetup:
     coeffs: tuple[Tensor, ...]
     pair_plan: PairPlan
     algorithm: str = DEFAULT_ALGORITHM
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> PytorchIntegralSetup:
+        """Return setup tensors converted to the requested dtype/device."""
+        ihelp = self.ihelp.to(device=device)
+        return replace(
+            self,
+            ihelp=ihelp,
+            alphas=tuple(
+                alpha.to(device=device, dtype=dtype) for alpha in self.alphas
+            ),
+            coeffs=tuple(
+                coeff.to(device=device, dtype=dtype) for coeff in self.coeffs
+            ),
+            pair_plan=prepare(ihelp, ihelp.device),
+        )
 
 
 def setup_integrals(

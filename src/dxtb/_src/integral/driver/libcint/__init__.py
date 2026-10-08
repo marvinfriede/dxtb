@@ -21,23 +21,29 @@ Integral Driver: Libcint
 `libcint`-based integral implementations.
 """
 
-from .dipole import DipoleLibcint
+from .dipole import DipoleLibcint, build_dipole_libcint
 from .driver import (
     IntDriverLibcint,
     LibcintCallData,
     LibcintIntegralSetup,
+    LegacyLibcintSetup,
     setup_libcint,
+    setup_libcint_legacy,
 )
 from .overlap import OverlapLibcint, build_overlap_libcint
-from .quadrupole import QuadrupoleLibcint
+from .quadrupole import QuadrupoleLibcint, build_quadrupole_libcint
 
 __all__ = [
     "DipoleLibcint",
     "IntDriverLibcint",
     "LibcintCallData",
     "LibcintIntegralSetup",
+    "LegacyLibcintSetup",
     "OverlapLibcint",
     "QuadrupoleLibcint",
     "build_overlap_libcint",
+    "build_dipole_libcint",
+    "build_quadrupole_libcint",
     "setup_libcint",
+    "setup_libcint_legacy",
 ]

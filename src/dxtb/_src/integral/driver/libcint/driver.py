@@ -30,7 +30,7 @@ import torch
 from tad_mctc.batch import deflate
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
+from dxtb._src.basis.bas import Basis, BasisSetup
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.utils import is_basis_list
@@ -43,13 +43,25 @@ __all__ = [
     "IntDriverLibcint",
     "LibcintCallData",
     "LibcintIntegralSetup",
+    "LegacyLibcintSetup",
     "setup_libcint",
+    "setup_libcint_legacy",
 ]
 
 
 @dataclass(frozen=True, eq=False)
 class LibcintIntegralSetup:
-    """Composition-dependent data for libcint integral construction."""
+    """Narrow, composition-dependent setup for pure libcint construction."""
+
+    numbers: Tensor
+    ihelp: IndexHelper
+    basis_setups: tuple[BasisSetup, ...]
+    force_cpu: bool
+
+
+@dataclass(frozen=True, eq=False)
+class LegacyLibcintSetup:
+    """Calculator-local inputs used by the transitional libcint driver."""
 
     numbers: Tensor
     par: ParamModule
@@ -77,6 +89,50 @@ def setup_libcint(
     mask: Tensor | None = None,
 ) -> LibcintCallData:
     """Build call-local libcint wrappers from setup data and positions."""
+    from dxtb._src.exlibs import libcint
+
+    if setup.force_cpu and positions.device.type != "cpu":
+        positions = positions.to(device=torch.device("cpu"))
+
+    if setup.ihelp.batch_mode == 0:
+        if len(setup.basis_setups) != 1:
+            raise RuntimeError("Single-system setup needs one basis value.")
+        basis = setup.basis_setups[0]
+        atom_basis = basis.create_libcint(positions, mask=mask)
+        return LibcintCallData(
+            drivers=(libcint.LibcintWrapper(atom_basis, basis.ihelp),),
+            ihelp=setup.ihelp,
+        )
+
+    if setup.ihelp.batch_mode not in (1, 2):
+        raise ValueError(f"Unknown batch mode '{setup.ihelp.batch_mode}'.")
+    if len(setup.basis_setups) != positions.shape[0]:
+        raise RuntimeError("Batched setup count does not match positions.")
+
+    drivers = []
+    for batch_index, basis in enumerate(setup.basis_setups):
+        if setup.ihelp.batch_mode == 1:
+            if mask is not None:
+                position = torch.masked_select(
+                    positions[batch_index], mask[batch_index]
+                ).reshape((-1, 3))
+            else:
+                position = positions[batch_index, : basis.numbers.shape[-1]]
+        else:
+            position = positions[batch_index]
+        atom_basis = basis.create_libcint(position)
+        drivers.append(libcint.LibcintWrapper(atom_basis, basis.ihelp))
+
+    return LibcintCallData(drivers=tuple(drivers), ihelp=setup.ihelp)
+
+
+def setup_libcint_legacy(
+    setup: LegacyLibcintSetup,
+    positions: Tensor,
+    *,
+    mask: Tensor | None = None,
+) -> LibcintCallData:
+    """Rebuild Calculator-local libcint wrappers and basis values per call."""
     from dxtb._src.exlibs import libcint
 
     if setup.force_cpu and positions.device.type != "cpu":
@@ -143,7 +199,7 @@ class BaseIntDriverLibcint(LibcintImplementation, IntDriver):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         force_cpu = kwargs.pop("force_cpu", False)
         super().__init__(*args, **kwargs)
-        self._integral_setup = LibcintIntegralSetup(
+        self._integral_setup = LegacyLibcintSetup(
             numbers=self.numbers,
             par=self.par,
             ihelp=self.ihelp,
@@ -151,13 +207,13 @@ class BaseIntDriverLibcint(LibcintImplementation, IntDriver):
         )
 
     @property
-    def integral_setup(self) -> LibcintIntegralSetup:
-        """Composition-dependent libcint setup data."""
+    def integral_setup(self) -> LegacyLibcintSetup:
+        """Legacy Calculator-local libcint setup data."""
         return self._integral_setup
 
     def setup(self, positions: Tensor, **kwargs: Any) -> LibcintCallData:
         """Create call-local libcint wrappers for ``positions``."""
-        return setup_libcint(
+        return setup_libcint_legacy(
             self.integral_setup, positions, mask=kwargs.get("mask")
         )
 

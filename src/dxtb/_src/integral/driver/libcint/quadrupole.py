@@ -28,9 +28,14 @@ from dxtb._src.typing import Any, Tensor
 
 from ...types import QuadrupoleIntegral
 from .driver import LibcintCallData
-from .multipole import MultipoleLibcint
+from .multipole import MultipoleLibcint, build_multipole_libcint
 
-__all__ = ["QuadrupoleLibcint"]
+__all__ = ["QuadrupoleLibcint", "build_quadrupole_libcint"]
+
+
+def build_quadrupole_libcint(call_data: LibcintCallData) -> Tensor:
+    """Build a raw origin-centered quadrupole matrix from call-local wrappers."""
+    return build_multipole_libcint(call_data, "r0r0")
 
 
 class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):

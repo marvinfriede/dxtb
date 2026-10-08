@@ -38,7 +38,7 @@ from dxtb._src.typing import Any, Self, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
 
 from .base import PAD, BaseHamiltonian
-from .h0 import build_hcore, gather_hscale
+from .h0 import build_hcore, build_hcore_raw, gather_hscale
 
 __all__ = ["GFN0Hamiltonian"]
 
@@ -212,6 +212,10 @@ class GFN0Hamiltonian(BaseHamiltonian):
         charge: Tensor | float | int | None = None,
     ) -> Tensor:
         """Build the GFN0 H0 matrix from local CN and main EEQ charges."""
-        h0, _ = build_hcore(self.setup, positions, overlap, charge)
+        if overlap is None:
+            # Preserve the legacy pre-overlap form for analytical-force users.
+            h0, _ = build_hcore_raw(self.setup, positions, charge)
+        else:
+            h0, _ = build_hcore(self.setup, positions, overlap, charge)
         self.matrix = h0
         return h0

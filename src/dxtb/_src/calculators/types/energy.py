@@ -34,7 +34,7 @@ from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.utils.tensors import tensor_id
-from dxtb._src.xtb.h0 import build_hcore
+from dxtb._src.integral.evaluation import build_integral_matrices
 
 from ..result import Result
 from . import decorators as cdec
@@ -178,100 +178,78 @@ class EnergyCalculator(BaseCalculator):
         #############
 
         timer.start("Integrals")
-
-        # overlap integral (always required, even without Hückel Hamiltonian)
-        OutputHandler.write_stdout_nf(" - Overlap           ... ", v=3)
-        timer.start("Overlap", parent_uid="Integrals")
-        overlap_matrix = self.integrals.build_overlap(positions)
-        timer.stop("Overlap")
-        OutputHandler.write_stdout("done", v=3)
-
-        if self.integrals.overlap is None:
-            raise RuntimeError("Overlap setup failed. SCF cannot be run.")
-
-        write_overlap = kwargs.get("write_overlap", False)
-        if write_overlap is not False:
-            assert self.integrals.overlap is not None
-            self.integrals.overlap.to_pt(write_overlap)
-
-        # dipole integral
-        dipole_matrix = None
-        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-            OutputHandler.write_stdout_nf(" - Dipole            ... ", v=3)
-            timer.start("Dipole Integral", parent_uid="Integrals")
-            dipole_matrix = self.integrals.build_dipole(positions)
-            timer.stop("Dipole Integral")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_dipole = kwargs.get("write_dipole", False)
-            if write_dipole is not False:
-                assert self.integrals.dipole is not None
-                self.integrals.dipole.to_pt(write_dipole)
-
-        # quadrupole integral
-        quadrupole_matrix = None
-        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            OutputHandler.write_stdout_nf(" - Quadrupole        ... ", v=3)
-            timer.start("Quadrupole Integral", parent_uid="Integrals")
-            quadrupole_matrix = self.integrals.build_quadrupole(positions)
-            # The legacy container defers the r0->rj dipole shift until the
-            # quadrupole has been built. Keep that final value for SCF.
-            if self.integrals.dipole is not None:
-                dipole_matrix = self.integrals.dipole.matrix
-            timer.stop("Quadrupole Integral")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_quad = kwargs.get("write_quadrupole", False)
-            if write_quad is not False:
-                assert self.integrals.quadrupole is not None
-                self.integrals.quadrupole.to_pt(write_quad)
-
-        # Core Hamiltonian (built from explicit numbers-only setup data).
-        #
-        # This should be the final integral, because the others are
-        # potentially calculated on CPU (libcint), even in GPU runs.
-        # To avoid unnecessary data transfer, the core Hamiltonian should
-        # be calculated last. Internally, the overlap integral is only
-        # transfered back to GPU when all multipole integrals are calculated.
+        OutputHandler.write_stdout_nf(" - Integral matrices ... ", v=3)
         if self.system.h0_setup is None:
             raise NotImplementedError("Core Hamiltonian setup is missing.")
-        if self.opts.ints.level >= labels.INTLEVEL_HCORE:
-            OutputHandler.write_stdout_nf(" - Core Hamiltonian  ... ", v=3)
-            timer.start("Core Hamiltonian", parent_uid="Integrals")
-            hcore_matrix, refocc = build_hcore(
+
+        if self.system.integral_setup is not None:
+            intmats, refocc, overlap_norm = build_integral_matrices(
+                self.system.integral_setup,
                 self.system.h0_setup,
                 positions,
-                overlap_matrix,
+                _chrg,
+            )
+            intmats = intmats.to(self.device)
+            if self.integrals.overlap is None:
+                raise RuntimeError("Legacy overlap adapter is not initialized.")
+            self.integrals.overlap.matrix = intmats.overlap
+            self.integrals.overlap.norm = overlap_norm.to(device=self.device)
+            if intmats.dipole is not None:
+                if self.integrals.dipole is None:
+                    raise RuntimeError(
+                        "Legacy dipole adapter is not initialized."
+                    )
+                self.integrals.dipole.matrix = intmats.dipole
+            if intmats.quadrupole is not None:
+                if self.integrals.quadrupole is None:
+                    raise RuntimeError(
+                        "Legacy quadrupole adapter is not initialized."
+                    )
+                self.integrals.quadrupole.matrix = intmats.quadrupole
+        else:
+            # Existing batched Calculator calls still use the legacy builder
+            # until the later single-system/vmap batching package.
+            overlap_matrix = self.integrals.build_overlap(positions)
+            dipole_matrix = None
+            quadrupole_matrix = None
+            if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
+                dipole_matrix = self.integrals.build_dipole(positions)
+            if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
+                quadrupole_matrix = self.integrals.build_quadrupole(positions)
+                if self.integrals.dipole is not None:
+                    dipole_matrix = self.integrals.dipole.matrix
+            hcore_matrix = self.integrals.build_hcore(
+                positions,
+                with_overlap=True,
                 charge=_chrg,
             )
-            timer.stop("Core Hamiltonian")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_hcore = kwargs.get("write_hcore", False)
-            if write_hcore is not False:
-                path = write_hcore
-                if path is None or path is True:
-                    path = self.integrals.hcore.label.casefold() + ".pt"
-                torch.save(
-                    hcore_matrix,
-                    path,
-                )
-
-        # While one can theoretically skip the core Hamiltonian, the
-        # current implementation does not account for this case because the
-        # reference occupation is necessary for the SCF procedure.
-        if self.opts.ints.level < labels.INTLEVEL_HCORE:
-            raise NotImplementedError("Core Hamiltonian is required by SCF.")
-
-        # finalize integrals
+            if self.integrals.hcore is None:
+                raise RuntimeError("Legacy H0 adapter is not initialized.")
+            refocc = self.integrals.hcore.refocc
+            intmats = IntegralMatrices(
+                hcore=hcore_matrix,
+                overlap=overlap_matrix,
+                dipole=dipole_matrix,
+                quadrupole=quadrupole_matrix,
+            ).to(self.device)
         timer.stop("Integrals")
-        intmats = IntegralMatrices(
-            hcore=hcore_matrix,
-            overlap=overlap_matrix,
-            dipole=dipole_matrix,
-            quadrupole=quadrupole_matrix,
-        )
-        intmats = intmats.to(self.device)
+        OutputHandler.write_stdout("done", v=3)
+
+        for key, matrix, integral in (
+            ("write_overlap", intmats.overlap, self.integrals.overlap),
+            ("write_dipole", intmats.dipole, self.integrals.dipole),
+            ("write_quadrupole", intmats.quadrupole, self.integrals.quadrupole),
+            ("write_hcore", intmats.hcore, self.integrals.hcore),
+        ):
+            path = kwargs.get(key, False)
+            if path is False or matrix is None:
+                continue
+            if path is None or path is True:
+                if integral is None:
+                    raise RuntimeError(f"No legacy label is available for {key}.")
+                path = integral.label.casefold() + ".pt"
+            torch.save(matrix, path)
+
         result.integrals = intmats
 
         ###################################
@@ -388,7 +366,7 @@ class EnergyCalculator(BaseCalculator):
             self.cache["fock"] = scf_results["hamiltonian"]
 
         if kwargs.get("store_hcore", copts.hcore):
-            self.cache["hcore"] = hcore_matrix
+            self.cache["hcore"] = intmats.hcore
 
         if kwargs.get("store_overlap", copts.overlap):
             self.cache["overlap"] = self.integrals.overlap

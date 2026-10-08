@@ -35,7 +35,30 @@ from .driver import LibcintCallData
 if TYPE_CHECKING:
     from .driver import IntDriverLibcint
 
-__all__ = ["MultipoleLibcint"]
+__all__ = ["MultipoleLibcint", "build_multipole_libcint"]
+
+
+def build_multipole_libcint(
+    call_data: LibcintCallData, intstring: str
+) -> Tensor:
+    """Build a raw origin-centered libcint multipole matrix."""
+    from dxtb._src.exlibs import libcint
+
+    allowed_mps = ("r0", "r0r0", "r0r0r0")
+    if intstring not in allowed_mps:
+        raise ValueError(
+            f"Unknown integral string '{intstring}' provided. "
+            f"Only '{', '.join(allowed_mps)}' are allowed."
+        )
+
+    matrices = [
+        libcint.int1e(intstring, driver) for driver in call_data.drivers
+    ]
+    if call_data.batch_mode > 0:
+        return pack(matrices)
+    if len(matrices) != 1:
+        raise RuntimeError("Single-system libcint setup needs one wrapper.")
+    return matrices[0]
 
 
 class MultipoleLibcint(IntegralLibcint):
@@ -62,26 +85,8 @@ class MultipoleLibcint(IntegralLibcint):
         """
         super().checks(call_data)
 
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.exlibs import libcint
-
-        allowed_mps = ("r0", "r0r0", "r0r0r0")
-        if intstring not in allowed_mps:
-            raise ValueError(
-                f"Unknown integral string '{intstring}' provided.\n"
-                f"Only '{', '.join(allowed_mps)} are allowed.\n'"
-                "Other integrals can be added to `tad-libcint`."
-            )
-
-        def _mpint(driver: libcint.LibcintWrapper) -> Tensor:
-            return libcint.int1e(intstring, driver)
-
-        # batched mode
-        if call_data.batch_mode > 0:
-            # In this version, batch mode does not matter. If we would
-            # normalize the integral here, we would have to deflate the norm.
-            self.matrix = pack([_mpint(d) for d in call_data.drivers])
-            return self.matrix
+        self.matrix = build_multipole_libcint(call_data, intstring)
+        return self.matrix
 
         # single mode
         if len(call_data.drivers) != 1:

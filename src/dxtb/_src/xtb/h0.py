@@ -335,10 +335,29 @@ def setup_h0(
 def build_hcore(
     setup: H0Setup,
     positions: Tensor,
-    overlap: Tensor | None = None,
+    overlap: Tensor,
     charge: Tensor | float | int | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Build one H0 matrix and return it with reference occupations."""
+    """Build the overlap-weighted H0 matrix and return reference occupations."""
+    return _build_hcore(setup, positions, overlap, charge)
+
+
+def build_hcore_raw(
+    setup: H0Setup,
+    positions: Tensor,
+    charge: Tensor | float | int | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Build the pre-overlap H0 terms for legacy analytical use."""
+    return _build_hcore(setup, positions, None, charge)
+
+
+def _build_hcore(
+    setup: H0Setup,
+    positions: Tensor,
+    overlap: Tensor | None,
+    charge: Tensor | float | int | None,
+) -> tuple[Tensor, Tensor]:
+    """Implement the shared H0 formula for true and raw compatibility APIs."""
     ihelp = setup.ihelp
     if setup.method == "gfn0":
         if charge is None:

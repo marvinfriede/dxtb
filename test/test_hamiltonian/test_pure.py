@@ -179,22 +179,28 @@ def test_pure_h0_survives_prior_backward_and_integral_call_order(
     )
     # First ordering: overlap -> H0 -> dipole -> H0.
     dipole = build_dipole(integral_setup, positions)
-    second_overlap = build_overlap(integral_setup, moved)
+    moved_leaf = moved.clone().requires_grad_()
+    second_overlap = build_overlap(integral_setup, moved_leaf)
     second_hcore, second_refocc = build_hcore(
-        setup, moved, second_overlap, charge=charge_arg
+        setup, moved_leaf, second_overlap, charge=charge_arg
     )
+    second_gradient = torch.autograd.grad(second_hcore.sum(), moved_leaf)[0]
+    assert torch.isfinite(second_gradient).all()
     assert torch.isfinite(dipole).all()
 
     # Second ordering: dipole -> overlap -> H0. Repeat the first geometry
     # after the preceding backward and moved-geometry evaluation.
     moved_dipole = build_dipole(integral_setup, moved)
     assert torch.isfinite(moved_dipole).all()
-    repeated_overlap = build_overlap(integral_setup, positions)
+    repeated_leaf = positions.clone().requires_grad_()
+    repeated_overlap = build_overlap(integral_setup, repeated_leaf)
     third_hcore, third_refocc = build_hcore(
-        setup, positions, repeated_overlap, charge=charge_arg
+        setup, repeated_leaf, repeated_overlap, charge=charge_arg
     )
+    third_gradient = torch.autograd.grad(third_hcore.sum(), repeated_leaf)[0]
 
     torch.testing.assert_close(third_hcore, first_hcore.detach())
+    torch.testing.assert_close(third_gradient, first_positions.grad)
     torch.testing.assert_close(third_refocc, first_refocc)
     torch.testing.assert_close(second_refocc, first_refocc)
     assert not torch.equal(second_hcore, third_hcore)
@@ -210,9 +216,111 @@ def test_pure_gfn0_requires_charge() -> None:
         dtype=positions.dtype,
     )
     setup = setup_h0(numbers, par, IndexHelper.from_numbers(numbers, par))
+    overlap = torch.eye(
+        setup.ihelp.nao, dtype=positions.dtype, device=positions.device
+    )
 
+    with pytest.raises(TypeError, match="overlap"):
+        build_hcore(setup, positions)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="charge is required"):
-        build_hcore(setup, positions)
+        build_hcore(setup, positions, overlap)
+
+
+@pytest.mark.parametrize("method", ["gfn1", "gfn2"])
+def test_pure_h0_multispecies_multishell(method: str) -> None:
+    """Build H0 for a molecule with multiple elements and p shells."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    params = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
+    par = ParamModule(
+        params[method].model_copy(deep=True),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    setup = setup_h0(numbers, par, ihelp)
+    overlap = torch.eye(ihelp.nao, dtype=positions.dtype, device=positions.device)
+
+    hcore, refocc = build_hcore(setup, positions, overlap)
+
+    assert hcore.shape == (ihelp.nao, ihelp.nao)
+    assert refocc.shape == setup.refocc.shape
+    assert torch.isfinite(hcore).all()
+    assert torch.isfinite(refocc).all()
+    assert torch.unique(numbers).numel() > 1
+    assert torch.any(ihelp.unique_angular == 1)
+
+
+def test_pure_gfn0_nonzero_charge_and_charge_gradient() -> None:
+    """Charge-dependent GFN0 H0 remains differentiable."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    par = ParamModule(
+        GFN0_XTB.model_copy(deep=True),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    setup = setup_h0(numbers, par, ihelp)
+    overlap = torch.eye(ihelp.nao, dtype=positions.dtype, device=positions.device)
+    neutral = torch.tensor(0.0, dtype=positions.dtype, device=positions.device)
+    charged = torch.tensor(1.0, dtype=positions.dtype, device=positions.device)
+
+    h_neutral, _ = build_hcore(setup, positions, overlap, charge=neutral)
+    h_charged, _ = build_hcore(setup, positions, overlap, charge=charged)
+    assert not torch.equal(h_neutral, h_charged)
+
+    differentiable_charge = charged.clone().requires_grad_()
+    h_differentiable, _ = build_hcore(
+        setup, positions, overlap, charge=differentiable_charge
+    )
+    charge_gradient = torch.autograd.grad(
+        h_differentiable.sum(), differentiable_charge
+    )[0]
+    assert torch.isfinite(charge_gradient).all()
+
+
+@pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
+def test_h0_parameter_training_rebuilds_setup_per_loss(method: str) -> None:
+    """Fresh composition setup preserves parameter gradients per loss call."""
+    sample = samples["H2"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    params = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
+    par = ParamModule(
+        params[method].model_copy(deep=True),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    refocc_parameter = dict(par.named_parameters())[
+        "parameter_tree.element.H.refocc.param"
+    ]
+    refocc_parameter.requires_grad_(True)
+
+    def loss_gradient() -> torch.Tensor:
+        # Training rebuilds setup inside each differentiated loss evaluation.
+        setup = setup_h0(numbers, par, IndexHelper.from_numbers(numbers, par))
+        overlap = torch.eye(
+            setup.ihelp.nao, dtype=positions.dtype, device=positions.device
+        )
+        charge = torch.tensor(0.0, dtype=positions.dtype, device=positions.device)
+        hcore, refocc = build_hcore(
+            setup,
+            positions,
+            overlap,
+            charge=charge if method == "gfn0" else None,
+        )
+        return torch.autograd.grad(
+            hcore.sum() + refocc.sum(), refocc_parameter
+        )[0]
+
+    first = loss_gradient()
+    second = loss_gradient()
+    assert torch.isfinite(first).all()
+    assert torch.any(first != 0)
+    torch.testing.assert_close(second, first)
 
 
 def test_gfn0_h0_setup_uses_zero_for_padded_element_parameters() -> None:

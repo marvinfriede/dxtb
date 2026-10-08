@@ -32,7 +32,7 @@ from dataclasses import replace
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
-from dxtb import IndexHelper, OutputHandler
+from dxtb import IndexHelper, OutputHandler, labels
 from dxtb import integrals as ints
 from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.properties.vibration import (
@@ -589,13 +589,51 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.ihelp = self.system.ihelp
         self.classicals = self.system.classicals
         self.interactions = self.system.interactions
-        self.integrals = self.system.integrals
+        self.integrals = self._create_legacy_integral_adapter()
 
         # create cache
         self.cache = CalculatorCache(**dd) if cache is None else cache
 
         self._ncalcs = 0
         timer.stop("Calculator")
+
+    def _create_legacy_integral_adapter(self) -> Integrals:
+        """Create Calculator-local mutable integral compatibility objects."""
+        manager = ints.DriverManager(
+            self.opts.ints.driver,
+            algorithm=self.opts.ints.algorithm,
+            **self.dd,
+        )
+        manager.create_driver(self.numbers, self.model.par, self.ihelp)
+        integrals = ints.Integrals(
+            manager, intlevel=self.opts.ints.level, **self.dd
+        )
+
+        if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
+            if self.system.h0_setup is None:
+                raise RuntimeError("Core Hamiltonian setup is missing.")
+            integrals.hcore = ints.factories.new_hcore(
+                self.numbers,
+                self.model.par,
+                self.ihelp,
+                setup=self.system.h0_setup,
+                **self.dd,
+            )
+            integrals.overlap = ints.factories.new_overlap(
+                driver=manager.driver_type, **self.dd
+            )
+
+        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
+            integrals.dipole = ints.factories.new_dipint(
+                driver=manager.driver_type, **self.dd
+            )
+
+        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
+            integrals.quadrupole = ints.factories.new_quadint(
+                driver=manager.driver_type, **self.dd
+            )
+
+        return integrals
 
     def reset(self) -> None:
         """
@@ -786,7 +824,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             self.system,
             classicals=self.classicals,
             interactions=self.interactions,
-            integrals=self.integrals,
+            integral_setup=(
+                None
+                if self.system.integral_setup is None
+                else self.system.integral_setup.to(dtype=dtype)
+            ),
             h0_setup=(
                 None
                 if self.system.h0_setup is None

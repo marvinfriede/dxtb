@@ -24,6 +24,7 @@ from the parametrization. The basis set can also be printed in various formats.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,7 +43,7 @@ from .slater import slater_to_gauss
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
-__all__ = ["Basis"]
+__all__ = ["Basis", "BasisSetup"]
 
 
 angular2label = {
@@ -333,151 +334,145 @@ class Basis(TensorLike):
     def create_libcint(
         self, positions: Tensor, mask: Tensor | None = None
     ) -> list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]:
-        """
-        Create the basis set required for `libcint`.
+        """Create the geometry-local libcint basis wrappers."""
+        return self.setup_data().create_libcint(positions, mask=mask)
 
-        Parameters
-        ----------
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        mask : Tensor | None, optional
-            Mask for positions to make batched computations easier. The overlap
-            does not work in a batched fashion. Hence, we loop over the batch
-            dimension and must remove the padding. Defaults to ``None``, i.e.,
-            :func:`tad_mctc.batch.deflate` is used.
-        Returns
-        -------
-        list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]
-            List of CGTOs.
-
-        Raises
-        ------
-        NotImplementedError
-            If batch mode is requested (checked through dimensions of numbers).
-        """
-        if self.unique.ndim > 1:
-            raise NotImplementedError("Batch mode not implemented.")
-
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.exlibs import libcint
-
-        alphas, coeffs = self.create_libcint_cgtos()
-
-        ##########
-        # SINGLE #
-        ##########
-
-        if self.ihelp.batch_mode == 0:
-            # reset counter
-            s = 0
-
-            # collect final basis for each atom in list
-            # (same order as `numbers`)
-            atombasis: list[libcint.AtomCGTOBasis] = []
-
-            for i, num in enumerate(self.numbers):
-                bases: list[libcint.CGTOBasis] = []
-
-                for _ in range(self.ihelp.shells_per_atom[i]):
-                    idx = self.ihelp.shells_to_ushell[s]
-
-                    cgto = libcint.CGTOBasis(
-                        angmom=int(self.ihelp.angular[s]),  # int!
-                        alphas=alphas[idx],
-                        coeffs=coeffs[idx],
-                        normalized=True,
-                    )
-                    bases.append(cgto)
-
-                    # increment
-                    s += 1
-
-                atomcgtobasis = libcint.AtomCGTOBasis(
-                    atomz=num,
-                    bases=bases,
-                    pos=positions[i, :],
-                )
-                atombasis.append(atomcgtobasis)
-
-            return atombasis
-
-        ###########
-        # BATCHED #
-        ###########
-
-        # collection for batch
-        b: list[list[libcint.AtomCGTOBasis]] = []
-
-        for _batch in range(self.numbers.shape[0]):
-            # reset counter
-            s = 0
-
-            # collect final basis for each atom in list
-            atombasis: list[libcint.AtomCGTOBasis] = []
-
-            shell_idxs = self.ihelp.shells_to_ushell[_batch]
-            shells_per_atom = self.ihelp.shells_per_atom[_batch]
-            angular = tensor_to_numpy(self.ihelp.angular[_batch])
-            pos = positions[_batch]
-
-            for i, num in enumerate(self.numbers[_batch]):
-                if num == 0:
-                    continue
-
-                # CGTOs
-                bases: list[libcint.CGTOBasis] = []
-                for _ in range(shells_per_atom[i]):
-                    idx = shell_idxs[s]
-
-                    # FIXME: Should probably be some kind of mask to get rid of
-                    # padding? But "s" only runs over the actual shells, so it
-                    # should be fine.
-                    # However, batched mode not working for functorch AD.
-                    cgto = libcint.CGTOBasis(
-                        angmom=angular[s],  # int!
-                        alphas=alphas[idx],
-                        coeffs=coeffs[idx],
-                        normalized=True,
-                    )
-                    bases.append(cgto)
-
-                    # increment
-                    s += 1
-
-                # POSITIONS
-                _pos = None
-                if self.ihelp.batch_mode == 1:
-                    if mask is not None:
-                        m = mask[_batch]
-                        _pos = torch.masked_select(pos, m).reshape((-1, 3))
-                    else:
-                        # pylint: disable=import-outside-toplevel
-                        from tad_mctc.batch import deflate
-
-                        _pos = deflate(pos, value=float("nan"))
-                elif self.ihelp.batch_mode == 2:
-                    _pos = pos
-
-                if _pos is None:
-                    raise RuntimeError(
-                        "Positions not found. Please check the batch mode."
-                    )
-
-                atomcgtobasis = libcint.AtomCGTOBasis(
-                    atomz=num,
-                    bases=bases,
-                    pos=_pos[i, :],
-                )
-                atombasis.append(atomcgtobasis)
-
-            b.append(atombasis)
-
-        return b
+    def setup_data(self) -> BasisSetup:
+        """Return the gathered, geometry-free basis data."""
+        return BasisSetup(
+            numbers=self.numbers,
+            unique=self.unique,
+            ihelp=self.ihelp,
+            ngauss=self.ngauss,
+            pqn=self.pqn,
+            slater=self.slater,
+            valence=self.valence,
+        )
 
     def create_libcint_cgtos(
         self,
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """Create geometry-independent Gaussian basis data for libcint."""
+        return self.setup_data().create_libcint_cgtos()
+
+
+@dataclass(frozen=True, eq=False)
+class BasisSetup:
+    """Narrow composition data required to create libcint basis wrappers."""
+
+    numbers: Tensor
+    unique: Tensor
+    ihelp: IndexHelper
+    ngauss: Tensor
+    pqn: Tensor
+    slater: Tensor
+    valence: Tensor
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> BasisSetup:
+        """Return converted gathered basis data."""
+        return replace(
+            self,
+            numbers=self.numbers.to(device=device),
+            unique=self.unique.to(device=device),
+            ihelp=self.ihelp.to(device=device),
+            ngauss=self.ngauss.to(device=device),
+            pqn=self.pqn.to(device=device),
+            slater=self.slater.to(device=device, dtype=dtype),
+            valence=self.valence.to(device=device),
+        )
+
+    def create_libcint(
+        self, positions: Tensor, mask: Tensor | None = None
+    ) -> list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]:
+        """Create libcint wrappers for the supplied current geometry."""
+        if self.unique.ndim > 1:
+            raise NotImplementedError("Batch mode not implemented.")
+
+        from dxtb._src.exlibs import libcint
+
+        alphas, coeffs = self.create_libcint_cgtos()
+        if self.ihelp.batch_mode == 0:
+            atom_basis: list[libcint.AtomCGTOBasis] = []
+            shell = 0
+            for i, number in enumerate(self.numbers):
+                bases = []
+                for _ in range(self.ihelp.shells_per_atom[i]):
+                    index = self.ihelp.shells_to_ushell[shell]
+                    bases.append(
+                        libcint.CGTOBasis(
+                            angmom=int(self.ihelp.angular[shell]),
+                            alphas=alphas[index],
+                            coeffs=coeffs[index],
+                            normalized=True,
+                        )
+                    )
+                    shell += 1
+                atom_basis.append(
+                    libcint.AtomCGTOBasis(
+                        atomz=number, bases=bases, pos=positions[i, :]
+                    )
+                )
+            return atom_basis
+
+        batches: list[list[libcint.AtomCGTOBasis]] = []
+        for batch_index in range(self.numbers.shape[0]):
+            shell = 0
+            atom_basis = []
+            shell_indices = self.ihelp.shells_to_ushell[batch_index]
+            shells_per_atom = self.ihelp.shells_per_atom[batch_index]
+            angular = tensor_to_numpy(self.ihelp.angular[batch_index])
+            batch_positions = positions[batch_index]
+
+            for atom_index, number in enumerate(self.numbers[batch_index]):
+                if number == 0:
+                    continue
+                bases = []
+                for _ in range(shells_per_atom[atom_index]):
+                    index = shell_indices[shell]
+                    bases.append(
+                        libcint.CGTOBasis(
+                            angmom=angular[shell],
+                            alphas=alphas[index],
+                            coeffs=coeffs[index],
+                            normalized=True,
+                        )
+                    )
+                    shell += 1
+
+                if self.ihelp.batch_mode == 1:
+                    if mask is None:
+                        from tad_mctc.batch import deflate
+
+                        atom_positions = deflate(batch_positions, value=float("nan"))
+                    else:
+                        atom_positions = torch.masked_select(
+                            batch_positions, mask[batch_index]
+                        ).reshape((-1, 3))
+                elif self.ihelp.batch_mode == 2:
+                    atom_positions = batch_positions
+                else:
+                    raise ValueError(
+                        f"Unknown batch mode '{self.ihelp.batch_mode}'."
+                    )
+
+                atom_basis.append(
+                    libcint.AtomCGTOBasis(
+                        atomz=number,
+                        bases=bases,
+                        pos=atom_positions[atom_index, :],
+                    )
+                )
+            batches.append(atom_basis)
+        return batches
+
+    def create_libcint_cgtos(
+        self,
+    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        """Create parameter-differentiable Gaussian contractions."""
         alphas: list[Tensor] = []
         coeffs: list[Tensor] = []
         shell = 0
@@ -485,7 +480,9 @@ class Basis(TensorLike):
         for unique_index in range(self.unique.size(0)):
             shell_count = self.ihelp.ushells_per_unique[unique_index]
             if shell_count == 0:
-                zero = torch.tensor(0.0, **self.dd)
+                zero = torch.tensor(
+                    0.0, dtype=self.slater.dtype, device=self.slater.device
+                )
                 alphas.append(zero)
                 coeffs.append(zero)
                 shell += 1
@@ -498,7 +495,6 @@ class Basis(TensorLike):
                     self.ihelp.unique_angular[shell],
                     self.slater[shell],
                 )
-
                 if self.valence[shell].item() is False:
                     alpha, coeff = orthogonalize(
                         (alphas[shell - 1], alpha),
@@ -507,7 +503,6 @@ class Basis(TensorLike):
                 alphas.append(alpha)
                 coeffs.append(coeff)
                 shell += 1
-
         return tuple(alphas), tuple(coeffs)
 
 

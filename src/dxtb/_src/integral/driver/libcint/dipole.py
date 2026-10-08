@@ -27,9 +27,14 @@ from dxtb._src.typing import Tensor
 
 from ...types import DipoleIntegral
 from .driver import LibcintCallData
-from .multipole import MultipoleLibcint
+from .multipole import MultipoleLibcint, build_multipole_libcint
 
-__all__ = ["DipoleLibcint"]
+__all__ = ["DipoleLibcint", "build_dipole_libcint"]
+
+
+def build_dipole_libcint(call_data: LibcintCallData) -> Tensor:
+    """Build a raw origin-centered dipole matrix from call-local wrappers."""
+    return build_multipole_libcint(call_data, "r0")
 
 
 class DipoleLibcint(DipoleIntegral, MultipoleLibcint):

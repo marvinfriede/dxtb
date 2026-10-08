@@ -42,7 +42,8 @@ def test_setup() -> None:
     system = model.setup(numbers)
 
     assert isinstance(system, System)
-    assert system.model is model
+    assert not hasattr(system, "model")
+    assert not hasattr(system, "integrals")
     assert system.batch_mode == 0
     # the integral level follows the parametrization
     assert system.config.ints.level == labels.INTLEVEL_QUADRUPOLE
@@ -57,6 +58,21 @@ def test_setup() -> None:
 
     batch = model.setup(torch.tensor([[3, 1], [1, 1]], device=DEVICE))
     assert batch.batch_mode == 1
+
+
+def test_system_does_not_retain_mutable_integral_layer() -> None:
+    """System retains setup values, not mutable integral builders."""
+    from dxtb._src.integral.base import BaseIntegral
+    from dxtb._src.integral.container import Integrals
+    from dxtb._src.integral.driver import DriverManager
+    from dxtb._src.xtb.base import BaseHamiltonian
+
+    system = Model(par=ParamModule(GFN2_XTB, **DD)).setup(
+        torch.tensor([3, 1], device=DEVICE)
+    )
+    forbidden = (Integrals, DriverManager, BaseHamiltonian, BaseIntegral)
+    for field in dataclasses.fields(system):
+        assert not isinstance(getattr(system, field.name), forbidden)
 
 
 def test_setup_is_differentiable() -> None:
