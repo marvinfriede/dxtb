@@ -26,11 +26,8 @@ from __future__ import annotations
 from functools import partial
 
 import torch
-from tad_mctc import Structure, storch
-from tad_mctc.batch import real_pairs
-from tad_mctc.convert import any_to_tensor, symmetrize
-from tad_mctc.data import radii
-from tad_mctc.units import EV2AU
+from tad_mctc import Structure
+from tad_mctc.convert import any_to_tensor
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
@@ -41,6 +38,7 @@ from dxtb._src.typing import Any, Self, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
 
 from .base import PAD, BaseHamiltonian
+from .h0 import build_hcore, gather_hscale
 
 __all__ = ["GFN0Hamiltonian"]
 
@@ -55,56 +53,31 @@ class GFN0Hamiltonian(BaseHamiltonian):
         ihelp: IndexHelper,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
         if not isinstance(par, ParamModule):
             par = ParamModule(par, device=device, dtype=dtype)
 
-        super().__init__(numbers, par, ihelp, device, dtype)
-
-        if par.is_none("eeq"):
-            raise RuntimeError("GFN0 Hamiltonian requires EEQ parameters.")
-        if par.get("eeq.cn") != "erf":
-            raise ValueError("GFN0 Hamiltonian only supports erf CN.")
-
-        # The standalone reference keeps H0 in eV and converts its electronic
-        # energy afterwards. dxtb keeps H0 in Hartree, so convert every
-        # energy-like H0 table with tad-mctc's canonical conversion here.
-        self.selfenergy = (
-            par.get_elem_param(self.unique, "levels", pad_val=0) * EV2AU
-        )
-        self.kcn = par.get_elem_param(self.unique, "kcn", pad_val=0) * EV2AU
-        self.kq = par.get_elem_param(self.unique, "kq", pad_val=0) * EV2AU
-        self.kqat = par.get_elem_param(self.unique, "kqat", pad_val=0) * EV2AU
-
-        self.h0rad = par.get_elem_param(self.unique, "h0rad", pad_val=1)
-        self.kdiff = par.get("hamiltonian.xtb.kdiff")
-        self.enshell = par.get("hamiltonian.xtb.enshell")
-        self.enscale4 = par.get("hamiltonian.xtb.enscale4")
-
-        max_element = int(numbers.max().item()) if numbers.numel() > 0 else 0
-        elements = torch.arange(
-            max_element + 1, dtype=numbers.dtype, device=numbers.device
-        )
-        self.eeq_model = EEQModel(
-            chi=par.get_elem_param(elements, "eeq_chi", pad_val=0).to(
-                **self.dd
-            ),
-            kcn=par.get_elem_param(elements, "eeq_kcn", pad_val=0).to(
-                **self.dd
-            ),
-            eta=par.get_elem_param(elements, "eeq_eta", pad_val=0).to(
-                **self.dd
-            ),
-            rad=par.get_elem_param(elements, "eeq_rad", pad_val=0).to(
-                **self.dd
-            ),
+        super().__init__(
+            numbers, par, ihelp, device, dtype, setup=kwargs.get("setup")
         )
 
-        self.cn_radii = radii.COV_D3(**self.dd)[numbers]
-        self.cn_cutoff = par.get("eeq.cutoff")
-        self.cn_max = par.get("eeq.cn_max")
-        self.cn_kcn = par.get("eeq.kcn")
+        setup = self.setup
+        assert setup.kq is not None and setup.kqat is not None
+        assert setup.h0rad is not None and setup.kdiff is not None
+        assert setup.enshell is not None and setup.enscale4 is not None
+        assert setup.eeq_model is not None and setup.cn_radii is not None
+        self.kq = setup.kq
+        self.kqat = setup.kqat
+        self.h0rad = setup.h0rad
+        self.kdiff = setup.kdiff
+        self.enshell = setup.enshell
+        self.enscale4 = setup.enscale4
+        self.eeq_model = setup.eeq_model
+        self.cn_radii = setup.cn_radii
+        self.cn_cutoff = setup.cn_cutoff
+        self.cn_max = setup.cn_max
+        self.cn_kcn = setup.cn_kcn
         self._set_cn_callable()
 
     def _set_cn_callable(self) -> None:
@@ -178,41 +151,11 @@ class GFN0Hamiltonian(BaseHamiltonian):
 
     @override
     def _get_hscale(self, par: ParamModule) -> Tensor:
-        """Build shell-pair kScale multiplied by Slater-exponent weighting."""
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
-
-        shell = par.get("hamiltonian.xtb.shell", unwrapped=False)
-        wexp = par.get("hamiltonian.xtb.wexp")
-        angular = self.ihelp.unique_angular
-        labels = {0: "s", 1: "p", 2: "d", 3: "f", 4: "g"}
-        angular_labels = [labels.get(int(ang), PAD) for ang in angular]
-
-        zeta = par.get_elem_param(self.unique, "slater", pad_val=1)
-        zi = zeta.unsqueeze(-1)
-        zj = zeta.unsqueeze(-2)
-        zeta_weight = storch.safe_pow(
-            2.0 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
+        return gather_hscale(
+            "gfn0", self.unique, self.ihelp, self.valence, par, self.dd
         )
-
-        kscale = torch.ones((len(angular), len(angular)), **self.dd)
-        for i, label_i in enumerate(angular_labels):
-            for j, label_j in enumerate(angular_labels):
-                key_ij = f"{label_i}{label_j}"
-                key_ji = f"{label_j}{label_i}"
-                if key_ij in shell:
-                    value = par.get(f"hamiltonian.xtb.shell.{key_ij}")
-                elif key_ji in shell:
-                    value = par.get(f"hamiltonian.xtb.shell.{key_ji}")
-                elif PAD in (label_i, label_j):
-                    value = torch.tensor(1.0, **self.dd)
-                else:  # pragma: no cover - validated built-in data is complete
-                    raise KeyError(
-                        f"GFN0 Hamiltonian: missing shell pair '{key_ij}'."
-                    )
-                kscale[i, j] = value
-
-        return kscale * zeta_weight
 
     def get_coordination_number(self, positions: Tensor) -> Tensor:
         """Evaluate capped GFN0 coordination numbers."""
@@ -269,66 +212,6 @@ class GFN0Hamiltonian(BaseHamiltonian):
         charge: Tensor | float | int | None = None,
     ) -> Tensor:
         """Build the GFN0 H0 matrix from local CN and main EEQ charges."""
-        if charge is None:
-            raise ValueError("Total molecular charge is required for GFN0 H0.")
-
-        zero = torch.tensor(0.0, **self.dd)
-        atom_pairs = real_pairs(self.numbers, mask_diagonal=True)
-        shell_pairs = self.ihelp.spread_atom_to_shell(atom_pairs, dim=(-2, -1))
-
-        cn = self.get_coordination_number(positions)
-        charges = self.get_eeq_charges(positions, charge, cn)
-        selfenergy = self.get_selfenergy(cn, charges)
-
-        # Exact GFN0 distance-dependent shell polynomial. The stored shpoly
-        # values already contain the reference function's factor of 0.01.
-        distances = storch.cdist(positions, positions, p=2)
-        h0rad = self.ihelp.spread_uspecies_to_atom(self.h0rad)
-        reduced = storch.safe_divide(
-            distances, h0rad.unsqueeze(-1) + h0rad.unsqueeze(-2)
-        )
-        root_reduced = self.ihelp.spread_atom_to_shell(
-            torch.where(atom_pairs, storch.safe_sqrt(reduced), zero),
-            dim=(-2, -1),
-        )
-        shpoly = self.ihelp.spread_ushell_to_shell(self.shpoly)
-        distance_scale = (1.0 + shpoly.unsqueeze(-1) * root_reduced) * (
-            1.0 + shpoly.unsqueeze(-2) * root_reduced
-        )
-
-        # Shell-dependent quadratic and quartic electronegativity polynomial.
-        angular = self.ihelp.unique_angular.clamp(min=0)
-        shell_en = self.enshell[angular]
-        enscale = 0.005 * (shell_en.unsqueeze(-1) + shell_en.unsqueeze(-2))
-        enscale = self.ihelp.spread_ushell_to_shell(enscale, dim=(-2, -1))
-        en = self.ihelp.spread_uspecies_to_shell(self.en)
-        den2 = (en.unsqueeze(-1) - en.unsqueeze(-2)) ** 2
-        enpoly = 1.0 + enscale * den2 + self.enscale4 * enscale * den2**2
-
-        kpair = self.ihelp.spread_uspecies_to_shell(self.kpair, dim=(-2, -1))
-        hscale = self.ihelp.spread_ushell_to_shell(self.hscale, dim=(-2, -1))
-        scale = hscale * kpair * enpoly
-
-        valence = self.ihelp.spread_ushell_to_shell(self.valence)
-        both_valence = valence.unsqueeze(-1) & valence.unsqueeze(-2)
-        one_nonvalence = valence.unsqueeze(-1) ^ valence.unsqueeze(-2)
-        scale = torch.where(
-            both_valence,
-            scale,
-            torch.where(one_nonvalence, scale * self.kdiff, zero),
-        )
-
-        average = 0.5 * (selfenergy.unsqueeze(-1) + selfenergy.unsqueeze(-2))
-        shell_h0 = torch.where(
-            shell_pairs, distance_scale * scale * average, zero
-        )
-        h0 = self.ihelp.spread_shell_to_orbital(shell_h0, dim=(-2, -1))
-        if overlap is not None:
-            h0 = h0 * overlap
-
-        # The reference sets only true orbital diagonals on-site. In
-        # particular, the duplicate hydrogen s shells have no on-site block.
-        diagonal = self.ihelp.spread_shell_to_orbital(selfenergy)
-        h0 = symmetrize(h0) + torch.diag_embed(diagonal)
+        h0, _ = build_hcore(self.setup, positions, overlap, charge)
         self.matrix = h0
         return h0

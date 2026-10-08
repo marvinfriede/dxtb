@@ -25,14 +25,49 @@ from __future__ import annotations
 
 from tad_mctc.convert import symmetrize
 
+from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import Tensor
 
 from ...types import OverlapIntegral
 from ...utils import snorm
 from .base import IntegralPytorch
 from .driver import IntDriverPytorch
+from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
+from .impls.pairs import assemble_matrix
+from .setup import PytorchIntegralSetup, setup_integrals
 
-__all__ = ["OverlapPytorch"]
+__all__ = [
+    "OverlapPytorch",
+    "PytorchIntegralSetup",
+    "PytorchOverlapSetup",
+    "setup_overlap",
+    "build_overlap",
+]
+
+
+PytorchOverlapSetup = PytorchIntegralSetup
+
+
+def setup_overlap(
+    basis: Basis,
+    *,
+    algorithm: str = DEFAULT_ALGORITHM,
+) -> PytorchIntegralSetup:
+    """Build explicit overlap data from an already constructed basis."""
+    return setup_integrals(basis, algorithm=algorithm)
+
+
+def build_overlap(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+    """Build an overlap matrix from immutable setup data and current positions."""
+    raw = assemble_matrix(
+        get_kernel(setup.algorithm),
+        setup.ihelp,
+        list(setup.alphas),
+        list(setup.coeffs),
+        positions,
+        plan=setup.pair_plan,
+    )[0]
+    return raw
 
 
 class OverlapPytorch(OverlapIntegral, IntegralPytorch):

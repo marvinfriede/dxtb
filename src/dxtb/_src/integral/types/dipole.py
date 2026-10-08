@@ -29,7 +29,23 @@ from dxtb._src.typing import Tensor
 
 from ..base import BaseIntegral
 
-__all__ = ["DipoleIntegral"]
+__all__ = ["DipoleIntegral", "shift_dipole_origin"]
+
+
+def shift_dipole_origin(
+    dipole: Tensor, overlap: Tensor, orbital_positions: Tensor
+) -> Tensor:
+    """Shift an origin-centered dipole to the ket-atom origin."""
+    if orbital_positions.shape[-2] != overlap.shape[-1]:
+        raise RuntimeError(
+            "Shape mismatch between positions and overlap integral. "
+            "The position tensor must be spread to orbital-resolution."
+            "Use the `IndexHelper` to spread the positions: "
+            "ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)"
+        )
+
+    shift = einsum("...jx,...ij->...xij", orbital_positions, overlap)
+    return dipole - shift
 
 
 class DipoleIntegral(BaseIntegral):
@@ -73,14 +89,5 @@ class DipoleIntegral(BaseIntegral):
         Tensor
             Second-index (ket) atom-centered dipole integral.
         """
-        if pos.shape[-2] != overlap.shape[-1]:
-            raise RuntimeError(
-                "Shape mismatch between positions and overlap integral. "
-                "The position tensor must be spread to orbital-resolution."
-                "Use the `IndexHelper` to spread the positions: "
-                "ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)"
-            )
-
-        shift = einsum("...jx,...ij->...xij", pos, overlap)
-        self.matrix = self.matrix - shift
+        self.matrix = shift_dipole_origin(self.matrix, overlap, pos)
         return self.matrix

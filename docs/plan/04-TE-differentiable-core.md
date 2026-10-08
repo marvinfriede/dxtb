@@ -2,19 +2,29 @@
 
 **Purpose.** Make the per-call path differentiable to third order (reverse and forward mode), batchable with `vmap`, and free of data-dependent shapes. This track carries goals G1 and G2.
 
-**Starting point (at `46af7bc`).**
+**Starting point.** See `07-current-state-and-execution-plan.md`.
 
-- Four custom autograd functions, none with a `jvp` rule; two with `generate_vmap_rule` (`RepulsionAG`, `OverlapAG`).
-- SCF: default mode unrolls all iterations (`SCF_MODE_FULL`); implicit modes use a vendored copy of xitorch (`scf/implicit/base.py`, `BaseXSCF(BaseSCF, xt.EditableModule)`).
-- GFN2 needs dipole and quadrupole integrals; the PyTorch driver raises `NotImplementedError` for them (`integral/driver/pytorch/dipole.py`, `quadrupole.py`), so GFN2 runs on libcint (the default driver), which is CPU-only and a C extension.
-- The PyTorch overlap groups shell pairs with a geometry-dependent mask (`unique_shell_pairs`) and writes every pair in a Python loop (`integral/driver/pytorch/impls/overlap.py:192–229`).
+- Remaining custom autograd functions: `CoulombMatrixAG` and optional `RepulsionAG`; none has a `jvp` rule.
+- SCF: default mode unrolls all iterations (`SCF_MODE_FULL`); implicit modes use a vendored copy of xitorch (`scf/implicit/base.py`).
+- GFN2 multipole integrals exist in PyTorch (E5, done).
+- The PyTorch overlap uses the PairPlan builder (E2).
 - Batched SCF culls converged systems in place (`IndexHelper.cull`/`restore`, cache `cull`/`restore`).
 
 ---
 
-## E0 Decision note: SCF differentiation and integrals
+## E0 Decision note: SCF differentiation
 
-**Goal.** Decide, from measurements, how the SCF is differentiated and whether PyTorch multipole integrals are needed.
+**Goal.** Decide, from measurements, how the SCF is differentiated. E0 is split into three explicit decisions:
+
+```text
+E0a canonical SCF differentiation path
+E0b degenerate/small-gap eigensolver response
+E0c open-shell GFN2 NO2 third-order failure
+```
+
+Changing the Lorentzian broadening parameter is not an acceptable resolution of E0b.
+
+E0 remains a hard design gate for G1.
 
 **Investigations (using the T0.3/T0.4 harness).**
 
@@ -28,11 +38,12 @@
 
 - SCF differentiation strategy for each order (unrolled, implicit, or mixed: implicit for the fixed point, unrolled where cheaper).
 - Whether xitorch is replaced.
-- Whether E5 (PyTorch multipole integrals) is needed, and for which goals (higher order, GPU, `vmap`).
+- E0b: how the eigensolver response at degeneracies and small gaps is handled (not by changing the broadening parameter).
+- E0c: the cause and fix of the open-shell GFN2 NO2 third-order failure.
 
 **Done when.** The note is agreed.
 
-**Needs.** T0.3, T0.4. **Unblocks.** E3, E5. **Size.** M.
+**Needs.** T0.3, T0.4. **Unblocks.** E3. **Size.** M.
 
 ---
 
@@ -40,12 +51,17 @@
 
 **Goal.** Every custom autograd function supports reverse mode to third order, forward mode and `vmap`; or is deleted.
 
+**Starting point.** `OverlapAG` and `EFunction` are already gone. Remaining dxtb-local shortcuts
+include `CoulombMatrixAG` and optional `RepulsionAG`; external blockers include
+tad-dftd3 and the generalized eigensolver path.
+
+Prefer removal in favor of plain torch rather than adding custom rules unless
+profiling proves a need.
+
 | Function | Location | Today |
 | --- | --- | --- |
-| `RepulsionAG` | `components/classicals/repulsion/rep.py:145` | `setup_context`, `generate_vmap_rule`, no `jvp` |
-| `CoulombMatrixAG` | `components/interactions/coulomb/secondorder.py:930` | no `jvp`, no vmap rule |
-| `OverlapAG` | `integral/driver/pytorch/impls/overlap.py:40` | `setup_context`, `generate_vmap_rule`, no `jvp` |
-| `EFunction` | `integral/driver/pytorch/impls/md/recursion.py:227` | no `jvp`, no vmap rule |
+| `RepulsionAG` | `components/classicals/repulsion/rep.py` | `setup_context`, `generate_vmap_rule`, no `jvp`; optional |
+| `CoulombMatrixAG` | `components/interactions/coulomb/secondorder.py` | no `jvp`, no vmap rule |
 
 **Steps per function.**
 
@@ -54,7 +70,7 @@
 3. Otherwise: convert to the `setup_context` form; add `jvp`; make `backward` use only differentiable operations; add a vmap rule (`generate_vmap_rule = True` where the body is pure torch).
 4. Tests: orders 1–3 by `gradcheck` chains, forward mode, `vmap` with fallback warnings as errors (from T0.4).
 
-**Done when.** All four pass T0.4's checks at orders 1–3, forward mode and `vmap`, or are deleted.
+**Done when.** Both pass T0.4's checks at orders 1–3, forward mode and `vmap`, or are deleted.
 
 **Needs.** T0.4. **Unblocks.** E3, E6a, E8, D2. **Size.** M.
 
@@ -64,23 +80,25 @@
 
 **Goal.** Integral and Hamiltonian pair computations with shapes fixed by the composition, no per-pair Python loops, and no geometry-dependent grouping.
 
-**Today.** `overlap()` calls `bas.unique_shell_pairs(mask=...)`, where the mask comes from a distance cutoff; it then calls `overlap_gto` once per unique pair type and writes each pair's block in a Python loop (`for r, pair in enumerate(upairs)`), one slice assignment and one autograd node per shell pair.
+**Starting point.** The current PairPlan/pair-builder implementation.
 
-**Steps.**
+**Scope.**
 
-1. Group shell pairs by angular-momentum combination (at most 10 for s–f), not by species pair.
-2. Build the group index lists in `setup` from `numbers` alone (B3).
-3. Gather each pair's exponents and coefficients, padded to the maximum number of primitives.
-4. Apply the distance cutoff as a multiplicative mask (with double-`where`, P8), not as a shape decision.
-5. Write each group's blocks with one scatter (`index_put`/`scatter`) instead of per-pair assignments.
-6. Apply the same pattern to the gradient path, the multipole integrals (E5, if built) and the H0 build if it follows the same structure.
-7. Delete `unique_shell_pairs`, `get_pairs`, `get_subblock_start` and the per-pair loop; replace the in-place `fill_diagonal_` with a pure operation.
+```text
+move PairPlan to setup;
+make the driver single-system;
+remove per-entry batch construction;
+keep transform-critical pair shapes static;
+only change grouping/packing further if profiling justifies it.
+```
+
+Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as a shape decision; replace any remaining in-place `fill_diagonal_` with a pure operation.
 
 **Tests.** T0.2 overlap and H0 values reproduced; T0.4 checks at orders 1–3; `vmap` over positions with no fallbacks; profile against T0.8 W1 and W2.
 
 **Done when.** No Python loop over pairs; no data-dependent operation in the per-call overlap path; reference reproduced.
 
-**Needs.** T0.2, B3 (index lists in setup), B4. **Unblocks.** E6a, E5, D1. **Size.** L.
+**Needs.** T0.2, B3a, B4. **Unblocks.** E6a, D1. **Size.** L.
 
 ---
 
@@ -103,6 +121,8 @@
 
 ## E4 Pure SCF step and masked convergence loop
 
+**Note.** The currently named `scf/pure` functions are not the final pure design because `_Data` is mutable. E4 requires functional SCF state and functional mixer state.
+
 **Goal.** The SCF iteration is a pure function of its state; the convergence loop runs outside it and handles batches by masking, not culling.
 
 **Steps.**
@@ -115,23 +135,16 @@
 
 **Done when.** No in-place culling remains; T0.2 reproduced, including batched cases; benchmark recorded.
 
-**Needs.** T0.2, B5, B6. **Unblocks.** E3, E6a, C5, D1, F4. **Size.** L.
+**Needs.** T0.2, B5, B6a. **Unblocks.** E3, E6a, B6b, C5, D1, F4. **Size.** L.
 
 ---
 
-## E5 PyTorch dipole and quadrupole integrals (conditional)
+## E5 PyTorch dipole and quadrupole integrals
 
-**Goal.** Remove libcint from GFN2's critical path, if E0 shows libcint blocks higher-order derivatives, GPU execution or `vmap`.
+**Status: done upstream (#270).** PyTorch dipole and quadrupole integral paths
+exist and pass the T0 component checks through third order, forward mode and
+vmap. Keep regression tests; do not reimplement.
 
-**Steps.**
-
-1. Implement dipole and quadrupole integrals in the McMurchie–Davidson code (which already supports up to f shells), using the fixed-shape pair structure from E2.
-2. Validate against libcint values for the T0.2 set.
-3. Make the PyTorch driver usable for GFN2; decide the default driver per method.
-
-**Done when.** GFN2 runs entirely in PyTorch with T0.2 reproduced, and T0.3 GFN2 cells pass with the PyTorch driver.
-
-**Needs.** E0, E2. **Unblocks.** D1 for GFN2 on GPU. **Size.** L.
 
 ---
 
@@ -159,7 +172,7 @@
 
 ## E6 Batching through `vmap`
 
-**Goal.** All batching goes through `vmap`; `batch_mode` disappears (P2).
+**Goal.** All batching goes through `vmap`; `batch_mode` disappears (P2). Integral and SCF code do not handle `batch_mode` themselves; the only final batching composition is single-System `vmap` plus stacked padded Systems.
 
 **Steps.**
 
@@ -168,7 +181,7 @@
 3. A pad-and-stack helper, with configurable bucket sizes.
 4. Batch entry points from B1 (no shape-based guessing).
 5. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
-6. Batched GFN2 on libcint: a plain loop over systems, or E5.
+6. Batched GFN2 runs through the PyTorch multipole integrals (E5); a libcint path is a plain loop over systems.
 
 **Done when.** Both batching modes run through `vmap` with no fallbacks; T0.2 batched references reproduced; per-system Hessians computed with `vmap(hessian)` without cross-system blocks.
 
@@ -213,13 +226,13 @@
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| E0 | Decision note: SCF differentiation, integrals | T0.3, T0.4 | M |
+| E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
-| E2 | Fixed-shape pair kernels | T0.2, B3, B4 | L |
+| E2 | Fixed-shape pair kernels (from PairPlan) | T0.2, B3a, B4 | L |
 | E3 | SCF differentiation | E0, E1, E4 | L |
-| E4 | Pure SCF step, masked loop | T0.2, B5, B6 | L |
-| E5 | PyTorch multipole integrals (conditional) | E0, E2 | L |
+| E4 | Pure SCF step, masked loop | T0.2, B5, B6a | L |
+| E5 | PyTorch multipole integrals (done, #270) | - | - |
 | E6a | `vmap` versus hand-written batching | E1, E2, E4, T0.8 | M |
 | E6 | Batching through `vmap` | E6a, B3, E4 (C8) | L |
 | E7 | Padding-safe masking | T0.3 | M |
-| E8 | Third-order acceptance | E1, E2, E3, B8 | M |
+| E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |

@@ -75,10 +75,8 @@ def build_problem(
     )
     h0 = hcore.build(positions, ovlp, charge=charge)
     integrals = IntegralMatrices(
-        _hcore=h0,
-        _overlap=ovlp,
-        device=positions.device,
-        dtype=positions.dtype,
+        hcore=h0,
+        overlap=ovlp,
     )
     return sample, numbers, positions, ihelp, hcore, integrals
 
@@ -261,10 +259,8 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
     )
     h0 = hcore.build(positions, ovlp, charge=charges)
     integrals = IntegralMatrices(
-        _hcore=h0,
-        _overlap=ovlp,
-        device=positions.device,
-        dtype=positions.dtype,
+        hcore=h0,
+        overlap=ovlp,
     )
     interactions = InteractionList()
     result = solve(

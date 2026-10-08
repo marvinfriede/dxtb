@@ -33,6 +33,7 @@ import torch
 from dxtb import OutputHandler
 from dxtb._src.components.interactions import Charges, Potential
 from dxtb._src.constants import defaults, labels
+from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Literal, Slicers, Tensor, exceptions, overload
 from dxtb._src.utils import t2int
 
@@ -385,14 +386,12 @@ class SelfConsistentFieldFull(BaseTSCF):
             self._data.nel = nel
             self._data.numbers = numbers
 
-            self._data.ints.run_checks = False
-            self._data.ints.overlap = overlap
-            self._data.ints.hcore = hcore
-            if self._data.ints.dipole is not None and dipole is not None:
-                self._data.ints.dipole = dipole
-            if self._data.ints.quadrupole is not None and quad is not None:
-                self._data.ints.quadrupole = quad
-            self._data.ints.run_checks = True
+            self._data.ints = IntegralMatrices(
+                overlap=overlap,
+                hcore=hcore,
+                dipole=dipole,
+                quadrupole=quad,
+            )
 
             # reset IndexHelper and caches which were culled as well
             self._data.ihelp.restore()

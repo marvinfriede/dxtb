@@ -32,8 +32,39 @@ from dxtb._src.typing import Literal, Tensor
 
 from .base import IntegralPytorch
 from .driver import IntDriverPytorch
+from .impls.kernels import get_kernel
+from .impls.pairs import assemble_matrix
+from .impls.pipeline import DIPOLE_COMPONENTS, QUADRUPOLE_COMPONENTS
+from .setup import PytorchIntegralSetup
 
-__all__ = ["MultipolePytorch"]
+__all__ = ["MultipolePytorch", "build_dipole", "build_quadrupole"]
+
+
+def _build_multipole(
+    setup: PytorchIntegralSetup,
+    positions: Tensor,
+    components: tuple[tuple[int, int, int], ...],
+) -> Tensor:
+    """Build a raw multipole matrix from setup data and current positions."""
+    return assemble_matrix(
+        get_kernel(setup.algorithm),
+        setup.ihelp,
+        list(setup.alphas),
+        list(setup.coeffs),
+        positions,
+        components,
+        plan=setup.pair_plan,
+    )
+
+
+def build_dipole(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+    """Build the raw, origin-centered three-component dipole matrix."""
+    return _build_multipole(setup, positions, DIPOLE_COMPONENTS)
+
+
+def build_quadrupole(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+    """Build the raw, origin-centered nine-component quadrupole matrix."""
+    return _build_multipole(setup, positions, QUADRUPOLE_COMPONENTS)
 
 
 class MultipolePytorch(IntegralPytorch):

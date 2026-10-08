@@ -30,7 +30,10 @@ from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule, labels
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.factory import new_driver
-from dxtb._src.integral.driver.libcint.driver import IntDriverLibcint
+from dxtb._src.integral.driver.libcint.driver import (
+    IntDriverLibcint,
+    LibcintCallData,
+)
 from dxtb._src.typing import DD, Callable, Tensor
 from dxtb._src.utils import is_basis_list
 
@@ -113,16 +116,14 @@ def test_gradgradcheck(name: str, gfn: Param) -> None:
     assert gradgradcheck(func, diffvars, atol=1e-6, nondet_tol=NONDET_TOL)
 
 
-def overlap(driver: IntDriverLibcint) -> Tensor:
+def overlap(call_data: LibcintCallData) -> Tensor:
     """Overlap wrapper for single and batched mode."""
     # batched mode
-    if driver.ihelp.batch_mode > 0:
-        assert isinstance(driver.drv, list)
-        return pack([libcint.overlap(d) for d in driver.drv])
+    if call_data.batch_mode > 0:
+        return pack([libcint.overlap(d) for d in call_data.drivers])
 
     # single mode
-    assert isinstance(driver.drv, libcint.LibcintWrapper)
-    return libcint.overlap(driver.drv)
+    return libcint.overlap(call_data.drivers[0])
 
 
 def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
@@ -160,8 +161,8 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
         drv = new_driver(labels.INTDRIVER_LIBCINT, numbers, par)
         assert isinstance(drv, IntDriverLibcint)
 
-        drv.setup(positions)
-        return overlap(drv)
+        call_data = drv.setup(positions)
+        return overlap(call_data)
 
     return func, slater
 

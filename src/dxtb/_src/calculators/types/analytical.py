@@ -39,6 +39,7 @@ from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
+from dxtb._src.xtb.h0 import build_hcore
 
 from ..result import Result
 from . import decorators as cdec
@@ -345,30 +346,26 @@ class AnalyticalCalculator(EnergyCalculator):
 
         timer.start("Integrals")
 
-        intmats = IntegralMatrices(**self.dd)
-
         # overlap integral (always required, even without Hückel Hamiltonian)
         OutputHandler.write_stdout_nf(" - Overlap           ... ", v=3)
         timer.start("Overlap", parent_uid="Integrals")
-        intmats.overlap = self.integrals.build_overlap(positions)
+        overlap_matrix = self.integrals.build_overlap(positions)
         timer.stop("Overlap")
         OutputHandler.write_stdout("done", v=3)
 
         if self.integrals.overlap is None:
             raise RuntimeError("Overlap setup failed. SCF cannot be run.")
-        if self.integrals.overlap.matrix is None:
-            raise RuntimeError("Overlap calculation failed. SCF cannot be run.")
-
         write_overlap = kwargs.get("write_overlap", False)
         if write_overlap is not False:
             assert self.integrals.overlap is not None
             self.integrals.overlap.to_pt(write_overlap)
 
         # dipole integral
+        dipole_matrix = None
         if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
             OutputHandler.write_stdout_nf(" - Dipole            ... ", v=3)
             timer.start("Dipole Integral", parent_uid="Integrals")
-            intmats.dipole = self.integrals.build_dipole(positions)
+            dipole_matrix = self.integrals.build_dipole(positions)
             timer.stop("Dipole Integral")
             OutputHandler.write_stdout("done", v=3)
 
@@ -378,10 +375,15 @@ class AnalyticalCalculator(EnergyCalculator):
                 self.integrals.dipole.to_pt(write_dipole)
 
         # quadrupole integral
+        quadrupole_matrix = None
         if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
             OutputHandler.write_stdout_nf(" - Quadrupole        ... ", v=3)
             timer.start("Quadrupole Integral", parent_uid="Integrals")
-            intmats.quadrupole = self.integrals.build_quadrupole(positions)
+            quadrupole_matrix = self.integrals.build_quadrupole(positions)
+            # The legacy container defers the r0->rj dipole shift until the
+            # quadrupole has been built. Keep that final value for SCF.
+            if self.integrals.dipole is not None:
+                dipole_matrix = self.integrals.dipole.matrix
             timer.stop("Quadrupole Integral")
             OutputHandler.write_stdout("done", v=3)
 
@@ -397,22 +399,34 @@ class AnalyticalCalculator(EnergyCalculator):
         # To avoid unnecessary data transfer, the core Hamiltonian should
         # be last. Internally, the overlap integral is only transfered back
         # to GPU when all multipole integrals are calculated.
+        if self.system.h0_setup is None:
+            raise NotImplementedError("Core Hamiltonian setup is missing.")
         if self.opts.ints.level >= labels.INTLEVEL_HCORE:
             OutputHandler.write_stdout_nf(" - Core Hamiltonian  ... ", v=3)
             timer.start("Core Hamiltonian", parent_uid="Integrals")
-            intmats.hcore = self.integrals.build_hcore(positions, charge=_chrg)
+            hcore_matrix, refocc = build_hcore(
+                self.system.h0_setup,
+                positions,
+                overlap_matrix,
+                charge=_chrg,
+            )
             timer.stop("Core Hamiltonian")
             OutputHandler.write_stdout("done", v=3)
 
             write_hcore = kwargs.get("write_hcore", False)
             if write_hcore is not False:
-                assert self.integrals.hcore is not None
-                self.integrals.hcore.to_pt(write_hcore)
+                path = write_hcore
+                if path is None or path is True:
+                    path = self.integrals.hcore.label.casefold() + ".pt"
+                torch.save(
+                    hcore_matrix,
+                    path,
+                )
 
         # While one can theoretically skip the core Hamiltonian, the
         # current implementation does not account for this case because the
         # reference occupation is necessary for the SCF procedure.
-        if self.integrals.hcore is None or self.integrals.hcore.matrix is None:
+        if self.opts.ints.level < labels.INTLEVEL_HCORE:
             raise NotImplementedError(
                 "Core Hamiltonian missing. Skipping the Core Hamiltonian in "
                 "the SCF is currently not supported. Please increase the "
@@ -422,6 +436,12 @@ class AnalyticalCalculator(EnergyCalculator):
 
         # finalize integrals
         timer.stop("Integrals")
+        intmats = IntegralMatrices(
+            hcore=hcore_matrix,
+            overlap=overlap_matrix,
+            dipole=dipole_matrix,
+            quadrupole=quadrupole_matrix,
+        )
         intmats = intmats.to(self.device)
         result.integrals = intmats
 
@@ -459,7 +479,7 @@ class AnalyticalCalculator(EnergyCalculator):
             self.ihelp,
             self.opts.scf,
             intmats,
-            self.integrals.hcore.refocc,
+            refocc,
         )
 
         timer.stop("SCF")

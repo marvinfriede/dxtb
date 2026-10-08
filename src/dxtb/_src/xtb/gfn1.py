@@ -23,6 +23,7 @@ The GFN1-xTB Hamiltonian.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 
 import torch
@@ -32,10 +33,11 @@ from tad_mctc.batch import real_pairs
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import Potential
 from dxtb._src.param.base import Param
-from dxtb._src.param.module import ParameterModule, ParamModule
+from dxtb._src.param.module import ParamModule
 from dxtb._src.typing import Any, Tensor, override
 
 from .base import PAD, BaseHamiltonian
+from .h0 import gather_hscale, setup_h0
 
 __all__ = ["GFN1Hamiltonian"]
 
@@ -52,117 +54,32 @@ class GFN1Hamiltonian(BaseHamiltonian):
         dtype: torch.dtype | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(numbers, par, ihelp, device, dtype)
+        setup = kwargs.pop("setup", None)
+        has_custom_cn = "cn" in kwargs
+        cn = kwargs.pop("cn", None)
+        if setup is None:
+            setup = setup_h0(
+                numbers, par, ihelp, device=device, dtype=dtype, cn=cn
+            )
+            if has_custom_cn and cn is None:
+                setup = replace(setup, cn=None)
+        elif has_custom_cn:
+            setup = replace(setup, cn=cn)
+        super().__init__(numbers, par, ihelp, device, dtype, setup=setup)
 
         # coordination number function
-        if "cn" in kwargs:
-            self.cn = kwargs.pop("cn")
-        else:
+        if self.cn is None and not (has_custom_cn and cn is None):
             # pylint: disable=import-outside-toplevel
             from dxtb._src.ncoord import cn_d3, exp_count
 
             self.cn = partial(cn_d3, counting_function=exp_count)
 
     def _get_hscale(self, par: ParamModule) -> Tensor:
-        """
-        Obtain the off-site scaling factor for the Hamiltonian.
-
-        Returns
-        -------
-        Tensor
-            Off-site scaling factor for the Hamiltonian.
-        """
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
-
-        # extract some vars for convenience
-        kpol = par.get("hamiltonian.xtb.kpol")
-        shell = par.get("hamiltonian.xtb.shell")
-        ushells = self.ihelp.unique_angular
-
-        angular2label = {
-            0: "s",
-            1: "p",
-            2: "d",
-            3: "f",
-            4: "g",
-        }
-        angular_labels = [angular2label.get(int(ang), PAD) for ang in ushells]
-
-        # precompute kii values outside loop (slightly faster)
-        kii_values = []
-        for i, label in enumerate(angular_labels):
-            # For non-valence shells, use kpol
-            if self.valence[i] == 0:
-                kii_values.append(kpol)
-                continue
-
-            key = f"{label}{label}"
-            if key in shell:
-                # Use view(-1)[0] to keep the value as a tensor.
-                val = shell[key]
-                assert isinstance(val, ParameterModule)
-                kii_values.append(val.param.view(-1)[0])
-            else:
-                kii_values.append(torch.tensor(1.0, **self.dd))
-
-        n = len(ushells)
-        ksh = torch.empty((n, n), **self.dd)
-        for i in range(n):
-            for j in range(i + 1):
-                kii = kii_values[i]
-                kjj = kii_values[j]
-                if self.valence[i] == 1 and self.valence[j] == 1:
-                    key1 = f"{angular_labels[i]}{angular_labels[j]}"
-                    key2 = f"{angular_labels[j]}{angular_labels[i]}"
-
-                    if key1 in shell:
-                        val: ParameterModule = shell[key1]
-                        ksh_val = val.param.view(-1)[0]
-                    elif key2 in shell:
-                        val: ParameterModule = shell[key2]
-                        ksh_val = val.param.view(-1)[0]
-                    else:
-                        ksh_val = (kii + kjj) / 2.0
-
-                else:
-                    ksh_val = (kii + kjj) / 2.0
-
-                # Assign symmetrically.
-                ksh[i, j] = ksh_val
-                ksh[j, i] = ksh_val
-
-        # for i, ang_i in enumerate(ushells):
-        #     ang_i = angular2label.get(int(ang_i.item()), PAD)
-
-        #     if self.valence[i] == 0:
-        #         kii = kpol
-        #     else:
-        #         kii = shell.get(f"{ang_i}{ang_i}", 1.0)
-
-        #     for j, ang_j in enumerate(ushells):
-        #         ang_j = angular2label.get(int(ang_j.item()), PAD)
-
-        #         if self.valence[j] == 0:
-        #             kjj = kpol
-        #         else:
-        #             kjj = shell.get(f"{ang_j}{ang_j}", 1.0)
-
-        #         # only if both belong to the valence shell,
-        #         # we will read from the parametrization
-        #         if self.valence[i] == 1 and self.valence[j] == 1:
-        #             # check both "sp" and "ps"
-        #             ksh[i, j] = shell.get(
-        #                 f"{ang_i}{ang_j}",
-        #                 shell.get(
-        #                     f"{ang_j}{ang_i}",
-        #                     (kii + kjj) / 2.0,
-        #                 ),
-        #             )
-        #         else:
-        #             ksh[i, j] = (kii + kjj) / 2.0
-
-        return ksh
+        return gather_hscale(
+            "gfn1", self.unique, self.ihelp, self.valence, par, self.dd
+        )
 
     @override
     def _get_elem_valence(self, par: ParamModule) -> Tensor:

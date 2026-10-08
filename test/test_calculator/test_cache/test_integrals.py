@@ -61,6 +61,20 @@ def test_overlap_deleted(dtype: torch.dtype) -> None:
     assert calc.integrals.overlap._gradient is None
 
 
+def test_hcore_cached_as_tensor() -> None:
+    numbers = torch.tensor([1, 1], device=DEVICE)
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], device=DEVICE)
+    calc = GFN1Calculator(
+        numbers,
+        opts={"verbosity": 0},
+    )
+    calc.get_energy(positions, store_hcore=True)
+
+    assert isinstance(calc.cache.hcore, Tensor)
+    assert calc.integrals.hcore is not None
+    assert calc.integrals.hcore.matrix is None
+
+
 def overlap_retained_for_grad(dtype: torch.dtype, intdriver: int) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
 

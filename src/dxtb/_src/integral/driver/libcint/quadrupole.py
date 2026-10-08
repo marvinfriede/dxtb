@@ -27,7 +27,7 @@ from dxtb._src.integral.base import IntDriver
 from dxtb._src.typing import Any, Tensor
 
 from ...types import QuadrupoleIntegral
-from .driver import IntDriverLibcint
+from .driver import LibcintCallData
 from .multipole import MultipoleLibcint
 
 __all__ = ["QuadrupoleLibcint"]
@@ -38,21 +38,21 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
     Quadrupole integral from atomic orbitals.
     """
 
-    def build(self, driver: IntDriverLibcint) -> Tensor:
+    def build(self, call_data: LibcintCallData) -> Tensor:
         """
         Calculation of quadrupole integral using libcint.
 
         Parameters
         ----------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
 
         Returns
         -------
         Tensor
             Quadrupole integral.
         """
-        return self.multipole(driver, "r0r0")
+        return self.multipole(call_data, "r0r0")
 
     def get_gradient(self, driver: IntDriver, **kwargs: Any) -> Tensor:
         """

@@ -12,7 +12,12 @@ This is the top-level document of the action plan. It states what dxtb should be
 | `05-TF-machine-learning.md` | TF | Parameter training (including new elements) and ML terms in the SCF |
 | `06-TD-performance.md` | TD | Compiling and other performance work, driven by measurements |
 
-Code references point to upstream `grimme-lab/dxtb` main at commit `46af7bc`. Line numbers may shift. Package IDs in these files supersede the IDs used in earlier review discussions.
+The original code references point to upstream `grimme-lab/dxtb` at
+`46af7bc`. They are historical starting points. The current restructuring
+branch has moved substantially since then; `T0-baseline-report.md` section 9a
+and `07-current-state-and-execution-plan.md` define the current starting point.
+Do not implement a package from the old line references without first checking
+the current source. Package IDs in these files supersede the IDs used in earlier review discussions.
 
 ---
 
@@ -65,7 +70,7 @@ Compiling is used where measurements show a benefit (TD). It is not a goal in it
 
 ### Non-goals
 
-- Backward compatibility of the Python API. Breaking changes are allowed and are collected into at most two releases (section 8).
+- Backward compatibility of the Python API. Breaking changes are allowed and are collected into one stable restructuring release (section 8).
 - Float32 for the physics. Higher-order derivatives and SCF convergence need float64.
 - Removing libcint, unless E0 shows it blocks G1 or G2.
 
@@ -76,7 +81,16 @@ Compiling is used where measurements show a benefit (TD). It is not a goal in it
 - **Precision.** Float64 throughout the physics. ML components run in float64, or cast internally and return float64.
 - **Python.** Python ≥ 3.10 once `Node` lands (frozen `kw_only` dataclasses).
 - **Torch.** torch ≥ 2.4 for eager use. The minimum version for compiled use is decided in TD.
-- **Coordinated releases.** dxtb pins tad-dftd3 0.6.0, tad-dftd4 0.8.0, tad-mctc 0.7.0 and tad-multicharge 0.5.0 exactly, and these packages pin `tad-mctc==0.7.0`. tad-* releases can therefore break APIs without breaking existing installs, but dxtb must update them in lockstep.
+- **Current tad stack.** The restructuring branch runs on tad-mctc 0.9.1 and
+  tad-multicharge 0.7.0. Node, ModuleNode and the tree helpers required by TC
+  are therefore already available.
+- **Temporary dispersion compatibility.** The currently used tad-dftd3 and
+  tad-dftd4 releases still target older tad-mctc APIs. The branch temporarily
+  bridges them with `dxtb._src.mctc_shim` and `dxtb._src.ncoord.legacy`, and
+  the pinned baseline installs the dispersion packages with `--no-deps`.
+  This is a development arrangement, not a releaseable dependency state.
+  A dxtb restructuring release is blocked until compatible dependency
+  releases are installed normally and both shims are deleted.
 - **Pytrees, not `nn.Module`.** Containers are frozen dataclasses registered as pytrees (`Node`). `nn.Module` was rejected because of in-place conversion, inferred dtype, mutation of shared Parameters and poor fit with `torch.func`. User-supplied `nn.Module`s (ML terms) are wrapped (C1b).
 
 ---
@@ -88,7 +102,12 @@ Every work package follows these principles. Reviews check against them.
 **P1. Three levels: model, system, result.**
 
 - **Model:** parameters and frozen settings, independent of any molecule. Holds per-element tables. Shared by many systems.
-- **System:** `model.setup(numbers)`. Holds everything that depends only on `numbers` (index helper, basis, gathered parameters, classical setup data). A pure function of parameters and numbers.
+- **System:** `model.setup(numbers)`. Holds everything required by evaluation
+  that depends on the composition and Model parameters: structural indices,
+  basis/setup data and gathered parameter tensors. It does **not** store the
+  complete Model. The gathered tensors retain their autograd relationship to
+  Model parameter leaves; training reconstructs System from the current Model
+  inside the differentiated loss.
 - **Result:** `system.singlepoint(positions, chrg, spin, field, field_grad)`. A frozen object with energies and SCF outputs.
 
 **P2. Single-system core; batching through `vmap`.**
@@ -163,7 +182,7 @@ grads = torch.func.grad(loss)(params)
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
 | Electric field as a mutable component, `update_efield`, `requires_efield*` decorators | fields as inputs | B7 |
 | `IndexHelper.cull`/`restore`, cache `cull`/`restore` | masked SCF loop | E4 |
-| `unique_shell_pairs`, per-pair Python loop in the overlap | fixed-shape pair kernels | E2 |
+| per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2 |
 | Calculator mixins (analytical, autograd, numerical) | property functions | B8 |
 | Vendored xitorch implicit SCF | decided in E0 | E3 |
 
@@ -175,10 +194,26 @@ grads = torch.func.grad(loss)(params)
 | --- | --- | --- | --- |
 | T0 Baseline | `01-T0-baseline.md` | immediately | reference data, derivative status matrix, performance profile, known issues |
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
-| TC Node migration | `03-TC-node-migration.md` | C1 immediately | `Node` in tad-mctc, all containers migrated, `TensorLike` deleted |
+| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after E4 | `Node` in tad-mctc, all containers migrated, `TensorLike` deleted |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
 | TD Performance | `06-TD-performance.md` | after E4/E6 | compiled step and derivatives, size buckets, conditional optimisations |
+
+### Current status
+
+The reviewed branch state is tracked in
+`07-current-state-and-execution-plan.md`.
+
+At the review point:
+
+- T0 is complete except for the GPU portion of T0.8;
+- B1 is agreed; B2 is implemented; B3a (structural Model/System split) is
+  implemented while B3b remains open;
+- B4-B8 remain;
+- Node and ModuleNode already exist upstream;
+- E5 is complete;
+- E2 has a substantially improved starting point;
+- E0 remains a hard design gate for G1.
 
 ---
 
@@ -188,59 +223,76 @@ grads = torch.func.grad(loss)(params)
 graph LR
   subgraph T0[Track 0]
     T0R[T0.11 baseline report]
+    T08G[T0.8 GPU baseline]
   end
-  T0R --> B1 --> B2 & B3 & B4
-  B3 --> B5
-  B4 --> B5 --> B6 & B7
-  B7 --> B8
-  B6 --> E4 --> E3
-  E0 --> E3
-  E1 --> E3 --> E8
-  B3 & B4 --> E2 --> E6a
-  E4 --> E6a --> E6
-  B8 --> E8
-  E0 --> E5
-  E2 --> E5
-  C1 --> C1b & C2 & C3
-  C3 --> C4
-  E4 --> C5
-  B3 --> C5 --> C6 & C7
-  B6 --> C6 & C7
+  T0R --> B1 --> B2 & B3a & B4
+  B3a --> B3b
+  B4 --> B5
+  B3a --> B5
+  B5 --> B6a & B7
+  T0R --> E1
+  B3a --> E1
+  B6a & B4 --> E4
+  E4 --> B6b
+  E0 & E1 & E4 --> E3
+  B3a & B4 --> E2
+  E2 & E4 & C8 & E1 --> E6
+  B7 --> B8a
+  B8a & E3 --> B8b & E8
+  B6b & C5 --> C6 & C7
   C6 & C7 & B5 --> C8 --> C9
-  C8 --> E6
-  T0R --> T012[T0.12 refocc fix] --> B3
-  B8 & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
+  B5 & B6a --> F0
+  T0R --> T012[T0.12 refocc fix] --> B3a
+  B8b & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
   F2c --> F2d
   E3 --> F2d --> F2e
-  C1b & B6 & E3 --> F3 --> F4
+  C1b & B6b & E3 --> F3 --> F4
   E4 & E6 --> D1
   E3 --> D2
+  T08G --> D1
+  T08G --> E6
   F2d & E6 --> D3
 ```
+
+C1 and C1b are completed prerequisites (tad-mctc 0.9.1) and no longer graph
+nodes; E5 is completed. B3 is split into B3a (done) and B3b (open), see
+`02-TB-evaluation-api.md`. The old "all of B, C, D, E precede F1" path is not
+the only training validation: F0 (an early training invariant) runs as soon
+as B5 and B6a exist.
 
 ### Critical paths per goal
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8 → E8 |
-| G2 | T0.8 → B3 → E2 → E4 → E6a → E6 (with C8 for stacked mixed batches) → D1 |
-| G3 | T0.9 → T0.12 → B3 → … all of Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (G3 is last by decision) |
-| G4 | T0.12 → B6 → C1b → F3 (needs E3 for consistent derivatives) |
+| G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8b → E8 (B8a after B7) |
+| G2 | T0.8 (CPU done, GPU open) → B3a → E2 → E4 → E6a → E6 (with C8 for stacked mixed batches) → D1 |
+| G3 | T0.9 → T0.12 → B3a → B5/B6a → F0 (early invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
+| G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
-Two packages can start immediately with no dependencies: C1 (`Node` in tad-mctc) and all of T0.
+The open T0.8 GPU baseline gates the final E6/D performance decisions, not the structural Track B work.
 
 ---
 
-## 8. Releases
+## 8. Releases and milestones
 
-| Release | Contents | Gate |
-| --- | --- | --- |
-| tad-mctc 0.8 | `Node` added; `TensorLike` kept | C1 |
-| dxtb release 1 | New evaluation API (TB) and the differentiable-core work merged so far | B2–B8 done; T0 reference data reproduced |
-| tad-mctc 0.9, tad-* releases | `TensorLike` and `ModuleLike` deleted; dependants migrated | C2–C4, C9 |
-| dxtb release 2 | Pytree containers, `vmap` batching, `.to()` through tree maps | C8, E6 |
+The restructure should not publish an intermediate API merely because the
+dataclass version exists before the Node version. Prefer internal milestones
+and one stable public breaking release unless a concrete downstream need
+justifies two releases.
 
-Each release ships a migration guide covering every removed or renamed public name. `main` stays green throughout; releases happen only at the gates.
+| Milestone | Gate |
+| --- | --- |
+| Structural-core milestone | B2-B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced |
+| Transform milestone | E0/E1/E3/E4/E6/E8 acceptance; known-wrong G1 baseline cases resolved |
+| Pytree milestone | C5-C9; System stacking and model partitioning work; TensorLike removed |
+| Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |
+
+The transitional `Model/System` layout is not a public API promise. Do not
+publish while the dependency setup requires `mctc_shim.py` or manual
+`--no-deps` installation. Use two releases only if a concrete downstream need
+outweighs the cost of exposing an intermediate API. The release ships a
+migration guide covering every removed or renamed public name. `main` stays
+green throughout.
 
 ---
 
@@ -251,7 +303,7 @@ Short documents (one to two pages), written before the packages that depend on t
 | Note | Decides | Written in | Blocks |
 | --- | --- | --- | --- |
 | [B1 Evaluation API and state](B1-decision-note.md)  | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8, F2a |
-| E0 SCF differentiation and integrals | unrolled versus implicit; replacement for xitorch; whether PyTorch multipole integrals are needed | TE | E3, E5 |
+| E0 SCF differentiation | E0a canonical SCF differentiation path (unrolled versus implicit; replacement for xitorch); E0b degenerate/small-gap eigensolver response; E0c open-shell GFN2 NO2 third-order failure. PyTorch multipole integrals are done (E5) | TE | E3 |
 | F2a Element structure | shell layout for actinides; which parameters are structural and which trainable | TF | F2b–F2e |
 | D4 Compile policy | minimum torch for compiled use; enforcement | TD | D-track releases |
 
@@ -263,7 +315,7 @@ Short documents (one to two pages), written before the packages that depend on t
 2. **Reference data is reproduced.** The T0.2 reference values are matched within the T0.3 tolerances, unless the package documents a deliberate change of physics.
 3. **The derivative status only improves.** The T0.3 status matrix may only gain passes; any new failure blocks the merge.
 4. **No new data-dependent operations in the per-call path** (P3). Reviewers check this.
-5. **No `object.__setattr__` outside the `Node` base.** Enforced by a CI grep once C1 lands.
+5. **No `object.__setattr__` outside the `Node` base.** Enforced by a CI grep.
 6. **Documentation.** Changelog entry, docstrings and the migration-guide section are updated.
 7. **One concern per PR.** If a package grows beyond one reviewable PR, split it into sub-packages in its track file.
 

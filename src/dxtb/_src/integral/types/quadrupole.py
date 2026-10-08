@@ -30,7 +30,94 @@ from dxtb._src.typing import Literal, Tensor
 
 from ..base import BaseIntegral
 
-__all__ = ["QuadrupoleIntegral"]
+__all__ = [
+    "QuadrupoleIntegral",
+    "make_quadrupole_traceless",
+    "reduce_quadrupole_9_to_6",
+    "shift_quadrupole_origin",
+]
+
+
+def reduce_quadrupole_9_to_6(
+    quadrupole: Tensor,
+    uplo: Literal["u", "U", "l", "L"] = "l",
+) -> Tensor:
+    """Return the six independent components of a quadrupole matrix."""
+    return _reduce_9_to_6(quadrupole, uplo=uplo)
+
+
+def make_quadrupole_traceless(quadrupole: Tensor) -> Tensor:
+    """Return the traceless form of a lower-ordered six-component tensor."""
+    if quadrupole.ndim not in (3, 4) or quadrupole.shape[-3] != 6:
+        raise RuntimeError(
+            "Quadrupole integral must be a tensor tensor of shape "
+            f"'(6, norb, norb)' but is {quadrupole.shape}."
+        )
+
+    tr = 0.5 * (
+        quadrupole[..., 0, :, :]
+        + quadrupole[..., 2, :, :]
+        + quadrupole[..., 5, :, :]
+    )
+    return torch.stack(
+        [
+            1.5 * quadrupole[..., 0, :, :] - tr,  # xx
+            1.5 * quadrupole[..., 1, :, :],  # yx
+            1.5 * quadrupole[..., 2, :, :] - tr,  # yy
+            1.5 * quadrupole[..., 3, :, :],  # zx
+            1.5 * quadrupole[..., 4, :, :],  # zy
+            1.5 * quadrupole[..., 5, :, :] - tr,  # zz
+        ],
+        dim=-3,
+    )
+
+
+def shift_quadrupole_origin(
+    quadrupole: Tensor,
+    r0: Tensor,
+    overlap: Tensor,
+    orbital_positions: Tensor,
+) -> Tensor:
+    """Shift a six-component lower-ordered quadrupole to the ket origin."""
+    if orbital_positions.shape[-2] != overlap.shape[-1]:
+        raise RuntimeError(
+            "Shape mismatch between positions and overlap integral. "
+            "The position tensor must be spread to orbital-resolution."
+            "Use the `IndexHelper` to spread the positions: "
+            "ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)"
+        )
+
+    if quadrupole.shape[-3] != 6:
+        raise RuntimeError(
+            "Quadrupole integral must be a tensor of shape "
+            f"'(6, norb, norb)' but is {quadrupole.shape}."
+        )
+
+    x = orbital_positions[..., 0]
+    y = orbital_positions[..., 1]
+    z = orbital_positions[..., 2]
+    dpx = r0[..., 0, :, :]
+    dpy = r0[..., 1, :, :]
+    dpz = r0[..., 2, :, :]
+
+    shift_xx = _shift_diagonal(x, dpx, overlap)
+    shift_yy = _shift_diagonal(y, dpy, overlap)
+    shift_zz = _shift_diagonal(z, dpz, overlap)
+    shift_yx = _shift_offdiag(y, x, dpy, dpx, overlap)
+    shift_zx = _shift_offdiag(z, x, dpz, dpx, overlap)
+    shift_zy = _shift_offdiag(z, y, dpz, dpy, overlap)
+
+    return torch.stack(
+        [
+            quadrupole[..., 0, :, :] + shift_xx,  # xx
+            quadrupole[..., 1, :, :] + shift_yx,  # yx
+            quadrupole[..., 2, :, :] + shift_yy,  # yy
+            quadrupole[..., 3, :, :] + shift_zx,  # zx
+            quadrupole[..., 4, :, :] + shift_zy,  # zy
+            quadrupole[..., 5, :, :] + shift_zz,  # zz
+        ],
+        dim=-3,
+    )
 
 
 class QuadrupoleIntegral(BaseIntegral):
@@ -63,7 +150,7 @@ class QuadrupoleIntegral(BaseIntegral):
         Tensor
             Reduced quadrupole integral of shape ``(..., 6, n, n)``.
         """
-        self.matrix = _reduce_9_to_6(self.matrix, uplo=uplo)
+        self.matrix = reduce_quadrupole_9_to_6(self.matrix, uplo=uplo)
         return self.matrix
 
     def traceless(self) -> Tensor:
@@ -87,29 +174,7 @@ class QuadrupoleIntegral(BaseIntegral):
             Supplied quadrupole integral is no ``6xNxN`` tensor.
         """
 
-        if self.matrix.ndim not in (3, 4) or self.matrix.shape[-3] != 6:
-            raise RuntimeError(
-                "Quadrupole integral must be a tensor tensor of shape "
-                f"'(6, norb, norb)' but is {self.matrix.shape}."
-            )
-
-        tr = 0.5 * (
-            self.matrix[..., 0, :, :]
-            + self.matrix[..., 2, :, :]
-            + self.matrix[..., 5, :, :]
-        )
-
-        self.matrix = torch.stack(
-            [
-                1.5 * self.matrix[..., 0, :, :] - tr,  # xx
-                1.5 * self.matrix[..., 1, :, :],  ###### yx
-                1.5 * self.matrix[..., 2, :, :] - tr,  # yy
-                1.5 * self.matrix[..., 3, :, :],  ###### zx
-                1.5 * self.matrix[..., 4, :, :],  ###### zy
-                1.5 * self.matrix[..., 5, :, :] - tr,  # zz
-            ],
-            dim=-3,
-        )
+        self.matrix = make_quadrupole_traceless(self.matrix)
         return self.matrix
 
     def shift_r0r0_rjrj(
@@ -187,50 +252,16 @@ class QuadrupoleIntegral(BaseIntegral):
         RuntimeError
             Quadrupole integral is no ``9xNxN`` or ``6xNxN`` tensor.
         """
-        if pos.shape[-2] != overlap.shape[-1]:
-            raise RuntimeError(
-                "Shape mismatch between positions and overlap integral. "
-                "The position tensor must be spread to orbital-resolution."
-                "Use the `IndexHelper` to spread the positions: "
-                "ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)"
-            )
-
-        if self.matrix.shape[-3] != 6:
-            if self.matrix.shape[-3] != 9:
+        matrix = self.matrix
+        if matrix.shape[-3] != 6:
+            if matrix.shape[-3] != 9:
                 raise RuntimeError(
                     "Quadrupole integral must be a tensor of shape "
                     "'(6, norb, norb)' or '(9, norb, norb)' but is "
-                    f"{self.matrix.shape}."
+                    f"{matrix.shape}."
                 )
-            self.reduce_9_to_6(uplo=uplo)
-
-        # cartesian components for convenience
-        x = pos[..., 0]
-        y = pos[..., 1]
-        z = pos[..., 2]
-        dpx = r0[..., 0, :, :]
-        dpy = r0[..., 1, :, :]
-        dpz = r0[..., 2, :, :]
-
-        # construct shift contribution from dipole and monopole (overlap) moments
-        shift_xx = _shift_diagonal(x, dpx, overlap)
-        shift_yy = _shift_diagonal(y, dpy, overlap)
-        shift_zz = _shift_diagonal(z, dpz, overlap)
-        shift_yx = _shift_offdiag(y, x, dpy, dpx, overlap)
-        shift_zx = _shift_offdiag(z, x, dpz, dpx, overlap)
-        shift_zy = _shift_offdiag(z, y, dpz, dpy, overlap)
-
-        self.matrix = torch.stack(
-            [
-                self.matrix[..., 0, :, :] + shift_xx,  # xx
-                self.matrix[..., 1, :, :] + shift_yx,  # yx
-                self.matrix[..., 2, :, :] + shift_yy,  # yy
-                self.matrix[..., 3, :, :] + shift_zx,  # zx
-                self.matrix[..., 4, :, :] + shift_zy,  # zy
-                self.matrix[..., 5, :, :] + shift_zz,  # zz
-            ],
-            dim=-3,
-        )
+            matrix = reduce_quadrupole_9_to_6(matrix, uplo=uplo)
+        self.matrix = shift_quadrupole_origin(matrix, r0, overlap, pos)
         return self.matrix
 
 

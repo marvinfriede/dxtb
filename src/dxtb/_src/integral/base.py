@@ -33,7 +33,33 @@ from .abc import IntegralABC
 from .driver import IntDriver
 from .utils import snorm
 
-__all__ = ["BaseIntegral"]
+__all__ = [
+    "BaseIntegral",
+    "normalize_integral_gradient",
+    "normalize_integral_matrix",
+]
+
+
+def normalize_integral_matrix(
+    matrix: Tensor, norm: Tensor | None = None
+) -> Tensor:
+    """Return a normalized integral matrix without changing its owner."""
+    if norm is None:
+        norm = snorm(matrix)
+
+    if norm.ndim == 1:
+        einsum_str = "...ij,i,j->...ij"
+    elif norm.ndim == 2:
+        einsum_str = "b...ij,bi,bj->b...ij"
+    else:
+        raise ValueError(f"Invalid norm shape: {norm.shape}")
+
+    return einsum(einsum_str, matrix, norm, norm)
+
+
+def normalize_integral_gradient(gradient: Tensor, norm: Tensor) -> Tensor:
+    """Return an overlap-normalized integral gradient."""
+    return einsum("...ijx,...i,...j->...ijx", gradient, norm, norm)
 
 
 class BaseIntegral(IntegralABC, TensorLike):
@@ -159,19 +185,8 @@ class BaseIntegral(IntegralABC, TensorLike):
             Overlap norm to normalize the integral.
         """
         if norm is None:
-            if self.norm is not None:
-                norm = self.norm
-            else:
-                norm = snorm(self.matrix)
-
-        if norm.ndim == 1:
-            einsum_str = "...ij,i,j->...ij"
-        elif norm.ndim == 2:
-            einsum_str = "b...ij,bi,bj->b...ij"
-        else:
-            raise ValueError(f"Invalid norm shape: {norm.shape}")
-
-        self.matrix = einsum(einsum_str, self.matrix, norm, norm)
+            norm = self.norm
+        self.matrix = normalize_integral_matrix(self.matrix, norm)
 
     def normalize_gradient(self, norm: Tensor | None = None) -> None:
         """
@@ -183,13 +198,11 @@ class BaseIntegral(IntegralABC, TensorLike):
             Overlap norm to normalize the integral.
         """
         if norm is None:
-            if self.norm is not None:
-                norm = self.norm
-            else:
-                norm = snorm(self.matrix)
+            norm = self.norm
+        if norm is None:
+            norm = snorm(self.matrix)
 
-        einsum_str = "...ijx,...i,...j->...ijx"
-        self.gradient = einsum(einsum_str, self.gradient, norm, norm)
+        self.gradient = normalize_integral_gradient(self.gradient, norm)
 
     def to_pt(self, path: PathLike | None = None) -> None:
         """

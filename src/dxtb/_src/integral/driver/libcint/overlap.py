@@ -32,9 +32,25 @@ from dxtb._src.typing import Any, Tensor
 from ...types import OverlapIntegral
 from ...utils import snorm
 from .base import IntegralLibcint
-from .driver import IntDriverLibcint
+from .driver import LibcintCallData
 
-__all__ = ["OverlapLibcint"]
+__all__ = ["OverlapLibcint", "build_overlap_libcint"]
+
+
+def build_overlap_libcint(call_data: LibcintCallData) -> Tensor:
+    """Build the overlap matrix from call-local libcint data."""
+    if not isinstance(call_data, LibcintCallData):
+        raise TypeError("Expected call-local LibcintCallData.")
+
+    # pylint: disable=import-outside-toplevel
+    from dxtb._src.exlibs import libcint
+
+    if call_data.batch_mode > 0:
+        return pack([libcint.overlap(driver) for driver in call_data.drivers])
+
+    if len(call_data.drivers) != 1:
+        raise RuntimeError("Single-system libcint setup needs one wrapper.")
+    return libcint.overlap(call_data.drivers[0])
 
 
 class OverlapLibcint(OverlapIntegral, IntegralLibcint):
@@ -48,65 +64,56 @@ class OverlapLibcint(OverlapIntegral, IntegralLibcint):
     the :meth:`get_gradient` method should be used.
     """
 
-    def build(self, driver: IntDriverLibcint, **_: Any) -> Tensor:
+    def build(self, call_data: LibcintCallData, **_: Any) -> Tensor:
         """
         Calculation of overlap integral using libcint.
 
         Returns
         -------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
 
         Returns
         -------
         Tensor
             Overlap integral matrix of shape ``(..., norb, norb)``.
         """
-        super().checks(driver)
+        super().checks(call_data)
 
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.exlibs import libcint
-
-        # batched mode
-        if driver.ihelp.batch_mode > 0:
-            assert isinstance(driver.drv, list)
-
-            slist = [libcint.overlap(d) for d in driver.drv]
-            nlist = [snorm(s) for s in slist]
-
-            self.norm = pack(nlist)
-            self.matrix = pack(slist)
-            return self.matrix
-
-        # single mode
-        assert isinstance(driver.drv, libcint.LibcintWrapper)
-
-        self.matrix = libcint.overlap(driver.drv)
-        self.norm = snorm(self.matrix)
+        self.matrix = build_overlap_libcint(call_data)
+        if call_data.batch_mode > 0:
+            self.norm = pack(
+                [
+                    snorm(self.matrix[i, : driver.nao(), : driver.nao()])
+                    for i, driver in enumerate(call_data.drivers)
+                ]
+            )
+        else:
+            self.norm = snorm(self.matrix)
         return self.matrix
 
-    def get_gradient(self, driver: IntDriverLibcint, **_: Any) -> Tensor:
+    def get_gradient(self, call_data: LibcintCallData, **_: Any) -> Tensor:
         """
         Overlap gradient calculation using libcint.
 
         Parameters
         ----------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
 
         Returns
         -------
         Tensor
             Overlap gradient of shape ``(..., norb, norb, 3)``.
         """
-        super().checks(driver)
+        super().checks(call_data)
 
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
 
         # build norm if not already available
         if self.norm is None:
-            self.build(driver)
+            self.build(call_data)
 
         def fcn(driver: libcint.LibcintWrapper) -> Tensor:
             # (3, norb, norb)
@@ -117,29 +124,20 @@ class OverlapLibcint(OverlapIntegral, IntegralLibcint):
             return -einsum("...xij->...ijx", grad)
 
         # batched mode
-        if driver.ihelp.batch_mode > 0:
-            if not isinstance(driver.drv, list):
-                raise RuntimeError(
-                    "IndexHelper on integral driver is batched, but the driver "
-                    "instance itself not."
-                )
-
-            if driver.ihelp.batch_mode == 1:
-                self.gradient = pack([fcn(d) for d in driver.drv])
+        if call_data.batch_mode > 0:
+            if call_data.batch_mode == 1:
+                self.gradient = pack([fcn(d) for d in call_data.drivers])
                 return self.gradient
 
-            elif driver.ihelp.batch_mode == 2:
-                self.gradient = torch.stack([fcn(d) for d in driver.drv])
+            if call_data.batch_mode == 2:
+                self.gradient = torch.stack([fcn(d) for d in call_data.drivers])
                 return self.gradient
 
-            raise ValueError(f"Unknown batch mode '{driver.ihelp.batch_mode}'.")
+            raise ValueError(f"Unknown batch mode '{call_data.batch_mode}'.")
 
         # single mode
-        if not isinstance(driver.drv, libcint.LibcintWrapper):
-            raise RuntimeError(
-                "IndexHelper on integral driver is not batched, but the "
-                "driver instance itself seems to be batched."
-            )
+        if len(call_data.drivers) != 1:
+            raise RuntimeError("Single-system libcint setup needs one wrapper.")
 
-        self.gradient = fcn(driver.drv)
+        self.gradient = fcn(call_data.drivers[0])
         return self.gradient

@@ -12,6 +12,23 @@
 
 ---
 
+## F0 Early training invariant
+
+A tiny architecture regression test, not the production training workflow.
+
+Needs: B5 and enough of B6a that call history cannot affect the result.
+
+Select a few existing parameters, build System inside the loss from the
+current Model, differentiate an energy loss, make several functional updates,
+verify loss decreases and verify non-selected parameters are bit-identical.
+
+Compare initial gradients with T0.9/finite differences.
+
+Purpose: detect graph cuts introduced by Model/System/setup work long before
+the complete F1/F2 workflow.
+
+---
+
 ## F1 Parameter training basics
 
 **Goal.** Train existing parameters reliably before adding new elements.
@@ -25,7 +42,7 @@
 
 **Done when.** Coverage table has no bug entries; the recovery test passes in CI.
 
-**Needs.** T0.12, B8, C9, E8, D1, D2 (everything except the training-dependent D3; F1 is the last package of the plan). **Unblocks.** F2a–F2e. **Size.** M.
+**Needs.** T0.12, F0, B8, C9, E8, D1, D2 (the full workflow stays downstream; the early training check is F0). **Unblocks.** F2a–F2e. **Size.** M.
 
 ---
 
@@ -45,6 +62,8 @@
    - any other element-indexed tables.
 
    Where coverage stops at 86, decide: provide defaults and make them trainable, or extend the dependency.
+
+**Prerequisite.** A machine-readable Z=89-103 support inventory (per dependency and per element-indexed table: covered, defaulted, missing) must exist before any actinide table is edited.
 
 **Implementation.**
 
@@ -139,7 +158,7 @@
 3. **Module handling.** The network is held with `ModuleNode` (C1b): architecture as context, weights as children, called through `functional_call`.
 4. **Precision.** Float64 inside the SCF; a network trained in float32 is converted, or casts internally and returns float64.
 5. **Determinism.** No dropout or randomness inside the SCF; evaluation mode enforced.
-6. **Smoothness.** Activation functions must be smooth for higher derivatives (ReLU has zero second derivative); document this as a requirement.
+6. **Smoothness.** Activation functions must be smooth for higher derivatives (ReLU has zero second derivative); document this as a requirement. Tests cover smooth activations and the overall third-order transforms of the ML-augmented energy, not merely first-order trainability.
 
 **Steps.**
 
@@ -173,6 +192,7 @@
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
+| F0 | Early training invariant | B5, B6a | S |
 | F1 | Training basics (last) | T0.12, B8, C9, E8, D1, D2 | M |
 | F2a | Structure and element range | F1 | M |
 | F2b | Defaults and constraints | F2a | S |

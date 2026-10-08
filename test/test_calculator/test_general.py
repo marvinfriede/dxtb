@@ -98,11 +98,19 @@ def test_change_type_after_energy(int_driver: str) -> None:
     run_asserts(calc_64, dtype)
 
     # extra asserts on initialized
-    bas = calc_64.integrals.mgr.driver.basis
-    assert bas.dtype == dtype
-    assert bas.ngauss.dtype == DEFAULT_BASIS_INT
-    assert bas.pqn.dtype == DEFAULT_BASIS_INT
-    assert bas.slater.dtype == dtype
+    driver = calc_64.integrals.mgr.driver
+    if int_driver == labels.INTDRIVER_PYTORCH:
+        bas = driver.basis
+        assert bas.dtype == dtype
+        assert bas.ngauss.dtype == DEFAULT_BASIS_INT
+        assert bas.pqn.dtype == DEFAULT_BASIS_INT
+        assert bas.slater.dtype == dtype
+    else:
+        # Libcint creates its parameter-dependent basis data per call and
+        # must not retain that basis on the persistent driver.
+        assert driver.is_setup() is False
+        with pytest.raises(RuntimeError, match="Basis has not been setup"):
+            _ = driver.basis
 
     assert calc_64.integrals.hcore is not None
     assert calc_64.integrals.hcore.dtype == dtype

@@ -28,7 +28,10 @@ from dxtb import GFN1_XTB, IndexHelper
 from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import IntDriverLibcint
+from dxtb._src.integral.driver.libcint import (
+    IntDriverLibcint,
+    LibcintCallData,
+)
 from dxtb._src.integral.driver.manager import DriverManager
 from dxtb._src.integral.factory import (
     new_dipint_libcint,
@@ -36,9 +39,6 @@ from dxtb._src.integral.factory import (
     new_quadint_libcint,
 )
 from dxtb._src.typing import DD, Tensor
-
-if has_libcint is True:
-    from dxtb._src.exlibs import libcint
 
 from ..conftest import DEVICE
 from .samples import samples
@@ -56,12 +56,11 @@ def run(numbers: Tensor, positions: Tensor, cpu: bool, dd: DD) -> None:
 
     if numbers.ndim == 1:
         assert isinstance(mgr.driver, IntDriverLibcint)
-        assert isinstance(mgr.driver.drv, libcint.LibcintWrapper)
+        assert not hasattr(mgr.driver, "drv")
     else:
         assert isinstance(mgr.driver, IntDriverLibcint)
-        assert isinstance(mgr.driver.drv, list)
-        assert isinstance(mgr.driver.drv[0], libcint.LibcintWrapper)
-        assert isinstance(mgr.driver.drv[1], libcint.LibcintWrapper)
+        assert not hasattr(mgr.driver, "drv")
+    assert isinstance(mgr.setup_driver(positions), LibcintCallData)
 
     ################################################
 

@@ -24,17 +24,13 @@ Base class for xTB Hamiltonians.
 from __future__ import annotations
 
 import torch
-from tad_mctc import storch
-from tad_mctc.batch import real_pairs
-from tad_mctc.convert import symmetrize
-from tad_mctc.data.radii import ATOMIC_RADII
 from tad_mctc.exceptions import DeviceError, DtypeError
 from tad_mctc.typing import PathLike, Tensor, TensorLike
-from tad_mctc.units import EV2AU
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import CNFunc
+from dxtb._src.xtb.h0 import H0Setup, build_hcore, setup_h0
 
 from .abc import HamiltonianABC
 
@@ -103,6 +99,7 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         "en",
         "enscale",
         "rad",
+        "setup",
     ]
 
     def __init__(
@@ -112,6 +109,7 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         ihelp: IndexHelper,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        setup: H0Setup | None = None,
         **_,
     ) -> None:
         super().__init__(device, dtype)
@@ -126,38 +124,32 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         if par.is_none("hamiltonian"):
             raise RuntimeError("Parametrization does not specify Hamiltonian.")
 
-        self.numbers = numbers
-        self.unique = torch.unique(numbers)
-        self.ihelp = ihelp
+        setup = (
+            setup_h0(numbers, par, ihelp, device=device, dtype=dtype)
+            if setup is None
+            else setup
+        )
+        self.setup = setup
+        self.numbers = setup.numbers
+        self.unique = setup.unique
+        self.ihelp = setup.ihelp
 
         self.label = self.__class__.__name__
         self._matrix = None
 
         # Initialize Hamiltonian parameters
 
-        # atom-resolved parameters
-        self.rad = ATOMIC_RADII(**self.dd)[self.unique]
-        self.en = par.get_elem_param(self.unique, "en", pad_val=PAD)
-        self.enscale = (
-            torch.tensor(0.0, **self.dd)
-            if par.is_none("hamiltonian.xtb.enscale")
-            else par.get("hamiltonian.xtb.enscale")
-        )
-
-        # shell-resolved element parameters
-        self.kcn = par.get_elem_param(self.unique, "kcn", pad_val=PAD)
-        self.selfenergy = par.get_elem_param(self.unique, "levels", pad_val=PAD)
-        self.shpoly = par.get_elem_param(self.unique, "shpoly", pad_val=PAD)
-        self.refocc = par.get_elem_param(self.unique, "refocc", pad_val=PAD)
-        self.valence = self._get_elem_valence(par)
-
-        # shell-pair-resolved pair parameters
-        self.hscale = self._get_hscale(par)
-        self.kpair = par.get_pair_param(self.unique.tolist())
-
-        # unit conversion
-        self.selfenergy = self.selfenergy * EV2AU
-        self.kcn = self.kcn * EV2AU
+        self.rad = setup.rad
+        self.en = setup.en
+        self.enscale = setup.enscale
+        self.kcn = setup.kcn
+        self.selfenergy = setup.selfenergy
+        self.shpoly = setup.shpoly
+        self.refocc = setup.refocc
+        self.valence = setup.valence
+        self.hscale = setup.hscale
+        self.kpair = setup.kpair
+        self.cn = setup.cn
 
         tensors = [
             ("hscale", self.hscale),
@@ -194,6 +186,17 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
     @matrix.setter
     def matrix(self, mat: Tensor) -> None:
         self._matrix = mat
+
+    def _clone_tensorlike(
+        self,
+        *,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> BaseHamiltonian:
+        """Clone setup tensors with structural indices kept integral."""
+        new = super()._clone_tensorlike(device=device, dtype=dtype)
+        new.setup = self.setup.to(device=device, dtype=dtype)
+        return new
 
     def clear(self) -> None:
         """Clear the integral matrix."""
@@ -278,98 +281,6 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         Tensor
             Hamiltonian (always symmetric).
         """
-        # masks
-        mask_atom_diagonal = real_pairs(self.numbers, mask_diagonal=True)
-        mask_shell = real_pairs(
-            self.ihelp.spread_atom_to_shell(self.numbers), mask_diagonal=False
-        )
-        mask_shell_diagonal = self.ihelp.spread_atom_to_shell(
-            mask_atom_diagonal, dim=(-2, -1)
-        )
-
-        zero = torch.tensor(0.0, **self.dd)
-
-        # ----------------
-        # Eq.29: H_(mu,mu)
-        # ----------------
-        if self.cn is None:
-            cn = torch.zeros_like(self.numbers, **self.dd)
-        else:
-            cn = self.cn(self.numbers, positions)
-
-        kcn = self.ihelp.spread_ushell_to_shell(self.kcn)
-
-        # formula differs from paper to be consistent with GFN2 -> "kcn" adapted
-        selfenergy = self.ihelp.spread_ushell_to_shell(
-            self.selfenergy
-        ) - kcn * self.ihelp.spread_atom_to_shell(cn)
-
-        # ----------------------
-        # Eq.24: PI(R_AB, l, l')
-        # ----------------------
-        distances = storch.cdist(positions, positions, p=2)
-        rad = self.ihelp.spread_uspecies_to_atom(self.rad)
-
-        rr = storch.safe_divide(
-            distances, rad.unsqueeze(-1) + rad.unsqueeze(-2)
-        )
-        rr_shell = self.ihelp.spread_atom_to_shell(
-            torch.where(mask_atom_diagonal, storch.safe_sqrt(rr), zero),
-            (-2, -1),
-        )
-
-        shpoly = self.ihelp.spread_ushell_to_shell(self.shpoly)
-        var_pi = (1.0 + shpoly.unsqueeze(-1) * rr_shell) * (
-            1.0 + shpoly.unsqueeze(-2) * rr_shell
-        )
-
-        # --------------------
-        # Eq.28: X(EN_A, EN_B)
-        # --------------------
-        en = self.ihelp.spread_uspecies_to_shell(self.en)
-        var_x = torch.where(
-            mask_shell_diagonal,
-            1.0
-            + self.enscale
-            * torch.pow(en.unsqueeze(-1) - en.unsqueeze(-2), 2.0),
-            zero,
-        )
-
-        # --------------------
-        # Eq.23: K_{AB}^{l,l'}
-        # --------------------
-        kpair = self.ihelp.spread_uspecies_to_shell(self.kpair, dim=(-2, -1))
-        hscale = self.ihelp.spread_ushell_to_shell(self.hscale, dim=(-2, -1))
-        valence = self.ihelp.spread_ushell_to_shell(self.valence)
-
-        var_k = torch.where(
-            valence.unsqueeze(-1) * valence.unsqueeze(-2),
-            hscale * kpair * var_x,
-            hscale,
-        )
-
-        # ------------
-        # Eq.23: H_EHT
-        # ------------
-        var_h = torch.where(
-            mask_shell,
-            0.5 * (selfenergy.unsqueeze(-1) + selfenergy.unsqueeze(-2)),
-            zero,
-        )
-
-        hcore = self.ihelp.spread_shell_to_orbital(
-            torch.where(
-                mask_shell_diagonal,
-                var_pi * var_k * var_h,  # scale only off-diagonals
-                var_h,
-            ),
-            dim=(-2, -1),
-        )
-
-        if overlap is not None:
-            hcore = hcore * overlap
-
-        # force symmetry to avoid problems through numerical errors
-        h0 = symmetrize(hcore)
+        h0, _ = build_hcore(self.setup, positions, overlap, charge)
         self.matrix = h0
         return h0

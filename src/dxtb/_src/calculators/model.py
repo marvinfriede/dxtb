@@ -69,6 +69,7 @@ from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import DD, Tensor
+from dxtb._src.xtb.h0 import H0Setup, setup_h0
 from dxtb.config import Config
 from dxtb.integrals import Integrals
 
@@ -113,6 +114,9 @@ class System:
 
     integrals: Integrals
     """Integral container (drivers and the empty integrals)."""
+
+    h0_setup: H0Setup | None
+    """Composition-dependent H0 data for pure matrix construction."""
 
     classical_cache: ClassicalListCache
     """
@@ -234,9 +238,7 @@ class Model:
         OutputHandler.write_stdout_nf(" - Interactions      ... ", v=4)
 
         es2 = (
-            new_es2(unique, par, **dd)
-            if not {"all", "es2"} & exclude
-            else None
+            new_es2(unique, par, **dd) if not {"all", "es2"} & exclude else None
         )
         aes2 = (
             new_aes2(unique, par, **dd)
@@ -244,9 +246,7 @@ class Model:
             else None
         )
         es3 = (
-            new_es3(unique, par, **dd)
-            if not {"all", "es3"} & exclude
-            else None
+            new_es3(unique, par, **dd) if not {"all", "es3"} & exclude else None
         )
         d4sc = (
             new_d4sc(numbers, par, **dd)
@@ -292,9 +292,7 @@ class Model:
             else None
         )
         srb = (
-            new_srb(unique, par, **dd)
-            if not {"all", "srb"} & exclude
-            else None
+            new_srb(unique, par, **dd) if not {"all", "srb"} & exclude else None
         )
 
         classicals = ClassicalList(
@@ -343,9 +341,11 @@ class Model:
 
         integrals = ints.Integrals(mgr, intlevel=config.ints.level, **dd)
 
+        h0_setup = None
         if config.ints.level >= labels.INTLEVEL_OVERLAP:
+            h0_setup = setup_h0(numbers, par, ihelp, **dd)
             integrals.hcore = ints.factories.new_hcore(
-                numbers, par, ihelp, **dd
+                numbers, par, ihelp, setup=h0_setup, **dd
             )
             integrals.overlap = ints.factories.new_overlap(
                 driver=mgr.driver_type, **dd
@@ -372,6 +372,7 @@ class Model:
             classicals=classicals,
             interactions=interactions,
             integrals=integrals,
+            h0_setup=h0_setup,
             classical_cache=classical_cache,
             dd=dd,
         )

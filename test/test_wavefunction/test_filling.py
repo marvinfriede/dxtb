@@ -22,7 +22,6 @@ Reference values obtained with tbmalt.
 from __future__ import annotations
 
 from dataclasses import replace
-
 from math import sqrt
 
 import numpy as np
@@ -258,6 +257,9 @@ def test_kt(dtype: torch.dtype, kt: float):
 
     # electronic free energy
     d = torch.zeros_like(focc)  # dummy
+    dmat = torch.zeros(
+        (emo.shape[-1], emo.shape[-1]), device=emo.device, dtype=emo.dtype
+    )
 
     class _IndexHelper:
         """Every orbital exists (the entropy only reads the mask)."""
@@ -274,7 +276,7 @@ def test_kt(dtype: torch.dtype, kt: float):
         numbers=numbers,
         ihelp=_IndexHelper(),  # type: ignore
         cache=d,
-        integrals=IntegralMatrices(_hcore=d, _overlap=d, **dd),
+        integrals=IntegralMatrices(hcore=dmat, overlap=dmat),
         config=ConfigSCF.create(fermi_etemp=kt),
     )
 

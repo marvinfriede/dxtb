@@ -134,8 +134,8 @@ def gradchecker_batch(
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        driver.setup(p, mask=mask)
-        return overlap.build(driver)
+        call_data = driver.setup(p, mask=mask)
+        return overlap.build(call_data)
 
     return func, pos
 

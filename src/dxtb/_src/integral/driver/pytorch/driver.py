@@ -23,6 +23,8 @@ Collection of PyTorch-based integral drivers.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 from tad_mctc.batch import deflate, pack
 
@@ -35,6 +37,9 @@ from .base import PytorchImplementation
 from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
 from .impls.pairs import PairPlan, assemble_matrix, prepare
 from .impls.pipeline import Kernel1D
+
+if TYPE_CHECKING:
+    from .setup import PytorchIntegralSetup
 
 __all__ = ["IntDriverPytorch"]
 
@@ -63,6 +68,7 @@ class IntDriverPytorch(PytorchImplementation, IntDriver):
         # driver; the single-molecule plan is tied to the helper it was built for
         self._plan_single: tuple[IndexHelper, PairPlan] | None = None
         self._plan_batch: list[PairPlan] = []
+        self._integral_setup: PytorchIntegralSetup | None = None
 
     def setup(self, positions: Tensor, **kwargs: Any) -> None:
         """
@@ -82,6 +88,14 @@ class IntDriverPytorch(PytorchImplementation, IntDriver):
                     self.ihelp,
                     device=self.device,
                     dtype=self.dtype,
+                )
+
+            if self._integral_setup is None:
+                from .setup import setup_integrals
+
+                self._integral_setup = setup_integrals(
+                    self.basis,
+                    algorithm=self.algorithm,
                 )
 
             self._positions_single = positions
@@ -154,6 +168,13 @@ class IntDriverPytorch(PytorchImplementation, IntDriver):
     def algorithm(self, value: str) -> None:
         get_kernel(value)  # validates the name
         self._algorithm = value.casefold()
+        if self._integral_setup is not None:
+            from .setup import setup_integrals
+
+            self._integral_setup = setup_integrals(
+                self.basis,
+                algorithm=self._algorithm,
+            )
 
     @property
     def kernel(self) -> Kernel1D:
@@ -180,6 +201,29 @@ class IntDriverPytorch(PytorchImplementation, IntDriver):
             ``(nbatch, ncomp, norb, norb)`` (batched).
         """
         kernel = self.kernel
+
+        if self.ihelp.batch_mode == 0:
+            if self._integral_setup is None:
+                raise RuntimeError("Integral setup has not been created.")
+
+            if components is None:
+                from .overlap import build_overlap
+
+                return build_overlap(
+                    self._integral_setup, self._positions_single
+                ).unsqueeze(0)
+
+            from .impls.pipeline import DIPOLE_COMPONENTS, QUADRUPOLE_COMPONENTS
+            from .multipole import build_dipole, build_quadrupole
+
+            if components == DIPOLE_COMPONENTS:
+                return build_dipole(
+                    self._integral_setup, self._positions_single
+                )
+            if components == QUADRUPOLE_COMPONENTS:
+                return build_quadrupole(
+                    self._integral_setup, self._positions_single
+                )
 
         def _one(
             ihelp: IndexHelper, bas: Basis, pos: Tensor, plan: PairPlan

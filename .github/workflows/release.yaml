@@ -109,6 +109,10 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install dist/*.whl
 
+      - name: Check restructuring release blockers
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test ! -f src/dxtb/_src/mctc_shim.py
+
       - name: Determine package name
         run: |
           name=$(echo "${REPO_NAME}" | tr '-' '_')

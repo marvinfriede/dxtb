@@ -30,6 +30,7 @@ from tad_mctc.math import einsum
 from tad_mctc.units import KELVIN2AU
 
 from dxtb import IndexHelper, OutputHandler
+from dxtb._src.calculators.config.scf import check_tols
 from dxtb._src.components.interactions.container import (
     Charges,
     ContainerData,
@@ -46,7 +47,6 @@ from dxtb._src.typing import (
     overload,
 )
 from dxtb._src.wavefunction import filling, mulliken
-from dxtb._src.calculators.config.scf import check_tols
 from dxtb.config import ConfigSCF
 
 from .pure import conversions, iterations
@@ -205,15 +205,7 @@ class BaseSCF:
                 [~conv, (...), *slicers["orbital"], *slicers["orbital"]]
             )
 
-            # disable shape check temporarily for writing culled versions back
-            self.ints.run_checks = False
-            self.ints.overlap = self.ints.overlap[twodim]
-            self.ints.hcore = self.ints.hcore[twodim]
-            if self.ints.dipole is not None:
-                self.ints.dipole = self.ints.dipole[threedim]
-            if self.ints.quadrupole is not None:
-                self.ints.quadrupole = self.ints.quadrupole[threedim]
-            self.ints.run_checks = True
+            self.ints = self.ints.slice(twodim, threedim)
 
             self.numbers = self.numbers[onedim_atom]
             self.hamiltonian = self.hamiltonian[twodim]
@@ -403,7 +395,9 @@ class BaseSCF:
 
         # initialize Charge container depending on given integrals
         if isinstance(charges, Tensor):
-            charges = Charges(mono=charges, batch_mode=self._data.ihelp.batch_mode)
+            charges = Charges(
+                mono=charges, batch_mode=self._data.ihelp.batch_mode
+            )
             self._data.charges["mono"] = charges.mono_shape
 
             if self._data.ints.dipole is not None:

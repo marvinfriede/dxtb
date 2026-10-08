@@ -161,15 +161,7 @@ class _Data:
             [~conv, (...), *slicers["orbital"], *slicers["orbital"]]
         )
 
-        # disable shape check temporarily for writing culled versions back
-        self.ints.run_checks = False
-        self.ints.overlap = self.ints.overlap[twodim]
-        self.ints.hcore = self.ints.hcore[twodim]
-        if self.ints.dipole is not None:
-            self.ints.dipole = self.ints.dipole[threedim]
-        if self.ints.quadrupole is not None:
-            self.ints.quadrupole = self.ints.quadrupole[threedim]
-        self.ints.run_checks = True
+        self.ints = self.ints.slice(twodim, threedim)
 
         self.numbers = self.numbers[onedim_atom]
         self.hamiltonian = self.hamiltonian[twodim]

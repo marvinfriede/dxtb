@@ -224,6 +224,14 @@ Add to the docstrings and a "Known issues" page:
 
 **Goal.** Know where time and memory go before deciding on any optimisation. This replaces the earlier D0.
 
+**Status: partial.** The CPU workloads and memory profile are recorded in
+`T0-baseline-report.md`. The planned GPU run has not been recorded. This does
+not block the structural Track B work, but it must be completed before final
+E6/D batching and compile performance decisions.
+
+Do not mark the whole package done until the original CPU+GPU criterion is met,
+or explicitly change that criterion.
+
 **Workloads.**
 
 | ID | Workload | Why |

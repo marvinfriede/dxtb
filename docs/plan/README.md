@@ -15,8 +15,25 @@ API.
 | `06-TD-performance.md` | Track D: compiling and performance |
 | `B1-decision-note.md` | Decision note B1 (agreed): model/system/result, results, property functions, batching |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
+| `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
 
 The design review referenced by the plan is not in the repository.
+
+## Current execution document
+
+The track files were originally written against `46af7bc`. The baseline work
+and subsequent upstream changes invalidated several starting assumptions.
+`07-current-state-and-execution-plan.md` records the reviewed state of the
+restructuring branch and supersedes package status/dependency information in
+the older files where they differ.
+
+In particular:
+
+- B3 is partial rather than complete;
+- tad-mctc's Node/ModuleNode infrastructure is already available;
+- E5 (PyTorch multipole integrals) is complete;
+- E2 starts from the newer PairPlan/pair-builder implementation;
+- T0.8 has a CPU baseline but still lacks the planned GPU baseline.
 
 The code references in the plan point to commit `46af7bc`. `main` has moved
 on since (#268 CCA orbital ordering, #269 Fermi smearing, #270 PyTorch

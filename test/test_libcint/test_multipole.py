@@ -142,17 +142,17 @@ def test_shift_r0_rj(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Setup the driver
     mgr = DriverManager(labels.INTDRIVER_LIBCINT, **dd)
     mgr.create_driver(numbers, par, ihelp)
-    mgr.setup_driver(positions)
+    driver_data = mgr.setup_driver(positions)
 
     # Setup, build and normalize OVERLAP integral
     ovlpint = new_overlap(**dd)
-    ovlpint.build(mgr.driver)
+    ovlpint.build(driver_data)
     ovlpint.normalize()
     ovlpint = ovlpint.to(DEVICE)
 
     # Setup, build and normalize DIPOLE integral
     dipint = new_dipint(**dd)
-    dipint.build(mgr.driver)
+    dipint.build(driver_data)
     dipint = dipint.to(DEVICE)
     dipint.normalize(ovlpint.norm)
 
@@ -265,17 +265,17 @@ def test_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Setup the driver
     mgr = DriverManager(labels.INTDRIVER_LIBCINT, **dd)
     mgr.create_driver(numbers, par, ihelp)
-    mgr.setup_driver(positions)
+    driver_data = mgr.setup_driver(positions)
 
     # Setup, build and normalize OVERLAP integral
     ovlpint = new_overlap(**dd)
-    ovlpint.build(mgr.driver)
+    ovlpint.build(driver_data)
     ovlpint = ovlpint.to(DEVICE)
     ovlpint.normalize()
 
     # Setup, build and normalize QUADRUPOLE integral
     quadint = new_quadint(**dd)
-    quadint.build(mgr.driver)
+    quadint.build(driver_data)
     quadint = quadint.to(DEVICE)
     quadint.normalize(ovlpint.norm)
 
@@ -299,7 +299,7 @@ def test_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     # Setup, build and normalize DIPOLE integral
     dipint = new_dipint(**dd)
-    dipint.build(mgr.driver)
+    dipint.build(driver_data)
     dipint = dipint.to(DEVICE)
     dipint.normalize(ovlpint.norm)
 
@@ -392,6 +392,44 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Compare with PySCF reference
     assert pyscf_qp.shape == i.quadrupole.matrix.shape
     assert pytest.approx(pyscf_qp.cpu(), abs=tol) == i.quadrupole.matrix.cpu()
+
+
+@pytest.mark.skipif(not has_libcint, reason="libcint not available")
+def test_integrals_rebuild_multipole_inputs_for_new_geometry() -> None:
+    """Repeated multipole builds use overlap and dipole from the current geometry."""
+    dd: DD = {"dtype": torch.double, "device": DEVICE}
+    sample = samples["H2"]
+    numbers = sample["numbers"].to(DEVICE)
+    positions_a = sample["positions"].to(**dd)
+    positions_b = positions_a.clone()
+    positions_b[1, 2] += 0.25
+    par = get_param_module("gfn1", **dd)
+
+    def make_integrals() -> Integrals:
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        manager = DriverManager(
+            labels.INTDRIVER_LIBCINT,
+            force_cpu_for_libcint=True,
+            **dd,
+        )
+        manager.create_driver(numbers, par, ihelp)
+        return Integrals(manager, intlevel=labels.INTLEVEL_QUADRUPOLE, **dd)
+
+    reused = make_integrals()
+    reused.build_quadrupole(positions_a)
+    reused_dipole, reused_quadrupole = reused.dipole, reused.quadrupole
+    assert reused_dipole is not None and reused_quadrupole is not None
+    dipole_a = reused_dipole.matrix.clone()
+    quadrupole_a = reused_quadrupole.matrix.clone()
+
+    reused.build_quadrupole(positions_b)
+    fresh = make_integrals()
+    fresh.build_quadrupole(positions_b)
+    assert fresh.dipole is not None and fresh.quadrupole is not None
+    assert torch.allclose(reused.dipole.matrix, fresh.dipole.matrix)
+    assert torch.allclose(reused.quadrupole.matrix, fresh.quadrupole.matrix)
+    assert not torch.allclose(dipole_a, reused.dipole.matrix)
+    assert not torch.allclose(quadrupole_a, reused.quadrupole.matrix)
 
 
 @pytest.mark.skipif(

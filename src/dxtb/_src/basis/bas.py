@@ -345,7 +345,6 @@ class Basis(TensorLike):
             does not work in a batched fashion. Hence, we loop over the batch
             dimension and must remove the padding. Defaults to ``None``, i.e.,
             :func:`tad_mctc.batch.deflate` is used.
-
         Returns
         -------
         list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]
@@ -362,41 +361,7 @@ class Basis(TensorLike):
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
 
-        # tracking only required for orthogonalization
-        coeffs = []
-        alphas = []
-
-        s = 0
-        for i in range(self.unique.size(0)):
-            bases: list[libcint.CGTOBasis] = []
-            shells = self.ihelp.ushells_per_unique[i]
-
-            if shells == 0:
-                s += 1
-                zero = torch.tensor(0.0, **self.dd)
-                alphas.append(zero)
-                coeffs.append(zero)
-                continue
-
-            for _ in range(shells):
-                alpha, coeff = slater_to_gauss(
-                    self.ngauss[s],
-                    self.pqn[s],
-                    self.ihelp.unique_angular[s],
-                    self.slater[s],
-                )
-
-                # orthogonalize the H2s against the H1s
-                if self.valence[s].item() is False:
-                    alpha, coeff = orthogonalize(
-                        (alphas[s - 1], alpha),
-                        (coeffs[s - 1], coeff),
-                    )
-                alphas.append(alpha)
-                coeffs.append(coeff)
-
-                # increment
-                s += 1
+        alphas, coeffs = self.create_libcint_cgtos()
 
         ##########
         # SINGLE #
@@ -508,6 +473,42 @@ class Basis(TensorLike):
             b.append(atombasis)
 
         return b
+
+    def create_libcint_cgtos(
+        self,
+    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        """Create geometry-independent Gaussian basis data for libcint."""
+        alphas: list[Tensor] = []
+        coeffs: list[Tensor] = []
+        shell = 0
+
+        for unique_index in range(self.unique.size(0)):
+            shell_count = self.ihelp.ushells_per_unique[unique_index]
+            if shell_count == 0:
+                zero = torch.tensor(0.0, **self.dd)
+                alphas.append(zero)
+                coeffs.append(zero)
+                shell += 1
+                continue
+
+            for _ in range(shell_count):
+                alpha, coeff = slater_to_gauss(
+                    self.ngauss[shell],
+                    self.pqn[shell],
+                    self.ihelp.unique_angular[shell],
+                    self.slater[shell],
+                )
+
+                if self.valence[shell].item() is False:
+                    alpha, coeff = orthogonalize(
+                        (alphas[shell - 1], alpha),
+                        (coeffs[shell - 1], coeff),
+                    )
+                alphas.append(alpha)
+                coeffs.append(coeff)
+                shell += 1
+
+        return tuple(alphas), tuple(coeffs)
 
 
 def format_contraction(shells: list[str], ngauss: Tensor) -> str:

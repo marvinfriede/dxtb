@@ -38,16 +38,9 @@ from dxtb.config import ConfigSCF
 
 def test_properties() -> None:
     d = torch.randn((3, 3))  # dummy
-
-    ints = IntegralMatrices()
-    with pytest.raises(RuntimeError):
-        SCF(d, d, d, d, d, d, integrals=ints)  # type: ignore
-
-    ints.hcore = torch.randn((3, 3))
-    with pytest.raises(RuntimeError):
-        SCF(d, d, d, d, d, d, integrals=ints)  # type: ignore
-
-    ints.overlap = torch.randn((3, 3))
+    with pytest.raises(TypeError):
+        IntegralMatrices()  # type: ignore[call-arg]
+    ints = IntegralMatrices(hcore=d, overlap=torch.randn((3, 3)))
     scf = SCF(d, d, d, d, d, d, integrals=ints)  # type: ignore
     assert scf.shape == d.shape
     assert scf.device == d.device
@@ -71,7 +64,7 @@ def test_full_mixer_error() -> None:
         "n0": torch.tensor([1]),
         "ihelp": torch.tensor([1]),
         "cache": torch.tensor([1]),
-        "integrals": IntegralMatrices(),
+        "integrals": IntegralMatrices(hcore=torch.eye(1), overlap=torch.eye(1)),
     }
 
     with pytest.raises(TypeError):
@@ -89,7 +82,10 @@ def test_full_change_scp() -> None:
         "n0": dummy,
         "ihelp": SimpleNamespace(batch_mode=2),  # only the mode is read
         "cache": dummy,
-        "integrals": IntegralMatrices(_hcore=dummy, _overlap=dummy),
+        "integrals": IntegralMatrices(
+            hcore=torch.eye(1, dtype=dummy.dtype),
+            overlap=torch.eye(1, dtype=dummy.dtype),
+        ),
     }
 
     config = ConfigSCF(

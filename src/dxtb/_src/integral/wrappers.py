@@ -273,7 +273,7 @@ def _integral(
     # setup driver for integral calculation
     drv_mgr = DriverManager(driver_name, **dd)
     drv_mgr.create_driver(numbers, par, ihelp)
-    drv_mgr.driver.setup(positions)
+    driver_data = drv_mgr.setup_driver(positions)
 
     ###########
     # Overlap #
@@ -283,7 +283,7 @@ def _integral(
         integral = new_overlap(drv_mgr.driver_type, **dd, **kwargs)
 
         # actual integral calculation
-        integral.build(drv_mgr.driver)
+        integral.build(driver_data)
 
         if normalize is True:
             integral.normalize(integral.norm)
@@ -297,7 +297,7 @@ def _integral(
     # multipole integrals require the overlap for normalization
     ovlp = new_overlap(drv_mgr.driver_type, **dd, **kwargs)
     if ovlp._matrix is None or ovlp.norm is None:
-        ovlp.build(drv_mgr.driver)
+        ovlp.build(driver_data)
 
     if integral_type == "_dipole":
         integral = new_dipint(driver=drv_mgr.driver_type, **dd, **kwargs)
@@ -307,7 +307,7 @@ def _integral(
         raise ValueError(f"Unknown integral type '{integral_type}'.")
 
     # actual integral calculation
-    integral.build(drv_mgr.driver)
+    integral.build(driver_data)
 
     if normalize is True:
         integral.normalize(ovlp.norm)

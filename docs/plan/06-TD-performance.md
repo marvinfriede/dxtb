@@ -19,6 +19,14 @@
 - Compile the outermost transformed function (for example, `compile(jacfwd(jacrev(energy)))`); never rely on `.backward(create_graph=True)` through a compiled region (double backward through compiled code isn't supported, as far as known).
 - Fixed shapes: masking instead of culling (E4); size buckets for mixed sets (E6).
 
+**Gates.**
+
+- Final GPU performance decisions require completion of the missing T0.8 GPU
+  baseline.
+- No compile-specific architectural workaround may be introduced before the
+  same function works correctly in eager mode under the required transforms.
+- Compile work stays downstream of E4/E6.
+
 ---
 
 ## D1 Compiled SCF step and CUDA graphs for conformers
@@ -34,7 +42,7 @@
 
 **Done when.** Speed-up and compile time recorded; enabled by default for batch entry points if worthwhile.
 
-**Needs.** E4, E6 (E5 for GFN2 on GPU), T0.8. **Size.** M.
+**Needs.** E4, E6 (E5, done, for GFN2 on GPU), T0.8 including the GPU baseline. **Size.** M.
 
 ---
 

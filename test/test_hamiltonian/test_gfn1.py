@@ -211,6 +211,7 @@ def test_no_cn(dtype: torch.dtype) -> None:
     driver = IntDriver(numbers, par, ihelp, **dd)
     overlap = Overlap(**dd)
     h0 = GFN1Hamiltonian(numbers, par, ihelp, cn=None, **dd)
+    assert h0.cn is None
 
     driver.setup(positions)
     s = overlap.build(driver)

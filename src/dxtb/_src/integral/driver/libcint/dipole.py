@@ -26,7 +26,7 @@ from __future__ import annotations
 from dxtb._src.typing import Tensor
 
 from ...types import DipoleIntegral
-from .driver import IntDriverLibcint
+from .driver import LibcintCallData
 from .multipole import MultipoleLibcint
 
 __all__ = ["DipoleLibcint"]
@@ -37,30 +37,30 @@ class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
     Dipole integral from atomic orbitals.
     """
 
-    def build(self, driver: IntDriverLibcint) -> Tensor:
+    def build(self, call_data: LibcintCallData) -> Tensor:
         """
         Calculation of dipole integral using libcint.
 
         Parameters
         ----------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
 
         Returns
         -------
         Tensor
             Dipole integral.
         """
-        return self.multipole(driver, "r0")
+        return self.multipole(call_data, "r0")
 
-    def get_gradient(self, driver: IntDriverLibcint) -> Tensor:
+    def get_gradient(self, call_data: LibcintCallData) -> Tensor:
         """
         Calculation of dipole gradient using libcint.
 
         Parameters
         ----------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
 
         Returns
         -------

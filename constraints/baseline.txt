@@ -52,6 +52,8 @@ pydantic-core==2.46.5
 tomli==2.4.1
 tomli-w==1.2.0
 typing-extensions==4.16.0
+# Used by the temporary mctc shim for tad-dftd3's CPU memory estimate.
+psutil==7.2.2
 
 # test
 covdefaults==2.3.0

@@ -31,6 +31,7 @@ from dxtb import IndexHelper
 from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import TYPE_CHECKING, Any, Tensor
+from dxtb._src.xtb.h0 import H0Setup
 
 if TYPE_CHECKING:
     from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
@@ -53,6 +54,7 @@ def new_hcore(
     ihelp: IndexHelper,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
+    setup: H0Setup | None = None,
 ) -> GFN0Hamiltonian | GFN1Hamiltonian | GFN2Hamiltonian:
     """Create Core Hamiltonian instance based on parametrization."""
     if not isinstance(par, ParamModule):
@@ -72,13 +74,19 @@ def new_hcore(
         )
 
     if par.meta.name.casefold() in ("gfn0-xtb", "gfn0"):
-        return new_hcore_gfn0(numbers, ihelp, par, device=device, dtype=dtype)
+        return new_hcore_gfn0(
+            numbers, ihelp, par, device=device, dtype=dtype, setup=setup
+        )
 
     if par.meta.name.casefold() in ("gfn1-xtb", "gfn1"):
-        return new_hcore_gfn1(numbers, ihelp, par, device=device, dtype=dtype)
+        return new_hcore_gfn1(
+            numbers, ihelp, par, device=device, dtype=dtype, setup=setup
+        )
 
     if par.meta.name.casefold() in ("gfn2-xtb", "gfn2"):
-        return new_hcore_gfn2(numbers, ihelp, par, device=device, dtype=dtype)
+        return new_hcore_gfn2(
+            numbers, ihelp, par, device=device, dtype=dtype, setup=setup
+        )
 
     raise ValueError(f"Unsupported Hamiltonian type: {par.meta.name}")
 
@@ -89,6 +97,7 @@ def new_hcore_gfn0(
     par: Param | ParamModule | None = None,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
+    setup: H0Setup | None = None,
 ) -> GFN0Hamiltonian:
     """Create GFN0 Core Hamiltonian instance."""
     from dxtb._src.xtb.gfn0 import GFN0Hamiltonian as Hamiltonian
@@ -97,7 +106,9 @@ def new_hcore_gfn0(
         from dxtb._src.param import GFN0_XTB as par
 
     assert par is not None
-    return Hamiltonian(numbers, par, ihelp, device=device, dtype=dtype)
+    return Hamiltonian(
+        numbers, par, ihelp, device=device, dtype=dtype, setup=setup
+    )
 
 
 def new_hcore_gfn1(
@@ -106,6 +117,7 @@ def new_hcore_gfn1(
     par: Param | ParamModule | None = None,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
+    setup: H0Setup | None = None,
 ) -> GFN1Hamiltonian:
     """Create GFN1 Core Hamiltonian instance."""
     from dxtb._src.xtb.gfn1 import GFN1Hamiltonian as Hamiltonian
@@ -114,7 +126,9 @@ def new_hcore_gfn1(
         from dxtb import GFN1_XTB as par
 
     assert par is not None
-    return Hamiltonian(numbers, par, ihelp, device=device, dtype=dtype)
+    return Hamiltonian(
+        numbers, par, ihelp, device=device, dtype=dtype, setup=setup
+    )
 
 
 def new_hcore_gfn2(
@@ -123,6 +137,7 @@ def new_hcore_gfn2(
     par: Param | ParamModule | None = None,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
+    setup: H0Setup | None = None,
 ) -> GFN2Hamiltonian:
     """Create GFN2 Core Hamiltonian instance."""
     from dxtb._src.xtb.gfn2 import GFN2Hamiltonian as Hamiltonian
@@ -131,7 +146,9 @@ def new_hcore_gfn2(
         from dxtb import GFN2_XTB as par
 
     assert par is not None
-    return Hamiltonian(numbers, par, ihelp, device=device, dtype=dtype)
+    return Hamiltonian(
+        numbers, par, ihelp, device=device, dtype=dtype, setup=setup
+    )
 
 
 ################################################################################

@@ -23,9 +23,14 @@ Base class for ``libcint``-based integral implementations.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from dxtb._src.typing import Literal
 
 from ...base import BaseIntegral
+
+if TYPE_CHECKING:
+    from .driver import LibcintCallData
 
 __all__ = ["IntegralLibcint"]
 
@@ -43,3 +48,12 @@ class IntegralLibcint(LibcintImplementation, BaseIntegral):
     """
     ``libcint``-based integral implementation.
     """
+
+    def checks(self, call_data: LibcintCallData) -> None:
+        """Check that the call-local libcint wrapper data is valid."""
+        from .driver import LibcintCallData
+
+        if not isinstance(call_data, LibcintCallData):
+            raise RuntimeError(
+                "Libcint integral construction requires call-local wrapper data."
+            )

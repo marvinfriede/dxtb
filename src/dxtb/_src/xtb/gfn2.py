@@ -23,18 +23,19 @@ The GFN2-xTB Hamiltonian.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 
 import torch
-from tad_mctc import storch
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import Potential
 from dxtb._src.param.base import Param
-from dxtb._src.param.module import ParameterModule, ParamModule
+from dxtb._src.param.module import ParamModule
 from dxtb._src.typing import Any, Tensor
 
-from .base import PAD, BaseHamiltonian
+from .base import BaseHamiltonian
+from .h0 import gather_hscale, setup_h0
 
 __all__ = ["GFN2Hamiltonian"]
 
@@ -53,107 +54,32 @@ class GFN2Hamiltonian(BaseHamiltonian):
         dtype: torch.dtype | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(numbers, par, ihelp, device, dtype)
+        setup = kwargs.pop("setup", None)
+        has_custom_cn = "cn" in kwargs
+        cn = kwargs.pop("cn", None)
+        if setup is None:
+            setup = setup_h0(
+                numbers, par, ihelp, device=device, dtype=dtype, cn=cn
+            )
+            if has_custom_cn and cn is None:
+                setup = replace(setup, cn=None)
+        elif has_custom_cn:
+            setup = replace(setup, cn=cn)
+        super().__init__(numbers, par, ihelp, device, dtype, setup=setup)
 
         # coordination number function
-        if "cn" in kwargs:
-            self.cn = kwargs.pop("cn")
-        else:
+        if self.cn is None and not (has_custom_cn and cn is None):
             # pylint: disable=import-outside-toplevel
             from dxtb._src.ncoord import cn_d3, gfn2_count
 
             self.cn = partial(cn_d3, counting_function=gfn2_count)
 
     def _get_hscale(self, par: ParamModule) -> Tensor:
-        """
-        Obtain the off-site scaling factor for the Hamiltonian.
-
-        Parameters
-        ----------
-        par : ParamModule
-            Representation of an extended tight-binding model.
-
-        Returns
-        -------
-        Tensor
-            Off-site scaling factor for the Hamiltonian.
-        """
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
-
-        # extract some vars for convenience
-        shell = par.get("hamiltonian.xtb.shell")
-        wexp = par.get("hamiltonian.xtb.wexp")
-        ushells = self.ihelp.unique_angular
-
-        angular2label = {
-            0: "s",
-            1: "p",
-            2: "d",
-            3: "f",
-            4: "g",
-        }
-        angular_labels = [angular2label.get(int(ang), PAD) for ang in ushells]
-
-        # ----------------------
-        # Eq.37: Y(z^A_l, z^B_m)
-        # ----------------------
-        z = par.get_elem_param(self.unique, "slater", pad_val=PAD)
-        zi = z.unsqueeze(-1)
-        zj = z.unsqueeze(-2)
-        zmat = storch.safe_pow(
-            2 * storch.safe_divide(storch.safe_sqrt(zi * zj), (zi + zj)), wexp
+        return gather_hscale(
+            "gfn2", self.unique, self.ihelp, self.valence, par, self.dd
         )
-
-        ksh = torch.ones((len(ushells), len(ushells)), **self.dd)
-        for i, ang_i in enumerate(ushells):
-            ang_i = angular_labels[i]
-
-            for j, ang_j in enumerate(ushells):
-                ang_j = angular_labels[j]
-
-                key1 = f"{ang_i}{ang_j}"
-                key2 = f"{ang_j}{ang_i}"
-
-                # Since the parametrization only contains "sp" (not "ps"),
-                # we need to check both.
-                # For some reason, the parametrization does not contain "sp"
-                # or "ps", although the value is calculated from "ss" and "pp",
-                # and hence, always the same. The paper, however, specifically
-                # mentions this.
-                # tblite: xtb/gfn2.f90::new_gfn2_h0spec
-                if key1 in shell:
-                    val: ParameterModule = shell[key1]
-                    kij = val.param.view(-1)[0]
-                elif f"{ang_j}{ang_i}" in shell:
-                    val: ParameterModule = shell[key2]
-                    kij = val.param.view(-1)[0]
-                else:
-                    key_ii = f"{ang_i}{ang_i}"
-                    key_jj = f"{ang_j}{ang_j}"
-
-                    if PAD not in (ang_i, ang_j):
-                        if key_ii not in shell:
-                            raise KeyError(
-                                f"GFN2 Core Hamiltonian: Missing '{ang_i}"
-                                f"{ang_i}' in shell."
-                            )
-                        if key_jj not in shell:  # pragma: no cover
-                            raise KeyError(
-                                f"GFN2 Core Hamiltonian: Missing '{ang_j}"
-                                f"{ang_j}' in shell."
-                            )
-                        val_ii: ParameterModule = shell[key_ii]
-                        val_jj: ParameterModule = shell[key_jj]
-                        kij = 0.5 * (
-                            val_ii.param.view(-1)[0] + val_jj.param.view(-1)[0]
-                        )
-                    else:
-                        kij = 1.0  # dummy for padding
-
-                ksh[i, j] = kij * zmat[i, j]
-
-        return ksh
 
     def get_gradient(
         self,

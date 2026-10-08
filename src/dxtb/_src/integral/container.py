@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
+from dataclasses import dataclass
 
 import torch
 
@@ -109,7 +110,7 @@ class Integrals(IntegralContainer):
         self._dipole = _dipole
         self._quadrupole = _quadrupole
 
-    def setup_driver(self, positions: Tensor, **kwargs: Any) -> None:
+    def setup_driver(self, positions: Tensor, **kwargs: Any) -> Any:
         """
         Setup the driver for the integrals.
 
@@ -120,7 +121,7 @@ class Integrals(IntegralContainer):
         **kwargs : Any
             Additional keyword arguments for the driver.
         """
-        self.mgr.setup_driver(positions, **kwargs)
+        return self.mgr.setup_driver(positions, **kwargs)
 
     # Core Hamiltonian
 
@@ -198,7 +199,7 @@ class Integrals(IntegralContainer):
             if positions.device != torch.device("cpu"):
                 positions = positions.to(device=torch.device("cpu"))
 
-        self.mgr.setup_driver(positions, **kwargs)
+        driver_data = self.mgr.setup_driver(positions, **kwargs)
         logger.debug("Overlap integral: Start building matrix.")
 
         if self.overlap is None:
@@ -216,7 +217,7 @@ class Integrals(IntegralContainer):
         # reset cannot be triggered by the driver manager, so we cannot add this
         # check here. If we do, the hessian tests will fail as the overlap is
         # not recalculated for positions + delta.
-        self.overlap.build(self.mgr.driver)
+        self.overlap.build(driver_data)
         self.overlap.normalize()
         assert self.overlap.matrix is not None
 
@@ -268,7 +269,7 @@ class Integrals(IntegralContainer):
             if positions.device != torch.device("cpu"):
                 positions = positions.to(device=torch.device("cpu"))
 
-        self.mgr.setup_driver(positions, **kwargs)
+        driver_data = self.mgr.setup_driver(positions, **kwargs)
 
         if self.overlap is None:
             # pylint: disable=import-outside-toplevel
@@ -281,7 +282,7 @@ class Integrals(IntegralContainer):
             )
 
         logger.debug("Overlap gradient: Start.")
-        self.overlap.get_gradient(self.mgr.driver, **kwargs)
+        self.overlap.get_gradient(driver_data, **kwargs)
         self.overlap.gradient = self.overlap.gradient.to(self.device)
         self.overlap.normalize_gradient()
         logger.debug("Overlap gradient: All finished.")
@@ -316,7 +317,7 @@ class Integrals(IntegralContainer):
             if positions.device != torch.device("cpu"):
                 positions = positions.to(device=torch.device("cpu"))
 
-        self.mgr.setup_driver(positions, **kwargs)
+        driver_data = self.mgr.setup_driver(positions, **kwargs)
         logger.debug("Dipole integral: Start building matrix.")
 
         if self.dipole is None:
@@ -325,12 +326,12 @@ class Integrals(IntegralContainer):
 
             self.dipole = new_dipint(self.mgr.driver_type, **self.dd, **kwargs)
 
-        if self.overlap is None:
-            self.build_overlap(positions, **kwargs)
+        # The overlap normalization used below belongs to this geometry.
+        self.build_overlap(positions, **kwargs)
         assert self.overlap is not None
 
         # build (with overlap norm)
-        self.dipole.build(self.mgr.driver)
+        self.dipole.build(driver_data)
         self.dipole.normalize(self.overlap.norm)
         logger.debug("Dipole integral: Finished building matrix.")
 
@@ -354,7 +355,7 @@ class Integrals(IntegralContainer):
             # shift to rj if required (requires overlap integral)
             self.dipole.shift_r0_rj(
                 self.overlap.matrix,
-                self.mgr.driver.ihelp.spread_atom_to_orbital(
+                driver_data.ihelp.spread_atom_to_orbital(
                     positions,
                     dim=-2,
                     extra=True,
@@ -448,7 +449,7 @@ class Integrals(IntegralContainer):
                 positions = positions.to(device=torch.device("cpu"))
 
         # check all instantiations
-        self.mgr.setup_driver(positions, **kwargs)
+        driver_data = self.mgr.setup_driver(positions, **kwargs)
         logger.debug("Quad integral: Start building matrix.")
 
         if self.quadrupole is None:
@@ -461,12 +462,13 @@ class Integrals(IntegralContainer):
                 **kwargs,
             )
 
-        if self.overlap is None:
-            self.build_overlap(positions, **kwargs)
+        # Both normalization and the shift below depend on the current
+        # geometry, even when this container has built integrals before.
+        self.build_overlap(positions, **kwargs)
         assert self.overlap is not None
 
         # build
-        self.quadrupole.build(self.mgr.driver)
+        self.quadrupole.build(driver_data)
         self.quadrupole.normalize(self.overlap.norm)
         logger.debug("Quad integral: Finished building matrix.")
 
@@ -485,8 +487,9 @@ class Integrals(IntegralContainer):
         # the `positions` are still on CPU if `force_cpu_for_libcint=True`.
         if shift is True:
             # Build dipole integral if not already done, but NO shift yet (r0)!
-            if self.dipole is None:
-                self.build_dipole(positions, shift=False, **kwargs)
+            # The r0-centered dipole used for the quadrupole shift must also
+            # be from this geometry.
+            self.build_dipole(positions, shift=False, **kwargs)
             assert self.dipole is not None
 
             logger.debug("Quad integral: Start shifting operator (r0r0->rjrj).")
@@ -495,7 +498,7 @@ class Integrals(IntegralContainer):
             self.quadrupole.shift_r0r0_rjrj(
                 self.dipole.matrix,
                 self.overlap.matrix,
-                self.mgr.driver.ihelp.spread_atom_to_orbital(
+                driver_data.ihelp.spread_atom_to_orbital(
                     positions,
                     dim=-2,
                     extra=True,
@@ -507,7 +510,7 @@ class Integrals(IntegralContainer):
 
             self.dipole.shift_r0_rj(
                 self.overlap.matrix,
-                self.mgr.driver.ihelp.spread_atom_to_orbital(
+                driver_data.ihelp.spread_atom_to_orbital(
                     positions,
                     dim=-2,
                     extra=True,
@@ -627,190 +630,109 @@ class Integrals(IntegralContainer):
         return str(self)
 
 
-class IntegralMatrices(IntegralContainer):
-    """
-    Storage container for the integral matrices.
-    """
+@dataclass(frozen=True, eq=False)
+class IntegralMatrices:
+    """Immutable tensor values produced by one integral evaluation."""
 
-    __slots__ = ["_hcore", "_overlap", "_dipole", "_quadrupole"]
+    hcore: Tensor
+    overlap: Tensor
+    dipole: Tensor | None = None
+    quadrupole: Tensor | None = None
 
-    def __init__(
+    def __post_init__(self) -> None:
+        reference = self.hcore
+        if (
+            reference.ndim not in (2, 3)
+            or reference.shape[-2] != reference.shape[-1]
+        ):
+            raise ValueError("Tensor 'hcore' must have shape (..., nao, nao).")
+        if self.overlap.shape != reference.shape:
+            raise ValueError("Tensor 'overlap' must match the hcore shape.")
+        if (
+            self.overlap.device != reference.device
+            or self.overlap.dtype != reference.dtype
+        ):
+            raise ValueError(
+                "All integral matrices must share device and dtype."
+            )
+
+        for name, tensor, components in (
+            ("dipole", self.dipole, (defaults.DP_SHAPE,)),
+            ("quadrupole", self.quadrupole, (6, 9)),
+        ):
+            if tensor is None:
+                continue
+            if tensor.ndim != reference.ndim + 1:
+                raise ValueError(f"Tensor '{name}' has an incompatible rank.")
+            expected = (
+                *reference.shape[:-2],
+                tensor.shape[-3],
+                *reference.shape[-2:],
+            )
+            if tensor.shape != expected or tensor.shape[-3] not in components:
+                raise ValueError(f"Tensor '{name}' has an incompatible shape.")
+            if (
+                tensor.device != reference.device
+                or tensor.dtype != reference.dtype
+            ):
+                raise ValueError(
+                    "All integral matrices must share device and dtype."
+                )
+
+    @property
+    def device(self) -> torch.device:
+        return self.hcore.device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self.hcore.dtype
+
+    def to(
         self,
-        device: torch.device | None = None,
+        device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
-        _hcore: Tensor | None = None,
-        _overlap: Tensor | None = None,
-        _dipole: Tensor | None = None,
-        _quadrupole: Tensor | None = None,
-        _run_checks: bool = True,
-    ):
-        super().__init__(device, dtype, _run_checks)
+    ) -> IntegralMatrices:
+        """Return a copy with all matrix tensors converted."""
+        return IntegralMatrices(
+            hcore=self.hcore.to(device=device, dtype=dtype),
+            overlap=self.overlap.to(device=device, dtype=dtype),
+            dipole=(
+                None
+                if self.dipole is None
+                else self.dipole.to(device=device, dtype=dtype)
+            ),
+            quadrupole=(
+                None
+                if self.quadrupole is None
+                else self.quadrupole.to(device=device, dtype=dtype)
+            ),
+        )
 
-        self._hcore = _hcore
-        self._overlap = _overlap
-        self._dipole = _dipole
-        self._quadrupole = _quadrupole
+    def type(self, dtype: torch.dtype) -> IntegralMatrices:
+        """Return a copy with a different floating point type."""
+        return self.to(dtype=dtype)
 
-    # Core Hamiltonian
-
-    @property
-    def hcore(self) -> Tensor:
-        if self._hcore is None:
-            raise RuntimeError("Core Hamiltonian matrix not set.")
-        return self._hcore
-
-    @hcore.setter
-    def hcore(self, mat: Tensor) -> None:
-        self._hcore = mat
-        self.checks()
-        self.device_check()
-
-    # overlap
-
-    @property
-    def overlap(self) -> Tensor:
-        if self._overlap is None:
-            raise RuntimeError("Overlap matrix not set.")
-        return self._overlap
-
-    @overlap.setter
-    def overlap(self, overlap: Tensor) -> None:
-        self._overlap = overlap
-        self.checks()
-        self.device_check()
-
-    # dipole
-
-    @property
-    def dipole(self) -> Tensor | None:
-        return self._dipole
-
-    @dipole.setter
-    def dipole(self, dipole: Tensor) -> None:
-        self._dipole = dipole
-        self.checks()
-        self.device_check()
-
-    # quadrupole
-
-    @property
-    def quadrupole(self) -> Tensor | None:
-        """
-        Quadrupole integral of shape (6/9, nao, nao).
-
-        Returns
-        -------
-        Tensor | None
-            Quadrupole integral if set, else ``None``.
-        """
-        return self._quadrupole
-
-    @quadrupole.setter
-    def quadrupole(self, mat: Tensor) -> None:
-        self._quadrupole = mat
-        self.checks()
-        self.device_check()
-
-    # checks
-
-    def device_check(self) -> None:
-        """
-        Check if all tensors are on the same device after calling a setter.
-        If not, set the device to ``"invalid"``. Otherwise, the :meth:`to`
-        method is not triggered properly.
-        """
-
-        for name in ["hcore", "overlap", "dipole", "quadrupole"]:
-            tensor: Tensor = getattr(self, "_" + name)
-            if tensor is None:
-                continue
-
-            if tensor.device != self.device:
-                self.override_device("invalid")  # type: ignore
-                break
-
-    def checks(self) -> None:
-        """
-        Checks the shapes of the tensors.
-
-        Expected shapes:
-
-        - hcore and overlap: ``(..., nao, nao)``
-        - dipole: ``(..., 3, nao, nao)``
-        - quad: ``(..., 9, nao, nao)``
-
-        Raises
-        ------
-        ValueError:
-            If any of the tensors have incorrect shapes or inconsistent batch
-            sizes.
-        """
-        if self.run_checks is False:
-            return
-
-        nao = None
-        batch_size = None
-
-        for name in ["hcore", "overlap", "dipole", "quadrupole"]:
-            tensor: Tensor = getattr(self, "_" + name)
-            if tensor is None:
-                continue
-
-            if name in ["hcore", "overlap"]:
-                if len(tensor.shape) not in [2, 3]:
-                    raise ValueError(
-                        f"Tensor '{name}' must have 2 or 3 dimensions. "
-                        f"Got {len(tensor.shape)}."
-                    )
-                if len(tensor.shape) == 3:
-                    if batch_size is not None and tensor.shape[0] != batch_size:
-                        raise ValueError(
-                            f"Tensor '{name}' has a different batch size. "
-                            f"Expected {batch_size}, got {tensor.shape[0]}."
-                        )
-                    batch_size = tensor.shape[0]
-                nao = tensor.shape[-1]
-            elif name in ["dipole", "quadrupole"]:
-                if len(tensor.shape) not in [3, 4]:
-                    raise ValueError(
-                        f"Tensor '{name}' must have 3 or 4 dimensions. "
-                        f"Got {len(tensor.shape)}."
-                    )
-                if len(tensor.shape) == 4:
-                    if batch_size is not None and tensor.shape[0] != batch_size:
-                        raise ValueError(
-                            f"Tensor '{name}' has a different batch size. "
-                            f"Expected {batch_size}, got {tensor.shape[0]}."
-                        )
-                    batch_size = tensor.shape[0]
-                nao = tensor.shape[-2]
-
-            if tensor.shape[-2:] != (nao, nao):
-                raise ValueError(
-                    f"Tensor '{name}' last two dimensions should be "
-                    f"(nao, nao). Got {tensor.shape[-2:]}."
-                )
-            if name == "dipole" and tensor.shape[-3] != defaults.DP_SHAPE:
-                raise ValueError(
-                    f"Tensor '{name}' third to last dimension should be "
-                    f"{defaults.DP_SHAPE}. Got {tensor.shape[-3]}."
-                )
-            if "quad" in name and tensor.shape[-3] != defaults.QP_SHAPE:
-                raise ValueError(
-                    f"Tensor '{name}' third to last dimension should be "
-                    f"{defaults.QP_SHAPE}. Got {tensor.shape[-3]}."
-                )
+    def slice(
+        self, matrix_indices: tuple, multipole_indices: tuple
+    ) -> IntegralMatrices:
+        """Return a value with its orbital dimensions sliced."""
+        return IntegralMatrices(
+            hcore=self.hcore[matrix_indices],
+            overlap=self.overlap[matrix_indices],
+            dipole=(
+                None if self.dipole is None else self.dipole[multipole_indices]
+            ),
+            quadrupole=(
+                None
+                if self.quadrupole is None
+                else self.quadrupole[multipole_indices]
+            ),
+        )
 
     def __str__(self) -> str:  # pragma: no cover
-        attributes = ["hcore", "overlap", "dipole", "quadrupole"]
-        details = []
-
-        for attr in attributes:
-            tensor = getattr(self, "_" + attr)
-            info = str(tensor.shape) if tensor is not None else "None"
-            details.append(f"\n  {attr}={info}")
-
-        return f"Integrals({', '.join(details)}\n)"
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return str(self)
+        fields = ("hcore", "overlap", "dipole", "quadrupole")
+        details = [
+            f"\n  {name}={getattr(self, name).shape if getattr(self, name) is not None else 'None'}"
+            for name in fields
+        ]
+        return f"IntegralMatrices({', '.join(details)}\n)"

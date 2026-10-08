@@ -570,10 +570,10 @@
   "peak_rss_mb": 690.5
  },
  "hcore_gfn1.positions:vmap": {
-  "status": "error",
-  "seconds": 0.10730102600064129,
-  "message": "RuntimeError: vmap over torch.allclose isn't supported yet. Please file an issue at https://github.com/pytorch/pytorch/issues if you need this feature. [dxtb/_src/xtb/base.py:373]",
-  "peak_rss_mb": 685.6
+  "status": "pass",
+  "seconds": 0.12762010912410915,
+  "message": "",
+  "peak_rss_mb": 364.9
  },
  "hcore_gfn2.positions:forward": {
   "status": "pass",
@@ -606,10 +606,10 @@
   "peak_rss_mb": 686.7
  },
  "hcore_gfn2.positions:vmap": {
-  "status": "error",
-  "seconds": 0.07437098500122374,
-  "message": "RuntimeError: vmap over torch.allclose isn't supported yet. Please file an issue at https://github.com/pytorch/pytorch/issues if you need this feature. [dxtb/_src/xtb/base.py:373]",
-  "peak_rss_mb": 683.2
+  "status": "pass",
+  "seconds": 0.09748848504386842,
+  "message": "",
+  "peak_rss_mb": 363.2
  },
  "overlap.slater:forward": {
   "status": "pass",

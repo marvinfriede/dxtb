@@ -787,6 +787,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             classicals=self.classicals,
             interactions=self.interactions,
             integrals=self.integrals,
+            h0_setup=(
+                None
+                if self.system.h0_setup is None
+                else self.system.h0_setup.to(dtype=dtype)
+            ),
             dd={**self.system.dd, "dtype": dtype},
         )
         self.cache = self.cache.type(dtype)

@@ -126,7 +126,16 @@ class DriverManager(TensorLike):
             raise ValueError(f"Unknown integral driver '{self.driver_type}'.")
 
         self.driver = _IntDriver(
-            numbers, par, ihelp, device=ihelp.device, dtype=self.dtype
+            numbers,
+            par,
+            ihelp,
+            device=ihelp.device,
+            dtype=self.dtype,
+            **(
+                {"force_cpu": self.force_cpu_for_libcint}
+                if self.driver_type == labels.INTDRIVER_LIBCINT
+                else {}
+            ),
         )
 
         if self.algorithm is not None:
@@ -138,7 +147,7 @@ class DriverManager(TensorLike):
 
             self.driver.algorithm = self.algorithm  # validates the name
 
-    def setup_driver(self, positions: Tensor, **kwargs: Any) -> None:
+    def setup_driver(self, positions: Tensor, **kwargs: Any) -> Any:
         """
         Setup the integral driver (if not already done).
 
@@ -149,8 +158,13 @@ class DriverManager(TensorLike):
         """
         logger.debug("Integral Driver: Start setup.")
 
-        # gradient-tracking state is taken from the caller's tensor, not from
-        # the CPU copy for libcint, which is a new tensor on every call
+        if self.driver_type == labels.INTDRIVER_LIBCINT:
+            # libcint wrappers contain the current geometry, so they are
+            # constructed locally and never retained on the driver/manager.
+            return self.driver.setup(positions, **kwargs)
+
+        # Keep the caller tensor as the gradient source if positions are
+        # copied to CPU for the legacy stateful driver path below.
         grad_source = positions
 
         if self.force_cpu_for_libcint is True:
@@ -158,12 +172,17 @@ class DriverManager(TensorLike):
 
         if self.driver.is_latest(positions, grad_source=grad_source) is True:
             logger.debug("Integral Driver: Skip setup. Already done.")
-            return
+            return self.driver
 
         self.driver.setup(positions, **kwargs)
         self.driver._grad_key = grad_key(grad_source)
         logger.debug("Integral Driver: Finished setup.")
+        return self.driver
 
     def invalidate_driver(self) -> None:
         """Invalidate the integral driver to require new setup."""
+        if self.driver_type == labels.INTDRIVER_LIBCINT:
+            # Libcint setup is call-local; there is no retained geometry to
+            # invalidate. Keep this method for legacy callers.
+            return
         self.driver.invalidate()

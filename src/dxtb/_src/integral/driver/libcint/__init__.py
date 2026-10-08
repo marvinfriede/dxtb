@@ -22,13 +22,22 @@ Integral Driver: Libcint
 """
 
 from .dipole import DipoleLibcint
-from .driver import IntDriverLibcint
-from .overlap import OverlapLibcint
+from .driver import (
+    IntDriverLibcint,
+    LibcintCallData,
+    LibcintIntegralSetup,
+    setup_libcint,
+)
+from .overlap import OverlapLibcint, build_overlap_libcint
 from .quadrupole import QuadrupoleLibcint
 
 __all__ = [
     "DipoleLibcint",
     "IntDriverLibcint",
+    "LibcintCallData",
+    "LibcintIntegralSetup",
     "OverlapLibcint",
     "QuadrupoleLibcint",
+    "build_overlap_libcint",
+    "setup_libcint",
 ]

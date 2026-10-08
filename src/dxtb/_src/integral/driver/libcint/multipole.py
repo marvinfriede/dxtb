@@ -30,6 +30,7 @@ from tad_mctc.batch import pack
 from dxtb._src.typing import Tensor
 
 from .base import IntegralLibcint
+from .driver import LibcintCallData
 
 if TYPE_CHECKING:
     from .driver import IntDriverLibcint
@@ -42,15 +43,15 @@ class MultipoleLibcint(IntegralLibcint):
     Base class for multipole integrals calculated with `libcint`.
     """
 
-    def multipole(self, driver: IntDriverLibcint, intstring: str) -> Tensor:
+    def multipole(self, call_data: LibcintCallData, intstring: str) -> Tensor:
         """
         Calculation of multipole integral. The integral is normalized, using
         the diagonal of the overlap integral.
 
         Parameters
         ----------
-        driver : IntDriver
-            The integral driver for the calculation.
+        call_data : LibcintCallData
+            Call-local wrappers for the current geometry.
         intstring : str
             String for `libcint` integral engine.
 
@@ -59,7 +60,7 @@ class MultipoleLibcint(IntegralLibcint):
         Tensor
             Normalized multipole integral.
         """
-        super().checks(driver)
+        super().checks(call_data)
 
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
@@ -76,24 +77,15 @@ class MultipoleLibcint(IntegralLibcint):
             return libcint.int1e(intstring, driver)
 
         # batched mode
-        if driver.ihelp.batch_mode > 0:
-            if not isinstance(driver.drv, list):
-                raise RuntimeError(
-                    "IndexHelper on integral driver is batched, but the driver "
-                    "instance itself not."
-                )
-
+        if call_data.batch_mode > 0:
             # In this version, batch mode does not matter. If we would
             # normalize the integral here, we would have to deflate the norm.
-            self.matrix = pack([_mpint(driver) for driver in driver.drv])
+            self.matrix = pack([_mpint(d) for d in call_data.drivers])
             return self.matrix
 
         # single mode
-        if not isinstance(driver.drv, libcint.LibcintWrapper):
-            raise RuntimeError(
-                "IndexHelper on integral driver is not batched, but the "
-                "driver instance itself seems to be batched."
-            )
+        if len(call_data.drivers) != 1:
+            raise RuntimeError("Single-system libcint setup needs one wrapper.")
 
-        self.matrix = _mpint(driver.drv)
+        self.matrix = _mpint(call_data.drivers[0])
         return self.matrix

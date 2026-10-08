@@ -319,22 +319,22 @@ def _integral(kind: str, algorithm: str = "os", method: str = "gfn2") -> Target:
 def _hcore(method: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb import labels
-        from dxtb._src.integral.driver.manager import DriverManager
-        from dxtb.integrals import factories
+        from dxtb._src.basis.bas import Basis
+        from dxtb._src.integral.driver.pytorch import (
+            build_overlap,
+            setup_integrals,
+        )
+        from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
         numbers, positions = _lih()
         par = _par(method)
         ihelp = IndexHelper.from_numbers(numbers, par)
+        h0_setup = setup_h0(numbers, par, ihelp)
+        integral_setup = setup_integrals(Basis(numbers, par, ihelp, **DD))
 
         def f(x: Tensor) -> Tensor:
-            mgr = DriverManager(labels.INTDRIVER_PYTORCH, **DD)
-            mgr.create_driver(numbers, par, ihelp)
-            mgr.driver.setup(x)
-            ovlp = factories.new_overlap(mgr.driver_type, **DD)
-            ovlp.build(mgr.driver)
-            h0 = factories.new_hcore(numbers, par, ihelp, **DD)
-            return h0.build(x, ovlp.matrix)
+            overlap = build_overlap(integral_setup, x)
+            return build_hcore(h0_setup, x, overlap)[0]
 
         return f, _leaf(positions)
 

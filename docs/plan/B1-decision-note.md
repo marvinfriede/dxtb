@@ -33,8 +33,12 @@ not taken. Items marked **[decide]** needed an explicit answer before B2 starts;
 
 - `Model` and `System` are frozen `Node`s (C1) once `Node` lands. Until then
   they are frozen dataclasses with the same fields, so C8 only changes the base.
-- `System` keeps a reference to the model's parameters, not a copy, so a
-  gradient through `setup` reaches the parameter leaves (T0.9 test).
+- `System` does not keep the complete Model or complete parameter tables.
+  `setup` gathers the tensors needed by this composition, and those tensors
+  retain their autograd relationship to the Model parameter leaves. A
+  differentiated/training evaluation therefore performs `setup` from the
+  current Model inside the loss. This avoids duplicating complete Models when
+  Systems are stacked (T0.9 test).
 - `Model` carries no `numbers`, no device, no dtype (item 7).
 
 **Alternative rejected:** keep one `Calculator(numbers, par)` and make it
@@ -121,6 +125,9 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
    eigensolver (E6a). Until then `dxtb.batch.*` is the supported path and
    `vmap` over the whole singlepoint is the target.
 
+The temporary `System.batch_mode` used by the legacy Calculator during the
+migration is not part of this contract and must be removed before C8/E6.
+
 **[decide]** whether a batched call with a single composition and many
 geometries gets a dedicated `setup(numbers)` + `positions[nb, nat, 3]` entry
 (the common CREST case) or only the generic `dxtb.batch.*`. Proposal: the
@@ -201,13 +208,15 @@ tree structure and are never stacked.
    element-only data of the classical **and** the self-consistent terms (ES2
    hardness, ES3 derivatives); see section 14.
 3. **Per-call data.** The Coulomb matrices, the Cholesky factor `l_inv`, the
-   integrals depend on positions. They live in the per-call interaction cache
+   integrals depend on positions. They live in per-call interaction data
    inside `singlepoint` and in the result (B6), not in the system. The
    Cholesky factor is the one place where this costs repeated work in a
    transformed function; measure before adding anything (P10).
+   These values are local explicit values. They are never reused by identity
+   or value comparison and are not caches in the architectural sense.
 4. **Requirement (decided, done): the `refocc` derivative is fixed in T0.12**,
    before B3. It was not excluded and not left to F1.
-5. **Release placement.** The new API is dxtb release 1 (overview, section 8).
+5. **Release placement.** The new API ships in the single public restructuring release (overview, section 8).
    The old API raises with a migration pointer for that release only.
 
 ## 13. Acceptance

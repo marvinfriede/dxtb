@@ -23,11 +23,25 @@ Pytorch-based integral implementations.
 
 from .dipole import DipolePytorch
 from .driver import IntDriverPytorch
-from .overlap import OverlapPytorch
+from .multipole import build_dipole, build_quadrupole
+from .overlap import (
+    OverlapPytorch,
+    PytorchOverlapSetup,
+    build_overlap,
+    setup_overlap,
+)
 from .quadrupole import QuadrupolePytorch
+from .setup import PytorchIntegralSetup, setup_integrals
 
 __all__ = [
     "OverlapPytorch",
+    "PytorchOverlapSetup",
+    "PytorchIntegralSetup",
+    "setup_overlap",
+    "setup_integrals",
+    "build_overlap",
+    "build_dipole",
+    "build_quadrupole",
     "DipolePytorch",
     "QuadrupolePytorch",
     "IntDriverPytorch",

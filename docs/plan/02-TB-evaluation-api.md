@@ -84,11 +84,25 @@
 
 **Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2 (index lists in setup). **Size.** L.
 
-**Status: done in two parts.**
+**Status: partial.**
 
-Part 1 (done): `dxtb.calculators.Model` (parameters, configuration, additional components) and `System`; `Model.setup(numbers)` builds the index helper, the interactions and classicals with their element parameters gathered, the integral container and the data of the classical terms that depends on the numbers only (`system.classical_cache`, computed once in setup). The effective configuration (integral level derived from the parametrization and the interactions) is part of the system. The classical components' `get_cache` is a pure function now (no value-keyed internal cache); the calculator constructor is a thin wrapper around `setup` (`calc.model`, `calc.system`), and the tests of the removed cache behaviour were deleted. `setup` is differentiable with respect to the parameters (test), the T0.9 parameter coverage and the parameter-derivative cells are unchanged.
+**B3a — structural split: done.** Model/System exist, the legacy Calculator
+constructs them, classical numbers-only setup is built once and parameter
+coverage is preserved.
 
-Part 2 (deferred, with the packages that remove the code involved): the element-only data of the self-consistent terms (ES2 hardness gather, ES3 derivatives) stays in the per-call interaction caches. The ES2 gather sits inside the custom autograd function `CoulombMatrixAG` (forward and hand-written backward), which E1 replaces by plain torch code; ES3 and the others follow with the per-call caches in B6. `System.integrals` is the integral container with its mutable state until B4. The dtype conversion `Calculator.type()` does not convert the classical data (running a calculator after `type()` was already broken: the components lose their `label`; gone with TensorLike, track C).
+**B3b — setup/per-call separation: open.** The original B3 done criterion is
+not yet met. ES2/ES3 numbers-only data remains in the interaction path,
+integral structural setup remains coupled to mutable integral/driver objects,
+and transitional System fields (`model`, `batch_mode`, `dd`, mutable
+`integrals`) are not part of the target architecture.
+
+B3b is completed incrementally by B4/E1/B6 and is only marked done when every
+numbers-only operation required by the transformed core has moved to setup.
+
+The complete Model must not be retained by the final System. Gathered setup
+tensors retain the gradient path to Model parameters.
+
+B3a record: `dxtb.calculators.Model` (parameters, configuration, additional components) and `System`; `Model.setup(numbers)` builds the index helper, the interactions and classicals with their element parameters gathered, the integral container and the data of the classical terms that depends on the numbers only. The classical components' `get_cache` is a pure function. `setup` is differentiable with respect to the parameters (test); T0.9 parameter coverage and parameter-derivative cells are unchanged.
 
 ---
 
@@ -105,9 +119,18 @@ Part 2 (deferred, with the packages that remove the code involved): the element-
 3. Remove stored `matrix`, `gradient`, `norm` from integral objects; integral objects keep only static description (driver type, basis references).
 4. The `Integrals` container disappears or becomes a plain grouping of builder functions.
 
+**Additional requirements.**
+
+- PairPlan/other structural PyTorch-integral metadata is constructed in setup.
+- PyTorch builders take positions directly; no driver owns current positions.
+- libcint setup is a per-call value.
+- integral I/O (`write_overlap`, etc.) is outside the core.
+- geometry-dependent screening is not used to change shapes in the
+  transform-critical path.
+
 **Done when.** No integral or Hamiltonian object is mutated after construction; T0.2 reference reproduced.
 
-**Needs.** B1. **Unblocks.** B5, C7, E2, E5. **Size.** L (can be split per integral type: overlap, dipole, quadrupole, H0).
+**Needs.** B1. **Unblocks.** B5, C7, E2. **Size.** L (can be split per integral type: overlap, dipole, quadrupole, H0).
 
 ---
 
@@ -123,6 +146,14 @@ Part 2 (deferred, with the packages that remove the code involved): the element-
 4. Delete `CalculatorCache`, `@cdec.cache`, `opts.cache` (`ConfigCache`, `ConfigCacheStore`) and all `store_*` keyword arguments.
 5. Delete the `calculate()` dispatcher's cache handling.
 
+`Result` is immutable from its first construction; do not construct an empty
+Result and fill its fields.
+
+`iterations`, `converged` and `residual` are explicit diagnostics.
+
+The old Calculator is an adapter to the new core, never the implementation
+called by the new System.
+
 **Done when.** No code reads or writes a calculator-level cache; T0.2 reference reproduced; T0.5 tests 2 and 3 no longer apply and are removed.
 
 **Needs.** B3, B4. **Unblocks.** B6, B7, C8, E4. **Size.** M.
@@ -130,6 +161,16 @@ Part 2 (deferred, with the packages that remove the code involved): the element-
 ---
 
 ## B6 Per-call geometry data; remove all caches and mutation methods
+
+**Split.**
+
+**B6a:** remove all state persistent across calls. Temporary per-call SCF data
+may still be mutable because the old batched SCF culls it.
+
+**B6b:** after E4 replaces culling with a fixed-shape loop, delete cull/restore
+and freeze all remaining per-call data.
+
+Dependencies: B6a needs B5 and B4; B6b needs E4 (and C5 for the Node conversion of the index helper).
 
 **Goal.** Geometry-dependent intermediates are computed inside each call; no component or driver keeps state between calls.
 
@@ -172,6 +213,11 @@ Part 2 (deferred, with the packages that remove the code involved): the element-
 
 ## B8 Property functions
 
+**Split.**
+
+B8a: pure first/second-order property API.
+B8b: third-order and mixed-response properties after E3.
+
 **Goal.** All properties are functions of the system and the call inputs, implemented with `torch.func`. They replace the calculator mixins (`AnalyticalCalculator`, `AutogradCalculator`, `NumericalCalculator`).
 
 **Functions.** `energy`, `forces`, `hessian`, `third_order` (new), `dipole`, `quadrupole`, `polarizability`, `hyperpolarizability`, `dipole_derivative`, `polarizability_derivative`, `vibration`, `ir`, `raman`, `bond_orders`, plus `*_numerical` variants.
@@ -207,12 +253,12 @@ Part 2 (deferred, with the packages that remove the code involved): the element-
 | --- | --- | --- | --- |
 | B1 | Decision note | T0.11 | S |
 | B2 | Frozen configuration | B1 | M |
-| B3 | Model and setup | B1, B2 | L |
+| B3 | Model and setup (B3a done, B3b open) | B1, B2 | L |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3, B4 | M |
-| B6 | Per-call geometry data; remove caches and mutation | B5, B4 | L |
+| B6 | Per-call geometry data; remove caches and mutation (B6a: B5, B4; B6b: E4) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
-| B8 | Property functions | B7 (TE for order 3) | L |
+| B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |
 | B9 | ASE adapter (optional) | B8 | S |
 
-**Release gate.** dxtb release 1 ships after B2–B8 with a migration guide built from B1's removal list.
+**Release gate.** No intermediate public release is planned; the structural-core milestone (B2–B8a, see `00-overview.md` section 8) feeds the single public restructuring release, with a migration guide built from B1's removal list.
