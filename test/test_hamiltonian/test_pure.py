@@ -10,6 +10,13 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
+from dxtb._src.basis.bas import Basis
+from dxtb._src.integral.driver.pytorch.multipole import build_dipole
+from dxtb._src.integral.driver.pytorch.overlap import build_overlap
+from dxtb._src.integral.driver.pytorch.setup import setup_integrals
+from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
+from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
+from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
 from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
 from .samples import samples
@@ -61,6 +68,11 @@ def test_pure_h0_is_call_history_independent(method: str) -> None:
     third_derivative = torch.autograd.grad(second_derivative.sum(), leaf1)[0]
     assert torch.isfinite(third_derivative).all()
 
+    jacobian = torch.func.jacfwd(
+        lambda p: build_hcore(setup, p, overlap, charge=charge_arg)[0]
+    )(positions)
+    assert torch.isfinite(jacobian).all()
+
     _, tangent = torch.func.jvp(
         lambda p: build_hcore(setup, p, overlap, charge=charge_arg)[0],
         (positions,),
@@ -74,6 +86,118 @@ def test_pure_h0_is_call_history_independent(method: str) -> None:
     )(batched_positions)
     torch.testing.assert_close(batched[0], first)
     torch.testing.assert_close(batched[1], second)
+
+
+@pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
+def test_pure_h0_matches_legacy_and_explicit_refocc(method: str) -> None:
+    sample = samples["H2"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    params = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
+    hamiltonians = {
+        "gfn0": GFN0Hamiltonian,
+        "gfn1": GFN1Hamiltonian,
+        "gfn2": GFN2Hamiltonian,
+    }
+    par = ParamModule(
+        params[method].model_copy(deep=True),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    setup = setup_h0(numbers, par, ihelp)
+    overlap = torch.eye(ihelp.nao, dtype=positions.dtype, device=positions.device)
+    # Include nonzero off-diagonal overlap elements so the explicit overlap is
+    # observable in the returned H0 matrix.
+    overlap = overlap + 0.05 * (torch.ones_like(overlap) - overlap)
+    charge = torch.tensor(0.0, dtype=positions.dtype, device=positions.device)
+    charge_arg = charge if method == "gfn0" else None
+
+    hcore, refocc = build_hcore(setup, positions, overlap, charge=charge_arg)
+    legacy = hamiltonians[method](
+        numbers,
+        par,
+        ihelp,
+        device=positions.device,
+        dtype=positions.dtype,
+        setup=setup,
+    )
+    legacy_hcore = legacy.build(positions, overlap, charge=charge_arg)
+
+    torch.testing.assert_close(hcore, legacy_hcore)
+    torch.testing.assert_close(refocc, legacy.refocc)
+    assert refocc.dtype == positions.dtype
+    assert refocc.device == positions.device
+
+    before = refocc.clone()
+    build_hcore(setup, positions + 0.01, overlap, charge=charge_arg)
+    torch.testing.assert_close(refocc, before)
+    torch.testing.assert_close(setup.refocc, before)
+
+    # Equal-valued, independent leaves must produce matching matrix and
+    # overlap gradients.
+    overlap1 = overlap.clone().requires_grad_()
+    overlap2 = overlap.clone().requires_grad_()
+    h1, _ = build_hcore(setup, positions.clone(), overlap1, charge=charge_arg)
+    h2, _ = build_hcore(setup, positions.clone(), overlap2, charge=charge_arg)
+    grad1 = torch.autograd.grad(h1.sum(), overlap1)[0]
+    grad2 = torch.autograd.grad(h2.sum(), overlap2)[0]
+    torch.testing.assert_close(h1, h2)
+    torch.testing.assert_close(grad1, grad2)
+
+
+@pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
+def test_pure_h0_survives_prior_backward_and_integral_call_order(
+    method: str,
+) -> None:
+    sample = samples["H2"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    params = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
+    par = ParamModule(
+        params[method].model_copy(deep=True),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    setup = setup_h0(numbers, par, ihelp)
+    integral_setup = setup_integrals(Basis(numbers, par, ihelp))
+    charge = torch.tensor(0.0, dtype=positions.dtype, device=positions.device)
+    charge_arg = charge if method == "gfn0" else None
+
+    first_positions = positions.clone().requires_grad_()
+    first_overlap = build_overlap(integral_setup, first_positions)
+    first_hcore, first_refocc = build_hcore(
+        setup, first_positions, first_overlap, charge=charge_arg
+    )
+    first_hcore.sum().backward()
+    assert first_positions.grad is not None
+    assert torch.isfinite(first_positions.grad).all()
+
+    moved = positions + torch.tensor(
+        [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], dtype=positions.dtype
+    )
+    # First ordering: overlap -> H0 -> dipole -> H0.
+    dipole = build_dipole(integral_setup, positions)
+    second_overlap = build_overlap(integral_setup, moved)
+    second_hcore, second_refocc = build_hcore(
+        setup, moved, second_overlap, charge=charge_arg
+    )
+    assert torch.isfinite(dipole).all()
+
+    # Second ordering: dipole -> overlap -> H0. Repeat the first geometry
+    # after the preceding backward and moved-geometry evaluation.
+    moved_dipole = build_dipole(integral_setup, moved)
+    assert torch.isfinite(moved_dipole).all()
+    repeated_overlap = build_overlap(integral_setup, positions)
+    third_hcore, third_refocc = build_hcore(
+        setup, positions, repeated_overlap, charge=charge_arg
+    )
+
+    torch.testing.assert_close(third_hcore, first_hcore.detach())
+    torch.testing.assert_close(third_refocc, first_refocc)
+    torch.testing.assert_close(second_refocc, first_refocc)
+    assert not torch.equal(second_hcore, third_hcore)
 
 
 def test_pure_gfn0_requires_charge() -> None:
@@ -145,10 +269,16 @@ def test_h0_parameter_gradients(method: str) -> None:
     assert any(
         grad is not None and torch.isfinite(grad).all() for grad in grads
     )
+    gradients = {
+        name: grad for (name, _), grad in zip(named_parameters, grads)
+    }
+    refocc_gradient = gradients[
+        "parameter_tree.element.H.refocc.param"
+    ]
+    assert refocc_gradient is not None
+    assert torch.isfinite(refocc_gradient).all()
+    assert torch.any(refocc_gradient != 0)
     if method == "gfn0":
-        gradients = {
-            name: grad for (name, _), grad in zip(named_parameters, grads)
-        }
         for parameter in ("chi", "eta", "kcn", "rad"):
             grad = gradients[f"parameter_tree.element.H.eeq_{parameter}.param"]
             assert grad is not None
