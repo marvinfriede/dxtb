@@ -213,13 +213,15 @@ def build_integral_matrices(
     else:
         raise ValueError(f"Unknown integral driver '{setup.driver_type}'.")
 
-    norm = snorm(raw_overlap)
-    overlap = normalize_integral_matrix(raw_overlap, norm)
+    backend_norm = snorm(raw_overlap)
+    overlap = normalize_integral_matrix(raw_overlap, backend_norm)
     dipole = None
     quadrupole = None
 
     if setup.intlevel >= labels.INTLEVEL_DIPOLE:
-        raw_dipole = normalize_integral_matrix(build_dipole(), norm)
+        raw_dipole = normalize_integral_matrix(
+            build_dipole(), backend_norm
+        )
         if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
             if setup.intlevel > labels.INTLEVEL_MAX:
                 raise RuntimeError(
@@ -228,7 +230,7 @@ def build_integral_matrices(
                     "moment."
                 )
             raw_quadrupole = normalize_integral_matrix(
-                build_quadrupole(), norm
+                build_quadrupole(), backend_norm
             )
             quadrupole = reduce_quadrupole_9_to_6(raw_quadrupole)
             orbital_positions = ihelp.spread_atom_to_orbital(
@@ -250,6 +252,7 @@ def build_integral_matrices(
             )
 
     target_device = positions.device
+    overlap_norm = backend_norm.to(device=target_device)
     overlap = overlap.to(device=target_device)
     if dipole is not None:
         dipole = dipole.to(device=target_device)
@@ -257,10 +260,12 @@ def build_integral_matrices(
         quadrupole = quadrupole.to(device=target_device)
 
     hcore, refocc = build_hcore(h0_setup, positions, overlap, charge=charge)
+    hcore = hcore.to(device=target_device)
+    refocc = refocc.to(device=target_device)
     matrices = IntegralMatrices(
         hcore=hcore,
         overlap=overlap,
         dipole=dipole,
         quadrupole=quadrupole,
     )
-    return matrices, refocc, norm
+    return matrices, refocc, overlap_norm

@@ -189,11 +189,13 @@ class EnergyCalculator(BaseCalculator):
                 positions,
                 _chrg,
             )
-            intmats = intmats.to(self.device)
             if self.integrals.overlap is None:
                 raise RuntimeError("Legacy overlap adapter is not initialized.")
             self.integrals.overlap.matrix = intmats.overlap
-            self.integrals.overlap.norm = overlap_norm.to(device=self.device)
+            self.integrals.overlap.norm = overlap_norm
+            if self.integrals.hcore is None:
+                raise RuntimeError("Legacy H0 adapter is not initialized.")
+            self.integrals.hcore.matrix = intmats.hcore
             if intmats.dipole is not None:
                 if self.integrals.dipole is None:
                     raise RuntimeError(

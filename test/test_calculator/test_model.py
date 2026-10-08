@@ -29,6 +29,7 @@ import torch
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.constants import labels
+from dxtb._src.exlibs.available import has_libcint
 
 from ..conftest import DEVICE
 
@@ -73,6 +74,65 @@ def test_system_does_not_retain_mutable_integral_layer() -> None:
     forbidden = (Integrals, DriverManager, BaseHamiltonian, BaseIntegral)
     for field in dataclasses.fields(system):
         assert not isinstance(getattr(system, field.name), forbidden)
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        pytest.param("pytorch", id="pytorch"),
+        pytest.param(
+            "libcint",
+            id="libcint",
+            marks=pytest.mark.skipif(
+                not has_libcint, reason="libcint not available"
+            ),
+        ),
+    ],
+)
+def test_system_integral_setup_is_narrow(driver: str) -> None:
+    """System's integral setup retains values, not model or adapter objects."""
+    from dxtb._src.basis.bas import BasisSetup
+    from dxtb._src.integral.evaluation import IntegralSetup
+    from dxtb._src.integral.base import BaseIntegral
+    from dxtb._src.integral.container import Integrals
+    from dxtb._src.integral.driver import DriverManager
+    from dxtb._src.param import ParamModule
+    from dxtb._src.xtb.base import BaseHamiltonian
+
+    calc = Calculator(
+        torch.tensor([1, 1], device=DEVICE),
+        GFN2_XTB,
+        dtype=torch.double,
+        opts={"verbosity": 0, "int_driver": driver},
+    )
+    system = calc.system
+    assert not hasattr(system, "model")
+    assert not hasattr(system, "integrals")
+    setup = system.integral_setup
+    assert isinstance(setup, IntegralSetup)
+    assert not isinstance(setup, (ParamModule, DriverManager))
+    assert not hasattr(setup, "par")
+    legacy_types = (Integrals, DriverManager, BaseHamiltonian, BaseIntegral)
+    assert not isinstance(setup.pytorch, legacy_types)
+    assert not isinstance(setup.libcint, legacy_types)
+    if setup.libcint is not None:
+        for basis_setup in setup.libcint.basis_setups:
+            assert isinstance(basis_setup, BasisSetup)
+            assert not hasattr(basis_setup, "par")
+            assert not hasattr(basis_setup, "basis")
+            assert not hasattr(basis_setup, "driver")
+            assert {field.name for field in dataclasses.fields(basis_setup)} == {
+                "numbers",
+                "unique",
+                "ihelp",
+                "ngauss",
+                "pqn",
+                "slater",
+                "valence",
+            }
+    if setup.pytorch is not None:
+        assert not hasattr(setup.pytorch, "par")
+        assert not hasattr(setup.pytorch, "driver")
 
 
 def test_setup_is_differentiable() -> None:

@@ -87,10 +87,3 @@ class MultipoleLibcint(IntegralLibcint):
 
         self.matrix = build_multipole_libcint(call_data, intstring)
         return self.matrix
-
-        # single mode
-        if len(call_data.drivers) != 1:
-            raise RuntimeError("Single-system libcint setup needs one wrapper.")
-
-        self.matrix = _mpint(call_data.drivers[0])
-        return self.matrix
