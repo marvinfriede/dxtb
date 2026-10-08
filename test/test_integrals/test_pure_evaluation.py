@@ -277,10 +277,10 @@ def test_pure_integral_levels_match_legacy(
         ),
     ],
 )
-def test_singlepoint_mirrors_latest_matrices_to_legacy_adapter(
+def test_singlepoint_does_not_retain_matrices_on_legacy_adapter(
     driver: int,
 ) -> None:
-    """Legacy matrix access reflects each pure singlepoint result."""
+    """Pure singlepoint outputs remain local to Result, not legacy wrappers."""
     sample = samples["H2"]
     positions = sample["positions"].to(dtype=torch.float64)
     calc = Calculator(
@@ -292,44 +292,40 @@ def test_singlepoint_mirrors_latest_matrices_to_legacy_adapter(
     moved = positions.clone()
     moved[1, 0] += 0.12
 
-    first_matrices = None
+    first = None
     for call_index, geometry in enumerate((positions, moved, positions.clone())):
         result = calc.singlepoint(
             geometry,
             chrg=0.0,
-            store_overlap=True,
-            store_dipole=True,
-            store_quadrupole=True,
         )
-        assert result.integrals is not None
-        adapter_pairs = (
-            ("overlap", calc.integrals.overlap),
-            ("dipole", calc.integrals.dipole),
-            ("quadrupole", calc.integrals.quadrupole),
-        )
-        for name, adapter in adapter_pairs:
-            expected = getattr(result.integrals, name)
-            if expected is None:
-                assert adapter is None
-                continue
-            assert adapter is not None and adapter.matrix is not None
-            torch.testing.assert_close(adapter.matrix, expected)
+        assert result.overlap is not None and result.hcore is not None
+        assert result.dipole_integrals is not None
+        assert result.quadrupole_integrals is not None
+        assert calc.integrals.overlap is not None
+        assert calc.integrals.dipole is not None
+        assert calc.integrals.quadrupole is not None
+        assert calc.integrals.overlap._matrix is None
+        assert calc.integrals.overlap._norm is None
+        assert calc.integrals.dipole._matrix is None
+        assert calc.integrals.quadrupole._matrix is None
+        assert calc.integrals.hcore is not None
+        assert calc.integrals.hcore._matrix is None
         if call_index == 0:
-            first_matrices = result.integrals
+            first = result
         elif call_index == 1:
-            assert first_matrices is not None
+            assert first is not None
             assert not torch.equal(
-                first_matrices.overlap, result.integrals.overlap
+                first.overlap, result.overlap
             )
         else:
-            assert first_matrices is not None
-            for name in ("overlap", "dipole", "quadrupole"):
-                torch.testing.assert_close(
-                    getattr(first_matrices, name),
-                    getattr(result.integrals, name),
-                )
-    assert calc.integrals.hcore is not None
-    assert calc.integrals.hcore.matrix is None
+            assert first is not None
+            for name in (
+                "overlap",
+                "hcore",
+                "dipole_integrals",
+                "quadrupole_integrals",
+            ):
+                torch.testing.assert_close(getattr(first, name), getattr(result, name))
 
 
 @pytest.mark.parametrize(
@@ -422,9 +418,6 @@ def test_analytical_properties_after_pure_singlepoint(
     calc.singlepoint(
         positions,
         chrg=0.0,
-        store_overlap=True,
-        store_dipole=True,
-        store_quadrupole=True,
     )
 
     if property_name == "forces":

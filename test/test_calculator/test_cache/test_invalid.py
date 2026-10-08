@@ -30,12 +30,12 @@ from dxtb.calculators import AutogradCalculator
 
 from ...conftest import DEVICE
 
-opts = {"cache_enabled": True, "verbosity": 0}
+opts = {"verbosity": 0}
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 def test_invalid_newpos(dtype: torch.dtype) -> None:
-    """Test that the cache is invalidated when new positions are used."""
+    """Test that the each geometry evaluation is recomputed."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
     numbers = torch.tensor([3, 1], device=DEVICE)
@@ -53,11 +53,6 @@ def test_invalid_newpos(dtype: torch.dtype) -> None:
     assert calc._ncalcs == 1
     assert isinstance(prop1, Tensor)
 
-    # cache active for first calc
-    prop1 = calc.get_forces(positions1)
-    assert calc._ncalcs == 1
-    assert isinstance(prop1, Tensor)
-
     # now run different positions
     prop2 = calc.get_forces(positions2)
     assert calc._ncalcs == 2
@@ -68,7 +63,7 @@ def test_invalid_newpos(dtype: torch.dtype) -> None:
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 def test_invalid_requiresgrad(dtype: torch.dtype) -> None:
-    """Test that the cache is invalidated when requires_grad is changed."""
+    """Test that the gradient tracking does not reuse a previous result."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
     numbers = torch.tensor([3, 1], device=DEVICE)
@@ -83,15 +78,14 @@ def test_invalid_requiresgrad(dtype: torch.dtype) -> None:
     assert calc._ncalcs == 1
     assert isinstance(prop1, Tensor)
 
-    # cache active for first calc
     prop1 = calc.get_energy(positions1)
-    assert calc._ncalcs == 1
+    assert calc._ncalcs == 2
     assert isinstance(prop1, Tensor)
 
     # now run with different positions (gradient)
     positions1.requires_grad_(True)
     prop2 = calc.get_energy(positions1)
-    assert calc._ncalcs == 2
+    assert calc._ncalcs == 3
     assert isinstance(prop2, Tensor)
 
     assert torch.equal(prop1, prop2)
@@ -99,7 +93,7 @@ def test_invalid_requiresgrad(dtype: torch.dtype) -> None:
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 def test_invalid_inplace(dtype: torch.dtype) -> None:
-    """Test that the cache is invalidated when inplace changes are made."""
+    """Test that the in-place input changes are evaluated."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
     numbers = torch.tensor([3, 1], device=DEVICE)
@@ -113,15 +107,14 @@ def test_invalid_inplace(dtype: torch.dtype) -> None:
     assert calc._ncalcs == 1
     assert isinstance(prop1, Tensor)
 
-    # cache active for first calc
     prop1 = calc.get_energy(positions1)
-    assert calc._ncalcs == 1
+    assert calc._ncalcs == 2
     assert isinstance(prop1, Tensor)
 
     # now run with different positions (inplace change, increases `_version`)
     positions1[0, 0] = 1.0
     prop2 = calc.get_energy(positions1)
-    assert calc._ncalcs == 2
+    assert calc._ncalcs == 3
     assert isinstance(prop2, Tensor)
 
     assert not torch.equal(prop1, prop2)

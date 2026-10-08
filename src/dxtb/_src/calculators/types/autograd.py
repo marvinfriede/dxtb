@@ -24,7 +24,6 @@ Calculator for the extended tight-binding model with automatic gradients.
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 
 import torch
 
@@ -81,7 +80,6 @@ class AutogradCalculator(EnergyCalculator):
     ]
 
     @cdec.requires_positions_grad
-    @cdec.cache
     def forces(
         self,
         positions: Tensor,
@@ -141,10 +139,8 @@ class AutogradCalculator(EnergyCalculator):
         OutputHandler.write_stdout("------\n", v=5)
         logger.debug("Forces: Starting.")
 
-        # DEVNOTE: We need to pop the `create_graph` and `retain_graph` kwargs
-        # to avoid passing them to the energy function, which would add them to
-        # the cache key. This would require to pass them to the energy function
-        # as well for a cache hit, which is obviously non-sensical.
+        # These options belong to the derivative operation, not the energy
+        # calculation itself.
         kw = {
             "create_graph": kwargs.pop("create_graph", False),
             "retain_graph": kwargs.pop("retain_graph", False),
@@ -201,7 +197,6 @@ class AutogradCalculator(EnergyCalculator):
         return -deriv
 
     @cdec.requires_positions_grad
-    @cdec.cache
     def hessian(
         self,
         positions: Tensor,
@@ -342,7 +337,6 @@ class AutogradCalculator(EnergyCalculator):
 
         return hess
 
-    @cdec.cache
     def vibration(
         self,
         positions: Tensor,
@@ -410,7 +404,6 @@ class AutogradCalculator(EnergyCalculator):
 
     @cdec.requires_efield
     @cdec.requires_efield_grad
-    @cdec.cache
     def dipole(
         self,
         positions: Tensor,
@@ -484,7 +477,6 @@ class AutogradCalculator(EnergyCalculator):
 
     @cdec.requires_efg
     @cdec.requires_efg_grad
-    @cdec.cache
     def quadrupole(
         self,
         positions: Tensor,
@@ -558,7 +550,6 @@ class AutogradCalculator(EnergyCalculator):
         return -3.0 * deriv[..., rows, cols].contiguous()
 
     @cdec.requires_positions_grad
-    @cdec.cache
     def dipole_deriv(
         self,
         positions: Tensor,
@@ -640,7 +631,6 @@ class AutogradCalculator(EnergyCalculator):
 
     @cdec.requires_efield
     @cdec.requires_efield_grad
-    @cdec.cache
     def polarizability(
         self,
         positions: Tensor,
@@ -746,7 +736,6 @@ class AutogradCalculator(EnergyCalculator):
 
     @cdec.requires_efield
     @cdec.requires_positions_grad
-    @cdec.cache
     def pol_deriv(
         self,
         positions: Tensor,
@@ -838,7 +827,6 @@ class AutogradCalculator(EnergyCalculator):
 
     @cdec.requires_efield
     @cdec.requires_efield_grad
-    @cdec.cache
     def hyperpolarizability(
         self,
         positions: Tensor,
@@ -952,7 +940,6 @@ class AutogradCalculator(EnergyCalculator):
 
     # SPECTRA
 
-    @cdec.cache
     def ir(
         self,
         positions: Tensor,
@@ -1006,7 +993,6 @@ class AutogradCalculator(EnergyCalculator):
 
         return IRResult(vib_res.freqs, intensities)
 
-    @cdec.cache
     def raman(
         self,
         positions: Tensor,
@@ -1083,13 +1069,6 @@ class AutogradCalculator(EnergyCalculator):
                 "implementation error."
             )
 
-        self.opts = replace(
-            self.opts,
-            cache=replace(
-                self.opts.cache, store=replace(self.opts.cache.store, dipole=True)
-            ),
-        )
-
         return self.dipole_analytical  # type: ignore
 
     ##########################################################################
@@ -1101,71 +1080,44 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ) -> None:
-        """
-        Calculate the requested properties. This is more of a dispatcher method
-        that calls the appropriate methods of the Calculator.
-
-        Parameters
-        ----------
-        properties : list[str]
-            List of properties to calculate.
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        chrg : Tensor | float | int, optional
-            Total charge. Defaults to 0.
-        spin : Tensor | float | int, optional
-            Number of unpaired electrons. Defaults to ``None``.
-        """
-        # DEVNOTE: `super()` does not quite work, because the default kwargs of
-        # other functions may be missing. Example: Running `forces` will always
-        # use the `grad_mode` argument, which is not known within `super()`.
-        # Hence, the cache key will be different and the energy calculation
-        # after `forces` would not use the cached energy.
-        # super().calculate(properties, positions, chrg, spin, **kwargs)
-
-        if self.opts.cache.enabled is False:
-            self.cache.reset_all()
-
-        # treat bond orders separately for better error message
-        if "bond_orders" in properties:
-            self.bond_orders(positions, chrg, spin, **kwargs)
-
-        props = list(EnergyCalculator.implemented_properties)
-        props.remove("bond_orders")
-
-        if set(props) & set(properties):
-            self.energy(positions, chrg, spin, **kwargs)
-
+    ) -> dict[str, Any]:
+        """Calculate requested properties and return them explicitly."""
+        values = EnergyCalculator.calculate(
+            self, properties, positions, chrg, spin, **kwargs
+        )
         if "forces" in properties:
-            self.forces(positions, chrg, spin, **kwargs)
-
+            values["forces"] = self.forces(positions, chrg, spin, **kwargs)
         if "hessian" in properties:
-            self.hessian(positions, chrg, spin, **kwargs)
-
+            values["hessian"] = self.hessian(positions, chrg, spin, **kwargs)
         if {"vibration", "frequencies", "normal_modes"} & set(properties):
-            self.vibration(positions, chrg, spin, **kwargs)
-
-        if "dipole" in properties:
-            self.dipole(positions, chrg, spin, **kwargs)
-
-        if "quadrupole" in properties:
-            self.quadrupole(positions, chrg, spin, **kwargs)
-
+            vib_result = self.vibration(positions, chrg, spin, **kwargs)
+            for name, value in (
+                ("vibration", vib_result),
+                ("frequencies", vib_result.freqs),
+                ("normal_modes", vib_result.modes),
+            ):
+                if name in properties:
+                    values[name] = value
+        for name in (
+            "dipole",
+            "quadrupole",
+            "polarizability",
+            "hyperpolarizability",
+        ):
+            if name in properties:
+                values[name] = getattr(self, name)(positions, chrg, spin, **kwargs)
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
-            self.dipole_deriv(positions, chrg, spin, **kwargs)
-
-        if "polarizability" in properties:
-            self.polarizability(positions, chrg, spin, **kwargs)
-
+            value = self.dipole_deriv(positions, chrg, spin, **kwargs)
+            for name in ("dipole_derivatives", "dipole_deriv"):
+                if name in properties:
+                    values[name] = value
         if {"polarizability_derivatives", "pol_deriv"} & set(properties):
-            self.pol_deriv(positions, chrg, spin, **kwargs)
-
-        if "hyperpolarizability" in properties:
-            self.hyperpolarizability(positions, chrg, spin, **kwargs)
-
-        if {"ir"} & set(properties):
-            self.ir(positions, chrg, spin, **kwargs)
-
-        if {"raman"} & set(properties):
-            self.raman(positions, chrg, spin, **kwargs)
+            value = self.pol_deriv(positions, chrg, spin, **kwargs)
+            for name in ("polarizability_derivatives", "pol_deriv"):
+                if name in properties:
+                    values[name] = value
+        if "ir" in properties:
+            values["ir"] = self.ir(positions, chrg, spin, **kwargs)
+        if "raman" in properties:
+            values["raman"] = self.raman(positions, chrg, spin, **kwargs)
+        return values

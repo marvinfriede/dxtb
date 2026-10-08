@@ -315,6 +315,25 @@ def test_core_singlepoint_early_exclusion_returns_complete_result(
     assert result.iterations.item() == 0
 
 
+def test_core_singlepoint_validates_dtype_without_integral_setup() -> None:
+    """SCF-excluded Systems still validate position dtype from System.dd."""
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB, exclude=("all",), int_level=0
+    )
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=positions.dtype),
+        config=config,
+        auto_int_level=False,
+    ).setup(torch.tensor([1, 1]))
+    assert system.h0_setup is None
+    assert system.integral_setup is None
+    with pytest.raises(DtypeError, match="Dtype mismatch"):
+        singlepoint(system, positions.to(torch.float32))
+
+
 def test_core_singlepoint_rejects_missing_hcore_level() -> None:
     """The core preserves the established minimum integral-level error."""
     positions = torch.tensor(

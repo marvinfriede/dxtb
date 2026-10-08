@@ -23,23 +23,17 @@ Calculator for the extended tight-binding model with analytical gradients.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import torch
-from tad_mctc.convert import any_to_tensor
 from tad_mctc.math import einsum
 
 from dxtb import OutputHandler
 from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src import ncoord, scf
-from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.components.interactions.field import efield as efield
 from dxtb._src.constants import defaults
-from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
-from dxtb._src.xtb.h0 import build_hcore
 
 from ..result import Result
 from . import decorators as cdec
@@ -64,7 +58,6 @@ class AnalyticalCalculator(EnergyCalculator):
     """Names of implemented methods of the Calculator."""
 
     @cdec.requires_positions_grad
-    @cdec.cache
     def forces_analytical(
         self,
         positions: Tensor,
@@ -72,185 +65,76 @@ class AnalyticalCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
     ) -> Tensor:
-        r"""
-        Calculate the nuclear forces :math:`f` via AD.
-
-        .. math::
-
-            f = -\dfrac{\partial E}{\partial R}
-
-        One can calculate the Jacobian either row-by-row using the standard
-        :func:`torch.autograd.grad` with unit vectors in the VJP or using
-        :mod:`torch.func`'s function transforms (e.g.,
-        :func:`torch.func.jacrev`).
-
-        .. note::
-
-            Using :mod:`torch.func`'s function transforms can apparently be only
-            used once. Hence, for example, the Hessian and the dipole
-            derivatives cannot be both calculated with functorch.
-
-        Parameters
-        ----------
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        chrg : Tensor | float | int, optional
-            Total charge. Defaults to 0.
-        spin : Tensor | float | int, optional
-            Number of unpaired electrons. Defaults to ``None``.
-
-        Returns
-        -------
-        Tensor
-            Atomic forces of shape ``(..., nat, 3)``.
-        """
+        """Calculate analytical nuclear forces from one local Result."""
+        result = self.singlepoint(positions, chrg, spin, **kwargs)
         total_grad = torch.zeros(positions.shape, **self.dd)
 
-        # DEVNOTE: We need to save certain properties from the energy
-        # calculation for the analytical derivative. So, we check in the
-        # options if those quantities were cached. If not, we correct the
-        # setup. We also need to reset the cache. Otherwise, the energy
-        # calculation will use the cached value and the properties of
-        # interest are not calculated.
-        if self.opts.cache.is_setup_for_analytical_gradient() is False:
-            self.opts = replace(
-                self.opts, cache=self.opts.cache.for_analytical_gradient()
+        if result.classical:
+            cgradients = self.classicals.get_gradient(
+                dict(result.classical), positions
             )
-            self.cache.reset_all()
-
-        self.energy(positions, chrg, spin, **kwargs)
-        _chrg: Tensor = torch.atleast_1d(any_to_tensor(chrg, **self.dd))
-        if self.numbers.ndim > 1 and _chrg.ndim == 1 and _chrg.numel() != 1:
-            _chrg = _chrg.view(-1, 1)
-
-        # CLASSICAL CONTRIBUTIONS
-
-        if len(self.classicals.components) > 0:
-            OutputHandler.write_stdout_nf(" - Classicals        ... ", v=3)
-            timer.start("Classicals")
-
-            ccaches = self.system.classical_cache
-            cenergies = self.classicals.get_energy(
-                positions, ccaches, charge=_chrg
-            )
-
-            timer.stop("Classicals")
-            OutputHandler.write_stdout("done", v=3)
-            OutputHandler.write_stdout_nf(" - Classicals Grad    ... ", v=3)
-            timer.start("Classicals Gradient")
-
-            cgradients = self.classicals.get_gradient(cenergies, positions)
-            total_grad += torch.stack(list(cgradients.values())).sum(0)
-
-            timer.stop("Classicals Gradient")
-            OutputHandler.write_stdout("done", v=3)
+            total_grad += torch.stack(tuple(cgradients.values())).sum(0)
 
         if {"all", "scf"} & set(self.opts.exclude):
             return -total_grad
 
-        # SELF-CONSISTENT FIELD PROCEDURE
-
         timer.start("Interaction Cache", parent_uid="SCF")
-        OutputHandler.write_stdout_nf(" - Interaction Cache ... ", v=3)
         icaches = self.interactions.get_cache(
             numbers=self.numbers, positions=positions, ihelp=self.ihelp
         )
         timer.stop("Interaction Cache")
-        OutputHandler.write_stdout("done", v=3)
 
-        # Interaction gradient
-
-        charges = self.cache["charges"]
-        assert isinstance(charges, Charges)
-
-        if len(self.interactions.components) > 0:
-            timer.start("igrad", "Interaction Gradient")
-
-            # charges should be detached
-            interaction_grad = self.interactions.get_gradient(
+        charges = result.charges
+        if charges is None:
+            raise RuntimeError("SCF charges are missing from the Result.")
+        if self.interactions.components:
+            total_grad += self.interactions.get_gradient(
                 charges, positions, icaches, self.ihelp
             )
-            total_grad += interaction_grad
-            timer.stop("igrad")
 
-        # overlap gradient
+        if result.overlap is None or result.density is None:
+            raise RuntimeError("SCF overlap or density is missing from the Result.")
+        if result.coefficients is None or result.emo is None:
+            raise RuntimeError("SCF orbital data is missing from the Result.")
+        if result.occupation is None or result.potential is None:
+            raise RuntimeError(
+                "SCF occupation or potential is missing from the Result."
+            )
+        if self.integrals.hcore is None:
+            raise RuntimeError("Legacy H0 gradient adapter is not initialized.")
 
-        timer.start("ograd", "Overlap Gradient")
         overlap_grad = self.integrals.grad_overlap(positions)
-        timer.stop("ograd")
-
-        overlap = self.cache["overlap"]
-        assert isinstance(overlap, ints.types.OverlapIntegral)
-        assert overlap.matrix is not None
-
-        # density matrix
-
-        coefficients = self.cache["coefficients"]
-        assert isinstance(coefficients, Tensor)
-
-        mo_energies = self.cache["mo_energies"]
-        assert isinstance(mo_energies, Tensor)
-
-        occupation = self.cache["occupation"]
-        assert isinstance(occupation, Tensor)
-
-        timer.start("hgrad", "Hamiltonian Gradient")
         wmat = scf.get_density(
-            coefficients,
-            occupation.sum(-2),
-            emo=mo_energies,
+            result.coefficients,
+            result.occupation.sum(-2),
+            emo=result.emo,
         )
-
-        # SCF gradient
-
-        potential = self.cache["potential"]
-        assert isinstance(potential, Potential)
-
-        density = self.cache["density"]
-        assert isinstance(density, Tensor)
-
-        assert self.integrals.hcore is not None
-
         cn = ncoord.cn_d3(self.numbers, positions)
         dedcn, dedr = self.integrals.hcore.get_gradient(
             positions,
-            overlap.matrix,
+            result.overlap,
             overlap_grad,
-            density,
+            result.density,
             wmat,
-            potential,
+            result.potential,
             cn,
         )
-
-        # CN gradient
         dcndr = ncoord.cn_d3_gradient(self.numbers, positions)
-        dcn = ncoord.get_dcn(dcndr, dedcn)
+        total_grad += dedr + ncoord.get_dcn(dcndr, dedcn)
 
-        # sum up hamiltonian gradient and CN gradient
-        hamiltonian_grad = dedr + dcn
-        total_grad += hamiltonian_grad
-        timer.stop("hgrad")
-
-        # dipole integral gradient (e.g., from an electric field)
-
-        if potential.dipole is not None and self.integrals.dipole is not None:
-            timer.start("dgrad", "Dipole Integral Gradient")
-
-            # Energy of the dipole potential for a fixed density matrix (cf.
-            # `potential_to_hamiltonian`). The position dependence of the
-            # dipole integral is differentiated via autograd.
-            #  - shape dipole integral: (..., 3, nao, nao)
-            #  - shape dipole potential: (..., nao, 3)
+        if (
+            result.potential.dipole is not None
+            and result.dipole_integrals is not None
+        ):
             vdp = self.ihelp.spread_atom_to_orbital(
-                potential.dipole.detach(), dim=-2, extra=True
+                result.potential.dipole.detach(), dim=-2, extra=True
             )
             edp = -einsum(
                 "...ij,...kij,...jk->...",
-                density.detach(),
-                self.integrals.dipole.matrix,
+                result.density.detach(),
+                result.dipole_integrals,
                 vdp,
             )
-
             (dipole_grad,) = torch.autograd.grad(
                 edp.sum(),
                 positions,
@@ -258,330 +142,10 @@ class AnalyticalCalculator(EnergyCalculator):
                 create_graph=torch.is_grad_enabled(),
             )
             total_grad += dipole_grad
-            timer.stop("dgrad")
-
-        return -total_grad
-
-    @cdec.requires_positions_grad
-    @cdec.cache
-    def _forces_analytical(
-        self,
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        **kwargs: Any,
-    ) -> Tensor:
-        r"""
-        Calculate the nuclear forces :math:`f` via AD.
-
-        .. math::
-
-            f = -\dfrac{\partial E}{\partial R}
-
-        One can calculate the Jacobian either row-by-row using the standard
-        :func:`torch.autograd.grad` with unit vectors in the VJP or using
-        :mod:`torch.func`'s function transforms (e.g.,
-        :func:`torch.func.jacrev`).
-
-        .. note::
-
-            Using :mod:`torch.func`'s function transforms can apparently be only
-            used once. Hence, for example, the Hessian and the dipole derivatives
-            cannot be both calculated with functorch.
-
-        Parameters
-        ----------
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        chrg : Tensor | float | int, optional
-            Total charge. Defaults to 0.
-        spin : Tensor | float | int, optional
-            Number of unpaired electrons. Defaults to ``None``.
-
-        Returns
-        -------
-        Tensor
-            Atomic forces of shape ``(..., nat, 3)``.
-        """
-        OutputHandler.write_stdout("Singlepoint ", v=3)
-
-        _chrg: Tensor = torch.atleast_1d(any_to_tensor(chrg, **self.dd))
-        if self.numbers.ndim > 1 and _chrg.ndim == 1 and _chrg.numel() != 1:
-            _chrg = _chrg.view(-1, 1)
-        if spin is not None:
-            spin = any_to_tensor(spin, **self.dd)
-
-        total_grad = torch.zeros(positions.shape, **self.dd)
-        classical: dict[str, Tensor] = {}
-        classical_energy = torch.zeros(positions.shape[:-1], **self.dd)
-
-        # CLASSICAL CONTRIBUTIONS
-
-        if len(self.classicals.components) > 0:
-            OutputHandler.write_stdout_nf(" - Classicals        ... ", v=3)
-            timer.start("Classicals")
-
-            ccaches = self.system.classical_cache
-            classical = self.classicals.get_energy(
-                positions, ccaches, charge=_chrg
-            )
-            classical_energy = torch.stack(list(classical.values())).sum(0)
-
-            timer.stop("Classicals")
-            OutputHandler.write_stdout("done", v=3)
-            OutputHandler.write_stdout_nf(" - Classicals Grad    ... ", v=3)
-            timer.start("Classicals Gradient")
-
-            cgradients = self.classicals.get_gradient(classical, positions)
-            total_grad += torch.stack(list(cgradients.values())).sum(0)
-
-            timer.stop("Classicals Gradient")
-
-        if any(x in ["all", "scf"] for x in self.opts.exclude):
-            return -total_grad
-
-        #############
-        # INTEGRALS #
-        #############
-
-        timer.start("Integrals")
-
-        # overlap integral (always required, even without Hückel Hamiltonian)
-        OutputHandler.write_stdout_nf(" - Overlap           ... ", v=3)
-        timer.start("Overlap", parent_uid="Integrals")
-        overlap_matrix = self.integrals.build_overlap(positions)
-        timer.stop("Overlap")
-        OutputHandler.write_stdout("done", v=3)
-
-        if self.integrals.overlap is None:
-            raise RuntimeError("Overlap setup failed. SCF cannot be run.")
-        write_overlap = kwargs.get("write_overlap", False)
-        if write_overlap is not False:
-            assert self.integrals.overlap is not None
-            self.integrals.overlap.to_pt(write_overlap)
-
-        # dipole integral
-        dipole_matrix = None
-        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-            OutputHandler.write_stdout_nf(" - Dipole            ... ", v=3)
-            timer.start("Dipole Integral", parent_uid="Integrals")
-            dipole_matrix = self.integrals.build_dipole(positions)
-            timer.stop("Dipole Integral")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_dipole = kwargs.get("write_dipole", False)
-            if write_dipole is not False:
-                assert self.integrals.dipole is not None
-                self.integrals.dipole.to_pt(write_dipole)
-
-        # quadrupole integral
-        quadrupole_matrix = None
-        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            OutputHandler.write_stdout_nf(" - Quadrupole        ... ", v=3)
-            timer.start("Quadrupole Integral", parent_uid="Integrals")
-            quadrupole_matrix = self.integrals.build_quadrupole(positions)
-            # The legacy container defers the r0->rj dipole shift until the
-            # quadrupole has been built. Keep that final value for SCF.
-            if self.integrals.dipole is not None:
-                dipole_matrix = self.integrals.dipole.matrix
-            timer.stop("Quadrupole Integral")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_quad = kwargs.get("write_quadrupole", False)
-            if write_quad is not False:
-                assert self.integrals.quadrupole is not None
-                self.integrals.quadrupole.to_pt(write_quad)
-
-        # Core Hamiltonian integral (requires overlap internally!)
-        #
-        # This should be the final integral, because the others are
-        # potentially calculated on CPU (libcint) even in GPU runs.
-        # To avoid unnecessary data transfer, the core Hamiltonian should
-        # be last. Internally, the overlap integral is only transfered back
-        # to GPU when all multipole integrals are calculated.
-        if self.system.h0_setup is None:
-            raise NotImplementedError("Core Hamiltonian setup is missing.")
-        if self.opts.ints.level >= labels.INTLEVEL_HCORE:
-            OutputHandler.write_stdout_nf(" - Core Hamiltonian  ... ", v=3)
-            timer.start("Core Hamiltonian", parent_uid="Integrals")
-            hcore_matrix, refocc = build_hcore(
-                self.system.h0_setup,
-                positions,
-                overlap_matrix,
-                charge=_chrg,
-            )
-            timer.stop("Core Hamiltonian")
-            OutputHandler.write_stdout("done", v=3)
-
-            write_hcore = kwargs.get("write_hcore", False)
-            if write_hcore is not False:
-                path = write_hcore
-                if path is None or path is True:
-                    path = self.integrals.hcore.label.casefold() + ".pt"
-                torch.save(
-                    hcore_matrix,
-                    path,
-                )
-
-        # While one can theoretically skip the core Hamiltonian, the
-        # current implementation does not account for this case because the
-        # reference occupation is necessary for the SCF procedure.
-        if self.opts.ints.level < labels.INTLEVEL_HCORE:
-            raise NotImplementedError(
-                "Core Hamiltonian missing. Skipping the Core Hamiltonian in "
-                "the SCF is currently not supported. Please increase the "
-                "integral level to at least '2'. Currently, the level is set "
-                f"to '{self.opts.ints.level}'."
-            )
-
-        # finalize integrals
-        timer.stop("Integrals")
-        intmats = IntegralMatrices(
-            hcore=hcore_matrix,
-            overlap=overlap_matrix,
-            dipole=dipole_matrix,
-            quadrupole=quadrupole_matrix,
-        )
-        intmats = intmats.to(self.device)
-        ###################################
-        # SELF-CONSISTENT FIELD PROCEDURE #
-        ###################################
-
-        timer.cuda_sync = False
-        timer.start("SCF", "Self-Consistent Field")
-
-        # get caches of all interactions
-        timer.start("Interaction Cache", parent_uid="SCF")
-        OutputHandler.write_stdout_nf(" - Interaction Cache ... ", v=3)
-        icaches = self.interactions.get_cache(
-            numbers=self.numbers, positions=positions, ihelp=self.ihelp
-        )
-        timer.stop("Interaction Cache")
-        OutputHandler.write_stdout("done", v=3)
-
-        # Electronic solve
-        if self.opts.scf.requires_iterations:
-            OutputHandler.write_stdout("\nStarting SCF Iterations...", v=3)
-        else:
-            OutputHandler.write_stdout(
-                "\nStarting non-self-consistent electronic solve...", v=3
-            )
-
-        scf_results = scf.solve(
-            self.numbers,
-            positions,
-            _chrg,
-            spin,
-            self.interactions,
-            icaches,
-            self.ihelp,
-            self.opts.scf,
-            intmats,
-            refocc,
-        )
-
-        timer.stop("SCF")
-        if self.opts.scf.requires_iterations:
-            OutputHandler.write_stdout(
-                f"SCF finished in {scf_results['iterations']} iterations.", v=3
-            )
-        else:
-            OutputHandler.write_stdout(
-                "Non-self-consistent electronic solve finished.", v=3
-            )
-
-        result = Result.snapshot(
-            energy=(
-                classical_energy
-                + scf_results["energy"]
-                + scf_results["fenergy"]
-            ),
-            scf=scf_results["energy"],
-            classical=tuple(classical.items()),
-            fenergy=scf_results["fenergy"],
-            charges=scf_results["charges"],
-            density=scf_results["density"],
-            coefficients=scf_results["coefficients"],
-            emo=scf_results["emo"],
-            occupation=scf_results["occupation"],
-            potential=scf_results["potential"],
-            hamiltonian=scf_results["hamiltonian"],
-            overlap=intmats.overlap,
-            hcore=intmats.hcore,
-            dipole_integrals=intmats.dipole,
-            quadrupole_integrals=intmats.quadrupole,
-            overlap_norm=(
-                None if self.integrals.overlap is None else self.integrals.overlap.norm
-            ),
-            iterations=torch.tensor(
-                scf_results["iterations"], dtype=torch.int64, device=self.device
-            ),
-        )
-
-        if self.ihelp.batch_mode == 0:
-            OutputHandler.write_stdout(
-                f"SCF Energy  : {result.scf.sum(-1):.14f} Hartree.",
-                v=2,
-            )
-            OutputHandler.write_stdout(
-                f"Total Energy: {result.total.sum(-1):.14f} Hartree.", v=1
-            )
-
-        if len(self.interactions.components) > 0:
-            timer.start("igrad", "Interaction Gradient")
-
-            # charges should be detached
-            interaction_grad = self.interactions.get_gradient(
-                result.charges, positions, icaches, self.ihelp
-            )
-            total_grad += interaction_grad
-            timer.stop("igrad")
-
-        timer.start("ograd", "Overlap Gradient")
-        overlap_grad = self.integrals.grad_overlap(positions)
-        timer.stop("ograd")
-
-        timer.start("hgrad", "Hamiltonian Gradient")
-        wmat = scf.get_density(
-            result.coefficients,
-            result.occupation.sum(-2),
-            emo=result.emo,
-        )
-
-        cn = ncoord.cn_d3(self.numbers, positions)
-        dedcn, dedr = self.integrals.hcore.get_gradient(
-            positions,
-            intmats.overlap,
-            overlap_grad,
-            result.density,
-            wmat,
-            result.potential,
-            cn,
-        )
-
-        # CN gradient
-        dcndr = ncoord.cn_d3_gradient(self.numbers, positions)
-        dcn = ncoord.get_dcn(dcndr, dedcn)
-
-        # sum up hamiltonian gradient and CN gradient
-        hamiltonian_grad = dedr + dcn
-        total_grad += hamiltonian_grad
-        timer.stop("hgrad")
-
-        # DEVNOTE: The cache decorator only writes the quantity specified by
-        # the function name in the cache. For this, the quantity must be
-        # returned from the function. All other quantities must be entered
-        # explicitly into the cache.
-        self.cache["energy"] = result.total
-        self.cache["charges"] = result.charges
-        self.cache["iterations"] = result.iterations
-
-        self._ncalcs += 1
 
         return -total_grad
 
     @cdec.requires_efield
-    @cdec.cache
     def dipole_analytical(
         self,
         positions: Tensor,
@@ -612,41 +176,22 @@ class AnalyticalCalculator(EnergyCalculator):
         Tensor
             Electric dipole moment of shape `(..., 3)`.
         """
-        # require caching for analytical calculation at end of function
-        kwargs["store_dipole"] = True
-
-        # run single point and check if integral is populated
+        # Keep the SCF and integral outputs local to this calculation.
         result = self.singlepoint(positions, chrg, spin, **kwargs)
-
-        dipint = self.integrals.dipole
-        if dipint is None:
+        if result.dipole_integrals is None:
             raise RuntimeError(
                 "Dipole moment requires a dipole integral. They should "
                 f"be added automatically if the '{efield.LABEL_EFIELD}' "
                 "interaction is added to the Calculator."
             )
 
-        # Use try except to raise more informative error message, because
-        # `dipint.matrix` already raises a RuntimeError if the matrix is None.
-        try:
-            _ = dipint.matrix
-        except RuntimeError as e:
-            raise RuntimeError(
-                "Dipole moment requires a dipole integral. They should "
-                f"be added automatically if the '{efield.LABEL_EFIELD}' "
-                "interaction is added to the Calculator. This is "
-                "probably a bug. Check the cache setup.\n\n"
-                f"Original error: {str(e)}"
-            ) from e
-
         # pylint: disable=import-outside-toplevel
         from ..properties.moments.dip import dipole
 
         qat = self.ihelp.reduce_orbital_to_atom(result.charges.mono)
-        dip = dipole(qat, positions, result.density, dipint.matrix)
+        dip = dipole(qat, positions, result.density, result.dipole_integrals)
         return dip
 
-    @cdec.cache
     def quadrupole_analytical(
         self,
         positions: Tensor,
@@ -723,42 +268,24 @@ class AnalyticalCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        **kwargs,
-    ) -> None:
-        """
-        Calculate the requested properties. This is more of a dispatcher method
-        that calls the appropriate methods of the Calculator.
-
-        Parameters
-        ----------
-        properties : list[str]
-            List of properties to calculate.
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        chrg : Tensor | float | int, optional
-            Total charge. Defaults to 0.
-        spin : Tensor | float | int, optional
-            Number of unpaired electrons. Defaults to ``None``.
-        """
-        # DEVNOTE: The cache reset should normally be done with
-        # super().calculate(...). However, this also runs an energy
-        # calculation, which is always done in forces_analytical too.
-        # To skip the extra energy calculation, the cache reset is done here.
-        # TODO: Maybe, we can store all quantities required for the analytical
-        # forces in the cache and really only do the analytical derivative in
-        # forces_analytical.
-        if self.opts.cache.enabled is False:
-            self.cache.reset_all()
-
-        if {"energy", "iterations"} & set(properties):
-            self.energy(positions, chrg, spin, **kwargs)
-
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Calculate requested properties and return them explicitly."""
+        values = EnergyCalculator.calculate(
+            self, properties, positions, chrg, spin, **kwargs
+        )
         if "forces" in properties:
-            kwargs.pop("grad_mode")
-            self.forces_analytical(positions, chrg, spin, **kwargs)
-
+            force_kwargs = dict(kwargs)
+            force_kwargs.pop("grad_mode", None)
+            values["forces"] = self.forces_analytical(
+                positions, chrg, spin, **force_kwargs
+            )
         if "dipole" in properties:
-            self.dipole_analytical(positions, chrg, spin, **kwargs)
-
+            values["dipole"] = self.dipole_analytical(
+                positions, chrg, spin, **kwargs
+            )
         if "quadrupole" in properties:
-            self.quadrupole_analytical(positions, chrg, spin, **kwargs)
+            values["quadrupole"] = self.quadrupole_analytical(
+                positions, chrg, spin, **kwargs
+            )
+        return values

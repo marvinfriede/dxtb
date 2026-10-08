@@ -100,18 +100,13 @@ Depending on which calculator you choose, the properties are calculated using
 analytical, autograd, or numerical derivatives. The default uses automatic
 differentation. For details, see the calculator types.
 
-Calculators: Caching
-====================
+Calculators: Reusing results
+============================
 
-All properties can be cached. However, caching is not enabled by default. To
-enable caching, pass ``{"cache_enabled": True}`` to the calculator options.
+Calculator property methods recompute when called. To reuse several outputs
+from one evaluation, retain the :class:`~dxtb.Result` returned by
+:meth:`~dxtb.Calculator.singlepoint` and read its fields.
 
-.. warning::
-
-    Caching may lead to side effects if automatic differentiation is used
-    multiple times. If you encounter any issues, try running
-    :meth:`~dxtb.Calculator.reset`. If this does not help, disable caching
-    or report the issue.
 """
 
 from dxtb._src.calculators.gfn0 import GFN0Calculator as GFN0Calculator

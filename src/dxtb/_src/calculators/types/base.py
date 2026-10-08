@@ -56,356 +56,30 @@ from dxtb.integrals import Integrals
 
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
 
+_REMOVED_STORE_OPTIONS = {
+    "store_charges",
+    "store_coefficients",
+    "store_density",
+    "store_iterations",
+    "store_mo_energies",
+    "store_occupation",
+    "store_potential",
+    "store_fock",
+    "store_hcore",
+    "store_overlap",
+    "store_dipole",
+    "store_quadrupole",
+}
 
-class CalculatorCache(TensorLike):
-    """
-    Cache for Calculator that extends TensorLike.
 
-    This class provides caching functionality for storing multiple calculation results.
-    """
-
-    _cache_keys: dict[str, str | None]
-    """Dictionary of cache keys and their corresponding hash values."""
-
-    __slots__ = [
-        "energy",
-        #
-        "forces",
-        "hessian",
-        "vibration",
-        "normal_modes",
-        "frequencies",
-        #
-        "dipole",
-        "quadrupole",
-        "polarizability",
-        "hyperpolarizability",
-        #
-        "dipole_deriv",
-        "pol_deriv",
-        "ir",
-        "ir_intensities",
-        "raman",
-        "raman_intensities",
-        "raman_depol",
-        #
-        "hcore",
-        "overlap",
-        "dipint",
-        "quadint",
-        #
-        "bond_orders",
-        "charges",
-        "coefficients",
-        "density",
-        "fock",
-        "iterations",
-        "mo_energies",
-        "occupation",
-        "potential",
-        #
-        "_cache_keys",
-    ]
-
-    def __init__(
-        self,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-        #
-        energy: Tensor | None = None,
-        forces: Tensor | None = None,
-        hessian: Tensor | None = None,
-        vibration: VibResult | None = None,
-        normal_modes: Tensor | None = None,
-        frequencies: Tensor | None = None,
-        #
-        dipole: Tensor | None = None,
-        quadrupole: Tensor | None = None,
-        polarizability: Tensor | None = None,
-        hyperpolarizability: Tensor | None = None,
-        #
-        dipole_deriv: Tensor | None = None,
-        pol_deriv: Tensor | None = None,
-        ir: IRResult | None = None,
-        ir_intensities: Tensor | None = None,
-        raman: RamanResult | None = None,
-        raman_intensities: Tensor | None = None,
-        raman_depol: Tensor | None = None,
-        #
-        hcore: Tensor | None = None,
-        overlap: ints.types.OverlapIntegral | None = None,
-        dipint: ints.types.DipoleIntegral | None = None,
-        quadint: ints.types.QuadrupoleIntegral | None = None,
-        #
-        bond_orders: Tensor | None = None,
-        coefficients: Tensor | None = None,
-        charges: Charges | None = None,
-        density: Tensor | None = None,
-        fock: Tensor | None = None,
-        mo_energies: Tensor | None = None,
-        occupation: Tensor | None = None,
-        potential: Potential | None = None,
-        iterations: int | None = None,
-        #
-        _cache_keys: dict[str, str | None] | None = None,
-    ) -> None:
-        """
-        Initialize the Cache class with optional device and dtype settings.
-
-        Parameters
-        ----------
-        device : torch.device, optional
-            The device on which the tensors are stored.
-        dtype : torch.dtype, optional
-            The data type of the tensors.
-        """
-        super().__init__(device=device, dtype=dtype)
-        self.energy = energy
-        self.forces = forces
-        self.hessian = hessian
-        self.vibration = vibration
-        self.normal_modes = normal_modes
-        self.frequencies = frequencies
-
-        self.dipole = dipole
-        self.quadrupole = quadrupole
-        self.polarizability = polarizability
-        self.hyperpolarizability = hyperpolarizability
-
-        self.dipole_deriv = dipole_deriv
-        self.pol_deriv = pol_deriv
-        self.ir = ir
-        self.ir_intensities = ir_intensities
-        self.raman = raman
-        self.raman_intensities = raman_intensities
-        self.raman_depol = raman_depol
-
-        self.hcore = hcore
-        self.overlap = overlap
-        self.dipint = dipint
-        self.quadint = quadint
-
-        self.bond_orders = bond_orders
-        self.coefficients = coefficients
-        self.charges = charges
-        self.density = density
-        self.fock = fock
-        self.iterations = iterations
-        self.mo_energies = mo_energies
-        self.occupation = occupation
-        self.potential = potential
-
-        self._cache_keys = (
-            {prop: None for prop in self.__slots__ if prop != "_cache_keys"}
-            if _cache_keys is None
-            else _cache_keys
+def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
+    """Reject the removed Calculator result-retention arguments."""
+    removed = sorted(_REMOVED_STORE_OPTIONS.intersection(kwargs))
+    if removed:
+        raise TypeError(
+            "Calculator result caching has been removed; retain the returned "
+            "Result instead. Unsupported arguments: " + ", ".join(removed)
         )
-
-    def __getitem__(self, key: str) -> Any:
-        """
-        Get an item from the cache.
-
-        Parameters
-        ----------
-        key : str
-            The key of the item to retrieve.
-
-        Returns
-        -------
-        Tensor | None
-            The value associated with the key, if it exists.
-        """
-        if key in self.__slots__:
-            return getattr(self, key)
-        raise KeyError(f"Key '{key}' not found in Cache.")
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        """
-        Set an item in the cache.
-
-        Parameters
-        ----------
-        key : str
-            The key of the item to set.
-        value : Tensor
-            The value to be associated with the key.
-        """
-        if key == "wrapper":
-            raise RuntimeError(
-                "Key 'wrapper' detected. This happens if the cache "
-                "decorator is not the innermost decorator of the "
-                "Calculator method that you are trying to cache. Please "
-                "move the cache decorator to the innermost position. "
-                "Otherwise, the name of the method cannot be inferred "
-                "correctly."
-            )
-
-        # also set the content of the spectroscopic results
-        if key == "vibration":
-            assert isinstance(value, VibResult)
-            setattr(self, "frequencies", value.freqs)
-            setattr(self, "normal_modes", value.modes)
-        if key == "ir":
-            assert isinstance(value, IRResult)
-            setattr(self, "frequencies", value.freqs)
-            setattr(self, "ir_intensities", value.ints)
-        if key == "raman":
-            assert isinstance(value, RamanResult)
-            setattr(self, "frequencies", value.freqs)
-            setattr(self, "raman_intensities", value.ints)
-            setattr(self, "raman_depol", value.depol)
-
-        if key in self.__slots__:
-            setattr(self, key, value)
-        else:
-            raise KeyError(f"Key '{key}' cannot be set in Cache.")
-
-    def __contains__(self, key: str) -> bool:
-        """
-        Check if a key is in the cache.
-
-        Parameters
-        ----------
-        key : str
-            The key to check in the cache.
-
-        Returns
-        -------
-        bool
-            True if the key is in the cache, False otherwise
-        """
-        return key in self.__slots__ and getattr(self, key) is not None
-
-    def reset(self, key: str) -> None:
-        """
-        Clearing specific cached value by key.
-
-        Parameters
-        ----------
-        key : str | None, optional
-            The key to reset. If ``None``, all keys are reset. Defaults to
-            ``None``.
-        """
-        setattr(self, key, None)
-
-    def reset_all(self) -> None:
-        """
-        Reset the cache by clearing all cached values.
-
-        Parameters
-        ----------
-        key : str | None, optional
-            The key to reset. If ``None``, all keys are reset. Defaults to
-            ``None``.
-        """
-        for key in self.__slots__:
-            if key != "_cache_keys":
-                setattr(self, key, None)
-
-        self._cache_keys = {
-            prop: None for prop in self.__slots__ if prop != "_cache_keys"
-        }
-
-    def list_cached_properties(self) -> list[str]:
-        """
-        List all cached properties.
-
-        Returns
-        -------
-        list[str]
-            List of cached properties.
-        """
-        return [
-            key
-            for key in self.__slots__
-            if getattr(self, key) is not None and key != "_cache_keys"
-        ]
-
-    # cache validation
-
-    def set_cache_key(self, key: str, hashval: str) -> None:
-        """
-        Set the cache key for a specific property.
-
-        Parameters
-        ----------
-        key : str
-            The key of the item to set.
-        hashval : str
-            The hash value to be associated with the key.
-        """
-        if self._cache_keys is None:
-            raise RuntimeError("Cache keys have not been initialized.")
-
-        if key not in self._cache_keys:
-            raise KeyError(f"Key '{key}' cannot be set in Cache.")
-
-        self._cache_keys[key] = hashval
-
-    def get_cache_key(self, key: str) -> str | None:
-        """
-        Get the cache key for a specific property.
-
-        Parameters
-        ----------
-        key : str
-            The key of the item to get.
-
-        Returns
-        -------
-        str | None
-            The hash value associated with the key.
-        """
-        if self._cache_keys is None:
-            raise RuntimeError("Cache keys have not been initialized.")
-
-        if key not in self._cache_keys:
-            raise KeyError(f"Key '{key}' not found in '_cache_keys'.")
-
-        return self._cache_keys[key]
-
-    def __len__(self) -> int:
-        """
-        Return the number of cached properties.
-
-        Returns
-        -------
-        int
-            Number of cached properties.
-        """
-        return len(self.list_cached_properties())
-
-    # printing
-
-    def __str__(self) -> str:  # pragma: no cover
-        """Return a string representation of the Cache object."""
-        counter = 0
-        l = []
-        for key in self.__slots__:
-            # skip "_cache_keys"
-            if key.startswith("_"):
-                continue
-
-            attr = getattr(self, key)
-
-            # count populated values
-            if attr is not None:
-                counter += 1
-
-            # reduce printout for tensors
-            if isinstance(attr, Tensor):
-                attr = attr.shape if len(attr.shape) > 0 else attr
-
-            l.append(f"{key}={attr!r}")
-
-        return (
-            f"{self.__class__.__name__}(populated={counter}/{len(l)}, "
-            f"{', '.join(l)})"
-        )
-
-    def __repr__(self) -> str:  # pragma: no cover
-        """Return a representation of the Cache object."""
-        return str(self)
 
 
 class BaseCalculator(GetPropertiesMixin, TensorLike):
@@ -422,9 +96,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     numbers: Tensor
     """Atomic numbers for all atoms in the system (shape: ``(..., nat)``)."""
 
-    cache: CalculatorCache
-    """Cache for storing multiple calculation results."""
-
     classicals: ClassicalList
     """Classical contributions."""
 
@@ -440,13 +111,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     opts: Config
     """Calculator configuration."""
 
-    results: dict[str, Any]
-    """Results container."""
-
     _ncalcs: int
     """
-    Number of calculations performed with the calculator. Helpful for keeping
-    track of cache hits and actual new calculations.
+    Number of calculations performed with the calculator.
     """
 
     def __init__(
@@ -459,7 +126,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             list[Interaction] | tuple[Interaction] | Interaction | None
         ) = None,
         opts: dict[str, Any] | Config | None = None,
-        cache: CalculatorCache | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         **kwargs: Any,
@@ -499,6 +165,12 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
               ``DXTB_TIMER`` to ``1``.
 
         """
+        if "cache" in kwargs:
+            raise TypeError(
+                "Calculator result caching has been removed; retain the "
+                "returned Result instead."
+            )
+
         if not timer.enabled and kwargs.pop("timer", False):
             timer.enable()
 
@@ -591,9 +263,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.interactions = self.system.interactions
         self.integrals = self._create_legacy_integral_adapter()
 
-        # create cache
-        self.cache = CalculatorCache(**dd) if cache is None else cache
-
         self._ncalcs = 0
         timer.stop("Calculator")
 
@@ -649,7 +318,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals.reset_all()
         self.interactions.reset_all()
         self.integrals.reset_all()
-        self.cache.reset_all()
 
     @abstractmethod
     def calculate(
@@ -685,7 +353,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         allow_calculation: bool = True,
         return_clone: bool = False,
         **kwargs: Any,
-    ) -> Tensor | VibResult | IRResult | RamanResult | None:
+    ) -> Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None:
         """
         Get the named property.
 
@@ -700,22 +368,22 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
         allow_calculation : bool, optional
-            If the property is not present, allow its calculation. This does
-            not check if we even allow caching or if the inputs are the same.
-            Use with caution. Defaults to ``True``.
+            If ``False``, return ``None`` without evaluating. Since previous
+            outputs are not retained by Calculator, this does not retrieve an
+            earlier value. Defaults to ``True``.
         return_clone : bool, optional
-            If True, return a clone of the property. Defaults to ``False``.
+            If True and the value is a tensor, return a local clone.
+            Defaults to ``False``.
         """
+        reject_removed_store_kwargs(kwargs)
         if name not in self.implemented_properties:
             raise PropertyNotImplementedError(
                 f"Property '{name}' not implemented. Use one of: "
                 f"{self.implemented_properties}."
             )
 
-        # If we do not allow calculation and do not have the property in the
-        # cache, there's nothing we can do. Note that this does not check if we
-        # even allow caching or if the inputs are the same.
-        if allow_calculation is False and name not in self.cache:
+        # Without a persistent property cache, calculation is the only source.
+        if allow_calculation is False:
             return None
 
         # Before calculating, let's do some device and dtype checks.
@@ -752,25 +420,19 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                     f"spin is on '{spin.device}'."
                 )
 
-        # All the cache checks are handled deep within `calculate`. No need to
-        # do it here as well.
-        self.calculate([name], positions, chrg=chrg, spin=spin, **kwargs)
-
-        # For some reason the calculator was not able to do what we want...
-        if name not in self.cache:
+        values = self.calculate(
+            [name], positions, chrg=chrg, spin=spin, **kwargs
+        )
+        if not isinstance(values, dict) or name not in values:
             raise PropertyNotImplementedError(
-                f"Property '{name}' not present after calculation.\n"
-                "This seems like an internal error. (Maybe the method you "
-                "are calling has no cache decorator?)"
+                f"Property '{name}' was not returned by the Calculator."
             )
-
-        if return_clone is False:
-            return self.cache[name]
-
-        result = self.cache[name]
-        if isinstance(result, Tensor):
-            result = result.clone()
-        return result
+        result = values[name]
+        return (
+            result.clone()
+            if return_clone and isinstance(result, Tensor)
+            else result
+        )
 
     @override
     def type(self, dtype: torch.dtype) -> Self:
@@ -836,8 +498,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             ),
             dd={**self.system.dd, "dtype": dtype},
         )
-        self.cache = self.cache.type(dtype)
-
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)
 
@@ -854,7 +514,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         num_classicals = len(self.classicals)
         num_interactions = len(self.interactions)
         num_integrals = len(self.integrals)
-        cache_size = len(self.cache)
 
         return (
             f"{self.__class__.__name__}(\n"
@@ -862,7 +521,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             f"  Device: {device}\n"
             f"  Data Type: {dtype}\n"
             f"  Calculations Performed: {num_calculations}\n"
-            f"  Cache Size: {cache_size}\n"
             f"  Classical Contributions: {num_classicals} {self.classicals.labels}\n"
             f"  Interactions: {num_interactions} {self.interactions.labels}\n"
             f"  Integrals: {num_integrals} {self.integrals.labels}\n"

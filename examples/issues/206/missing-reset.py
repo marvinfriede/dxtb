@@ -75,7 +75,7 @@ class DxtbAseCalculator(AseCalculator):
         dxtb_calculator = DxtbCalculator(
             numbers=numbers,
             par=self.parametrization,
-            opts={"cache_enabled": False, "verbosity": 0},
+            opts={"verbosity": 0},
             **dd,
         )
 

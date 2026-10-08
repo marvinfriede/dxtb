@@ -45,7 +45,6 @@ import torch
 from dxtb._src.constants import defaults, labels
 from dxtb._src.typing import Any, PathLike, Self
 
-from .cache import ConfigCache
 from .integral import ConfigIntegrals
 from .scf import ConfigSCF
 
@@ -82,9 +81,6 @@ class Config:
     """Whether to run PyTorch in anomaly detection mode."""
 
     # configs
-
-    cache: ConfigCache = field(default_factory=ConfigCache)
-    """The cache configuration."""
 
     ints: ConfigIntegrals = field(default_factory=ConfigIntegrals)
     """The integral configuration."""
@@ -147,20 +143,6 @@ class Config:
         fermi_thresh: float | int | None = defaults.FERMI_THRESH,
         fermi_diff_order: int = defaults.FERMI_DIFF_ORDER,
         fermi_partition: str | int = defaults.FERMI_PARTITION,
-        # cache
-        cache_enabled: bool = defaults.CACHE_ENABLED,
-        cache_hcore: bool = defaults.CACHE_STORE_HCORE,
-        cache_overlap: bool = defaults.CACHE_STORE_OVERLAP,
-        cache_dipole: bool = defaults.CACHE_STORE_DIPOLE,
-        cache_quadrupole: bool = defaults.CACHE_STORE_QUADRUPOLE,
-        cache_charges: bool = defaults.CACHE_STORE_CHARGES,
-        cache_coefficients: bool = defaults.CACHE_STORE_COEFFICIENTS,
-        cache_density: bool = defaults.CACHE_STORE_DENSITY,
-        cache_fock: bool = defaults.CACHE_STORE_FOCK,
-        cache_iterations: bool = defaults.CACHE_STORE_ITERATIONS,
-        cache_mo_energies: bool = defaults.CACHE_STORE_MO_ENERGIES,
-        cache_occupation: bool = defaults.CACHE_STORE_OCCUPATIONS,
-        cache_potential: bool = defaults.CACHE_STORE_POTENTIAL,
         # misc
         max_element: int = defaults.MAX_ELEMENT,
     ) -> Self:
@@ -230,21 +212,6 @@ class Config:
             grad=grad,
             max_element=max_element,
             anomaly=anomaly,
-            cache=ConfigCache.create(
-                enabled=cache_enabled,
-                hcore=cache_hcore,
-                overlap=cache_overlap,
-                dipole=cache_dipole,
-                quadrupole=cache_quadrupole,
-                charges=cache_charges,
-                coefficients=cache_coefficients,
-                density=cache_density,
-                fock=cache_fock,
-                iterations=cache_iterations,
-                mo_energies=cache_mo_energies,
-                occupation=cache_occupation,
-                potential=cache_potential,
-            ),
             ints=ConfigIntegrals.create(
                 level=int_level,
                 cutoff=int_cutoff,
@@ -301,18 +268,6 @@ class Config:
             fermi_thresh=args.fermi_thresh,
             fermi_diff_order=args.fermi_diff_order,
             fermi_partition=args.fermi_partition,
-            # Cache
-            cache_enabled=args.cache_enabled,
-            cache_hcore=args.cache_hcore,
-            cache_overlap=args.cache_overlap,
-            cache_dipole=args.cache_dipole,
-            cache_quadrupole=args.cache_quadrupole,
-            cache_coefficients=args.cache_coefficients,
-            cache_density=args.cache_density,
-            cache_fock=args.cache_fock,
-            cache_mo_energies=args.cache_mo_energies,
-            cache_occupation=args.cache_occupation,
-            cache_potential=args.cache_potential,
         )
 
     @classmethod

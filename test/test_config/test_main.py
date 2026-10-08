@@ -61,26 +61,20 @@ def test_default() -> None:
     assert cfg.scf.fermi.diff_order == defaults.FERMI_DIFF_ORDER
     assert cfg.scf.fermi.partition == defaults.FERMI_PARTITION
 
-    assert cfg.cache.enabled == defaults.CACHE_ENABLED
-    assert cfg.cache.store.hcore == defaults.CACHE_STORE_HCORE
-    assert cfg.cache.store.overlap == defaults.CACHE_STORE_OVERLAP
-    assert cfg.cache.store.dipole == defaults.CACHE_STORE_DIPOLE
-    assert cfg.cache.store.quadrupole == defaults.CACHE_STORE_QUADRUPOLE
-    assert cfg.cache.store.charges == defaults.CACHE_STORE_CHARGES
-    assert cfg.cache.store.coefficients == defaults.CACHE_STORE_COEFFICIENTS
-    assert cfg.cache.store.density == defaults.CACHE_STORE_DENSITY
-    assert cfg.cache.store.fock == defaults.CACHE_STORE_FOCK
-    assert cfg.cache.store.iterations == defaults.CACHE_STORE_ITERATIONS
-    assert cfg.cache.store.mo_energies == defaults.CACHE_STORE_MO_ENERGIES
-    assert cfg.cache.store.occupation == defaults.CACHE_STORE_OCCUPATIONS
-    assert cfg.cache.store.potential == defaults.CACHE_STORE_POTENTIAL
-
     assert cfg.max_element == defaults.MAX_ELEMENT
 
     if has_libcint is True:
         assert cfg.ints.driver == defaults.INTDRIVER
     else:
         assert cfg.ints.driver == labels.INTDRIVER_PYTORCH
+
+
+def test_result_cache_configuration_is_removed() -> None:
+    """Calculator configuration has no result-cache options."""
+    cfg = Cfg.create()
+    assert not hasattr(cfg, "cache")
+    with pytest.raises(TypeError, match="cache_enabled"):
+        Cfg.create(cache_enabled=True)
 
 
 def test_method() -> None:

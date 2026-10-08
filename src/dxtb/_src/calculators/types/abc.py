@@ -31,6 +31,7 @@ from dxtb._src.calculators.properties.vibration import (
     RamanResult,
     VibResult,
 )
+from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Literal, Tensor
 
@@ -62,7 +63,7 @@ class GetPropertiesMixin(ABC):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ) -> Tensor | VibResult | IRResult | RamanResult | None:
+    ) -> Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None:
         """
         Get the named property.
 
@@ -79,8 +80,8 @@ class GetPropertiesMixin(ABC):
 
         Returns
         -------
-        Tensor
-            The requested property.
+        Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None
+            The requested value from the current calculation.
         """
 
     # energy

@@ -204,14 +204,11 @@ Note that all methods (except :meth:`~dxtb.Calculator.energy`) utilize
 automatic derivatives. For comparison, each method also has a numerical
 counterpart, e.g., :meth:`~dxtb.Calculator.forces_numerical`.
 
-.. note:: Caching
+.. note:: Reusing calculation outputs
 
-    These methods only calculate the requested property. To also store
-    associated properties, turn on caching by passing
-    ``{"cache_enabled": True}`` to the calculator options. This avoids
-    redundant calculations. For example, with caching,
-    :meth:`~dxtb.Calculator.get_hessian` also stores the forces and the energy.
-    Hence, a subsequent :meth:`~dxtb.Calculator.get_forces` does not
-    necessitate an additional calculation.
+    Calculator property calls evaluate their inputs each time. To reuse several
+    outputs from one evaluation, retain the returned value from
+    :meth:`~dxtb.Calculator.singlepoint` and read its fields, for example
+    ``result.energy`` and ``result.density``.
 
 For more details, please see :ref:`here <indepth_calculators>`.

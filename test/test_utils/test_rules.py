@@ -38,3 +38,32 @@ def test_no_object_setattr() -> None:
         if "object.__setattr__" in line
     ]
     assert not offenders, "object.__setattr__ found in " + ", ".join(offenders)
+
+
+def test_no_calculator_result_cache_or_identity_keying() -> None:
+    """Calculator evaluation cannot retain or key prior result outputs."""
+    calculator_source = SRC / "_src" / "calculators"
+    text = "\n".join(
+        path.read_text()
+        for path in calculator_source.rglob("*.py")
+    )
+    forbidden = (
+        "class CalculatorCache",
+        "class ConfigCache",
+        "class ConfigCacheStore",
+        "@cdec.cache",
+        "set_cache_key",
+        "get_cache_key",
+        "tensor_id(",
+        "data_ptr()",
+        "id(",
+        "hashed_key",
+        "cache_key",
+        "_last_result",
+        "last_result",
+        "result_cache",
+        "cached_result",
+        "self.cache",
+    )
+    found = [token for token in forbidden if token in text]
+    assert not found, "Calculator result retention returned: " + ", ".join(found)

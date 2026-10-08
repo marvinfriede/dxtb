@@ -67,7 +67,6 @@ class NumericalCalculator(EnergyCalculator):
     """Names of implemented methods of the Calculator."""
 
     @cdec.numerical
-    @cdec.cache
     def forces_numerical(
         self,
         positions: Tensor,
@@ -151,7 +150,6 @@ class NumericalCalculator(EnergyCalculator):
         return -deriv
 
     @cdec.numerical
-    @cdec.cache
     def hessian_numerical(
         self,
         positions: Tensor,
@@ -242,7 +240,6 @@ class NumericalCalculator(EnergyCalculator):
         return deriv
 
     @cdec.numerical
-    @cdec.cache
     def vibration_numerical(
         self,
         positions: Tensor,
@@ -294,7 +291,6 @@ class NumericalCalculator(EnergyCalculator):
 
     @cdec.numerical
     @cdec.requires_efield
-    @cdec.cache
     def dipole_numerical(
         self,
         positions: Tensor,
@@ -362,7 +358,6 @@ class NumericalCalculator(EnergyCalculator):
 
     @cdec.numerical
     @cdec.requires_efg
-    @cdec.cache
     def quadrupole_numerical(
         self,
         positions: Tensor,
@@ -435,7 +430,6 @@ class NumericalCalculator(EnergyCalculator):
         return -3.0 * deriv
 
     @cdec.numerical
-    @cdec.cache
     def dipole_deriv_numerical(
         self,
         positions: Tensor,
@@ -519,7 +513,6 @@ class NumericalCalculator(EnergyCalculator):
 
     @cdec.numerical
     @cdec.requires_efield
-    @cdec.cache
     def polarizability_numerical(
         self,
         positions: Tensor,
@@ -605,7 +598,6 @@ class NumericalCalculator(EnergyCalculator):
 
     @cdec.numerical
     @cdec.requires_efield
-    @cdec.cache
     def pol_deriv_numerical(
         self,
         positions: Tensor,
@@ -682,7 +674,6 @@ class NumericalCalculator(EnergyCalculator):
 
     @cdec.numerical
     @cdec.requires_efield
-    @cdec.cache
     def hyperpolarizability_numerical(
         self,
         positions: Tensor,
@@ -761,7 +752,6 @@ class NumericalCalculator(EnergyCalculator):
     # SPECTRA
 
     @cdec.numerical
-    @cdec.cache
     def ir_numerical(
         self,
         positions: Tensor,
@@ -810,7 +800,6 @@ class NumericalCalculator(EnergyCalculator):
         return vib.IRResult(freqs, intensities)
 
     @cdec.numerical
-    @cdec.cache
     def raman_numerical(
         self,
         positions: Tensor,
@@ -867,53 +856,56 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ) -> None:
-        """
-        Calculate the requested properties. This is more of a dispatcher method
-        that calls the appropriate methods of the Calculator.
-
-        Parameters
-        ----------
-        properties : list[str]
-            List of properties to calculate.
-        positions : Tensor
-            Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        chrg : Tensor | float | int, optional
-            Total charge. Defaults to 0.
-        spin : Tensor | float | int, optional
-            Number of unpaired electrons. Defaults to ``None``.
-        """
-        super().calculate(properties, positions, chrg, spin, **kwargs)
-
-        if "forces" in properties:
-            self.forces_numerical(positions, chrg, spin, **kwargs)
-
-        if "hessian" in properties:
-            self.hessian_numerical(positions, chrg, spin, **kwargs)
-
+    ) -> dict[str, Any]:
+        """Calculate requested properties and return them explicitly."""
+        values = super().calculate(properties, positions, chrg, spin, **kwargs)
+        for name in (
+            "forces", "hessian", "dipole", "quadrupole", "polarizability",
+            "hyperpolarizability",
+        ):
+            if name in properties:
+                values[name] = getattr(self, f"{name}_numerical")(
+                    positions, chrg, spin, **kwargs
+                )
         if {"vibration", "frequencies", "normal_modes"} & set(properties):
-            self.vibration_numerical(positions, chrg, spin, **kwargs)
-
-        if "dipole" in properties:
-            self.dipole_numerical(positions, chrg, spin, **kwargs)
-
-        if "quadrupole" in properties:
-            self.quadrupole_numerical(positions, chrg, spin, **kwargs)
-
+            vib_result = self.vibration_numerical(
+                positions, chrg, spin, **kwargs
+            )
+            for name, value in (
+                ("vibration", vib_result),
+                ("frequencies", vib_result.freqs),
+                ("normal_modes", vib_result.modes),
+            ):
+                if name in properties:
+                    values[name] = value
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
-            self.dipole_deriv_numerical(positions, chrg, spin, **kwargs)
-
-        if "polarizability" in properties:
-            self.polarizability_numerical(positions, chrg, spin, **kwargs)
-
+            value = self.dipole_deriv_numerical(
+                positions, chrg, spin, **kwargs
+            )
+            for name in ("dipole_derivatives", "dipole_deriv"):
+                if name in properties:
+                    values[name] = value
         if {"polarizability_derivatives", "pol_deriv"} & set(properties):
-            self.pol_deriv_numerical(positions, chrg, spin, **kwargs)
-
-        if "hyperpolarizability" in properties:
-            self.hyperpolarizability_numerical(positions, chrg, spin, **kwargs)
-
-        if {"ir", "ir_intensities"} in set(properties):
-            self.ir_numerical(positions, chrg, spin, **kwargs)
-
+            value = self.pol_deriv_numerical(
+                positions, chrg, spin, **kwargs
+            )
+            for name in ("polarizability_derivatives", "pol_deriv"):
+                if name in properties:
+                    values[name] = value
+        if {"ir", "ir_intensities"} & set(properties):
+            ir_result = self.ir_numerical(positions, chrg, spin, **kwargs)
+            if "ir" in properties:
+                values["ir"] = ir_result
+            if "ir_intensities" in properties:
+                values["ir_intensities"] = ir_result.ints
         if {"raman", "raman_intensities", "raman_depol"} & set(properties):
-            self.raman_numerical(positions, chrg, spin, **kwargs)
+            raman_result = self.raman_numerical(
+                positions, chrg, spin, **kwargs
+            )
+            if "raman" in properties:
+                values["raman"] = raman_result
+            if "raman_intensities" in properties:
+                values["raman_intensities"] = raman_result.ints
+            if "raman_depol" in properties:
+                values["raman_depol"] = raman_result.depol
+        return values

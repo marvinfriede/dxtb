@@ -363,15 +363,12 @@ class Driver:
 
         io.OutputHandler.dump_warnings()
 
-        if "energy" not in calc.cache:
-            result = calc.singlepoint(positions, chrg)
+        result = calc.singlepoint(positions, chrg)
 
-            timer.print()
-            result.print_energies()
-            io.OutputHandler.dump_warnings()
-            return result
-
-        raise RuntimeError("No calculation was performed.")
+        timer.print()
+        result.print_energies()
+        io.OutputHandler.dump_warnings()
+        return result
 
     def __str__(self) -> str:  # pragma: no cover
         """Custom print representation of class."""

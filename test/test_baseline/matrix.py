@@ -92,7 +92,6 @@ SCF_OPTIONS: dict[str, Any] = {
     "maxiter": 300,
     "f_atol": 1e-10,
     "x_atol": 1e-10,
-    "cache_enabled": False,
     "verbosity": 0,
 }
 

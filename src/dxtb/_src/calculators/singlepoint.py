@@ -102,6 +102,9 @@ def singlepoint(
         )
 
     floating_setup = _floating_setup_tensor(system)
+    expected_dtype = (
+        system.dd["dtype"] if floating_setup is None else floating_setup.dtype
+    )
     if floating_setup is not None:
         if floating_setup.device != system_device:
             raise DeviceError(
@@ -109,12 +112,12 @@ def singlepoint(
                 f"'{floating_setup.device}', but System numbers are on "
                 f"'{system_device}'."
             )
-        if positions.dtype != floating_setup.dtype:
-            raise DtypeError(
-                "Dtype mismatch: System floating setup is of type "
-                f"'{floating_setup.dtype}', but positions are of type "
-                f"'{positions.dtype}'."
-            )
+    if positions.dtype != expected_dtype:
+        raise DtypeError(
+            "Dtype mismatch: System floating setup is of type "
+            f"'{expected_dtype}', but positions are of type "
+            f"'{positions.dtype}'."
+        )
 
     charge = _call_scalar("charge", chrg, positions)
     spin_tensor = (

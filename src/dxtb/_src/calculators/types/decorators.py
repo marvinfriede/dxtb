@@ -23,7 +23,6 @@ Decorators for the Calculator class. These decorators can mark:
 - functions that require ``requires_grad=True`` for certain tensors
 - functions that require specific interactions to be present
 - functions that are computed numerically
-- results for caching
 """
 
 from __future__ import annotations
@@ -39,7 +38,6 @@ from dxtb._src.components.interactions import efield as efield
 from dxtb._src.components.interactions.field import efieldgrad as efieldgrad
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Callable, Tensor, TypeVar
-from dxtb._src.utils.tensors import tensor_id
 
 if TYPE_CHECKING:
     from ..base import Calculator
@@ -51,7 +49,6 @@ __all__ = [
     "requires_efg",
     "requires_efg_grad",
     "numerical",
-    "cache",
 ]
 
 logger = logging.getLogger(__name__)
@@ -225,53 +222,3 @@ def numerical(func: F) -> F:
             calc.interactions.update_efield(field=field_tensor)
     """
     return _numerical(nograd=True)(func)
-
-
-def cache(func: F) -> F:
-    """
-    Decorator to cache the results of a function.
-
-    .. warning::
-
-        This decorator must always be the innermost decorator.
-    """
-
-    @wraps(func)
-    def wrapper(self: Calculator, *args, **kwargs):
-        cache_key: str = func.__name__
-        key = cache_key.replace("_numerical", "").replace("_analytical", "")
-
-        hashed_key = ""
-
-        all_args = args + tuple(kwargs.values())
-        for i, arg in enumerate(all_args):
-            sep = "_" if i > 0 else ""
-            if isinstance(arg, Tensor):
-                hashed_key += f"{sep}{tensor_id(arg)}"
-            else:
-                hashed_key += f"{sep}{arg}"
-
-        full_key = key + ":" + hashed_key
-
-        # Check if the result is already in the cache in three steps:
-        # 1. Are we allowed to use the cache?
-        # 2. Is the key even in the cache?
-        # 3. Is the cache result calculated with the same inputs?
-        if self.opts.cache.enabled is True:
-            if key in self.cache:
-                if self.cache.get_cache_key(key) is not None:
-                    if self.cache.get_cache_key(key) == full_key:
-                        logger.debug(
-                            f"{cache_key.title()}: Using cached result."
-                        )
-                        return self.cache[key]
-
-        # Execute the function and store the result in the cache
-        result = func(self, *args, **kwargs)
-        self.cache[key] = result
-
-        # Also store the "hashkey"
-        self.cache.set_cache_key(key, full_key)
-        return result
-
-    return cast(F, wrapper)

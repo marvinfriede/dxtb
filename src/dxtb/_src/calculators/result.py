@@ -74,11 +74,14 @@ class _FrozenCharges(Charges):
     def __add__(self, other: Container) -> Container:
         if not isinstance(other, Container):
             raise TypeError("Only containers can be added together.")
+        if other.batch_mode != self.batch_mode:
+            raise ValueError("Cannot add containers with different batch modes.")
         return Container(
             mono=self.add_tensors(self.mono, other.mono),
             dipole=self.add_tensors(self.dipole, other.dipole),
             quad=self.add_tensors(self.quad, other.quad),
             label=[*self.label, *other.label],
+            batch_mode=self.batch_mode,
         )
 
     @classmethod
@@ -132,11 +135,14 @@ class _FrozenPotential(Potential):
     def __add__(self, other: Container) -> Container:
         if not isinstance(other, Container):
             raise TypeError("Only containers can be added together.")
+        if other.batch_mode != self.batch_mode:
+            raise ValueError("Cannot add containers with different batch modes.")
         return Container(
             mono=self.add_tensors(self.mono, other.mono),
             dipole=self.add_tensors(self.dipole, other.dipole),
             quad=self.add_tensors(self.quad, other.quad),
             label=[*self.label, *other.label],
+            batch_mode=self.batch_mode,
         )
 
     @classmethod

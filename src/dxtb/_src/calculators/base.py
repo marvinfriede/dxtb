@@ -58,12 +58,12 @@ class Calculator(AnalyticalCalculator, AutogradCalculator, NumericalCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ):
+    ) -> dict[str, Any]:
         # The quadrupole moment is also available via autograd (`quadrupole`)
         # and finite differences (`quadrupole_numerical`), but both need the
         # field gradient interaction. The default route requires no such
         # interaction and is the analytical one.
-        AutogradCalculator.calculate(
+        values = AutogradCalculator.calculate(
             self,
             [p for p in properties if p != "quadrupole"],
             positions,
@@ -73,4 +73,7 @@ class Calculator(AnalyticalCalculator, AutogradCalculator, NumericalCalculator):
         )
 
         if "quadrupole" in properties:
-            self.quadrupole_analytical(positions, chrg, spin, **kwargs)
+            values["quadrupole"] = self.quadrupole_analytical(
+                positions, chrg, spin, **kwargs
+            )
+        return values

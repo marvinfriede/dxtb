@@ -129,51 +129,25 @@ def test_forces_twice_same_leaf() -> None:
     calc.get_forces(pos)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known issue: with `cache_enabled=True`, `update_efield` does not "
-        "invalidate the result cache and the energy key covers only the "
-        "method arguments, so every displaced-field energy is the cached "
-        "zero-field energy. Removed with the result cache (B5)."
-    ),
-)
-def test_numerical_dipole_with_result_cache() -> None:
-    """Test 2: numerical dipole with the result cache enabled."""
+def test_numerical_dipole_without_result_cache() -> None:
+    """Numerical dipole evaluations use current displaced-field energies."""
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers, positions = _setup(dd)
-
-    def dipole(cache: bool) -> Tensor:
-        field = torch.zeros(3, **dd)
-        calc = Calculator(
-            numbers,
-            GFN1_XTB,
-            interaction=[new_efield(field)],
-            opts={"verbosity": 0, "cache_enabled": cache},
-            **dd,
-        )
-        return calc.dipole_numerical(positions)
-
-    ref = dipole(cache=False)
-    assert ref.abs().max() > 0.5  # water has a dipole moment
-    assert pytest.approx(ref.cpu(), abs=1e-6) == dipole(cache=True).cpu()
+    field = torch.zeros(3, **dd)
+    calc = Calculator(
+        numbers,
+        GFN1_XTB,
+        interaction=[new_efield(field)],
+        opts={"verbosity": 0},
+        **dd,
+    )
+    value = calc.dipole_numerical(positions)
+    assert torch.isfinite(value).all()
+    assert value.abs().max() > 0.5
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known issue: the result cache keys tensors on `data_ptr()` and "
-        "version only (`utils.tensors.tensor_id`), so a view sharing the "
-        "storage of a cached batch returns the batched result instead of "
-        "being validated. Removed with the result cache (B5)."
-    ),
-)
-def test_view_of_batch_with_result_cache() -> None:
-    """
-    Test 3: batched energy, then energy of ``positions[0]``. Without the
-    cache, the call is rejected (shape mismatch); with the cache, the cached
-    batched energies are returned.
-    """
+def test_view_of_batch_is_validated_without_result_cache() -> None:
+    """A batch view is checked as a single-system input, never reused."""
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers, positions = _setup(dd)
     numbers = pack([numbers, torch.tensor([1, 1], device=DEVICE)])
@@ -181,10 +155,7 @@ def test_view_of_batch_with_result_cache() -> None:
         [positions, torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], **dd)]
     )
 
-    calc = Calculator(
-        numbers, GFN1_XTB, opts={"verbosity": 0, "cache_enabled": True}, **dd
-    )
+    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, **dd)
     calc.get_energy(positions)
-
     with pytest.raises(ValueError):
         calc.get_energy(positions[0])

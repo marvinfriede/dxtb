@@ -133,21 +133,6 @@ of every system because the systems are independent:
     forces = -grad
 
 
-Result cache: numerical field derivatives and views of a batch
---------------------------------------------------------------
-
-With ``opts={"cache_enabled": True}`` (default: ``False``):
-
-- numerical derivatives with respect to the electric field (e.g.,
-  ``dipole_numerical``) return zero, because the field updates do not
-  invalidate the cached energies;
-- the result cache identifies a tensor by its storage, so a view of a batch
-  that was calculated before (e.g., ``positions[0]``) returns the cached
-  result of the whole batch instead of being validated.
-
-**Workaround:** keep the result cache disabled for these calculations.
-
-
 ``reset()`` cuts gradients to user-supplied tensors
 ---------------------------------------------------
 
