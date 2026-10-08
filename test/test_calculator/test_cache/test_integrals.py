@@ -72,9 +72,7 @@ def test_hcore_cached_as_tensor() -> None:
 
     assert isinstance(calc.cache.hcore, Tensor)
     assert calc.integrals.hcore is not None
-    torch.testing.assert_close(
-        calc.integrals.hcore.matrix, calc.cache.hcore
-    )
+    assert calc.integrals.hcore.matrix is None
 
 
 def overlap_retained_for_grad(dtype: torch.dtype, intdriver: int) -> None:

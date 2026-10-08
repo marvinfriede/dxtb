@@ -140,7 +140,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
     if res.charges.quad is not None:
         out["atomic_quadrupoles"] = res.charges.quad
 
-    out["iterations"] = torch.tensor(res.iter)
+    out["iterations"] = res.iterations
     return out
 
 

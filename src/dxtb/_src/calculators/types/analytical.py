@@ -312,7 +312,8 @@ class AnalyticalCalculator(EnergyCalculator):
             spin = any_to_tensor(spin, **self.dd)
 
         total_grad = torch.zeros(positions.shape, **self.dd)
-        result = Result(positions, **self.dd)
+        classical: dict[str, Tensor] = {}
+        classical_energy = torch.zeros(positions.shape[:-1], **self.dd)
 
         # CLASSICAL CONTRIBUTIONS
 
@@ -321,18 +322,17 @@ class AnalyticalCalculator(EnergyCalculator):
             timer.start("Classicals")
 
             ccaches = self.system.classical_cache
-            cenergies = self.classicals.get_energy(
+            classical = self.classicals.get_energy(
                 positions, ccaches, charge=_chrg
             )
-            result.cenergies = cenergies
-            result.total += torch.stack(list(cenergies.values())).sum(0)
+            classical_energy = torch.stack(list(classical.values())).sum(0)
 
             timer.stop("Classicals")
             OutputHandler.write_stdout("done", v=3)
             OutputHandler.write_stdout_nf(" - Classicals Grad    ... ", v=3)
             timer.start("Classicals Gradient")
 
-            cgradients = self.classicals.get_gradient(cenergies, positions)
+            cgradients = self.classicals.get_gradient(classical, positions)
             total_grad += torch.stack(list(cgradients.values())).sum(0)
 
             timer.stop("Classicals Gradient")
@@ -443,8 +443,6 @@ class AnalyticalCalculator(EnergyCalculator):
             quadrupole=quadrupole_matrix,
         )
         intmats = intmats.to(self.device)
-        result.integrals = intmats
-
         ###################################
         # SELF-CONSISTENT FIELD PROCEDURE #
         ###################################
@@ -492,18 +490,33 @@ class AnalyticalCalculator(EnergyCalculator):
                 "Non-self-consistent electronic solve finished.", v=3
             )
 
-        # store SCF results
-        result.charges = scf_results["charges"]
-        result.coefficients = scf_results["coefficients"]
-        result.density = scf_results["density"]
-        result.emo = scf_results["emo"]
-        result.fenergy = scf_results["fenergy"]
-        result.hamiltonian = scf_results["hamiltonian"]
-        result.occupation = scf_results["occupation"]
-        result.potential = scf_results["potential"]
-        result.scf += scf_results["energy"]
-        result.total += scf_results["energy"] + scf_results["fenergy"]
-        result.iter = scf_results["iterations"]
+        result = Result.snapshot(
+            energy=(
+                classical_energy
+                + scf_results["energy"]
+                + scf_results["fenergy"]
+            ),
+            scf=scf_results["energy"],
+            classical=tuple(classical.items()),
+            fenergy=scf_results["fenergy"],
+            charges=scf_results["charges"],
+            density=scf_results["density"],
+            coefficients=scf_results["coefficients"],
+            emo=scf_results["emo"],
+            occupation=scf_results["occupation"],
+            potential=scf_results["potential"],
+            hamiltonian=scf_results["hamiltonian"],
+            overlap=intmats.overlap,
+            hcore=intmats.hcore,
+            dipole_integrals=intmats.dipole,
+            quadrupole_integrals=intmats.quadrupole,
+            overlap_norm=(
+                None if self.integrals.overlap is None else self.integrals.overlap.norm
+            ),
+            iterations=torch.tensor(
+                scf_results["iterations"], dtype=torch.int64, device=self.device
+            ),
+        )
 
         if self.ihelp.batch_mode == 0:
             OutputHandler.write_stdout(
@@ -561,7 +574,7 @@ class AnalyticalCalculator(EnergyCalculator):
         # explicitly into the cache.
         self.cache["energy"] = result.total
         self.cache["charges"] = result.charges
-        self.cache["iterations"] = torch.tensor(result.iter, device=self.device)
+        self.cache["iterations"] = result.iterations
 
         self._ncalcs += 1
 

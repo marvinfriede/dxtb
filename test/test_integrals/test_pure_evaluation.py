@@ -304,7 +304,6 @@ def test_singlepoint_mirrors_latest_matrices_to_legacy_adapter(
         assert result.integrals is not None
         adapter_pairs = (
             ("overlap", calc.integrals.overlap),
-            ("hcore", calc.integrals.hcore),
             ("dipole", calc.integrals.dipole),
             ("quadrupole", calc.integrals.quadrupole),
         )
@@ -324,63 +323,13 @@ def test_singlepoint_mirrors_latest_matrices_to_legacy_adapter(
             )
         else:
             assert first_matrices is not None
-            for name in ("overlap", "hcore", "dipole", "quadrupole"):
+            for name in ("overlap", "dipole", "quadrupole"):
                 torch.testing.assert_close(
                     getattr(first_matrices, name),
                     getattr(result.integrals, name),
                 )
-
-    # H0 remains on the legacy wrapper even when the default cache policy
-    # clears non-gradient overlap/multipole matrices after the call.
-    result = calc.singlepoint(moved, chrg=0.0)
-    assert result.integrals is not None
     assert calc.integrals.hcore is not None
-    torch.testing.assert_close(calc.integrals.hcore.matrix, result.integrals.hcore)
-
-
-@pytest.mark.parametrize(
-    "driver",
-    [
-        pytest.param(labels.INTDRIVER_PYTORCH, id="pytorch"),
-        pytest.param(
-            labels.INTDRIVER_LIBCINT,
-            id="libcint",
-            marks=pytest.mark.skipif(
-                not has_libcint, reason="libcint not available"
-            ),
-        ),
-    ],
-)
-def test_hcore_adapter_does_not_retain_consumed_position_graph(
-    driver: int,
-) -> None:
-    """Two differentiated calls leave H0 mirroring on the latest geometry."""
-    positions = samples["H2"]["positions"].to(dtype=torch.float64)
-    calc = Calculator(
-        samples["H2"]["numbers"],
-        GFN1_XTB,
-        dtype=positions.dtype,
-        opts={"verbosity": 0, "int_driver": driver},
-    )
-    first_positions = positions.clone().requires_grad_(True)
-    first = calc.singlepoint(first_positions, chrg=0.0)
-    first_gradient = torch.autograd.grad(first.total.sum(), first_positions)[0]
-
-    second_positions = positions.clone()
-    second_positions[1, 0] += 0.09
-    second_positions.requires_grad_()
-    second = calc.singlepoint(second_positions, chrg=0.0)
-    second_gradient = torch.autograd.grad(second.total.sum(), second_positions)[
-        0
-    ]
-
-    assert torch.isfinite(first_gradient).all()
-    assert torch.isfinite(second_gradient).all()
-    assert second.integrals is not None
-    assert calc.integrals.hcore is not None
-    torch.testing.assert_close(
-        calc.integrals.hcore.matrix, second.integrals.hcore
-    )
+    assert calc.integrals.hcore.matrix is None
 
 
 @pytest.mark.parametrize(
@@ -563,7 +512,17 @@ def test_batched_calculator_keeps_legacy_integral_adapter(
             single.singlepoint(geometry, chrg=float(charge)).total.sum()
         )
     torch.testing.assert_close(result.total.sum(-1), torch.stack(separate))
-    assert not torch.isclose(result.total[0].sum(), result.total[1].sum())
+
+    geometry = positions[0]
+    single = Calculator(
+        torch.tensor([1, 1]),
+        GFN1_XTB,
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+    )
+    neutral = single.singlepoint(geometry, chrg=0.0).total.sum()
+    charged = single.singlepoint(geometry, chrg=1.0).total.sum()
+    assert not torch.isclose(neutral, charged)
 
 
 def test_pure_integral_evaluation_supports_torch_transforms() -> None:
@@ -605,6 +564,17 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
             for index, matrix in enumerate(evaluate(geometry))
         )
 
+    tangent = torch.arange(
+        positions.numel(), dtype=positions.dtype, device=positions.device
+    ).reshape_as(positions)
+    tangent = tangent / tangent.norm()
+    _, scalar_tangent = jvp(scalar, (positions,), (tangent,))
+    reverse_leaf = positions.clone().requires_grad_(True)
+    (reverse_gradient,) = torch.autograd.grad(scalar(reverse_leaf), reverse_leaf)
+    torch.testing.assert_close(
+        scalar_tangent, (reverse_gradient * tangent).sum()
+    )
+
     leaf = positions.clone().requires_grad_(True)
     first = torch.autograd.grad(scalar(leaf), leaf, create_graph=True)[0]
     second = torch.autograd.grad(first.sum(), leaf, create_graph=True)[0]
@@ -619,6 +589,7 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
 
     jacobian = jacfwd(scalar)(positions)
     assert torch.isfinite(jacobian).all()
+    torch.testing.assert_close(jacobian, reverse_gradient)
 
     geometries = torch.stack((positions, positions.clone()))
     mapped = vmap(evaluate)(geometries)

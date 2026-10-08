@@ -34,7 +34,6 @@ from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.utils.tensors import tensor_id
-from dxtb._src.integral.evaluation import build_integral_matrices
 
 from ..result import Result
 from . import decorators as cdec
@@ -148,7 +147,13 @@ class EnergyCalculator(BaseCalculator):
             if _spin is not None and _spin.ndim == 1 and _spin.numel() != 1:
                 _spin = _spin.view(-1, 1)
 
-        result = Result(positions, **self.dd)
+        if not is_batched:
+            return self._singlepoint_system(
+                positions, _chrg, _spin, hashed_key, kwargs
+            )
+
+        classical: dict[str, Tensor] = {}
+        total_energy = torch.zeros(positions.shape[:-1], **self.dd)
 
         ###########################
         # CLASSICAL CONTRIBUTIONS #
@@ -159,18 +164,25 @@ class EnergyCalculator(BaseCalculator):
             timer.start("Classicals")
 
             ccaches = self.system.classical_cache
-            cenergies = self.classicals.get_energy(
+            classical = self.classicals.get_energy(
                 positions, ccaches, charge=_chrg
             )
-            result.cenergies = cenergies
-            result.total += torch.stack(list(cenergies.values())).sum(0)
+            total_energy = total_energy + torch.stack(
+                list(classical.values())
+            ).sum(0)
 
             timer.stop("Classicals")
             OutputHandler.write_stdout("done", v=3)
 
         if {"all", "scf"} & set(self.opts.exclude):
-            self.cache["energy"] = result.total
-
+            result = Result.snapshot(
+                energy=total_energy,
+                scf=torch.zeros_like(total_energy),
+                classical=tuple(classical.items()),
+                fenergy=torch.zeros_like(total_energy),
+                iterations=torch.zeros((), dtype=torch.int64, device=self.device),
+            )
+            self.cache["energy"] = result.energy
             return result
 
         #############
@@ -182,60 +194,31 @@ class EnergyCalculator(BaseCalculator):
         if self.system.h0_setup is None:
             raise NotImplementedError("Core Hamiltonian setup is missing.")
 
-        if self.system.integral_setup is not None:
-            intmats, refocc, overlap_norm = build_integral_matrices(
-                self.system.integral_setup,
-                self.system.h0_setup,
-                positions,
-                _chrg,
-            )
-            if self.integrals.overlap is None:
-                raise RuntimeError("Legacy overlap adapter is not initialized.")
-            self.integrals.overlap.matrix = intmats.overlap
-            self.integrals.overlap.norm = overlap_norm
-            if self.integrals.hcore is None:
-                raise RuntimeError("Legacy H0 adapter is not initialized.")
-            # Keep the Calculator-local compatibility surface synchronized;
-            # core physics consumes intmats directly. B5 removes this mirror.
-            self.integrals.hcore.matrix = intmats.hcore
-            if intmats.dipole is not None:
-                if self.integrals.dipole is None:
-                    raise RuntimeError(
-                        "Legacy dipole adapter is not initialized."
-                    )
-                self.integrals.dipole.matrix = intmats.dipole
-            if intmats.quadrupole is not None:
-                if self.integrals.quadrupole is None:
-                    raise RuntimeError(
-                        "Legacy quadrupole adapter is not initialized."
-                    )
-                self.integrals.quadrupole.matrix = intmats.quadrupole
-        else:
-            # Existing batched Calculator calls still use the legacy builder
-            # until the later single-system/vmap batching package.
-            overlap_matrix = self.integrals.build_overlap(positions)
-            dipole_matrix = None
-            quadrupole_matrix = None
-            if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-                dipole_matrix = self.integrals.build_dipole(positions)
-            if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-                quadrupole_matrix = self.integrals.build_quadrupole(positions)
-                if self.integrals.dipole is not None:
-                    dipole_matrix = self.integrals.dipole.matrix
-            hcore_matrix = self.integrals.build_hcore(
-                positions,
-                with_overlap=True,
-                charge=_chrg,
-            )
-            if self.integrals.hcore is None:
-                raise RuntimeError("Legacy H0 adapter is not initialized.")
-            refocc = self.integrals.hcore.refocc
-            intmats = IntegralMatrices(
-                hcore=hcore_matrix,
-                overlap=overlap_matrix,
-                dipole=dipole_matrix,
-                quadrupole=quadrupole_matrix,
-            ).to(self.device)
+        # Batched Calculator calls remain on legacy mutable integral builders
+        # until E6 introduces stacked-System evaluation.
+        overlap_matrix = self.integrals.build_overlap(positions)
+        dipole_matrix = None
+        quadrupole_matrix = None
+        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
+            dipole_matrix = self.integrals.build_dipole(positions)
+        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
+            quadrupole_matrix = self.integrals.build_quadrupole(positions)
+            if self.integrals.dipole is not None:
+                dipole_matrix = self.integrals.dipole.matrix
+        hcore_matrix = self.integrals.build_hcore(
+            positions,
+            with_overlap=True,
+            charge=_chrg,
+        )
+        if self.integrals.hcore is None:
+            raise RuntimeError("Legacy H0 adapter is not initialized.")
+        refocc = self.integrals.hcore.refocc
+        intmats = IntegralMatrices(
+            hcore=hcore_matrix,
+            overlap=overlap_matrix,
+            dipole=dipole_matrix,
+            quadrupole=quadrupole_matrix,
+        ).to(self.device)
         timer.stop("Integrals")
         OutputHandler.write_stdout("done", v=3)
 
@@ -253,8 +236,6 @@ class EnergyCalculator(BaseCalculator):
                     raise RuntimeError(f"No legacy label is available for {key}.")
                 path = integral.label.casefold() + ".pt"
             torch.save(matrix, path)
-
-        result.integrals = intmats
 
         ###################################
         # SELF-CONSISTENT FIELD PROCEDURE #
@@ -307,21 +288,30 @@ class EnergyCalculator(BaseCalculator):
                 "Non-self-consistent electronic solve finished.", v=3
             )
 
-        # store SCF results
-        result.charges = scf_results["charges"]
-        result.coefficients = scf_results["coefficients"]
-        result.density = scf_results["density"]
-        result.emo = scf_results["emo"]
-        result.fenergy = scf_results["fenergy"]
-        result.hamiltonian = scf_results["hamiltonian"]
-        result.occupation = scf_results["occupation"]
-        result.potential = scf_results["potential"]
-        result.scf = scf_results["energy"]
-        result.fenergy = scf_results["fenergy"]
-        result.iter = scf_results["iterations"]
-
         scf_energy = scf_results["energy"] + scf_results["fenergy"]
-        result.total += scf_energy
+        result = Result.snapshot(
+            energy=total_energy + scf_energy,
+            scf=scf_results["energy"],
+            classical=tuple(classical.items()),
+            fenergy=scf_results["fenergy"],
+            charges=scf_results["charges"],
+            density=scf_results["density"],
+            coefficients=scf_results["coefficients"],
+            emo=scf_results["emo"],
+            occupation=scf_results["occupation"],
+            potential=scf_results["potential"],
+            hamiltonian=scf_results["hamiltonian"],
+            overlap=intmats.overlap,
+            hcore=intmats.hcore,
+            dipole_integrals=intmats.dipole,
+            quadrupole_integrals=intmats.quadrupole,
+            overlap_norm=(
+                None if self.integrals.overlap is None else self.integrals.overlap.norm
+            ),
+            iterations=torch.tensor(
+                scf_results["iterations"], dtype=torch.int64, device=self.device
+            ),
+        )
 
         if self.ihelp.batch_mode == 0:
             OutputHandler.write_stdout(
@@ -331,12 +321,12 @@ class EnergyCalculator(BaseCalculator):
             )
             OutputHandler.write_stdout(
                 "Total Energy: %.14f Hartree.",
-                result.total.sum(-1),
+                result.energy.sum(-1),
                 v=1,
             )
 
         # Store results. Energy always stored.
-        self.cache["energy"] = result.total
+        self.cache["energy"] = result.energy
 
         copts = self.opts.cache.store
 
@@ -392,6 +382,108 @@ class EnergyCalculator(BaseCalculator):
             if self.integrals.quadrupole is not None:
                 if self.integrals.quadrupole.requires_grad is False:
                     self.integrals.quadrupole.clear()
+
+        self._ncalcs += 1
+        return result
+
+    def _singlepoint_system(
+        self,
+        positions: Tensor,
+        charge: Tensor,
+        spin: Tensor | None,
+        hashed_key: str,
+        kwargs: dict[str, Any],
+    ) -> Result:
+        """Adapt a pure System result to legacy Calculator state and options."""
+        old_cuda_sync = timer.cuda_sync
+        timer.cuda_sync = kwargs.get(
+            "cuda_sync_in_scf", False if self.device.type == "cpu" else True
+        )
+        try:
+            result = self.system.singlepoint(positions, charge, spin)
+        finally:
+            timer.cuda_sync = old_cuda_sync
+
+        # Mutable integral objects remain only as Calculator-local adapters
+        # for analytical APIs that have not yet moved to explicit matrices.
+        if result.overlap is not None:
+            if self.integrals.overlap is None:
+                raise RuntimeError("Legacy overlap adapter is not initialized.")
+            self.integrals.overlap.matrix = result.overlap
+            self.integrals.overlap.norm = result.overlap_norm
+        if result.dipole_integrals is not None:
+            if self.integrals.dipole is None:
+                raise RuntimeError("Legacy dipole adapter is not initialized.")
+            self.integrals.dipole.matrix = result.dipole_integrals
+        if result.quadrupole_integrals is not None:
+            if self.integrals.quadrupole is None:
+                raise RuntimeError(
+                    "Legacy quadrupole adapter is not initialized."
+                )
+            self.integrals.quadrupole.matrix = result.quadrupole_integrals
+
+        for key, matrix, integral in (
+            ("write_overlap", result.overlap, self.integrals.overlap),
+            ("write_dipole", result.dipole_integrals, self.integrals.dipole),
+            (
+                "write_quadrupole",
+                result.quadrupole_integrals,
+                self.integrals.quadrupole,
+            ),
+            ("write_hcore", result.hcore, self.integrals.hcore),
+        ):
+            path = kwargs.get(key, False)
+            if path is False or matrix is None:
+                continue
+            if path is None or path is True:
+                if integral is None:
+                    raise RuntimeError(f"No legacy label is available for {key}.")
+                path = integral.label.casefold() + ".pt"
+            torch.save(matrix, path)
+
+        self.cache["energy"] = result.energy
+        copts = self.opts.cache.store
+        for option, cache_key, value in (
+            ("charges", "charges", result.charges),
+            ("coefficients", "coefficients", result.coefficients),
+            ("density", "density", result.density),
+            ("iterations", "iterations", result.iterations),
+            ("mo_energies", "mo_energies", result.emo),
+            ("occupation", "occupation", result.occupation),
+            ("potential", "potential", result.potential),
+        ):
+            if kwargs.get(f"store_{option}", getattr(copts, option)):
+                self.cache[cache_key] = value
+                self.cache.set_cache_key(cache_key, f"{cache_key}:{hashed_key}")
+
+        if kwargs.get("store_fock", copts.fock):
+            self.cache["fock"] = result.hamiltonian
+        if kwargs.get("store_hcore", copts.hcore):
+            self.cache["hcore"] = result.hcore
+
+        if kwargs.get("store_overlap", copts.overlap):
+            self.cache["overlap"] = self.integrals.overlap
+        elif (
+            self.integrals.overlap is not None
+            and not self.integrals.overlap.requires_grad
+        ):
+            self.integrals.overlap.clear()
+
+        if kwargs.get("store_dipole", copts.dipole):
+            self.cache["dipint"] = self.integrals.dipole
+        elif (
+            self.integrals.dipole is not None
+            and not self.integrals.dipole.requires_grad
+        ):
+            self.integrals.dipole.clear()
+
+        if kwargs.get("store_quadrupole", copts.quadrupole):
+            self.cache["quadint"] = self.integrals.quadrupole
+        elif (
+            self.integrals.quadrupole is not None
+            and not self.integrals.quadrupole.requires_grad
+        ):
+            self.integrals.quadrupole.clear()
 
         self._ncalcs += 1
         return result

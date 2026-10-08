@@ -18,132 +18,234 @@
 Calculators: Result
 ===================
 
-Result container for singlepoint calculation.
+Immutable values produced by a single-point calculation.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 
 from dxtb import OutputHandler
 from dxtb._src.components.interactions import Charges, Potential
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Any, Tensor, TensorLike
+from dxtb._src.typing import Tensor
 
-__all__ = ["Result"]
+__all__ = ["Multipoles", "Result"]
 
 
-class Result(TensorLike):
+def _copy_tensor(value: Tensor | None) -> Tensor | None:
+    return None if value is None else value.clone()
+
+
+class _FrozenCharges(Charges):
+    """Read-only snapshot of the mutable SCF charge container."""
+
+    __slots__ = ("_locked",)
+
+    def __init__(self, value: Charges):
+        self._locked = False
+        super().__init__(
+            mono=_copy_tensor(value.mono),
+            dipole=_copy_tensor(value.dipole),
+            quad=_copy_tensor(value.quad),
+            label=list(value.label),
+            batch_mode=value.batch_mode,
+        )
+        self.label = tuple(self.label)
+        self._locked = True
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if not getattr(self, "_locked", False):
+            super().__setattr__(name, value)
+            return
+        raise AttributeError("Result charge values are immutable.")
+
+
+class _FrozenPotential(Potential):
+    """Read-only snapshot of the mutable SCF potential container."""
+
+    __slots__ = ("_locked",)
+
+    def __init__(self, value: Potential):
+        self._locked = False
+        super().__init__(
+            mono=_copy_tensor(value.mono),
+            dipole=_copy_tensor(value.dipole),
+            quad=_copy_tensor(value.quad),
+            label=list(value.label),
+            batch_mode=value.batch_mode,
+        )
+        self.label = tuple(self.label)
+        self._locked = True
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if not getattr(self, "_locked", False):
+            super().__setattr__(name, value)
+            return
+        raise AttributeError("Result potential values are immutable.")
+
+
+@dataclass(frozen=True, eq=False)
+class Multipoles:
+    """Immutable dipole and quadrupole charge outputs."""
+
+    dipole: Tensor | None = None
+    quadrupole: Tensor | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class Result:
+    """Immutable single-system or legacy-batch calculation output.
+
+    SCF currently exposes iteration count but no reliable convergence flag or
+    residual value, so those two planned fields remain ``None``.
     """
-    Result container for singlepoint calculation.
-    """
 
-    charges: Charges
-    """Self-consistent orbital-resolved Mulliken partial charges."""
+    energy: Tensor
+    scf: Tensor | None
+    classical: tuple[tuple[str, Tensor], ...]
+    fenergy: Tensor | None
+    iterations: Tensor
+    charges: Charges | None = None
+    multipoles: Multipoles | None = None
+    density: Tensor | None = None
+    coefficients: Tensor | None = None
+    emo: Tensor | None = None
+    occupation: Tensor | None = None
+    potential: Potential | None = None
+    hamiltonian: Tensor | None = None
+    overlap: Tensor | None = None
+    hcore: Tensor | None = None
+    dipole_integrals: Tensor | None = None
+    quadrupole_integrals: Tensor | None = None
+    overlap_norm: Tensor | None = None
+    converged: Tensor | None = None
+    residual: Tensor | None = None
 
-    coefficients: Tensor
-    """LCAO-MO coefficients (eigenvectors of Fockian)."""
+    @classmethod
+    def snapshot(
+        cls,
+        *,
+        energy: Tensor,
+        scf: Tensor | None,
+        classical: tuple[tuple[str, Tensor], ...],
+        fenergy: Tensor | None,
+        iterations: Tensor,
+        charges: Charges | None = None,
+        multipoles: Multipoles | None = None,
+        density: Tensor | None = None,
+        coefficients: Tensor | None = None,
+        emo: Tensor | None = None,
+        occupation: Tensor | None = None,
+        potential: Potential | None = None,
+        hamiltonian: Tensor | None = None,
+        overlap: Tensor | None = None,
+        hcore: Tensor | None = None,
+        dipole_integrals: Tensor | None = None,
+        quadrupole_integrals: Tensor | None = None,
+        overlap_norm: Tensor | None = None,
+        converged: Tensor | None = None,
+        residual: Tensor | None = None,
+    ) -> Result:
+        """Create a Result with independent tensor snapshots.
 
-    density: Tensor
-    """Density matrix."""
-
-    cenergies: dict[str, Tensor]
-    """Energies of classical contributions."""
-
-    emo: Tensor
-    """Energy of molecular orbitals (sorted by increasing energy)."""
-
-    fenergy: Tensor
-    """Atom-resolved electronic free energy from fractional occupation."""
-
-    hamiltonian: Tensor
-    """Full Hamiltonian matrix (H0 + H1)."""
-
-    integrals: IntegralMatrices
-    """Collection of integrals including overlap and core Hamiltonian (H0)."""
-
-    occupation: Tensor
-    """Orbital occupation."""
-
-    potential: Potential
-    """Self-consistent potentials."""
-
-    scf: Tensor
-    """Atom-resolved energy from the self-consistent field (SCF) calculation."""
-
-    total: Tensor
-    """Total energy."""
-
-    __slots__ = [
-        "charges",
-        "coefficients",
-        "cenergies",
-        "density",
-        "emo",
-        "fenergy",
-        "hamiltonian",
-        "integrals",
-        "iter",
-        "occupation",
-        "potential",
-        "scf",
-        "total",
-    ]
-
-    def __init__(
-        self,
-        positions: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(device, dtype)
-        shape = positions.shape[:-1]
-
-        self.scf = torch.zeros(shape, dtype=self.dtype, device=self.device)
-        self.fenergy = torch.zeros(shape, dtype=self.dtype, device=self.device)
-        self.total = torch.zeros(shape, dtype=self.dtype, device=self.device)
-        self.cenergies = {}
-        self.iter = 0
-
-    def __str__(self) -> str:  # pragma: no cover
-        """Custom print representation showing all available slots."""
-        return f"{self.__class__.__name__}({self.__slots__})"
-
-    def __repr__(self) -> str:  # pragma: no cover
-        """Custom print representation showing all available slots."""
-        return str(self)
-
-    def get_energies(self) -> dict[str, dict[str, Any]]:
+        ``clone`` preserves autograd connectivity while keeping the result
+        independent of mutable SCF and component output containers.
         """
-        Get energies in a dictionary.
+        frozen_charges = None if charges is None else _FrozenCharges(charges)
+        frozen_potential = (
+            None if potential is None else _FrozenPotential(potential)
+        )
+        if frozen_charges is not None:
+            frozen_multipoles = Multipoles(
+                dipole=frozen_charges.dipole,
+                quadrupole=frozen_charges.quad,
+            )
+        elif multipoles is not None:
+            frozen_multipoles = Multipoles(
+                dipole=_copy_tensor(multipoles.dipole),
+                quadrupole=_copy_tensor(multipoles.quadrupole),
+            )
+        else:
+            frozen_multipoles = None
+        return cls(
+            energy=energy.clone(),
+            scf=_copy_tensor(scf),
+            classical=tuple((name, value.clone()) for name, value in classical),
+            fenergy=_copy_tensor(fenergy),
+            iterations=iterations.clone(),
+            charges=frozen_charges,
+            multipoles=frozen_multipoles,
+            density=_copy_tensor(density),
+            coefficients=_copy_tensor(coefficients),
+            emo=_copy_tensor(emo),
+            occupation=_copy_tensor(occupation),
+            potential=frozen_potential,
+            hamiltonian=_copy_tensor(hamiltonian),
+            overlap=_copy_tensor(overlap),
+            hcore=_copy_tensor(hcore),
+            dipole_integrals=_copy_tensor(dipole_integrals),
+            quadrupole_integrals=_copy_tensor(quadrupole_integrals),
+            overlap_norm=_copy_tensor(overlap_norm),
+            converged=_copy_tensor(converged),
+            residual=_copy_tensor(residual),
+        )
 
-        Returns
-        -------
-        dict[str, dict[str, float]]
-            Energies in a dictionary.
-        """
-        KEY = "value"
+    @property
+    def total(self) -> Tensor:
+        """Compatibility alias for the canonical total-energy field."""
+        return self.energy
 
-        c = {k: {KEY: v.sum().item()} for k, v in self.cenergies.items()}
-        ctotal = sum(d[KEY] for d in c.values())
+    @property
+    def iter(self) -> Tensor:
+        """Compatibility alias for the per-system iteration tensor."""
+        return self.iterations
 
-        e = {
-            "SCF": {KEY: self.scf.sum().item()},
-            "Free Energy (Fermi)": {KEY: self.fenergy.sum().item()},
+    @property
+    def cenergies(self) -> dict[str, Tensor]:
+        """Materialize the immutable classical-energy pairs as a new dict."""
+        return dict(self.classical)
+
+    @property
+    def integrals(self) -> IntegralMatrices | None:
+        """Return the immutable integral matrices when they were evaluated."""
+        if self.hcore is None or self.overlap is None:
+            return None
+        return IntegralMatrices(
+            hcore=self.hcore,
+            overlap=self.overlap,
+            dipole=self.dipole_integrals,
+            quadrupole=self.quadrupole_integrals,
+        )
+
+    def get_energies(self) -> dict[str, dict[str, object]]:
+        """Return energy contributions formatted for user-facing output."""
+        key = "value"
+        classical = {
+            name: {key: value.sum().item()}
+            for name, value in self.classical
         }
-        etotal = sum(d[KEY] for d in e.values())
-
+        ctotal = sum(value[key] for value in classical.values())
+        scf_energy = 0.0 if self.scf is None else self.scf.sum().item()
+        free_energy = (
+            0.0 if self.fenergy is None else self.fenergy.sum().item()
+        )
         return {
-            "total": {KEY: self.total.sum().item()},
-            "Classical": {KEY: ctotal, "sub": c},
-            "Electronic": {KEY: etotal, "sub": e},
+            "total": {key: self.energy.sum().item()},
+            "Classical": {key: ctotal, "sub": classical},
+            "Electronic": {
+                key: scf_energy + free_energy,
+                "sub": {
+                    "SCF": {key: scf_energy},
+                    "Free Energy (Fermi)": {key: free_energy},
+                },
+            },
         }
 
-    def print_energies(
-        self, v: int = 4, precision: int = 14
-    ) -> None:  # pragma: no cover
-        """Print energies in a table."""
-
+    def print_energies(self, v: int = 4, precision: int = 14) -> None:
+        """Print energy contributions in a table."""
         OutputHandler.write_table(
             self.get_energies(),
             title="Energies",

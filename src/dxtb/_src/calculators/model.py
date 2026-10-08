@@ -25,9 +25,8 @@ The calculator is split into a molecule-independent :class:`Model` and a
   components. It is independent of any molecule.
 - The :class:`System` holds everything that depends on the atomic numbers
   only: the index helper, the components with their parameters gathered from
-  the element tables, the data of the classical contributions (their caches)
-  and the integral container. It does not depend on the positions, the total
-  charge or the spin.
+  the element tables, the data of the classical contributions and immutable
+  integral/H0 setup values. It does not depend on positions, charge or spin.
 
 :meth:`Model.setup` is a function of the parameters and the numbers.
 Gradients flow from everything computed in the system to the parameter
@@ -35,16 +34,15 @@ leaves, i.e., it can be called inside a differentiated function.
 
 .. note::
 
-    The components and the integral container are still mutable objects that
-    carry their own state (caches of the geometry-dependent data, the integral
-    matrices). They disappear with the pure integral builders and the removal
-    of the caches (B4, B6). The :class:`System` itself and everything it holds
-    that depends on the numbers only (`classical_cache`) is fixed.
+    Component lists and classical setup remain transitional mutable objects
+    until later component/cache packages. Integral matrix production uses
+    explicit setup values and does not store per-call outputs on System.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -74,6 +72,9 @@ from dxtb._src.param import ParamModule
 from dxtb._src.typing import DD, Tensor
 from dxtb._src.xtb.h0 import H0Setup, setup_h0
 from dxtb.config import Config
+
+if TYPE_CHECKING:
+    from dxtb._src.calculators.result import Result
 
 __all__ = ["Model", "System"]
 
@@ -125,6 +126,17 @@ class System:
 
     dd: DD
     """Device and data type of the tensors of the system."""
+
+    def singlepoint(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+    ) -> Result:
+        """Evaluate this single system through the pure calculator core."""
+        from dxtb._src.calculators.singlepoint import singlepoint
+
+        return singlepoint(self, positions, chrg, spin)
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
