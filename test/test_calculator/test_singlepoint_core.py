@@ -25,9 +25,10 @@ from dataclasses import FrozenInstanceError, fields
 import pytest
 import torch
 
-from dxtb import GFN1_XTB, ParamModule, labels
+from dxtb import Calculator, GFN1_XTB, ParamModule, labels
+from tad_mctc.exceptions import DeviceError, DtypeError
 from dxtb._src.calculators.config import Config
-from dxtb._src.calculators.model import Model
+from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import singlepoint
 
@@ -94,7 +95,11 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
     same_tensor = singlepoint(system, positions)
     _assert_result_values_equal(first, same_tensor)
     snapshot = {
-        name: None if getattr(first, name) is None else getattr(first, name).clone()
+        name: (
+            None
+            if getattr(first, name) is None
+            else getattr(first, name).clone()
+        )
         for name in (
             "energy",
             "scf",
@@ -113,20 +118,22 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
     assert first.charges is not None and first.potential is not None
     nested_snapshot = {
         "charges": {
-            name: None
-            if getattr(first.charges, name) is None
-            else getattr(first.charges, name).clone()
+            name: (
+                None
+                if getattr(first.charges, name) is None
+                else getattr(first.charges, name).clone()
+            )
             for name in ("mono", "dipole", "quad")
         },
         "potential": {
-            name: None
-            if getattr(first.potential, name) is None
-            else getattr(first.potential, name).clone()
+            name: (
+                None
+                if getattr(first.potential, name) is None
+                else getattr(first.potential, name).clone()
+            )
             for name in ("mono", "dipole", "quad")
         },
-        "classical": {
-            name: value.clone() for name, value in first.classical
-        },
+        "classical": {name: value.clone() for name, value in first.classical},
     }
     moved = positions.clone()
     moved[1, 0] += 0.1
@@ -154,10 +161,20 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         torch.testing.assert_close(first.cenergies[name], expected)
     assert first.charges is not second.charges
     assert first.potential is not second.potential
+    for name in ("energy", "density", "hamiltonian", "overlap", "hcore"):
+        left = getattr(first, name)
+        right = getattr(second, name)
+        assert left is not None and right is not None
+        assert (
+            left.untyped_storage().data_ptr()
+            != right.untyped_storage().data_ptr()
+        )
     with pytest.raises(FrozenInstanceError):
         first.energy = second.energy  # type: ignore[misc]
     with pytest.raises(AttributeError):
         first.charges.mono = second.charges.mono  # type: ignore[union-attr,misc]
+    with pytest.raises(AttributeError, match="immutable"):
+        first.potential.label = []  # type: ignore[union-attr,misc]
 
     assert first.energy is first.total
     assert first.integrals is not None
@@ -208,6 +225,25 @@ def test_core_singlepoint_supports_independent_position_gradients() -> None:
     torch.testing.assert_close(repeated_gradient, gradients[0])
 
 
+def test_core_singlepoint_geometry_after_prior_backward() -> None:
+    """A prior backward does not affect a fresh geometry call on one System."""
+    system, positions = _system()
+    first_positions = positions.clone().requires_grad_(True)
+    first = singlepoint(system, first_positions)
+    first.energy.sum().backward()
+    assert first_positions.grad is not None
+    assert torch.isfinite(first_positions.grad).all()
+
+    second_positions = positions.clone()
+    second_positions[1, 0] += 0.03
+    second_positions.requires_grad_(True)
+    second = singlepoint(system, second_positions)
+    (second_gradient,) = torch.autograd.grad(
+        second.energy.sum(), second_positions
+    )
+    assert torch.isfinite(second_gradient).all()
+
+
 def test_system_singlepoint_delegates_to_core() -> None:
     """System exposes a thin direct delegate to the singlepoint core."""
     positions = torch.tensor(
@@ -220,6 +256,8 @@ def test_system_singlepoint_delegates_to_core() -> None:
     direct = singlepoint(system, positions)
     _assert_result_values_equal(result, direct)
     source = inspect.getsource(sys.modules[singlepoint.__module__])
+    assert "Result.snapshot(" in source
+    assert "Result(" not in source
     assert "tensor_id" not in source
     assert "data_ptr" not in source
     assert "id(" not in source
@@ -267,6 +305,14 @@ def test_core_singlepoint_early_exclusion_returns_complete_result(
     assert result.charges is None
     assert result.potential is None
     assert torch.isfinite(result.energy).all()
+    classical_sum = sum(
+        (value for _, value in result.classical),
+        torch.zeros_like(result.energy),
+    )
+    torch.testing.assert_close(result.energy, classical_sum)
+    assert result.iterations.shape == torch.Size([])
+    assert result.iterations.device == positions.device
+    assert result.iterations.item() == 0
 
 
 def test_core_singlepoint_rejects_missing_hcore_level() -> None:
@@ -302,3 +348,170 @@ def test_core_singlepoint_rejects_non_single_system_positions(
     )
     with pytest.raises(ValueError, match=r"shape \(nat, 3\)"):
         singlepoint(system, positions)
+
+
+def _system(dtype: torch.dtype = torch.float64) -> tuple[System, torch.Tensor]:
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=dtype)
+    system = Model(par=ParamModule(GFN1_XTB, dtype=dtype)).setup(
+        torch.tensor([1, 1])
+    )
+    return system, positions
+
+
+def test_core_singlepoint_validates_positions_dtype_and_device() -> None:
+    """Core rejects mismatched geometry dtype/device before evaluation."""
+    system, positions = _system()
+    with pytest.raises(DtypeError, match="Dtype mismatch"):
+        singlepoint(system, positions.to(torch.float32))
+    with pytest.raises(DeviceError, match="Device mismatch"):
+        singlepoint(system, torch.empty(positions.shape, device="meta"))
+
+
+@pytest.mark.parametrize(
+    "charge",
+    [
+        0.0,
+        torch.tensor(0.0, dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+    ],
+    ids=["python-scalar", "zero-d", "one-element"],
+)
+def test_core_singlepoint_accepts_scalar_charge_forms(
+    charge: torch.Tensor | float,
+) -> None:
+    system, positions = _system()
+    result = singlepoint(system, positions, chrg=charge)
+    assert torch.isfinite(result.energy).all()
+
+
+def test_core_singlepoint_rejects_multivalued_charge_and_spin() -> None:
+    system, positions = _system()
+    with pytest.raises(ValueError, match="one-element"):
+        singlepoint(
+            system,
+            positions,
+            chrg=torch.tensor([0.0, 1.0], dtype=positions.dtype),
+        )
+    with pytest.raises(ValueError, match="one-element"):
+        singlepoint(
+            system,
+            positions,
+            spin=torch.tensor([0.0, 1.0], dtype=positions.dtype),
+        )
+
+
+@pytest.mark.parametrize(
+    "spin",
+    [
+        None,
+        0.0,
+        torch.tensor(0.0, dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+    ],
+    ids=["none", "python-scalar", "zero-d", "one-element"],
+)
+def test_core_singlepoint_accepts_scalar_spin_forms(
+    spin: torch.Tensor | float | None,
+) -> None:
+    system, positions = _system()
+    result = singlepoint(system, positions, spin=spin)
+    assert torch.isfinite(result.energy).all()
+
+
+@pytest.mark.parametrize("name", ["charge", "spin"])
+def test_core_singlepoint_validates_tensor_call_input_dtype_and_device(
+    name: str,
+) -> None:
+    system, positions = _system()
+    invalid_dtype = torch.tensor(0.0, dtype=torch.float32)
+    with pytest.raises(DtypeError, match="Dtype mismatch"):
+        singlepoint(
+            system,
+            positions,
+            **{"chrg" if name == "charge" else "spin": invalid_dtype},
+        )
+    invalid_device = torch.empty((), device="meta")
+    with pytest.raises(DeviceError, match="Device mismatch"):
+        singlepoint(
+            system,
+            positions,
+            **{"chrg" if name == "charge" else "spin": invalid_device},
+        )
+
+
+@pytest.mark.parametrize("case", ["shape", "dtype", "device", "charge", "spin"])
+def test_core_and_calculator_reject_same_invalid_single_system_inputs(
+    case: str,
+) -> None:
+    """Calculator adapter and direct core enforce the same input contract."""
+    system, positions = _system()
+    calculator = Calculator(
+        torch.tensor([1, 1]),
+        GFN1_XTB,
+        dtype=positions.dtype,
+        opts={"verbosity": 0},
+    )
+    kwargs = {}
+    if case == "shape":
+        positions = torch.zeros((1, 2, 3), dtype=positions.dtype)
+    elif case == "dtype":
+        positions = positions.to(torch.float32)
+    elif case == "device":
+        positions = torch.empty(positions.shape, device="meta")
+    elif case == "charge":
+        kwargs["chrg"] = torch.tensor([0.0, 1.0], dtype=positions.dtype)
+    else:
+        kwargs["spin"] = torch.tensor([0.0, 1.0], dtype=positions.dtype)
+
+    with pytest.raises((ValueError, DtypeError, DeviceError)):
+        singlepoint(system, positions, **kwargs)
+    with pytest.raises((ValueError, DtypeError, DeviceError)):
+        calculator.singlepoint(positions, **kwargs)
+
+
+def test_core_singlepoint_tensor_charge_gradient_is_preserved() -> None:
+    """Tensor call-input normalization preserves charge autograd."""
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    config = Config.create(method=labels.GFN1_XTB, fermi_etemp=300)
+    model = Model(
+        par=ParamModule(GFN1_XTB, dtype=positions.dtype), config=config
+    )
+    system = model.setup(torch.tensor([1, 1]))
+    charge = torch.tensor(0.1, dtype=positions.dtype, requires_grad=True)
+    result = singlepoint(system, positions, chrg=charge)
+    (gradient,) = torch.autograd.grad(result.energy.sum(), charge)
+    assert torch.isfinite(gradient)
+    assert gradient.abs() > 0
+
+
+def test_result_charge_potential_mutators_fail_intentionally() -> None:
+    """Legacy-container read methods work; mutation methods fail clearly."""
+    system, positions = _system()
+    result = singlepoint(system, positions)
+    assert result.charges is not None
+    assert result.potential is not None
+    assert result.charges.as_tensor().numel() > 0
+    assert result.potential.as_tensor().numel() > 0
+    with pytest.raises(AttributeError, match="cannot be mutated"):
+        result.charges.nullify_padding()
+    with pytest.raises(AttributeError, match="cannot be mutated"):
+        result.charges.__iadd__(result.charges)
+    charge_before = result.charges.mono.clone()
+    summed_charges = result.charges + result.charges
+    torch.testing.assert_close(summed_charges.mono, 2 * charge_before)
+    torch.testing.assert_close(result.charges.mono, charge_before)
+    with pytest.raises(TypeError, match="cannot be constructed by mutation"):
+        result.charges.from_tensor(torch.zeros(1), {})
+    with pytest.raises(AttributeError, match="cannot be mutated"):
+        result.potential.reset()
+    with pytest.raises(AttributeError, match="cannot be mutated"):
+        result.potential.nullify_padding()
+    with pytest.raises(AttributeError, match="cannot be mutated"):
+        result.potential.__iadd__(result.potential)
+    potential_before = result.potential.mono.clone()
+    summed_potential = result.potential + result.potential
+    assert summed_potential.mono is not None
+    torch.testing.assert_close(summed_potential.mono, 2 * potential_before)
+    torch.testing.assert_close(result.potential.mono, potential_before)

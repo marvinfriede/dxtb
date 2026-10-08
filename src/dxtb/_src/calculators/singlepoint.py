@@ -24,6 +24,7 @@ Single-system evaluation from explicit System and call inputs.
 from __future__ import annotations
 
 import torch
+from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import labels
 from dxtb._src import scf
@@ -34,6 +35,50 @@ from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.typing import Tensor
 
 __all__ = ["singlepoint"]
+
+
+def _floating_setup_tensor(system: System) -> Tensor | None:
+    """Return a gathered floating tensor that defines the System dtype."""
+    if system.h0_setup is not None:
+        return system.h0_setup.hscale
+
+    setup = system.integral_setup
+    if setup is None:
+        return None
+    if setup.pytorch is not None and setup.pytorch.alphas:
+        return setup.pytorch.alphas[0]
+    if setup.libcint is not None and setup.libcint.basis_setups:
+        return setup.libcint.basis_setups[0].slater
+    return None
+
+
+def _call_scalar(
+    name: str,
+    value: Tensor | float | int,
+    positions: Tensor,
+) -> Tensor:
+    """Validate a scalar call input without copying tensor inputs."""
+    if isinstance(value, Tensor):
+        if value.device != positions.device:
+            raise DeviceError(
+                f"Device mismatch: positions are on '{positions.device}', "
+                f"but {name} is on '{value.device}'."
+            )
+        if value.dtype != positions.dtype:
+            raise DtypeError(
+                f"Dtype mismatch: positions are of type '{positions.dtype}', "
+                f"but {name} is of type '{value.dtype}'."
+            )
+        if value.ndim == 0:
+            return value.unsqueeze(0)
+        if value.ndim == 1 and value.shape[0] == 1:
+            return value
+        raise ValueError(
+            f"Core singlepoint expects {name} to be a scalar or a "
+            "one-element tensor."
+        )
+
+    return torch.tensor([value], dtype=positions.dtype, device=positions.device)
 
 
 def singlepoint(
@@ -49,22 +94,35 @@ def singlepoint(
         raise ValueError(
             "Core singlepoint expects positions with shape (nat, 3)."
         )
-
-    charge = torch.atleast_1d(
-        torch.as_tensor(
-            chrg, dtype=positions.dtype, device=positions.device
+    system_device = system.numbers.device
+    if positions.device != system_device:
+        raise DeviceError(
+            f"Device mismatch: System is on '{system_device}', but positions "
+            f"are on '{positions.device}'."
         )
-    )
-    spin_tensor = (
-        None
-        if spin is None
-        else torch.atleast_1d(
-            torch.as_tensor(
-                spin, dtype=positions.dtype, device=positions.device
+
+    floating_setup = _floating_setup_tensor(system)
+    if floating_setup is not None:
+        if floating_setup.device != system_device:
+            raise DeviceError(
+                "System floating setup is on "
+                f"'{floating_setup.device}', but System numbers are on "
+                f"'{system_device}'."
             )
-        )
+        if positions.dtype != floating_setup.dtype:
+            raise DtypeError(
+                "Dtype mismatch: System floating setup is of type "
+                f"'{floating_setup.dtype}', but positions are of type "
+                f"'{positions.dtype}'."
+            )
+
+    charge = _call_scalar("charge", chrg, positions)
+    spin_tensor = (
+        None if spin is None else _call_scalar("spin", spin, positions)
     )
 
+    # B5 provides the pure evaluation boundary. B6a removes persistent
+    # component state behind this boundary.
     if system.classicals.components:
         classical = system.classicals.get_energy(
             positions, system.classical_cache, charge=charge
@@ -81,7 +139,9 @@ def singlepoint(
             scf=zero_energy,
             classical=tuple(classical.items()),
             fenergy=zero_energy,
-            iterations=torch.zeros((), dtype=torch.int64, device=positions.device),
+            iterations=torch.zeros(
+                (), dtype=torch.int64, device=positions.device
+            ),
         )
 
     if system.h0_setup is None:
@@ -144,6 +204,8 @@ def singlepoint(
         quadrupole_integrals=matrices.quadrupole,
         overlap_norm=overlap_norm,
         iterations=torch.tensor(
-            scf_results["iterations"], dtype=torch.int64, device=positions.device
+            scf_results["iterations"],
+            dtype=torch.int64,
+            device=positions.device,
         ),
     )

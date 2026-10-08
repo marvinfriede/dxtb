@@ -25,31 +25,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
-
 from dxtb import OutputHandler
 from dxtb._src.components.interactions import Charges, Potential
+from dxtb._src.components.interactions.container import Container
+from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Tensor
+from dxtb._src.typing import ContainerData, Tensor
 
 __all__ = ["Multipoles", "Result"]
 
 
-def _copy_tensor(value: Tensor | None) -> Tensor | None:
-    return None if value is None else value.clone()
-
-
 class _FrozenCharges(Charges):
-    """Read-only snapshot of the mutable SCF charge container."""
+    """Read-only structural wrapper for call-local SCF charges.
+
+    The tensors are already call-local SCF outputs, so retaining them avoids
+    duplicating large values while preserving their autograd graph. Mutation
+    methods inherited from :class:`Charges` are intentionally unavailable.
+    """
 
     __slots__ = ("_locked",)
 
     def __init__(self, value: Charges):
         self._locked = False
         super().__init__(
-            mono=_copy_tensor(value.mono),
-            dipole=_copy_tensor(value.dipole),
-            quad=_copy_tensor(value.quad),
+            mono=value.mono,
+            dipole=value.dipole,
+            quad=value.quad,
             label=list(value.label),
             batch_mode=value.batch_mode,
         )
@@ -62,18 +63,49 @@ class _FrozenCharges(Charges):
             return
         raise AttributeError("Result charge values are immutable.")
 
+    def nullify_padding(self, pad: int = defaults.PADNZ) -> None:
+        del pad
+        raise AttributeError("Result charge values cannot be mutated.")
+
+    def __iadd__(self, other: Container) -> _FrozenCharges:
+        del other
+        raise AttributeError("Result charge values cannot be mutated.")
+
+    def __add__(self, other: Container) -> Container:
+        if not isinstance(other, Container):
+            raise TypeError("Only containers can be added together.")
+        return Container(
+            mono=self.add_tensors(self.mono, other.mono),
+            dipole=self.add_tensors(self.dipole, other.dipole),
+            quad=self.add_tensors(self.quad, other.quad),
+            label=[*self.label, *other.label],
+        )
+
+    @classmethod
+    def from_tensor(
+        cls,
+        tensor: Tensor,
+        data: ContainerData,
+        batch_mode: int = 0,
+        pad: int = defaults.PADNZ,
+    ) -> _FrozenCharges:
+        del tensor, data, batch_mode, pad
+        raise TypeError(
+            "Result charge values cannot be constructed by mutation."
+        )
+
 
 class _FrozenPotential(Potential):
-    """Read-only snapshot of the mutable SCF potential container."""
+    """Read-only structural wrapper for call-local SCF potential values."""
 
     __slots__ = ("_locked",)
 
     def __init__(self, value: Potential):
         self._locked = False
         super().__init__(
-            mono=_copy_tensor(value.mono),
-            dipole=_copy_tensor(value.dipole),
-            quad=_copy_tensor(value.quad),
+            mono=value.mono,
+            dipole=value.dipole,
+            quad=value.quad,
             label=list(value.label),
             batch_mode=value.batch_mode,
         )
@@ -86,6 +118,40 @@ class _FrozenPotential(Potential):
             return
         raise AttributeError("Result potential values are immutable.")
 
+    def nullify_padding(self, pad: int = defaults.PADNZ) -> None:
+        del pad
+        raise AttributeError("Result potential values cannot be mutated.")
+
+    def reset(self) -> None:
+        raise AttributeError("Result potential values cannot be mutated.")
+
+    def __iadd__(self, other: Container) -> _FrozenPotential:
+        del other
+        raise AttributeError("Result potential values cannot be mutated.")
+
+    def __add__(self, other: Container) -> Container:
+        if not isinstance(other, Container):
+            raise TypeError("Only containers can be added together.")
+        return Container(
+            mono=self.add_tensors(self.mono, other.mono),
+            dipole=self.add_tensors(self.dipole, other.dipole),
+            quad=self.add_tensors(self.quad, other.quad),
+            label=[*self.label, *other.label],
+        )
+
+    @classmethod
+    def from_tensor(
+        cls,
+        tensor: Tensor,
+        data: ContainerData,
+        batch_mode: int = 0,
+        pad: int = defaults.PADNZ,
+    ) -> _FrozenPotential:
+        del tensor, data, batch_mode, pad
+        raise TypeError(
+            "Result potential values cannot be constructed by mutation."
+        )
+
 
 @dataclass(frozen=True, eq=False)
 class Multipoles:
@@ -97,10 +163,14 @@ class Multipoles:
 
 @dataclass(frozen=True, eq=False)
 class Result:
-    """Immutable single-system or legacy-batch calculation output.
+    """Immutable structure for single-system or legacy-batch outputs.
 
     SCF currently exposes iteration count but no reliable convergence flag or
-    residual value, so those two planned fields remain ``None``.
+    residual value, so those two planned fields remain ``None``. Fields are
+    never rebound by evaluation, and later evaluations do not mutate a prior
+    Result. Tensor values remain ordinary PyTorch tensors, so callers can still
+    mutate them in place. Charges and Potential are temporary B5.5 compatibility
+    wrappers around call-local SCF outputs.
     """
 
     energy: Tensor
@@ -149,10 +219,12 @@ class Result:
         converged: Tensor | None = None,
         residual: Tensor | None = None,
     ) -> Result:
-        """Create a Result with independent tensor snapshots.
+        """Construct the core Result from call-local evaluation outputs.
 
-        ``clone`` preserves autograd connectivity while keeping the result
-        independent of mutable SCF and component output containers.
+        Core evaluation must use this factory. Numeric tensors are retained
+        directly because their producers create per-call outputs and do not
+        mutate them later; this preserves autograd without copying O(nao²)
+        values. Classical energies are stored as an immutable tuple.
         """
         frozen_charges = None if charges is None else _FrozenCharges(charges)
         frozen_potential = (
@@ -165,32 +237,32 @@ class Result:
             )
         elif multipoles is not None:
             frozen_multipoles = Multipoles(
-                dipole=_copy_tensor(multipoles.dipole),
-                quadrupole=_copy_tensor(multipoles.quadrupole),
+                dipole=multipoles.dipole,
+                quadrupole=multipoles.quadrupole,
             )
         else:
             frozen_multipoles = None
         return cls(
-            energy=energy.clone(),
-            scf=_copy_tensor(scf),
-            classical=tuple((name, value.clone()) for name, value in classical),
-            fenergy=_copy_tensor(fenergy),
-            iterations=iterations.clone(),
+            energy=energy,
+            scf=scf,
+            classical=tuple(classical),
+            fenergy=fenergy,
+            iterations=iterations,
             charges=frozen_charges,
             multipoles=frozen_multipoles,
-            density=_copy_tensor(density),
-            coefficients=_copy_tensor(coefficients),
-            emo=_copy_tensor(emo),
-            occupation=_copy_tensor(occupation),
+            density=density,
+            coefficients=coefficients,
+            emo=emo,
+            occupation=occupation,
             potential=frozen_potential,
-            hamiltonian=_copy_tensor(hamiltonian),
-            overlap=_copy_tensor(overlap),
-            hcore=_copy_tensor(hcore),
-            dipole_integrals=_copy_tensor(dipole_integrals),
-            quadrupole_integrals=_copy_tensor(quadrupole_integrals),
-            overlap_norm=_copy_tensor(overlap_norm),
-            converged=_copy_tensor(converged),
-            residual=_copy_tensor(residual),
+            hamiltonian=hamiltonian,
+            overlap=overlap,
+            hcore=hcore,
+            dipole_integrals=dipole_integrals,
+            quadrupole_integrals=quadrupole_integrals,
+            overlap_norm=overlap_norm,
+            converged=converged,
+            residual=residual,
         )
 
     @property
@@ -224,14 +296,11 @@ class Result:
         """Return energy contributions formatted for user-facing output."""
         key = "value"
         classical = {
-            name: {key: value.sum().item()}
-            for name, value in self.classical
+            name: {key: value.sum().item()} for name, value in self.classical
         }
         ctotal = sum(value[key] for value in classical.values())
         scf_energy = 0.0 if self.scf is None else self.scf.sum().item()
-        free_energy = (
-            0.0 if self.fenergy is None else self.fenergy.sum().item()
-        )
+        free_energy = 0.0 if self.fenergy is None else self.fenergy.sum().item()
         return {
             "total": {key: self.energy.sum().item()},
             "Classical": {key: ctotal, "sub": classical},
