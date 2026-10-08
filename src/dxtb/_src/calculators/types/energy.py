@@ -195,6 +195,8 @@ class EnergyCalculator(BaseCalculator):
             self.integrals.overlap.norm = overlap_norm
             if self.integrals.hcore is None:
                 raise RuntimeError("Legacy H0 adapter is not initialized.")
+            # Keep the Calculator-local compatibility surface synchronized;
+            # core physics consumes intmats directly. B5 removes this mirror.
             self.integrals.hcore.matrix = intmats.hcore
             if intmats.dipole is not None:
                 if self.integrals.dipole is None:
