@@ -22,6 +22,19 @@ Short-range bond correction energy.
 """
 
 from .factory import new_srb
-from .srb import LABEL_SRB, ShortRangeBond
+from .srb import (
+    LABEL_SRB,
+    ShortRangeBond,
+    ShortRangeBondSetup,
+    setup_srb,
+    short_range_bond_energy,
+)
 
-__all__ = ["LABEL_SRB", "ShortRangeBond", "new_srb"]
+__all__ = [
+    "LABEL_SRB",
+    "ShortRangeBond",
+    "ShortRangeBondSetup",
+    "new_srb",
+    "setup_srb",
+    "short_range_bond_energy",
+]

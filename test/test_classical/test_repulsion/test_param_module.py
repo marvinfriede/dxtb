@@ -68,7 +68,9 @@ def test_mixed_position_parameter_derivative() -> None:
     """Core setup preserves mixed position/parameter differentiation."""
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers = samples["H2O"]["numbers"].to(DEVICE)
-    positions = samples["H2O"]["positions"].to(**dd).requires_grad_(True)
+    positions = (
+        samples["H2O"]["positions"].to(**dd).clone().requires_grad_(True)
+    )
     par = ParamModule(GFN1_XTB, **dd)
     par.set_differentiable("element.H.arep")
     arep = par.get("element.H.arep")
@@ -86,6 +88,20 @@ def test_mixed_position_parameter_derivative() -> None:
 
     assert torch.isfinite(mixed_gradient).all()
     assert torch.count_nonzero(mixed_gradient) > 0
+
+
+def test_parameter_gradient_input_does_not_mutate_shared_sample() -> None:
+    """Derivative setup leaves module-level geometry unchanged."""
+    shared = samples["H2O"]["positions"]
+    requires_grad = shared.requires_grad
+    before = shared.clone()
+    dd: DD = {"device": DEVICE, "dtype": torch.double}
+
+    positions = shared.to(**dd).clone().requires_grad_(True)
+
+    assert shared.requires_grad is requires_grad
+    torch.testing.assert_close(shared, before)
+    assert positions.requires_grad
 
 
 def test_geometry_history_after_backward() -> None:

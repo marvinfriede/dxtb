@@ -49,7 +49,7 @@ from typing import Any, Callable, Tuple
 
 import torch
 
-from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
+from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.typing import Tensor
 
 from ..molecules import mols
@@ -86,7 +86,8 @@ def _lih() -> tuple[Tensor, Tensor]:
 
 
 def _par(method: str) -> ParamModule:
-    return ParamModule(GFN1_XTB if method == "gfn1" else GFN2_XTB, **DD)
+    params = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
+    return ParamModule(params[method], **DD)
 
 
 def _leaf(x: Tensor) -> Tensor:
@@ -172,6 +173,24 @@ def _classical(name: str, method: str) -> Target:
         assert comp is not None
         cache = comp.get_cache(numbers, ihelp)
         return (lambda x: comp.get_energy(x, cache)), _leaf(positions)
+
+    return build
+
+
+def _srb() -> Target:
+    """GFN0 short-range bond energy on a nonzero-SRB geometry."""
+
+    def build():
+        # pylint: disable=import-outside-toplevel
+        from dxtb._src.components.classicals import new_srb
+
+        numbers, positions = mols["NO2"]["numbers"], mols["NO2"]["positions"]
+        par = _par("gfn0")
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        srb = new_srb(torch.unique(numbers), par, **DD)
+        assert srb is not None
+        setup = srb.get_cache(numbers, ihelp)
+        return (lambda x: srb.get_energy(x, setup)), _leaf(positions)
 
     return build
 
@@ -475,6 +494,7 @@ TARGETS: dict[str, Target] = {
     "dispersion_d4.positions": _classical("dispersion", "gfn2"),
     "repulsion_gfn2.positions": _classical("repulsion", "gfn2"),
     "repulsion_gfn2.arep": _repulsion("gfn2", "arep"),
+    "srb_gfn0.positions": _srb(),
     "es2.charges": _interaction("es2"),
     "es3.charges": _interaction("es3"),
     "aes2.dipoles": _interaction("aes2"),

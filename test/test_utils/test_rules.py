@@ -128,6 +128,30 @@ def test_repulsion_uses_explicit_setup_without_persistent_cache() -> None:
     assert "self.kexp" not in energy_method
 
 
+def test_srb_uses_explicit_setup_without_persistent_cache() -> None:
+    """Exact SRB energy uses explicit setup rather than component fields."""
+    srb_source = (
+        SRC / "_src" / "components" / "classicals" / "shortrangebond" / "srb.py"
+    ).read_text()
+    forbidden = (
+        "class ShortRangeBondCache",
+        "cache_is_latest",
+        "self.cache =",
+        "_cachevars",
+        "_cachegrad",
+        "def update_srb(",
+        "def reset_srb(",
+    )
+    found = [token for token in forbidden if token in srb_source]
+    assert not found, "Persistent SRB cache path returned: " + ", ".join(found)
+
+    energy = srb_source.split("def short_range_bond_energy(", maxsplit=1)[
+        1
+    ].split("class ShortRangeBond(", maxsplit=1)[0]
+    assert "self." not in energy
+    assert "setup." in energy
+
+
 def test_es2_uses_plain_torch_coulomb_construction() -> None:
     """ES2 Coulomb matrices do not use a custom autograd shortcut."""
     source = (

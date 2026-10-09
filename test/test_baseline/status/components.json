@@ -898,5 +898,41 @@
   "seconds": 0.06192626300071424,
   "message": "",
   "peak_rss_mb": 678.4
+ },
+ "srb_gfn0.positions:forward": {
+  "status": "pass",
+  "seconds": 0.24089269991964102,
+  "message": "",
+  "peak_rss_mb": 366.9
+ },
+ "srb_gfn0.positions:jvp": {
+  "status": "pass",
+  "seconds": 0.17517614900134504,
+  "message": "",
+  "peak_rss_mb": 368.5
+ },
+ "srb_gfn0.positions:order1": {
+  "status": "pass",
+  "seconds": 0.12578530982136726,
+  "message": "",
+  "peak_rss_mb": 364.9
+ },
+ "srb_gfn0.positions:order2": {
+  "status": "pass",
+  "seconds": 0.19204381899908185,
+  "message": "",
+  "peak_rss_mb": 366.5
+ },
+ "srb_gfn0.positions:order3": {
+  "status": "pass",
+  "seconds": 0.2865776279941201,
+  "message": "",
+  "peak_rss_mb": 366.5
+ },
+ "srb_gfn0.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.1101262120064348,
+  "message": "",
+  "peak_rss_mb": 363.8
  }
 }

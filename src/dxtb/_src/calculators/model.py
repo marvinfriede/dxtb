@@ -52,6 +52,8 @@ from dxtb._src.components.classicals import (
     ClassicalList,
     Repulsion,
     RepulsionSetup,
+    ShortRangeBond,
+    ShortRangeBondSetup,
     new_dispersion,
     new_halogen,
     new_ies,
@@ -149,6 +151,12 @@ class System:
 
     repulsion_classical: Repulsion | None
     """Exact migrated Repulsion associated with :attr:`repulsion_setup`."""
+
+    srb_setup: ShortRangeBondSetup | None
+    """Numbers-only setup associated with the exact migrated SRB term."""
+
+    srb_classical: ShortRangeBond | None
+    """Exact migrated SRB associated with :attr:`srb_setup`."""
 
     dd: DD
     """Device and data type of the tensors of the system."""
@@ -374,6 +382,15 @@ class Model:
             if repulsion_classical is not None
             else None
         )
+        srb_classical = next(
+            (c for c in classicals.components if type(c) is ShortRangeBond),
+            None,
+        )
+        srb_setup = (
+            classical_cache[srb_classical.label]
+            if srb_classical is not None
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -440,6 +457,8 @@ class Model:
             classical_cache=classical_cache,
             repulsion_setup=repulsion_setup,
             repulsion_classical=repulsion_classical,
+            srb_setup=srb_setup,
+            srb_classical=srb_classical,
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,

@@ -31,6 +31,7 @@ from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
 from dxtb._src.components.classicals.repulsion.rep import Repulsion
+from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
 from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2Cache,
     build_es2_coulomb,
@@ -174,6 +175,8 @@ def singlepoint(
             timer.start(component.label, parent_uid="Classicals")
             if component is system.repulsion_classical:
                 setup = system.repulsion_setup
+            elif component is system.srb_classical:
+                setup = system.srb_setup
             elif (
                 isinstance(component, Repulsion)
                 and type(component) is not Repulsion
@@ -181,6 +184,12 @@ def singlepoint(
                 # Custom subclasses remain on their legacy extension path.
                 # Refresh their call data so their supported update/reset
                 # behavior is observed; exact Repulsion uses System setup.
+                setup = component.get_cache(system.numbers, system.ihelp)
+            elif (
+                isinstance(component, ShortRangeBond)
+                and type(component) is not ShortRangeBond
+            ):
+                # Custom subclasses retain their legacy extension hooks.
                 setup = component.get_cache(system.numbers, system.ihelp)
             else:
                 setup = system.classical_cache[component.label]

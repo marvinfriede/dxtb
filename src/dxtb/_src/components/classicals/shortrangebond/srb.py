@@ -15,15 +15,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Short-Range Bond Correction: Class
-==============================
+Short-Range Bond Correction
+===========================
 
-This module implements the short-range bond correction class. The
-:class:`dxtb.components.ShortRangeBond` class is constructed similar to the
-:class:`dxtb.components.Repulsion` class.
+This module provides explicit numbers-only setup and plain-PyTorch energy
+evaluation for the short-range bond correction.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 from tad_mctc import storch
@@ -35,36 +36,129 @@ from dxtb import IndexHelper
 from dxtb._src.ncoord import coordination_number
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
-from ..base import Classical, ClassicalCache, ComponentCache
+from ..base import Classical, ComponentCache
 
-__all__ = ["LABEL_SRB", "ShortRangeBond"]
+__all__ = [
+    "LABEL_SRB",
+    "ShortRangeBond",
+    "ShortRangeBondSetup",
+    "setup_srb",
+    "short_range_bond_energy",
+]
 
 
 LABEL_SRB = "ShortRangeBond"
-"""Label for the :class:`.ShortRangeBond` component, coinciding with the class name."""
+"""Label for the :class:`.ShortRangeBond` component."""
 
 
-class ShortRangeBondCache(ClassicalCache):
-    """Cache for the short-range bond correction parameters."""
+@dataclass(frozen=True, eq=False)
+class ShortRangeBondSetup:
+    """Numbers-only SRB values used by one or more geometry evaluations."""
 
-    __slots__ = ["numbers", "r0", "cnfak", "en", "pauling", "rcov"]
+    numbers: Tensor
+    r0: Tensor
+    cnfak: Tensor
+    en: Tensor
+    pauling: Tensor
+    rcov: Tensor
+    counting_function: CountingFunction
+    shift: Tensor
+    prefactor: Tensor
+    steepness: Tensor
+    enscale: Tensor
+    enpoly: Tensor
+    pair_cutoff2: Tensor
+    cn_cutoff: Tensor
+    cn_max: Tensor
+    cn_kcn: Tensor
 
-    def __init__(
-        self,
-        numbers: Tensor,
-        r0: Tensor,
-        cnfak: Tensor,
-        en: Tensor,
-        pauling: Tensor,
-        rcov: Tensor,
-    ) -> None:
-        super().__init__(device=r0.device, dtype=r0.dtype)
-        self.numbers = numbers
-        self.r0 = r0
-        self.cnfak = cnfak
-        self.en = en
-        self.pauling = pauling
-        self.rcov = rcov
+
+def setup_srb(
+    component: ShortRangeBond,
+    numbers: Tensor,
+    ihelp: IndexHelper,
+) -> ShortRangeBondSetup:
+    """Gather all geometry-independent SRB data into a frozen setup."""
+
+    def clone(value: Tensor) -> Tensor:
+        return value.clone()
+
+    return ShortRangeBondSetup(
+        numbers=numbers,
+        r0=clone(ihelp.spread_uspecies_to_atom(component.r0)),
+        cnfak=clone(ihelp.spread_uspecies_to_atom(component.cnfak)),
+        en=clone(ihelp.spread_uspecies_to_atom(component.en)),
+        pauling=clone(element_en.PAULING(**component.dd)[numbers]),
+        rcov=clone(component.rcov[numbers]),
+        counting_function=component.counting_function,
+        shift=clone(component.shift),
+        prefactor=clone(component.prefactor),
+        steepness=clone(component.steepness),
+        enscale=clone(component.enscale),
+        enpoly=clone(component.enpoly),
+        pair_cutoff2=clone(component.pair_cutoff2),
+        cn_cutoff=clone(component.cn_cutoff),
+        cn_max=clone(component.cn_max),
+        cn_kcn=clone(component.cn_kcn),
+    )
+
+
+def short_range_bond_energy(
+    setup: ShortRangeBondSetup, positions: Tensor
+) -> Tensor:
+    """Evaluate the atom-partitioned SRB energy from setup and positions."""
+    cn = coordination_number(
+        setup.numbers,
+        positions,
+        counting_function=setup.counting_function,
+        rcov=setup.rcov,
+        cutoff=setup.cn_cutoff,
+        cn_max=setup.cn_max,
+        kcn=setup.cn_kcn,
+    )
+
+    eligible = (setup.numbers >= 5) & (setup.numbers <= 9)
+    pair_mask = (
+        real_pairs(setup.numbers, mask_diagonal=True)
+        & eligible.unsqueeze(-1)
+        & eligible.unsqueeze(-2)
+        & (setup.numbers.unsqueeze(-1) != setup.numbers.unsqueeze(-2))
+    )
+
+    eps = positions.new_tensor(torch.finfo(positions.dtype).eps)
+    distances = torch.where(
+        pair_mask,
+        storch.cdist(positions, positions, p=2),
+        eps,
+    )
+    pair_mask = pair_mask & (distances**2 < setup.pair_cutoff2)
+
+    radius = setup.r0 + setup.cnfak * cn + setup.shift
+    fitted_difference = torch.abs(
+        setup.en.unsqueeze(-1) - setup.en.unsqueeze(-2)
+    )
+    orders = torch.arange(
+        1,
+        setup.enpoly.shape[0] + 1,
+        device=fitted_difference.device,
+        dtype=fitted_difference.dtype,
+    ).reshape((-1,) + (1,) * fitted_difference.ndim)
+    powers = fitted_difference.unsqueeze(0) ** orders
+    coefficients = setup.enpoly.reshape((-1,) + (1,) * fitted_difference.ndim)
+    factor = 1.0 - (coefficients * powers).sum(0)
+    reference_distance = (radius.unsqueeze(-1) + radius.unsqueeze(-2)) * factor
+
+    pauling_difference = setup.pauling.unsqueeze(-1) - setup.pauling.unsqueeze(
+        -2
+    )
+    width = setup.steepness * (1.0 + setup.enscale * pauling_difference**2)
+    pair_energy = setup.prefactor * torch.exp(
+        -width * (distances - reference_distance) ** 2
+    )
+    pair_energy = torch.where(
+        pair_mask, pair_energy, torch.zeros_like(pair_energy)
+    )
+    return 0.5 * pair_energy.sum(-1)
 
 
 class ShortRangeBond(Classical):
@@ -125,115 +219,41 @@ class ShortRangeBond(Classical):
     @override
     def get_cache(
         self, numbers: Tensor, ihelp: IndexHelper | None = None, **_: Any
-    ) -> ShortRangeBondCache:
-        """
-        Store variables that are independent of the atomic positions in a cache object.
-
-        Parameters
-        ----------
-        numbers : Tensor
-            Atomic numbers of the system (shape: ``(natom,)``).
-        ihelp : IndexHelper | None
-            Helper class for indexing.
-
-        Returns
-        -------
-        ShortRangeBondCache
-            Cache object containing coordinate-independent SRB data.
-        """
+    ) -> ShortRangeBondSetup:
+        """Build fresh numbers-only SRB setup data."""
         if ihelp is None:
             raise ValueError(
                 "IndexHelper is required for short-range bond correction."
             )
-
-        return ShortRangeBondCache(
-            numbers=numbers,
-            r0=ihelp.spread_uspecies_to_atom(self.r0),
-            cnfak=ihelp.spread_uspecies_to_atom(self.cnfak),
-            en=ihelp.spread_uspecies_to_atom(self.en),
-            pauling=element_en.PAULING(**self.dd)[numbers],
-            rcov=self.rcov[numbers],
-        )
+        return setup_srb(self, numbers, ihelp)
 
     @override
     def get_energy(
         self, positions: Tensor, cache: ComponentCache, **_: Any
     ) -> Tensor:
-        """
-        Return the symmetrically half-partitioned atomwise SRB energy.
-
-        Parameters
-        ----------
-        positions : Tensor
-            Atomic positions (shape: ``(natom, 3)``).
-        cache : ComponentCache
-            Cache object containing coordinate-independent SRB data.
-
-        Returns
-        -------
-        Tensor
-            Symmetrically half-partitioned atomwise SRB energy.
-        """
-        if not isinstance(cache, ShortRangeBondCache):
+        """Return the symmetrically half-partitioned atomwise SRB energy."""
+        if not isinstance(cache, ShortRangeBondSetup):
             raise TypeError(
-                f"Cache in {self.label} is not of type 'ShortRangeBondCache'."
+                f"Data in {self.label} is not of type 'ShortRangeBondSetup'."
             )
+        return short_range_bond_energy(cache, positions)
 
-        cn = coordination_number(
-            cache.numbers,
-            positions,
-            counting_function=self.counting_function,
-            rcov=cache.rcov,
-            cutoff=self.cn_cutoff,
-            cn_max=self.cn_max,
-            kcn=self.cn_kcn,
-        )
+    def update(self, **kwargs: Any) -> None:
+        """Reject in-place changes for the exact setup-migrated SRB term."""
+        if type(self) is ShortRangeBond:
+            raise RuntimeError(
+                "ShortRangeBond parameters are setup-derived and cannot be "
+                "updated. Create a new Model/System/Calculator with changed "
+                "parameters."
+            )
+        super().update(**kwargs)
 
-        eligible = (cache.numbers >= 5) & (cache.numbers <= 9)
-        pair_mask = (
-            real_pairs(cache.numbers, mask_diagonal=True)
-            & eligible.unsqueeze(-1)
-            & eligible.unsqueeze(-2)
-            & (cache.numbers.unsqueeze(-1) != cache.numbers.unsqueeze(-2))
-        )
-
-        eps = torch.tensor(torch.finfo(positions.dtype).eps, **self.dd)
-        distances = torch.where(
-            pair_mask,
-            storch.cdist(positions, positions, p=2),
-            eps,
-        )
-        pair_mask = pair_mask & (distances**2 < self.pair_cutoff2)
-
-        radius = cache.r0 + cache.cnfak * cn + self.shift
-        fitted_difference = torch.abs(
-            cache.en.unsqueeze(-1) - cache.en.unsqueeze(-2)
-        )
-        orders = torch.arange(
-            1,
-            self.enpoly.shape[0] + 1,
-            device=fitted_difference.device,
-            dtype=fitted_difference.dtype,
-        ).reshape((-1,) + (1,) * fitted_difference.ndim)
-        powers = fitted_difference.unsqueeze(0) ** orders
-        coefficients = self.enpoly.reshape(
-            (-1,) + (1,) * fitted_difference.ndim
-        )
-        factor = 1.0 - (coefficients * powers).sum(0)
-        reference_distance = (
-            radius.unsqueeze(-1) + radius.unsqueeze(-2)
-        ) * factor
-
-        pauling_difference = cache.pauling.unsqueeze(
-            -1
-        ) - cache.pauling.unsqueeze(-2)
-        width = self.steepness * (1.0 + self.enscale * pauling_difference**2)
-        pair_energy = self.prefactor * torch.exp(
-            -width * (distances - reference_distance) ** 2
-        )
-        pair_energy = torch.where(
-            pair_mask,
-            pair_energy,
-            torch.tensor(0.0, **self.dd),
-        )
-        return 0.5 * pair_energy.sum(-1)
+    def reset(self) -> None:
+        """Reject in-place reset for the exact setup-migrated SRB term."""
+        if type(self) is ShortRangeBond:
+            raise RuntimeError(
+                "ShortRangeBond parameters are setup-derived and cannot be "
+                "reset. Create a new Model/System/Calculator with changed "
+                "parameters."
+            )
+        super().reset()

@@ -33,10 +33,10 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional; B3b ES2/ES3 and repulsion setup separation are done, while other required setup/per-call work remains. |
+| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, repulsion, and SRB setup separation are done, while other required setup/per-call work remains. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
-| B6             | partial                         | B6a ES2/ES3 and repulsion families are done; remaining component families are open.                     |
+| B6             | partial                         | B6a ES2/ES3, repulsion, and SRB families are done; remaining component families are open.               |
 | B7             | not done                        | Explicit field API remains open.                                                                    |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -1741,7 +1741,7 @@ Success means measured speed/memory improves without creating a second semantics
 
 B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batching remains scheduled for E6, and B3b remains incomplete until all required structural setup is explicit.
 
-E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: the ES2/ES3 and repulsion families are complete, while the remaining component families are open. B3b is partial: ES2, ES3, and repulsion numbers-only setup are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
+E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: the ES2/ES3, repulsion, and SRB families are complete, while the remaining component families are open. B3b is partial: ES2, ES3, repulsion, and SRB setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
 
 The next local package should be selected from the current dependency plan after review; do not begin it automatically. E1.3 remains an upstream dependency task and should resume when the D3 transform blocker is available. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
 

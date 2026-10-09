@@ -40,6 +40,7 @@ from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
 from .halogen import LABEL_HALOGEN, Halogen
 from .repulsion import LABEL_REPULSION, Repulsion
+from .shortrangebond import LABEL_SRB, ShortRangeBond
 
 if TYPE_CHECKING:
     from dxtb import IndexHelper
@@ -64,17 +65,21 @@ class ClassicalList(ComponentList[Classical]):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
-        """Create a classical list and reject duplicate repulsion labels."""
-        matching = [
-            component
-            for component in components
-            if component is not None and component.label == LABEL_REPULSION
-        ]
-        if len({id(component) for component in matching}) > 1:
-            raise ValueError(
-                "Multiple classical contributions use the label 'Repulsion'. "
-                "Duplicate repulsion labels are ambiguous."
-            )
+        """Create a classical list and reject duplicate migrated labels."""
+        for label in (LABEL_REPULSION, LABEL_SRB):
+            matching = [
+                component
+                for component in components
+                if component is not None and component.label == label
+            ]
+            if len({id(component) for component in matching}) > 1:
+                duplicate_name = (
+                    "repulsion" if label == LABEL_REPULSION else label
+                )
+                raise ValueError(
+                    f"Multiple classical contributions use the label '{label}'. "
+                    f"Duplicate {duplicate_name} labels are ambiguous."
+                )
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Classical:
@@ -86,9 +91,9 @@ class ClassicalList(ComponentList[Classical]):
         return super().reset(name)
 
     def reset_all(self) -> None:
-        """Reset unmigrated classicals, leaving exact Repulsion setup intact."""
+        """Reset unmigrated classicals, leaving explicit setups intact."""
         for component in self.components:
-            if type(component) is not Repulsion:
+            if type(component) not in (Repulsion, ShortRangeBond):
                 component.reset()
 
     @override
