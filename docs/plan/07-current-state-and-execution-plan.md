@@ -4,10 +4,9 @@ This document reconciles the original restructuring plan with the actual state o
 
 Review point:
 
-- base: `main` at `3b6a90f8bd2e4584e14408c59f2d42700f881417`
-- branch head reviewed: `8e3595359f43f05d59cc10dc5412f06a33176792`
-- branch relation to main: 36 commits ahead, 0 behind
-- the branch currently has no GitHub Actions run attached to it; package completion must therefore not be inferred from commit messages alone
+- branch head at the start of the B5.5/E1.1 package: `3d0fb3cc8fbd12573f0fd056dd0609f018016d5f`
+- reviewed B5 closure and E1.1 implementation commit: `24cd1d021c15db2e705ebb91b691012d5428c168`
+- final status update is recorded in the following plan-only commit
 
 This document supersedes package status and ordering in the earlier track files where they conflict. The architectural goals and principles P1-P10 of `00-overview.md` remain authoritative.
 
@@ -15,9 +14,7 @@ This document supersedes package status and ordering in the earlier track files 
 
 # 1. Executive status
 
-The restructuring remains on the right architectural path, but implementation is still in its early structural phase.
-
-The baseline work is substantially further advanced than the refactor itself. Track 0 has established enough evidence to make the major architectural decisions, and that evidence should now be used to simplify the remaining plan instead of continuing to implement against the assumptions that existed at commit `46af7bc`.
+The single-system B4 integral/H0 core and B5 immutable Result/core singlepoint are complete. Remaining work is scoped to setup separation, component-state removal, transforms, batching, and the downstream tracks listed below.
 
 Current state:
 
@@ -25,19 +22,22 @@ Current state:
 | -------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
 | T0.1-T0.7      | done                            | Baseline, reference data, derivative and transform characterization exist.                         |
 | T0.8 CPU       | done                            | Workloads and memory profile recorded.                                                             |
-| T0.8 GPU       | missing                         | Required by the original done criterion; do before GPU performance decisions, not before B4.       |
+| T0.8 GPU       | deferred                        | CPU workload and memory profile are done; GPU completion remains explicitly deferred.              |
 | T0.9           | done                            | Parameter gradient coverage recorded.                                                              |
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
-| B1             | done, one amendment required    | Model/System/Result split is sound. Remove the requirement for System to store the complete Model. |
-| B2             | implemented, validation pending | Configuration is frozen and device/dtype/batch mode are no longer configuration fields.            |
-| B3a            | implemented                     | Model/System structural split and classical numbers-only setup.                                    |
-| B3b            | not done                        | ES2/ES3 setup, integral structural plans and complete P3 separation remain.                        |
-| B4-B8          | not done                        | Legacy calculator state remains active.                                                            |
+| B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
+| B2             | done                            | Frozen configuration and input validation are implemented.                                          |
+| B3             | partial                         | B3a is done, transitional; B3b setup/per-call separation remains open.                              |
+| B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
+| B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
+| B6             | not done                        | Persistent component state remains scheduled for B6a.                                               |
+| B7             | not done                        | Explicit field API remains open.                                                                    |
+| B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
 | E0             | decision required now           | Baseline gives enough evidence; this must no longer remain an open placeholder.                    |
-| E1             | partial starting point          | Several old custom functions disappeared upstream; remaining blockers are known.                   |
-| E2             | partial starting point          | New pair builder already groups/scatters pairs and supports higher derivatives.                    |
+| E1             | partial                         | E1.1 RepulsionAG is done; E1.2 CoulombMatrixAG/ES2 setup is next; D3 forward AD remains.              |
+| E2             | partial                         | Existing pair builder groups/scatters pairs and supports higher derivatives.                         |
 | E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | not started                     | Correctly downstream.                                                                              |
@@ -164,7 +164,7 @@ Update the plan so that:
 - C1/C1b are marked available in tad-mctc 0.9.1 instead of future work;
 - E2 records the existing pair-builder improvements;
 - T0.8 records CPU done / GPU outstanding;
-- the old tad-mctc 0.8 -> 0.9 release sequence is removed as a future dxtb dependency;
+- the obsolete tad-mctc 0.8 -> 0.9 release sequence is not a future dxtb dependency;
 - the current tad compatibility shim is listed as a release blocker.
 
 No code change belongs in this subpackage.
@@ -1730,7 +1730,7 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-After R0, the implementation agent should start **B4.1/B4.2**, not continue adding fields or behavior to the current transitional System.
+B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batching remains scheduled for E6, and B3b remains incomplete until ES2/ES3 and all required structural setup are explicit.
 
-In parallel, a technically stronger reviewer should write and approve **E0**. The implementation agent should not attempt the eigensolver/implicit-differentiation design without that decision.
+The next implementation package is **E1.2 / PR 7: remove `CoulombMatrixAG` and introduce ES2 setup data**. Do not mark E1 complete after E1.2: the D3 forward-mode dependency remains a separate E1 item. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
 
