@@ -33,16 +33,16 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional; B3b ES2/ES3 setup separation is done, while other required setup/per-call work remains. |
+| B3             | partial                         | B3a is done, transitional; B3b ES2/ES3 and repulsion setup separation are done, while other required setup/per-call work remains. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
-| B6             | partial                         | B6a ES2/ES3 ownership closure is done; other component families remain.                              |
+| B6             | partial                         | B6a ES2/ES3 and repulsion families are done; remaining component families are open.                     |
 | B7             | not done                        | Explicit field API remains open.                                                                    |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
 | E0             | decision required now           | Baseline gives enough evidence; this must no longer remain an open placeholder.                    |
-| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup are done. E1.3 D3 forward AD remains blocked upstream. |
+| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial                         | Existing pair builder groups/scatters pairs and supports higher derivatives.                         |
 | E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
@@ -322,10 +322,11 @@ B3 is finally complete only after:
 
 1. ES2 element/shell hardness data is gathered in setup;
 2. ES3 Hubbard derivative data is gathered in setup;
-3. integral structural data such as the PyTorch pair plan is created in setup;
-4. all other numbers-only masks/index mappings needed by per-call kernels are created in setup;
-5. no parameter-to-element gather remains in a transform-critical per-call kernel unless it is a fixed-shape tensor gather intentionally retained and tested;
-6. System no longer owns a live mutable integral container.
+3. repulsion pair parameters and masks are gathered in setup;
+4. integral structural data such as the PyTorch pair plan is created in setup;
+5. all other numbers-only masks/index mappings needed by per-call kernels are created in setup;
+6. no parameter-to-element gather remains in a transform-critical per-call kernel unless it is a fixed-shape tensor gather intentionally retained and tested;
+7. System no longer owns a live mutable integral container.
 
 B3b can be completed incrementally through B4/E1/B6. Do not block B5 on every B3b detail; mark B3 complete only when all are finished.
 
@@ -644,7 +645,7 @@ Delete `with_analytical_gradient` if it has no remaining distinct implementation
 
 ## E1.2 `CoulombMatrixAG`
 
-Status: done. The B6a ES2/ES3 ownership package closed mutable-object/setup dual authority, custom/additional ES2 selection, and duplicate-label ambiguity. The plain-PyTorch setup and builder remain the authoritative single-system path.
+Status: done. `CoulombMatrixAG` is removed; the plain-PyTorch `ES2Setup`/builder is authoritative for exact migrated ES2 terms. B6a removed the ES2/ES3 mutable-object/setup dual authority, resolved custom/additional exact-term selection, and rejects ambiguous duplicate labels. E1 remains partial because the D3 forward-mode work is blocked upstream.
 
 Do not repair the current Function by adding progressively more custom rules.
 
@@ -1740,7 +1741,7 @@ Success means measured speed/memory improves without creating a second semantics
 
 B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batching remains scheduled for E6, and B3b remains incomplete until all required structural setup is explicit.
 
-E1.1 (`RepulsionAG`) and E1.2 / PR 7 (`CoulombMatrixAG` plus ES2 setup) are complete. E1 remains partial because D3 forward-mode support is still blocked upstream. B3b remains partial: ES2 and ES3 setup separation is done, while other required setup/per-call separation remains. B6a is partial: the ES2/ES3 family is done, while other component families remain.
+E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: the ES2/ES3 and repulsion families are complete, while the remaining component families are open. B3b is partial: ES2, ES3, and repulsion numbers-only setup are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
 
 The next local package should be selected from the current dependency plan after review; do not begin it automatically. E1.3 remains an upstream dependency task and should resume when the D3 transform blocker is available. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
 

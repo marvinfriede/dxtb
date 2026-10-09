@@ -46,11 +46,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from dxtb import IndexHelper, OutputHandler
-from dxtb import labels
+from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
+    Repulsion,
+    RepulsionSetup,
     new_dispersion,
     new_halogen,
     new_ies,
@@ -61,8 +62,8 @@ from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
     ES2,
-    ES2Setup,
     ES3,
+    ES2Setup,
     ES3Setup,
     new_aes2,
     new_es2,
@@ -141,10 +142,13 @@ class System:
     """Composition-dependent H0 data for pure matrix construction."""
 
     classical_cache: ClassicalListCache
-    """
-    Data of the classical contributions that depends on the atomic numbers
-    only (the geometry enters :meth:`ClassicalList.get_energy` only).
-    """
+    """Legacy numbers-only data for unmigrated classical contributions."""
+
+    repulsion_setup: RepulsionSetup | None
+    """Numbers-only setup associated with the exact migrated Repulsion."""
+
+    repulsion_classical: Repulsion | None
+    """Exact migrated Repulsion associated with :attr:`repulsion_setup`."""
 
     dd: DD
     """Device and data type of the tensors of the system."""
@@ -362,6 +366,14 @@ class Model:
 
         # the data that does not depend on the geometry
         classical_cache = classicals.get_cache(numbers, ihelp)
+        repulsion_classical = next(
+            (c for c in classicals.components if type(c) is Repulsion), None
+        )
+        repulsion_setup = (
+            classical_cache[repulsion_classical.label]
+            if repulsion_classical is not None
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -426,6 +438,8 @@ class Model:
             integral_setup=integral_setup,
             h0_setup=h0_setup,
             classical_cache=classical_cache,
+            repulsion_setup=repulsion_setup,
+            repulsion_classical=repulsion_classical,
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,

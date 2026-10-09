@@ -114,8 +114,10 @@ def test_batch(
     )
     positions = pack(
         (
-            sample1["positions"].to(**dd),
-            sample2["positions"].to(**dd),
+            # Shared samples may have been marked differentiable by earlier
+            # tests; this forward-value check uses isolated numerical inputs.
+            sample1["positions"].to(**dd).detach().clone(),
+            sample2["positions"].to(**dd).detach().clone(),
         )
     )
     ref = torch.stack(

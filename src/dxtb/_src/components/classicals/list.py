@@ -58,6 +58,39 @@ class ClassicalList(ComponentList[Classical]):
     List of classical contributions.
     """
 
+    def __init__(
+        self,
+        *components: Classical | None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """Create a classical list and reject duplicate repulsion labels."""
+        matching = [
+            component
+            for component in components
+            if component is not None and component.label == LABEL_REPULSION
+        ]
+        if len({id(component) for component in matching}) > 1:
+            raise ValueError(
+                "Multiple classical contributions use the label 'Repulsion'. "
+                "Duplicate repulsion labels are ambiguous."
+            )
+        super().__init__(*components, device=device, dtype=dtype)
+
+    def update(self, name: str, **kwargs: Any) -> Classical:
+        """Update classicals through their family-specific compatibility API."""
+        return super().update(name, **kwargs)
+
+    def reset(self, name: str) -> Classical:
+        """Reset classicals through their family-specific compatibility API."""
+        return super().reset(name)
+
+    def reset_all(self) -> None:
+        """Reset unmigrated classicals, leaving exact Repulsion setup intact."""
+        for component in self.components:
+            if type(component) is not Repulsion:
+                component.reset()
+
     @override
     def get_cache(
         self, numbers: Tensor, ihelp: IndexHelper
@@ -173,18 +206,8 @@ class ClassicalList(ComponentList[Classical]):
         """Reset tensor attributes to a detached clone of the current state."""
         return self.reset(LABEL_HALOGEN)
 
-    @_docstring_reset
-    def reset_repulsion(self) -> Classical:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_REPULSION)
-
     ###########################################################################
 
     @_docstring_update
     def update_halogen(self, **kwargs: Any) -> Classical:
         return self.update(LABEL_HALOGEN, **kwargs)
-
-    @_docstring_update
-    def update_repulsion(self, **kwargs: Any) -> Classical:
-        """"""
-        return self.update(LABEL_REPULSION, **kwargs)

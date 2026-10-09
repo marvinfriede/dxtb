@@ -191,17 +191,21 @@ class ES3(Interaction):
 
     def update(self, **kwargs: Any) -> None:
         """ES3 parameters are fixed when the System is set up."""
-        raise RuntimeError(
-            "ES3 parameters are setup-derived and cannot be updated. "
-            "Create a new Model/System/Calculator with changed parameters."
-        )
+        if type(self) is ES3:
+            raise RuntimeError(
+                "ES3 parameters are setup-derived and cannot be updated. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().update(**kwargs)
 
     def reset(self) -> None:
         """ES3 parameters are fixed when the System is set up."""
-        raise RuntimeError(
-            "ES3 parameters are setup-derived and cannot be reset. "
-            "Create a new Model/System/Calculator with changed parameters."
-        )
+        if type(self) is ES3:
+            raise RuntimeError(
+                "ES3 parameters are setup-derived and cannot be reset. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().reset()
 
     # pylint: disable=unused-argument
     @override

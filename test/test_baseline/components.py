@@ -100,7 +100,10 @@ def _leaf(x: Tensor) -> Tensor:
 def _repulsion(method: str, wrt: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb._src.components.classicals import new_repulsion
+        from dxtb._src.components.classicals import (
+            RepulsionSetup,
+            new_repulsion,
+        )
 
         numbers, positions = _water()
         par = _par(method)
@@ -119,9 +122,14 @@ def _repulsion(method: str, wrt: str) -> Target:
         arep0 = cache.arep.detach().clone()
 
         def f(arep: Tensor) -> Tensor:
-            c = rep.get_cache(numbers, ihelp)
-            c.arep = arep
-            return rep.get_energy(positions, c)
+            setup = RepulsionSetup(
+                arep,
+                cache.zeff,
+                cache.kexp,
+                cache.mask,
+                cache.cutoff,
+            )
+            return rep.get_energy(positions, setup)
 
         return f, _leaf(arep0)
 

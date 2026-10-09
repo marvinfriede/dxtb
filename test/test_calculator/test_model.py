@@ -29,10 +29,11 @@ import torch
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3, ES3Cache
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
-from dxtb.config import Config
 from dxtb.components.coulomb import new_es2, new_es3
+from dxtb.config import Config
 
 from ..conftest import DEVICE
 
@@ -125,6 +126,7 @@ def test_es2_subclass_uses_legacy_extension_path() -> None:
         shell_resolved=original.shell_resolved,
         dtype=torch.double,
     )
+    custom.label = "ES2"
     model = Model(
         par=par,
         config=Config.create(exclude="es2"),
@@ -137,6 +139,173 @@ def test_es2_subclass_uses_legacy_extension_path() -> None:
     result = system.singlepoint(positions)
     assert torch.isfinite(result.energy).all()
     assert custom.cache_calls == 1
+
+
+def test_es2_subclass_keeps_legacy_update_and_reset() -> None:
+    """ES2 subclasses retain the generic Component mutation behavior."""
+
+    class ES2Extension(ES2):
+        __slots__ = ("extension_value",)
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.extension_value = torch.tensor(1.0, **DD)
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    original = new_es2(torch.unique(numbers), par, dtype=torch.double)
+    assert original is not None
+    custom = ES2Extension(
+        original.hubbard,
+        original.lhubbard,
+        average=original.average,
+        gexp=original.gexp,
+        shell_resolved=original.shell_resolved,
+        dtype=torch.double,
+    )
+    custom.label = "ES2"
+    system = Model(
+        par=par,
+        config=Config.create(exclude="es2"),
+        interaction=(custom,),
+    ).setup(numbers)
+
+    system.interactions.update("ES2", extension_value=torch.tensor(2.0, **DD))
+    assert custom.extension_value.item() == 2.0
+    system.interactions.reset("ES2")
+    assert custom.extension_value.item() == 2.0
+    system.interactions.reset_all()
+    assert custom.extension_value.item() == 2.0
+
+
+def test_es3_custom_exact_replaces_excluded_builtin() -> None:
+    """An active exact custom ES3 supplies the System setup values."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    reference_system = Model(par=par).setup(numbers)
+    reference_result = reference_system.singlepoint(positions)
+    custom = new_es3(torch.unique(numbers), par, dtype=torch.double)
+    assert custom is not None
+    custom.hubbard_derivs = custom.hubbard_derivs * 2.0
+    system = Model(
+        par=par,
+        config=Config.create(exclude="es3"),
+        interaction=(custom,),
+    ).setup(numbers)
+
+    assert system.es3_interaction is custom
+    assert system.es3_setup is not None
+    expected = system.ihelp.spread_uspecies_to_atom(custom.hubbard_derivs)
+    torch.testing.assert_close(system.es3_setup.hubbard_derivs, expected)
+    result = system.singlepoint(positions)
+    assert torch.isfinite(result.energy).all()
+    assert not torch.isclose(result.energy.sum(), reference_result.energy.sum())
+
+
+def test_es3_subclass_keeps_legacy_extension_and_mutation() -> None:
+    """An ES3 subclass uses its cache hook and legacy mutation methods."""
+
+    class ES3Extension(ES3):
+        __slots__ = ("extension_scale", "cache_calls", "reset_calls")
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.extension_scale = torch.tensor(1.0, **DD)
+            self.cache_calls = 0
+            self.reset_calls = 0
+
+        def get_cache(self, **kwargs):
+            self.cache_calls += 1
+            cache = super().get_cache(**kwargs)
+            return ES3Cache(
+                cache.hd * self.extension_scale,
+                shell_resolved=cache.shell_resolved,
+            )
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+            super().reset()
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    original = new_es3(torch.unique(numbers), par, dtype=torch.double)
+    assert original is not None
+    custom = ES3Extension(
+        original.hubbard_derivs,
+        shell_scale=original.shell_scale,
+        dtype=torch.double,
+    )
+    custom.label = "ES3"
+    calc = Calculator(
+        numbers,
+        par,
+        interaction=(custom,),
+        opts={"verbosity": 0, "exclude": "es3"},
+        dtype=torch.double,
+    )
+
+    assert calc.system.es3_setup is None
+    first = calc.singlepoint(positions)
+    assert first.energy.isfinite().all()
+    assert custom.cache_calls == 1
+    calc.interactions.update("ES3", extension_scale=torch.tensor(2.0, **DD))
+    assert custom.extension_scale.item() == 2.0
+    second = calc.singlepoint(positions.clone())
+    assert custom.cache_calls == 2
+    assert not torch.isclose(first.energy.sum(), second.energy.sum())
+    calc.interactions.reset("ES3")
+    assert custom.reset_calls == 1
+    calc.reset()
+    assert custom.reset_calls == 2
+    assert custom.extension_scale.item() == 2.0
+
+
+def test_exact_es2_es3_mutations_are_rejected() -> None:
+    """Only exact migrated ES2/ES3 objects reject update and reset."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    calc = Calculator(numbers, par, dtype=torch.double, opts={"verbosity": 0})
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        calc.interactions.update("ES2", gexp=torch.tensor(3.0, **DD))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        calc.interactions.reset("ES2")
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        calc.interactions.update("ES3", hubbard_derivs=torch.ones(1, **DD))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        calc.interactions.reset("ES3")
+
+
+def test_es2_setup_does_not_alias_legacy_gexp() -> None:
+    """In-place writes through the exact legacy ES2 object cannot alter setup."""
+    from dxtb._src.components.interactions.coulomb.secondorder import (
+        build_es2_coulomb,
+    )
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]], **DD
+    )
+    system = Model(par=ParamModule(GFN1_XTB, **DD)).setup(numbers)
+    assert system.es2_setup is not None
+    assert system.es2_interaction is not None
+    setup_gexp = system.es2_setup.gexp.clone()
+    matrix = build_es2_coulomb(system.es2_setup, positions)
+
+    with torch.no_grad():
+        system.es2_interaction.gexp.add_(0.5)
+
+    torch.testing.assert_close(system.es2_setup.gexp, setup_gexp)
+    torch.testing.assert_close(
+        build_es2_coulomb(system.es2_setup, positions.clone()), matrix
+    )
 
 
 @pytest.mark.parametrize("label", ["ES2", "ES3"])
@@ -252,10 +421,10 @@ def test_system_does_not_retain_mutable_integral_layer() -> None:
 def test_system_integral_setup_is_narrow(driver: str) -> None:
     """System's integral setup retains values, not model or adapter objects."""
     from dxtb._src.basis.bas import BasisSetup
-    from dxtb._src.integral.evaluation import IntegralSetup
     from dxtb._src.integral.base import BaseIntegral
     from dxtb._src.integral.container import Integrals
     from dxtb._src.integral.driver import DriverManager
+    from dxtb._src.integral.evaluation import IntegralSetup
     from dxtb._src.param import ParamModule
     from dxtb._src.xtb.base import BaseHamiltonian
 

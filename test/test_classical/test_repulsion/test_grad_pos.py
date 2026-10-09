@@ -30,7 +30,7 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.components.classicals import Repulsion, new_repulsion
-from dxtb._src.components.classicals.repulsion.base import BaseRepulsionCache
+from dxtb._src.components.classicals.repulsion.base import RepulsionSetup
 from dxtb._src.typing import DD, Callable, Tensor
 
 from ...conftest import DEVICE
@@ -139,7 +139,7 @@ def test_backward_batch_vs_tblite(
 
 
 def calc_numerical_gradient(
-    positions: Tensor, rep: Repulsion, cache: BaseRepulsionCache
+    positions: Tensor, rep: Repulsion, cache: RepulsionSetup
 ) -> Tensor:
     """Calculate gradient numerically for reference."""
 

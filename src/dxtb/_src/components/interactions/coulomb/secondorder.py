@@ -241,17 +241,21 @@ class ES2(Interaction):
 
     def update(self, **kwargs: Any) -> None:
         """ES2 parameters are fixed when the System is set up."""
-        raise RuntimeError(
-            "ES2 parameters are setup-derived and cannot be updated. "
-            "Create a new Model/System/Calculator with changed parameters."
-        )
+        if type(self) is ES2:
+            raise RuntimeError(
+                "ES2 parameters are setup-derived and cannot be updated. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().update(**kwargs)
 
     def reset(self) -> None:
         """ES2 parameters are fixed when the System is set up."""
-        raise RuntimeError(
-            "ES2 parameters are setup-derived and cannot be reset. "
-            "Create a new Model/System/Calculator with changed parameters."
-        )
+        if type(self) is ES2:
+            raise RuntimeError(
+                "ES2 parameters are setup-derived and cannot be reset. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().reset()
 
     # pylint: disable=unused-argument
     @override
@@ -643,7 +647,9 @@ def setup_es2(
         shell_mask=shell_mask,
         shell_hubbard=shell_hubbard,
         shells_to_atom=shells_to_atom,
-        gexp=gexp,
+        # Avoid sharing mutable compatibility-object storage with System while
+        # retaining the autograd edge to the source parameter.
+        gexp=gexp.clone(),
         average=average,
         shell_resolved=resolve_shells,
     )

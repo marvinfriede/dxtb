@@ -30,14 +30,16 @@ from dxtb import labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
-from dxtb._src.constants import defaults
-from dxtb._src.components.interactions.list import InteractionListCache
+from dxtb._src.components.classicals.repulsion.rep import Repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2Cache,
     build_es2_coulomb,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
+from dxtb._src.components.interactions.list import InteractionListCache
+from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.timing import timer
 from dxtb._src.typing import Tensor
 
 __all__ = ["singlepoint"]
@@ -167,9 +169,25 @@ def singlepoint(
     # B5 provides the pure evaluation boundary. B6a removes persistent
     # component state behind this boundary.
     if system.classicals.components:
-        classical = system.classicals.get_energy(
-            positions, system.classical_cache, charge=charge
-        )
+        classical = {}
+        for component in system.classicals.components:
+            timer.start(component.label, parent_uid="Classicals")
+            if component is system.repulsion_classical:
+                setup = system.repulsion_setup
+            elif (
+                isinstance(component, Repulsion)
+                and type(component) is not Repulsion
+            ):
+                # Custom subclasses remain on their legacy extension path.
+                # Refresh their call data so their supported update/reset
+                # behavior is observed; exact Repulsion uses System setup.
+                setup = component.get_cache(system.numbers, system.ihelp)
+            else:
+                setup = system.classical_cache[component.label]
+            classical[component.label] = component.get_energy(
+                positions, setup, charge=charge
+            )
+            timer.stop(component.label)
         classical_energy = torch.stack(tuple(classical.values())).sum(0)
     else:
         classical = {}

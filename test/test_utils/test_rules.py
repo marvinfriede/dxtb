@@ -22,7 +22,6 @@ section 10).
 from __future__ import annotations
 
 import re
-
 from pathlib import Path
 
 SRC = Path(__file__).parents[2] / "src" / "dxtb"
@@ -100,6 +99,33 @@ def test_repulsion_uses_plain_torch_derivatives() -> None:
     )
     found = [token for token in forbidden if token in text]
     assert not found, "Removed repulsion path returned: " + ", ".join(found)
+
+
+def test_repulsion_uses_explicit_setup_without_persistent_cache() -> None:
+    """Repulsion setup and energy no longer use persistent component caches."""
+    repulsion_source = SRC / "_src" / "components" / "classicals" / "repulsion"
+    text = "\n".join(
+        path.read_text() for path in repulsion_source.rglob("*.py")
+    )
+    forbidden = ("BaseRepulsionCache", "cache_is_latest", "self.cache =")
+    found = [token for token in forbidden if token in text]
+    assert not found, "Persistent repulsion cache path returned: " + ", ".join(
+        found
+    )
+    classical_list = (
+        SRC / "_src" / "components" / "classicals" / "list.py"
+    ).read_text()
+    assert "def update_repulsion(" not in classical_list
+    assert "def reset_repulsion(" not in classical_list
+
+    rep = (repulsion_source / "rep.py").read_text()
+    energy_method = rep.split("def get_energy(", maxsplit=1)[1].split(
+        "def update(", maxsplit=1
+    )[0]
+    assert "self.cutoff" not in energy_method
+    assert "self.arep" not in energy_method
+    assert "self.zeff" not in energy_method
+    assert "self.kexp" not in energy_method
 
 
 def test_es2_uses_plain_torch_coulomb_construction() -> None:

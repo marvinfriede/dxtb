@@ -98,27 +98,17 @@ class InteractionList(ComponentList[Interaction]):
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Interaction:
-        """Reject mutation of parameters captured by ES2/ES3 setup values."""
-        if name in (LABEL_ES2, LABEL_ES3):
-            raise RuntimeError(
-                f"{name} parameters are setup-derived and cannot be updated. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
+        """Update an interaction, preserving legacy subclass behavior."""
         return super().update(name, **kwargs)
 
     def reset(self, name: str) -> Interaction:
-        """Reject resetting parameters captured by ES2/ES3 setup values."""
-        if name in (LABEL_ES2, LABEL_ES3):
-            raise RuntimeError(
-                f"{name} parameters are setup-derived and cannot be reset. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
+        """Reset an interaction, preserving legacy subclass behavior."""
         return super().reset(name)
 
     def reset_all(self) -> None:
         """Reset unmigrated interactions, leaving ES2/ES3 setup untouched."""
         for component in self.components:
-            if component.label not in (LABEL_ES2, LABEL_ES3):
+            if type(component) not in (ES2, ES3):
                 component.reset()
 
     @override

@@ -22,10 +22,8 @@ This module implements the classical repulsion energy term.
 
 Note
 ----
-The Repulsion class is constructed for geometry optimization, i.e., the atomic
-numbers are set upon instantiation (`numbers` is a property), and the parameters
-in the cache are created for only those atomic numbers. The positions, however,
-must be supplied to the ``get_energy`` (or ``get_grad``) method.
+Numbers-only parameter values are resolved into a frozen setup. Positions are
+supplied explicitly to ``get_energy`` and are never stored in that setup.
 
 Example
 -------
@@ -58,6 +56,7 @@ Example
 from __future__ import annotations
 
 from abc import abstractmethod
+from dataclasses import dataclass
 
 import torch
 from tad_mctc import storch
@@ -68,25 +67,25 @@ from dxtb import IndexHelper
 from dxtb._src.constants import xtb
 from dxtb._src.typing import Any, Tensor, override
 
-from ..base import Classical, ClassicalCache
+from ..base import Classical
 
 __all__ = [
     "BaseRepulsion",
-    "BaseRepulsionCache",
+    "RepulsionSetup",
     "repulsion_energy",
+    "setup_repulsion",
 ]
 
 
-class BaseRepulsionCache(ClassicalCache):
-    """
-    Cache for the repulsion parameters.
-    """
+@dataclass(frozen=True, eq=False)
+class RepulsionSetup:
+    """Numbers-only, parameter-derived values for repulsion evaluation."""
 
     arep: Tensor
-    """Atom-specific screening parameters."""
+    """Pair-specific screening parameters."""
 
     zeff: Tensor
-    """Effective nuclear charges."""
+    """Pair-specific effective nuclear-charge products."""
 
     kexp: Tensor
     """
@@ -95,27 +94,58 @@ class BaseRepulsionCache(ClassicalCache):
     """
 
     mask: Tensor
-    """Mask for padding from numbers."""
+    """Mask for real atom pairs, excluding padding and the diagonal."""
 
-    __slots__ = ["mask", "arep", "zeff", "kexp"]
+    cutoff: Tensor
+    """Real-space cutoff captured at setup."""
 
-    def __init__(
-        self,
-        mask: Tensor,
-        arep: Tensor,
-        zeff: Tensor,
-        kexp: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(
-            device=device if device is None else arep.device,
-            dtype=dtype if dtype is None else arep.dtype,
-        )
-        self.mask = mask
-        self.arep = arep
-        self.zeff = zeff
-        self.kexp = kexp
+
+def setup_repulsion(
+    numbers: Tensor,
+    ihelp: IndexHelper,
+    arep: Tensor,
+    zeff: Tensor,
+    kexp: Tensor,
+    cutoff: Tensor,
+    *,
+    klight: Tensor | None = None,
+    en: Tensor | None = None,
+    enscale: Tensor | None = None,
+) -> RepulsionSetup:
+    """Resolve repulsion parameters and structural masks for one System."""
+    dd = {"device": arep.device, "dtype": arep.dtype}
+    atom_arep = ihelp.spread_uspecies_to_atom(arep)
+    atom_zeff = ihelp.spread_uspecies_to_atom(zeff)
+    atom_kexp = ihelp.spread_uspecies_to_atom(
+        kexp.expand(torch.unique(numbers).shape)
+    )
+    mask = real_pairs(numbers, mask_diagonal=True)
+
+    # Keep the established epsilon workaround for the pairwise geometric mean.
+    eps = torch.finfo(atom_arep.dtype).tiny
+    pair_arep = torch.where(
+        mask,
+        torch.sqrt(atom_arep.unsqueeze(-1) * atom_arep.unsqueeze(-2) + eps),
+        torch.tensor(0.0, **dd),
+    )
+    if en is not None and enscale is not None:
+        atom_en = ihelp.spread_uspecies_to_atom(en)
+        den2 = (atom_en.unsqueeze(-1) - atom_en.unsqueeze(-2)) ** 2
+        pair_arep = pair_arep * (1.0 + (0.01 * den2 + 0.01 * den2**2) * enscale)
+
+    pair_zeff = atom_zeff.unsqueeze(-1) * atom_zeff.unsqueeze(-2) * mask
+    pair_kexp = (
+        atom_kexp.unsqueeze(-1)
+        * atom_kexp.new_ones(atom_kexp.shape).unsqueeze(-2)
+        * mask
+    )
+    if klight is not None:
+        light_mask = ~real_pairs(numbers <= 2)
+        pair_kexp = torch.where(light_mask, pair_kexp, klight) * mask
+
+    # Keep the compatibility object's mutable cutoff tensor from aliasing
+    # System setup while preserving a possible autograd edge.
+    return RepulsionSetup(pair_arep, pair_zeff, pair_kexp, mask, cutoff.clone())
 
 
 class BaseRepulsion(Classical):
@@ -190,9 +220,9 @@ class BaseRepulsion(Classical):
     @override
     def get_cache(
         self, numbers: Tensor, ihelp: IndexHelper | None = None, **_: Any
-    ) -> BaseRepulsionCache:
+    ) -> RepulsionSetup:
         """
-        Store variables for energy and gradient calculation.
+        Create numbers-only setup values for energy and gradient calculation.
 
         Parameters
         ----------
@@ -203,57 +233,32 @@ class BaseRepulsion(Classical):
 
         Returns
         -------
-        Repulsion.Cache
-            Cache for repulsion.
+        RepulsionSetup
+            Frozen setup for repulsion.
 
         Note
         ----
-        The cache of a classical contribution does not require ``positions`` as
-        it only becomes useful if `numbers` remain unchanged and ``positions``
-        vary, i.e., during geometry optimization.
+        This compatibility method returns a fresh setup. It does not store or
+        reuse evaluation state on the Repulsion object.
         """
         if ihelp is None:
             raise ValueError("IndexHelper must be passed for repulsion.")
 
-        # spread
-        arep = ihelp.spread_uspecies_to_atom(self.arep)
-        zeff = ihelp.spread_uspecies_to_atom(self.zeff)
-        kexp = ihelp.spread_uspecies_to_atom(
-            self.kexp.expand(torch.unique(numbers).shape)
+        return setup_repulsion(
+            numbers,
+            ihelp,
+            self.arep,
+            self.zeff,
+            self.kexp,
+            self.cutoff,
+            klight=self.klight,
+            en=self.en,
+            enscale=self.enscale,
         )
-
-        # mask for padding
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        # Without the eps, the first backward returns nan's as described in
-        # https://github.com/pytorch/pytorch/issues/2421. The second backward
-        # gives nan's in gradgradcheck, because the epsilon is smaller than the
-        # step size. But the actual gradient should be correct.
-        eps = torch.finfo(arep.dtype).tiny
-        a = torch.where(
-            mask,
-            torch.sqrt(arep.unsqueeze(-1) * arep.unsqueeze(-2) + eps),
-            torch.tensor(0.0, **self.dd),
-        )
-
-        if self.en is not None and self.enscale is not None:
-            en = ihelp.spread_uspecies_to_atom(self.en)
-            den2 = (en.unsqueeze(-1) - en.unsqueeze(-2)) ** 2
-            a = a * (1.0 + (0.01 * den2 + 0.01 * den2**2) * self.enscale)
-
-        z = zeff.unsqueeze(-1) * zeff.unsqueeze(-2) * mask
-        k = kexp.unsqueeze(-1) * kexp.new_ones(kexp.shape).unsqueeze(-2) * mask
-
-        # GFN2 uses a different value for H and He
-        if self.klight is not None:
-            kmask = ~real_pairs(numbers <= 2)
-            k = torch.where(kmask, k, self.klight) * mask
-
-        return BaseRepulsionCache(mask, a, z, k)
 
     @abstractmethod
     def get_energy(
-        self, positions: Tensor, cache: BaseRepulsionCache, **kwargs: Any
+        self, positions: Tensor, cache: RepulsionSetup, **kwargs: Any
     ) -> Tensor:
         """
         Get repulsion energy.

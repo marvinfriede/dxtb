@@ -23,12 +23,9 @@ PyTorch operations, so reverse- and forward-mode derivatives use one path.
 
 Note
 ----
-The Repulsion class has a cache scope that goes beyond single-point
-calculations (geometry optimization, numerical gradients). The atomic numbers
-are set upon instantiation (``numbers`` is a property), and the parameters in
-the cache are created for only those atomic numbers. The positions, however,
-must be supplied to the ``get_energy`` method. Hence, the cache does not become
-invalid for different geometries, but only for different atomic numbers.
+The Repulsion class is a compatibility adapter. Single-system calculations
+use the frozen ``RepulsionSetup`` stored on System and pass positions to the
+ordinary PyTorch energy formula.
 """
 
 from __future__ import annotations
@@ -39,7 +36,7 @@ from dxtb._src.typing import Any, Tensor, override
 
 from .base import (
     BaseRepulsion,
-    BaseRepulsionCache,
+    RepulsionSetup,
     repulsion_energy,
 )
 
@@ -59,7 +56,7 @@ class Repulsion(BaseRepulsion):
 
     @override
     def get_energy(
-        self, positions: Tensor, cache: BaseRepulsionCache, **kwargs: Any
+        self, positions: Tensor, cache: RepulsionSetup, **kwargs: Any
     ) -> Tensor:
         """
         Get repulsion energy.
@@ -85,9 +82,27 @@ class Repulsion(BaseRepulsion):
             cache.arep,
             cache.kexp,
             cache.zeff,
-            self.cutoff,
+            cache.cutoff,
         )
 
         if kwargs.get("atom_resolved", True) is True:
             return 0.5 * torch.sum(e, dim=-1)
         return e
+
+    def update(self, **kwargs: Any) -> None:
+        """Exact migrated Repulsion parameters cannot be changed in place."""
+        if type(self) is Repulsion:
+            raise RuntimeError(
+                "Repulsion parameters are setup-derived and cannot be updated. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().update(**kwargs)
+
+    def reset(self) -> None:
+        """Exact migrated Repulsion parameters cannot be reset in place."""
+        if type(self) is Repulsion:
+            raise RuntimeError(
+                "Repulsion parameters are setup-derived and cannot be reset. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().reset()
