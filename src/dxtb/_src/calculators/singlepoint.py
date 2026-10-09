@@ -30,6 +30,7 @@ from dxtb import labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
+from dxtb._src.components.classicals.dispersion.d4 import dispersion_d4_energy
 from dxtb._src.components.classicals.repulsion.rep import Repulsion
 from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
 from dxtb._src.components.interactions.coulomb.secondorder import (
@@ -173,29 +174,36 @@ def singlepoint(
         classical = {}
         for component in system.classicals.components:
             timer.start(component.label, parent_uid="Classicals")
-            if component is system.repulsion_classical:
-                setup = system.repulsion_setup
-            elif component is system.srb_classical:
-                setup = system.srb_setup
-            elif (
-                isinstance(component, Repulsion)
-                and type(component) is not Repulsion
-            ):
-                # Custom subclasses remain on their legacy extension path.
-                # Refresh their call data so their supported update/reset
-                # behavior is observed; exact Repulsion uses System setup.
-                setup = component.get_cache(system.numbers, system.ihelp)
-            elif (
-                isinstance(component, ShortRangeBond)
-                and type(component) is not ShortRangeBond
-            ):
-                # Custom subclasses retain their legacy extension hooks.
-                setup = component.get_cache(system.numbers, system.ihelp)
+            if component is system.d4_classical:
+                if system.d4_setup is None:
+                    raise RuntimeError("Single-system D4 setup is missing.")
+                classical[component.label] = dispersion_d4_energy(
+                    system.d4_setup, positions, charge
+                )
             else:
-                setup = system.classical_cache[component.label]
-            classical[component.label] = component.get_energy(
-                positions, setup, charge=charge
-            )
+                if component is system.repulsion_classical:
+                    setup = system.repulsion_setup
+                elif component is system.srb_classical:
+                    setup = system.srb_setup
+                elif (
+                    isinstance(component, Repulsion)
+                    and type(component) is not Repulsion
+                ):
+                    # Custom subclasses remain on their legacy extension path.
+                    # Refresh their call data so supported update/reset
+                    # behavior is observed; exact Repulsion uses System setup.
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                elif (
+                    isinstance(component, ShortRangeBond)
+                    and type(component) is not ShortRangeBond
+                ):
+                    # Custom subclasses retain their legacy extension hooks.
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                else:
+                    setup = system.classical_cache[component.label]
+                classical[component.label] = component.get_energy(
+                    positions, setup, charge=charge
+                )
             timer.stop(component.label)
         classical_energy = torch.stack(tuple(classical.values())).sum(0)
     else:

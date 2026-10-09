@@ -50,6 +50,8 @@ from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
+    DispersionD4,
+    DispersionD4Setup,
     Repulsion,
     RepulsionSetup,
     ShortRangeBond,
@@ -157,6 +159,12 @@ class System:
 
     srb_classical: ShortRangeBond | None
     """Exact migrated SRB associated with :attr:`srb_setup`."""
+
+    d4_setup: DispersionD4Setup | None
+    """Numbers-only setup associated with the exact classical D4 term."""
+
+    d4_classical: DispersionD4 | None
+    """Exact classical D4 associated with :attr:`d4_setup`."""
 
     dd: DD
     """Device and data type of the tensors of the system."""
@@ -391,6 +399,15 @@ class Model:
             if srb_classical is not None
             else None
         )
+        d4_classical = next(
+            (c for c in classicals.components if type(c) is DispersionD4),
+            None,
+        )
+        d4_setup = (
+            classical_cache[d4_classical.label]
+            if d4_classical is not None
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -459,6 +476,8 @@ class Model:
             repulsion_classical=repulsion_classical,
             srb_setup=srb_setup,
             srb_classical=srb_classical,
+            d4_setup=d4_setup,
+            d4_classical=d4_classical,
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,

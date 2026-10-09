@@ -172,6 +172,15 @@ def _classical(name: str, method: str) -> Target:
             raise KeyError(name)
         assert comp is not None
         cache = comp.get_cache(numbers, ihelp)
+        if name == "dispersion" and method == "gfn2":
+            from dxtb._src.components.classicals.dispersion.d4 import (
+                dispersion_d4_energy,
+            )
+
+            return (
+                lambda x: dispersion_d4_energy(cache, x, 0.0),
+                _leaf(positions),
+            )
         return (lambda x: comp.get_energy(x, cache)), _leaf(positions)
 
     return build

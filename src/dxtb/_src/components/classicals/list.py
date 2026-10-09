@@ -38,6 +38,7 @@ from dxtb._src.typing import (
 from ..list import ComponentList, ComponentListCache
 from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
+from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
 from .halogen import LABEL_HALOGEN, Halogen
 from .repulsion import LABEL_REPULSION, Repulsion
 from .shortrangebond import LABEL_SRB, ShortRangeBond
@@ -66,16 +67,18 @@ class ClassicalList(ComponentList[Classical]):
         dtype: torch.dtype | None = None,
     ) -> None:
         """Create a classical list and reject duplicate migrated labels."""
-        for label in (LABEL_REPULSION, LABEL_SRB):
+        for label in (LABEL_REPULSION, LABEL_SRB, LABEL_DISPERSIOND4):
             matching = [
                 component
                 for component in components
                 if component is not None and component.label == label
             ]
             if len({id(component) for component in matching}) > 1:
-                duplicate_name = (
-                    "repulsion" if label == LABEL_REPULSION else label
-                )
+                duplicate_name = {
+                    LABEL_REPULSION: "repulsion",
+                    LABEL_SRB: LABEL_SRB,
+                    LABEL_DISPERSIOND4: LABEL_DISPERSIOND4,
+                }[label]
                 raise ValueError(
                     f"Multiple classical contributions use the label '{label}'. "
                     f"Duplicate {duplicate_name} labels are ambiguous."
@@ -93,7 +96,11 @@ class ClassicalList(ComponentList[Classical]):
     def reset_all(self) -> None:
         """Reset unmigrated classicals, leaving explicit setups intact."""
         for component in self.components:
-            if type(component) not in (Repulsion, ShortRangeBond):
+            if type(component) not in (
+                Repulsion,
+                ShortRangeBond,
+                DispersionD4,
+            ):
                 component.reset()
 
     @override

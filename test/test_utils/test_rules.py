@@ -152,6 +152,32 @@ def test_srb_uses_explicit_setup_without_persistent_cache() -> None:
     assert "setup." in energy
 
 
+def test_classical_d4_uses_explicit_setup_without_persistent_cache() -> None:
+    """Exact classical D4 evaluation reads setup and explicit call inputs."""
+    d4 = (
+        SRC / "_src" / "components" / "classicals" / "dispersion" / "d4.py"
+    ).read_text()
+    forbidden = (
+        "class DispersionD4Cache",
+        "cache_is_latest",
+        "self.cache =",
+        "_cachevars",
+        "_cachegrad",
+    )
+    found = [token for token in forbidden if token in d4]
+    assert (
+        not found
+    ), "Persistent classical D4 cache path returned: " + ", ".join(found)
+    assert "@dataclass(frozen=True, eq=False)\nclass DispersionD4Setup" in d4
+
+    energy = d4.split("def dispersion_d4_energy(", maxsplit=1)[1].split(
+        "class DispersionD4(", maxsplit=1
+    )[0]
+    assert "self." not in energy
+    assert "setup." in energy
+    assert "charge" in energy
+
+
 def test_es2_uses_plain_torch_coulomb_construction() -> None:
     """ES2 Coulomb matrices do not use a custom autograd shortcut."""
     source = (
