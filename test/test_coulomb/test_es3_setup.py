@@ -23,7 +23,7 @@ from dataclasses import fields
 import pytest
 import torch
 
-from dxtb import GFN1_XTB, ParamModule
+from dxtb import GFN1_XTB, GFN2_XTB, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.components.interactions.coulomb.thirdorder import (
@@ -114,6 +114,38 @@ def test_es3_setup_parameter_gradient_rebuilds_system() -> None:
     system2 = model.setup(numbers)
     loss2 = _energy(system2, charges)
     (grad2,) = torch.autograd.grad(loss2, parameter)
+
+    assert torch.isfinite(grad1).all()
+    assert torch.isfinite(grad2).all()
+    assert torch.count_nonzero(grad1) > 0
+    torch.testing.assert_close(grad1, grad2)
+
+
+@pytest.mark.parametrize(
+    "parameter_name",
+    [
+        "parameter_tree.thirdorder.shell.s.param",
+        "parameter_tree.thirdorder.shell.p.param",
+    ],
+)
+def test_gfn2_shell_scale_parameter_gradient_rebuilds_system(
+    parameter_name: str,
+) -> None:
+    """Active GFN2 shell scaling stays connected through fresh setup."""
+    numbers, positions = _inputs()
+    par = ParamModule(GFN2_XTB, device=DEVICE, dtype=positions.dtype)
+    parameter = dict(par.named_parameters())[parameter_name]
+    parameter.requires_grad_(True)
+    model = Model(par=par)
+
+    def loss() -> torch.Tensor:
+        system = model.setup(numbers)
+        assert system.es3_setup is not None
+        assert system.es3_setup.shell_resolved
+        return system.singlepoint(positions).scf.sum()
+
+    (grad1,) = torch.autograd.grad(loss(), parameter)
+    (grad2,) = torch.autograd.grad(loss(), parameter)
 
     assert torch.isfinite(grad1).all()
     assert torch.isfinite(grad2).all()
