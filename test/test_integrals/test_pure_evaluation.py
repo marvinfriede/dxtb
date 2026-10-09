@@ -444,7 +444,11 @@ class BlockLibcint(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, BlockLibcint())
 import torch
 import dxtb
+from dxtb.calculators import ChargeResult, Multipoles, PotentialResult, Result
 from dxtb._src.integral.evaluation import build_integral_matrices
+
+assert dxtb.Result is Result
+assert all((ChargeResult, PotentialResult, Multipoles))
 
 numbers = torch.tensor([1, 1])
 positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64)

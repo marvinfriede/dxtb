@@ -16,8 +16,6 @@
 # limitations under the License.
 """
 Run tests for repulsion contribution.
-
-(Note that the analytical gradient tests fail for `torch.float`.)
 """
 
 from __future__ import annotations
@@ -72,6 +70,9 @@ def test_single(
     ihelp = IndexHelper.from_numbers(numbers, _par)
     cache = rep.get_cache(numbers, ihelp)
     e = rep.get_energy(positions, cache, atom_resolved=False)
+    atom_energy = rep.get_energy(positions, cache, atom_resolved=True)
+
+    torch.testing.assert_close(atom_energy, 0.5 * e.sum(-1))
 
     assert pytest.approx(ref.cpu(), abs=tol) == 0.5 * e.sum((-2, -1)).cpu()
 

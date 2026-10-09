@@ -83,3 +83,20 @@ def test_no_calculator_result_cache_or_identity_keying() -> None:
     ), "Calculator result identity keying returned: " + ", ".join(
         identity_found
     )
+
+
+def test_repulsion_uses_plain_torch_derivatives() -> None:
+    """The repulsion package has one ordinary-PyTorch implementation."""
+    repulsion_source = SRC / "_src" / "components" / "classicals" / "repulsion"
+    text = "\n".join(
+        path.read_text() for path in repulsion_source.rglob("*.py")
+    )
+    forbidden = (
+        "RepulsionAG",
+        "RepulsionAnalytical",
+        "torch.autograd.Function",
+        "with_analytical_gradient",
+        "repulsion_gradient",
+    )
+    found = [token for token in forbidden if token in text]
+    assert not found, "Removed repulsion path returned: " + ", ".join(found)

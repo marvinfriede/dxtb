@@ -97,18 +97,17 @@ def _leaf(x: Tensor) -> Tensor:
 # classical terms (positions and parameters)
 
 
-def _repulsion(analytical: bool, wrt: str) -> Target:
+def _repulsion(method: str, wrt: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
         from dxtb._src.components.classicals import new_repulsion
 
         numbers, positions = _water()
-        par = _par("gfn1")
+        par = _par(method)
         ihelp = IndexHelper.from_numbers(numbers, par)
         rep = new_repulsion(
             torch.unique(numbers),
             par,
-            with_analytical_gradient=analytical,
             **DD,
         )
         assert rep is not None
@@ -433,9 +432,8 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
 
 
 TARGETS: dict[str, Target] = {
-    "repulsion_ag.positions": _repulsion(True, "positions"),
-    "repulsion_ag.arep": _repulsion(True, "arep"),
-    "repulsion.positions": _repulsion(False, "positions"),
+    "repulsion.positions": _repulsion("gfn1", "positions"),
+    "repulsion.arep": _repulsion("gfn1", "arep"),
     "coulomb_matrix_ag.positions": _coulomb_matrix_ag("positions"),
     "coulomb_matrix_ag.hubbard": _coulomb_matrix_ag("hubbard"),
     "overlap_md.positions": _integral("overlap", "md"),
@@ -449,6 +447,7 @@ TARGETS: dict[str, Target] = {
     "dispersion_d3.positions": _classical("dispersion", "gfn1"),
     "dispersion_d4.positions": _classical("dispersion", "gfn2"),
     "repulsion_gfn2.positions": _classical("repulsion", "gfn2"),
+    "repulsion_gfn2.arep": _repulsion("gfn2", "arep"),
     "es2.charges": _interaction("es2"),
     "es3.charges": _interaction("es3"),
     "aes2.dipoles": _interaction("aes2"),

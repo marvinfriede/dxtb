@@ -62,6 +62,7 @@ from dxtb._src.param.gfn2 import GFN2_XTB as GFN2_XTB
 
 
 from dxtb import calculators as calculators
+from dxtb.calculators import Result as Result
 from dxtb import components as components
 from dxtb import config as config
 from dxtb import integrals as integrals
@@ -82,6 +83,7 @@ __all__ = [
     #
     "calculators",
     "Calculator",
+    "Result",
     "GFN0_XTB",
     "GFN1_XTB",
     "GFN2_XTB",

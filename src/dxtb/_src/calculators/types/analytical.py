@@ -96,6 +96,7 @@ class AnalyticalCalculator(EnergyCalculator):
                 mono=charges.mono,
                 dipole=charges.dipole,
                 quad=charges.quadrupole,
+                batch_mode=self.ihelp.batch_mode,
             )
             total_grad += self.interactions.get_gradient(
                 legacy_charges, positions, icaches, self.ihelp
@@ -118,6 +119,7 @@ class AnalyticalCalculator(EnergyCalculator):
             mono=result.potential.mono,
             dipole=result.potential.dipole,
             quad=result.potential.quadrupole,
+            batch_mode=self.ihelp.batch_mode,
         )
 
         overlap_grad = self.integrals.grad_overlap(positions)

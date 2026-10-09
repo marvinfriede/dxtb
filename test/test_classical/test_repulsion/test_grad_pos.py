@@ -26,14 +26,11 @@ import pytest
 import torch
 from tad_mctc.autograd import dgradcheck, dgradgradcheck
 from tad_mctc.batch import pack
+from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.components.classicals import Repulsion, new_repulsion
 from dxtb._src.components.classicals.repulsion.base import BaseRepulsionCache
-from dxtb._src.components.classicals.repulsion.rep import (
-    repulsion_energy,
-    repulsion_gradient,
-)
 from dxtb._src.typing import DD, Callable, Tensor
 
 from ...conftest import DEVICE
@@ -48,10 +45,7 @@ tol = 1e-7
 @pytest.mark.grad
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", ["H2O", "SiH4"])
-@pytest.mark.parametrize("with_analytical_gradient", [True, False])
-def test_backward_vs_tblite(
-    dtype: torch.dtype, name: str, with_analytical_gradient: bool
-) -> None:
+def test_backward_vs_tblite(dtype: torch.dtype, name: str) -> None:
     """Compare with reference values from tblite."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -64,7 +58,6 @@ def test_backward_vs_tblite(
     rep = new_repulsion(
         torch.unique(numbers),
         par,
-        with_analytical_gradient=with_analytical_gradient,
         **dd,
     )
     assert rep is not None
@@ -92,9 +85,8 @@ def test_backward_vs_tblite(
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["H2O", "SiH4"])
 @pytest.mark.parametrize("name2", ["H2O", "SiH4"])
-@pytest.mark.parametrize("with_analytical_gradient", [True, False])
 def test_backward_batch_vs_tblite(
-    dtype: torch.dtype, name1: str, name2: str, with_analytical_gradient: bool
+    dtype: torch.dtype, name1: str, name2: str
 ) -> None:
     """Compare with reference values from tblite."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -123,7 +115,6 @@ def test_backward_batch_vs_tblite(
     rep = new_repulsion(
         torch.unique(numbers),
         par,
-        with_analytical_gradient=with_analytical_gradient,
         **dd,
     )
     assert rep is not None
@@ -145,48 +136,6 @@ def test_backward_batch_vs_tblite(
     pos.grad.data.zero_()
 
     assert pytest.approx(ref.cpu(), abs=tol) == grad_backward.cpu()
-
-
-@pytest.mark.grad
-@pytest.mark.parametrize("dtype", [torch.double])
-@pytest.mark.parametrize("name", sample_list + ["MB16_43_03"])
-def test_grad_pos_backward_vs_analytical(dtype: torch.dtype, name: str) -> None:
-    """Compare analytical gradient with automatic gradient."""
-    dd: DD = {"device": DEVICE, "dtype": dtype}
-
-    sample = samples[name]
-    numbers = sample["numbers"].to(DEVICE)
-    positions = sample["positions"].to(**dd)
-
-    par = get_param_module("gfn1", **dd)
-    rep = new_repulsion(torch.unique(numbers), par, **dd)
-    assert rep is not None
-
-    ihelp = IndexHelper.from_numbers(numbers, par)
-    cache = rep.get_cache(numbers, ihelp)
-
-    # analytical gradient
-    e = repulsion_energy(
-        positions, cache.mask, cache.arep, cache.kexp, cache.zeff
-    )
-    grad_analytical = repulsion_gradient(
-        e, positions, cache.mask, cache.arep, cache.kexp, reduced=True
-    )
-
-    # automatic gradient
-    pos = positions.clone().requires_grad_(True)
-    energy = torch.sum(rep.get_energy(pos, cache), dim=-1)
-    energy.backward()
-
-    assert pos.grad is not None
-    grad_backward = pos.grad.clone()
-
-    # also zero out gradients when using `.backward()`
-    grad_backward.detach_()
-    pos.detach_()
-    pos.grad.data.zero_()
-
-    assert pytest.approx(grad_analytical.cpu(), abs=tol) == grad_backward.cpu()
 
 
 def calc_numerical_gradient(
@@ -218,10 +167,8 @@ def calc_numerical_gradient(
 
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", sample_list + ["MB16_43_03"])
-def test_grad_pos_analytical_vs_numerical(
-    dtype: torch.dtype, name: str
-) -> None:
-    """Test analytical gradient against numerical gradient."""
+def test_grad_pos_autograd_vs_numerical(dtype: torch.dtype, name: str) -> None:
+    """Compare the PyTorch position derivative with finite differences."""
     dd: DD = {"device": DEVICE, "dtype": dtype}
     atol = sqrt(torch.finfo(dtype).eps) * 10
 
@@ -236,17 +183,12 @@ def test_grad_pos_analytical_vs_numerical(
     ihelp = IndexHelper.from_numbers(numbers, par)
     cache = rep.get_cache(numbers, ihelp)
 
-    # analytical gradient
-    e = repulsion_energy(
-        positions, cache.mask, cache.arep, cache.kexp, cache.zeff
-    )
-    grad_analytical = repulsion_gradient(
-        e, positions, cache.mask, cache.arep, cache.kexp, reduced=True
-    )
+    pos = positions.clone().requires_grad_(True)
+    energy = rep.get_energy(pos, cache).sum()
+    (grad_autograd,) = torch.autograd.grad(energy, pos)
 
-    # numerical gradient
-    grad_num = calc_numerical_gradient(positions, rep, cache)
-    assert pytest.approx(grad_num.cpu(), abs=atol) == grad_analytical.cpu()
+    grad_num = calc_numerical_gradient(positions.clone(), rep, cache)
+    assert pytest.approx(grad_num.cpu(), abs=atol) == grad_autograd.cpu()
 
 
 def gradchecker(
@@ -361,3 +303,56 @@ def test_gradgrad_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     """
     func, diffvars = gradchecker_batch(dtype, name1, name2)
     assert dgradgradcheck(func, diffvars, atol=tol)
+
+
+def test_forward_transforms_match_reverse_and_loop() -> None:
+    """The production repulsion path composes with PyTorch transforms."""
+    dd: DD = {"device": DEVICE, "dtype": torch.double}
+    numbers = samples["H2"]["numbers"].to(DEVICE)
+    positions = samples["H2"]["positions"].to(**dd)
+    repulsion = new_repulsion(torch.unique(numbers), GFN1_XTB, **dd)
+    assert repulsion is not None
+    ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
+    cache = repulsion.get_cache(numbers, ihelp)
+
+    def scalar(pos: Tensor) -> Tensor:
+        return repulsion.get_energy(pos, cache).sum()
+
+    reverse = jacrev(scalar)(positions)
+    forward = jacfwd(scalar)(positions)
+    torch.testing.assert_close(forward, reverse)
+
+    direction = torch.tensor([[0.2, -0.1, 0.3], [-0.2, 0.1, -0.3]], **dd)
+    _, tangent = jvp(scalar, (positions,), (direction,))
+    torch.testing.assert_close(tangent, (reverse * direction).sum())
+
+    conformers = torch.stack((positions, positions + 0.05))
+    mapped = vmap(scalar)(conformers)
+    looped = torch.stack(tuple(scalar(pos) for pos in conformers))
+    torch.testing.assert_close(mapped, looped)
+
+
+def test_padding_has_finite_energy_and_position_gradient() -> None:
+    """Padded pair masks keep the plain derivative finite."""
+    dd: DD = {"device": DEVICE, "dtype": torch.double}
+    numbers = pack(
+        (
+            samples["H2"]["numbers"].to(DEVICE),
+            samples["H2O"]["numbers"].to(DEVICE),
+        )
+    )
+    positions = pack(
+        (
+            samples["H2"]["positions"].to(**dd),
+            samples["H2O"]["positions"].to(**dd),
+        )
+    ).requires_grad_(True)
+    repulsion = new_repulsion(torch.unique(numbers), GFN1_XTB, **dd)
+    assert repulsion is not None
+    cache = repulsion.get_cache(
+        numbers, IndexHelper.from_numbers(numbers, GFN1_XTB)
+    )
+    energy = repulsion.get_energy(positions, cache)
+    (gradient,) = torch.autograd.grad(energy.sum(), positions)
+    assert torch.isfinite(energy).all()
+    assert torch.isfinite(gradient).all()

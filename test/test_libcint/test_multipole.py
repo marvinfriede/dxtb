@@ -170,7 +170,11 @@ def test_shift_r0_rj(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     # Compare with PySCF reference
     assert pyscf_r0.shape == dipint.matrix.shape
-    assert pytest.approx(pyscf_r0.cpu(), abs=tol) == dipint.matrix.cpu()
+    # pytest.approx converts tensors through NumPy, which rejects this
+    # autograd-connected integral. Keep its default 1e-6 relative tolerance.
+    torch.testing.assert_close(
+        dipint.matrix.cpu(), pyscf_r0.cpu(), atol=tol, rtol=1e-6
+    )
 
     ##########################################################################
 

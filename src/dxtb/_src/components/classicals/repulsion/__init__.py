@@ -60,11 +60,10 @@ Example
 """
 
 from .factory import new_repulsion
-from .rep import LABEL_REPULSION, Repulsion, RepulsionAnalytical
+from .rep import LABEL_REPULSION, Repulsion
 
 __all__ = [
     "LABEL_REPULSION",
     "new_repulsion",
     "Repulsion",
-    "RepulsionAnalytical",
 ]

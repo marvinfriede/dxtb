@@ -74,7 +74,6 @@ __all__ = [
     "BaseRepulsion",
     "BaseRepulsionCache",
     "repulsion_energy",
-    "repulsion_gradient",
 ]
 
 
@@ -342,75 +341,3 @@ def repulsion_energy(
         storch.safe_divide(zeff * exp_term, distances),
         zero,
     )
-
-
-def repulsion_gradient(
-    erep: Tensor,
-    positions: Tensor,
-    mask: Tensor,
-    arep: Tensor,
-    kexp: Tensor,
-    *,
-    reduced: bool = False,
-) -> Tensor:
-    """
-    Nuclear gradient of classical repulsion energy.
-
-    Parameters
-    ----------
-    erep : Tensor
-        Atom-resolved repulsion energy (from `repulsion_energy`).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    mask : Tensor
-        Mask for padding.
-    arep : Tensor
-        Atom-specific screening parameters.
-    kexp : Tensor
-        Scaling of the interatomic distance in the exponential damping function
-        of the repulsion energy.
-    reduced : bool, optional
-        Shape of the output gradient. Defaults to ``False``, which returns a
-        gradient of shape `(natoms, natoms, 3)`. This is required for the custom
-        backward function. If `reduced=True`, the output gradient has the
-        typical shape `(natoms, 3)`.
-
-    Returns
-    -------
-    Tensor
-        Nuclear gradient of repulsion energy. The shape is specified by the
-        `reduced` keyword argument.
-    """
-    eps = torch.tensor(
-        torch.finfo(positions.dtype).eps,
-        dtype=positions.dtype,
-        device=positions.device,
-    )
-
-    distances = torch.where(
-        mask,
-        storch.cdist(positions, positions, p=2),
-        eps,
-    )
-
-    r1k = torch.pow(distances, kexp)
-
-    # (n_batch, n_atoms, n_atoms)
-    grad = -(arep * r1k * kexp + 1.0) * erep
-
-    # (n_batch, n_atoms, n_atoms, 3)
-    rij = torch.where(
-        mask.unsqueeze(-1),
-        positions.unsqueeze(-2) - positions.unsqueeze(-3),
-        eps,
-    )
-
-    # (n_batch, n_atoms, n_atoms)
-    r2 = torch.pow(distances, 2)
-
-    # (n_batch, n_atoms, n_atoms, 3)
-    grad = torch.where(mask, storch.safe_divide(grad, r2), eps)
-    grad = grad.unsqueeze(-1) * rij
-
-    # reduction gives (n_batch, n_atoms, 3)
-    return grad if reduced is False else torch.sum(grad, dim=-2)

@@ -57,8 +57,7 @@ torch reserve several GB of address space without using it.
 
 COMPONENT_MEMORY_GB = 4.0
 """
-Address space limit for the component checks, which include an unbounded
-recursion (``repulsion_ag.arep``) that should fail quickly.
+Address space limit for an isolated component check.
 """
 
 

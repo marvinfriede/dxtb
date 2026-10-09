@@ -133,6 +133,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
         mono=result_charges.mono,
         dipole=result_charges.dipole,
         quad=result_charges.quadrupole,
+        batch_mode=calc.ihelp.batch_mode,
     )
     eint = calc.interactions.get_energy_as_dict(scf_charges, icache, calc.ihelp)
     for label, e in eint.items():

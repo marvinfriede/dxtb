@@ -755,6 +755,42 @@
   "message": "",
   "peak_rss_mb": 680.4
  },
+ "repulsion.arep:forward": {
+  "status": "pass",
+  "seconds": 0.17597320908680558,
+  "message": "",
+  "peak_rss_mb": 366.0
+ },
+ "repulsion.arep:jvp": {
+  "status": "pass",
+  "seconds": 0.15051141497679055,
+  "message": "",
+  "peak_rss_mb": 367.5
+ },
+ "repulsion.arep:order1": {
+  "status": "pass",
+  "seconds": 0.10179360909387469,
+  "message": "",
+  "peak_rss_mb": 362.8
+ },
+ "repulsion.arep:order2": {
+  "status": "pass",
+  "seconds": 0.11615001386962831,
+  "message": "",
+  "peak_rss_mb": 362.8
+ },
+ "repulsion.arep:order3": {
+  "status": "pass",
+  "seconds": 0.1266253988724202,
+  "message": "",
+  "peak_rss_mb": 360.5
+ },
+ "repulsion.arep:vmap": {
+  "status": "pass",
+  "seconds": 0.08846787200309336,
+  "message": "",
+  "peak_rss_mb": 362.7
+ },
  "repulsion.positions:forward": {
   "status": "pass",
   "seconds": 0.4368877840006462,
@@ -791,77 +827,41 @@
   "message": "",
   "peak_rss_mb": 680.4
  },
- "repulsion_ag.arep:forward": {
-  "status": "error",
-  "seconds": 0.41822345099899394,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
-  "peak_rss_mb": 699.0
- },
- "repulsion_ag.arep:jvp": {
-  "status": "error",
-  "seconds": 0.4156330639998487,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
-  "peak_rss_mb": 697.2
- },
- "repulsion_ag.arep:order1": {
-  "status": "error",
-  "seconds": 0.276525078999839,
-  "message": "RuntimeError: std::bad_alloc [dxtb/_src/components/classicals/repulsion/rep.py:214]",
-  "peak_rss_mb": 706.9
- },
- "repulsion_ag.arep:order2": {
-  "status": "error",
-  "seconds": 0.29749597500085656,
-  "message": "RuntimeError: std::bad_alloc [dxtb/_src/components/classicals/repulsion/rep.py:214]",
-  "peak_rss_mb": 707.3
- },
- "repulsion_ag.arep:order3": {
-  "status": "error",
-  "seconds": 0.5815367809991585,
-  "message": "RuntimeError: Resource temporarily unavailable [dxtb/_src/components/classicals/repulsion/rep.py:214]",
-  "peak_rss_mb": 745.6
- },
- "repulsion_ag.arep:vmap": {
+ "repulsion_gfn2.arep:forward": {
   "status": "pass",
-  "seconds": 0.07930377600132488,
+  "seconds": 0.15490769315510988,
   "message": "",
-  "peak_rss_mb": 680.6
+  "peak_rss_mb": 364.3
  },
- "repulsion_ag.positions:forward": {
-  "status": "error",
-  "seconds": 0.4968215050012077,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
-  "peak_rss_mb": 698.8
- },
- "repulsion_ag.positions:jvp": {
-  "status": "error",
-  "seconds": 0.4762726010012557,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/repulsion/rep.py:130]",
-  "peak_rss_mb": 697.7
- },
- "repulsion_ag.positions:order1": {
+ "repulsion_gfn2.arep:jvp": {
   "status": "pass",
-  "seconds": 0.106988323999758,
+  "seconds": 0.12462920695543289,
   "message": "",
-  "peak_rss_mb": 681.8
+  "peak_rss_mb": 365.5
  },
- "repulsion_ag.positions:order2": {
+ "repulsion_gfn2.arep:order1": {
   "status": "pass",
-  "seconds": 0.16931858300085878,
+  "seconds": 0.07915953802876174,
   "message": "",
-  "peak_rss_mb": 682.8
+  "peak_rss_mb": 358.5
  },
- "repulsion_ag.positions:order3": {
+ "repulsion_gfn2.arep:order2": {
   "status": "pass",
-  "seconds": 0.30274678000023414,
+  "seconds": 0.09474194701761007,
   "message": "",
-  "peak_rss_mb": 682.7
+  "peak_rss_mb": 362.5
  },
- "repulsion_ag.positions:vmap": {
+ "repulsion_gfn2.arep:order3": {
   "status": "pass",
-  "seconds": 0.09009844399952271,
+  "seconds": 0.1066058820579201,
   "message": "",
-  "peak_rss_mb": 680.6
+  "peak_rss_mb": 360.4
+ },
+ "repulsion_gfn2.arep:vmap": {
+  "status": "pass",
+  "seconds": 0.06544689694419503,
+  "message": "",
+  "peak_rss_mb": 360.8
  },
  "repulsion_gfn2.positions:forward": {
   "status": "pass",

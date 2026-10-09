@@ -114,6 +114,10 @@ from dxtb._src.calculators.gfn1 import GFN1Calculator as GFN1Calculator
 from dxtb._src.calculators.gfn2 import GFN2Calculator as GFN2Calculator
 from dxtb._src.calculators.model import Model as Model
 from dxtb._src.calculators.model import System as System
+from dxtb._src.calculators.result import ChargeResult as ChargeResult
+from dxtb._src.calculators.result import Multipoles as Multipoles
+from dxtb._src.calculators.result import PotentialResult as PotentialResult
+from dxtb._src.calculators.result import Result as Result
 from dxtb._src.calculators.types import (
     AnalyticalCalculator as AnalyticalCalculator,
 )
@@ -133,4 +137,8 @@ __all__ = [
     "NumericalCalculator",
     "Model",
     "System",
+    "Result",
+    "ChargeResult",
+    "PotentialResult",
+    "Multipoles",
 ]

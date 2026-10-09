@@ -162,14 +162,3 @@ Device given as a string (fixed)
 Up to dxtb 0.4.0, ``Calculator(..., device="cpu")`` (a string instead of a
 ``torch.device``) and ``device="cuda"`` (without index, while tensors report
 ``cuda:0``) raised a ``DeviceError``. Devices are now normalized.
-
-
-Analytical repulsion: parameter gradients do not terminate
-----------------------------------------------------------
-
-The repulsion with the custom backward function
-(``new_repulsion(..., with_analytical_gradient=True)``, not used by the
-calculators) recurses without bound when differentiated with respect to its
-parameters and runs out of memory. Position gradients are correct.
-
-**Workaround:** use the default repulsion for parameter gradients.

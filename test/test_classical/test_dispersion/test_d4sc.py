@@ -49,7 +49,7 @@ opts = {
 }
 
 
-def _scf_charges(result: Result) -> Charges:
+def _scf_charges(result: Result, batch_mode: int) -> Charges:
     """Adapt public Result charge tensors for this legacy SCF operation."""
     charge_result = result.charges
     assert charge_result is not None
@@ -57,6 +57,7 @@ def _scf_charges(result: Result) -> Charges:
         mono=charge_result.mono,
         dipole=charge_result.dipole,
         quad=charge_result.quadrupole,
+        batch_mode=batch_mode,
     )
 
 
@@ -86,7 +87,9 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     d4sc = calc.interactions.get_interaction("DispersionD4SC")
     cache = d4sc.get_cache(numbers=numbers, positions=positions)
 
-    edisp = d4sc.get_energy(cache, _scf_charges(result), calc.ihelp)
+    edisp = d4sc.get_energy(
+        cache, _scf_charges(result, calc.ihelp.batch_mode), calc.ihelp
+    )
     assert pytest.approx(ref.cpu(), abs=10 * tol, rel=tol) == edisp.cpu()
 
 
@@ -131,7 +134,9 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     d4sc = calc.interactions.get_interaction("DispersionD4SC")
     cache = d4sc.get_cache(numbers=numbers, positions=positions)
 
-    edisp = d4sc.get_energy(cache, _scf_charges(result), calc.ihelp)
+    edisp = d4sc.get_energy(
+        cache, _scf_charges(result, calc.ihelp.batch_mode), calc.ihelp
+    )
     assert pytest.approx(ref.cpu(), abs=10 * tol, rel=tol) == edisp.cpu()
 
 

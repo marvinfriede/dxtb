@@ -33,7 +33,7 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import DD, Tensor, get_default_dtype
 from dxtb._src.typing.exceptions import ParameterWarning
 
-from .rep import Repulsion, RepulsionAnalytical
+from .rep import Repulsion
 
 __all__ = ["new_repulsion"]
 
@@ -42,7 +42,6 @@ def new_repulsion(
     unique: Tensor,
     par: Param | ParamModule,
     cutoff: Tensor | float | int | None = None,
-    with_analytical_gradient: bool = False,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> Repulsion | None:
@@ -57,12 +56,6 @@ def new_repulsion(
         Representation of an extended tight-binding model.
     cutoff : float
         Real space cutoff for repulsion interactions (default: 25.0).
-    with_analytical_gradient : bool, optional
-        Whether to instantiate a repulsion class that implements a custom
-        backward function with an analytical nuclear gradient, i.e., the first
-        derivative w.r.t. positions is computed with an analytical formula
-        instead of the AD engine. Defaults to ``False``.
-
     Returns
     -------
     Repulsion | None
@@ -117,8 +110,7 @@ def new_repulsion(
         )
     cutoff = any_to_tensor(cutoff, **dd)
 
-    cls = RepulsionAnalytical if with_analytical_gradient else Repulsion
-    return cls(
+    return Repulsion(
         arep,
         zeff,
         kexp,
