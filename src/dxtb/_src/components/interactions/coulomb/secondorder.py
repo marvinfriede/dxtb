@@ -62,6 +62,8 @@ Example
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from tad_mctc import storch
 from tad_mctc.batch import real_pairs
@@ -81,16 +83,40 @@ from dxtb._src.typing import (
     get_default_dtype,
     override,
 )
+from dxtb._src.utils.scattergather import wrap_gather
 from dxtb._src.utils.tensors import grad_key, normalize_device
 
 from ..base import Interaction, InteractionCache
 from .average import AveragingFunction, averaging_function, harmonic_average
 
-__all__ = ["ES2", "LABEL_ES2", "new_es2"]
+__all__ = [
+    "ES2",
+    "ES2Setup",
+    "LABEL_ES2",
+    "build_es2_coulomb",
+    "new_es2",
+    "setup_es2",
+]
 
 
 LABEL_ES2 = "ES2"
 """Label for the 'ES2' interaction, coinciding with the class name."""
+
+
+@dataclass(frozen=True, eq=False)
+class ES2Setup:
+    """Numbers-only structural and parameter data for one ES2 evaluation."""
+
+    atom_pair_mask: Tensor
+    atom_mask: Tensor
+    atom_hubbard: Tensor | None
+    shell_pair_mask: Tensor | None
+    shell_mask: Tensor | None
+    shell_hubbard: Tensor | None
+    shells_to_atom: Tensor | None
+    gexp: Tensor
+    average: AveragingFunction
+    shell_resolved: bool
 
 
 class ES2Cache(InteractionCache, TensorLike):
@@ -266,13 +292,18 @@ class ES2(Interaction):
         self._cachevars = cachvars
         self._cachegrad = grad_key(positions)
 
-        self.cache = ES2Cache(
-            (
-                self.get_shell_coulomb_matrix(numbers, positions, ihelp)
-                if self.shell_resolved
-                else self.get_atom_coulomb_matrix(numbers, positions, ihelp)
-            ),
+        setup = setup_es2(
+            numbers,
+            self.hubbard,
+            ihelp,
+            lhubbard=self.lhubbard,
+            gexp=self.gexp,
+            average=self.average,
             shell_resolved=self.shell_resolved,
+        )
+        self.cache = ES2Cache(
+            build_es2_coulomb(setup, positions),
+            shell_resolved=setup.shell_resolved,
         )
 
         return self.cache
@@ -297,22 +328,15 @@ class ES2(Interaction):
         Tensor
             Coulomb matrix.
         """
-        # only calculate mask once and save it for backward
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        mat = CoulombMatrixAG.apply(
-            mask,
-            positions,
-            ihelp,
+        setup = setup_es2(
+            numbers,
             self.hubbard,
-            self.lhubbard,
-            self.gexp,
-            self.average,
-            self.shell_resolved,
+            ihelp,
+            gexp=self.gexp,
+            average=self.average,
+            shell_resolved=False,
         )
-        assert mat is not None
-
-        return mat
+        return build_es2_coulomb(setup, positions)
 
     def get_shell_coulomb_matrix(
         self, numbers: Tensor, positions: Tensor, ihelp: IndexHelper
@@ -334,34 +358,16 @@ class ES2(Interaction):
         Tensor
             Coulomb matrix.
         """
-        if self.lhubbard is None:
-            raise ValueError("No 'lhubbard' parameters set.")
-
-        # only calculate mask once and save it for backward
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        mat = coulomb_matrix_shell(
-            mask,
-            positions,
-            ihelp,
+        setup = setup_es2(
+            numbers,
             self.hubbard,
-            self.lhubbard,
-            self.gexp,
-            self.average,
+            ihelp,
+            lhubbard=self.lhubbard,
+            gexp=self.gexp,
+            average=self.average,
+            shell_resolved=True,
         )
-        # mat = CoulombMatrixAG(
-        #     mask,
-        #     positions,
-        #     ihelp,
-        #     self.hubbard,
-        #     self.lhubbard,
-        #     self.gexp,
-        #     self.average,
-        #     self.shell_resolved,
-        # )
-        assert mat is not None
-
-        return mat
+        return build_es2_coulomb(setup, positions)
 
     @override
     def get_monopole_atom_energy(
@@ -593,464 +599,113 @@ class ES2(Interaction):
         )
         return gradient
 
-    # DEPRECATED
-    def _get_atom_gradient(
-        self,
-        numbers: Tensor,
-        positions: Tensor,
-        charges: Tensor,
-        cache: ES2Cache,
-    ) -> Tensor:
-        if self.shell_resolved:
-            return torch.zeros_like(positions)
 
-        zero = torch.tensor(0.0, device=positions.device, dtype=positions.dtype)
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        distances = torch.where(
-            mask,
-            storch.cdist(positions, positions, p=2),
-            zero,
-        )
-
-        # (n_batch, atoms_i, atoms_j, 3)
-        rij = torch.where(
-            mask.unsqueeze(-1),
-            positions.unsqueeze(-2) - positions.unsqueeze(-3),
-            zero,
-        )
-
-        # (n_batch, atoms_i) -> (n_batch, atoms_i, 1)
-        charges = charges.unsqueeze(-1)
-
-        # (n_batch, atoms_i, atoms_j) * (n_batch, atoms_i, 1)
-        # every column is multiplied by the charge vector
-        dmat = (
-            -(distances ** (self.gexp - 2.0)) * cache.mat * cache.mat**self.gexp
-        ) * charges
-
-        # (n_batch, atoms_i, atoms_j) -> (n_batch, atoms_i, atoms_j, 3)
-        dmat = dmat.unsqueeze(-1) * rij
-
-        # (n_batch, atoms_i, atoms_j, 3) -> (n_batch, atoms_i, 3)
-        return einsum("...ijx,...jx->...ix", dmat, charges)
-
-    # DEPRECATED
-    def _get_shell_gradient(
-        self,
-        numbers: Tensor,
-        positions: Tensor,
-        charges: Tensor,
-        cache: ES2Cache,
-        ihelp: IndexHelper,
-    ) -> Tensor:
-        if not self.shell_resolved:
-            return torch.zeros_like(positions)
-
-        dd: DD = {"device": positions.device, "dtype": positions.dtype}
-        zero = torch.tensor(0.0, **dd)
-        eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
-
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        # all distances to the power of "gexp" (R^2_AB from Eq.26)
-        distances = ihelp.spread_atom_to_shell(
-            torch.where(
-                mask,
-                storch.cdist(positions, positions, p=2),
-                eps,
-            ),
-            (-1, -2),
-        )
-
-        # (n_batch, shells_i, shells_j, 3)
-        positions = ihelp.spread_atom_to_shell(positions, dim=-2, extra=True)
-        mask = ihelp.spread_atom_to_shell(mask, (-2, -1))
-        rij = torch.where(
-            mask.unsqueeze(-1),
-            positions.unsqueeze(-2) - positions.unsqueeze(-3),
-            zero,
-        )
-
-        # (n_batch, shells_i) -> (n_batch, shells_i, 1)
-        charges = charges.unsqueeze(-1)
-
-        # (n_batch, shells_i, shells_j) * (n_batch, shells_i, 1)
-        # every column is multiplied by the charge vector
-        dmat = (
-            -(distances ** (self.gexp - 2.0)) * cache.mat * cache.mat**self.gexp
-        ) * charges
-
-        # (n_batch, shells_i, shells_j) -> (n_batch, shells_i, shells_j, 3)
-        dmat = dmat.unsqueeze(-1) * rij
-
-        # (n_batch, shells_i, shells_j, 3) -> (n_batch, atoms, shells_j, 3)
-        dmat = ihelp.reduce_shell_to_atom(dmat, dim=-3, extra=True)
-
-        # (n_batch, atoms, shells_j, 3) -> (n_batch, atoms, 3)
-        return einsum("...ijx,...jx->...ix", dmat, charges)
-
-
-def coulomb_matrix_atom(
-    mask: Tensor,
-    positions: Tensor,
-    ihelp: IndexHelper,
+def setup_es2(
+    numbers: Tensor,
     hubbard: Tensor,
+    ihelp: IndexHelper,
+    *,
     gexp: Tensor,
     average: AveragingFunction,
-) -> Tensor:
-    """
-    Calculate the atom-resolved Coulomb matrix.
+    lhubbard: Tensor | None = None,
+    shell_resolved: bool = True,
+) -> ES2Setup:
+    """Gather number- and parameter-dependent ES2 data for evaluation."""
+    resolve_shells = shell_resolved and lhubbard is not None
+    if shell_resolved and lhubbard is None:
+        raise ValueError("No 'lhubbard' parameters set.")
 
-    Parameters
-    ----------
-    mask : Tensor
-        Mask from Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    ihelp : IndexHelper
-        Index mapping for the basis set.
-    hubbard : Tensor
-        Hubbard parameters of all elements.
-    gexp: Tensor
-        Exponent of the second-order Coulomb interaction (default: 2.0).
-    average: AveragingFunction
-        Function to use for averaging the Hubbard parameters (default:
-        :func:`dxtb.components.interactions.coulomb.average.harmonic_average`).
+    atom_pair_mask = real_pairs(numbers, mask_diagonal=True)
+    atom_mask = atom_pair_mask | torch.diag_embed(
+        torch.ones_like(numbers, dtype=torch.bool)
+    )
 
-    Returns
-    -------
-    Tensor
-        Coulomb matrix.
-    """
+    if resolve_shells:
+        assert lhubbard is not None
+        shells_to_atom = ihelp.shells_to_atom
+        shell_pair_mask = wrap_gather(atom_pair_mask, (-2, -1), shells_to_atom)
+        shell_mask = wrap_gather(atom_mask, (-2, -1), shells_to_atom)
+        shell_hubbard = ihelp.spread_ushell_to_shell(
+            lhubbard
+        ) * ihelp.spread_uspecies_to_shell(hubbard)
+        atom_hubbard = None
+    else:
+        shells_to_atom = None
+        shell_pair_mask = None
+        shell_mask = None
+        shell_hubbard = None
+        atom_hubbard = ihelp.spread_uspecies_to_atom(hubbard)
+
+    # The setup deliberately retains only gathered tensors and structural maps,
+    # not the ES2 interaction or its cross-call geometry cache.
+    return ES2Setup(
+        atom_pair_mask=atom_pair_mask,
+        atom_mask=atom_mask,
+        atom_hubbard=atom_hubbard,
+        shell_pair_mask=shell_pair_mask,
+        shell_mask=shell_mask,
+        shell_hubbard=shell_hubbard,
+        shells_to_atom=shells_to_atom,
+        gexp=gexp,
+        average=average,
+        shell_resolved=resolve_shells,
+    )
+
+
+def build_es2_coulomb(setup: ES2Setup, positions: Tensor) -> Tensor:
+    """Build the atom- or shell-resolved ES2 matrix for current positions."""
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
-
     eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
     zero = torch.tensor(0.0, **dd)
+    distances = storch.cdist(positions, positions, p=2)
 
-    h = ihelp.spread_uspecies_to_atom(hubbard)
+    if setup.shell_resolved:
+        if (
+            setup.shell_pair_mask is None
+            or setup.shell_mask is None
+            or setup.shell_hubbard is None
+            or setup.shells_to_atom is None
+        ):
+            raise RuntimeError("Shell-resolved ES2 setup is incomplete.")
+        shell_distances = wrap_gather(distances, (-2, -1), setup.shells_to_atom)
+        dist_gexp = torch.where(
+            setup.shell_pair_mask,
+            torch.pow(shell_distances + eps, setup.gexp),
+            eps,
+        )
+        avg = torch.where(
+            setup.shell_mask,
+            setup.average(setup.shell_hubbard + eps),
+            eps,
+        )
+        tmp = dist_gexp + torch.where(
+            setup.shell_mask, torch.pow(avg, -setup.gexp), eps
+        )
+        return torch.where(
+            setup.shell_mask, 1.0 / torch.pow(tmp, 1.0 / setup.gexp), zero
+        )
 
-    dist = storch.cdist(positions, positions, p=2)
+    if setup.atom_pair_mask is None or setup.atom_mask is None:
+        raise RuntimeError("Atom-resolved ES2 setup is incomplete.")
+    if setup.atom_hubbard is None:
+        raise RuntimeError("Atom-resolved ES2 setup has no Hubbard values.")
 
-    # all distances to the power of "gexp" (R^2_AB from Eq.26)
     dist_gexp = torch.where(
-        mask,
-        # eps to avoid nan in double backward (negative base?)
-        torch.pow(dist + eps, gexp),
+        setup.atom_pair_mask,
+        torch.pow(distances + eps, setup.gexp),
         eps,
     )
-
-    # re-include diagonal for hardness
-    mask = mask + torch.diag_embed(torch.ones_like(h).type(torch.bool))
-
-    # Eq.30: averaging function for hardnesses (Hubbard parameter)
-    avg = torch.where(mask, average(h + eps), eps)
-
-    # Eq.26: Coulomb matrix
-    tmp = dist_gexp + torch.where(mask, torch.pow(avg, -gexp), eps)
-    return torch.where(mask, 1.0 / torch.pow(tmp, 1.0 / gexp), zero)
-
-
-def coulomb_matrix_atom_gradient(
-    mask: Tensor, positions: Tensor, mat: Tensor, gexp: Tensor
-) -> Tensor:
-    """
-    Nuclear gradient of atom-resolved Coulomb matrix.
-
-    Parameters
-    ----------
-    mask : Tensor
-        Mask from Atomic numbers for all atoms in the system (shape:
-        ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    mat : Tensor
-        Atom-resolved Coulomb matrix.
-    gexp: Tensor
-        Exponent of the second-order Coulomb interaction (default: 2.0).
-
-    Returns
-    -------
-    Tensor
-        Derivative of atom-resolved Coulomb matrix. The derivative has the
-        following shape: ``(n_batch, atoms_i, atoms_j, 3)``.
-    """
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    zero = torch.tensor(0.0, **dd)
-
-    distances = torch.where(
-        mask,
-        storch.cdist(positions, positions, p=2),
-        zero,
+    avg = torch.where(
+        setup.atom_mask,
+        setup.average(setup.atom_hubbard + eps),
+        eps,
     )
-
-    # (n_batch, atoms_i, atoms_j, 3)
-    rij = torch.where(
-        mask.unsqueeze(-1),
-        positions.unsqueeze(-2) - positions.unsqueeze(-3),
-        zero,
+    tmp = dist_gexp + torch.where(
+        setup.atom_mask, torch.pow(avg, -setup.gexp), eps
     )
-
-    # (n_batch, atoms_i, atoms_j)
-    dmat = -(distances ** (gexp - 2.0)) * mat * mat**gexp
-
-    # (n_batch, atoms_i, atoms_j) -> (n_batch, atoms_i, atoms_j, 3)
-    return dmat.unsqueeze(-1) * rij
-
-
-def coulomb_matrix_shell(
-    mask: Tensor,
-    positions: Tensor,
-    ihelp: IndexHelper,
-    hubbard: Tensor,
-    lhubbard: Tensor,
-    gexp: Tensor,
-    average: AveragingFunction,
-) -> Tensor:
-    """
-    Calculate the shell-resolved Coulomb matrix.
-
-    Parameters
-    ----------
-    mask : Tensor
-        Mask from Atomic numbers for all atoms in the system (shape:
-        ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    ihelp : IndexHelper
-        Index mapping for the basis set.
-    hubbard : Tensor
-        Hubbard parameters of all elements.
-    lhubbard: Tensor
-        Shell-resolved scaling factors for Hubbard parameters (default:
-        ``None``, i.e., no shell resolution).
-    gexp: Tensor
-        Exponent of the second-order Coulomb interaction (default: 2.0).
-    average: AveragingFunction
-        Function to use for averaging the Hubbard parameters (default:
-        :func:`dxtb._src.components.interactions.average.harmonic_average`).
-
-    Returns
-    -------
-    Tensor
-        Coulomb matrix.
-    """
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    zero = torch.tensor(0.0, **dd)
-    eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
-
-    lh = ihelp.spread_ushell_to_shell(lhubbard)
-    h = lh * ihelp.spread_uspecies_to_shell(hubbard)
-
-    dist = storch.cdist(positions, positions, p=2)
-
-    # all distances to the power of "gexp" (R^2_AB from Eq.26)
-    dist_gexp = ihelp.spread_atom_to_shell(
-        torch.where(
-            mask,
-            # eps to avoid nan in double backward (negative base?)
-            torch.pow(dist + eps, gexp),
-            eps,
-        ),
-        (-1, -2),
+    return torch.where(
+        setup.atom_mask, 1.0 / torch.pow(tmp, 1.0 / setup.gexp), zero
     )
-
-    # re-include diagonal for hardness
-    mask = ihelp.spread_atom_to_shell(
-        mask
-        + torch.diag_embed(
-            torch.ones_like(ihelp.atom_to_unique).type(torch.bool)
-        ),
-        (-2, -1),
-    )
-
-    # Eq.30: averaging function for hardnesses (Hubbard parameter)
-    avg = torch.where(mask, average(h + eps), eps)
-
-    # Eq.26: Coulomb matrix
-    tmp = dist_gexp + torch.where(mask, torch.pow(avg, -gexp), eps)
-    return torch.where(mask, 1.0 / torch.pow(tmp, 1.0 / gexp), zero)
-
-
-def coulomb_matrix_shell_gradient(
-    mask: Tensor,
-    positions: Tensor,
-    mat: Tensor,
-    ihelp: IndexHelper,
-    gexp: Tensor,
-) -> Tensor:
-    """
-    Nuclear gradient of shell-resolved Coulomb matrix.
-
-    Parameters
-    ----------
-    mask : Tensor
-        Mask from Atomic numbers for all atoms in the system (shape:
-        ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    mat : Tensor
-        Shell-resolved Coulomb matrix.
-    ihelp : IndexHelper
-        Index mapping for the basis set.
-    gexp: Tensor
-        Exponent of the second-order Coulomb interaction (default: 2.0).
-
-    Returns
-    -------
-    Tensor
-        Derivative of shell-resolved Coulomb matrix. The derivative has the
-        following shape: ``(n_batch, shell_i, shell_j, 3)``.
-    """
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    zero = torch.tensor(0.0, **dd)
-    eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
-
-    # all distances to the power of "gexp" (R^2_AB from Eq.26)
-    distances = ihelp.spread_atom_to_shell(
-        torch.where(mask, storch.cdist(positions, positions, p=2), eps),
-        (-1, -2),
-    )
-
-    # (n_batch, shells_i, shells_j, 3)
-    positions = ihelp.spread_atom_to_shell(positions, dim=-2, extra=True)
-    mask = ihelp.spread_atom_to_shell(mask, (-2, -1))
-    rij = torch.where(
-        mask.unsqueeze(-1),
-        positions.unsqueeze(-2) - positions.unsqueeze(-3),
-        zero,
-    )
-
-    # (n_batch, shells_i, shells_j) * (n_batch, shells_i, 1)
-    dmat = -(distances ** (gexp - 2.0)) * mat * mat**gexp
-
-    # (n_batch, shells_i, shells_j) -> (n_batch, shells_i, shells_j, 3)
-    return dmat.unsqueeze(-1) * rij
-
-
-# pylint: disable=abstract-method,arguments-differ
-class CoulombMatrixAG(torch.autograd.Function):
-    """
-    Autograd function for Coulomb matrix.
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        mask: Tensor,
-        positions: Tensor,
-        ihelp: IndexHelper,
-        hubbard: Tensor,
-        lhubbard: Tensor,
-        gexp: Tensor,
-        average: AveragingFunction,
-        shell_resolved: bool,
-    ) -> Tensor:
-        with torch.enable_grad():
-            if shell_resolved:
-                mat = coulomb_matrix_shell(
-                    mask, positions, ihelp, hubbard, lhubbard, gexp, average
-                )
-            else:
-                mat = coulomb_matrix_atom(
-                    mask, positions, ihelp, hubbard, gexp, average
-                )
-
-        # save tensor variables the intended way
-        ctx.save_for_backward(mat, mask, positions, gexp, hubbard, lhubbard)
-
-        # save non-tensor variables (required in backward) directly
-        ctx.shell_resolved = shell_resolved
-        ctx.ihelp = ihelp
-
-        return mat.clone()
-
-    @staticmethod
-    def backward(ctx, grad_out: Tensor) -> tuple[
-        None,  # mask
-        None | Tensor,  # positions
-        None,  # ihelp
-        None | Tensor,  # hubbard
-        None | Tensor,  # lhubbard
-        None | Tensor,  # gexp
-        None,  # average
-        None,  # shell_resolved
-    ]:
-        # initialize gradients with ``None``
-        positions_bar = hubbard_bar = lhubbard_bar = gexp_bar = None
-
-        # check which of the input variables of `forward()` requires gradients
-        (
-            _,
-            grad_positions,
-            _,
-            grad_hubbard,
-            grad_lhubbard,
-            grad_gexp,
-            _,
-            _,
-        ) = ctx.needs_input_grad
-
-        mat, mask, positions, gexp, hubbard, lhubbard = ctx.saved_tensors
-        shell_resolved: bool = ctx.shell_resolved
-        ihelp: IndexHelper = ctx.ihelp
-
-        # analytical gradient for positions
-        if grad_positions:
-            # (n_batch, n, n, 3)
-            if shell_resolved:
-                g = coulomb_matrix_shell_gradient(
-                    mask, positions, mat, ihelp, gexp
-                )
-            else:
-                g = coulomb_matrix_atom_gradient(mask, positions, mat, gexp)
-
-            # vjp: (nb, n, n) * (nb, n, n, 3) -> (nb, n, 3)
-            _gi = einsum("...ij,...ijd->...id", grad_out, g)
-            _gj = einsum("...ij,...ijd->...jd", grad_out, g)
-
-            if shell_resolved:
-                positions_bar = ihelp.reduce_shell_to_atom(
-                    _gi - _gj, dim=-2, extra=True
-                )
-            else:
-                positions_bar = _gi - _gj
-
-        # automatic gradient for parameters
-        if grad_hubbard:
-            (hubbard_bar,) = torch.autograd.grad(
-                mat,
-                hubbard,
-                grad_outputs=grad_out,
-                create_graph=True,
-            )
-
-        if grad_lhubbard:
-            (lhubbard_bar,) = torch.autograd.grad(
-                mat,
-                lhubbard,
-                grad_outputs=grad_out,
-                create_graph=True,
-            )
-
-        if grad_gexp:
-            (gexp_bar,) = torch.autograd.grad(
-                mat,
-                gexp,
-                grad_outputs=grad_out,
-                create_graph=True,
-            )
-
-        return (
-            None,
-            positions_bar,
-            None,
-            hubbard_bar,
-            lhubbard_bar,
-            gexp_bar,
-            None,
-            None,
-        )
 
 
 def new_es2(

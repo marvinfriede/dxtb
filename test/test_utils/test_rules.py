@@ -100,3 +100,23 @@ def test_repulsion_uses_plain_torch_derivatives() -> None:
     )
     found = [token for token in forbidden if token in text]
     assert not found, "Removed repulsion path returned: " + ", ".join(found)
+
+
+def test_es2_uses_plain_torch_coulomb_construction() -> None:
+    """ES2 Coulomb matrices do not use a custom autograd shortcut."""
+    source = (
+        SRC
+        / "_src"
+        / "components"
+        / "interactions"
+        / "coulomb"
+        / "secondorder.py"
+    ).read_text()
+    forbidden = (
+        "CoulombMatrixAG",
+        "torch.autograd.Function",
+        "coulomb_matrix_atom_gradient",
+        "coulomb_matrix_shell_gradient",
+    )
+    found = [token for token in forbidden if token in source]
+    assert not found, "Removed ES2 custom path returned: " + ", ".join(found)

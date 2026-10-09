@@ -59,7 +59,13 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
-from dxtb._src.components.interactions.coulomb import new_aes2, new_es2, new_es3
+from dxtb._src.components.interactions.coulomb import (
+    ES2Setup,
+    new_aes2,
+    new_es2,
+    new_es3,
+    setup_es2,
+)
 from dxtb._src.components.interactions.dispersion import new_d4sc
 from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
@@ -111,6 +117,9 @@ class System:
 
     interactions: InteractionList
     """Self-consistent contributions with their parameters gathered."""
+
+    es2_setup: ES2Setup | None
+    """Numbers-only setup for pure single-system ES2 matrix construction."""
 
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
@@ -268,6 +277,19 @@ class Model:
         interactions = InteractionList(
             es2, aes2, es3, d4sc, *self.interaction, **dd
         )
+        es2_setup = (
+            setup_es2(
+                numbers,
+                es2.hubbard,
+                ihelp,
+                lhubbard=es2.lhubbard,
+                gexp=es2.gexp,
+                average=es2.average,
+                shell_resolved=es2.shell_resolved,
+            )
+            if es2 is not None and batch_mode == 0
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -376,6 +398,7 @@ class Model:
             integral_setup=integral_setup,
             h0_setup=h0_setup,
             classical_cache=classical_cache,
+            es2_setup=es2_setup,
             dd=dd,
         )
 

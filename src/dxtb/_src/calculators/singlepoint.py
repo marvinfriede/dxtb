@@ -31,10 +31,43 @@ from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
 from dxtb._src.constants import defaults
+from dxtb._src.components.interactions.list import InteractionListCache
+from dxtb._src.components.interactions.coulomb.secondorder import (
+    ES2,
+    ES2Cache,
+    build_es2_coulomb,
+)
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.typing import Tensor
 
 __all__ = ["singlepoint"]
+
+
+def _interaction_data(
+    system: System, positions: Tensor
+) -> InteractionListCache:
+    """Build call-local interaction data for one SCF evaluation.
+
+    ES2 uses the explicit numbers-only setup and current positions. Other
+    interactions keep their current cache APIs until B6a, but their returned
+    data is local to this call.
+    """
+    data = InteractionListCache()
+    for interaction in system.interactions.components:
+        if isinstance(interaction, ES2):
+            if system.es2_setup is None:
+                raise RuntimeError("Single-system ES2 setup is missing.")
+            matrix = build_es2_coulomb(system.es2_setup, positions)
+            data[interaction.label] = ES2Cache(
+                matrix, shell_resolved=system.es2_setup.shell_resolved
+            )
+        else:
+            data[interaction.label] = interaction.get_cache(
+                numbers=system.numbers,
+                positions=positions,
+                ihelp=system.ihelp,
+            )
+    return data
 
 
 def _floating_setup_tensor(system: System) -> Tensor | None:
@@ -168,11 +201,7 @@ def singlepoint(
         positions,
         charge,
     )
-    interaction_data = system.interactions.get_cache(
-        numbers=system.numbers,
-        positions=positions,
-        ihelp=system.ihelp,
-    )
+    interaction_data = _interaction_data(system, positions)
     scf_results = scf.solve(
         system.numbers,
         positions,

@@ -64,18 +64,9 @@ def test_single(dtype: torch.dtype, name: str) -> None:
 
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
-    # shell gradient should be zero
-    grad_sh = es._get_shell_gradient(numbers, positions, charges, cache, ihelp)
-    assert (torch.zeros_like(positions) == grad_sh).all()
-
-    # analytical (old)
-    grad = es._get_atom_gradient(numbers, positions, charges, cache)
-    assert pytest.approx(ref.cpu(), abs=tol) == grad.cpu()
-
     # numerical
     num_grad = calc_numerical_gradient(numbers, positions, ihelp, charges)
     assert pytest.approx(ref.cpu(), abs=tol) == num_grad.cpu()
-    assert pytest.approx(num_grad.cpu(), abs=tol) == grad.cpu()
 
     # automatic
     pos = positions.clone().requires_grad_(True)
@@ -141,9 +132,6 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
 
     # analytical (old)
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
-    grad = es._get_atom_gradient(numbers, positions, charges, cache)
-    assert pytest.approx(ref.cpu(), abs=tol) == grad.cpu()
-
     # automatic
     pos = positions.clone().requires_grad_(True)
     mat = es.get_atom_coulomb_matrix(numbers, pos, ihelp)

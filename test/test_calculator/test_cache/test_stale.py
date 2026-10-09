@@ -14,18 +14,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Cache findings of the baseline (T0.5 in ``docs/plan/01-T0-baseline.md``).
+"""Regression tests for Calculator call-history and stale-value behavior.
 
-The component caches and the integral driver are validated by comparing
-tensor *values*. A cache built from positions without gradient tracking was
-therefore reused for positions with gradient tracking, which silently dropped
-the position dependence of these terms from the forces. The stopgap also
-checks the gradient-tracking state (``dxtb._src.utils.tensors.grad_key``).
-
-The remaining findings are known issues (``xfail(strict=True)``) that are
-fixed by removing the caches (B5, B6). These tests are not maintained beyond
-that point.
+These cases originate in the T0.5 cache findings. They verify that current
+single-system evaluation does not reuse stale integral or result data across
+calls. Legacy component-cache cleanup remains scheduled for B6.
 """
 
 from __future__ import annotations
@@ -109,17 +102,8 @@ def test_new_leaf_same_values(par, driver: str) -> None:
     assert pytest.approx(ref.cpu(), abs=1e-10) == forces.detach().cpu()
 
 
-@pytest.mark.xfail(
-    raises=RuntimeError,
-    strict=True,
-    reason=(
-        "Known issue: the second call reuses a cached graph that the first "
-        "backward pass has freed ('backward through the graph a second "
-        "time'). Removed with the caches (B6)."
-    ),
-)
 def test_forces_twice_same_leaf() -> None:
-    """Repeated ``get_forces`` on the same leaf tensor raises."""
+    """Repeated force calls do not reuse a consumed ES2 geometry graph."""
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers, positions = _setup(dd)
 

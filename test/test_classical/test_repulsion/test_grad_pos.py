@@ -326,10 +326,13 @@ def test_forward_transforms_match_reverse_and_loop() -> None:
     _, tangent = jvp(scalar, (positions,), (direction,))
     torch.testing.assert_close(tangent, (reverse * direction).sum())
 
-    conformers = torch.stack((positions, positions + 0.05))
+    moved = positions.clone()
+    moved[1, 2] += 0.05
+    conformers = torch.stack((positions, moved))
     mapped = vmap(scalar)(conformers)
     looped = torch.stack(tuple(scalar(pos) for pos in conformers))
     torch.testing.assert_close(mapped, looped)
+    assert not torch.isclose(mapped[0], mapped[1])
 
 
 def test_padding_has_finite_energy_and_position_gradient() -> None:

@@ -35,78 +35,6 @@
   "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/components/interactions/base.py:352]",
   "peak_rss_mb": 682.9
  },
- "coulomb_matrix_ag.hubbard:forward": {
-  "status": "error",
-  "seconds": 0.43271927699970547,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 699.0
- },
- "coulomb_matrix_ag.hubbard:jvp": {
-  "status": "error",
-  "seconds": 0.4043217899998126,
-  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 695.9
- },
- "coulomb_matrix_ag.hubbard:order1": {
-  "status": "pass",
-  "seconds": 0.1113858299995627,
-  "message": "",
-  "peak_rss_mb": 683.4
- },
- "coulomb_matrix_ag.hubbard:order2": {
-  "status": "pass",
-  "seconds": 0.20443941000121413,
-  "message": "",
-  "peak_rss_mb": 682.3
- },
- "coulomb_matrix_ag.hubbard:order3": {
-  "status": "pass",
-  "seconds": 0.186221582998769,
-  "message": "",
-  "peak_rss_mb": 682.6
- },
- "coulomb_matrix_ag.hubbard:vmap": {
-  "status": "error",
-  "seconds": 0.11413544900096895,
-  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 678.4
- },
- "coulomb_matrix_ag.positions:forward": {
-  "status": "error",
-  "seconds": 0.4266105389997392,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 699.3
- },
- "coulomb_matrix_ag.positions:jvp": {
-  "status": "error",
-  "seconds": 0.4335865239991108,
-  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 696.0
- },
- "coulomb_matrix_ag.positions:order1": {
-  "status": "pass",
-  "seconds": 0.1416471550001006,
-  "message": "",
-  "peak_rss_mb": 681.8
- },
- "coulomb_matrix_ag.positions:order2": {
-  "status": "pass",
-  "seconds": 0.21236891800072044,
-  "message": "",
-  "peak_rss_mb": 683.4
- },
- "coulomb_matrix_ag.positions:order3": {
-  "status": "pass",
-  "seconds": 0.29642289399998845,
-  "message": "",
-  "peak_rss_mb": 683.1
- },
- "coulomb_matrix_ag.positions:vmap": {
-  "status": "error",
-  "seconds": 0.08299716000146873,
-  "message": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html [dxtb/_src/components/interactions/coulomb/secondorder.py:303]",
-  "peak_rss_mb": 678.5
- },
  "d4sc.charges:forward": {
   "status": "pass",
   "seconds": 0.4056101980004314,
@@ -466,6 +394,78 @@
   "seconds": 0.08100428000034299,
   "message": "",
   "peak_rss_mb": 682.4
+ },
+ "es2_coulomb.hubbard:forward": {
+  "status": "pass",
+  "seconds": 0.15585267217829823,
+  "message": "",
+  "peak_rss_mb": 364.5
+ },
+ "es2_coulomb.hubbard:jvp": {
+  "status": "pass",
+  "seconds": 0.1509454920887947,
+  "message": "",
+  "peak_rss_mb": 367.5
+ },
+ "es2_coulomb.hubbard:order1": {
+  "status": "pass",
+  "seconds": 0.11980692902579904,
+  "message": "",
+  "peak_rss_mb": 364.5
+ },
+ "es2_coulomb.hubbard:order2": {
+  "status": "pass",
+  "seconds": 0.17078201100230217,
+  "message": "",
+  "peak_rss_mb": 364.1
+ },
+ "es2_coulomb.hubbard:order3": {
+  "status": "pass",
+  "seconds": 0.11788474791683257,
+  "message": "",
+  "peak_rss_mb": 362.5
+ },
+ "es2_coulomb.hubbard:vmap": {
+  "status": "pass",
+  "seconds": 0.09199522784911096,
+  "message": "",
+  "peak_rss_mb": 362.5
+ },
+ "es2_coulomb.positions:forward": {
+  "status": "pass",
+  "seconds": 0.17226011492311954,
+  "message": "",
+  "peak_rss_mb": 364.0
+ },
+ "es2_coulomb.positions:jvp": {
+  "status": "pass",
+  "seconds": 0.14786709984764457,
+  "message": "",
+  "peak_rss_mb": 365.8
+ },
+ "es2_coulomb.positions:order1": {
+  "status": "pass",
+  "seconds": 0.12260360200889409,
+  "message": "",
+  "peak_rss_mb": 364.4
+ },
+ "es2_coulomb.positions:order2": {
+  "status": "pass",
+  "seconds": 0.1741140028461814,
+  "message": "",
+  "peak_rss_mb": 362.1
+ },
+ "es2_coulomb.positions:order3": {
+  "status": "pass",
+  "seconds": 0.18677646899595857,
+  "message": "",
+  "peak_rss_mb": 365.5
+ },
+ "es2_coulomb.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.08769057993777096,
+  "message": "",
+  "peak_rss_mb": 363.1
  },
  "es3.charges:forward": {
   "status": "pass",

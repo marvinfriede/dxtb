@@ -161,27 +161,39 @@ def test_fail_shell_resolved() -> None:
 
 def test_zeros_atom_resolved() -> None:
     """Test if atom-resolved ES2 returns zero."""
-    cls = es2.new_es2(torch.tensor([0.0]), GFN1_XTB, shell_resolved=False)
+    numbers = torch.tensor([6, 1])
+    cls = es2.new_es2(torch.unique(numbers), GFN1_XTB, shell_resolved=False)
     assert cls is not None
 
-    n = torch.tensor([6, 1])
-
-    shell_energy = cls.get_monopole_shell_energy(n, n)  # type: ignore
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], requires_grad=True
+    )
+    ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
+    cache = cls.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    shell_energy = cls.get_monopole_shell_energy(cache, torch.zeros(ihelp.nsh))
     assert (shell_energy == torch.zeros_like(shell_energy)).all()
-
-    shell_gradient = cls.get_shell_gradient(n, n, n)  # type: ignore
+    shell_gradient = cls.get_shell_gradient(
+        torch.zeros(ihelp.nsh), positions, cache
+    )
     assert (shell_gradient == torch.zeros_like(shell_gradient)).all()
 
 
 def test_zeros_shell_resolved() -> None:
     """Test if shell-resolved ES2 returns zero."""
-    cls = es2.new_es2(torch.tensor([0.0]), GFN1_XTB)
+    numbers = torch.tensor([6, 1])
+    cls = es2.new_es2(torch.unique(numbers), GFN1_XTB)
     assert cls is not None
 
-    n = torch.tensor([6, 1])
-
-    atom_energy = cls.get_monopole_atom_energy(n, n)  # type: ignore
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], requires_grad=True
+    )
+    ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
+    cache = cls.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    atom_energy = cls.get_monopole_atom_energy(
+        cache, torch.zeros(numbers.numel())
+    )
     assert (atom_energy == torch.zeros_like(atom_energy)).all()
-
-    atom_gradient = cls.get_atom_gradient(n, n, n, n)  # type: ignore
+    atom_gradient = cls.get_atom_gradient(
+        torch.zeros(numbers.numel()), positions, cache
+    )
     assert (atom_gradient == torch.zeros_like(atom_gradient)).all()

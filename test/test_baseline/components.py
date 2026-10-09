@@ -169,13 +169,17 @@ def _classical(name: str, method: str) -> Target:
 
 
 ###############################################################################
-# Coulomb matrix (custom autograd function)
+# ES2 Coulomb matrix
 
 
-def _coulomb_matrix_ag(wrt: str) -> Target:
+def _es2_coulomb(wrt: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb._src.components.interactions.coulomb import new_es2
+        from dxtb._src.components.interactions.coulomb import (
+            build_es2_coulomb,
+            new_es2,
+            setup_es2,
+        )
 
         numbers, positions = _water()
         par = _par("gfn1")
@@ -184,15 +188,30 @@ def _coulomb_matrix_ag(wrt: str) -> Target:
         assert es2 is not None
 
         if wrt == "positions":
-            return (
-                lambda x: es2.get_atom_coulomb_matrix(numbers, x, ihelp)
-            ), _leaf(positions)
+            setup = setup_es2(
+                numbers,
+                es2.hubbard,
+                ihelp,
+                lhubbard=es2.lhubbard,
+                gexp=es2.gexp,
+                average=es2.average,
+                shell_resolved=True,
+            )
+            return (lambda x: build_es2_coulomb(setup, x)), _leaf(positions)
 
         hubbard0 = es2.hubbard.detach().clone()
 
         def f(hubbard: Tensor) -> Tensor:
-            es2.hubbard = hubbard
-            return es2.get_atom_coulomb_matrix(numbers, positions, ihelp)
+            setup = setup_es2(
+                numbers,
+                hubbard,
+                ihelp,
+                lhubbard=es2.lhubbard,
+                gexp=es2.gexp,
+                average=es2.average,
+                shell_resolved=True,
+            )
+            return build_es2_coulomb(setup, positions)
 
         return f, _leaf(hubbard0)
 
@@ -434,8 +453,8 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
 TARGETS: dict[str, Target] = {
     "repulsion.positions": _repulsion("gfn1", "positions"),
     "repulsion.arep": _repulsion("gfn1", "arep"),
-    "coulomb_matrix_ag.positions": _coulomb_matrix_ag("positions"),
-    "coulomb_matrix_ag.hubbard": _coulomb_matrix_ag("hubbard"),
+    "es2_coulomb.positions": _es2_coulomb("positions"),
+    "es2_coulomb.hubbard": _es2_coulomb("hubbard"),
     "overlap_md.positions": _integral("overlap", "md"),
     "overlap_os.positions": _integral("overlap", "os"),
     "dipint_os.positions": _integral("dipint", "os"),
