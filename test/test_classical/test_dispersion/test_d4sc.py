@@ -28,6 +28,8 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
+from dxtb._src.components.interactions.container import Charges
+from dxtb._src.calculators.result import Result
 from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 from dxtb.components.dispersion import new_dispersion
@@ -45,6 +47,17 @@ opts = {
     "scf_mode": labels.SCF_MODE_IMPLICIT,
     "scp_mode": labels.SCP_MODE_POTENTIAL,
 }
+
+
+def _scf_charges(result: Result) -> Charges:
+    """Adapt public Result charge tensors for this legacy SCF operation."""
+    charge_result = result.charges
+    assert charge_result is not None
+    return Charges(
+        mono=charge_result.mono,
+        dipole=charge_result.dipole,
+        quad=charge_result.quadrupole,
+    )
 
 
 @pytest.mark.filterwarnings("ignore")
@@ -73,7 +86,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     d4sc = calc.interactions.get_interaction("DispersionD4SC")
     cache = d4sc.get_cache(numbers=numbers, positions=positions)
 
-    edisp = d4sc.get_energy(cache, result.charges, calc.ihelp)
+    edisp = d4sc.get_energy(cache, _scf_charges(result), calc.ihelp)
     assert pytest.approx(ref.cpu(), abs=10 * tol, rel=tol) == edisp.cpu()
 
 
@@ -118,7 +131,7 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     d4sc = calc.interactions.get_interaction("DispersionD4SC")
     cache = d4sc.get_cache(numbers=numbers, positions=positions)
 
-    edisp = d4sc.get_energy(cache, result.charges, calc.ihelp)
+    edisp = d4sc.get_energy(cache, _scf_charges(result), calc.ihelp)
     assert pytest.approx(ref.cpu(), abs=10 * tol, rel=tol) == edisp.cpu()
 
 

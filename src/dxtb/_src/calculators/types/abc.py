@@ -31,7 +31,7 @@ from dxtb._src.calculators.properties.vibration import (
     RamanResult,
     VibResult,
 )
-from dxtb._src.components.interactions.container import Charges, Potential
+from dxtb._src.calculators.result import ChargeResult, PotentialResult
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Literal, Tensor
 
@@ -63,7 +63,15 @@ class GetPropertiesMixin(ABC):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ) -> Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None:
+    ) -> (
+        Tensor
+        | ChargeResult
+        | PotentialResult
+        | VibResult
+        | IRResult
+        | RamanResult
+        | None
+    ):
         """
         Get the named property.
 
@@ -80,7 +88,7 @@ class GetPropertiesMixin(ABC):
 
         Returns
         -------
-        Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None
+        Tensor | ChargeResult | PotentialResult | VibResult | IRResult | RamanResult | None
             The requested value from the current calculation.
         """
 
@@ -498,13 +506,10 @@ class GetPropertiesMixin(ABC):
             print(f"Actual shape  : {charges_nat.shape}")
         """
 
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.scf.base import Charges
-
         prop = self.get_property(
             "charges", positions, chrg=chrg, spin=spin, **kwargs
         )
-        assert isinstance(prop, Charges)
+        assert isinstance(prop, ChargeResult)
 
         return prop.mono
 
@@ -563,13 +568,10 @@ class GetPropertiesMixin(ABC):
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
     ) -> Tensor:
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.scf.base import Potential
-
         prop = self.get_property(
             "potential", positions, chrg=chrg, spin=spin, **kwargs
         )
-        assert isinstance(prop, Potential)
+        assert isinstance(prop, PotentialResult)
         assert isinstance(prop.mono, Tensor)
 
         return prop.mono

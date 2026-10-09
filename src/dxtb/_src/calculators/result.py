@@ -27,136 +27,28 @@ from dataclasses import dataclass
 
 from dxtb import OutputHandler
 from dxtb._src.components.interactions import Charges, Potential
-from dxtb._src.components.interactions.container import Container
-from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import ContainerData, Tensor
+from dxtb._src.typing import Tensor
 
-__all__ = ["Multipoles", "Result"]
-
-
-class _FrozenCharges(Charges):
-    """Read-only structural wrapper for call-local SCF charges.
-
-    The tensors are already call-local SCF outputs, so retaining them avoids
-    duplicating large values while preserving their autograd graph. Mutation
-    methods inherited from :class:`Charges` are intentionally unavailable.
-    """
-
-    __slots__ = ("_locked",)
-
-    def __init__(self, value: Charges):
-        self._locked = False
-        super().__init__(
-            mono=value.mono,
-            dipole=value.dipole,
-            quad=value.quad,
-            label=list(value.label),
-            batch_mode=value.batch_mode,
-        )
-        self.label = tuple(self.label)
-        self._locked = True
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if not getattr(self, "_locked", False):
-            super().__setattr__(name, value)
-            return
-        raise AttributeError("Result charge values are immutable.")
-
-    def nullify_padding(self, pad: int = defaults.PADNZ) -> None:
-        del pad
-        raise AttributeError("Result charge values cannot be mutated.")
-
-    def __iadd__(self, other: Container) -> _FrozenCharges:
-        del other
-        raise AttributeError("Result charge values cannot be mutated.")
-
-    def __add__(self, other: Container) -> Container:
-        if not isinstance(other, Container):
-            raise TypeError("Only containers can be added together.")
-        if other.batch_mode != self.batch_mode:
-            raise ValueError("Cannot add containers with different batch modes.")
-        return Container(
-            mono=self.add_tensors(self.mono, other.mono),
-            dipole=self.add_tensors(self.dipole, other.dipole),
-            quad=self.add_tensors(self.quad, other.quad),
-            label=[*self.label, *other.label],
-            batch_mode=self.batch_mode,
-        )
-
-    @classmethod
-    def from_tensor(
-        cls,
-        tensor: Tensor,
-        data: ContainerData,
-        batch_mode: int = 0,
-        pad: int = defaults.PADNZ,
-    ) -> _FrozenCharges:
-        del tensor, data, batch_mode, pad
-        raise TypeError(
-            "Result charge values cannot be constructed by mutation."
-        )
+__all__ = ["ChargeResult", "Multipoles", "PotentialResult", "Result"]
 
 
-class _FrozenPotential(Potential):
-    """Read-only structural wrapper for call-local SCF potential values."""
+@dataclass(frozen=True, eq=False)
+class ChargeResult:
+    """Immutable charge tensors returned by a calculation."""
 
-    __slots__ = ("_locked",)
+    mono: Tensor
+    dipole: Tensor | None = None
+    quadrupole: Tensor | None = None
 
-    def __init__(self, value: Potential):
-        self._locked = False
-        super().__init__(
-            mono=value.mono,
-            dipole=value.dipole,
-            quad=value.quad,
-            label=list(value.label),
-            batch_mode=value.batch_mode,
-        )
-        self.label = tuple(self.label)
-        self._locked = True
 
-    def __setattr__(self, name: str, value: object) -> None:
-        if not getattr(self, "_locked", False):
-            super().__setattr__(name, value)
-            return
-        raise AttributeError("Result potential values are immutable.")
+@dataclass(frozen=True, eq=False)
+class PotentialResult:
+    """Immutable potential tensors returned by a calculation."""
 
-    def nullify_padding(self, pad: int = defaults.PADNZ) -> None:
-        del pad
-        raise AttributeError("Result potential values cannot be mutated.")
-
-    def reset(self) -> None:
-        raise AttributeError("Result potential values cannot be mutated.")
-
-    def __iadd__(self, other: Container) -> _FrozenPotential:
-        del other
-        raise AttributeError("Result potential values cannot be mutated.")
-
-    def __add__(self, other: Container) -> Container:
-        if not isinstance(other, Container):
-            raise TypeError("Only containers can be added together.")
-        if other.batch_mode != self.batch_mode:
-            raise ValueError("Cannot add containers with different batch modes.")
-        return Container(
-            mono=self.add_tensors(self.mono, other.mono),
-            dipole=self.add_tensors(self.dipole, other.dipole),
-            quad=self.add_tensors(self.quad, other.quad),
-            label=[*self.label, *other.label],
-            batch_mode=self.batch_mode,
-        )
-
-    @classmethod
-    def from_tensor(
-        cls,
-        tensor: Tensor,
-        data: ContainerData,
-        batch_mode: int = 0,
-        pad: int = defaults.PADNZ,
-    ) -> _FrozenPotential:
-        del tensor, data, batch_mode, pad
-        raise TypeError(
-            "Result potential values cannot be constructed by mutation."
-        )
+    mono: Tensor | None = None
+    dipole: Tensor | None = None
+    quadrupole: Tensor | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -175,8 +67,8 @@ class Result:
     residual value, so those two planned fields remain ``None``. Fields are
     never rebound by evaluation, and later evaluations do not mutate a prior
     Result. Tensor values remain ordinary PyTorch tensors, so callers can still
-    mutate them in place. Charges and Potential are temporary B5.5 compatibility
-    wrappers around call-local SCF outputs.
+    mutate them in place. Charge and potential outputs use plain immutable
+    values whose tensors remain graph-connected.
     """
 
     energy: Tensor
@@ -184,13 +76,12 @@ class Result:
     classical: tuple[tuple[str, Tensor], ...]
     fenergy: Tensor | None
     iterations: Tensor
-    charges: Charges | None = None
-    multipoles: Multipoles | None = None
+    charges: ChargeResult | None = None
     density: Tensor | None = None
     coefficients: Tensor | None = None
     emo: Tensor | None = None
     occupation: Tensor | None = None
-    potential: Potential | None = None
+    potential: PotentialResult | None = None
     hamiltonian: Tensor | None = None
     overlap: Tensor | None = None
     hcore: Tensor | None = None
@@ -210,7 +101,6 @@ class Result:
         fenergy: Tensor | None,
         iterations: Tensor,
         charges: Charges | None = None,
-        multipoles: Multipoles | None = None,
         density: Tensor | None = None,
         coefficients: Tensor | None = None,
         emo: Tensor | None = None,
@@ -232,35 +122,36 @@ class Result:
         mutate them later; this preserves autograd without copying O(nao²)
         values. Classical energies are stored as an immutable tuple.
         """
-        frozen_charges = None if charges is None else _FrozenCharges(charges)
-        frozen_potential = (
-            None if potential is None else _FrozenPotential(potential)
+        result_charges = (
+            None
+            if charges is None
+            else ChargeResult(
+                mono=charges.mono,
+                dipole=charges.dipole,
+                quadrupole=charges.quad,
+            )
         )
-        if frozen_charges is not None:
-            frozen_multipoles = Multipoles(
-                dipole=frozen_charges.dipole,
-                quadrupole=frozen_charges.quad,
+        result_potential = (
+            None
+            if potential is None
+            else PotentialResult(
+                mono=potential.mono,
+                dipole=potential.dipole,
+                quadrupole=potential.quad,
             )
-        elif multipoles is not None:
-            frozen_multipoles = Multipoles(
-                dipole=multipoles.dipole,
-                quadrupole=multipoles.quadrupole,
-            )
-        else:
-            frozen_multipoles = None
+        )
         return cls(
             energy=energy,
             scf=scf,
             classical=tuple(classical),
             fenergy=fenergy,
             iterations=iterations,
-            charges=frozen_charges,
-            multipoles=frozen_multipoles,
+            charges=result_charges,
             density=density,
             coefficients=coefficients,
             emo=emo,
             occupation=occupation,
-            potential=frozen_potential,
+            potential=result_potential,
             hamiltonian=hamiltonian,
             overlap=overlap,
             hcore=hcore,
@@ -280,6 +171,16 @@ class Result:
     def iter(self) -> Tensor:
         """Compatibility alias for the per-system iteration tensor."""
         return self.iterations
+
+    @property
+    def multipoles(self) -> Multipoles | None:
+        """Expose charge multipoles without duplicating their tensors."""
+        if self.charges is None:
+            return None
+        return Multipoles(
+            dipole=self.charges.dipole,
+            quadrupole=self.charges.quadrupole,
+        )
 
     @property
     def cenergies(self) -> dict[str, Tensor]:

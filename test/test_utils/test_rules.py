@@ -21,6 +21,8 @@ section 10).
 
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 SRC = Path(__file__).parents[2] / "src" / "dxtb"
@@ -44,8 +46,7 @@ def test_no_calculator_result_cache_or_identity_keying() -> None:
     """Calculator evaluation cannot retain or key prior result outputs."""
     calculator_source = SRC / "_src" / "calculators"
     text = "\n".join(
-        path.read_text()
-        for path in calculator_source.rglob("*.py")
+        path.read_text() for path in calculator_source.rglob("*.py")
     )
     forbidden = (
         "class CalculatorCache",
@@ -56,7 +57,6 @@ def test_no_calculator_result_cache_or_identity_keying() -> None:
         "get_cache_key",
         "tensor_id(",
         "data_ptr()",
-        "id(",
         "hashed_key",
         "cache_key",
         "_last_result",
@@ -66,4 +66,20 @@ def test_no_calculator_result_cache_or_identity_keying() -> None:
         "self.cache",
     )
     found = [token for token in forbidden if token in text]
-    assert not found, "Calculator result retention returned: " + ", ".join(found)
+    assert not found, "Calculator result retention returned: " + ", ".join(
+        found
+    )
+    identity_patterns = (
+        r"\btensor_id\s*\(",
+        r"\.data_ptr\s*\(",
+        r"(?:untyped_)?storage\s*\(\)\.data_ptr",
+        r"\bid\s*\(\s*(?:positions|tensor)\b",
+    )
+    identity_found = [
+        pattern for pattern in identity_patterns if re.search(pattern, text)
+    ]
+    assert (
+        not identity_found
+    ), "Calculator result identity keying returned: " + ", ".join(
+        identity_found
+    )

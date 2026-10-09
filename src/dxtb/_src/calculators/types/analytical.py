@@ -30,6 +30,7 @@ from dxtb import OutputHandler
 from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src import ncoord, scf
+from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.components.interactions.field import efield as efield
 from dxtb._src.constants import defaults
 from dxtb._src.timing import timer
@@ -88,12 +89,22 @@ class AnalyticalCalculator(EnergyCalculator):
         if charges is None:
             raise RuntimeError("SCF charges are missing from the Result.")
         if self.interactions.components:
+            # The legacy interaction gradient reads the three charge tensors
+            # from the mutable SCF container shape. Keep this adapter local to
+            # the call; Result retains only its immutable output value.
+            legacy_charges = Charges(
+                mono=charges.mono,
+                dipole=charges.dipole,
+                quad=charges.quadrupole,
+            )
             total_grad += self.interactions.get_gradient(
-                charges, positions, icaches, self.ihelp
+                legacy_charges, positions, icaches, self.ihelp
             )
 
         if result.overlap is None or result.density is None:
-            raise RuntimeError("SCF overlap or density is missing from the Result.")
+            raise RuntimeError(
+                "SCF overlap or density is missing from the Result."
+            )
         if result.coefficients is None or result.emo is None:
             raise RuntimeError("SCF orbital data is missing from the Result.")
         if result.occupation is None or result.potential is None:
@@ -102,6 +113,12 @@ class AnalyticalCalculator(EnergyCalculator):
             )
         if self.integrals.hcore is None:
             raise RuntimeError("Legacy H0 gradient adapter is not initialized.")
+
+        legacy_potential = Potential(
+            mono=result.potential.mono,
+            dipole=result.potential.dipole,
+            quad=result.potential.quadrupole,
+        )
 
         overlap_grad = self.integrals.grad_overlap(positions)
         wmat = scf.get_density(
@@ -116,7 +133,7 @@ class AnalyticalCalculator(EnergyCalculator):
             overlap_grad,
             result.density,
             wmat,
-            result.potential,
+            legacy_potential,
             cn,
         )
         dcndr = ncoord.cn_d3_gradient(self.numbers, positions)
@@ -250,7 +267,7 @@ class AnalyticalCalculator(EnergyCalculator):
         result = self.singlepoint(positions, chrg, spin, **kwargs)
 
         charges = result.charges
-        if charges.dipole is None or charges.quad is None:
+        if charges.dipole is None or charges.quadrupole is None:
             raise RuntimeError(
                 "The SCF did not produce atom-resolved dipole and quadrupole "
                 "populations. This is probably a bug."
@@ -260,7 +277,7 @@ class AnalyticalCalculator(EnergyCalculator):
         from ..properties.moments.quad import quadrupole
 
         qat = self.ihelp.reduce_orbital_to_atom(charges.mono)
-        return quadrupole(qat, charges.dipole, charges.quad, positions)
+        return quadrupole(qat, charges.dipole, charges.quadrupole, positions)
 
     def calculate(
         self,

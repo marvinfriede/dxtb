@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.components.interactions.container import Charges, Potential
+from dxtb._src.calculators.result import ChargeResult, PotentialResult
 from dxtb._src.typing import Tensor
 from dxtb.calculators import AnalyticalCalculator
 
@@ -42,7 +42,9 @@ def _system(dtype: torch.dtype = torch.float64):
 def test_same_input_is_recomputed_and_user_result_is_retained() -> None:
     """Repeated calls recompute while a caller-owned Result remains stable."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     before = calc._ncalcs
 
     retained = calc.singlepoint(positions)
@@ -67,7 +69,9 @@ def test_same_input_is_recomputed_and_user_result_is_retained() -> None:
 def test_energy_recomputes_for_equal_leaves_and_inplace_geometry() -> None:
     """Energy has no identity or storage-version result key."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     before = calc._ncalcs
 
     energy1 = calc.energy(positions)
@@ -84,15 +88,17 @@ def test_energy_recomputes_for_equal_leaves_and_inplace_geometry() -> None:
 def test_get_property_returns_local_values_without_history() -> None:
     """get_property selects a value from this calculation's local Result."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     before = calc._ncalcs
 
     density = calc.get_density(positions)
     assert isinstance(density, Tensor)
     assert calc._ncalcs == before + 1
-    assert calc.get_property(
-        "density", positions, allow_calculation=False
-    ) is None
+    assert (
+        calc.get_property("density", positions, allow_calculation=False) is None
+    )
 
     clone = calc.get_property("density", positions, return_clone=True)
     assert isinstance(clone, Tensor)
@@ -103,20 +109,45 @@ def test_get_property_returns_local_values_without_history() -> None:
 def test_calculate_returns_requested_values() -> None:
     """calculate returns requested properties instead of writing cache state."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     before = calc._ncalcs
 
     values = calc.calculate(["energy", "charges"], positions)
     assert set(values) == {"energy", "charges"}
     assert isinstance(values["energy"], Tensor)
-    assert hasattr(values["charges"], "mono")
+    assert isinstance(values["charges"], ChargeResult)
     assert calc._ncalcs == before + 1
+    potential = calc.get_property("potential", positions)
+    assert isinstance(potential, PotentialResult)
+    assert calc._ncalcs == before + 2
+
+
+def test_calculate_returns_mixed_energy_and_force_values() -> None:
+    """Mixed energy and property requests return explicit local values."""
+    numbers, positions = _system()
+    positions.requires_grad_(True)
+    calc = AnalyticalCalculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
+    before = calc._ncalcs
+    values = calc.calculate(["energy", "forces"], positions)
+    assert set(values) == {"energy", "forces"}
+    assert isinstance(values["energy"], Tensor)
+    assert isinstance(values["forces"], Tensor)
+    assert values["forces"].shape == positions.shape
+    assert calc._ncalcs == before + 2
+    assert not hasattr(calc, "result")
+    assert not hasattr(calc, "last_result")
 
 
 def test_bond_orders_use_result_matrices_directly() -> None:
     """Bond orders do not require store_overlap/store_density options."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     before = calc._ncalcs
     bond_orders = calc.get_bond_orders(positions)
     assert isinstance(bond_orders, Tensor)
@@ -144,7 +175,9 @@ def test_bond_orders_use_result_matrices_directly() -> None:
 def test_removed_store_options_raise(option: str) -> None:
     """Removed result-retention kwargs cannot be silently ignored."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     with pytest.raises(TypeError, match="result caching has been removed"):
         calc.energy(positions, **{option: True})
 
@@ -152,7 +185,9 @@ def test_removed_store_options_raise(option: str) -> None:
 def test_calculator_has_no_result_cache_state() -> None:
     """Neither Calculator nor Config retains result cache state."""
     numbers, positions = _system()
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype)
+    calc = Calculator(
+        numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
+    )
     assert not hasattr(calc, "cache")
     assert not hasattr(calc.opts, "cache")
     with pytest.raises(TypeError, match="result caching has been removed"):
@@ -165,8 +200,26 @@ def test_calculator_has_no_result_cache_state() -> None:
         )
 
 
+@pytest.mark.parametrize("option", ["cache_enabled", "cache_overlap"])
+def test_removed_cache_options_have_transition_message(option: str) -> None:
+    """Calculator reports why removed result-cache options are rejected."""
+    numbers, positions = _system()
+    with pytest.raises(
+        TypeError,
+        match=f"result caching has been removed.*Unsupported cache option: {option}",
+    ):
+        Calculator(
+            numbers,
+            GFN1_XTB,
+            opts={"verbosity": 0, option: True},
+            dtype=positions.dtype,
+        )
+
+
 @pytest.mark.parametrize("batch_mode", [1, 2])
-def test_legacy_batch_modes_recompute_without_result_cache(batch_mode: int) -> None:
+def test_legacy_batch_modes_recompute_without_result_cache(
+    batch_mode: int,
+) -> None:
     """Both supported legacy batch modes return current values without reuse."""
     numbers, positions = _system()
     batch_numbers = numbers.unsqueeze(0).expand(2, -1).clone()
@@ -195,25 +248,26 @@ def test_legacy_batch_modes_recompute_without_result_cache(batch_mode: int) -> N
             opts={"verbosity": 0},
             dtype=positions.dtype,
         )
-        looped.append(calc.singlepoint(positions, chrg=charge).energy)
-    torch.testing.assert_close(first.energy, torch.stack(looped))
+        looped.append(calc.singlepoint(positions, chrg=charge))
+    torch.testing.assert_close(
+        first.energy, torch.stack([value.energy for value in looped])
+    )
     assert not torch.isclose(first.energy[0].sum(), first.energy[1].sum())
 
-    assert first.charges is not None
-    combined_charges = first.charges + Charges(
-        mono=torch.zeros_like(first.charges.mono), batch_mode=batch_mode
+    assert first.charges is not None and first.potential is not None
+    assert first.potential.mono is not None
+    assert first.charges.mono.shape[0] == 2
+    assert first.potential.mono.shape[0] == 2
+    torch.testing.assert_close(
+        first.charges.mono,
+        torch.stack([value.charges.mono for value in looped]),
     )
-    assert combined_charges.batch_mode == batch_mode
-    assert combined_charges.axis == first.charges.axis == 1
-    assert combined_charges.as_tensor().shape[0] == 2
-
-    assert first.potential is not None
-    combined_potential = first.potential + Potential(
-        mono=torch.zeros_like(first.potential.mono), batch_mode=batch_mode
+    torch.testing.assert_close(
+        first.potential.mono,
+        torch.stack(
+            [value.potential.mono for value in looped if value.potential]
+        ),
     )
-    assert combined_potential.batch_mode == batch_mode
-    assert combined_potential.axis == first.potential.axis == 1
-    assert combined_potential.as_tensor().shape[0] == 2
 
 
 def test_analytical_forces_use_local_result_data() -> None:

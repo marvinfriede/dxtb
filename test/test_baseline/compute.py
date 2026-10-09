@@ -21,8 +21,8 @@ This is the only module of the reference data that depends on the dxtb API;
 it is rewritten when the API changes (TB), while the reference files and
 ``refdata.py`` stay untouched.
 
-Generation rules: a fresh calculator for every quantity, result cache
-disabled, float64, tight SCF convergence. All derivatives are taken by
+Generation rules: a fresh calculator for every quantity, no result cache,
+float64, tight SCF convergence. All derivatives are taken by
 autograd of the energy through the unrolled SCF (``scf_mode="full"``):
 
 - forces: first derivative of the energy (positions);
@@ -47,6 +47,7 @@ import numpy as np
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
+from dxtb._src.components.interactions.container import Charges
 from dxtb._src.typing import Tensor
 from dxtb.components.field import new_efield
 
@@ -123,7 +124,17 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
     icache = calc.interactions.get_cache(
         numbers=calc.numbers, positions=pos, ihelp=calc.ihelp
     )
-    eint = calc.interactions.get_energy_as_dict(res.charges, icache, calc.ihelp)
+    # The reference decomposition still calls the mutable SCF interaction API.
+    # Adapt the public Result value locally instead of making Result inherit
+    # that legacy container.
+    result_charges = res.charges
+    assert result_charges is not None
+    scf_charges = Charges(
+        mono=result_charges.mono,
+        dipole=result_charges.dipole,
+        quad=result_charges.quadrupole,
+    )
+    eint = calc.interactions.get_energy_as_dict(scf_charges, icache, calc.ihelp)
     for label, e in eint.items():
         out[f"energy.{label}"] = e.sum(-1)
 
@@ -136,8 +147,8 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
     out["charges"] = calc.ihelp.reduce_orbital_to_atom(mono)
     if res.charges.dipole is not None:
         out["atomic_dipoles"] = res.charges.dipole
-    if res.charges.quad is not None:
-        out["atomic_quadrupoles"] = res.charges.quad
+    if res.charges.quadrupole is not None:
+        out["atomic_quadrupoles"] = res.charges.quadrupole
 
     out["iterations"] = res.iterations
     return out

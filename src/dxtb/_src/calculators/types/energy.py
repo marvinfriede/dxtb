@@ -39,6 +39,7 @@ from .base import BaseCalculator, reject_removed_store_kwargs
 
 __all__ = ["EnergyCalculator"]
 
+
 class EnergyCalculator(BaseCalculator):
     """
     Parametrized calculator defining the extended tight-binding model.
@@ -77,7 +78,7 @@ class EnergyCalculator(BaseCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ):
+    ) -> dict[str, Any]:
         """
         Entry point for performing single point calculations.
 
@@ -166,7 +167,9 @@ class EnergyCalculator(BaseCalculator):
                 scf=torch.zeros_like(total_energy),
                 classical=tuple(classical.items()),
                 fenergy=torch.zeros_like(total_energy),
-                iterations=torch.zeros((), dtype=torch.int64, device=self.device),
+                iterations=torch.zeros(
+                    (), dtype=torch.int64, device=self.device
+                ),
             )
             self._ncalcs += 1
             return result
@@ -219,7 +222,9 @@ class EnergyCalculator(BaseCalculator):
                 continue
             if path is None or path is True:
                 if integral is None:
-                    raise RuntimeError(f"No legacy label is available for {key}.")
+                    raise RuntimeError(
+                        f"No legacy label is available for {key}."
+                    )
                 path = integral.label.casefold() + ".pt"
             torch.save(matrix, path)
 
@@ -292,7 +297,9 @@ class EnergyCalculator(BaseCalculator):
             dipole_integrals=intmats.dipole,
             quadrupole_integrals=intmats.quadrupole,
             overlap_norm=(
-                None if self.integrals.overlap is None else self.integrals.overlap.norm
+                None
+                if self.integrals.overlap is None
+                else self.integrals.overlap.norm
             ),
             iterations=torch.tensor(
                 scf_results["iterations"], dtype=torch.int64, device=self.device
@@ -348,7 +355,9 @@ class EnergyCalculator(BaseCalculator):
                 continue
             if path is None or path is True:
                 if integral is None:
-                    raise RuntimeError(f"No legacy label is available for {key}.")
+                    raise RuntimeError(
+                        f"No legacy label is available for {key}."
+                    )
                 path = integral.label.casefold() + ".pt"
             torch.save(matrix, path)
 
@@ -408,7 +417,9 @@ class EnergyCalculator(BaseCalculator):
         """
         result = self.singlepoint(positions, chrg, spin, **kwargs)
         if result.overlap is None or result.density is None:
-            raise RuntimeError("Bond orders require overlap and density matrices.")
+            raise RuntimeError(
+                "Bond orders require overlap and density matrices."
+            )
 
         # pylint: disable=import-outside-toplevel
         from dxtb._src.wavefunction.wiberg import get_bond_order
@@ -422,7 +433,7 @@ class EnergyCalculator(BaseCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ):
+    ) -> dict[str, Any]:
         """
         Calculate the requested properties. This is more of a dispatcher method
         that calls the appropriate methods of the Calculator.
@@ -440,8 +451,8 @@ class EnergyCalculator(BaseCalculator):
 
         Returns
         -------
-        dict
-            Dictionary of calculated properties.
+        dict[str, Any]
+            Values for the requested properties, returned explicitly.
         """
         reject_removed_store_kwargs(kwargs)
         values: dict[str, Any] = {}
@@ -473,7 +484,9 @@ class EnergyCalculator(BaseCalculator):
         if "bond_orders" in properties:
             assert result is not None
             if result.overlap is None or result.density is None:
-                raise RuntimeError("Bond orders require overlap and density matrices.")
+                raise RuntimeError(
+                    "Bond orders require overlap and density matrices."
+                )
             from dxtb._src.wavefunction.wiberg import get_bond_order
 
             values["bond_orders"] = get_bond_order(

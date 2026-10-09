@@ -26,10 +26,11 @@ import pytest
 import torch
 
 from dxtb import Calculator, GFN1_XTB, ParamModule, labels
+from dxtb._src.components.interactions.container import Charges, Potential
 from tad_mctc.exceptions import DeviceError, DtypeError
 from dxtb._src.calculators.config import Config
 from dxtb._src.calculators.model import Model, System
-from dxtb._src.calculators.result import Result
+from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import singlepoint
 
 
@@ -58,7 +59,7 @@ def _assert_result_values_equal(left: Result, right: Result) -> None:
 
     assert left.charges is not None and right.charges is not None
     assert left.potential is not None and right.potential is not None
-    for name in ("mono", "dipole", "quad"):
+    for name in ("mono", "dipole", "quadrupole"):
         left_value = getattr(left.charges, name)
         right_value = getattr(right.charges, name)
         if left_value is None or right_value is None:
@@ -123,7 +124,7 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
                 if getattr(first.charges, name) is None
                 else getattr(first.charges, name).clone()
             )
-            for name in ("mono", "dipole", "quad")
+            for name in ("mono", "dipole", "quadrupole")
         },
         "potential": {
             name: (
@@ -131,7 +132,7 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
                 if getattr(first.potential, name) is None
                 else getattr(first.potential, name).clone()
             )
-            for name in ("mono", "dipole", "quad")
+            for name in ("mono", "dipole", "quadrupole")
         },
         "classical": {name: value.clone() for name, value in first.classical},
     }
@@ -147,16 +148,16 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         if expected is not None:
             assert value is not None
             torch.testing.assert_close(value, expected)
-    for container_name in ("charges", "potential"):
-        container = getattr(first, container_name)
-        assert container is not None
-        for name, expected in nested_snapshot[container_name].items():
-            value = getattr(container, name)
+    for value_name in ("charges", "potential"):
+        value = getattr(first, value_name)
+        assert value is not None
+        for name, expected in nested_snapshot[value_name].items():
+            tensor = getattr(value, name)
             if expected is None:
-                assert value is None
+                assert tensor is None
             else:
-                assert value is not None
-                torch.testing.assert_close(value, expected)
+                assert tensor is not None
+                torch.testing.assert_close(tensor, expected)
     for name, expected in nested_snapshot["classical"].items():
         torch.testing.assert_close(first.cenergies[name], expected)
     assert first.charges is not second.charges
@@ -171,21 +172,24 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         )
     with pytest.raises(FrozenInstanceError):
         first.energy = second.energy  # type: ignore[misc]
-    with pytest.raises(AttributeError):
+    with pytest.raises(FrozenInstanceError):
         first.charges.mono = second.charges.mono  # type: ignore[union-attr,misc]
-    with pytest.raises(AttributeError, match="immutable"):
-        first.potential.label = []  # type: ignore[union-attr,misc]
+    with pytest.raises(FrozenInstanceError):
+        first.potential.mono = second.potential.mono  # type: ignore[union-attr,misc]
 
     assert first.energy is first.total
     assert first.integrals is not None
     assert first.integrals.hcore is not None
+    assert first.multipoles is not None
+    assert first.charges is not None
+    assert first.multipoles.dipole is first.charges.dipole
+    assert first.multipoles.quadrupole is first.charges.quadrupole
     assert {field.name for field in fields(first)} >= {
         "energy",
         "scf",
         "classical",
         "fenergy",
         "charges",
-        "multipoles",
         "density",
         "coefficients",
         "emo",
@@ -200,6 +204,14 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         "converged",
         "residual",
     }
+    assert not isinstance(first.charges, Charges)
+    assert not isinstance(first.potential, Potential)
+    for value in (first.charges, first.potential):
+        assert value is not None
+        assert not hasattr(value, "batch_mode")
+        assert not hasattr(value, "label")
+        assert not hasattr(value, "reset")
+        assert not hasattr(value, "nullify_padding")
 
 
 def test_core_singlepoint_supports_independent_position_gradients() -> None:
@@ -230,6 +242,9 @@ def test_core_singlepoint_geometry_after_prior_backward() -> None:
     system, positions = _system()
     first_positions = positions.clone().requires_grad_(True)
     first = singlepoint(system, first_positions)
+    assert first.charges is not None and first.potential is not None
+    charge_before = first.charges.mono.clone()
+    potential_before = first.potential.mono.clone()
     first.energy.sum().backward()
     assert first_positions.grad is not None
     assert torch.isfinite(first_positions.grad).all()
@@ -242,6 +257,27 @@ def test_core_singlepoint_geometry_after_prior_backward() -> None:
         second.energy.sum(), second_positions
     )
     assert torch.isfinite(second_gradient).all()
+    torch.testing.assert_close(first.charges.mono, charge_before)
+    assert first.potential.mono is not None
+    torch.testing.assert_close(first.potential.mono, potential_before)
+
+
+def test_result_charge_geometry_gradient_is_connected() -> None:
+    """Result charge tensors preserve their position-autograd connection."""
+    numbers = torch.tensor([3, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.3]], dtype=torch.float64
+    ).requires_grad_(True)
+    system = Model(par=ParamModule(GFN1_XTB, dtype=positions.dtype)).setup(
+        numbers
+    )
+    result = singlepoint(system, positions)
+    assert result.charges is not None
+    (gradient,) = torch.autograd.grad(
+        result.charges.mono.square().sum(), positions
+    )
+    assert torch.isfinite(gradient).all()
+    assert gradient.abs().sum() > 0
 
 
 def test_system_singlepoint_delegates_to_core() -> None:
@@ -279,7 +315,9 @@ def test_core_parameter_training_rebuilds_system_per_loss() -> None:
     for _ in range(2):
         system = model.setup(numbers)
         result = singlepoint(system, positions)
-        (gradient,) = torch.autograd.grad(result.energy.sum(), parameter)
+        assert result.charges is not None
+        loss = result.charges.mono.square().sum()
+        (gradient,) = torch.autograd.grad(loss, parameter)
         assert torch.isfinite(gradient).all()
         assert gradient.abs().sum() > 0
         gradients.append(gradient)
@@ -505,32 +543,24 @@ def test_core_singlepoint_tensor_charge_gradient_is_preserved() -> None:
     assert gradient.abs() > 0
 
 
-def test_result_charge_potential_mutators_fail_intentionally() -> None:
-    """Legacy-container read methods work; mutation methods fail clearly."""
+def test_result_charge_and_potential_are_plain_values() -> None:
+    """Result payloads use narrow immutable values without SCF container API."""
     system, positions = _system()
     result = singlepoint(system, positions)
-    assert result.charges is not None
-    assert result.potential is not None
-    assert result.charges.as_tensor().numel() > 0
-    assert result.potential.as_tensor().numel() > 0
-    with pytest.raises(AttributeError, match="cannot be mutated"):
-        result.charges.nullify_padding()
-    with pytest.raises(AttributeError, match="cannot be mutated"):
-        result.charges.__iadd__(result.charges)
-    charge_before = result.charges.mono.clone()
-    summed_charges = result.charges + result.charges
-    torch.testing.assert_close(summed_charges.mono, 2 * charge_before)
-    torch.testing.assert_close(result.charges.mono, charge_before)
-    with pytest.raises(TypeError, match="cannot be constructed by mutation"):
-        result.charges.from_tensor(torch.zeros(1), {})
-    with pytest.raises(AttributeError, match="cannot be mutated"):
-        result.potential.reset()
-    with pytest.raises(AttributeError, match="cannot be mutated"):
-        result.potential.nullify_padding()
-    with pytest.raises(AttributeError, match="cannot be mutated"):
-        result.potential.__iadd__(result.potential)
-    potential_before = result.potential.mono.clone()
-    summed_potential = result.potential + result.potential
-    assert summed_potential.mono is not None
-    torch.testing.assert_close(summed_potential.mono, 2 * potential_before)
-    torch.testing.assert_close(result.potential.mono, potential_before)
+    assert isinstance(result.charges, ChargeResult)
+    assert isinstance(result.potential, PotentialResult)
+    assert result.charges.mono.numel() > 0
+    assert result.potential.mono is not None
+    assert result.potential.mono.numel() > 0
+    for value in (result.charges, result.potential):
+        for forbidden in (
+            "batch_mode",
+            "axis",
+            "label",
+            "reset",
+            "nullify_padding",
+        ):
+            assert not hasattr(value, forbidden)
+    assert result.multipoles is not None
+    assert result.multipoles.dipole is result.charges.dipole
+    assert result.multipoles.quadrupole is result.charges.quadrupole

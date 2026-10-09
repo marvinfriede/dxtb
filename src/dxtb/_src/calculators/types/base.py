@@ -40,12 +40,12 @@ from dxtb._src.calculators.properties.vibration import (
     RamanResult,
     VibResult,
 )
+from dxtb._src.calculators.result import ChargeResult, PotentialResult
 from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
-from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
@@ -70,6 +70,21 @@ _REMOVED_STORE_OPTIONS = {
     "store_dipole",
     "store_quadrupole",
 }
+_REMOVED_CACHE_OPTIONS = {
+    "cache_enabled",
+    "cache_hcore",
+    "cache_overlap",
+    "cache_dipole",
+    "cache_quadrupole",
+    "cache_charges",
+    "cache_coefficients",
+    "cache_density",
+    "cache_fock",
+    "cache_iterations",
+    "cache_mo_energies",
+    "cache_occupation",
+    "cache_potential",
+}
 
 
 def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
@@ -79,6 +94,16 @@ def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
         raise TypeError(
             "Calculator result caching has been removed; retain the returned "
             "Result instead. Unsupported arguments: " + ", ".join(removed)
+        )
+
+
+def reject_removed_cache_options(opts: dict[str, Any]) -> None:
+    """Explain that removed result-cache options are no longer supported."""
+    removed = sorted(_REMOVED_CACHE_OPTIONS.intersection(opts))
+    if removed:
+        raise TypeError(
+            "Calculator result caching has been removed; retain the returned "
+            "Result instead. Unsupported cache option: " + ", ".join(removed)
         )
 
 
@@ -216,6 +241,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         # setup calculator options
         if isinstance(opts, dict):
+            reject_removed_cache_options(opts)
             opts = Config.create(**opts)
         self.opts = opts
 
@@ -327,7 +353,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         **kwargs: Any,
-    ):
+    ) -> dict[str, Any]:
         """
         Calculate the requested properties. This is more of a dispatcher method
         that calls the appropriate methods of the Calculator.
@@ -342,6 +368,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
+
+        Returns
+        -------
+        dict[str, Any]
+            Values for the requested properties, returned explicitly.
         """
 
     def get_property(
@@ -353,7 +384,15 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         allow_calculation: bool = True,
         return_clone: bool = False,
         **kwargs: Any,
-    ) -> Tensor | Charges | Potential | VibResult | IRResult | RamanResult | None:
+    ) -> (
+        Tensor
+        | ChargeResult
+        | PotentialResult
+        | VibResult
+        | IRResult
+        | RamanResult
+        | None
+    ):
         """
         Get the named property.
 
