@@ -77,6 +77,50 @@ class InteractionList(ComponentList[Interaction]):
     List of interactions.
     """
 
+    def __init__(
+        self,
+        *components: Interaction | None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """Create an interaction list and reject duplicate ES2/ES3 labels."""
+        for label in (LABEL_ES2, LABEL_ES3):
+            matching = [
+                component
+                for component in components
+                if component is not None and component.label == label
+            ]
+            if len({id(component) for component in matching}) > 1:
+                raise ValueError(
+                    f"Multiple interactions use the label '{label}'. "
+                    "Duplicate ES2/ES3 labels are ambiguous."
+                )
+        super().__init__(*components, device=device, dtype=dtype)
+
+    def update(self, name: str, **kwargs: Any) -> Interaction:
+        """Reject mutation of parameters captured by ES2/ES3 setup values."""
+        if name in (LABEL_ES2, LABEL_ES3):
+            raise RuntimeError(
+                f"{name} parameters are setup-derived and cannot be updated. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        return super().update(name, **kwargs)
+
+    def reset(self, name: str) -> Interaction:
+        """Reject resetting parameters captured by ES2/ES3 setup values."""
+        if name in (LABEL_ES2, LABEL_ES3):
+            raise RuntimeError(
+                f"{name} parameters are setup-derived and cannot be reset. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        return super().reset(name)
+
+    def reset_all(self) -> None:
+        """Reset unmigrated interactions, leaving ES2/ES3 setup untouched."""
+        for component in self.components:
+            if component.label not in (LABEL_ES2, LABEL_ES3):
+                component.reset()
+
     @override
     def get_energy(
         self,
@@ -314,16 +358,6 @@ class InteractionList(ComponentList[Interaction]):
         """Reset tensor attributes to a detached clone of the current state."""
         return self.reset(LABEL_EFIELD_GRAD)
 
-    @_docstring_reset
-    def reset_es2(self) -> Interaction:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_ES2)
-
-    @_docstring_reset
-    def reset_es3(self) -> Interaction:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_ES3)
-
     ###########################################################################
 
     @_docstring_update
@@ -345,11 +379,3 @@ class InteractionList(ComponentList[Interaction]):
         field_grad: Tensor | None = None,
     ) -> Interaction:
         return self.update(LABEL_EFIELD_GRAD, field_grad=field_grad)
-
-    @_docstring_update
-    def update_es2(self, **kwargs: Any) -> Interaction:
-        return self.update(LABEL_ES2, **kwargs)
-
-    @_docstring_update
-    def update_es3(self, **kwargs: Any) -> Interaction:
-        return self.update(LABEL_ES3, **kwargs)

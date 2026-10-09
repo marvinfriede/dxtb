@@ -67,6 +67,8 @@ Example
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from tad_mctc.exceptions import DeviceError
 
@@ -85,11 +87,19 @@ from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
-__all__ = ["ES3", "LABEL_ES3", "new_es3"]
+__all__ = ["ES3", "ES3Setup", "LABEL_ES3", "new_es3", "setup_es3"]
 
 
 LABEL_ES3 = "ES3"
 """Label for the :class:`.ES3` interaction, coinciding with the class name."""
+
+
+@dataclass(frozen=True, eq=False)
+class ES3Setup:
+    """Numbers-only parameter data for one ES3 evaluation."""
+
+    hubbard_derivs: Tensor
+    shell_resolved: bool
 
 
 class ES3Cache(InteractionCache, TensorLike):
@@ -179,6 +189,20 @@ class ES3(Interaction):
         self.hubbard_derivs = hubbard_derivs
         self.shell_scale = shell_scale
 
+    def update(self, **kwargs: Any) -> None:
+        """ES3 parameters are fixed when the System is set up."""
+        raise RuntimeError(
+            "ES3 parameters are setup-derived and cannot be updated. "
+            "Create a new Model/System/Calculator with changed parameters."
+        )
+
+    def reset(self) -> None:
+        """ES3 parameters are fixed when the System is set up."""
+        raise RuntimeError(
+            "ES3 parameters are setup-derived and cannot be reset. "
+            "Create a new Model/System/Calculator with changed parameters."
+        )
+
     # pylint: disable=unused-argument
     @override
     def get_cache(
@@ -216,33 +240,14 @@ class ES3(Interaction):
         if ihelp is None:
             raise ValueError("IndexHelper is required for ES3 cache.")
 
-        cachvars = (numbers.detach().clone(),)
-
-        if self.cache_is_latest(cachvars) is True:
-            if not isinstance(self.cache, ES3Cache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        # if the cache is built, store the cachevar for validation
-        self._cachevars = cachvars
-
-        if self.shell_scale is None:
-            hd = ihelp.spread_uspecies_to_atom(self.hubbard_derivs)
-        else:
-            scale = ihelp.spread_ushell_to_shell(
-                self.shell_scale[ihelp.unique_angular]
-            )
-            hd = ihelp.spread_uspecies_to_shell(self.hubbard_derivs) * scale
-
-        self.cache = ES3Cache(
-            hd, shell_resolved=(self.shell_scale is not None), **self.dd
+        setup = setup_es3(
+            self.hubbard_derivs, ihelp, shell_scale=self.shell_scale
         )
-
-        return self.cache
+        return ES3Cache(
+            setup.hubbard_derivs,
+            shell_resolved=setup.shell_resolved,
+            **self.dd,
+        )
 
     @override
     def get_monopole_atom_energy(
@@ -272,7 +277,7 @@ class ES3(Interaction):
         """
         return (
             cache.hd * torch.pow(qat, 3.0) / 3.0
-            if self.shell_scale is None
+            if not cache.shell_resolved
             else torch.zeros_like(qat)
         )
 
@@ -297,7 +302,7 @@ class ES3(Interaction):
         """
         return (
             torch.zeros_like(qat)
-            if self.shell_scale is None
+            if not cache.shell_resolved
             else cache.hd * torch.pow(qat, 3.0) / 3.0
         )
 
@@ -327,7 +332,7 @@ class ES3(Interaction):
         """
         return (
             cache.hd * torch.pow(qat, 2.0)
-            if self.shell_scale is None
+            if not cache.shell_resolved
             else torch.zeros_like(qat)
         )
 
@@ -353,9 +358,25 @@ class ES3(Interaction):
         """
         return (
             torch.zeros_like(qsh)
-            if self.shell_scale is None
+            if not cache.shell_resolved
             else cache.hd * torch.pow(qsh, 2.0)
         )
+
+
+def setup_es3(
+    hubbard_derivs: Tensor,
+    ihelp: IndexHelper,
+    *,
+    shell_scale: Tensor | None = None,
+) -> ES3Setup:
+    """Resolve ES3 parameter data to atoms or shells for one System."""
+    if shell_scale is None:
+        resolved = ihelp.spread_uspecies_to_atom(hubbard_derivs)
+    else:
+        scale = ihelp.spread_ushell_to_shell(shell_scale[ihelp.unique_angular])
+        resolved = ihelp.spread_uspecies_to_shell(hubbard_derivs) * scale
+
+    return ES3Setup(resolved, shell_resolved=shell_scale is not None)
 
 
 def new_es3(

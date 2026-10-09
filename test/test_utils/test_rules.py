@@ -120,3 +120,33 @@ def test_es2_uses_plain_torch_coulomb_construction() -> None:
     )
     found = [token for token in forbidden if token in source]
     assert not found, "Removed ES2 custom path returned: " + ", ".join(found)
+
+
+def test_es2_es3_do_not_retain_persistent_call_data() -> None:
+    """ES2/ES3 cache methods construct call data without component reuse."""
+    coulomb = SRC / "_src" / "components" / "interactions" / "coulomb"
+    es2 = (coulomb / "secondorder.py").read_text()
+    es3 = (coulomb / "thirdorder.py").read_text()
+    migrated_sources = es2 + es3
+    forbidden = (
+        "cache_is_latest",
+        "_cachevars",
+        "_cachegrad",
+        "self.cache =",
+    )
+    found = [token for token in forbidden if token in migrated_sources]
+    assert not found, "Persistent ES2/ES3 cache path returned: " + ", ".join(
+        found
+    )
+
+    interaction_list = (
+        SRC / "_src" / "components" / "interactions" / "list.py"
+    ).read_text()
+    removed_apis = (
+        "def update_es2(",
+        "def reset_es2(",
+        "def update_es3(",
+        "def reset_es3(",
+    )
+    found = [token for token in removed_apis if token in interaction_list]
+    assert not found, "ES2/ES3 mutation API returned: " + ", ".join(found)

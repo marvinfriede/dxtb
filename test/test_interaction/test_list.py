@@ -21,6 +21,7 @@ Test InteractionList.
 from __future__ import annotations
 
 import torch
+import pytest
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
 from dxtb.components.base import InteractionList, InteractionListCache
@@ -73,11 +74,13 @@ def test_reset() -> None:
     ilist = InteractionList(d4sc, es2, es3, ef, efg)
     assert len(ilist.components) == 5
 
-    _ = ilist.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    call_data = ilist.get_cache(
+        numbers=numbers, positions=positions, ihelp=ihelp
+    )
 
     assert d4sc is not None and d4sc.cache is not None
-    assert es2 is not None and es2.cache is not None
-    assert es3 is not None and es3.cache is not None
+    assert es2 is not None and es2.cache is None
+    assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
@@ -85,13 +88,12 @@ def test_reset() -> None:
     ilist.reset_d4sc()
     assert d4sc.cache is None
 
-    assert len(es2.cache) == 2  # mat + shell_resolved
-    ilist.reset_es2()
-    assert es2.cache is None
-
-    assert len(es3.cache) == 2  # hd + shell_resolved
-    ilist.reset_es3()
-    assert es3.cache is None
+    assert len(call_data["ES2"]) == 2  # mat + shell_resolved
+    assert len(call_data["ES3"]) == 2  # hd + shell_resolved
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        ilist.reset("ES2")
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        ilist.reset("ES3")
 
     assert len(ef.cache) == 2
     ilist.reset_efield()
@@ -116,17 +118,19 @@ def test_reset_all() -> None:
     ilist = InteractionList(d4sc, es2, es3, ef, efg)
     assert len(ilist.components) == 5
 
-    _ = ilist.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    call_data = ilist.get_cache(
+        numbers=numbers, positions=positions, ihelp=ihelp
+    )
 
     assert d4sc is not None and d4sc.cache is not None
-    assert es2 is not None and es2.cache is not None
-    assert es3 is not None and es3.cache is not None
+    assert es2 is not None and es2.cache is None
+    assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
     assert len(d4sc.cache) == 3
-    assert len(es2.cache) == 2
-    assert len(es3.cache) == 2
+    assert len(call_data["ES2"]) == 2
+    assert len(call_data["ES3"]) == 2
     assert len(ef.cache) == 2
     assert len(efg.cache) == 3  # vat + vdp + vqp
 
@@ -155,8 +159,8 @@ def test_update() -> None:
     _ = ilist.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
     assert d4sc is not None and d4sc.cache is not None
-    assert es2 is not None and es2.cache is not None
-    assert es3 is not None and es3.cache is not None
+    assert es2 is not None and es2.cache is None
+    assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
@@ -164,13 +168,18 @@ def test_update() -> None:
     ilist.update_d4sc(r4r2=r4r2)
     assert (d4sc.r4r2 == r4r2).all()
 
-    lhubbard = torch.tensor([1.0, 0.0, 0.0], device=DEVICE)
-    ilist.update_es2(lhubbard=lhubbard)
-    assert (es2.lhubbard == lhubbard).all()
-
-    hubbard_derivs = torch.tensor([1.0, 0.0, 0.0], device=DEVICE)
-    ilist.update_es3(hubbard_derivs=hubbard_derivs)
-    assert (es3.hubbard_derivs == hubbard_derivs).all()
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        ilist.update("ES2", lhubbard=torch.ones(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        ilist.update("ES3", hubbard_derivs=torch.ones(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        es2.update(lhubbard=torch.ones(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        es3.update(hubbard_derivs=torch.ones(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        es2.reset()
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        es3.reset()
 
     field = torch.tensor([1.0, 0.0, 0.0], device=DEVICE)
     ilist.update_efield(field=field)

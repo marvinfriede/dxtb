@@ -84,7 +84,7 @@ from dxtb._src.typing import (
     override,
 )
 from dxtb._src.utils.scattergather import wrap_gather
-from dxtb._src.utils.tensors import grad_key, normalize_device
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 from .average import AveragingFunction, averaging_function, harmonic_average
@@ -239,6 +239,20 @@ class ES2(Interaction):
 
         self.shell_resolved = shell_resolved and lhubbard is not None
 
+    def update(self, **kwargs: Any) -> None:
+        """ES2 parameters are fixed when the System is set up."""
+        raise RuntimeError(
+            "ES2 parameters are setup-derived and cannot be updated. "
+            "Create a new Model/System/Calculator with changed parameters."
+        )
+
+    def reset(self) -> None:
+        """ES2 parameters are fixed when the System is set up."""
+        raise RuntimeError(
+            "ES2 parameters are setup-derived and cannot be reset. "
+            "Create a new Model/System/Calculator with changed parameters."
+        )
+
     # pylint: disable=unused-argument
     @override
     def get_cache(
@@ -277,21 +291,6 @@ class ES2(Interaction):
         if ihelp is None:
             raise ValueError("IndexHelper is required for ES2 cache creation.")
 
-        cachvars = (numbers.detach().clone(), positions.detach().clone())
-
-        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
-            if not isinstance(self.cache, ES2Cache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        # if the cache is built, store the cachvar for validation
-        self._cachevars = cachvars
-        self._cachegrad = grad_key(positions)
-
         setup = setup_es2(
             numbers,
             self.hubbard,
@@ -301,12 +300,10 @@ class ES2(Interaction):
             average=self.average,
             shell_resolved=self.shell_resolved,
         )
-        self.cache = ES2Cache(
+        return ES2Cache(
             build_es2_coulomb(setup, positions),
             shell_resolved=setup.shell_resolved,
         )
-
-        return self.cache
 
     def get_atom_coulomb_matrix(
         self, numbers: Tensor, positions: Tensor, ihelp: IndexHelper
@@ -375,7 +372,7 @@ class ES2(Interaction):
     ) -> Tensor:
         return (
             0.5 * qat * self.get_monopole_atom_potential(cache, qat)
-            if not self.shell_resolved
+            if not cache.shell_resolved
             else torch.zeros_like(qat)
         )
 
@@ -385,7 +382,7 @@ class ES2(Interaction):
     ) -> Tensor:
         return (
             0.5 * qat * self.get_monopole_shell_potential(cache, qat)
-            if self.shell_resolved
+            if cache.shell_resolved
             else torch.zeros_like(qat)
         )
 
@@ -415,7 +412,7 @@ class ES2(Interaction):
         """
         return (
             torch.zeros_like(qat)
-            if self.shell_resolved
+            if cache.shell_resolved
             else einsum("...ik,...k->...i", cache.mat, qat)
         )
 
@@ -445,7 +442,7 @@ class ES2(Interaction):
         """
         return (
             einsum("...ik,...k->...i", cache.mat, qsh)
-            if self.shell_resolved
+            if cache.shell_resolved
             else torch.zeros_like(qsh)
         )
 
@@ -485,7 +482,7 @@ class ES2(Interaction):
         RuntimeError
             ``positions`` tensor does not have ``requires_grad=True``.
         """
-        if self.shell_resolved:
+        if cache.shell_resolved:
             return torch.zeros_like(positions)
 
         energy = self.get_monopole_atom_energy(cache, charges)
@@ -533,7 +530,7 @@ class ES2(Interaction):
         RuntimeError
             ``positions`` tensor does not have ``requires_grad=True``.
         """
-        if not self.shell_resolved:
+        if not cache.shell_resolved:
             return torch.zeros_like(positions)
 
         energy = self.get_monopole_shell_energy(cache, charges)

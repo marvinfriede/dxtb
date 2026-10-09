@@ -339,7 +339,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             The tensors of the components are replaced by detached copies,
             which cuts gradients to tensors passed in by the user (e.g., an
             electric field with ``requires_grad=True``). Pass them again
-            after the reset. See :ref:`help_known_issues`.
+            after the reset. ES2 and ES3 setup-derived parameters are not
+            reset. See :ref:`help_known_issues`.
         """
         self.classicals.reset_all()
         self.interactions.reset_all()
@@ -518,9 +519,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.interactions = self.interactions.type(dtype)
         self.integrals = self.integrals.type(dtype)
 
-        # Keep the system consistent with the converted components. Its
-        # classical data is not converted (running the calculator after
-        # `type` is a known issue, see the class docstring).
+        # Keep the system consistent with the converted components where
+        # supported. Classical and ES2/ES3 setup data are not converted;
+        # evaluating after `type` is a known issue (see known_issues.rst).
         self.system = replace(
             self.system,
             classicals=self.classicals,

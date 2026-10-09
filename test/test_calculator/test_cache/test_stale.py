@@ -23,6 +23,8 @@ calls. Legacy component-cache cleanup remains scheduled for B6.
 
 from __future__ import annotations
 
+import random
+
 import pytest
 import torch
 from tad_mctc.batch import pack
@@ -102,15 +104,102 @@ def test_new_leaf_same_values(par, driver: str) -> None:
     assert pytest.approx(ref.cpu(), abs=1e-10) == forces.detach().cpu()
 
 
-def test_forces_twice_same_leaf() -> None:
-    """Repeated force calls do not reuse a consumed ES2 geometry graph."""
+@pytest.mark.parametrize("driver", drivers)
+def test_forces_twice_same_leaf(driver: str) -> None:
+    """Repeated force calls match a fresh Calculator on the same leaf."""
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers, positions = _setup(dd)
 
-    calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, **dd)
+    opts = {"verbosity": 0, "int_driver": driver}
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
     pos = positions.clone().requires_grad_(True)
-    calc.get_forces(pos)
-    calc.get_forces(pos)
+    first = calc.get_forces(pos)
+    second = calc.get_forces(pos)
+    fresh = _fresh_forces(numbers, positions, GFN1_XTB, opts)
+
+    torch.testing.assert_close(first, fresh, atol=1e-10, rtol=0.0)
+    torch.testing.assert_close(second, fresh, atol=1e-10, rtol=0.0)
+
+
+def test_es2_es3_reused_system_random_call_history() -> None:
+    """ES2/ES3 outputs and forces do not depend on evaluation history."""
+    dd: DD = {"device": DEVICE, "dtype": torch.double}
+    numbers = torch.tensor([1, 1], device=DEVICE)
+    positions_a = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], **dd)
+    positions_b = positions_a.clone()
+    positions_b[1, 2] += 0.12
+    options = {"verbosity": 0}
+    operations = (
+        "energy_a",
+        "singlepoint_a",
+        "force_new_a",
+        "singlepoint_b",
+        "force_same_leaf_a",
+        "energy_clone_a",
+        "singlepoint_clone_a",
+        "backward_then_singlepoint_a",
+    )
+
+    def evaluate(calc: Calculator, operation: str, shared_leaf) -> object:
+        if operation == "energy_a":
+            return calc.get_energy(positions_a)
+        if operation == "singlepoint_a":
+            return calc.singlepoint(positions_a)
+        if operation == "force_new_a":
+            return calc.get_forces(shared_leaf)
+        if operation == "singlepoint_b":
+            return calc.singlepoint(positions_b)
+        if operation == "force_same_leaf_a":
+            return calc.get_forces(shared_leaf)
+        if operation == "energy_clone_a":
+            return calc.get_energy(positions_a.clone())
+        if operation == "singlepoint_clone_a":
+            return calc.singlepoint(positions_a.clone())
+        if operation == "backward_then_singlepoint_a":
+            leaf = positions_a.clone().requires_grad_(True)
+            energy = calc.get_energy(leaf)
+            torch.autograd.grad(energy.sum(), leaf)
+            return calc.singlepoint(positions_a)
+        raise AssertionError(f"Unknown operation: {operation}")
+
+    def assert_same(actual: object, expected: object) -> None:
+        if isinstance(actual, torch.Tensor):
+            assert isinstance(expected, torch.Tensor)
+            torch.testing.assert_close(actual, expected)
+            return
+        assert hasattr(actual, "energy") and hasattr(expected, "energy")
+        for field in (
+            "energy",
+            "charges",
+            "potential",
+            "density",
+            "hcore",
+            "overlap",
+        ):
+            first_value = getattr(actual, field)
+            second_value = getattr(expected, field)
+            if field in ("charges", "potential"):
+                first_value = first_value.mono
+                second_value = second_value.mono
+            if first_value is not None:
+                torch.testing.assert_close(first_value, second_value)
+
+    expected: dict[str, object] = {}
+    for operation in operations:
+        reference_calc = Calculator(numbers, GFN1_XTB, opts=options, **dd)
+        reference_leaf = positions_a.clone().requires_grad_(True)
+        expected[operation] = evaluate(
+            reference_calc, operation, reference_leaf
+        )
+
+    for seed in (20261010, 42017):
+        order = list(operations)
+        random.Random(seed).shuffle(order)
+        calc = Calculator(numbers, GFN1_XTB, opts=options, **dd)
+        shared_leaf = positions_a.clone().requires_grad_(True)
+        for operation in order:
+            actual = evaluate(calc, operation, shared_leaf)
+            assert_same(actual, expected[operation])
 
 
 def test_numerical_dipole_without_result_cache() -> None:

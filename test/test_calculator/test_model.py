@@ -28,8 +28,11 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
+from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
+from dxtb.config import Config
+from dxtb.components.coulomb import new_es2, new_es3
 
 from ..conftest import DEVICE
 
@@ -59,6 +62,163 @@ def test_setup() -> None:
 
     batch = model.setup(torch.tensor([[3, 1], [1, 1]], device=DEVICE))
     assert batch.batch_mode == 1
+
+
+def test_custom_ordinary_es2_replaces_excluded_builtin() -> None:
+    """The explicit ES2 setup comes from the active custom ordinary term."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    default = new_es2(torch.unique(numbers), par, dtype=torch.double)
+    assert default is not None
+    custom = ES2(
+        default.hubbard,
+        default.lhubbard,
+        average=default.average,
+        gexp=torch.tensor(1.4, **DD),
+        shell_resolved=default.shell_resolved,
+        dtype=torch.double,
+    )
+    model = Model(
+        par=par,
+        config=Config.create(exclude="es2"),
+        interaction=(custom,),
+    )
+    system = model.setup(numbers)
+
+    assert system.es2_interaction is custom
+    assert system.es2_setup is not None
+    torch.testing.assert_close(system.es2_setup.gexp, custom.gexp)
+    assert torch.isfinite(system.singlepoint(positions).energy).all()
+
+
+def test_es2_subclass_uses_legacy_extension_path() -> None:
+    """A custom ES2 subclass is not intercepted by the built-in setup path."""
+
+    class ES2Extension(ES2):
+        __slots__ = ("cache_calls",)
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.cache_calls = 0
+
+        def get_cache(self, **kwargs):
+            self.cache_calls += 1
+            return super().get_cache(**kwargs)
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    original = new_es2(torch.unique(numbers), par, dtype=torch.double)
+    assert original is not None
+    custom = ES2Extension(
+        original.hubbard,
+        original.lhubbard,
+        average=original.average,
+        gexp=original.gexp,
+        shell_resolved=original.shell_resolved,
+        dtype=torch.double,
+    )
+    model = Model(
+        par=par,
+        config=Config.create(exclude="es2"),
+        interaction=(custom,),
+    )
+    system = model.setup(numbers)
+
+    assert system.es2_setup is None
+    assert system.es2_interaction is None
+    result = system.singlepoint(positions)
+    assert torch.isfinite(result.energy).all()
+    assert custom.cache_calls == 1
+
+
+@pytest.mark.parametrize("label", ["ES2", "ES3"])
+def test_duplicate_migrated_interaction_labels_rejected(label: str) -> None:
+    """Built-in plus additional ES2/ES3 labels are rejected at setup."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    if label == "ES2":
+        interaction1 = new_es2(torch.unique(numbers), par, dtype=torch.double)
+        interaction2 = new_es2(torch.unique(numbers), par, dtype=torch.double)
+    else:
+        interaction1 = new_es3(torch.unique(numbers), par, dtype=torch.double)
+        interaction2 = new_es3(torch.unique(numbers), par, dtype=torch.double)
+    assert interaction1 is not None and interaction2 is not None
+    with pytest.raises(ValueError, match="Duplicate ES2/ES3 labels"):
+        Model(par=par, interaction=(interaction1,)).setup(numbers)
+
+
+def test_calculator_reset_preserves_es2_es3_setup() -> None:
+    """Legacy reset leaves migrated interaction setup and its values intact."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    params = dict(par.named_parameters())
+    gam = params["parameter_tree.element.O.gam.param"]
+    gam3 = params["parameter_tree.element.O.gam3.param"]
+    gam.requires_grad_(True)
+    gam3.requires_grad_(True)
+    calc = Calculator(numbers, par, dtype=torch.double, opts={"verbosity": 0})
+    es2_setup = calc.system.es2_setup
+    es3_setup = calc.system.es3_setup
+    assert es2_setup is not None and es3_setup is not None
+
+    first = calc.singlepoint(positions)
+    es2_parameters = (
+        es2_setup.atom_hubbard,
+        es2_setup.shell_hubbard,
+        es2_setup.gexp,
+    )
+    es3_parameters = es3_setup.hubbard_derivs
+    calc.reset()
+    second = calc.singlepoint(positions.clone())
+
+    assert calc.system.es2_setup is es2_setup
+    assert calc.system.es3_setup is es3_setup
+    assert es2_setup.atom_hubbard is es2_parameters[0]
+    assert es2_setup.shell_hubbard is es2_parameters[1]
+    assert es2_setup.gexp is es2_parameters[2]
+    assert es3_setup.hubbard_derivs is es3_parameters
+    torch.testing.assert_close(first.energy, second.energy)
+    es2_hubbard = (
+        es2_setup.atom_hubbard
+        if es2_setup.atom_hubbard is not None
+        else es2_setup.shell_hubbard
+    )
+    assert es2_hubbard is not None
+    setup_scalar = (
+        es2_hubbard.sum() + es2_setup.gexp + es3_setup.hubbard_derivs.sum()
+    )
+    grad_gam, grad_gam3 = torch.autograd.grad(setup_scalar, (gam, gam3))
+    assert torch.isfinite(grad_gam).all()
+    assert torch.isfinite(grad_gam3).all()
+    assert torch.count_nonzero(grad_gam) > 0
+    assert torch.count_nonzero(grad_gam3) > 0
+
+
+def test_calculator_type_does_not_convert_es2_es3_setup() -> None:
+    """Post-type evaluation is unsupported for setup-derived ES2/ES3 data."""
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    calc = Calculator(
+        numbers, GFN1_XTB, dtype=torch.double, opts={"verbosity": 0}
+    )
+    assert calc.system.es2_setup is not None
+    assert calc.system.es3_setup is not None
+
+    calc.type(torch.float32)
+
+    assert calc.system.es2_setup.gexp.dtype == torch.float64
+    assert calc.system.es3_setup.hubbard_derivs.dtype == torch.float64
 
 
 def test_system_does_not_retain_mutable_integral_layer() -> None:
@@ -121,7 +281,9 @@ def test_system_integral_setup_is_narrow(driver: str) -> None:
             assert not hasattr(basis_setup, "par")
             assert not hasattr(basis_setup, "basis")
             assert not hasattr(basis_setup, "driver")
-            assert {field.name for field in dataclasses.fields(basis_setup)} == {
+            assert {
+                field.name for field in dataclasses.fields(basis_setup)
+            } == {
                 "numbers",
                 "unique",
                 "ihelp",

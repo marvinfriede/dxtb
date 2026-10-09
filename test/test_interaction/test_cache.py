@@ -62,15 +62,26 @@ def test_fail_overwritten_cache(
     comp = comp_factory(numbers, par, device=DEVICE)
     assert comp is not None
 
-    # create cache
+    # create persistent cache for the unmigrated family
     comp.cache_enable()
-    _ = comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    first = comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
     # manually overwrite cache
     comp.cache = InteractionCache()
 
-    with pytest.raises(TypeError):
-        comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    if comp.label in ("ES2", "ES3"):
+        fresh = comp.get_cache(
+            numbers=numbers, positions=positions, ihelp=ihelp
+        )
+        assert fresh is not first
+        assert isinstance(comp.cache, InteractionCache)
+        if comp.label == "ES2":
+            torch.testing.assert_close(fresh.mat, first.mat)
+        else:
+            torch.testing.assert_close(fresh.hd, first.hd)
+    else:
+        with pytest.raises(TypeError):
+            comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
 
 def test_fail_overwritten_cache_ef() -> None:

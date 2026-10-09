@@ -60,11 +60,15 @@ from dxtb._src.components.classicals import (
 from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
+    ES2,
     ES2Setup,
+    ES3,
+    ES3Setup,
     new_aes2,
     new_es2,
     new_es3,
     setup_es2,
+    setup_es3,
 )
 from dxtb._src.components.interactions.dispersion import new_d4sc
 from dxtb._src.components.interactions.field import efield
@@ -120,6 +124,15 @@ class System:
 
     es2_setup: ES2Setup | None
     """Numbers-only setup for pure single-system ES2 matrix construction."""
+
+    es2_interaction: ES2 | None
+    """Exact interaction associated with :attr:`es2_setup`, if any."""
+
+    es3_setup: ES3Setup | None
+    """Numbers-only parameter data for per-call ES3 interaction data."""
+
+    es3_interaction: ES3 | None
+    """Exact interaction associated with :attr:`es3_setup`, if any."""
 
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
@@ -277,17 +290,32 @@ class Model:
         interactions = InteractionList(
             es2, aes2, es3, d4sc, *self.interaction, **dd
         )
+        es2_interaction = next(
+            (i for i in interactions.components if type(i) is ES2), None
+        )
+        es3_interaction = next(
+            (i for i in interactions.components if type(i) is ES3), None
+        )
         es2_setup = (
             setup_es2(
                 numbers,
-                es2.hubbard,
+                es2_interaction.hubbard,
                 ihelp,
-                lhubbard=es2.lhubbard,
-                gexp=es2.gexp,
-                average=es2.average,
-                shell_resolved=es2.shell_resolved,
+                lhubbard=es2_interaction.lhubbard,
+                gexp=es2_interaction.gexp,
+                average=es2_interaction.average,
+                shell_resolved=es2_interaction.shell_resolved,
             )
-            if es2 is not None and batch_mode == 0
+            if es2_interaction is not None and batch_mode == 0
+            else None
+        )
+        es3_setup = (
+            setup_es3(
+                es3_interaction.hubbard_derivs,
+                ihelp,
+                shell_scale=es3_interaction.shell_scale,
+            )
+            if es3_interaction is not None and batch_mode == 0
             else None
         )
 
@@ -399,6 +427,9 @@ class Model:
             h0_setup=h0_setup,
             classical_cache=classical_cache,
             es2_setup=es2_setup,
+            es2_interaction=es2_interaction,
+            es3_setup=es3_setup,
+            es3_interaction=es3_interaction,
             dd=dd,
         )
 

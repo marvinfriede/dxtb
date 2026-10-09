@@ -36,6 +36,8 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2,
     ES2Cache,
 )
+from dxtb._src.components.interactions.list import InteractionList
+from dxtb._src.param import Param
 from dxtb._src.typing import Tensor
 
 from ..molecules import mols
@@ -101,6 +103,20 @@ def test_setup_builder_history_and_named_resolution(
         numbers=numbers, positions=positions, ihelp=ihelp
     )
     assert isinstance(legacy_cache, ES2Cache)
+    second_cache = interaction.get_cache(
+        numbers=numbers, positions=positions, ihelp=ihelp
+    )
+    assert second_cache is not legacy_cache
+    assert interaction.cache is None
+    assert interaction._cachevars is None
+    assert interaction._cachegrad is None
+    interaction.cache_disable()
+    interaction.cache_invalidate()
+    third_cache = interaction.get_cache(
+        numbers=numbers, positions=positions, ihelp=ihelp
+    )
+    assert third_cache is not second_cache
+    torch.testing.assert_close(third_cache.mat, second_cache.mat)
     torch.testing.assert_close(matrix1, legacy_cache.mat)
 
     # The method name fixes its resolution even when the interaction object's
@@ -187,6 +203,7 @@ def test_setup_builder_reverse_and_forward_transforms(
         ("gfn1", False, "parameter_tree.element.O.gam.param"),
         ("gfn1", True, "parameter_tree.element.O.lgam.param"),
         ("gfn1", True, "parameter_tree.charge.effective.gexp.param"),
+        ("gfn2", False, "parameter_tree.element.O.gam.param"),
         ("gfn2", True, "parameter_tree.element.O.lgam.param"),
         ("gfn2", True, "parameter_tree.charge.effective.gexp.param"),
     ],
@@ -276,12 +293,37 @@ def test_setup_has_only_gathered_values_and_core_bypasses_es2_cache(
 ) -> None:
     """System retains narrow ES2 data and core never asks ES2 for a cache."""
     numbers, positions, _, _, setup = _es2_setup(shell_resolved=True)
-    forbidden = ("Param", "ParamModule", "Model", "ES2", "Cache", "positions")
     assert isinstance(setup, ES2Setup)
-    assert all(
-        not any(token in field.name for token in forbidden)
-        for field in fields(setup)
+    assert {field.name for field in fields(setup)} == {
+        "atom_pair_mask",
+        "atom_mask",
+        "atom_hubbard",
+        "shell_pair_mask",
+        "shell_mask",
+        "shell_hubbard",
+        "shells_to_atom",
+        "gexp",
+        "average",
+        "shell_resolved",
+    }
+    forbidden_values = (
+        Param,
+        ParamModule,
+        Model,
+        ES2,
+        ES2Cache,
+        InteractionList,
     )
+    for field in fields(setup):
+        assert not isinstance(getattr(setup, field.name), forbidden_values)
+    assert not {"positions", "matrix", "coulomb"} & {
+        field.name for field in fields(setup)
+    }
+    forbidden_values = (ParamModule, Model, ES2, ES2Cache)
+    for field in fields(setup):
+        value = getattr(setup, field.name)
+        assert not isinstance(value, forbidden_values)
+        assert field.name not in {"positions", "matrix", "coulomb"}
     assert setup.shells_to_atom is not None
     assert setup.shell_hubbard is not None
     assert torch.unique(setup.shell_hubbard).numel() > 1
