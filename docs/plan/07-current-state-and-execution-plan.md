@@ -33,10 +33,10 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, repulsion, SRB, and classical D4 setup separation are done, while other required setup/per-call work remains. |
+| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, repulsion, SRB, classical D4, and IES setup separation are done, while other required setup/per-call work remains. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
-| B6             | partial                         | B6a ES2/ES3, repulsion, SRB, and classical D4 families are done; remaining component families are open. |
+| B6             | partial                         | B6a ES2/ES3, repulsion, SRB, classical D4, and IES families are done; remaining component families are open. |
 | B7             | not done                        | Explicit field API remains open.                                                                    |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -717,14 +717,14 @@ energy(term_setup, positions, call_inputs...) -> Tensor
 
 No term caches its most recent call.
 
-Families:
+Families and current status:
 
-- repulsion;
-- D3;
-- D4;
-- halogen;
-- IES;
-- short-range bond.
+- repulsion — done;
+- D3 — blocked upstream for forward AD;
+- D4 — classical D4 done; D4SC remains under interactions;
+- halogen — open;
+- IES — done;
+- short-range bond — done.
 
 Numbers-only tensors belong in setup.
 
@@ -1741,7 +1741,9 @@ Success means measured speed/memory improves without creating a second semantics
 
 B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batching remains scheduled for E6, and B3b remains incomplete until all required structural setup is explicit.
 
-E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: ES2/ES3, repulsion, SRB, and classical D4 are complete; remaining component families are open. B3b is partial: ES2, ES3, repulsion, SRB, and classical D4 setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
+E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: ES2/ES3, repulsion, SRB, classical D4, and IES are complete; halogen and other component families remain open. B3b is partial: ES2, ES3, repulsion, SRB, classical D4, and IES setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
+
+Package record: the IES family and classical D4 compatibility hardening were validated from task base `12d0182d6b0dff7214bddfcfe8f34eb22f8e77e2` and implemented in `635a6bbfbd1dbe07eabce68d46a42e3d03f35de1`. The independent Luna/high review found no blocker or major issue. D4SC, D3, halogen, and other B6 families were not migrated in this package.
 
 The next local package should be selected from the current dependency plan after review; do not begin it automatically. E1.3 remains an upstream dependency task and should resume when the D3 transform blocker is available. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
 
