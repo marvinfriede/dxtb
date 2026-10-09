@@ -204,6 +204,24 @@ def _srb() -> Target:
     return build
 
 
+def _ies_gfn0() -> Target:
+    """GFN0 IES setup-based energy on a nonzero, smooth water geometry."""
+
+    def build():
+        # pylint: disable=import-outside-toplevel
+        from dxtb._src.components.classicals import new_ies
+        from dxtb._src.components.classicals.ies import ies_energy
+
+        numbers, positions = _water()
+        par = _par("gfn0")
+        ies = new_ies(numbers, par, **DD)
+        assert ies is not None
+        setup = ies.get_cache(numbers)
+        return (lambda x: ies_energy(setup, x, 0.0).sum()), _leaf(positions)
+
+    return build
+
+
 ###############################################################################
 # ES2 Coulomb matrix
 
@@ -504,6 +522,7 @@ TARGETS: dict[str, Target] = {
     "repulsion_gfn2.positions": _classical("repulsion", "gfn2"),
     "repulsion_gfn2.arep": _repulsion("gfn2", "arep"),
     "srb_gfn0.positions": _srb(),
+    "ies_gfn0.positions": _ies_gfn0(),
     "es2.charges": _interaction("es2"),
     "es3.charges": _interaction("es3"),
     "aes2.dipoles": _interaction("aes2"),

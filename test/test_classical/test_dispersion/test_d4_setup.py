@@ -130,12 +130,13 @@ def test_explicit_q_remains_a_legacy_get_cache_override() -> None:
     torch.testing.assert_close(adapter_energy, explicit_energy)
 
 
-def test_unsupported_d4_model_subclass_is_rejected_explicitly() -> None:
-    """Do not silently erase custom model behavior while copying setup data."""
-    numbers, _ = _geometry()
+def test_direct_compatibility_preserves_d4_model_subclass() -> None:
+    """Direct legacy setup preserves caller D4Model extensions."""
+    numbers, positions = _geometry()
 
     class CustomD4Model(d4.model.D4Model):
-        pass
+        def get_atomic_c6(self, gw: Tensor) -> Tensor:
+            return 2.0 * super().get_atomic_c6(gw)
 
     dispersion = DispersionD4(
         numbers,
@@ -143,9 +144,15 @@ def test_unsupported_d4_model_subclass_is_rejected_explicitly() -> None:
         charge=torch.tensor(0.0, **DD),
         **DD,
     )
-    model = CustomD4Model(numbers, **DD)
-    with pytest.raises(TypeError, match="subclasses cannot be copied safely"):
-        dispersion.get_cache(numbers, model=model)
+    model = CustomD4Model(numbers, ref_charges="eeq", **DD)
+    setup = dispersion.get_cache(numbers, model=model)
+    assert isinstance(setup.model, CustomD4Model)
+    assert type(setup.model) is CustomD4Model
+    custom = dispersion.get_energy(positions, setup)
+    ordinary = dispersion_d4_energy(
+        dispersion.get_cache(numbers), positions, 0.0
+    )
+    assert not torch.allclose(custom, ordinary)
 
 
 def test_classical_d4_modes_keep_distinct_configuration() -> None:
@@ -206,6 +213,10 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
         getattr(setup.cutoff, name).clone()
         for name in ("disp2", "disp3", "cn", "cn_eeq")
     )
+    before_parameters = tuple(
+        (name, value.clone() if isinstance(value, Tensor) else value)
+        for name, value in setup.parameters
+    )
 
     a1 = dispersion_d4_energy(setup, positions, 0.0)
     moved = positions.clone()
@@ -222,6 +233,27 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
     torch.testing.assert_close(setup.model.rc6, before_rc6)
     for name, value in zip(("disp2", "disp3", "cn", "cn_eeq"), before_cutoff):
         torch.testing.assert_close(getattr(setup.cutoff, name), value)
+    for (name, value), (expected_name, expected) in zip(
+        setup.parameters, before_parameters
+    ):
+        assert name == expected_name
+        if isinstance(value, Tensor):
+            torch.testing.assert_close(value, expected)
+        else:
+            assert value == expected
+
+
+def test_total_charge_tensor_gradient_reaches_classical_d4() -> None:
+    """Classical D4 preserves autograd through scalar charge normalization."""
+    numbers, positions = _geometry()
+    system = _system(_parameters(self_consistent=False)).setup(numbers)
+    charge = torch.tensor(0.2, **DD, requires_grad=True)
+
+    energy = _classical_energy(system.singlepoint(positions, chrg=charge))
+    (gradient,) = torch.autograd.grad(energy, charge)
+
+    assert torch.isfinite(gradient)
+    assert torch.count_nonzero(gradient) > 0
 
 
 def test_actual_parameter_leaf_survives_setup_and_stale_object_mutation() -> (
@@ -503,7 +535,13 @@ def test_d4_subclass_remains_on_legacy_extension_path() -> None:
     )
 
     class D4Extension(DispersionD4):
-        __slots__ = ("scale", "cache_calls", "energy_calls", "reset_calls")
+        __slots__ = (
+            "scale",
+            "initial_scale",
+            "cache_calls",
+            "energy_calls",
+            "reset_calls",
+        )
 
         def __init__(self) -> None:
             super().__init__(
@@ -515,21 +553,22 @@ def test_d4_subclass_remains_on_legacy_extension_path() -> None:
             )
             self.label = "DispersionD4"
             self.scale = torch.tensor(2.0, **DD)
+            self.initial_scale = self.scale.clone()
             self.cache_calls = 0
             self.energy_calls = 0
             self.reset_calls = 0
 
         def get_cache(self, numbers, ihelp=None, **kwargs):
             self.cache_calls += 1
-            return torch.tensor(1.0, **DD)
+            return self.scale.clone()
 
         def get_energy(self, positions, cache, **kwargs):
             self.energy_calls += 1
-            return positions.new_ones(positions.shape[-2]) * self.scale
+            return positions.new_ones(positions.shape[-2]) * cache
 
         def reset(self) -> None:
             self.reset_calls += 1
-            super().reset()
+            self.scale = self.initial_scale.clone()
 
     extension = D4Extension()
     system = Model(
@@ -553,5 +592,20 @@ def test_d4_subclass_remains_on_legacy_extension_path() -> None:
         updated, torch.tensor(3.0 * positions.shape[-2], **DD)
     )
     system.classicals.reset("DispersionD4")
+    reset = _classical_energy(system.singlepoint(positions.clone()))
+    torch.testing.assert_close(reset, energy)
     system.classicals.reset_all()
     assert extension.reset_calls == 2
+    assert extension.cache_calls == 4
+
+    calculator_extension = D4Extension()
+    calc = Calculator(
+        numbers,
+        par,
+        classical=(calculator_extension,),
+        opts={"exclude": ("disp", "scf"), "verbosity": 0},
+        dtype=torch.double,
+        auto_int_level=False,
+    )
+    calc.reset()
+    assert calculator_extension.reset_calls == 1

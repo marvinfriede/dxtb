@@ -124,3 +124,9 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
 
     nat1 = sample1["numbers"].numel()
     assert torch.count_nonzero(atomwise[0, nat1:]) == 0
+
+    positions_grad = positions.clone().requires_grad_(True)
+    atomwise_grad = ies.get_energy(positions_grad, cache, charge=charge)
+    (gradient,) = torch.autograd.grad(atomwise_grad.sum(), positions_grad)
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient[0, nat1:]) == 0

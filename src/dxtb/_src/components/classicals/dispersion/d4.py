@@ -97,14 +97,14 @@ def setup_dispersion_d4(
     model = kwargs.pop("model", None)
     if model is not None and not isinstance(model, d4.model.D4Model):
         raise TypeError("D4: Model is not of type 'd4.model.D4Model'.")
-    if model is not None and type(model) is not d4.model.D4Model:
-        raise TypeError(
-            "D4: D4Model subclasses cannot be copied safely into setup data."
-        )
     if model is None:
         model = d4.model.D4Model(
             numbers, ref_charges=dispersion.ref_charges, **dd
         )
+    elif type(model) is not d4.model.D4Model:
+        # Preserve caller extensions at this legacy compatibility boundary.
+        # Canonical Model.setup never accepts or stores a custom D4Model.
+        model = model.type(dd["dtype"]).to(dd["device"])
     else:
         model = _copy_model(model, numbers, dd)
 

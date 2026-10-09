@@ -40,6 +40,7 @@ from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
 from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
 from .halogen import LABEL_HALOGEN, Halogen
+from .ies import IES, LABEL_IES
 from .repulsion import LABEL_REPULSION, Repulsion
 from .shortrangebond import LABEL_SRB, ShortRangeBond
 
@@ -67,7 +68,12 @@ class ClassicalList(ComponentList[Classical]):
         dtype: torch.dtype | None = None,
     ) -> None:
         """Create a classical list and reject duplicate migrated labels."""
-        for label in (LABEL_REPULSION, LABEL_SRB, LABEL_DISPERSIOND4):
+        for label in (
+            LABEL_REPULSION,
+            LABEL_SRB,
+            LABEL_DISPERSIOND4,
+            LABEL_IES,
+        ):
             matching = [
                 component
                 for component in components
@@ -78,6 +84,7 @@ class ClassicalList(ComponentList[Classical]):
                     LABEL_REPULSION: "repulsion",
                     LABEL_SRB: LABEL_SRB,
                     LABEL_DISPERSIOND4: LABEL_DISPERSIOND4,
+                    LABEL_IES: LABEL_IES,
                 }[label]
                 raise ValueError(
                     f"Multiple classical contributions use the label '{label}'. "
@@ -100,6 +107,7 @@ class ClassicalList(ComponentList[Classical]):
                 Repulsion,
                 ShortRangeBond,
                 DispersionD4,
+                IES,
             ):
                 component.reset()
 

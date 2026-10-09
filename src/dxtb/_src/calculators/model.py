@@ -48,10 +48,12 @@ import torch
 
 from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
+    IES,
     Classical,
     ClassicalList,
     DispersionD4,
     DispersionD4Setup,
+    IESSetup,
     Repulsion,
     RepulsionSetup,
     ShortRangeBond,
@@ -165,6 +167,12 @@ class System:
 
     d4_classical: DispersionD4 | None
     """Exact classical D4 associated with :attr:`d4_setup`."""
+
+    ies_setup: IESSetup | None
+    """Numbers/parameter setup for the exact migrated IES term."""
+
+    ies_classical: IES | None
+    """Exact IES associated with :attr:`ies_setup`."""
 
     dd: DD
     """Device and data type of the tensors of the system."""
@@ -408,6 +416,14 @@ class Model:
             if d4_classical is not None
             else None
         )
+        ies_classical = next(
+            (c for c in classicals.components if type(c) is IES), None
+        )
+        ies_setup = (
+            classical_cache[ies_classical.label]
+            if ies_classical is not None
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -478,6 +494,8 @@ class Model:
             srb_classical=srb_classical,
             d4_setup=d4_setup,
             d4_classical=d4_classical,
+            ies_setup=ies_setup,
+            ies_classical=ies_classical,
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,

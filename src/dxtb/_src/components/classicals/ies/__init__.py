@@ -22,6 +22,6 @@ Electronegativity-equilibration energy.
 """
 
 from .factory import new_ies
-from .ies import IES, LABEL_IES
+from .ies import IES, LABEL_IES, IESSetup, ies_energy, setup_ies
 
-__all__ = ["IES", "LABEL_IES", "new_ies"]
+__all__ = ["IES", "IESSetup", "LABEL_IES", "ies_energy", "new_ies", "setup_ies"]

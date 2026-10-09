@@ -30,7 +30,11 @@ from dxtb import labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
-from dxtb._src.components.classicals.dispersion.d4 import dispersion_d4_energy
+from dxtb._src.components.classicals.dispersion.d4 import (
+    DispersionD4,
+    dispersion_d4_energy,
+)
+from dxtb._src.components.classicals.ies import IES, ies_energy
 from dxtb._src.components.classicals.repulsion.rep import Repulsion
 from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
 from dxtb._src.components.interactions.coulomb.secondorder import (
@@ -198,6 +202,26 @@ def singlepoint(
                     and type(component) is not ShortRangeBond
                 ):
                     # Custom subclasses retain their legacy extension hooks.
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                elif (
+                    isinstance(component, DispersionD4)
+                    and type(component) is not DispersionD4
+                ):
+                    # D4 subclasses are legacy extensions. Refresh their
+                    # cache each evaluation so updates affect the next call.
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                elif component is system.ies_classical:
+                    if system.ies_setup is None:
+                        raise RuntimeError(
+                            "Single-system IES setup is missing."
+                        )
+                    classical[component.label] = ies_energy(
+                        system.ies_setup, positions, charge
+                    )
+                    timer.stop(component.label)
+                    continue
+                elif isinstance(component, IES) and type(component) is not IES:
+                    # Custom IES subclasses retain their cache-driven hooks.
                     setup = component.get_cache(system.numbers, system.ihelp)
                 else:
                     setup = system.classical_cache[component.label]
