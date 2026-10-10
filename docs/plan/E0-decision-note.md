@@ -5,33 +5,76 @@ This is a decision package, not an SCF implementation. It fixes the
 mathematical contract and package boundaries for E3, E4, and E6. The current
 mutable SCF engines remain transitional until those packages land.
 
-## 1. Canonical SCF physics and differentiation
+## 1. Canonical SCF physics and solver separation
 
-There is one canonical SCF physics definition:
+The canonical physical map is conceptually:
 
 ```python
-scf_step(state, inputs) -> new_state
+scf_map(x, inputs) -> SCFMapResult
 ```
 
-`state` and `inputs` are explicit immutable values. `scf_step` includes the
-physical interaction evaluation, spectral solution, occupations, density,
-charges/potential, free-energy data, and mixer transition needed for one
-fixed-point step. The fixed-point map includes Fermi/occupation physics; it is
-not merely a charge-to-Hamiltonian-to-charge map with occupations computed by
-an unrelated side path.
+`x` is the configured self-consistent variable: charges, potential, or a Fock
+matrix according to `scp_mode`. `inputs` are immutable per-call physical and
+setup values. `SCFMapResult` contains at least `mapped_x = G(x)` and the
+physical observables produced by that same evaluation: density, charges,
+potential, Hamiltonian, orbital energies, coefficients, occupations,
+free-energy data, and other observables needed by the result. Exact field and
+class names remain E4 implementation details.
 
-The exact same step definition is used by fixed-iteration unrolling, any future
-implicit differentiation, eager early-stop wrappers if retained, and mapped
-execution. There may be different solve/differentiation strategies around that
-step, but no independently evolving “full physics” and “implicit physics.”
+The physical fixed-point equation is:
 
-The **functional unrolled composition of the common step** is the G1
-correctness and reference differentiation path. Ordinary PyTorch composition
-provides the clearest derivative semantics, so its higher memory use is
-accepted for the reference path. This does not bless today's
-`SelfConsistentFieldFull` implementation wholesale: the current mutable
-`_Data`, culling, mixer objects, Lorentzian broadening, and hidden inverse
-Cholesky cache are not authoritative architecture.
+```text
+x* = G(x*; inputs)
+R(x*) = G(x*; inputs) - x* = 0
+```
+
+This equation contains no mixer history. A separate pure solver transition is
+conceptually:
+
+```python
+solver_step(solver_state, map_result, solver_settings) -> new_solver_state
+```
+
+`solver_state` may contain the current iterate, Anderson/Broyden/simple-mixer
+history, dynamic damping state, active/converged masks, and solver bookkeeping.
+The mixer is an algorithm for approaching the physical root, not part of the
+physical equation. Changing Simple ↔ Anderson ↔ Broyden may change convergence
+speed and the finite-iteration trajectory, but it must not change the SCF
+equation whose root defines the physical solution.
+
+The functional unrolled reference evaluates `G(x)`, computes the raw residual,
+applies the functional solver/mixer transition, and repeats. It differentiates
+the actual finite forward solver trajectory. The canonical equation used by
+future implicit differentiation is instead `G(x) - x = 0`; these are related
+but not identical mathematical objects. The unrolled composition around the
+common physical map is the G1 correctness/reference differentiation path.
+Ordinary PyTorch composition provides the clearest derivative semantics, so
+its higher memory use is accepted for this reference implementation. This
+does not bless today's `SelfConsistentFieldFull` implementation wholesale:
+the mutable `_Data`, culling, mixer objects, Lorentzian broadening, and hidden
+inverse-Cholesky cache are not authoritative architecture.
+
+The implicit function theorem applies to the raw physical equation:
+
+```text
+F(x, p) = G(x, p) - x = 0
+```
+
+It does not apply to Anderson history, Broyden history, dynamic damping, or the
+entire finite-iteration solver state. Apart from numerical convergence error,
+the implicit derivative of one converged physical solution must be
+independent of whether Simple, Anderson, or Broyden found it. Implicit
+differentiation is mathematically attached only to a converged fixed point. A
+nonconverged state must not silently receive a derivative presented as the
+derivative of the SCF root. E3 will choose an explicit runtime policy: eager
+failure/reporting, returning status without attaching the implicit derivative,
+or a documented fallback to an unrolled derivative.
+
+The physical map result and solver state have distinct ownership. `SCFMapResult`
+must not contain mixer history, damping generations, residual history, or
+solver counters. Conversely, physical outputs must come from the same map
+evaluation that supplies the convergence residual; they must not be recomputed
+from an unrelated mixed iterate after convergence.
 
 Current behavior is transitional and diverges between strategies:
 
@@ -42,6 +85,22 @@ Current behavior is transitional and diverges between strategies:
 
 That divergence must disappear. In particular, current forward-mode behavior
 must not select different derivative mathematics based on `requires_grad`.
+
+The source currently separates the raw physical evaluation from solver
+mixing. In full mode, `SelfConsistentFieldFull.scf()` evaluates
+`q_new = fcn(guess)` and then optionally mixes it at
+`src/dxtb/_src/scf/unrolling/default.py:81-97`; each loop repeats the raw map,
+then calls `mixer.iter(q_new, q)` at lines 101-115. In `Simple.iter()`, the
+returned update is `x_old + (x_new - x_old) * damp`, while the stored
+convergence delta is exactly `x_new - x_old` at
+`src/dxtb/_src/scf/mixer/simple.py:142-148`. `BaseSCF.iterate_charges()`
+increments `_data.iter` once per raw map call at
+`src/dxtb/_src/scf/base.py:636-651`. In implicit mode,
+`SelfConsistentFieldImplicit.scf()` sends its stateless map to `equilibrium()`
+at `src/dxtb/_src/scf/implicit/default.py:63-69`; the root callback is
+`y - fcn(y)` at `src/dxtb/_src/scf/implicit/fixed_point.py:516-522`. Thus the
+current physical equation already excludes mixer history even though the old
+full-mode class and this note previously described a single mixed “step.”
 
 ## 2. Current implicit mode and its future boundary
 
@@ -56,9 +115,11 @@ functional parameter-tree semantics.
 
 Treat it as a legacy reverse-autograd optimization only. Do not extend it
 piecemeal before E4 and do not silently change the public default in E0. After
-E4, an implicit strategy must wrap the exact same pure fixed-point map used by
-unrolling. All differentiable quantities are explicit input-tree leaves; no
-parameter discovery by graph or object introspection is allowed.
+E4, an implicit strategy must apply the implicit-function theorem to the exact
+same raw physical `scf_map` used by unrolling, using `G(x, p) - x = 0`; it
+must not wrap or differentiate the mixer/solver transition. All
+differentiable quantities are explicit input-tree leaves; no parameter
+discovery by graph or object introspection is allowed.
 
 E0 does not delete the current implementation. A future custom
 `torch.autograd.Function`, if proposed, requires a separately reviewed E3/E3b
@@ -193,55 +254,147 @@ are tensor masks; converged entries freeze their values. There is no
 `Tensor.item()`, tensor-dependent Python `break`, `bool(tensor)`, or Python
 `any()` over tensor-derived flags to control the numerical loop.
 
-Conceptually, one fixed-trip loop is:
+Conceptually, the future fixed-trip solver around the physical map is:
 
 ```python
-state = initial_state
+solver_state = initial_solver_state
 active = initial_active_mask
-iterations = zeros_like_systems(dtype=int64)
-residual = zeros_like_systems(dtype=inputs.dtype, trailing=2)
+final_map_result = scf_map(solver_state.x, inputs)
+iterations = ones_like_systems(dtype=int64)  # initial map evaluation
+residual = residual_values(final_map_result.mapped_x - solver_state.x)
 
-for iteration in range(maxiter):
-    candidate = scf_step(state, inputs)
-    newly_converged = active & convergence_test(candidate)
-    state = tree_where(active, candidate, state)
-    iterations = where(newly_converged, iteration + 1, iterations)
-    residual = tree_where(active, candidate.residual, residual)
-    active = active & ~newly_converged
+if maxiter > 0:  # static configuration branch; zero is supported
+    if mix_guess:
+        solver_state = initial_mix(solver_state, final_map_result)
+    else:
+        solver_state = with_x(solver_state, final_map_result.mapped_x)
 
-converged = ~active
-iterations = where(converged, iterations, maxiter)
+    for iteration in range(maxiter):
+        map_result = scf_map(solver_state.x, inputs)
+        raw_residual = map_result.mapped_x - solver_state.x
+        newly_converged = active & convergence_test(raw_residual)
+        final_map_result = tree_where(active, map_result, final_map_result)
+        residual = tree_where(active, residual_values(raw_residual), residual)
+        iterations = where(active, iterations + 1, iterations)
+        candidate_solver_state = solver_step(
+            solver_state, map_result, solver_settings
+        )
+        solver_state = tree_where(active, candidate_solver_state, solver_state)
+        active = active & ~newly_converged
+
+converged = zeros_like(active)
+if maxiter > 0:
+    converged = ~active
 ```
 
-`maxiter` is a positive static configuration value. The Python iteration
-count is static. The candidate state is accepted for
-currently active systems, including systems that converge on that step; later
-steps preserve their accepted state. Anderson/Broyden/simple mixer history is
-part of explicit `SCFState`; mixer settings are part of `SCFInputs` or its
-static configuration, and each mixer transition is a pure function.
+This sketch describes the eventual E4 structure; its public iteration-count
+compatibility is specified below. `SCFInputs` contains immutable per-call
+physical/setup inputs. `SCFMapResult` contains `G(x)` and the observables from
+that physical evaluation. `SCFSolverState` owns the current iterate, mixer
+history, active/converged masks, and solver bookkeeping. `SCFSolveResult`
+contains the selected final physical map result and convergence/status values.
+The raw residual is tested before the mixer changes the next iterate. A
+converged system's final physical observables are those from the `G(x_k)` map
+evaluation whose raw residual converged; the subsequently mixed iterate is
+never reported as though it were that converged physical evaluation.
 
-The convergence residual is the raw fixed-point delta `g(x) - x` for the
-configured iterated quantity, measured before mixer damping/history changes
-the next iterate. This preserves the current distinction between the map
-residual and a damped state update.
+The loop trip count is static, and no tensor-dependent Python `break` is used.
+The candidate physical result is accepted for currently active systems,
+including systems that converge on that evaluation; later evaluations freeze
+their physical result and status. Anderson/Broyden/simple mixer history and
+dynamic damping state belong only to `SCFSolverState`; mixer settings belong to
+`SCFInputs` or static solver configuration. The solver transition is a pure
+function.
 
-The numerical core returns tensor-valued per-system `iterations`,
-`converged`, and `residual` (for one System the system dimensions may be
-zero-dimensional). `residual` has a final length-two axis containing the raw
-L2 and maximum-absolute fixed-point deltas, in that order, matching the two
-current convergence tests. The configured tolerances are applied componentwise.
+The raw convergence residual is exactly:
 
-- `converged` is the tensor flag for the configured SCF residual criterion.
-- `iterations` is one-based and gives the first step at which that criterion
-  became true; if it never becomes true, it equals `maxiter`.
-- `residual` records both criterion values at the first converged step for a
-  converged system, and after `maxiter` for a nonconverged system.
+```text
+R(x) = G(x) - x
+```
 
-The eager compatibility wrapper may inspect those returned flags to issue the
+It is measured before damping or mixer history changes the next iterate. Its
+L2 and maximum-absolute values are computed from that raw physical residual,
+in that order, matching the existing pair of convergence tests. Convergence
+must not be defined from `mixed_x - x`, whose value depends on the solver
+settings. In current full mode this is the distinction represented by the
+mixer's stored raw delta `x_new - x_old`.
+
+### Iteration and result compatibility
+
+The terms below are distinct:
+
+- `maxiter` is the user-configured budget for loop cycles after the initial
+  physical-map evaluation in current full mode.
+- A physical-map evaluation is one call to the raw `G(x)` map.
+- A solver/mixer transition updates the next iterate and its history; current
+  full mode has an initial mix transition only when `mix_guess=True`, then one
+  transition after each loop map evaluation.
+- `Result.iterations` currently reports the number of physical-map
+  evaluations, including the initial evaluation. It is not the number of
+  mixer transitions or the configured `maxiter` value.
+- A future first-converged-step index is a separate status concept and must
+  not be silently substituted for current public `Result.iterations`.
+
+Current full mode deliberately supports `maxiter=0`: it evaluates `G(guess)`
+once, returns that raw physical map result, performs no mixer transition, and
+reports one iteration/map evaluation. `mix_guess` has no effect in this case.
+For positive `maxiter`, the implementation starts with one raw evaluation and
+then performs up to `maxiter` further map evaluations, stopping early if the
+raw map delta meets convergence. Thus with no early convergence the current
+full-mode reported count is `maxiter + 1`. This compatibility contract is
+characterized by `test/test_scf/test_e0_iteration_compat.py` and is the first
+behavior E4 must preserve. The characterization also records that `mix_guess`
+changes the finite trajectory and returned physical values for positive
+budgets, but not the physical fixed-point equation. On the current deterministic
+CPU GFN1 H2O case with Simple mixing and damping `0.25`, the characterization
+is:
+
+| `maxiter` | `mix_guess` | raw map evaluations / reported iterations | mixer transitions | returned total energy | unconverged warning |
+| ---: | :---: | ---: | ---: | ---: | :---: |
+| 0 | true | 1 | 0 | -5.7674748965126055 | no |
+| 0 | false | 1 | 0 | -5.7674748965126055 | no |
+| 1 | true | 2 | 2 | -5.768234535786348 | yes |
+| 1 | false | 2 | 1 | -5.768064929714654 | yes |
+| 2 | true | 3 | 3 | -5.768491792471992 | yes |
+| 2 | false | 3 | 2 | -5.768438426259488 | yes |
+
+Exact returned orbital charges are locked alongside energy in the focused
+compatibility test. The positive-budget cases use `f_atol=x_atol=x_atol_max=
+1e-12`; they do not converge in one or two cycles, so the warning is expected.
+The initial map is not convergence-tested by the current full-mode algorithm.
+Consequently `maxiter` is non-negative, not positive, and the zero case is a
+separately preserved one-shot operation.
+
+The future core returns tensor-valued per-system `iterations`, `converged`, and
+`residual`. `converged` and `residual` describe the raw map criterion and the
+map evaluation selected as the final physical result. For positive budgets,
+`iterations` first preserves the characterized current full-mode
+map-evaluation-count semantics, including the initial evaluation. A system
+that converges records the count at its first converged raw map evaluation; a
+system that exhausts the budget records the number of map evaluations actually
+performed (up to `maxiter + 1`). For `maxiter=0`, the observable compatibility
+requirement is one raw map evaluation and `Result.iterations == 1`; the current
+API has no convergence-status field for this one-shot case. The future E4
+status is explicitly conservative: `converged=False` because no outer
+convergence check was performed, and `residual` contains the raw diagnostic
+`G(guess)-guess` from that initial map. A small diagnostic residual does not
+retroactively turn the one-shot operation into a convergence test. This also
+prevents implicit root differentiation from attaching to a zero-budget result.
+Any different zero-budget status convention requires an explicit API
+behavior-change decision. For mapped systems, later fixed-trip evaluations
+freeze each system's physical result and status.
+
+Current implicit mode uses a different root solver and reports its own
+function-evaluation count. It remains transitional; do not force its current
+count to match full mode. The common future E4 solver/status contract applies
+to the canonical functional solver, while legacy implicit mode keeps its
+existing behavior until separately rebuilt around the common map.
+
+The eager compatibility wrapper may inspect returned status to issue a
 configured warning/error or user-facing message. The transform-critical
 numerical kernel returns values and status; it does not synchronize to the
-host to decide whether it is allowed to continue. Invalid static structure
-may still be rejected eagerly before evaluation.
+host to decide whether it may continue. Invalid static structure may still be
+rejected eagerly before evaluation.
 
 ## 7. NO2 third-order isolation
 
@@ -267,20 +420,27 @@ matrix green.
 
 ## 8. Package boundaries and status
 
-**E4 owns** explicit immutable `SCFInputs` and `SCFState`, the common pure
-`scf_step`, functional mixers, the fixed-trip masked loop, removal of
-SCF/cache `cull`/`restore`, transform-compatible Fermi control flow, and
-per-call spectral inputs such as the inverse-Cholesky factor. E4 may reuse
-current numerical formulas, but this note does not declare today's
-`BaseSCF._Data`, `_MapData`, or `pure.iterations` suitable as the final explicit
-state/input API.
+**E4 owns** both (A) the pure physical `scf_map(x, inputs) -> SCFMapResult` and
+(B) the pure functional solver around that map: immutable `SCFInputs`, explicit
+`SCFSolverState`, functional mixers, a fixed-shape solver loop, fixed-trip
+tensor-masked SCF/Fermi control flow, convergence/status tensors, removal of
+SCF/cache `cull`/`restore`, and per-call spectral inputs such as the inverse-
+Cholesky factor. E4 may reuse numerical formulas, but it must not combine the
+physical map and solver transition into one opaque state update. This note
+does not declare today's `BaseSCF._Data`, `_MapData`, or `pure.iterations`
+suitable as the final explicit API.
 
-**E3 owns**, after E0 is accepted and E4 supplies the pure map, invariant
-spectral/density differentiation, the NO2 isolation and fix, higher-order SCF
-derivative validation, unrolled-versus-implicit comparison, and any optional
-transform-compatible implicit strategy. If the invariant spectral primitive
-must land before E4 can function, split that work into a narrowly approved
-spectral-prerequisite package; E4 must not improvise its derivative contract.
+**E3 owns**, after E0 is accepted and E4 supplies the raw physical map,
+invariant spectral/density differentiation, the NO2 isolation and fix,
+higher-order SCF derivative validation, unrolled-versus-implicit comparison,
+and any optional transform-compatible implicit strategy. Its implicit path
+consumes `scf_map` (or the corresponding raw-map component of the E4 API),
+never the selected mixer. A required later acceptance test is that the same
+converged physical point reached by Simple, Anderson, and Broyden gives the
+same implicit physical derivative within solver convergence error. If the
+invariant spectral primitive must land before E4 can function, split that work
+into a narrowly approved spectral-prerequisite package; E4 must not improvise
+its derivative contract.
 
 **E6 owns** external batching and `vmap` of complete Systems. E4 must make the
 single-System SCF transform-compatible enough for E6. The B7 field kernels

@@ -41,7 +41,7 @@ Current state:
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
-| E0             | done — decision fixed           | Common pure SCF map, invariant spectral response, fixed-trip convergence semantics, and E3/E4/E6 boundaries are recorded in [`E0-decision-note.md`](E0-decision-note.md). |
+| E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. Full-mode `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial                         | Existing pair builder groups/scatters pairs and supports higher derivatives.                         |
 | E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
@@ -831,21 +831,23 @@ Fermi-search blocker on both trees; no SCF source was changed. Whole-System
 # 11. E0: SCF/eigensolver decision
 
 The E0 decision is recorded in [`E0-decision-note.md`](E0-decision-note.md).
-E0 fixes one pure explicit `scf_step` as the common SCF physics map and
-functional unrolling of that map as the G1 reference differentiation path.
-The current implicit mode remains a public legacy reverse-autograd
-optimization until it can wrap the E4 map. Spectral derivatives target
-gauge-invariant density/occupation quantities; Lorentzian eigenvector
-broadening is not the final derivative definition. Finite-temperature
-degeneracies use the analytic spectral divided-difference limit, and a
-zero-temperature occupied/unoccupied crossing is not assigned an artificial
-derivative.
+The raw physical map `G(x)` is distinct from the pure solver/mixer transition.
+Functional unrolling evaluates `G`, applies the functional solver, and
+differentiates that finite trajectory as the G1 reference path. Future
+implicit differentiation applies to the mixer-independent physical equation
+`G(x)-x=0`, only at a converged fixed point. Full-mode `maxiter` and
+`Result.iterations` compatibility, including the supported `maxiter=0`
+one-shot behavior, is characterized.
 
-E4 owns the explicit pure map, fixed-trip tensor-masked SCF/Fermi control
-flow, and per-call spectral inputs. E3 owns invariant spectral differentiation
-and the NO2 diagnosis/fix after the map is available. E6 owns complete-System
-batching. E0 changes no SCF implementation and does not mark E3, E4, or E6
-done.
+Spectral derivatives target gauge-invariant density/occupation quantities;
+Lorentzian eigenvector broadening is not the final derivative definition.
+Finite-temperature degeneracies use the analytic spectral divided-difference
+limit, and a zero-temperature occupied/unoccupied crossing is not assigned an
+artificial derivative. E4 owns both the pure physical map and the functional
+fixed-shape solver around it, including tensor-masked SCF/Fermi control flow
+and per-call spectral inputs. E3 owns invariant spectral differentiation and
+the NO2 diagnosis/fix using the raw E4 map. E6 owns complete-System batching.
+E0 changes no SCF implementation and does not mark E3, E4, or E6 done.
 
 ---
 
@@ -926,7 +928,8 @@ The existing `scf/pure` naming is misleading: `_Data` and iteration functions st
 
 Do not incrementally patch this object.
 
-Define explicit immutable/static inputs and iteration state.
+Define explicit immutable/static inputs, raw physical-map results, and solver
+state as separate values.
 
 Suggested concepts:
 
@@ -938,31 +941,44 @@ class SCFInputs:
     ...
 
 @dataclass(frozen=True)
-class SCFState:
-    charges: ...
+class SCFMapResult:
+    mapped_x: ...
     density: ...
     potential: ...
     hamiltonian: ...
     emo: ...
     coefficients: ...
+    occupations: ...
+    free_energy: ...
+
+@dataclass(frozen=True)
+class SCFSolverState:
+    x: ...
     mixer_state: ...
+    active: ...
+    iterations: ...
     residual: ...
-    converged: ...
 ```
 
 Then:
 
 ```python
-def scf_step(
-    state: SCFState,
+def scf_map(
+    x: Tensor,
     inputs: SCFInputs,
-) -> SCFState:
+) -> SCFMapResult:
+    ...
+
+def solver_step(
+    state: SCFSolverState,
+    result: SCFMapResult,
+    settings: ...,
+) -> SCFSolverState:
     ...
 ```
 
-No mutation of `inputs`.
-
-No mutation of the incoming state.
+The physical equation is `G(x) - x = 0`; mixer history belongs only to
+`SCFSolverState`. No mutation of inputs, map results, or incoming solver state.
 
 ## E4.1 Functional mixers
 
@@ -986,14 +1002,43 @@ For mapped execution, use an active/converged mask and preserve the previous sta
 
 Do not use tensor-dependent Python `break` in the transform path.
 
-Conceptually:
+Conceptually, preserve the existing full-mode budget contract: evaluate the
+initial map once, use its mapped value directly when `mix_guess=False`, or
+apply the functional initial mix when `mix_guess=True`, then perform up to
+`maxiter` additional map evaluations. In particular, `maxiter=0` still
+returns the one-shot initial map result and reports one map evaluation.
 
 ```python
+result = scf_map(state.x, inputs)
+final_result = result
+iterations = ones_like_systems(dtype=int64)
+residual = residual_values(result.mapped_x - state.x)
+converged = zeros_like(active)
+if maxiter > 0:
+    state = (
+        initial_mix(state, result)
+        if mix_guess
+        else with_x(state, result.mapped_x)
+    )
+
 for _ in range(maxiter):
-    candidate = scf_step(state, inputs)
+    result = scf_map(state.x, inputs)
+    residual = result.mapped_x - state.x
+    newly_converged = active & convergence_test(residual)
+    final_result = tree_where(active, result, final_result)
+    candidate = solver_step(state, result, settings)
     state = tree_where(active, candidate, state)
-    active = active & ~candidate.converged
+    iterations = where(active, iterations + 1, iterations)
+    active = active & ~newly_converged
+
+if maxiter > 0:
+    converged = ~active
 ```
+
+For the zero-budget one-shot, report `converged=False` because no convergence
+test ran, and retain `G(guess)-guess` as a diagnostic residual. For positive
+budgets, `iterations` counts physical-map evaluations, including the initial
+one, to preserve the current full-mode `Result.iterations` contract.
 
 The exact tree masking helper can be optimized later.
 
@@ -1056,10 +1101,11 @@ Do not build higher-order implicit differentiation around today's mutable `_Data
 
 Required implementation structure:
 
-1. one pure SCF fixed-point/step definition;
-2. unrolled differentiation as the reference implementation;
-3. optional implicit derivative mechanism wrapping that exact definition;
-4. explicit tests comparing implicit and unrolled results.
+1. one pure raw physical map `scf_map(x, inputs) -> SCFMapResult`;
+2. a pure functional solver/mixer around that map;
+3. unrolled differentiation of the actual solver trajectory as the reference;
+4. optional implicit differentiation of `G(x)-x=0`, independent of mixer;
+5. explicit tests comparing implicit and unrolled results.
 
 Required test ladder:
 
