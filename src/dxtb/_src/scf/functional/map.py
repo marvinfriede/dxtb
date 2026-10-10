@@ -21,7 +21,6 @@ from __future__ import annotations
 import torch
 from tad_mctc import storch
 from tad_mctc.math import einsum
-from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions.container import Charges, Potential
@@ -37,7 +36,11 @@ from .data import (
     unpack_charges,
 )
 
-__all__ = ["potential_to_hamiltonian", "scf_map"]
+__all__ = [
+    "potential_from_charges",
+    "potential_to_hamiltonian",
+    "scf_map",
+]
 
 
 def potential_to_hamiltonian(
@@ -86,9 +89,10 @@ def _legacy_potential(potential: Potential) -> SCFPotential:
     )
 
 
-def _potential_from_charges(
+def potential_from_charges(
     charges: SCFCharges, inputs: SCFInputs
 ) -> SCFPotential:
+    """Evaluate a fresh potential value from arbitrary explicit charges."""
     local = inputs.interactions.get_potential(
         inputs.interaction_data, _legacy_charges(charges), inputs.ihelp
     )
@@ -155,23 +159,8 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
     persistent state. Finite-temperature occupation remains deferred to the
     transform-compatible Fermi work in a later E4 package.
     """
-    from dxtb._src.constants import labels
-
-    if inputs.config.scp_mode != labels.SCP_MODE_CHARGE:
-        raise NotImplementedError(
-            "E4.0 currently implements the raw charge SCF map only; "
-            "potential and Fock modes are deferred."
-        )
-
-    if inputs.config.fermi.etemp * KELVIN2AU >= 3.0e-7:
-        raise NotImplementedError(
-            "E4.0 raw-map evaluation currently requires effectively zero "
-            "electronic temperature; finite-temperature Fermi handling is "
-            "deferred."
-        )
-
     charges_in = unpack_charges(x, inputs.charge_layout)
-    potential = _potential_from_charges(charges_in, inputs)
+    driving_potential = potential_from_charges(charges_in, inputs)
     integrals = inputs.integrals
     hamiltonian = potential_to_hamiltonian(
         integrals.hcore,
@@ -179,7 +168,7 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
         integrals.dipole,
         integrals.quadrupole,
         inputs.ihelp,
-        potential,
+        driving_potential,
     )
 
     emo, coefficients = _transitional_diagonalize(hamiltonian, inputs)
@@ -190,7 +179,7 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
     return SCFMapResult(
         mapped_x=pack_charges(charges_out, inputs.charge_layout),
         charges=charges_out,
-        potential=potential,
+        driving_potential=driving_potential,
         hamiltonian=hamiltonian,
         density=density,
         emo=emo,

@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,7 +29,8 @@ from torch.func import jacfwd, jvp, vmap
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.base import Component
-from dxtb._src.components.interactions import InteractionList
+from dxtb._src.components.interactions import Interaction, InteractionList
+from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.list import InteractionListCache
@@ -39,14 +40,19 @@ from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     ChargeLayout,
     SCFCharges,
+    SCFPotential,
     pack_charges,
+    potential_from_charges,
     scf_map,
     setup_scf_inputs,
     unpack_charges,
+    validate_functional_scf_interactions,
 )
+from dxtb._src.scf.functional.map import _transitional_diagonalize
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+from dxtb._src.scf.utils import get_density
 
 from ..utils import get_param_module
 from .samples import samples
@@ -61,6 +67,7 @@ def _prepare_case(
     positions: torch.Tensor | None = None,
     par: ParamModule | None = None,
     int_level: int | None = None,
+    scf_options: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     sample = samples["H2O"]
     numbers = sample["numbers"].to(device="cpu")
@@ -80,19 +87,22 @@ def _prepare_case(
             if field is not None
             else labels.INTLEVEL_QUADRUPOLE
         )
+    opts: dict[str, object] = {
+        "verbosity": 0,
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": labels.SCP_MODE_CHARGE,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": int_level,
+        "fermi_etemp": 0.0,
+    }
+    if scf_options is not None:
+        opts.update(scf_options)
     calc = Calculator(
         numbers,
         par,
         device="cpu",
         dtype=torch.float64,
-        opts={
-            "verbosity": 0,
-            "scf_mode": labels.SCF_MODE_FULL,
-            "scp_mode": labels.SCP_MODE_CHARGE,
-            "int_driver": labels.INTDRIVER_PYTORCH,
-            "int_level": int_level,
-            "fermi_etemp": 0.0,
-        },
+        opts=opts,
     )
     system = calc.model.setup(numbers, dd=calc.dd)
     charge_tensor = positions.new_tensor([charge])
@@ -147,6 +157,10 @@ def _prepare_case(
         system.config.scf,
     )
     return SimpleNamespace(
+        method=method,
+        int_level=int_level,
+        field=field,
+        par=par,
         calc=calc,
         system=system,
         positions=positions,
@@ -219,9 +233,23 @@ def test_charge_layout_round_trip(
 
 
 def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
-    engine = case.engine
-    expected_x = engine._fcn(x)
-    actual = scf_map(x, case.inputs)
+    """Compare raw maps built from independent mutable preparations."""
+    kwargs: dict[str, object] = {
+        "method": case.method,
+        "charge": case.charge,
+        "spin": case.spin,
+        "field": case.field,
+        "positions": case.positions.clone(),
+        "par": case.par,
+        "int_level": case.int_level,
+    }
+    legacy_case = _prepare_case(**kwargs)
+    functional_case = _prepare_case(**kwargs)
+    legacy_x = x.clone()
+    functional_x = x.clone()
+    engine = legacy_case.engine
+    expected_x = engine._fcn(legacy_x)
+    actual = scf_map(functional_x, functional_case.inputs)
 
     _assert_tensor_equal(actual.mapped_x, expected_x)
     _assert_tensor_equal(actual.hamiltonian, engine._data.hamiltonian)
@@ -241,13 +269,17 @@ def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
 
     input_charges = engine.converged_to_charges(x)
     expected_potential = engine.charges_to_potential(input_charges)
-    _assert_tensor_equal(actual.potential.mono, expected_potential.mono)
+    _assert_tensor_equal(actual.driving_potential.mono, expected_potential.mono)
     if expected_potential.dipole is not None:
-        assert actual.potential.dipole is not None
-        _assert_tensor_equal(actual.potential.dipole, expected_potential.dipole)
+        assert actual.driving_potential.dipole is not None
+        _assert_tensor_equal(
+            actual.driving_potential.dipole, expected_potential.dipole
+        )
     if expected_potential.quad is not None:
-        assert actual.potential.quad is not None
-        _assert_tensor_equal(actual.potential.quad, expected_potential.quad)
+        assert actual.driving_potential.quad is not None
+        _assert_tensor_equal(
+            actual.driving_potential.quad, expected_potential.quad
+        )
 
     # Coefficients are compared only through their occupation-weighted
     # projector, which is invariant to eigenvector column signs.
@@ -282,6 +314,221 @@ def test_gfn2_h2o_multipole_raw_map_matches_full_engine() -> None:
     assert case.inputs.charge_layout.dipole_shape is not None
     assert case.inputs.charge_layout.quadrupole_shape is not None
     _compare_raw_map(case, case.x)
+
+
+def test_map_uses_input_potential_and_output_charge_potential_is_distinct() -> (
+    None
+):
+    case = _prepare_case(GFN1_XTB)
+    x = case.x.clone()
+    x[0, 0] += 0.4
+    result = scf_map(x, case.inputs)
+    output_potential = potential_from_charges(result.charges, case.inputs)
+
+    assert result.driving_potential.mono is not None
+    assert output_potential.mono is not None
+    difference = torch.max(
+        torch.abs(result.driving_potential.mono - output_potential.mono)
+    )
+    assert difference > 1.0e-5
+
+
+def test_full_finalization_recomputes_potential_from_returned_charges() -> None:
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "maxiter": 1,
+            "mix_guess": False,
+            "x_atol": 1.0e5,
+            "x_atol_max": 1.0e5,
+        },
+    )
+    engine = case.engine
+    guess = case.x.clone()
+    guess[0, 0] += 0.4
+    initial_charges = engine.converged_to_charges(guess)
+    original_iterate = engine.iterate_charges
+    raw_calls: list[
+        tuple[
+            torch.Tensor,
+            torch.Tensor,
+            SCFPotential,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ]
+    ] = []
+
+    def record_raw_call(x: torch.Tensor) -> torch.Tensor:
+        input_charges = engine.converged_to_charges(x)
+        potential = engine.charges_to_potential(input_charges)
+        driving = SCFPotential(
+            potential.mono,
+            dipole=potential.dipole,
+            quad=potential.quad,
+        )
+        mapped = original_iterate(x)
+        raw_calls.append(
+            (
+                x.clone(),
+                mapped.clone(),
+                driving,
+                engine._data.hamiltonian.clone(),
+                engine._data.density.clone(),
+                engine._data.evals.clone(),
+            )
+        )
+        return mapped
+
+    engine.iterate_charges = record_raw_call
+    final = engine(charges=initial_charges)
+    assert len(raw_calls) == 2
+
+    (
+        input_x,
+        last_mapped_x,
+        last_driving_potential,
+        last_hamiltonian,
+        last_density,
+        last_emo,
+    ) = raw_calls[-1]
+    final_x = final["charges"].as_tensor()
+    _assert_tensor_equal(final_x, last_mapped_x)
+
+    # The returned spectral outputs belong to the last raw map evaluation.
+    _assert_tensor_equal(final["hamiltonian"], last_hamiltonian)
+    _assert_tensor_equal(final["density"], last_density)
+    _assert_tensor_equal(final["emo"], last_emo)
+
+    # Finalization deliberately evaluates the potential and interaction
+    # energy from G(x), rather than reusing the V(x) that drove the last map.
+    final_potential = final["potential"]
+    expected_potential = engine.charges_to_potential(final["charges"])
+    _assert_tensor_equal(final_potential.mono, expected_potential.mono)
+    assert final_potential.mono is not None
+    assert last_driving_potential.mono is not None
+    assert (
+        torch.max(torch.abs(final_potential.mono - last_driving_potential.mono))
+        > 1.0e-5
+    )
+
+    h0_energy = engine._data.ihelp.reduce_orbital_to_atom(engine._data.energy)
+    interaction_energy = engine.interactions.get_energy(
+        final["charges"], engine._data.cache, engine._data.ihelp
+    )
+    _assert_tensor_equal(final["energy"], h0_energy + interaction_energy)
+    input_charges = engine.converged_to_charges(input_x)
+    input_interaction_energy = engine.interactions.get_energy(
+        input_charges, engine._data.cache, engine._data.ihelp
+    )
+    assert (
+        torch.max(torch.abs(interaction_energy - input_interaction_energy))
+        > 1.0e-8
+    )
+    assert input_x.shape == final_x.shape
+
+
+def test_static_scf_configuration_is_validated_at_setup() -> None:
+    case = _prepare_case(GFN1_XTB)
+    assert not hasattr(case.inputs, "config")
+    baseline = scf_map(case.x, case.inputs)
+
+    potential_config = replace(
+        case.system.config.scf, scp_mode=labels.SCP_MODE_POTENTIAL
+    )
+    with pytest.raises(NotImplementedError, match="charge raw map only"):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            potential_config,
+        )
+
+    warm_config = replace(
+        case.system.config.scf,
+        fermi=replace(case.system.config.scf.fermi, etemp=1000.0),
+    )
+    with pytest.raises(
+        NotImplementedError, match="zero electronic temperature"
+    ):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            warm_config,
+        )
+
+    iterates = torch.stack((case.x, case.x + 0.01))
+    before_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
+        iterates
+    )
+    # ConfigSCF is frozen, so a changed configuration is a replacement. The
+    # legacy engine's replacement is the mutable authority boundary here;
+    # SCFInputs does not retain that config or the engine.
+    case.engine.config = replace(
+        case.engine.config,
+        scp_mode=labels.SCP_MODE_POTENTIAL,
+        fermi=replace(case.engine.config.fermi, etemp=250.0),
+    )
+    after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
+        iterates
+    )
+    _assert_tensor_equal(after_config_change, before_config_change)
+    after = scf_map(case.x, case.inputs)
+    _assert_tensor_equal(after.mapped_x, baseline.mapped_x)
+
+
+class _MutatingPotentialInteraction(Interaction):
+    label = "MutatingPotentialInteraction"
+
+    def __init__(self) -> None:
+        super().__init__(device=torch.device("cpu"), dtype=torch.float64)
+        self.calls = 0
+
+    def get_monopole_atom_potential(
+        self,
+        cache: InteractionCache,
+        qat: torch.Tensor,
+        qdp: torch.Tensor | None = None,
+        qqp: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self.calls += 1
+        return torch.zeros_like(qat)
+
+
+def test_functional_eligibility_rejects_custom_mutable_interactions() -> None:
+    case = _prepare_case(GFN1_XTB)
+    custom = _MutatingPotentialInteraction()
+    interactions = InteractionList(custom, device="cpu", dtype=torch.float64)
+
+    # Ordinary interaction construction remains available to the legacy path.
+    assert len(interactions.components) == 1
+    assert interactions.components[0] is custom
+    with pytest.raises(TypeError, match="exact migrated built-in"):
+        validate_functional_scf_interactions(interactions)
+    assert custom.calls == 0
+    with pytest.raises(TypeError, match="exact migrated built-in"):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+        )
 
 
 def test_charged_spin_raw_map_matches_full_engine() -> None:
@@ -356,6 +603,42 @@ def test_map_position_derivatives_and_iterate_vmap() -> None:
     _assert_tensor_equal(mapped, looped)
 
 
+def test_forward_derivative_mismatch_is_inside_transitional_spectrum() -> None:
+    case = _prepare_case(GFN1_XTB)
+    hamiltonian = scf_map(case.x, case.inputs).hamiltonian.detach()
+    probe = torch.arange(
+        hamiltonian.numel(), dtype=hamiltonian.dtype
+    ).reshape_as(hamiltonian)
+    probe = probe / hamiltonian.numel()
+    direction = torch.arange(
+        hamiltonian.numel(), dtype=hamiltonian.dtype
+    ).reshape_as(hamiltonian)
+    direction = (direction + direction.mT) / hamiltonian.numel()
+    occupation = case.inputs.occupation.sum(-2)
+
+    def spectral_projection(h: torch.Tensor) -> torch.Tensor:
+        _, coefficients = _transitional_diagonalize(h, case.inputs)
+        density = get_density(coefficients, occupation)
+        return torch.sum(probe * density)
+
+    _, tangent = jvp(spectral_projection, (hamiltonian,), (direction,))
+    h_leaf = hamiltonian.clone().requires_grad_(True)
+    reverse_value = spectral_projection(h_leaf)
+    (reverse_gradient,) = torch.autograd.grad(reverse_value, h_leaf)
+    reverse_tangent = torch.sum(reverse_gradient * direction)
+    forward_jacobian = jacfwd(spectral_projection)(hamiltonian)
+    jacfwd_tangent = torch.sum(forward_jacobian * direction)
+
+    jvp_discrepancy = torch.abs(tangent - reverse_tangent)
+    jacfwd_discrepancy = torch.abs(jacfwd_tangent - reverse_tangent)
+    assert torch.isfinite(jvp_discrepancy)
+    assert torch.isfinite(jacfwd_discrepancy)
+    # This intentionally records the known mode-selection discrepancy at the
+    # transitional eigensolver, before charge packing or interactions enter.
+    assert jvp_discrepancy > 1.0e-8
+    assert jacfwd_discrepancy > 1.0e-8
+
+
 def test_map_parameter_graph_reaches_param_module() -> None:
     par = ParamModule(GFN1_XTB, device="cpu", dtype=torch.float64)
     parameter = par.get("element.O.levels")
@@ -370,7 +653,8 @@ def test_map_parameter_graph_reaches_param_module() -> None:
 def test_map_inputs_are_not_mutated_and_values_are_frozen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    case = _prepare_case(GFN1_XTB)
+    gfn2_par = ParamModule(GFN2_XTB, device="cpu", dtype=torch.float64)
+    case = _prepare_case(GFN2_XTB, par=gfn2_par)
     inputs = case.inputs
     tensor_values = [
         inputs.numbers.clone(),
@@ -396,11 +680,26 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
     cache_tensors = {
         key: {
             name: value.clone()
-            for name, value in vars(cache).items()
-            if isinstance(value, torch.Tensor)
+            for name in ("cn", "dispmat")
+            if isinstance((value := getattr(cache, name, None)), torch.Tensor)
         }
         for key, cache in cache_entries
     }
+    nested_model_tensors: dict[str, torch.Tensor] = {}
+    nested_model_values: dict[str, object] = {}
+    for key, cache in cache_entries:
+        model = getattr(cache, "model", None)
+        if model is None:
+            continue
+        for name in ("numbers", "wf", "rc6"):
+            value = getattr(model, name)
+            if isinstance(value, torch.Tensor):
+                nested_model_tensors[name] = value.clone()
+            else:
+                nested_model_values[name] = value
+        for name in ("ga", "gc", "ref_charges"):
+            nested_model_values[name] = getattr(model, name)
+    assert {"numbers", "wf", "rc6"} <= nested_model_tensors.keys()
     index_state = {
         name: getattr(inputs.ihelp, name) for name in inputs.ihelp.__slots__
     }
@@ -461,6 +760,11 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
     for key, cache in cache_entries:
         for name, expected in cache_tensors[key].items():
             _assert_tensor_equal(getattr(cache, name), expected)
+    d4_model = inputs.interaction_data["DispersionD4SC"].model
+    for name, expected in nested_model_tensors.items():
+        _assert_tensor_equal(getattr(d4_model, name), expected)
+    for name, expected in nested_model_values.items():
+        assert getattr(d4_model, name) == expected
     for name, before in index_state.items():
         after = getattr(inputs.ihelp, name)
         if name in index_tensors:

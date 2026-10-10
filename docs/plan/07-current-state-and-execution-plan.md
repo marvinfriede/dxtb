@@ -946,25 +946,39 @@ This follows P10.
 
 The new `scf/functional` module provides frozen `SCFInputs`, fixed
 `ChargeLayout`, immutable internal charge/potential values, `SCFMapResult`,
-and a pure zero-temperature charge-mode `scf_map(x, inputs)`. It computes the
-call-local inverse Cholesky at input construction, carries a structural
-orbital mask, and does not use legacy restart data or invoke interaction
-state-management operations. The raw map matches one current full-mode map
+and a zero-temperature charge-mode `scf_map(x, inputs)`. Charge mode,
+zero-temperature scope, single-System shape, and exact migrated built-in
+interaction eligibility are checked when inputs are prepared; `ConfigSCF` and
+solver settings are not retained by the map. The map computes call-local
+inverse Cholesky at input construction, carries a structural orbital mask,
+and does not use legacy restart data or invoke interaction state-management
+operations. Its result names the potential `driving_potential` because it is
+`V(x)`, while `mapped_x` and `charges` are `G(x)`. The legacy full solver's
+finite-tolerance finalization remains a separate compatibility rule: final
+Hamiltonian/density/orbital outputs come from the last raw map evaluation,
+while its returned potential and interaction energy are recomputed from the
+returned mapped charges. E4.1 must preserve this before any behavior change.
+
+The raw map matches an independently prepared current full-mode map
 evaluation for GFN1 H2O (initial and perturbed charge iterate), GFN2 H2O
 multipoles, a charged/spin case, a monopole-only layout, and an explicit
 electric field. Its reverse position derivatives through second order,
 parameter graph, repeated-map behavior, and vmap over charge iterates are
-covered by focused tests.
+covered by focused tests. Functional purity is guaranteed only for exact
+migrated built-in interactions. Custom Interaction subclasses remain on the
+legacy solver path until a separate pure extension protocol is designed.
 
 The existing full/implicit solver engines remain the only production route.
 E4.0 does not add mixers, solver state, fixed-trip control flow, Fermi
 handling, potential/Fock modes, or free-energy partitioning. The transitional
 full-mode eigensolver is isolated in one helper and preserves its current
 `requires_grad`-selected Lorentzian behavior. On the characterized H2O map,
-JVP/jacfwd are finite but their numerical derivatives do not exactly match
-reverse mode under that legacy mode selection; this is the already-defined
-E3 spectral contract issue, not a map-plumbing failure. E3 still owns the
-spectral derivative correction.
+JVP/jacfwd are finite but their numerical derivatives differ from reverse
+mode by about `1.205e-6` for an isolated Hamiltonian-to-density spectral
+projection under that legacy mode selection. The discrepancy reproduces
+inside the transitional eigensolver without map or interaction plumbing; it
+is the already-defined E3 spectral contract issue. E3 still owns the spectral
+derivative correction.
 
 E4 remains partial. Functional solver integration, functional mixers,
 fixed-trip convergence and Fermi semantics, potential/Fock convergence

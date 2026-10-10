@@ -21,13 +21,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.constants import defaults
+from dxtb._src.components.interactions.coulomb.multipole import AES2
+from dxtb._src.components.interactions.coulomb.secondorder import ES2
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3
+from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
+from dxtb._src.components.interactions.field.efield import ElectricField
+from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
+from dxtb._src.constants import defaults, labels
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
 from dxtb.config import ConfigSCF
@@ -39,6 +47,7 @@ __all__ = [
     "SCFMapResult",
     "SCFPotential",
     "setup_scf_inputs",
+    "validate_functional_scf_interactions",
 ]
 
 
@@ -89,6 +98,8 @@ class SCFInputs:
     The dataclass is frozen. Some structural children (IndexHelper, the
     interaction list and call-local interaction data) remain legacy mutable
     types during this transition. The map promises not to mutate them.
+    Solver and convergence configuration is validated during setup and is not
+    retained here.
     """
 
     numbers: Tensor
@@ -99,7 +110,6 @@ class SCFInputs:
     occupation: Tensor
     interactions: InteractionList
     interaction_data: InteractionListCache
-    config: ConfigSCF
     charge_layout: ChargeLayout
     inverse_cholesky: Tensor
     orbital_mask: Tensor
@@ -107,11 +117,17 @@ class SCFInputs:
 
 @dataclass(frozen=True, eq=False)
 class SCFMapResult:
-    """Physical observables from one raw charge-map evaluation."""
+    """Physical outputs from one raw charge-map evaluation.
+
+    ``mapped_x`` and ``charges`` are the raw output ``G(x)``. The
+    ``driving_potential`` is computed from the input iterate ``x``. The
+    Hamiltonian, density, orbital energies, coefficients and occupation are
+    from the spectral evaluation driven by that input potential.
+    """
 
     mapped_x: Tensor
     charges: SCFCharges
-    potential: SCFPotential
+    driving_potential: SCFPotential
     hamiltonian: Tensor
     density: Tensor
     emo: Tensor
@@ -150,6 +166,15 @@ def setup_scf_inputs(
     config: ConfigSCF,
 ) -> SCFInputs:
     """Build one immutable-ish input value for a single-System raw map."""
+    if config.scp_mode != labels.SCP_MODE_CHARGE:
+        raise NotImplementedError(
+            "E4.0 SCFInputs currently support the charge raw map only."
+        )
+    if config.fermi.etemp * KELVIN2AU >= 3.0e-7:
+        raise NotImplementedError(
+            "E4.0 SCFInputs require effectively zero electronic temperature."
+        )
+    validate_functional_scf_interactions(interactions)
     if numbers.ndim != 1 or ihelp.batch_mode != 0:
         raise ValueError("E4.0 SCFInputs require one unbatched System.")
     if integrals.hcore is None or integrals.overlap is None:
@@ -172,11 +197,44 @@ def setup_scf_inputs(
         occupation=occupation,
         interactions=interactions,
         interaction_data=interaction_data,
-        config=config,
         charge_layout=_single_system_layout(numbers, integrals),
         inverse_cholesky=inverse_cholesky,
         orbital_mask=orbital_mask,
     )
+
+
+def validate_functional_scf_interactions(
+    interactions: InteractionList,
+) -> None:
+    """Reject interaction extensions without a functional-purity contract.
+
+    The E4.0 raw map is guaranteed pure for exact migrated built-in
+    interactions. Arbitrary subclasses remain supported by the legacy SCF
+    route and must not be admitted to future functional SCF execution.
+    """
+    supported = (
+        ES2,
+        ES3,
+        AES2,
+        DispersionD4SC,
+        GeneralizedBorn,
+        ElectricField,
+        ElectricFieldGrad,
+    )
+    unsupported = [
+        component
+        for component in interactions.components
+        if type(component) not in supported
+    ]
+    if unsupported:
+        names = ", ".join(
+            f"{type(component).__module__}.{type(component).__qualname__}"
+            for component in unsupported
+        )
+        raise TypeError(
+            "Functional SCF currently supports exact migrated built-in "
+            f"interactions only; unsupported extension(s): {names}."
+        )
 
 
 def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:

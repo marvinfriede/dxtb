@@ -25,8 +25,9 @@ from .data import (
     pack_charges,
     setup_scf_inputs,
     unpack_charges,
+    validate_functional_scf_interactions,
 )
-from .map import potential_to_hamiltonian, scf_map
+from .map import potential_from_charges, potential_to_hamiltonian, scf_map
 
 __all__ = [
     "ChargeLayout",
@@ -35,8 +36,10 @@ __all__ = [
     "SCFMapResult",
     "SCFPotential",
     "pack_charges",
+    "potential_from_charges",
     "potential_to_hamiltonian",
     "scf_map",
     "setup_scf_inputs",
     "unpack_charges",
+    "validate_functional_scf_interactions",
 ]
