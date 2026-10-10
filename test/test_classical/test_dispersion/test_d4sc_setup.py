@@ -433,6 +433,37 @@ def test_d4sc_charge_and_geometry_history_is_independent() -> None:
     torch.testing.assert_close(a0[1], after_backward[1])
 
 
+def test_system_scf_charge_history_is_independent() -> None:
+    """Earlier charged SCF calls do not alter later neutral D4SC results."""
+    numbers, positions = _sample("LiH")
+    exclude = ("es2", "es3", "aes2")
+    system = _model(_parameters(), exclude=exclude).setup(numbers)
+    pos_b = positions.clone()
+    pos_b[0, 0] += 0.06
+
+    neutral_first = system.singlepoint(positions, chrg=0.0, spin=0.0)
+    _ = system.singlepoint(positions, chrg=1.0, spin=1.0)
+    _ = system.singlepoint(pos_b, chrg=0.0, spin=0.0)
+    neutral_after = system.singlepoint(positions.clone(), chrg=0.0, spin=0.0)
+
+    fresh_system = _model(_parameters(), exclude=exclude).setup(numbers)
+    neutral_fresh = fresh_system.singlepoint(
+        positions.clone(), chrg=0.0, spin=0.0
+    )
+    for result in (neutral_after, neutral_fresh):
+        torch.testing.assert_close(result.energy, neutral_first.energy)
+        assert result.charges is not None and neutral_first.charges is not None
+        assert (
+            result.potential is not None and neutral_first.potential is not None
+        )
+        torch.testing.assert_close(
+            result.charges.mono, neutral_first.charges.mono
+        )
+        torch.testing.assert_close(
+            result.potential.mono, neutral_first.potential.mono
+        )
+
+
 def test_d4sc_position_jacfwd_and_potential_transforms() -> None:
     """Position energy and potential use the same differentiable builder."""
     numbers, positions = _sample("SiH4")
