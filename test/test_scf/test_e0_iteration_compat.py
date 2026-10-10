@@ -23,14 +23,13 @@ from collections.abc import Callable
 import pytest
 import torch
 
-from dxtb import Calculator, GFN1_XTB, OutputHandler
+from dxtb import GFN1_XTB, Calculator, OutputHandler, Result
 from dxtb._src.constants import labels
 from dxtb._src.scf import base as scf_base
 from dxtb._src.scf.mixer.simple import Simple
 
-from .samples import samples
 from ..utils import get_param_module
-
+from .samples import samples
 
 _CASES = [
     pytest.param(
@@ -202,7 +201,8 @@ def test_full_mode_iteration_compatibility(
         assert result.iterations.item() == map_evaluations
         assert counts["mixer"] == mixer_transitions
         torch.testing.assert_close(
-            result.energy.sum(), torch.tensor(energy, dtype=torch.double),
+            result.energy.sum(),
+            torch.tensor(energy, dtype=torch.double),
             rtol=0.0,
             atol=2.0e-12,
         )
@@ -215,8 +215,7 @@ def test_full_mode_iteration_compatibility(
 
         if maxiter == 0:
             assert not any(
-                "does not converge" in msg
-                for msg, _ in OutputHandler.warnings
+                "does not converge" in msg for msg, _ in OutputHandler.warnings
             )
         else:
             assert any(
@@ -225,3 +224,68 @@ def test_full_mode_iteration_compatibility(
             )
     finally:
         OutputHandler.clear_warnings()
+
+
+def _full_result(
+    *, f_atol: float, x_atol: float, x_atol_max: float
+) -> tuple[Result, tuple[str, ...]]:
+    sample = samples["H2O"]
+    numbers = sample["numbers"].to(device="cpu")
+    positions = sample["positions"].to(device="cpu", dtype=torch.double).clone()
+    par = get_param_module("gfn1", device="cpu", dtype=torch.double)
+    opts = {
+        "verbosity": 0,
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": labels.SCP_MODE_CHARGE,
+        "mixer": "simple",
+        "mix_guess": True,
+        "damp": 0.25,
+        "maxiter": 5,
+        "f_atol": f_atol,
+        "x_atol": x_atol,
+        "x_atol_max": x_atol_max,
+        "force_convergence": False,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+    }
+    OutputHandler.clear_warnings()
+    try:
+        result = Calculator(
+            numbers, par, opts=opts, device="cpu", dtype=torch.double
+        ).singlepoint(positions)
+        warnings = tuple(msg for msg, _ in OutputHandler.warnings)
+    finally:
+        OutputHandler.clear_warnings()
+    return result, warnings
+
+
+def test_full_f_atol_does_not_change_convergence() -> None:
+    """Full-mode stopping depends on x residual tolerances, not f_atol."""
+    loose, loose_warnings = _full_result(
+        f_atol=1.0e3, x_atol=1.0e-12, x_atol_max=1.0e-12
+    )
+    tight, tight_warnings = _full_result(
+        f_atol=1.0e-12, x_atol=1.0e-12, x_atol_max=1.0e-12
+    )
+
+    assert loose.iterations.item() == tight.iterations.item() == 6
+    torch.testing.assert_close(loose.energy, tight.energy, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        loose.charges.mono, tight.charges.mono, rtol=0.0, atol=0.0
+    )
+    assert loose_warnings == tight_warnings
+    assert any("does not converge" in warning for warning in tight_warnings)
+
+
+def test_full_x_atol_controls_convergence() -> None:
+    """The two raw-residual x tolerances determine full-mode stopping."""
+    loose, loose_warnings = _full_result(
+        f_atol=1.0e-8, x_atol=1.0e2, x_atol_max=1.0e2
+    )
+    tight, tight_warnings = _full_result(
+        f_atol=1.0e-8, x_atol=1.0e-12, x_atol_max=1.0e-12
+    )
+
+    assert loose.iterations.item() == 2
+    assert tight.iterations.item() == 6
+    assert not any("does not converge" in warning for warning in loose_warnings)
+    assert any("does not converge" in warning for warning in tight_warnings)

@@ -41,9 +41,9 @@ Current state:
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
-| E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. Full-mode `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
+| E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
-| E2             | partial                         | Existing pair builder groups/scatters pairs and supports higher derivatives.                         |
+| E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -851,9 +851,10 @@ E0 changes no SCF implementation and does not mark E3, E4, or E6 done.
 
 ---
 
-# 12. E2: finish the fixed-shape integral path without rewriting working code unnecessarily
+# 12. E2: fixed-shape integral path and legacy batch boundary
 
-The original E2 assumptions are stale.
+The original E2 assumptions are stale. The single-System E2 core prerequisite
+is implemented; the remaining packed-driver cleanup belongs to E6.
 
 The current PyTorch pair builder already:
 
@@ -866,40 +867,57 @@ The current PyTorch pair builder already:
 
 Therefore re-scope E2.
 
-## E2.1 Move structural pair planning into System setup
+## E2-core: setup-time structural planning — done
 
-`PairPlan` is numbers/basis-structure dependent.
+`PytorchIntegralSetup.pair_plan` is the structural `PairPlan`, owned at
+`System.integral_setup.pytorch.pair_plan`. `Model.setup(numbers)` creates the
+integral setup through `setup_integral_evaluation()` and `setup_integrals()`.
+The plan depends on the structural `IndexHelper`/basis layout and device; it
+contains no positions. Pure `build_overlap`, `build_dipole`, and
+`build_quadrupole` pass this stored plan to the pair assembler. They do not use
+the low-level `_resolve_plan()` compatibility fallback. The basis exponents
+and contraction coefficients remain parameter-connected setup tensors; the
+plan itself is discrete structural data. Setup conversion may rebuild
+device-local plan indices alongside the converted `IndexHelper`.
 
-It belongs in `model.setup(numbers)`, not lazily in a driver after positions arrive.
+Core evaluation passes no `screening_threshold`, geometry-selected pair list,
+or dynamic chunk list. The stored ordered shell-pair classes determine the
+fixed iteration shape, and positions change only integral values. The pure
+integral tests lock higher reverse orders, JVP, `jacfwd`, `vmap`, setup-time
+plan ownership, repeated-geometry independence, and parameter gradients.
 
-Make its tensor-containing classes compatible with the later Node migration.
+This is the single-System structural pair-planning result; do not add a second
+`System.pair_plan` field. Node migration is later work.
 
-## E2.2 Remove batched driver construction
+## E2-legacy-batch cleanup: deferred to E6
 
-Delete the per-entry loop that creates:
+`IntDriverPytorch.setup()` still constructs, for the legacy packed Calculator
+path, per-entry:
 
 - per-entry `IndexHelper`;
 - per-entry Basis;
 - per-entry PairPlan
 
-inside `IntDriverPytorch.setup`.
+inside its Python loop. Keep this compatibility behavior until E6 replaces
+packed Calculator evaluation with externally mapped/stacked single-System
+evaluation. Removing it now would break legacy batching or begin E6
+prematurely. This cleanup is the only remaining E2 item and does not block
+E4.
 
-The core driver handles one System.
+## E2-core fixed transform path — done
 
-E6 performs batching externally.
-
-## E2.3 Fixed transform path
-
-For the transform path:
+The transform-critical single-System path has:
 
 - no dynamic screening;
 - no pair count based on positions;
 - no data-dependent chunk list;
 - fixed structural classes.
 
-A static chunk size is acceptable if needed for memory.
+The optional low-level screening API remains available to eager compatibility
+callers, but the pure core does not pass it. No production batching rewrite or
+change to legacy Calculator batch semantics is part of E2 closure.
 
-## E2.4 Only optimize grouping further if measured
+## E2.4 Preserve grouping unless measurements justify change
 
 The current builder groups by ordered unique-shell-pair class rather than only angular momentum.
 
@@ -1769,5 +1787,19 @@ The ALPB fresh-setup and F0 package was validated from task base `cf0c98266d8c12
 
 B7 compatibility hardening: exact Calculator field defaults now reject any retained same-label interaction during construction, rather than deferring the ambiguity to evaluation. Custom same-label field subclasses remain ordinary legacy interactions for energy and forces; generic standard-field response methods report that they cannot infer a differentiation variable from an arbitrary extension. On the pre-B7 base, same-label `ElectricField` subclasses supported energy, dipole, and polarizability, while same-label `ElectricFieldGrad` subclasses supported energy, quadrupole, and numerical quadrupole when their perturbation tensors required gradients. The explicit-field architecture intentionally narrows those response APIs to exact/default/explicit standard perturbations; no interaction mutation is restored. Whole-System `vmap` remains deferred to generic SCF occupation/Fermi-search work.
 
-The next local package should be selected from the current dependency plan after review; do not begin it automatically. E1.3 remains an upstream dependency task and should resume when the D3 transform blocker is available. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
+E0's convergence-tolerance contract is now explicit: canonical full/unrolled
+convergence requires both raw-residual x norms to meet `x_atol` and
+`x_atol_max`; `f_atol` remains transitional legacy solver configuration and
+does not add a full-mode convergence condition. The focused H2O regression
+demonstrates that changing `f_atol` alone leaves full-mode outputs and
+stopping unchanged, while changing the x tolerances changes the stopping
+point.
+
+E2's single-System core prerequisite is complete and is no longer a blocker
+for E4. The setup-owned `PairPlan` is reused by overlap, dipole, and
+quadrupole evaluation across geometries. The per-entry structural setup loop
+in the legacy packed `IntDriverPytorch` remains until E6 replaces that batch
+path; no batch behavior was changed here. E0 decisions are accepted and
+remain design-only. The next package is selected separately after review;
+E4, E3, E6, D3, Node migration, and GPU work are not started by this package.
 

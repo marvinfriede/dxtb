@@ -12,9 +12,14 @@ import pytest
 import torch
 from torch.func import jacfwd, jvp, vmap
 
-from dxtb import Calculator, GFN0_XTB, GFN1_XTB, GFN2_XTB, labels
+from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
+from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
+from dxtb._src.integral.driver.pytorch.overlap import (
+    build_overlap as build_overlap_pytorch,
+)
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.typing import Tensor
 
@@ -112,6 +117,102 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     assert torch.isfinite(grad1).all()
     assert torch.isfinite(grad2).all()
     torch.testing.assert_close(grad1, grad2)
+
+
+def test_system_reuses_setup_pair_plan_across_geometries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core overlap and multipoles consume the setup-owned PairPlan."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"].to(device="cpu")
+    positions = sample["positions"].to(device="cpu", dtype=torch.float64)
+    calc = Calculator(
+        numbers,
+        GFN2_XTB,
+        dtype=positions.dtype,
+        opts={
+            "verbosity": 0,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+        },
+    )
+    system = calc.model.setup(numbers, dd=calc.dd)
+    assert system.integral_setup is not None
+    setup = system.integral_setup.pytorch
+    assert setup is not None
+    assert isinstance(setup.pair_plan, pair_builder.PairPlan)
+    assert not hasattr(setup.pair_plan, "positions")
+
+    plan_uses: list[object] = []
+    resolve_plan = pair_builder._resolve_plan
+
+    def check_plan(ihelp, device, plan):
+        assert plan is setup.pair_plan
+        plan_uses.append(plan)
+        return resolve_plan(ihelp, device, plan)
+
+    def fail_prepare(*args, **kwargs):
+        raise AssertionError(
+            "PairPlan must not be constructed during evaluation"
+        )
+
+    monkeypatch.setattr(pair_builder, "_resolve_plan", check_plan)
+    monkeypatch.setattr(pytorch_setup_module, "prepare", fail_prepare)
+
+    moved = positions.clone()
+    moved[1, 0] += 0.08
+    first = system.singlepoint(positions)
+    second = system.singlepoint(moved)
+    assert torch.isfinite(first.energy).all()
+    assert torch.isfinite(second.energy).all()
+    assert len(plan_uses) == 6
+
+
+def test_pytorch_integral_setup_conversion_rebuilds_pair_plan() -> None:
+    """Converted setup has a device-local plan matching its IndexHelper."""
+    numbers = samples["H2O"]["numbers"].to(device="cpu")
+    positions = samples["H2O"]["positions"].to(
+        device="cpu", dtype=torch.float64
+    )
+    calc = Calculator(
+        numbers,
+        GFN2_XTB,
+        dtype=positions.dtype,
+        opts={
+            "verbosity": 0,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+        },
+    )
+    assert calc.system.integral_setup is not None
+    setup = calc.system.integral_setup.pytorch
+    assert setup is not None
+
+    converted = setup.to(device="cpu", dtype=torch.float32)
+    assert converted.pair_plan is not setup.pair_plan
+    assert converted.pair_plan.atom.device == torch.device(
+        converted.ihelp.device
+    )
+    assert torch.equal(converted.pair_plan.atom, converted.ihelp.shells_to_atom)
+    assert converted.pair_plan.nao == setup.pair_plan.nao
+    assert len(converted.pair_plan.classes) == len(setup.pair_plan.classes)
+    for old, new in zip(setup.pair_plan.classes, converted.pair_plan.classes):
+        assert (old.ub, old.uk, old.lb, old.lk) == (
+            new.ub,
+            new.uk,
+            new.lb,
+            new.lk,
+        )
+        assert torch.equal(old.ib, new.ib)
+        assert torch.equal(old.jk, new.jk)
+        assert torch.equal(old.idx, new.idx)
+        assert new.idx.device == torch.device(converted.ihelp.device)
+        assert new.weight.device == torch.device(converted.ihelp.device)
+
+    overlap = build_overlap_pytorch(
+        converted, positions.to(dtype=torch.float32)
+    )
+    assert torch.isfinite(overlap).all()
 
 
 @pytest.mark.parametrize(
@@ -293,7 +394,9 @@ def test_singlepoint_does_not_retain_matrices_on_legacy_adapter(
     moved[1, 0] += 0.12
 
     first = None
-    for call_index, geometry in enumerate((positions, moved, positions.clone())):
+    for call_index, geometry in enumerate(
+        (positions, moved, positions.clone())
+    ):
         result = calc.singlepoint(
             geometry,
             chrg=0.0,
@@ -314,9 +417,7 @@ def test_singlepoint_does_not_retain_matrices_on_legacy_adapter(
             first = result
         elif call_index == 1:
             assert first is not None
-            assert not torch.equal(
-                first.overlap, result.overlap
-            )
+            assert not torch.equal(first.overlap, result.overlap)
         else:
             assert first is not None
             for name in (
@@ -325,7 +426,9 @@ def test_singlepoint_does_not_retain_matrices_on_legacy_adapter(
                 "dipole_integrals",
                 "quadrupole_integrals",
             ):
-                torch.testing.assert_close(getattr(first, name), getattr(result, name))
+                torch.testing.assert_close(
+                    getattr(first, name), getattr(result, name)
+                )
 
 
 @pytest.mark.parametrize(
@@ -397,10 +500,7 @@ def test_analytical_properties_after_pure_singlepoint(
     driver: int, property_name: str
 ) -> None:
     """Analytical compatibility APIs remain usable after pure evaluation."""
-    if (
-        property_name == "forces"
-        and driver == labels.INTDRIVER_PYTORCH
-    ):
+    if property_name == "forces" and driver == labels.INTDRIVER_PYTORCH:
         pytest.skip(
             "PyTorch overlap has no analytical gradient; use its autograd path"
         )
@@ -431,7 +531,7 @@ def test_analytical_properties_after_pure_singlepoint(
 
 def test_dxtb_and_pytorch_integrals_do_not_require_libcint_import() -> None:
     """The PyTorch core remains usable when tad_libcint is unimportable."""
-    script = r'''
+    script = r"""
 import importlib.abc
 import sys
 
@@ -466,7 +566,7 @@ matrices, _, _ = build_integral_matrices(
 )
 assert torch.isfinite(matrices.overlap).all()
 assert "tad_libcint" not in sys.modules
-'''
+"""
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
@@ -567,7 +667,9 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
     tangent = tangent / tangent.norm()
     _, scalar_tangent = jvp(scalar, (positions,), (tangent,))
     reverse_leaf = positions.clone().requires_grad_(True)
-    (reverse_gradient,) = torch.autograd.grad(scalar(reverse_leaf), reverse_leaf)
+    (reverse_gradient,) = torch.autograd.grad(
+        scalar(reverse_leaf), reverse_leaf
+    )
     torch.testing.assert_close(
         scalar_tangent, (reverse_gradient * tangent).sum()
     )

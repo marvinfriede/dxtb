@@ -319,6 +319,26 @@ must not be defined from `mixed_x - x`, whose value depends on the solver
 settings. In current full mode this is the distinction represented by the
 mixer's stored raw delta `x_new - x_old`.
 
+The canonical E4/full functional convergence test preserves the current
+full-mode tolerance semantics exactly:
+
+```text
+L2(R(x)) < x_atol
+L∞(R(x)) < x_atol_max
+```
+
+Both conditions must hold. The future `Result.residual` contains exactly two
+values per system: `[..., 0]` is `L2(G(x)-x)` and is compared with `x_atol`;
+`[..., 1]` is the maximum-absolute norm and is compared with `x_atol_max`.
+There is no third `f_atol` residual or convergence condition. Current
+`SelfConsistentFieldFull` uses `Mixer.converged`, which checks these two x
+tolerances and does not consult `f_tol`. `BaseSCF.fwd_options` still maps
+`ConfigSCF.f_atol` to `f_tol` for the transitional implicit/root-solving
+path. That legacy compatibility behavior remains unchanged. When that path is
+rebuilt around E4, the public fate and meaning of `f_atol` must be decided
+explicitly; it must not silently become a full-mode convergence criterion.
+Other legacy modes retain their existing behavior in this decision package.
+
 ### Iteration and result compatibility
 
 The terms below are distinct:
@@ -364,6 +384,23 @@ compatibility test. The positive-budget cases use `f_atol=x_atol=x_atol_max=
 The initial map is not convergence-tested by the current full-mode algorithm.
 Consequently `maxiter` is non-negative, not positive, and the zero case is a
 separately preserved one-shot operation.
+
+The tolerance compatibility test also characterizes a five-cycle CPU GFN1
+H2O run with Simple mixing, `damp=0.25`, and `mix_guess=True`. With both x
+tolerances fixed at `1e-12`, `f_atol=1e3` and `f_atol=1e-12` each report six
+map evaluations, the same energy (`-5.768616757320126`), identical orbital
+charges (`[0.304379237811349, -0.6666666666666672,
+-0.3137346056586603, 0.0038987582914078445, 0.36813476975763415,
+-0.03207313164634945, 0.3681347697576336, -0.032073131646349326]`), and
+the same unconverged warning. With `f_atol=1e-8` held fixed, changing both x
+tolerances from `1e-12` to `1e2` changes the result from six evaluations,
+energy `-5.768616757320126`, and an unconverged warning to two evaluations,
+energy `-5.768234535786348`, and no warning. This confirms that the full-mode
+convergence point is controlled by the x tolerances, not by `f_atol`.
+
+Negative `maxiter` is outside the canonical E4 contract and must be rejected
+as invalid static configuration when the functional solver lands. This does
+not preserve accidental legacy behavior for a negative budget.
 
 The future core returns tensor-valued per-system `iterations`, `converged`, and
 `residual`. `converged` and `residual` describe the raw map criterion and the
