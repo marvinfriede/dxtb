@@ -355,6 +355,57 @@ def test_setup_preserves_tensor_born_configuration_gradients() -> None:
     assert all(torch.count_nonzero(gradient) > 0 for gradient in gradients)
 
 
+def test_fresh_setup_dielectric_transforms() -> None:
+    """Fresh component and setup construction preserve dielectric transforms."""
+    numbers, positions = _geometry()
+    charges = torch.tensor([0.2, -0.2], **DD)
+
+    def energy_from_dielectric(eps: Tensor) -> Tensor:
+        component = _component(numbers, dielectric=eps)
+        setup = setup_generalized_born(component, numbers)
+        return _energy(setup, positions, charges)
+
+    dielectric = torch.tensor(78.9, **DD)
+    direction = torch.tensor(0.37, **DD)
+    reverse = torch.func.grad(energy_from_dielectric)(dielectric)
+    _, tangent = torch.func.jvp(
+        energy_from_dielectric, (dielectric,), (direction,)
+    )
+    jacobian = torch.func.jacfwd(energy_from_dielectric)(dielectric)
+    step = 1.0e-4
+    finite_difference = (
+        energy_from_dielectric(dielectric + step)
+        - energy_from_dielectric(dielectric - step)
+    ) / (2 * step)
+
+    assert torch.isfinite(reverse)
+    assert torch.count_nonzero(reverse) > 0
+    torch.testing.assert_close(tangent, reverse * direction)
+    torch.testing.assert_close(jacobian, reverse)
+    torch.testing.assert_close(
+        finite_difference, reverse, atol=1.0e-9, rtol=1.0e-5
+    )
+
+
+def test_fresh_setup_tensor_born_configuration_jvp() -> None:
+    """Fresh setup construction preserves tensor Born-scale differentiation."""
+    numbers, positions = _geometry()
+    charges = torch.tensor([0.2, -0.2], **DD)
+
+    def energy_from_scale(scale: Tensor) -> Tensor:
+        component = _component(numbers, born_scale=scale)
+        setup = setup_generalized_born(component, numbers)
+        return _energy(setup, positions, charges)
+
+    scale = torch.tensor(1.0, **DD)
+    direction = torch.tensor(0.25, **DD)
+    reverse = torch.func.grad(energy_from_scale)(scale)
+    _, tangent = torch.func.jvp(energy_from_scale, (scale,), (direction,))
+    torch.testing.assert_close(tangent, reverse * direction)
+    assert torch.isfinite(reverse)
+    assert torch.count_nonzero(reverse) > 0
+
+
 def test_same_position_leaf_can_be_differentiated_repeatedly() -> None:
     """Fresh per-call matrices allow repeated force evaluation on one leaf."""
     numbers, positions = _geometry()

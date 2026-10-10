@@ -266,7 +266,11 @@ def setup_h0(
     )
     shpoly = par.get_elem_param(unique, "shpoly", pad_val=PAD)
     refocc = par.get_elem_param(unique, "refocc", pad_val=PAD)
-    kpair = par.get_pair_param(unique.tolist())
+    # Tensor.tolist() requires storage and fails for the GradTrackingTensor
+    # produced when Model.setup runs inside torch.func.grad (notably on older
+    # supported PyTorch versions). Atomic numbers are structural integer
+    # inputs, so extract their scalar values individually for the pair lookup.
+    kpair = par.get_pair_param([int(number) for number in unique])
     rad = ATOMIC_RADII(**dd)[unique]
     kcn = kcn * EV2AU
 
