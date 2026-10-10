@@ -410,6 +410,40 @@ def test_singlepoint_core_bypasses_exact_aes2_get_cache(
     assert torch.isfinite(result.energy).all()
 
 
+def test_singlepoint_uses_setup_after_component_and_parameter_mutation() -> (
+    None
+):
+    """Existing Systems freeze setup while fresh Systems read new leaves."""
+    numbers, positions, parameters, _, _ = _inputs()
+    config = Config.create(
+        int_driver="pytorch",
+        int_level=4,
+        exclude=("d4sc", "disp"),
+    )
+    system = Model(par=parameters, config=config, auto_int_level=False).setup(
+        numbers
+    )
+    assert system.aes2_setup is not None
+    assert system.aes2_interaction is not None
+
+    initial = system.singlepoint(positions).energy
+    with torch.no_grad():
+        system.aes2_interaction.dmp3.fill_(20.0)
+    after_component_mutation = system.singlepoint(positions.clone()).energy
+    torch.testing.assert_close(after_component_mutation, initial)
+
+    parameter_leaf = parameters.get("multipole.damped.dmp3")
+    with torch.no_grad():
+        parameter_leaf.add_(0.5)
+    fresh_system = Model(
+        par=parameters, config=config, auto_int_level=False
+    ).setup(numbers)
+    assert fresh_system.aes2_setup is not None
+    assert not torch.allclose(
+        fresh_system.singlepoint(positions).energy, initial
+    )
+
+
 def test_core_interaction_data_is_call_local_after_geometry_change() -> None:
     """System keeps setup only while call-local matrices track geometry."""
     numbers, positions, parameters, _, _ = _inputs()
