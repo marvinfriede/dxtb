@@ -363,7 +363,9 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "dipole_numerical requires field= or a field default."
@@ -443,7 +445,9 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field_grad=True
+        )
         if field_grad is None:
             raise RuntimeError(
                 "An electric field gradient is required; pass field_grad= or "
@@ -530,6 +534,14 @@ class NumericalCalculator(EnergyCalculator):
         else:
             _dipfcn = self.dipole_numerical
 
+        field, field_grad = self._resolve_response_fields(
+            kwargs.pop("field", _UNSET),
+            kwargs.pop("field_grad", _UNSET),
+            needs_field=True,
+        )
+        kwargs["field"] = field
+        kwargs["field_grad"] = field_grad
+
         # (..., 3, n, 3)
         deriv = torch.zeros(
             (*self.numbers.shape[:-1], 3, *positions.shape[-2:]),
@@ -611,7 +623,9 @@ class NumericalCalculator(EnergyCalculator):
         else:
             _dipfcn = self.dipole_numerical
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "polarizability_numerical requires field= or a field default."
@@ -692,6 +706,10 @@ class NumericalCalculator(EnergyCalculator):
         """
         # pylint: disable=import-outside-toplevel
         import gc
+
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
 
         # (..., 3, 3, nat, 3)
         deriv = torch.zeros(
@@ -780,7 +798,9 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "hyperpolarizability_numerical requires field= or a field default."
@@ -857,7 +877,9 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nIR Spectrum")
         OutputHandler.write_stdout("-----------")
         logger.debug("IR spectrum (numerical): Start.")
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
 
         # run vibrational analysis first
         freqs, modes = self.vibration_numerical(
@@ -921,7 +943,9 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nRaman Spectrum")
         OutputHandler.write_stdout("--------------")
         logger.debug("Raman spectrum (numerical): All finished.")
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
 
         vib_res = self.vibration_numerical(
             positions,

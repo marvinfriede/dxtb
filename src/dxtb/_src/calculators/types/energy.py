@@ -30,8 +30,14 @@ from tad_mctc.io.checks import content_checks, shape_checks
 from dxtb import OutputHandler, labels
 from dxtb._src import scf
 from dxtb._src.calculators.singlepoint import _call_tensor
-from dxtb._src.components.interactions.field.efield import ElectricField
-from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.components.interactions.field.efield import (
+    LABEL_EFIELD,
+    ElectricField,
+)
+from dxtb._src.components.interactions.field.efieldgrad import (
+    LABEL_EFIELD_GRAD,
+    ElectricFieldGrad,
+)
 from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
@@ -447,23 +453,65 @@ class EnergyCalculator(BaseCalculator):
             raise TypeError("field_grad must be a Tensor or None.")
         return resolved_field, resolved_grad
 
+    def _resolve_response_fields(
+        self,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
+        *,
+        needs_field: bool = False,
+        needs_field_grad: bool = False,
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """Resolve standard response inputs and explain custom extensions."""
+        resolved_field, resolved_grad = self._resolve_fields(field, field_grad)
+        component_labels = {
+            component.label for component in self.interactions.components
+        }
+
+        if (
+            needs_field
+            and resolved_field is None
+            and LABEL_EFIELD in component_labels
+        ):
+            raise RuntimeError(
+                "This Calculator contains a custom ElectricField-labelled "
+                "interaction. Generic dipole/polarizability response "
+                "differentiates the standard explicit field= input and cannot "
+                "infer a perturbation variable from a custom interaction. "
+                "Pass/use an exact ElectricField compatibility default or "
+                "provide a custom response implementation."
+            )
+        if (
+            needs_field_grad
+            and resolved_grad is None
+            and LABEL_EFIELD_GRAD in component_labels
+        ):
+            raise RuntimeError(
+                "This Calculator contains a custom ElectricFieldGrad-labelled "
+                "interaction. Generic quadrupole response differentiates the "
+                "standard explicit field_grad= input and cannot infer a "
+                "perturbation variable from a custom interaction. Pass/use an "
+                "exact ElectricFieldGrad compatibility default or provide a "
+                "custom response implementation."
+            )
+        return resolved_field, resolved_grad
+
     def _call_interactions(
         self, field: Tensor | None, field_grad: Tensor | None
     ) -> InteractionList:
         """Create a call-local interaction list for legacy batch SCF."""
         components = list(self.interactions.components)
         if field is not None:
-            if any(x.label == "ElectricField" for x in components):
+            if any(x.label == LABEL_EFIELD for x in components):
                 raise ValueError(
-                    "Explicit field= conflicts with a custom ElectricField "
+                    f"Explicit field= conflicts with a custom '{LABEL_EFIELD}' "
                     "label interaction."
                 )
             components.append(ElectricField(field))
         if field_grad is not None:
-            if any(x.label == "ElectricFieldGrad" for x in components):
+            if any(x.label == LABEL_EFIELD_GRAD for x in components):
                 raise ValueError(
                     "Explicit field_grad= conflicts with a custom "
-                    "ElectricFieldGrad label interaction."
+                    f"'{LABEL_EFIELD_GRAD}' label interaction."
                 )
             components.append(ElectricFieldGrad(field_grad))
         return InteractionList(

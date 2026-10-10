@@ -165,21 +165,11 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
         ValueError
             If no interaction with the given label is found in the list.
 
-        Examples
-        --------
-
-        .. code-block:: python
-
-            import torch
-            from dxtb._src.components.interactions import InteractionList
-            from dxtb._src.components.interactions.field import efield
-
-            field_vector = torch.tensor([0.0, 0.0, 0.0])
-            ef = efield.new_efield(field_vector)
-            ilist = InteractionList(ef)
-
-            new_field_vector = torch.tensor([1.0, 0.0, 0.0])
-            ilist.update(efield.LABEL_EFIELD, field=new_field_vector)
+        Note
+        ----
+        Exact electric-field inputs are per-evaluation values and cannot be
+        updated through an interaction list. Pass ``field=`` or
+        ``field_grad=`` to the evaluation call instead.
         """
         for interaction in self.components:
             if name == interaction.label:
@@ -212,17 +202,6 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
         ValueError
             If no component with the given label is found in the list.
 
-        Examples
-        --------
-        .. code-block:: python
-
-            import torch
-            from dxtb._src.components.interactions import InteractionList
-            from dxtb._src.components.interactions.external import field as efield
-
-            ef = efield.new_efield(torch.tensor([0.0, 0.0, 0.0]))
-            ilist = InteractionList(ef)
-            ilist.reset(efield.LABEL_EFIELD)
         """
         for component in self.components:
             if name == component.label:

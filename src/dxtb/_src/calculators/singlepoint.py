@@ -388,7 +388,7 @@ def singlepoint(
         ):
             raise ValueError(
                 "Explicit field= cannot be combined with a custom interaction "
-                "using the ElectricField label."
+                f"using the '{LABEL_EFIELD}' label."
             )
         call_components.append(ElectricField(field))
     if field_grad is not None:
@@ -398,7 +398,7 @@ def singlepoint(
         ):
             raise ValueError(
                 "Explicit field_grad= cannot be combined with a custom "
-                "interaction using the ElectricFieldGrad label."
+                f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
         call_components.append(ElectricFieldGrad(field_grad))
     from dxtb._src.components.interactions.list import InteractionList

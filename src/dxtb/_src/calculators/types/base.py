@@ -47,8 +47,14 @@ from dxtb._src.components.classicals import (
     ClassicalList,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
-from dxtb._src.components.interactions.field.efield import ElectricField
-from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.components.interactions.field.efield import (
+    LABEL_EFIELD,
+    ElectricField,
+)
+from dxtb._src.components.interactions.field.efieldgrad import (
+    LABEL_EFIELD_GRAD,
+    ElectricFieldGrad,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
@@ -298,6 +304,23 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             for x in interaction
             if type(x) not in (ElectricField, ElectricFieldGrad)
         )
+
+        if self._field_default is not None and any(
+            x.label == LABEL_EFIELD for x in interaction
+        ):
+            raise ValueError(
+                "An exact Calculator field default and a custom interaction "
+                f"labelled '{LABEL_EFIELD}' cannot both represent the same "
+                "perturbation. Choose one."
+            )
+        if self._field_grad_default is not None and any(
+            x.label == LABEL_EFIELD_GRAD for x in interaction
+        ):
+            raise ValueError(
+                "An exact Calculator field-gradient default and a custom "
+                f"interaction labelled '{LABEL_EFIELD_GRAD}' cannot both "
+                "represent the same perturbation. Choose one."
+            )
 
         if self._field_default is not None:
             self.opts = replace(

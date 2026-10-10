@@ -447,7 +447,9 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Electric dipole moment of shape ``(..., 3)``.
         """
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "dipole requires field= or a Calculator field default."
@@ -534,7 +536,9 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Traceless quadrupole moment of shape ``(..., 6)``.
         """
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field_grad=True
+        )
         if field_grad is None:
             raise RuntimeError(
                 "An electric field gradient is required; pass field_grad= or "
@@ -622,7 +626,9 @@ class AutogradCalculator(EnergyCalculator):
             Cartesian dipole derivative of shape ``(..., 3, nat, 3)``.
         """
         dip_fcn = self._get_dipole_fcn(use_analytical_dipmom)
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
@@ -724,7 +730,9 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Polarizability tensor of shape ``(..., 3, 3)``.
         """
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "polarizability requires field= or a Calculator field default."
@@ -840,7 +848,9 @@ class AutogradCalculator(EnergyCalculator):
             Polarizability derivative shape ``(..., 3, 3, nat, 3)``.
         """
         use_analytical = kwargs.pop("use_analytical", False)
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
 
         if use_functorch is False:
             # pylint: disable=import-outside-toplevel
@@ -939,7 +949,9 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Hyper polarizability tensor of shape ``(..., 3, 3, 3)``.
         """
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._resolve_response_fields(
+            field, field_grad, needs_field=True
+        )
         if field is None:
             raise RuntimeError(
                 "hyperpolarizability requires field= or a Calculator field "
