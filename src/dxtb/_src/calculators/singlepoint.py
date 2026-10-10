@@ -47,6 +47,10 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
 from dxtb._src.components.interactions.dispersion.d4sc import build_d4sc_data
+from dxtb._src.components.interactions.solvation.alpb import (
+    GeneralizedBorn,
+    build_generalized_born_data,
+)
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
@@ -61,7 +65,7 @@ def _interaction_data(
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation.
 
-    Exact ES2, ES3, AES2, and D4SC use explicit System setup values. Other
+    Exact ES2, ES3, AES2, D4SC, and GeneralizedBorn use explicit System setup values. Other
     interactions keep their current cache APIs until their B6a packages, but
     returned data is local to this call.
     """
@@ -92,6 +96,23 @@ def _interaction_data(
                 raise RuntimeError("Single-system D4SC setup is missing.")
             data[interaction.label] = build_d4sc_data(
                 system.d4sc_setup, positions
+            )
+        elif interaction is system.generalized_born_interaction:
+            if system.generalized_born_setup is None:
+                raise RuntimeError(
+                    "Single-system GeneralizedBorn setup is missing."
+                )
+            data[interaction.label] = build_generalized_born_data(
+                system.generalized_born_setup, positions
+            )
+        elif (
+            isinstance(interaction, GeneralizedBorn)
+            and type(interaction) is not GeneralizedBorn
+        ):
+            data[interaction.label] = interaction.get_cache(
+                numbers=system.numbers,
+                positions=positions,
+                ihelp=system.ihelp,
             )
         else:
             data[interaction.label] = interaction.get_cache(

@@ -88,6 +88,11 @@ from dxtb._src.components.interactions.dispersion import (
     new_d4sc,
     setup_d4sc,
 )
+from dxtb._src.components.interactions.solvation.alpb import (
+    GeneralizedBorn,
+    GeneralizedBornSetup,
+    setup_generalized_born,
+)
 from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
@@ -162,6 +167,12 @@ class System:
 
     d4sc_interaction: DispersionD4SC | None
     """Exact D4SC interaction associated with :attr:`d4sc_setup`."""
+
+    generalized_born_setup: GeneralizedBornSetup | None
+    """Explicit setup for one exact GeneralizedBorn interaction."""
+
+    generalized_born_interaction: GeneralizedBorn | None
+    """Exact GeneralizedBorn interaction associated with its setup."""
 
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
@@ -359,6 +370,10 @@ class Model:
             (i for i in interactions.components if type(i) is DispersionD4SC),
             None,
         )
+        generalized_born_interaction = next(
+            (i for i in interactions.components if type(i) is GeneralizedBorn),
+            None,
+        )
         es2_setup = (
             setup_es2(
                 numbers,
@@ -389,6 +404,11 @@ class Model:
         d4sc_setup = (
             setup_d4sc(d4sc_interaction, numbers)
             if d4sc_interaction is not None and batch_mode == 0
+            else None
+        )
+        generalized_born_setup = (
+            setup_generalized_born(generalized_born_interaction, numbers)
+            if generalized_born_interaction is not None and batch_mode == 0
             else None
         )
 
@@ -559,6 +579,8 @@ class Model:
             aes2_interaction=aes2_interaction,
             d4sc_setup=d4sc_setup,
             d4sc_interaction=d4sc_interaction,
+            generalized_born_setup=generalized_born_setup,
+            generalized_born_interaction=generalized_born_interaction,
             dd=dd,
         )
 

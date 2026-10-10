@@ -382,13 +382,29 @@ def test_stale_component_mutation_does_not_change_existing_setup() -> None:
         return interaction.get_monopole_atom_energy(data, q).sum()
 
     before = energy(setup)
+    original_leaf = par.get("dispersion.d4.a1")
+    leaf_before = original_leaf.clone()
     with torch.no_grad():
-        interaction.param["a1"].add_(0.2)
+        interaction.param["a1"] = interaction.param["a1"] + 0.2
         interaction.model.wf.add_(0.5)
         interaction.model.rc6.mul_(1.1)
         interaction.model.numbers = interaction.model.numbers.clone()
         interaction.model.numbers[0] = 8
+    torch.testing.assert_close(original_leaf, leaf_before)
     torch.testing.assert_close(energy(setup), before)
+
+    component_system = Model(
+        par=par,
+        interaction=(interaction,),
+        config=Config.create(exclude=("d4sc", "es2", "es3", "aes2")),
+        auto_int_level=False,
+    ).setup(numbers)
+    assert component_system.d4sc_setup is not None
+    torch.testing.assert_close(
+        dict(component_system.d4sc_setup.parameters)["a1"],
+        interaction.param["a1"],
+    )
+    assert not torch.allclose(energy(component_system.d4sc_setup), before)
 
     leaf = par.get("dispersion.d4.a1")
     with torch.no_grad():
@@ -701,3 +717,32 @@ def test_system_setup_carries_exact_replacement_parameters() -> None:
         build_d4sc_data(default.d4sc_setup, positions), q
     ).sum()
     assert not torch.allclose(energy_custom, energy_default)
+
+
+@pytest.mark.parametrize("missing", ["s9", "s10"])
+def test_sparse_d4_parameters_are_preserved(missing: str) -> None:
+    """Sparse supplied D4 parameter mappings remain valid through setup."""
+    numbers, positions = _sample("SiH4")
+    params = _parameters()
+    custom = new_d4sc(numbers, params, **DD)
+    assert custom is not None
+    del custom.param[missing]
+
+    direct = custom.get_cache(numbers=numbers, positions=positions)
+    charges = torch.tensor([0.03, -0.02, -0.01, 0.01, -0.01], **DD)
+    direct_energy = custom.get_monopole_atom_energy(direct, charges)
+    assert torch.isfinite(direct_energy).all()
+
+    system = Model(
+        par=params,
+        interaction=(custom,),
+        config=Config.create(exclude=("d4sc", "es2", "es3", "aes2")),
+        auto_int_level=False,
+    ).setup(numbers)
+    assert system.d4sc_setup is not None
+    supplied = dict(system.d4sc_setup.parameters)
+    assert set(supplied) == set(custom.param)
+    assert missing not in supplied
+    call_data = build_d4sc_data(system.d4sc_setup, positions)
+    energy = custom.get_monopole_atom_energy(call_data, charges)
+    assert torch.isfinite(energy).all()

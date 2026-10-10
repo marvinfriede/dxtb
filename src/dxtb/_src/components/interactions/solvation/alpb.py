@@ -57,6 +57,8 @@ Example
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from tad_mctc import storch
 from tad_mctc.batch import real_pairs
@@ -76,7 +78,7 @@ from dxtb._src.typing import (
     override,
 )
 from dxtb._src.typing.exceptions import DeviceError
-from dxtb._src.utils.tensors import grad_key, normalize_device
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 from .born import get_born_radii
@@ -88,7 +90,17 @@ DEFAULT_ALPB = True
 DEFAULT_BORN_SCALE = 1.0
 DEFAULT_BORN_OFFSET = 0.0
 
-__all__ = ["GeneralizedBorn", "new_solvation"]
+__all__ = [
+    "GeneralizedBorn",
+    "GeneralizedBornSetup",
+    "LABEL_GENERALIZED_BORN",
+    "build_generalized_born_data",
+    "new_solvation",
+    "setup_generalized_born",
+]
+
+LABEL_GENERALIZED_BORN = "GeneralizedBorn"
+"""Label for the :class:`.GeneralizedBorn` interaction."""
 
 
 def p16_kernel(r1: Tensor, ab: Tensor) -> Tensor:
@@ -206,6 +218,81 @@ class GeneralizedBornCache(InteractionCache, TensorLike):
         self.mat = mat
 
 
+@dataclass(frozen=True, eq=False)
+class GeneralizedBornSetup:
+    """Static solvent configuration for one System."""
+
+    numbers: Tensor
+    kernel: str
+    alpbet: Tensor
+    keps: Tensor
+    rvdw: Tensor
+    born_scale: Tensor | float | int
+    born_offset: Tensor | float | int
+    cutoff: Tensor
+    descreening: Tensor | float | int
+    obc: Tensor
+    apply_alpb_shape_correction: bool
+
+
+def setup_generalized_born(
+    component: GeneralizedBorn, numbers: Tensor
+) -> GeneralizedBornSetup:
+    """Gather immutable static settings for one solvation System."""
+    dd = component.dd
+    rvdw = any_to_tensor(component.born_kwargs["rvdw"], **dd).clone()
+    born_scale = component.born_kwargs["born_scale"]
+    born_offset = component.born_kwargs["born_offset"]
+    if isinstance(born_scale, Tensor):
+        born_scale = born_scale.clone()
+    if isinstance(born_offset, Tensor):
+        born_offset = born_offset.clone()
+
+    return GeneralizedBornSetup(
+        numbers=numbers.clone(),
+        kernel=component.kernel,
+        alpbet=component.alpbet.clone(),
+        keps=component.keps.clone(),
+        rvdw=rvdw,
+        born_scale=born_scale,
+        born_offset=born_offset,
+        cutoff=torch.tensor(66.0, **dd),
+        descreening=0.8,
+        obc=torch.tensor([1.0, 0.8, 4.85], **dd),
+        apply_alpb_shape_correction=bool(component.alpbet > 0),
+    )
+
+
+def build_generalized_born_data(
+    setup: GeneralizedBornSetup, positions: Tensor
+) -> GeneralizedBornCache:
+    """Build fresh geometry-dependent data for one solvation evaluation."""
+    born = get_born_radii(
+        setup.numbers,
+        positions,
+        rvdw=setup.rvdw,
+        cutoff=setup.cutoff,
+        born_scale=setup.born_scale,
+        born_offset=setup.born_offset,
+        descreening=setup.descreening,
+        obc=setup.obc,
+    )
+    eps = positions.new_tensor(torch.finfo(positions.dtype).eps)
+    mask = real_pairs(setup.numbers, mask_diagonal=False)
+    dist = torch.where(mask, storch.cdist(positions, p=2), eps)
+    ab = torch.where(mask, born.unsqueeze(-1) * born.unsqueeze(-2), eps)
+    mat = setup.keps * born_kernel[setup.kernel](dist, ab)
+
+    if setup.apply_alpb_shape_correction:
+        adet = get_adet(positions, setup.rvdw)
+        correction = (
+            setup.keps * setup.alpbet * adet.unsqueeze(-1).unsqueeze(-2)
+        )
+        mat = mat + correction
+
+    return GeneralizedBornCache(mat)
+
+
 class GeneralizedBorn(Interaction):
     """
     Implicit solvation model for describing the interaction with a dielectric continuum.
@@ -226,16 +313,18 @@ class GeneralizedBorn(Interaction):
     def __init__(
         self,
         numbers: Tensor,
-        dielectric_constant: Tensor,
+        dielectric_constant: Tensor | float | int,
         alpb: bool = DEFAULT_ALPB,
         kernel: str = DEFAULT_KERNEL,
-        born_scale: float = DEFAULT_BORN_SCALE,
-        born_offset: float = DEFAULT_BORN_OFFSET,
+        born_scale: float | Tensor = DEFAULT_BORN_SCALE,
+        born_offset: float | Tensor = DEFAULT_BORN_OFFSET,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(device, dtype)
+
+        dielectric_constant = any_to_tensor(dielectric_constant, **self.dd)
 
         self.alpbet = (
             alpha / dielectric_constant
@@ -246,10 +335,30 @@ class GeneralizedBorn(Interaction):
         self.kernel = kernel
 
         self.born_kwargs = {
-            "rvdw": kwargs.get("rvdw", VDW_D3(**self.dd)[numbers]),
+            "rvdw": any_to_tensor(
+                kwargs.get("rvdw", VDW_D3(**self.dd)[numbers]), **self.dd
+            ),
             "born_scale": born_scale,
             "born_offset": born_offset,
         }
+
+    def update(self, **kwargs: Any) -> None:
+        """Reject mutation of setup-derived exact solvation terms."""
+        if type(self) is GeneralizedBorn:
+            raise RuntimeError(
+                "Exact GeneralizedBorn settings are setup-derived. Create a "
+                "new System with changed solvent settings."
+            )
+        super().update(**kwargs)
+
+    def reset(self) -> None:
+        """Reject resetting setup-derived exact solvation terms."""
+        if type(self) is GeneralizedBorn:
+            raise RuntimeError(
+                "Exact GeneralizedBorn settings are setup-derived. Create a "
+                "new System with changed solvent settings."
+            )
+        super().reset()
 
     # pylint: disable=unused-argument
     @override
@@ -288,37 +397,9 @@ class GeneralizedBorn(Interaction):
         if positions is None:
             raise ValueError("Atomic positions are required for cache.")
 
-        cachvars = (numbers.detach().clone(), positions.detach().clone())
-
-        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
-            if not isinstance(self.cache, GeneralizedBornCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        # if the cache is built, store the positions for validation
-        self._cachevars = cachvars
-        self._cachegrad = grad_key(positions)
-
-        born = get_born_radii(numbers, positions, **self.born_kwargs)
-        eps = torch.tensor(torch.finfo(positions.dtype).eps, **self.dd)
-
-        mask = real_pairs(numbers, mask_diagonal=False)
-
-        dist = torch.where(mask, storch.cdist(positions, p=2), eps)
-        ab = torch.where(mask, born.unsqueeze(-1) * born.unsqueeze(-2), eps)
-
-        mat = self.keps * born_kernel[self.kernel](dist, ab)
-
-        if self.alpbet > 0:
-            adet = get_adet(positions, self.born_kwargs["rvdw"])
-            mat += self.keps * self.alpbet * adet.unsqueeze(-1).unsqueeze(-2)
-
-        self.cache = GeneralizedBornCache(mat)
-        return self.cache
+        return build_generalized_born_data(
+            setup_generalized_born(self, numbers), positions
+        )
 
     @override
     def get_monopole_atom_energy(
@@ -396,7 +477,7 @@ def new_solvation(
 
     return GeneralizedBorn(
         numbers,
-        dielectric_constant=any_to_tensor(dielectric_constant),
+        dielectric_constant=any_to_tensor(dielectric_constant, **dd),
         alpb=par.get("solvation.alpb.alpb"),
         kernel=par.get("solvation.alpb.kernel"),
         born_scale=par.get("solvation.alpb.born_scale"),

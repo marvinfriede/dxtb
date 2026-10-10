@@ -138,12 +138,13 @@ def test_fail_overwritten_cache_solvation() -> None:
     solv = new_solvation(numbers, par, device=DEVICE)
     assert solv is not None
 
-    # create cache
+    # direct compatibility calls now build fresh nonpersistent data
     solv.cache_enable()
-    _ = solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    first = solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
     # manually overwrite cache
     solv.cache = InteractionCache()
 
-    with pytest.raises(TypeError):
-        solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    fresh = solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    assert fresh is not first
+    assert isinstance(solv.cache, InteractionCache)

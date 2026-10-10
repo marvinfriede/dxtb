@@ -411,6 +411,32 @@ def _d4sc_positions() -> Target:
     return build
 
 
+def _alpb_positions() -> Target:
+    """P16/ALPB energy rebuilds Born radii and matrix per geometry."""
+
+    def build():
+        from dxtb._src.components.interactions.solvation.alpb import (
+            GeneralizedBorn,
+            build_generalized_born_data,
+            setup_generalized_born,
+        )
+
+        numbers, positions = _water()
+        interaction = GeneralizedBorn(
+            numbers, 78.9, kernel="p16", alpb=True, **DD
+        )
+        setup = setup_generalized_born(interaction, numbers)
+        charges = torch.tensor([0.2, -0.1, -0.1], **DD)
+
+        def f(pos: Tensor) -> Tensor:
+            data = build_generalized_born_data(setup, pos)
+            return interaction.get_monopole_atom_energy(data, charges).sum()
+
+        return f, _leaf(positions)
+
+    return build
+
+
 ###############################################################################
 # integrals and core Hamiltonian
 
@@ -589,6 +615,7 @@ TARGETS: dict[str, Target] = {
     "aes2.positions": _aes2_positions(),
     "d4sc.charges": _interaction("d4sc"),
     "d4sc.positions": _d4sc_positions(),
+    "alpb.positions": _alpb_positions(),
     "es2.positions": _interaction_positions("es2"),
     "eigensolver.degenerate_aufbau": _eigensolver("degenerate", "aufbau"),
     "eigensolver.degenerate_fermi": _eigensolver("degenerate", "fermi"),

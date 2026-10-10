@@ -41,6 +41,7 @@ from .coulomb.multipole import AES2, LABEL_AES2
 from .coulomb.secondorder import ES2, LABEL_ES2
 from .coulomb.thirdorder import ES3, LABEL_ES3
 from .dispersion.d4sc import LABEL_DISPERSIOND4SC, DispersionD4SC
+from .solvation.alpb import LABEL_GENERALIZED_BORN, GeneralizedBorn
 from .field.efield import LABEL_EFIELD, ElectricField
 from .field.efieldgrad import LABEL_EFIELD_GRAD, ElectricFieldGrad
 
@@ -90,6 +91,7 @@ class InteractionList(ComponentList[Interaction]):
             LABEL_ES3,
             LABEL_AES2,
             LABEL_DISPERSIOND4SC,
+            LABEL_GENERALIZED_BORN,
         ):
             matching = [
                 component
@@ -114,7 +116,13 @@ class InteractionList(ComponentList[Interaction]):
     def reset_all(self) -> None:
         """Reset unmigrated interactions, leaving setup terms untouched."""
         for component in self.components:
-            if type(component) not in (ES2, ES3, AES2, DispersionD4SC):
+            if type(component) not in (
+                ES2,
+                ES3,
+                AES2,
+                DispersionD4SC,
+                GeneralizedBorn,
+            ):
                 component.reset()
 
     @override

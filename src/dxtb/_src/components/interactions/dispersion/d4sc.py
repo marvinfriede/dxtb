@@ -155,8 +155,7 @@ def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
     model = component.model
     param = component.param
     parameters = tuple(
-        (name, _clone_static(param[name]))
-        for name in ("a1", "a2", "s6", "s8", "s9", "s10")
+        (name, _clone_static(value)) for name, value in param.items()
     )
 
     return D4SCSetup(
