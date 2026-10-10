@@ -86,38 +86,38 @@ def test_fail_overwritten_cache(
             comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
 
-def test_fail_overwritten_cache_ef() -> None:
+def test_field_cache_is_fresh_and_nonpersistent_ef() -> None:
     positions = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device=DEVICE)
 
     ef = new_efield(torch.tensor([0.0, 0.0, 0.0]), device=DEVICE)
     assert ef is not None
 
-    # create cache
+    # Field data is call-local even when the inherited cache flags are enabled.
     ef.cache_enable()
-    _ = ef.get_cache(positions=positions)
+    first = ef.get_cache(positions=positions)
+    second = ef.get_cache(positions=positions)
 
-    # manually overwrite cache
-    ef.cache = InteractionCache()
+    assert first is not second
+    assert ef.cache is None
+    assert ef._cachevars is None
+    assert ef._cachegrad is None
 
-    with pytest.raises(TypeError):
-        ef.get_cache(positions=positions)
 
-
-def test_fail_overwritten_cache_efg() -> None:
+def test_field_cache_is_fresh_and_nonpersistent_efg() -> None:
     positions = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device=DEVICE)
 
     efg = new_efield_grad(torch.zeros((3, 3)), device=DEVICE)
     assert efg is not None
 
-    # create cache
+    # Field-gradient data is call-local even with inherited cache flags on.
     efg.cache_enable()
-    _ = efg.get_cache(positions=positions)
+    first = efg.get_cache(positions=positions)
+    second = efg.get_cache(positions=positions)
 
-    # manually overwrite cache
-    efg.cache = InteractionCache()
-
-    with pytest.raises(TypeError):
-        efg.get_cache(positions=positions)
+    assert first is not second
+    assert efg.cache is None
+    assert efg._cachevars is None
+    assert efg._cachegrad is None
 
 
 def test_fail_overwritten_cache_solvation() -> None:

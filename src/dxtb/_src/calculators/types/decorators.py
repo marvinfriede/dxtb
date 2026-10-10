@@ -34,8 +34,6 @@ from typing import TYPE_CHECKING, cast
 import torch
 
 from dxtb import OutputHandler
-from dxtb._src.components.interactions import efield as efield
-from dxtb._src.components.interactions.field import efieldgrad as efieldgrad
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Callable, Tensor, TypeVar
 
@@ -44,10 +42,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "requires_positions_grad",
-    "requires_efield",
-    "requires_efield_grad",
-    "requires_efg",
-    "requires_efg_grad",
     "numerical",
 ]
 
@@ -74,97 +68,6 @@ def requires_positions_grad(
                 f"Position tensor needs ``requires_grad=True`` in '{func.__name__}'."
             )
 
-        return func(self, positions, chrg, spin, *args, **kwargs)
-
-    return wrapper
-
-
-def requires_efield(func: Callable[..., Tensor]) -> Callable[..., Tensor]:
-    @wraps(func)
-    def wrapper(
-        self: Calculator,
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Tensor:
-        if efield.LABEL_EFIELD not in self.interactions.labels:
-            raise RuntimeError(
-                f"'{func.__name__}' requires an electric field."
-                f"\nAdd the '{efield.LABEL_EFIELD}' interaction to the "
-                "Calculator.\n\nExample:\n"
-                "field = torch.tensor([0.0, 0.0, 0.0], **dd)\n"
-                "ef = dxtb.components.field.new_efield(field, **dd)\n"
-                "calc = dxtb.calculators.GFN1Calculator(numbers, "
-                "interaction=ef, **dd)"
-            )
-        return func(self, positions, chrg, spin, *args, **kwargs)
-
-    return wrapper
-
-
-def requires_efield_grad(func: Callable[..., Tensor]) -> Callable[..., Tensor]:
-    @wraps(func)
-    def wrapper(
-        self: Calculator,
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Tensor:
-        ef = self.interactions.get_interaction(efield.LABEL_EFIELD)
-        if not ef.field.requires_grad:
-            raise RuntimeError(
-                f"Field tensor needs ``requires_grad=True`` in '{func.__name__}'."
-            )
-        return func(self, positions, chrg, spin, *args, **kwargs)
-
-    return wrapper
-
-
-def requires_efg(func: Callable[..., Tensor]) -> Callable[..., Tensor]:
-    @wraps(func)
-    def wrapper(
-        self: Calculator,
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Tensor:
-        if efieldgrad.LABEL_EFIELD_GRAD not in self.interactions.labels:
-            raise RuntimeError(
-                f"'{func.__name__}' requires an electric field gradient."
-                f"\nAdd the '{efieldgrad.LABEL_EFIELD_GRAD}' interaction to "
-                "the Calculator.\n\nExample:\n"
-                "field_grad = torch.zeros((3, 3), **dd)\n"
-                "efg = dxtb.components.field.new_efield_grad(field_grad, **dd)"
-                "\ncalc = dxtb.calculators.GFN1Calculator(numbers, "
-                "interaction=efg, **dd)"
-            )
-        return func(self, positions, chrg, spin, *args, **kwargs)
-
-    return wrapper
-
-
-def requires_efg_grad(func: Callable[..., Tensor]) -> Callable[..., Tensor]:
-    @wraps(func)
-    def wrapper(
-        self: Calculator,
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Tensor:
-        efg = self.interactions.get_interaction(efieldgrad.LABEL_EFIELD_GRAD)
-        if not efg.field_grad.requires_grad:
-            raise RuntimeError(
-                "Field gradient tensor needs ``requires_grad=True`` in "
-                f"'{func.__name__}'."
-            )
         return func(self, positions, chrg, spin, *args, **kwargs)
 
     return wrapper
@@ -209,16 +112,8 @@ def numerical(func: F) -> F:
 
     .. warning::
 
-        Since this decorator turns off gradient tracking for the function, a
-        possible ``requires_grad=True`` will be lost because the corresponding
-        tensor is updated within the numerical differentiation.
-        This happens in any electric field related derivatives. If you want to
-        carry out a subsequent calculation with ``requires_grad=True``, you have
-        to update the electric field tensor manually with:
-
-        .. code-block:: python
-
-            field_tensor.requires_grad_(True)
-            calc.interactions.update_efield(field=field_tensor)
+        This decorator turns off gradient tracking for the numerical
+        differentiation. Explicit field arguments are evaluated as supplied
+        and are never stored or modified.
     """
     return _numerical(nograd=True)(func)

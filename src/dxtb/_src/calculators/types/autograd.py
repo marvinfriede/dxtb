@@ -28,8 +28,6 @@ import logging
 import torch
 
 from dxtb import OutputHandler, timer
-from dxtb._src.components.interactions.field import efield as efield
-from dxtb._src.components.interactions.field import efieldgrad as efieldgrad
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Callable, Literal, Tensor
 
@@ -42,7 +40,7 @@ from ..properties.vibration import (
     vib_analysis,
 )
 from . import decorators as cdec
-from .energy import EnergyCalculator
+from .energy import _UNSET, EnergyCalculator
 
 __all__ = ["AutogradCalculator"]
 
@@ -261,11 +259,14 @@ class AutogradCalculator(EnergyCalculator):
             if derived_quantity == "forces":
                 hess_func = jacrev(self.forces, argnums=0)
                 # specifiy grad_mode here!
-                hess = hess_func(positions, chrg, spin, "functorch")
+                hess = hess_func(positions, chrg, spin, "functorch", **kwargs)
 
             elif derived_quantity == "energy":
-                hess_func = jacrev(jacrev(self.energy, argnums=0), argnums=0)
-                hess = hess_func(positions, chrg, spin)
+
+                def energy(pos: Tensor) -> Tensor:
+                    return self.energy(pos, chrg, spin, **kwargs)
+
+                hess = jacrev(jacrev(energy))(positions)
 
             else:
                 raise ValueError(
@@ -288,6 +289,7 @@ class AutogradCalculator(EnergyCalculator):
                     grad_mode=grad_mode,
                     create_graph=True,
                     retain_graph=True,
+                    **kwargs,
                 )
 
                 # reshape (..., nat, 3, nat*3) to (..., nat, 3, nat, 3)
@@ -301,7 +303,7 @@ class AutogradCalculator(EnergyCalculator):
 
                 def _grad(pos: Tensor) -> Tensor:
                     # sum over the batch: the systems are independent
-                    e = self.energy(pos, chrg, spin).sum()
+                    e = self.energy(pos, chrg, spin, **kwargs).sum()
                     if e.grad_fn is None:
                         return torch.zeros_like(pos)
                     (g,) = torch.autograd.grad(e, pos, create_graph=True)
@@ -402,14 +404,14 @@ class AutogradCalculator(EnergyCalculator):
 
         return a
 
-    @cdec.requires_efield
-    @cdec.requires_efield_grad
     def dipole(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the electric dipole moment :math:`\mu` via AD.
@@ -445,15 +447,24 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Electric dipole moment of shape ``(..., 3)``.
         """
-        field = self.interactions.get_interaction(efield.LABEL_EFIELD).field
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "dipole requires field= or a Calculator field default."
+            )
+        if not use_functorch and not field.requires_grad:
+            raise RuntimeError(
+                "field tensor needs requires_grad=True for dipole."
+            )
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
             from torch.func import jacrev
 
             def wrapped_energy(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return self.energy(positions, chrg, spin)
+                return self.energy(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             dip = jacrev(wrapped_energy)(field)
             assert isinstance(dip, Tensor)
@@ -462,7 +473,9 @@ class AutogradCalculator(EnergyCalculator):
             from tad_mctc.autograd import jac
 
             # calculate electric dipole contribution from xtb energy: -de/dE
-            energy = self.energy(positions, chrg, spin)
+            energy = self.energy(
+                positions, chrg, spin, field=field, field_grad=field_grad
+            )
             dip = jac(energy, field)
 
         if dip.is_contiguous() is False:
@@ -475,14 +488,14 @@ class AutogradCalculator(EnergyCalculator):
 
         return -dip
 
-    @cdec.requires_efg
-    @cdec.requires_efg_grad
     def quadrupole(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
+        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the traceless electric quadrupole moment :math:`\Theta` via
@@ -521,17 +534,25 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Traceless quadrupole moment of shape ``(..., 6)``.
         """
-        field_grad = self.interactions.get_interaction(
-            efieldgrad.LABEL_EFIELD_GRAD
-        ).field_grad
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field_grad is None:
+            raise RuntimeError(
+                "An electric field gradient is required; pass field_grad= or "
+                "provide a Calculator field-gradient default."
+            )
+        if not use_functorch and not field_grad.requires_grad:
+            raise RuntimeError(
+                "field_grad tensor needs requires_grad=True for quadrupole response."
+            )
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
             from torch.func import jacrev
 
             def wrapped_energy(g: Tensor) -> Tensor:
-                self.interactions.update_efield_grad(field_grad=g)
-                return self.energy(positions, chrg, spin)
+                return self.energy(
+                    positions, chrg, spin, field=field, field_grad=g
+                )
 
             deriv = jacrev(wrapped_energy)(field_grad)
             assert isinstance(deriv, Tensor)
@@ -539,7 +560,9 @@ class AutogradCalculator(EnergyCalculator):
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            energy = self.energy(positions, chrg, spin)
+            energy = self.energy(
+                positions, chrg, spin, field=field, field_grad=field_grad
+            )
             deriv = jac(energy, field_grad)
 
         # `jac` flattens the (3, 3) input, `jacrev` does not: (..., 3, 3)
@@ -557,6 +580,8 @@ class AutogradCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         use_analytical_dipmom: bool = True,
         use_functorch: bool = False,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -597,22 +622,40 @@ class AutogradCalculator(EnergyCalculator):
             Cartesian dipole derivative of shape ``(..., 3, nat, 3)``.
         """
         dip_fcn = self._get_dipole_fcn(use_analytical_dipmom)
+        field, field_grad = self._resolve_fields(field, field_grad)
 
         if use_functorch is True:
             # pylint: disable=import-outside-toplevel
             from torch.func import jacrev
 
             # d(3) / d(nat, 3) = (3, nat, 3)
-            dmu_dr = jacrev(dip_fcn, argnums=0)(
-                positions, chrg, spin, use_functorch
-            )
+            def wrapped(pos: Tensor) -> Tensor:
+                return dip_fcn(
+                    pos,
+                    chrg,
+                    spin,
+                    use_functorch,
+                    field=field,
+                    field_grad=field_grad,
+                    **kwargs,
+                )
+
+            dmu_dr = jacrev(wrapped)(positions)
             assert isinstance(dmu_dr, Tensor)
 
         else:
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            mu = dip_fcn(positions, chrg, spin, use_functorch)
+            mu = dip_fcn(
+                positions,
+                chrg,
+                spin,
+                use_functorch,
+                field=field,
+                field_grad=field_grad,
+                **kwargs,
+            )
 
             # (..., 3, 3*nat) -> (..., 3, nat, 3)
             dmu_dr = jac(mu, positions).reshape(
@@ -629,8 +672,6 @@ class AutogradCalculator(EnergyCalculator):
 
         return dmu_dr
 
-    @cdec.requires_efield
-    @cdec.requires_efield_grad
     def polarizability(
         self,
         positions: Tensor,
@@ -639,6 +680,8 @@ class AutogradCalculator(EnergyCalculator):
         use_functorch: bool = False,
         use_analytical: bool = False,
         derived_quantity: Literal["energy", "dipole"] = "dipole",
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the polarizability tensor :math:`\alpha`.
@@ -681,8 +724,15 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Polarizability tensor of shape ``(..., 3, 3)``.
         """
-        # retrieve the efield interaction and the field
-        field = self.interactions.get_interaction(efield.LABEL_EFIELD).field
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "polarizability requires field= or a Calculator field default."
+            )
+        if not use_functorch and not field.requires_grad:
+            raise RuntimeError(
+                "field tensor needs requires_grad=True for polarizability."
+            )
 
         # FIXME: Not working for Raman
         dip_fcn = self._get_dipole_fcn(use_analytical)
@@ -691,7 +741,9 @@ class AutogradCalculator(EnergyCalculator):
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            mu = dip_fcn(positions, chrg, spin)
+            mu = dip_fcn(
+                positions, chrg, spin, field=field, field_grad=field_grad
+            )
             return jac(mu, field)
 
         # pylint: disable=import-outside-toplevel
@@ -700,16 +752,18 @@ class AutogradCalculator(EnergyCalculator):
         if derived_quantity == "dipole":
 
             def wrapped_dipole(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return dip_fcn(positions, chrg, spin)
+                return dip_fcn(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             alpha = jacrev(wrapped_dipole)(field)
             assert isinstance(alpha, Tensor)
         elif derived_quantity == "energy":
 
             def wrapped_energy(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return self.energy(positions, chrg, spin)
+                return self.energy(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             alpha = jacrev(jacrev(wrapped_energy))(field)
             assert isinstance(alpha, Tensor)
@@ -734,7 +788,6 @@ class AutogradCalculator(EnergyCalculator):
         # 3x3 polarizability tensor
         return alpha
 
-    @cdec.requires_efield
     @cdec.requires_positions_grad
     def pol_deriv(
         self,
@@ -743,6 +796,8 @@ class AutogradCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
         derived_quantity: Literal["energy", "dipole"] = "dipole",
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -785,6 +840,7 @@ class AutogradCalculator(EnergyCalculator):
             Polarizability derivative shape ``(..., 3, 3, nat, 3)``.
         """
         use_analytical = kwargs.pop("use_analytical", False)
+        field, field_grad = self._resolve_fields(field, field_grad)
 
         if use_functorch is False:
             # pylint: disable=import-outside-toplevel
@@ -796,6 +852,8 @@ class AutogradCalculator(EnergyCalculator):
                 spin,
                 use_functorch=use_functorch,
                 use_analytical=use_analytical,
+                field=field,
+                field_grad=field_grad,
             )
 
             # d(3, 3) / d(nat, 3) -> (3, 3, nat*3) -> (3, 3, nat, 3)
@@ -805,14 +863,19 @@ class AutogradCalculator(EnergyCalculator):
             # pylint: disable=import-outside-toplevel
             from torch.func import jacrev
 
-            chi = jacrev(self.polarizability, argnums=0)(
-                positions,
-                chrg,
-                spin,
-                use_functorch,
-                use_analytical,
-                derived_quantity,
-            )
+            def wrapped(pos: Tensor) -> Tensor:
+                return self.polarizability(
+                    pos,
+                    chrg,
+                    spin,
+                    use_functorch=use_functorch,
+                    use_analytical=use_analytical,
+                    derived_quantity=derived_quantity,
+                    field=field,
+                    field_grad=field_grad,
+                )
+
+            chi = jacrev(wrapped)(positions)
             assert isinstance(chi, Tensor)
 
         if chi.is_contiguous() is False:
@@ -825,8 +888,6 @@ class AutogradCalculator(EnergyCalculator):
 
         return chi
 
-    @cdec.requires_efield
-    @cdec.requires_efield_grad
     def hyperpolarizability(
         self,
         positions: Tensor,
@@ -836,6 +897,8 @@ class AutogradCalculator(EnergyCalculator):
         derived_quantity: Literal[
             "energy", "dipole", "polarizability", "pol"
         ] = "pol",
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the hyper polarizability tensor :math:`\beta`.
@@ -876,15 +939,28 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Hyper polarizability tensor of shape ``(..., 3, 3, 3)``.
         """
-        # retrieve the efield interaction and the field
-        field = self.interactions.get_interaction(efield.LABEL_EFIELD).field
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "hyperpolarizability requires field= or a Calculator field "
+                "default."
+            )
+        if not use_functorch and not field.requires_grad:
+            raise RuntimeError(
+                "field tensor needs requires_grad=True for hyperpolarizability."
+            )
 
         if use_functorch is False:
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
             alpha = self.polarizability(
-                positions, chrg, spin, use_functorch=use_functorch
+                positions,
+                chrg,
+                spin,
+                use_functorch=use_functorch,
+                field=field,
+                field_grad=field_grad,
             )
             return jac(alpha, field)
 
@@ -894,24 +970,27 @@ class AutogradCalculator(EnergyCalculator):
         if derived_quantity == "pol":
 
             def wrapped_polarizability(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return self.polarizability(positions, chrg, spin)
+                return self.polarizability(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             beta = jacrev(wrapped_polarizability)(field)
 
         elif derived_quantity == "dipole":
 
             def wrapped_dipole(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return self.dipole(positions, chrg, spin)
+                return self.dipole(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             beta = jacrev(jacrev(wrapped_dipole))(field)
 
         elif derived_quantity == "energy":
 
             def wrapped_energy(f: Tensor) -> Tensor:
-                self.interactions.update_efield(field=f)
-                return self.energy(positions, chrg, spin)
+                return self.energy(
+                    positions, chrg, spin, field=f, field_grad=field_grad
+                )
 
             beta = jacrev(jacrev(jacrev(wrapped_energy)))(field)
 
@@ -1030,7 +1109,7 @@ class AutogradCalculator(EnergyCalculator):
         logger.debug("Raman spectrum: Start.")
 
         vib_res = self.vibration(
-            positions, chrg, spin, use_functorch=use_functorch
+            positions, chrg, spin, use_functorch=use_functorch, **kwargs
         )
 
         # TODO: Figure out how to run func transforms 2x properly
@@ -1042,7 +1121,9 @@ class AutogradCalculator(EnergyCalculator):
         # FIXME: functorch does not work here, liekly because of some
         # weird interaction with libcint.
         # d(..., 3, 3) / d(..., nat, 3) -> (..., 3, 3, nat, 3)
-        da_dr = self.pol_deriv(positions, chrg, spin, use_functorch=False)
+        da_dr = self.pol_deriv(
+            positions, chrg, spin, use_functorch=False, **kwargs
+        )
 
         intensities, depol = raman_ints_depol(da_dr, vib_res.modes)
 
@@ -1105,7 +1186,9 @@ class AutogradCalculator(EnergyCalculator):
             "hyperpolarizability",
         ):
             if name in properties:
-                values[name] = getattr(self, name)(positions, chrg, spin, **kwargs)
+                values[name] = getattr(self, name)(
+                    positions, chrg, spin, **kwargs
+                )
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
             value = self.dipole_deriv(positions, chrg, spin, **kwargs)
             for name in ("dipole_derivatives", "dipole_deriv"):

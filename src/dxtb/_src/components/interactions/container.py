@@ -28,6 +28,8 @@ monopolar potential.
 
 from __future__ import annotations
 
+from math import prod
+
 import torch
 from tad_mctc.batch import deflate, pack
 
@@ -140,6 +142,24 @@ class Container:
         if len(tensors) == 1:
             return tensors[0].unsqueeze(-2)
 
+        if not self.batch_mode:
+            # For a single System the component lengths are fixed by setup.
+            # Avoid tad-mctc.pack's indexed writes so this call-local value
+            # also composes with vmap over explicit field inputs.
+            tensors = [tensor.flatten() for tensor in tensors]
+            size = max(tensor.shape[-1] for tensor in tensors)
+            return torch.stack(
+                [
+                    torch.cat(
+                        (
+                            tensor,
+                            tensor.new_full((size - tensor.shape[-1],), pad),
+                        )
+                    )
+                    for tensor in tensors
+                ]
+            )
+
         # pack along dim=1 to keep the batch dimension in the first positions
         return pack(tensors, axis=self.axis, value=pad)
 
@@ -212,6 +232,38 @@ class Container:
             # Now, dipolar and quadrupolar properties are checked.
             assert data["dipole"] is not None
             vs = torch.split(tensor, 1, dim=axis)
+
+            if not batch_mode:
+                # A single System has fixed, setup-known component sizes. Crop
+                # the packed tail padding directly instead of calling
+                # deflate(), whose unique-consecutive sizing is not vmap-safe.
+                mono = (
+                    vs[0]
+                    .reshape(-1)[: prod(data["mono"])]
+                    .reshape(*data["mono"])
+                )
+                dipole = (
+                    vs[1]
+                    .reshape(-1)[: prod(data["dipole"])]
+                    .reshape(*data["dipole"])
+                )
+
+                if tensor.shape[axis] == 2:
+                    return cls(mono, dipole, label=label)
+
+                assert data["quad"] is not None
+                quad = (
+                    vs[2]
+                    .reshape(-1)[: prod(data["quad"])]
+                    .reshape(*data["quad"])
+                )
+                if tensor.shape[axis] == 3:
+                    return cls(mono, dipole, quad, label=label)
+
+                raise RuntimeError(
+                    "It appears as if more than 3 tensors are given in the "
+                    f"tensor representation as its shape is {tensor.shape}."
+                )
 
             # TODO: Conformer batch_mode mode (deflate not required)
             mono = deflate(vs[0], axis=0, value=pad).reshape(*data["mono"])

@@ -132,8 +132,8 @@ def execute(
     assert pytest.approx(npref, abs=atol, rel=rtol) == dip0
     assert pytest.approx(num, abs=atol, rel=rtol) == dip0
 
-    # required for autodiff of energy w.r.t. efield
-    calc.interactions.update_efield(field=field_vector.requires_grad_(True))
+    # Explicit field values remain differentiable without list mutation.
+    field_vector.requires_grad_(True)
 
     # manual jacobian
     dip1 = tensor_to_numpy(calc.dipole(positions, charge, use_functorch=False))

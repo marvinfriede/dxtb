@@ -81,8 +81,8 @@ def test_reset() -> None:
     assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is not None
-    assert efg is not None and efg.cache is not None
+    assert ef is not None and ef.cache is None
+    assert efg is not None and efg.cache is None
 
     assert len(call_data["DispersionD4SC"]) == 3
     assert not hasattr(ilist, "reset_d4sc")
@@ -94,13 +94,15 @@ def test_reset() -> None:
     with pytest.raises(RuntimeError, match="setup-derived"):
         ilist.reset("ES3")
 
-    assert len(ef.cache) == 2
-    ilist.reset_efield()
-    assert ef.cache is None
-
-    assert len(efg.cache) == 3  # vat + vdp + vqp
-    ilist.reset_efield_grad()
-    assert efg.cache is None
+    assert len(call_data["ElectricField"]) == 2
+    assert len(call_data["ElectricFieldGrad"]) == 3
+    assert call_data["ElectricField"] is not ef.get_cache(
+        numbers=numbers, positions=positions, ihelp=ihelp
+    )
+    with pytest.raises(RuntimeError, match="per-evaluation"):
+        ef.update(field=torch.zeros(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="per-evaluation"):
+        efg.update(field_grad=torch.zeros((3, 3), device=DEVICE))
 
 
 def test_reset_all() -> None:
@@ -124,14 +126,14 @@ def test_reset_all() -> None:
     assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is not None
-    assert efg is not None and efg.cache is not None
+    assert ef is not None and ef.cache is None
+    assert efg is not None and efg.cache is None
 
     assert len(call_data["DispersionD4SC"]) == 3
     assert len(call_data["ES2"]) == 2
     assert len(call_data["ES3"]) == 2
-    assert len(ef.cache) == 2
-    assert len(efg.cache) == 3  # vat + vdp + vqp
+    assert len(call_data["ElectricField"]) == 2
+    assert len(call_data["ElectricFieldGrad"]) == 3
 
     ilist.reset_all()
     assert d4sc.cache is None
@@ -160,8 +162,8 @@ def test_update() -> None:
     assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is not None
-    assert efg is not None and efg.cache is not None
+    assert ef is not None and ef.cache is None
+    assert efg is not None and efg.cache is None
 
     with pytest.raises(RuntimeError, match="setup-derived"):
         ilist.update("DispersionD4SC", r4r2=torch.ones(3, device=DEVICE))
@@ -180,10 +182,11 @@ def test_update() -> None:
     with pytest.raises(RuntimeError, match="setup-derived"):
         es3.reset()
 
-    field = torch.tensor([1.0, 0.0, 0.0], device=DEVICE)
-    ilist.update_efield(field=field)
-    assert (ef.field == field).all()
-
-    field_grad = torch.ones((3, 3), device=DEVICE)
-    ilist.update_efield_grad(field_grad=field_grad)
-    assert (efg.field_grad == field_grad).all()
+    with pytest.raises(RuntimeError, match="per-evaluation"):
+        ilist.update("ElectricField", field=torch.zeros(3, device=DEVICE))
+    with pytest.raises(RuntimeError, match="per-evaluation"):
+        ilist.reset("ElectricFieldGrad")
+    assert not hasattr(ilist, "update_efield")
+    assert not hasattr(ilist, "update_efield_grad")
+    assert not hasattr(ilist, "reset_efield")
+    assert not hasattr(ilist, "reset_efield_grad")

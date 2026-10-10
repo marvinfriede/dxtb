@@ -28,13 +28,12 @@ import logging
 import torch
 
 from dxtb import OutputHandler
-from dxtb._src.components.interactions.field import efield, efieldgrad
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Any, Tensor
 
 from ..properties import vibration as vib
 from . import decorators as cdec
-from .energy import EnergyCalculator
+from .energy import _UNSET, EnergyCalculator
 
 __all__ = ["NumericalCalculator"]
 
@@ -73,6 +72,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -101,6 +102,8 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
+        field, field_grad = self._resolve_fields(field, field_grad)
+
         # (..., nat, 3)
         deriv = torch.zeros(positions.shape, **self.dd)
         logger.debug("Forces (numerical): Starting build (%s).", deriv.shape)
@@ -121,10 +124,22 @@ class NumericalCalculator(EnergyCalculator):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):
                     positions[..., i, j] += step_size
-                    gr = self.energy(positions, chrg, spin)
+                    gr = self.energy(
+                        positions,
+                        chrg,
+                        spin,
+                        field=field,
+                        field_grad=field_grad,
+                    )
 
                     positions[..., i, j] -= 2 * step_size
-                    gl = self.energy(positions, chrg, spin)
+                    gl = self.energy(
+                        positions,
+                        chrg,
+                        spin,
+                        field=field,
+                        field_grad=field_grad,
+                    )
 
                     positions[..., i, j] += step_size
                     deriv[..., i, j] = 0.5 * (gr - gl) / step_size
@@ -157,6 +172,8 @@ class NumericalCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
         matrix: bool = False,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         """
         Numerically calculate the Hessian.
@@ -184,6 +201,8 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
+        field, field_grad = self._resolve_fields(field, field_grad)
+
         # potentially use analytical forces if available
         if hasattr(self, "forces_analytical") and callable(
             getattr(self, "forces_analytical")
@@ -192,14 +211,26 @@ class NumericalCalculator(EnergyCalculator):
             def _gradfcn(pos: Tensor) -> Tensor:
                 with torch.enable_grad():
                     pos.requires_grad_(True)
-                    result = -self.forces_analytical(pos, chrg, spin)  # type: ignore
+                    result = -self.forces_analytical(
+                        pos,
+                        chrg,
+                        spin,
+                        field=field,
+                        field_grad=field_grad,
+                    )  # type: ignore
                     pos.detach_()
                 return result.detach()
 
         else:
 
             def _gradfcn(pos: Tensor) -> Tensor:
-                return -self.forces_numerical(pos, chrg, spin)
+                return -self.forces_numerical(
+                    pos,
+                    chrg,
+                    spin,
+                    field=field,
+                    field_grad=field_grad,
+                )
 
         # (..., nat, 3, nat, 3)
         deriv = torch.zeros(
@@ -248,6 +279,8 @@ class NumericalCalculator(EnergyCalculator):
         step_size: int | float = defaults.STEP_SIZE,
         project_translational: bool = True,
         project_rotational: bool = True,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> vib.VibResult:
         r"""
         Perform vibrational analysis via numerical Hessian.
@@ -277,7 +310,12 @@ class NumericalCalculator(EnergyCalculator):
             ``(..., nat*3, nfreqs)``).
         """
         hess = self.hessian_numerical(
-            positions, chrg, spin, step_size=step_size
+            positions,
+            chrg,
+            spin,
+            step_size=step_size,
+            field=field,
+            field_grad=field_grad,
         )
         return vib.vib_analysis(
             self.numbers,
@@ -290,14 +328,14 @@ class NumericalCalculator(EnergyCalculator):
     # PROPERTIES (FIELD)
 
     @cdec.numerical
-    @cdec.requires_efield
     def dipole_numerical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        **kwargs: Any,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the electric dipole moment :math:`\mu`.
@@ -325,8 +363,11 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        # retrieve electric field, no copy needed because of no_grad context
-        field = self.interactions.get_interaction(efield.LABEL_EFIELD).field
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "dipole_numerical requires field= or a field default."
+            )
 
         # (..., 3)
         deriv = torch.zeros((*self.numbers.shape[:-1], 3), **self.dd)
@@ -335,16 +376,22 @@ class NumericalCalculator(EnergyCalculator):
         count = 1
         for i in range(3):
             with OutputHandler.with_verbosity(0):
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
-                gr = self.energy(positions, chrg, spin, **kwargs)
-
-                field[..., i] -= 2 * step_size
-                self.interactions.update_efield(field=field)
-                gl = self.energy(positions, chrg, spin, **kwargs)
-
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
+                direction = torch.zeros_like(field)
+                direction[i] = 1.0
+                gr = self.energy(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field + step_size * direction,
+                    field_grad=field_grad,
+                )
+                gl = self.energy(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field - step_size * direction,
+                    field_grad=field_grad,
+                )
                 deriv[..., i] = 0.5 * (gr - gl) / step_size
 
             logger.debug("Dipole (numerical): step %s/3.", count)
@@ -357,14 +404,14 @@ class NumericalCalculator(EnergyCalculator):
         return -deriv
 
     @cdec.numerical
-    @cdec.requires_efg
     def quadrupole_numerical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        **kwargs: Any,
+        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the traceless electric quadrupole moment
@@ -396,10 +443,12 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        # retrieve field gradient, no copy needed because of no_grad context
-        field_grad = self.interactions.get_interaction(
-            efieldgrad.LABEL_EFIELD_GRAD
-        ).field_grad
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field_grad is None:
+            raise RuntimeError(
+                "An electric field gradient is required; pass field_grad= or "
+                "provide a Calculator field-gradient default."
+            )
 
         # (..., 6)
         deriv = torch.zeros((*self.numbers.shape[:-1], 6), **self.dd)
@@ -410,16 +459,22 @@ class NumericalCalculator(EnergyCalculator):
         rows, cols = torch.tril_indices(3, 3).unbind()
         for k, (i, j) in enumerate(zip(rows.tolist(), cols.tolist())):
             with OutputHandler.with_verbosity(0):
-                field_grad[i, j] += step_size
-                self.interactions.update_efield_grad(field_grad=field_grad)
-                gr = self.energy(positions, chrg, spin, **kwargs)
-
-                field_grad[i, j] -= 2 * step_size
-                self.interactions.update_efield_grad(field_grad=field_grad)
-                gl = self.energy(positions, chrg, spin, **kwargs)
-
-                field_grad[i, j] += step_size
-                self.interactions.update_efield_grad(field_grad=field_grad)
+                direction = torch.zeros_like(field_grad)
+                direction[i, j] = 1.0
+                gr = self.energy(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field,
+                    field_grad=field_grad + step_size * direction,
+                )
+                gl = self.energy(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field,
+                    field_grad=field_grad - step_size * direction,
+                )
                 deriv[..., k] = 0.5 * (gr - gl) / step_size
 
             logger.debug("Quadrupole (numerical): step %s/6.", k + 1)
@@ -512,14 +567,14 @@ class NumericalCalculator(EnergyCalculator):
         return deriv
 
     @cdec.numerical
-    @cdec.requires_efield
     def polarizability_numerical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        **kwargs: Any,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the polarizability tensor :math:`\alpha`.
@@ -556,11 +611,11 @@ class NumericalCalculator(EnergyCalculator):
         else:
             _dipfcn = self.dipole_numerical
 
-        # retrieve the efield interaction and the field and detach for gradient
-        ef = self.interactions.get_interaction(efield.LABEL_EFIELD)
-        _field = ef.field.clone()
-        field = ef.field.detach().clone()
-        self.interactions.update_efield(field=field)
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "polarizability_numerical requires field= or a field default."
+            )
 
         # (..., 3, 3)
         deriv = torch.zeros(*(*self.numbers.shape[:-1], 3, 3), **self.dd)
@@ -571,16 +626,22 @@ class NumericalCalculator(EnergyCalculator):
         count = 1
         for i in range(3):
             with OutputHandler.with_verbosity(0):
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
-                gr = _dipfcn(positions, chrg, spin, **kwargs)
-
-                field[..., i] -= 2 * step_size
-                self.interactions.update_efield(field=field)
-                gl = _dipfcn(positions, chrg, spin, **kwargs)
-
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
+                direction = torch.zeros_like(field)
+                direction[i] = 1.0
+                gr = _dipfcn(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field + step_size * direction,
+                    field_grad=field_grad,
+                )
+                gl = _dipfcn(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field - step_size * direction,
+                    field_grad=field_grad,
+                )
                 deriv[..., :, i] = 0.5 * (gr - gl) / step_size
 
             logger.debug("Polarizability (numerical): step %s/3", count)
@@ -590,20 +651,17 @@ class NumericalCalculator(EnergyCalculator):
 
         logger.debug("Polarizability (numerical): All finished.")
 
-        # explicitly update field (to restore original field with possible grad)
-        self.interactions.reset_efield()
-        self.interactions.update_efield(field=_field)
-
         return deriv
 
     @cdec.numerical
-    @cdec.requires_efield
     def pol_deriv_numerical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the cartesian polarizability derivative
@@ -650,10 +708,22 @@ class NumericalCalculator(EnergyCalculator):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):
                     positions[..., i, j] += step_size
-                    r = self.polarizability_numerical(positions, chrg, spin)
+                    r = self.polarizability_numerical(
+                        positions,
+                        chrg,
+                        spin,
+                        field=field,
+                        field_grad=field_grad,
+                    )
 
                     positions[..., i, j] -= 2 * step_size
-                    l = self.polarizability_numerical(positions, chrg, spin)
+                    l = self.polarizability_numerical(
+                        positions,
+                        chrg,
+                        spin,
+                        field=field,
+                        field_grad=field_grad,
+                    )
 
                     positions[..., i, j] += step_size
                     deriv[..., :, :, i, j] = 0.5 * (r - l) / step_size
@@ -673,13 +743,14 @@ class NumericalCalculator(EnergyCalculator):
         return deriv
 
     @cdec.numerical
-    @cdec.requires_efield
     def hyperpolarizability_numerical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the hyper polarizability tensor :math:`\beta`.
@@ -709,11 +780,11 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        # retrieve the efield interaction and the field and detach for gradient
-        ef = self.interactions.get_interaction(efield.LABEL_EFIELD)
-        _field = ef.field.clone()
-        field = ef.field.detach().clone()
-        self.interactions.update_efield(field=field)
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field is None:
+            raise RuntimeError(
+                "hyperpolarizability_numerical requires field= or a field default."
+            )
 
         # (..., 3, 3, 3)
         deriv = torch.zeros(*(*self.numbers.shape[:-1], 3, 3, 3), **self.dd)
@@ -724,26 +795,28 @@ class NumericalCalculator(EnergyCalculator):
         count = 1
         for i in range(3):
             with OutputHandler.with_verbosity(0):
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
-                gr = self.polarizability_numerical(positions, chrg, spin)
-
-                field[..., i] -= 2 * step_size
-                self.interactions.update_efield(field=field)
-                gl = self.polarizability_numerical(positions, chrg, spin)
-
-                field[..., i] += step_size
-                self.interactions.update_efield(field=field)
+                direction = torch.zeros_like(field)
+                direction[i] = 1.0
+                gr = self.polarizability_numerical(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field + step_size * direction,
+                    field_grad=field_grad,
+                )
+                gl = self.polarizability_numerical(
+                    positions,
+                    chrg,
+                    spin,
+                    field=field - step_size * direction,
+                    field_grad=field_grad,
+                )
                 deriv[..., :, :, i] = 0.5 * (gr - gl) / step_size
 
             logger.debug("Hyper Polarizability (numerical): step %s/3", count)
             count += 1
 
             gc.collect()
-
-        # explicitly update field (to restore original field with possible grad)
-        self.interactions.reset_efield()
-        self.interactions.update_efield(field=_field)
 
         logger.debug("Hyper Polarizability (numerical): All finished.")
 
@@ -758,6 +831,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> vib.IRResult:
         """
         Numerically calculate the frequencies and intensities of IR spectra.
@@ -782,15 +857,26 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nIR Spectrum")
         OutputHandler.write_stdout("-----------")
         logger.debug("IR spectrum (numerical): Start.")
+        field, field_grad = self._resolve_fields(field, field_grad)
 
         # run vibrational analysis first
         freqs, modes = self.vibration_numerical(
-            positions, chrg, spin, step_size=step_size
+            positions,
+            chrg,
+            spin,
+            step_size=step_size,
+            field=field,
+            field_grad=field_grad,
         )
 
         # calculate nuclear dipole derivative dmu/dR: (..., 3, nat, 3)
         dmu_dr = self.dipole_deriv_numerical(
-            positions, chrg, spin, step_size=step_size
+            positions,
+            chrg,
+            spin,
+            step_size=step_size,
+            field=field,
+            field_grad=field_grad,
         )
 
         intensities = vib.ir_ints(dmu_dr, modes)
@@ -806,6 +892,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
     ) -> vib.RamanResult:
         """
         Numerically calculate the frequencies, static intensities and
@@ -833,14 +921,25 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nRaman Spectrum")
         OutputHandler.write_stdout("--------------")
         logger.debug("Raman spectrum (numerical): All finished.")
+        field, field_grad = self._resolve_fields(field, field_grad)
 
         vib_res = self.vibration_numerical(
-            positions, chrg, spin, step_size=step_size
+            positions,
+            chrg,
+            spin,
+            step_size=step_size,
+            field=field,
+            field_grad=field_grad,
         )
 
         # d(3, 3) / d(nat, 3) -> (3, 3, nat, 3) -> (3, 3, nat*3)
         da_dr = self.pol_deriv_numerical(
-            positions, chrg, spin, step_size=step_size
+            positions,
+            chrg,
+            spin,
+            step_size=step_size,
+            field=field,
+            field_grad=field_grad,
         )
 
         intensities, depol = vib.raman_ints_depol(da_dr, vib_res.modes)
@@ -860,7 +959,11 @@ class NumericalCalculator(EnergyCalculator):
         """Calculate requested properties and return them explicitly."""
         values = super().calculate(properties, positions, chrg, spin, **kwargs)
         for name in (
-            "forces", "hessian", "dipole", "quadrupole", "polarizability",
+            "forces",
+            "hessian",
+            "dipole",
+            "quadrupole",
+            "polarizability",
             "hyperpolarizability",
         ):
             if name in properties:
@@ -879,16 +982,12 @@ class NumericalCalculator(EnergyCalculator):
                 if name in properties:
                     values[name] = value
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
-            value = self.dipole_deriv_numerical(
-                positions, chrg, spin, **kwargs
-            )
+            value = self.dipole_deriv_numerical(positions, chrg, spin, **kwargs)
             for name in ("dipole_derivatives", "dipole_deriv"):
                 if name in properties:
                     values[name] = value
         if {"polarizability_derivatives", "pol_deriv"} & set(properties):
-            value = self.pol_deriv_numerical(
-                positions, chrg, spin, **kwargs
-            )
+            value = self.pol_deriv_numerical(positions, chrg, spin, **kwargs)
             for name in ("polarizability_derivatives", "pol_deriv"):
                 if name in properties:
                     values[name] = value
@@ -899,9 +998,7 @@ class NumericalCalculator(EnergyCalculator):
             if "ir_intensities" in properties:
                 values["ir_intensities"] = ir_result.ints
         if {"raman", "raman_intensities", "raman_depol"} & set(properties):
-            raman_result = self.raman_numerical(
-                positions, chrg, spin, **kwargs
-            )
+            raman_result = self.raman_numerical(positions, chrg, spin, **kwargs)
             if "raman" in properties:
                 values["raman"] = raman_result
             if "raman_intensities" in properties:

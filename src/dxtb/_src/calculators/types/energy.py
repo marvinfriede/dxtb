@@ -29,6 +29,10 @@ from tad_mctc.io.checks import content_checks, shape_checks
 
 from dxtb import OutputHandler, labels
 from dxtb._src import scf
+from dxtb._src.calculators.singlepoint import _call_tensor
+from dxtb._src.components.interactions.field.efield import ElectricField
+from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
@@ -38,6 +42,8 @@ from ..result import Result
 from .base import BaseCalculator, reject_removed_store_kwargs
 
 __all__ = ["EnergyCalculator"]
+
+_UNSET = object()
 
 
 class EnergyCalculator(BaseCalculator):
@@ -77,6 +83,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
@@ -94,6 +102,7 @@ class EnergyCalculator(BaseCalculator):
             Number of unpaired electrons. Defaults to 0.
         """
         reject_removed_store_kwargs(kwargs)
+        field, field_grad = self._resolve_fields(field, field_grad)
 
         # shape checks
         assert shape_checks(
@@ -129,6 +138,24 @@ class EnergyCalculator(BaseCalculator):
         else:
             _spin = None
 
+        field = _call_tensor("field", field, positions, (3,))
+        field_grad = _call_tensor("field_grad", field_grad, positions, (3, 3))
+        if field is not None and self.opts.ints.level < labels.INTLEVEL_DIPOLE:
+            raise RuntimeError(
+                "An electric field requires dipole integrals. Construct the "
+                "Calculator with an integral level of at least "
+                f"{labels.INTLEVEL_DIPOLE}."
+            )
+        if (
+            field_grad is not None
+            and self.opts.ints.level < labels.INTLEVEL_QUADRUPOLE
+        ):
+            raise RuntimeError(
+                "An electric field gradient requires quadrupole integrals. "
+                "Construct the Calculator with an integral level of at least "
+                f"{labels.INTLEVEL_QUADRUPOLE}."
+            )
+
         # Attempt reshaping to proper batch shape: (n,) -> (n, 1)
         if is_batched is True:
             if _chrg.ndim == 1 and _chrg.numel() != 1:
@@ -137,7 +164,9 @@ class EnergyCalculator(BaseCalculator):
                 _spin = _spin.view(-1, 1)
 
         if not is_batched:
-            return self._singlepoint_system(positions, _chrg, _spin, kwargs)
+            return self._singlepoint_system(
+                positions, _chrg, _spin, field, field_grad, kwargs
+            )
 
         classical: dict[str, Tensor] = {}
         total_energy = torch.zeros(positions.shape[:-1], **self.dd)
@@ -241,7 +270,8 @@ class EnergyCalculator(BaseCalculator):
         # get caches of all interactions
         timer.start("Interaction Cache", parent_uid="SCF")
         OutputHandler.write_stdout_nf(" - Interaction Cache ... ", v=3)
-        icaches = self.interactions.get_cache(
+        call_interactions = self._call_interactions(field, field_grad)
+        icaches = call_interactions.get_cache(
             numbers=self.numbers, positions=positions, ihelp=self.ihelp
         )
         timer.stop("Interaction Cache")
@@ -260,7 +290,7 @@ class EnergyCalculator(BaseCalculator):
             positions,
             _chrg,
             _spin,
-            self.interactions,
+            call_interactions,
             icaches,
             self.ihelp,
             self.opts.scf,
@@ -326,6 +356,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         charge: Tensor,
         spin: Tensor | None,
+        field: Tensor | None,
+        field_grad: Tensor | None,
         kwargs: dict[str, Any],
     ) -> Result:
         """Adapt a pure System result to legacy Calculator state and options."""
@@ -334,7 +366,9 @@ class EnergyCalculator(BaseCalculator):
             "cuda_sync_in_scf", False if self.device.type == "cpu" else True
         )
         try:
-            result = self.system.singlepoint(positions, charge, spin)
+            result = self.system.singlepoint(
+                positions, charge, spin, field, field_grad
+            )
         finally:
             timer.cuda_sync = old_cuda_sync
 
@@ -369,6 +403,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         """
@@ -388,8 +424,51 @@ class EnergyCalculator(BaseCalculator):
         Tensor
             Total energy of the system (scalar value).
         """
-        result = self.singlepoint(positions, chrg, spin, **kwargs)
+        result = self.singlepoint(
+            positions, chrg, spin, field=field, field_grad=field_grad, **kwargs
+        )
         return result.energy.sum(-1, keepdim=kwargs.get("keepdim", False))
+
+    def _resolve_fields(
+        self,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """Resolve omitted Calculator fields against constructor defaults."""
+        resolved_field = self._field_default if field is _UNSET else field
+        resolved_grad = (
+            self._field_grad_default if field_grad is _UNSET else field_grad
+        )
+        if resolved_field is not None and not isinstance(
+            resolved_field, Tensor
+        ):
+            raise TypeError("field must be a Tensor or None.")
+        if resolved_grad is not None and not isinstance(resolved_grad, Tensor):
+            raise TypeError("field_grad must be a Tensor or None.")
+        return resolved_field, resolved_grad
+
+    def _call_interactions(
+        self, field: Tensor | None, field_grad: Tensor | None
+    ) -> InteractionList:
+        """Create a call-local interaction list for legacy batch SCF."""
+        components = list(self.interactions.components)
+        if field is not None:
+            if any(x.label == "ElectricField" for x in components):
+                raise ValueError(
+                    "Explicit field= conflicts with a custom ElectricField "
+                    "label interaction."
+                )
+            components.append(ElectricField(field))
+        if field_grad is not None:
+            if any(x.label == "ElectricFieldGrad" for x in components):
+                raise ValueError(
+                    "Explicit field_grad= conflicts with a custom "
+                    "ElectricFieldGrad label interaction."
+                )
+            components.append(ElectricFieldGrad(field_grad))
+        return InteractionList(
+            *components, device=self.device, dtype=self.dtype
+        )
 
     def bond_orders(
         self,

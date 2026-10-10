@@ -31,14 +31,13 @@ from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src import ncoord, scf
 from dxtb._src.components.interactions.container import Charges, Potential
-from dxtb._src.components.interactions.field import efield as efield
 from dxtb._src.constants import defaults
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
 
 from ..result import Result
 from . import decorators as cdec
-from .energy import EnergyCalculator
+from .energy import _UNSET, EnergyCalculator
 
 __all__ = ["AnalyticalCalculator"]
 
@@ -64,10 +63,25 @@ class AnalyticalCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         """Calculate analytical nuclear forces from one local Result."""
-        result = self.singlepoint(positions, chrg, spin, **kwargs)
+        field, field_grad = self._resolve_fields(field, field_grad)
+        if field_grad is not None:
+            raise NotImplementedError(
+                "Analytical forces for an electric field gradient are not "
+                "implemented; use autograd forces."
+            )
+        result = self.singlepoint(
+            positions,
+            chrg,
+            spin,
+            field=field,
+            field_grad=field_grad,
+            **kwargs,
+        )
         total_grad = torch.zeros(positions.shape, **self.dd)
 
         if result.classical:
@@ -101,6 +115,12 @@ class AnalyticalCalculator(EnergyCalculator):
             total_grad += self.interactions.get_gradient(
                 legacy_charges, positions, icaches, self.ihelp
             )
+
+        if field is not None and result.charges is not None:
+            qat = self.ihelp.reduce_orbital_to_atom(
+                result.charges.mono.detach()
+            )
+            total_grad -= qat.unsqueeze(-1) * field
 
         if result.overlap is None or result.density is None:
             raise RuntimeError(
@@ -164,13 +184,14 @@ class AnalyticalCalculator(EnergyCalculator):
 
         return -total_grad
 
-    @cdec.requires_efield
     def dipole_analytical(
         self,
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         *_,  # absorb stuff
+        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -196,12 +217,19 @@ class AnalyticalCalculator(EnergyCalculator):
             Electric dipole moment of shape `(..., 3)`.
         """
         # Keep the SCF and integral outputs local to this calculation.
-        result = self.singlepoint(positions, chrg, spin, **kwargs)
+        result = self.singlepoint(
+            positions,
+            chrg,
+            spin,
+            field=field,
+            field_grad=field_grad,
+            **kwargs,
+        )
         if result.dipole_integrals is None:
             raise RuntimeError(
                 "Dipole moment requires a dipole integral. They should "
-                f"be added automatically if the '{efield.LABEL_EFIELD}' "
-                "interaction is added to the Calculator."
+                "be available when the System is constructed with dipole "
+                "integrals."
             )
 
         # pylint: disable=import-outside-toplevel

@@ -29,15 +29,29 @@ from tad_mctc.math import einsum
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Slicers, Tensor, TensorOrTensors, override
 from dxtb._src.typing.exceptions import DeviceError, DtypeError
-from dxtb._src.utils.tensors import grad_key, normalize_device
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
-__all__ = ["ElectricField", "LABEL_EFIELD", "new_efield"]
+__all__ = [
+    "ElectricField",
+    "LABEL_EFIELD",
+    "build_electric_field_data",
+    "new_efield",
+]
 
 
 LABEL_EFIELD = "ElectricField"
 """Label for the 'ElectricField' interaction, coinciding with the class name."""
+
+
+def build_electric_field_data(
+    positions: Tensor, field: Tensor
+) -> ElectricFieldCache:
+    """Build fresh field call data without retaining either input."""
+    vat = einsum("...ik,k->...i", positions, field)
+    vdp = field.expand_as(positions)
+    return ElectricFieldCache(vat, vdp)
 
 
 class ElectricFieldCache(InteractionCache):
@@ -112,7 +126,11 @@ class ElectricFieldCache(InteractionCache):
 
 class ElectricField(Interaction):
     """
-    Instantaneous electric field.
+    Instantaneous electric field compatibility adapter.
+
+    The single-System core accepts ``field=`` on each evaluation. This class
+    remains supported as a legacy Calculator-constructor default and is
+    translated into that call input before System setup.
     """
 
     field: Tensor
@@ -159,28 +177,22 @@ class ElectricField(Interaction):
         if positions is None:
             raise ValueError("Electric field requires atomic positions.")
 
-        cachvars = (positions.detach().clone(), self.field.detach().clone())
+        return build_electric_field_data(positions, self.field)
 
-        if self.cache_is_latest(cachvars, grad=(positions, self.field)) is True:
-            if not isinstance(self.cache, ElectricFieldCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
+    def update(self, **kwargs: Any) -> None:
+        if type(self) is ElectricField:
+            raise RuntimeError(
+                "ElectricField is a per-evaluation input. Pass field= to "
+                "singlepoint/energy instead of updating the interaction."
+            )
+        super().update(**kwargs)
 
-        self._cachevars = cachvars
-        self._cachegrad = grad_key(positions, self.field)
-
-        # (nbatch, natoms, 3) * (3) -> (nbatch, natoms)
-        vat = einsum("...ik,k->...i", positions, self.field)
-
-        # (nbatch, natoms, 3)
-        vdp = self.field.expand_as(positions)
-
-        self.cache = ElectricFieldCache(vat, vdp)
-        return self.cache
+    def reset(self) -> None:
+        if type(self) is ElectricField:
+            raise RuntimeError(
+                "ElectricField is a per-evaluation input and cannot be reset."
+            )
+        super().reset()
 
     @override
     def get_monopole_atom_energy(

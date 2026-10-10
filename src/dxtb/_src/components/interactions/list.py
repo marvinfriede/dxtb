@@ -34,16 +34,15 @@ from dxtb._src.typing import (
 )
 
 from ..list import ComponentList, ComponentListCache
-from ..utils import _docstring_reset, _docstring_update
 from .base import Interaction
 from .container import Charges, Potential
 from .coulomb.multipole import AES2, LABEL_AES2
 from .coulomb.secondorder import ES2, LABEL_ES2
 from .coulomb.thirdorder import ES3, LABEL_ES3
 from .dispersion.d4sc import LABEL_DISPERSIOND4SC, DispersionD4SC
-from .solvation.alpb import LABEL_GENERALIZED_BORN, GeneralizedBorn
 from .field.efield import LABEL_EFIELD, ElectricField
 from .field.efieldgrad import LABEL_EFIELD_GRAD, ElectricFieldGrad
+from .solvation.alpb import LABEL_GENERALIZED_BORN, GeneralizedBorn
 
 __all__ = ["InteractionList", "InteractionListCache"]
 
@@ -92,6 +91,8 @@ class InteractionList(ComponentList[Interaction]):
             LABEL_AES2,
             LABEL_DISPERSIOND4SC,
             LABEL_GENERALIZED_BORN,
+            LABEL_EFIELD,
+            LABEL_EFIELD_GRAD,
         ):
             matching = [
                 component
@@ -122,6 +123,8 @@ class InteractionList(ComponentList[Interaction]):
                 AES2,
                 DispersionD4SC,
                 GeneralizedBorn,
+                ElectricField,
+                ElectricFieldGrad,
             ):
                 component.reset()
 
@@ -344,33 +347,3 @@ class InteractionList(ComponentList[Interaction]):
     @override  # generic implementation for typing
     def get_interaction(self, name: str) -> Interaction:
         return super().get_interaction(name)
-
-    ###########################################################################
-
-    @_docstring_reset
-    def reset_efield(self) -> Interaction:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_EFIELD)
-
-    @_docstring_reset
-    def reset_efield_grad(self) -> Interaction:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_EFIELD_GRAD)
-
-    ###########################################################################
-
-    @_docstring_update
-    def update_efield(
-        self,
-        *,
-        field: Tensor | None = None,
-    ) -> Interaction:
-        return self.update(LABEL_EFIELD, field=field)
-
-    @_docstring_update
-    def update_efield_grad(
-        self,
-        *,
-        field_grad: Tensor | None = None,
-    ) -> Interaction:
-        return self.update(LABEL_EFIELD_GRAD, field_grad=field_grad)

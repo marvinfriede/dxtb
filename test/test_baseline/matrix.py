@@ -474,8 +474,7 @@ def _func_field_energy(
     calc: Calculator, pos: Tensor, charge: Tensor
 ) -> Callable[[Tensor], Tensor]:
     def f(field: Tensor) -> Tensor:
-        calc.interactions.update_efield(field=field)
-        return calc.energy(pos, charge)
+        return calc.energy(pos, charge, field=field)
 
     return f
 

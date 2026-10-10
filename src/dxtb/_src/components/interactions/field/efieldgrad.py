@@ -29,15 +29,36 @@ from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Slicers, Tensor, override
-from dxtb._src.utils.tensors import grad_key, normalize_device
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
-__all__ = ["ElectricFieldGrad", "LABEL_EFIELD_GRAD", "new_efield_grad"]
+__all__ = [
+    "ElectricFieldGrad",
+    "LABEL_EFIELD_GRAD",
+    "build_electric_field_grad_data",
+    "new_efield_grad",
+]
 
 
 LABEL_EFIELD_GRAD = "ElectricFieldGrad"
 """Label for the 'ElectricField' interaction, coinciding with the class name."""
+
+
+def build_electric_field_grad_data(
+    positions: Tensor, field_grad: Tensor
+) -> ElectricFieldGradCache:
+    """Build fresh field-gradient call data without retaining either input."""
+    eye = torch.eye(3, device=field_grad.device, dtype=field_grad.dtype)
+    grad_tl = field_grad - torch.diagonal(field_grad).sum() / 3.0 * eye
+    grad_sym = 0.5 * (grad_tl + grad_tl.mT)
+    vat = -0.5 * einsum("...ai,ij,...aj->...a", positions, grad_sym, positions)
+    vdp = -einsum("ij,...aj->...ai", grad_sym, positions)
+    rows, cols = torch.tril_indices(3, 3, device=field_grad.device).unbind()
+    off = (rows != cols).to(field_grad.dtype)
+    efg = field_grad[rows, cols] + off * field_grad[cols, rows]
+    vqp = (-1.0 / 3.0) * efg.expand(*positions.shape[:-1], 6)
+    return ElectricFieldGradCache(vat, vdp, vqp)
 
 
 class ElectricFieldGradCache(InteractionCache):
@@ -119,7 +140,12 @@ class ElectricFieldGradCache(InteractionCache):
 
 class ElectricFieldGrad(Interaction):
     r"""
-    Instantaneous electric field gradient :math:`G_{ij}`.
+    Instantaneous electric field gradient :math:`G_{ij}` compatibility
+    adapter.
+
+    The single-System core accepts ``field_grad=`` on each evaluation. This
+    class remains supported as a legacy Calculator-constructor default and is
+    translated into that call input before System setup.
 
     The field gradient couples to the traceless quadrupole moment
     :math:`\Theta`:
@@ -188,52 +214,24 @@ class ElectricFieldGrad(Interaction):
         if positions is None:
             raise ValueError("Electric field gradient requires positions.")
 
-        cachvars = (
-            positions.detach().clone(),
-            self.field_grad.detach().clone(),
-        )
+        return build_electric_field_grad_data(positions, self.field_grad)
 
-        if (
-            self.cache_is_latest(cachvars, grad=(positions, self.field_grad))
-            is True
-        ):
-            if not isinstance(self.cache, ElectricFieldGradCache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
+    def update(self, **kwargs: Any) -> None:
+        if type(self) is ElectricFieldGrad:
+            raise RuntimeError(
+                "ElectricFieldGrad is a per-evaluation input. Pass "
+                "field_grad= to singlepoint/energy instead of updating the "
+                "interaction."
+            )
+        super().update(**kwargs)
 
-        self._cachevars = cachvars
-        self._cachegrad = grad_key(positions, self.field_grad)
-
-        grad = self.field_grad
-
-        # the trace of the field gradient does not couple to the traceless
-        # quadrupole moment; only its symmetric part is relevant for the
-        # monopole and dipole terms
-        eye = torch.eye(3, device=grad.device, dtype=grad.dtype)
-        grad_tl = grad - torch.diagonal(grad).sum() / 3.0 * eye
-        grad_sym = 0.5 * (grad_tl + grad_tl.mT)
-
-        # (..., nat, 3) x (3, 3) x (..., nat, 3) -> (..., nat)
-        vat = -0.5 * einsum(
-            "...ai,ij,...aj->...a", positions, grad_sym, positions
-        )
-
-        # (3, 3) x (..., nat, 3) -> (..., nat, 3)
-        vdp = -einsum("ij,...aj->...ai", grad_sym, positions)
-
-        # packed lower triangle of the traceless quadrupole moment (xx, yx,
-        # yy, zx, zy, zz); the off-diagonal elements enter twice
-        rows, cols = torch.tril_indices(3, 3, device=grad.device).unbind()
-        off = (rows != cols).to(grad.dtype)
-        efg = grad[rows, cols] + off * grad[cols, rows]
-        vqp = (-1.0 / 3.0) * efg.expand(*positions.shape[:-1], 6)
-
-        self.cache = ElectricFieldGradCache(vat, vdp, vqp)
-        return self.cache
+    def reset(self) -> None:
+        if type(self) is ElectricFieldGrad:
+            raise RuntimeError(
+                "ElectricFieldGrad is a per-evaluation input and cannot be "
+                "reset."
+            )
+        super().reset()
 
     @override
     def get_monopole_atom_energy(

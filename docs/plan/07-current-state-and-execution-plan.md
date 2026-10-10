@@ -37,7 +37,7 @@ Current state:
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6             | partial                         | All currently unblocked B6a component families are migrated, including ALPB; D3 remains blocked upstream. The overall track remains partial. |
-| B7             | not done                        | Explicit field API remains open.                                                                    |
+| B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4/E6. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
@@ -815,6 +815,16 @@ energy(system, positions, field=field)
 and nested differentiation of that call.
 
 `None` may remain the user-facing "term absent" value. Within one `vmap`, every mapped entry must use the same argument tree structure; batched fields are tensors, not a mixture of `None` and tensors.
+
+B7 closure record (task base `d1c63d3a418e2cf3b4aa665fd15c6a72075b4a78`):
+field kernels and full-System reverse/JVP/jacfwd are transform-compatible.
+Field-free and explicit-field whole-System `vmap` diagnostics both reach the
+generic occupation/Fermi-search host-scalar extraction in
+`wavefunction/filling.py::_read_flags` (`Tensor.item`). A diagnostic-only
+bypass of the earlier charge-spreading conservation check exposed the same
+Fermi-search blocker on both trees; no SCF source was changed. Whole-System
+`vmap` is therefore deferred to transform-compatible SCF/batching work
+(E4/E6, under the E0 design constraints). This does not start E4 or E6.
 
 ---
 

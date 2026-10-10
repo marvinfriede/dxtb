@@ -108,8 +108,7 @@ def execute(
     # field is cloned and detached and updated inside
     num = calc.dipole_deriv_numerical(positions, charge)
 
-    # required for autodiff of energy w.r.t. efield
-    calc.interactions.update_efield(field=field_vector.requires_grad_(True))
+    field_vector.requires_grad_(True)
 
     # manual jacobian with analytical dipole derivative
     dipder1 = tensor_to_numpy(

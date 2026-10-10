@@ -47,11 +47,21 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
 from dxtb._src.components.interactions.dispersion.d4sc import build_d4sc_data
+from dxtb._src.components.interactions.field.efield import (
+    LABEL_EFIELD,
+    ElectricField,
+    build_electric_field_data,
+)
+from dxtb._src.components.interactions.field.efieldgrad import (
+    LABEL_EFIELD_GRAD,
+    ElectricFieldGrad,
+    build_electric_field_grad_data,
+)
+from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
     build_generalized_born_data,
 )
-from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.timing import timer
@@ -61,7 +71,7 @@ __all__ = ["singlepoint"]
 
 
 def _interaction_data(
-    system: System, positions: Tensor
+    system: System, positions: Tensor, interactions=None
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation.
 
@@ -70,8 +80,17 @@ def _interaction_data(
     returned data is local to this call.
     """
     data = InteractionListCache()
-    for interaction in system.interactions.components:
-        if interaction is system.es2_interaction:
+    interactions = system.interactions if interactions is None else interactions
+    for interaction in interactions.components:
+        if type(interaction) is ElectricField:
+            data[interaction.label] = build_electric_field_data(
+                positions, interaction.field
+            )
+        elif type(interaction) is ElectricFieldGrad:
+            data[interaction.label] = build_electric_field_grad_data(
+                positions, interaction.field_grad
+            )
+        elif interaction is system.es2_interaction:
             if system.es2_setup is None:
                 raise RuntimeError("Single-system ES2 setup is missing.")
             matrix = build_es2_coulomb(system.es2_setup, positions)
@@ -167,11 +186,36 @@ def _call_scalar(
     return torch.tensor([value], dtype=positions.dtype, device=positions.device)
 
 
+def _call_tensor(
+    name: str, value: Tensor | None, positions: Tensor, shape: tuple[int, ...]
+) -> Tensor | None:
+    """Validate a perturbation tensor without copying or severing its graph."""
+    if value is None:
+        return None
+    if value.shape != shape:
+        raise ValueError(
+            f"{name} must have shape {shape}, got {tuple(value.shape)}."
+        )
+    if value.device != positions.device:
+        raise DeviceError(
+            f"Device mismatch: positions are on '{positions.device}', "
+            f"but {name} is on '{value.device}'."
+        )
+    if value.dtype != positions.dtype:
+        raise DtypeError(
+            f"Dtype mismatch: positions are of type '{positions.dtype}', "
+            f"but {name} is of type '{value.dtype}'."
+        )
+    return value
+
+
 def singlepoint(
     system: System,
     positions: Tensor,
     chrg: Tensor | float | int = defaults.CHRG,
     spin: Tensor | float | int | None = defaults.SPIN,
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
 ) -> Result:
     """Evaluate one System without Calculator or legacy integral state."""
     if system.numbers.ndim != 1:
@@ -209,6 +253,24 @@ def singlepoint(
     spin_tensor = (
         None if spin is None else _call_scalar("spin", spin, positions)
     )
+
+    field = _call_tensor("field", field, positions, (3,))
+    field_grad = _call_tensor("field_grad", field_grad, positions, (3, 3))
+    if field is not None and system.config.ints.level < labels.INTLEVEL_DIPOLE:
+        raise RuntimeError(
+            "An electric field requires dipole integrals. Construct the "
+            "System with an integral level of at least "
+            f"{labels.INTLEVEL_DIPOLE}."
+        )
+    if (
+        field_grad is not None
+        and system.config.ints.level < labels.INTLEVEL_QUADRUPOLE
+    ):
+        raise RuntimeError(
+            "An electric field gradient requires quadrupole integrals. "
+            "Construct the System with an integral level of at least "
+            f"{labels.INTLEVEL_QUADRUPOLE}."
+        )
 
     # B5 provides the pure evaluation boundary. B6a removes persistent
     # component state behind this boundary.
@@ -319,13 +381,38 @@ def singlepoint(
         positions,
         charge,
     )
-    interaction_data = _interaction_data(system, positions)
+    call_components = list(system.interactions.components)
+    if field is not None:
+        if any(
+            component.label == LABEL_EFIELD for component in call_components
+        ):
+            raise ValueError(
+                "Explicit field= cannot be combined with a custom interaction "
+                "using the ElectricField label."
+            )
+        call_components.append(ElectricField(field))
+    if field_grad is not None:
+        if any(
+            component.label == LABEL_EFIELD_GRAD
+            for component in call_components
+        ):
+            raise ValueError(
+                "Explicit field_grad= cannot be combined with a custom "
+                "interaction using the ElectricFieldGrad label."
+            )
+        call_components.append(ElectricFieldGrad(field_grad))
+    from dxtb._src.components.interactions.list import InteractionList
+
+    call_interactions = InteractionList(
+        *call_components, device=positions.device, dtype=positions.dtype
+    )
+    interaction_data = _interaction_data(system, positions, call_interactions)
     scf_results = scf.solve(
         system.numbers,
         positions,
         charge,
         spin_tensor,
-        system.interactions,
+        call_interactions,
         interaction_data,
         system.ihelp,
         system.config.scf,

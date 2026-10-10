@@ -109,9 +109,8 @@ def execute(
     assert num_pol.grad_fn is None
     num = tensor_to_numpy(num_pol)
 
-    # required for autodiff of energy w.r.t. efield; update after numerical
-    # derivative as `requires_grad_(True)` gets lost
-    calc.interactions.update_efield(field=field_vector.requires_grad_(True))
+    # Explicit field values remain differentiable without list mutation.
+    field_vector.requires_grad_(True)
 
     # manual jacobian
     pol = tensor_to_numpy(
@@ -134,9 +133,6 @@ def execute(
     )
     assert pytest.approx(num, abs=atol, rel=rtol) == pol2
 
-    # applying jacrev twice requires detaching
-    calc.interactions.reset_efield()
-
     # 2x jacrev of energy
     pol3 = tensor_to_numpy(
         calc.polarizability(
@@ -147,9 +143,6 @@ def execute(
         )
     )
     assert pytest.approx(num, abs=atol, rel=rtol) == pol3
-
-    # applying jacrev twice requires detaching
-    calc.interactions.reset_efield()
 
     # jacrev of analytical dipole moment calculation
     pol4 = tensor_to_numpy(

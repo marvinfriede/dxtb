@@ -88,13 +88,13 @@ from dxtb._src.components.interactions.dispersion import (
     new_d4sc,
     setup_d4sc,
 )
+from dxtb._src.components.interactions.field import efield
+from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
     GeneralizedBornSetup,
     setup_generalized_born,
 )
-from dxtb._src.components.interactions.field import efield
-from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import (
     IntegralSetup,
@@ -221,11 +221,13 @@ class System:
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
     ) -> Result:
         """Evaluate this single system through the pure calculator core."""
         from dxtb._src.calculators.singlepoint import singlepoint
 
-        return singlepoint(self, positions, chrg, spin)
+        return singlepoint(self, positions, chrg, spin, field, field_grad)
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -337,6 +339,17 @@ class Model:
 
         OutputHandler.write_stdout_nf(" - Interactions      ... ", v=4)
 
+        if any(
+            type(interaction)
+            in (efield.ElectricField, efield_grad.ElectricFieldGrad)
+            for interaction in self.interaction
+        ):
+            raise ValueError(
+                "Electric fields are evaluation inputs. Pass field= or "
+                "field_grad= to System.singlepoint instead of storing an "
+                "exact field interaction on Model."
+            )
+
         es2 = (
             new_es2(unique, par, **dd) if not {"all", "es2"} & exclude else None
         )
@@ -357,6 +370,24 @@ class Model:
         interactions = InteractionList(
             es2, aes2, es3, d4sc, *self.interaction, **dd
         )
+        # Exact field adapters are removed by the Calculator before setup.
+        # Preserve automatic integral promotion for legacy field subclasses.
+        if any(
+            interaction.label == efield.LABEL_EFIELD
+            and type(interaction) is not efield.ElectricField
+            for interaction in interactions.components
+        ):
+            config = _with_int_level(
+                config, max(labels.INTLEVEL_DIPOLE, config.ints.level)
+            )
+        if any(
+            interaction.label == efield_grad.LABEL_EFIELD_GRAD
+            and type(interaction) is not efield_grad.ElectricFieldGrad
+            for interaction in interactions.components
+        ):
+            config = _with_int_level(
+                config, max(labels.INTLEVEL_QUADRUPOLE, config.ints.level)
+            )
         es2_interaction = next(
             (i for i in interactions.components if type(i) is ES2), None
         )
@@ -505,29 +536,6 @@ class Model:
         #############
 
         OutputHandler.write_stdout_nf(" - Integrals         ... ", v=4)
-
-        # figure out integral level from interactions
-        if efield.LABEL_EFIELD in interactions.labels:
-            if config.ints.level < labels.INTLEVEL_DIPOLE:
-                OutputHandler.warn(
-                    "Setting integral level to DIPOLE "
-                    f"({labels.INTLEVEL_DIPOLE}) due to electric field "
-                    "interaction."
-                )
-            config = _with_int_level(
-                config, max(labels.INTLEVEL_DIPOLE, config.ints.level)
-            )
-
-        if efield_grad.LABEL_EFIELD_GRAD in interactions.labels:
-            if config.ints.level < labels.INTLEVEL_DIPOLE:
-                OutputHandler.warn(
-                    "Setting integral level to QUADRUPOLE "
-                    f"{labels.INTLEVEL_DIPOLE} due to electric field "
-                    "gradient interaction."
-                )
-            config = _with_int_level(
-                config, max(labels.INTLEVEL_QUADRUPOLE, config.ints.level)
-            )
 
         h0_setup = None
         integral_setup = None

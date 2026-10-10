@@ -139,12 +139,13 @@ of every system because the systems are independent:
 ``calc.reset()``, ``reset_all()`` and the ``reset_*`` methods of the
 interaction and classical lists replace the tensors of the components with
 detached copies. Gradients with respect to a tensor the user passed in, e.g.,
-an electric field with ``requires_grad=True``, are then ``None``. Setup-derived
-ES2 and ES3 parameters are not reset; change them by constructing a new
-Model/System or Calculator.
+``requires_grad=True`` component parameters, are then ``None``. Electric
+fields are per-evaluation inputs and are not component state; their graph is
+preserved across ``Calculator.reset()``. Setup-derived parameters are not reset;
+change them by constructing a new Model/System or Calculator.
 
-**Workaround:** pass the tensor again after a reset, e.g.,
-``calc.interactions.update_efield(field=field)``.
+**Workaround:** for unmigrated component parameters, pass a fresh component or
+rebuild the Calculator after reset if gradients to the original leaves matter.
 
 
 ``Calculator.to(device)`` does not move all state
@@ -153,8 +154,11 @@ Model/System or Calculator.
 ``Calculator.to`` (and ``.type``) convert the components, but not every
 internal object (e.g., the :class:`~dxtb.IndexHelper` stays on the original
 device). The immutable ES2/ES3 setup values gathered by ``Model.setup`` also
-remain on their original dtype/device. Evaluating after ``Calculator.type`` is
-unsupported; construct a new Calculator with the requested dtype instead.
+remain on their original dtype/device. Legacy constructor-field defaults are
+also retained at their original dtype/device because they are compatibility
+call inputs rather than interaction components. Evaluating after
+``Calculator.type`` is unsupported; construct a new Calculator with the
+requested dtype instead.
 
 **Workaround:** create the calculator on the target device
 (``Calculator(..., device=device)``).

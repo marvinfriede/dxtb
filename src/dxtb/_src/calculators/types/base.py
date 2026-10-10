@@ -32,8 +32,9 @@ from dataclasses import replace
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
-from dxtb import IndexHelper, OutputHandler, labels
+from dxtb import IndexHelper, OutputHandler
 from dxtb import integrals as ints
+from dxtb import labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.properties.vibration import (
     IRResult,
@@ -46,6 +47,8 @@ from dxtb._src.components.classicals import (
     ClassicalList,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
+from dxtb._src.components.interactions.field.efield import ElectricField
+from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
@@ -274,6 +277,45 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"'{type(interaction).__name__}'."
             )
 
+        # Constructor field interactions remain a Calculator-only adapter.
+        # Keep their tensor references intact so user autograd graphs survive.
+        field_terms = [x for x in interaction if type(x) is ElectricField]
+        field_grad_terms = [
+            x for x in interaction if type(x) is ElectricFieldGrad
+        ]
+        if len(field_terms) > 1:
+            raise ValueError("Only one exact ElectricField default is allowed.")
+        if len(field_grad_terms) > 1:
+            raise ValueError(
+                "Only one exact ElectricFieldGrad default is allowed."
+            )
+        self._field_default = field_terms[0].field if field_terms else None
+        self._field_grad_default = (
+            field_grad_terms[0].field_grad if field_grad_terms else None
+        )
+        interaction = tuple(
+            x
+            for x in interaction
+            if type(x) not in (ElectricField, ElectricFieldGrad)
+        )
+
+        if self._field_default is not None:
+            self.opts = replace(
+                self.opts,
+                ints=replace(
+                    self.opts.ints,
+                    level=max(self.opts.ints.level, labels.INTLEVEL_DIPOLE),
+                ),
+            )
+        if self._field_grad_default is not None:
+            self.opts = replace(
+                self.opts,
+                ints=replace(
+                    self.opts.ints,
+                    level=max(self.opts.ints.level, labels.INTLEVEL_QUADRUPOLE),
+                ),
+            )
+
         self.model = Model(
             par=par,
             config=self.opts,
@@ -336,11 +378,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         .. warning::
 
-            The tensors of the components are replaced by detached copies,
-            which cuts gradients to tensors passed in by the user (e.g., an
-            electric field with ``requires_grad=True``). Pass them again
-            after the reset. ES2 and ES3 setup-derived parameters are not
-            reset. See :ref:`help_known_issues`.
+            Legacy component tensors may be replaced by detached copies.
+            Explicit ``field=`` and ``field_grad=`` inputs are not component
+            state and remain connected to their original tensors across reset.
+            ES2 and ES3 setup-derived parameters are not reset. See
+            :ref:`help_known_issues`.
         """
         self.classicals.reset_all()
         self.interactions.reset_all()

@@ -109,8 +109,7 @@ def execute(
     assert num_polder.grad_fn is None
     num = tensor_to_numpy(num_polder)
 
-    # required for autodiff of energy w.r.t. efield
-    calc.interactions.update_efield(field=field_vector.requires_grad_(True))
+    field_vector.requires_grad_(True)
 
     # manual jacobian
     pol = tensor_to_numpy(
@@ -144,7 +143,6 @@ def execute(
     # assert pytest.approx(num, abs=atol, rel=rtol) == pol2
 
     # # applying jacrev twice requires detaching
-    # calc.interactions.reset_efield()
 
     # # jacrev of dipole
     # pol3 = tensor_to_numpy(

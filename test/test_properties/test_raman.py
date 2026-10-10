@@ -124,9 +124,7 @@ def execute(
     numints = tensor_to_numpy(numres.ints)
     numdepol = tensor_to_numpy(numres.depol)
 
-    # only add gradient to field_vector after numerical calculation
     field_vector.requires_grad_(True)
-    calc.interactions.update_efield(field=field_vector)
 
     # required for autodiff of energy w.r.t. positions (Hessian)
     pos = positions.clone().detach().requires_grad_(True)
