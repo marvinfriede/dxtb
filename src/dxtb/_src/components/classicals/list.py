@@ -73,6 +73,7 @@ class ClassicalList(ComponentList[Classical]):
             LABEL_SRB,
             LABEL_DISPERSIOND4,
             LABEL_IES,
+            LABEL_HALOGEN,
         ):
             matching = [
                 component
@@ -85,6 +86,7 @@ class ClassicalList(ComponentList[Classical]):
                     LABEL_SRB: LABEL_SRB,
                     LABEL_DISPERSIOND4: LABEL_DISPERSIOND4,
                     LABEL_IES: LABEL_IES,
+                    LABEL_HALOGEN: LABEL_HALOGEN,
                 }[label]
                 raise ValueError(
                     f"Multiple classical contributions use the label '{label}'. "
@@ -108,6 +110,7 @@ class ClassicalList(ComponentList[Classical]):
                 ShortRangeBond,
                 DispersionD4,
                 IES,
+                Halogen,
             ):
                 component.reset()
 

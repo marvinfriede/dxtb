@@ -57,6 +57,19 @@ the :class:`.Halogen` class in a simple scenario:
 """
 
 from .factory import new_halogen
-from .hal import LABEL_HALOGEN, Halogen
+from .hal import (
+    LABEL_HALOGEN,
+    Halogen,
+    HalogenSetup,
+    halogen_energy,
+    setup_halogen,
+)
 
-__all__ = ["new_halogen", "Halogen", "LABEL_HALOGEN"]
+__all__ = [
+    "new_halogen",
+    "Halogen",
+    "HalogenSetup",
+    "LABEL_HALOGEN",
+    "halogen_energy",
+    "setup_halogen",
+]

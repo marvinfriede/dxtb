@@ -534,9 +534,9 @@
   "peak_rss_mb": 682.5
  },
  "halogen.positions:vmap": {
-  "status": "error",
+  "status": "pass",
   "seconds": 0.08820651700079907,
-  "message": "RuntimeError: vmap: It looks like you're attempting to use a Tensor in some data-dependent control flow. We don't support that yet, please file an issue at https://github.com/pytorch/pytorch/issues . [dxtb/_src/components/classicals/halogen/hal.py:242]",
+  "message": "",
   "peak_rss_mb": 680.8
  },
  "hcore_gfn1.positions:forward": {

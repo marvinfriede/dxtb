@@ -34,6 +34,7 @@ from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
     dispersion_d4_energy,
 )
+from dxtb._src.components.classicals.halogen import Halogen, halogen_energy
 from dxtb._src.components.classicals.ies import IES, ies_energy
 from dxtb._src.components.classicals.repulsion.rep import Repulsion
 from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
@@ -184,6 +185,14 @@ def singlepoint(
                 classical[component.label] = dispersion_d4_energy(
                     system.d4_setup, positions, charge
                 )
+            elif component is system.halogen_classical:
+                if system.halogen_setup is None:
+                    raise RuntimeError(
+                        "Single-system halogen setup is missing."
+                    )
+                classical[component.label] = halogen_energy(
+                    system.halogen_setup, positions
+                )
             else:
                 if component is system.repulsion_classical:
                     setup = system.repulsion_setup
@@ -209,6 +218,12 @@ def singlepoint(
                 ):
                     # D4 subclasses are legacy extensions. Refresh their
                     # cache each evaluation so updates affect the next call.
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                elif (
+                    isinstance(component, Halogen)
+                    and type(component) is not Halogen
+                ):
+                    # Custom subclasses retain cache-driven legacy behavior.
                     setup = component.get_cache(system.numbers, system.ihelp)
                 elif component is system.ies_classical:
                     if system.ies_setup is None:

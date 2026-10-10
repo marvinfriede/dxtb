@@ -178,6 +178,35 @@ def test_classical_d4_uses_explicit_setup_without_persistent_cache() -> None:
     assert "charge" in energy
 
 
+def test_halogen_uses_fixed_shape_explicit_setup() -> None:
+    """Exact halogen evaluation has no dynamic adjacency or cache state."""
+    halogen = (
+        SRC / "_src" / "components" / "classicals" / "halogen" / "hal.py"
+    ).read_text()
+    forbidden = (
+        "class HalogenCache",
+        "cache_is_latest",
+        "self.cache =",
+        "_cachevars",
+        "_cachegrad",
+        "_xbond_list",
+        "_xbond_energy",
+        ".nonzero()",
+        "torch.autograd.Function",
+    )
+    found = [token for token in forbidden if token in halogen]
+    assert not found, "Dynamic halogen path returned: " + ", ".join(found)
+    assert "@dataclass(frozen=True, eq=False)\nclass HalogenSetup" in halogen
+
+    energy = halogen.split("def halogen_energy(", maxsplit=1)[1].split(
+        "class Halogen(", maxsplit=1
+    )[0]
+    assert "setup." in energy
+    assert "self." not in energy
+    assert "torch.argmin" in energy
+    assert "torch.gather" in energy
+
+
 def test_es2_uses_plain_torch_coulomb_construction() -> None:
     """ES2 Coulomb matrices do not use a custom autograd shortcut."""
     source = (

@@ -53,6 +53,8 @@ from dxtb._src.components.classicals import (
     ClassicalList,
     DispersionD4,
     DispersionD4Setup,
+    Halogen,
+    HalogenSetup,
     IESSetup,
     Repulsion,
     RepulsionSetup,
@@ -173,6 +175,12 @@ class System:
 
     ies_classical: IES | None
     """Exact IES associated with :attr:`ies_setup`."""
+
+    halogen_setup: HalogenSetup | None
+    """Numbers/parameter setup for the exact migrated halogen term."""
+
+    halogen_classical: Halogen | None
+    """Exact Halogen associated with :attr:`halogen_setup`."""
 
     dd: DD
     """Device and data type of the tensors of the system."""
@@ -424,6 +432,14 @@ class Model:
             if ies_classical is not None
             else None
         )
+        halogen_classical = next(
+            (c for c in classicals.components if type(c) is Halogen), None
+        )
+        halogen_setup = (
+            classical_cache[halogen_classical.label]
+            if halogen_classical is not None
+            else None
+        )
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -496,6 +512,8 @@ class Model:
             d4_classical=d4_classical,
             ies_setup=ies_setup,
             ies_classical=ies_classical,
+            halogen_setup=halogen_setup,
+            halogen_classical=halogen_classical,
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,
