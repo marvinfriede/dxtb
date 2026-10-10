@@ -136,11 +136,8 @@ class Component(TensorLike):
 
         .. code-block:: python
 
-            import torch
-            from dxtb.components.field import ElectricField
-
-            ef = ElectricField(field=torch.tensor([0.0, 0.0, 0.0]))
-            ef.update(field=torch.tensor([1.0, 0.0, 0.0]))
+            component = SomeMutableComponent(parameter=initial_value)
+            component.update(parameter=new_value)
         """
         for key, value in kwargs.items():
             if key is None:
@@ -172,11 +169,8 @@ class Component(TensorLike):
 
         .. code-block:: python
 
-            import torch
-            from dxtb.components.base.field import ElectricField
-
-            ef = ElectricField(field=torch.tensor([0.0, 0.0, 0.0]))
-            ef.reset()
+            component = SomeMutableComponent(parameter=initial_value)
+            component.reset()
 
         Notes
         -----

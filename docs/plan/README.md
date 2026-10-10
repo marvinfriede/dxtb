@@ -14,6 +14,7 @@ API.
 | `05-TF-machine-learning.md` | Track F: parameter training, ML terms |
 | `06-TD-performance.md` | Track D: compiling and performance |
 | `B1-decision-note.md` | Decision note B1 (agreed): model/system/result, results, property functions, batching |
+| `E0-decision-note.md` | Decision note E0 (agreed): canonical SCF map, spectral derivative contract, and E3/E4/E6 boundaries |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
 | `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
 

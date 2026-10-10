@@ -41,7 +41,7 @@ Current state:
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
-| E0             | decision required now           | Baseline gives enough evidence; this must no longer remain an open placeholder.                    |
+| E0             | done — decision fixed           | Common pure SCF map, invariant spectral response, fixed-trip convergence semantics, and E3/E4/E6 boundaries are recorded in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial                         | Existing pair builder groups/scatters pairs and supports higher derivatives.                         |
 | E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
@@ -828,68 +828,24 @@ Fermi-search blocker on both trees; no SCF source was changed. Whole-System
 
 ---
 
-# 11. E0: write the SCF/eigensolver decision now
+# 11. E0: SCF/eigensolver decision
 
-Do not let a general implementation agent improvise this package.
+The E0 decision is recorded in [`E0-decision-note.md`](E0-decision-note.md).
+E0 fixes one pure explicit `scf_step` as the common SCF physics map and
+functional unrolling of that map as the G1 reference differentiation path.
+The current implicit mode remains a public legacy reverse-autograd
+optimization until it can wrap the E4 map. Spectral derivatives target
+gauge-invariant density/occupation quantities; Lorentzian eigenvector
+broadening is not the final derivative definition. Finite-temperature
+degeneracies use the analytic spectral divided-difference limit, and a
+zero-temperature occupied/unoccupied crossing is not assigned an artificial
+derivative.
 
-T0 has uncovered correctness problems which require an explicit mathematical choice.
-
-The decision note must resolve three separate questions.
-
-## E0.1 Canonical differentiation path
-
-Decide which SCF path is authoritative for G1.
-
-Current evidence:
-
-- unrolled SCF is correct through third order for the ordinary single-system reverse-mode baseline;
-- implicit SCF now agrees under ordinary autograd;
-- current implicit implementation does not compose with `torch.func`/forward mode;
-- unrolled SCF has severe memory cost.
-
-Recommended policy:
-
-1. use the functional unrolled implementation as the correctness/reference path;
-2. implement the pure fixed-point map in E4;
-3. build implicit differentiation only against that pure map;
-4. do not keep two independently evolving physics implementations.
-
-The implicit solver is an optimization/differentiation strategy around the same step function, not another SCF physics implementation.
-
-## E0.2 Degenerate eigenspaces
-
-The Lorentzian-broadened eigenvector backward is not acceptable as the final G1 solution.
-
-It is demonstrably:
-
-- wrong from second order onward at exact degeneracy;
-- biased even at first order for sufficiently small gaps.
-
-Do not "fix" this by adjusting the broadening epsilon.
-
-The decision note should specify an invariant formulation for quantities required by the SCF, preferably in terms of the density/occupied subspace and finite divided differences of occupations where possible.
-
-Before implementation, preserve minimal reproductions for:
-
-- exact occupied degeneracy;
-- small HOMO-LUMO gap;
-- benzene;
-- Fe(CO)5.
-
-The acceptance criterion is physics correctness, not merely finite derivatives.
-
-## E0.3 Open-shell GFN2 NO2
-
-The unexplained wrong third-order GFN2 NO2 result is a hard G1 blocker.
-
-Before E3 is called done:
-
-1. isolate whether the failure starts in occupation/Fermi response, alpha/beta handling, eigensolver response or another GFN2-only term;
-2. add the smallest reproducible test;
-3. fix it;
-4. remove the corresponding `KNOWN_WRONG` entry only after independent finite-difference agreement.
-
-No implementation agent should weaken tolerances or remove the molecule to obtain a green matrix.
+E4 owns the explicit pure map, fixed-trip tensor-masked SCF/Fermi control
+flow, and per-call spectral inputs. E3 owns invariant spectral differentiation
+and the NO2 diagnosis/fix after the map is available. E6 owns complete-System
+batching. E0 changes no SCF implementation and does not mark E3, E4, or E6
+done.
 
 ---
 
