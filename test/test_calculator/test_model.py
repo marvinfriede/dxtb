@@ -320,7 +320,9 @@ def test_duplicate_migrated_interaction_labels_rejected(label: str) -> None:
         interaction1 = new_es3(torch.unique(numbers), par, dtype=torch.double)
         interaction2 = new_es3(torch.unique(numbers), par, dtype=torch.double)
     assert interaction1 is not None and interaction2 is not None
-    with pytest.raises(ValueError, match="Duplicate ES2/ES3 labels"):
+    with pytest.raises(
+        ValueError, match="Duplicate migrated interaction labels"
+    ):
         Model(par=par, interaction=(interaction1,)).setup(numbers)
 
 

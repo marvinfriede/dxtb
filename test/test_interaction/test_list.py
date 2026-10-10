@@ -20,8 +20,8 @@ Test InteractionList.
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
 from dxtb.components.base import InteractionList, InteractionListCache
@@ -78,15 +78,14 @@ def test_reset() -> None:
         numbers=numbers, positions=positions, ihelp=ihelp
     )
 
-    assert d4sc is not None and d4sc.cache is not None
+    assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
-    assert len(d4sc.cache) == 3
-    ilist.reset_d4sc()
-    assert d4sc.cache is None
+    assert len(call_data["DispersionD4SC"]) == 3
+    assert not hasattr(ilist, "reset_d4sc")
 
     assert len(call_data["ES2"]) == 2  # mat + shell_resolved
     assert len(call_data["ES3"]) == 2  # hd + shell_resolved
@@ -122,13 +121,13 @@ def test_reset_all() -> None:
         numbers=numbers, positions=positions, ihelp=ihelp
     )
 
-    assert d4sc is not None and d4sc.cache is not None
+    assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
-    assert len(d4sc.cache) == 3
+    assert len(call_data["DispersionD4SC"]) == 3
     assert len(call_data["ES2"]) == 2
     assert len(call_data["ES3"]) == 2
     assert len(ef.cache) == 2
@@ -158,15 +157,15 @@ def test_update() -> None:
 
     _ = ilist.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
-    assert d4sc is not None and d4sc.cache is not None
+    assert d4sc is not None and d4sc.cache is None
     assert es2 is not None and es2.cache is None
     assert es3 is not None and es3.cache is None
     assert ef is not None and ef.cache is not None
     assert efg is not None and efg.cache is not None
 
-    r4r2 = torch.tensor([1.0, 0.0, 0.0], device=DEVICE)
-    ilist.update_d4sc(r4r2=r4r2)
-    assert (d4sc.r4r2 == r4r2).all()
+    with pytest.raises(RuntimeError, match="setup-derived"):
+        ilist.update("DispersionD4SC", r4r2=torch.ones(3, device=DEVICE))
+    assert not hasattr(ilist, "update_d4sc")
 
     with pytest.raises(RuntimeError, match="setup-derived"):
         ilist.update("ES2", lhubbard=torch.ones(3, device=DEVICE))

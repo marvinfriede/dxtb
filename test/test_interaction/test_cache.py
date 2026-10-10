@@ -69,7 +69,7 @@ def test_fail_overwritten_cache(
     # manually overwrite cache
     comp.cache = InteractionCache()
 
-    if comp.label in ("ES2", "ES3"):
+    if comp.label in ("ES2", "ES3", "DispersionD4SC"):
         fresh = comp.get_cache(
             numbers=numbers, positions=positions, ihelp=ihelp
         )
@@ -77,8 +77,10 @@ def test_fail_overwritten_cache(
         assert isinstance(comp.cache, InteractionCache)
         if comp.label == "ES2":
             torch.testing.assert_close(fresh.mat, first.mat)
-        else:
+        elif comp.label == "ES3":
             torch.testing.assert_close(fresh.hd, first.hd)
+        else:
+            assert comp.cache is not fresh
     else:
         with pytest.raises(TypeError):
             comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)

@@ -207,6 +207,46 @@ def test_halogen_uses_fixed_shape_explicit_setup() -> None:
     assert "torch.gather" in energy
 
 
+def test_d4sc_uses_frozen_setup_and_call_local_model() -> None:
+    """Exact D4SC has no persistent cache or model authority in evaluation."""
+    d4sc = (
+        SRC / "_src" / "components" / "interactions" / "dispersion" / "d4sc.py"
+    ).read_text()
+    forbidden = (
+        "cache_is_latest",
+        "self.cache =",
+        "_cachevars",
+        "_cachegrad",
+    )
+    found = [token for token in forbidden if token in d4sc]
+    assert not found, "Persistent D4SC cache path returned: " + ", ".join(found)
+    assert "@dataclass(frozen=True, eq=False)\nclass D4SCSetup" in d4sc
+    assert "def build_d4sc_data(" in d4sc
+
+    for method, next_method in (
+        ("get_monopole_atom_energy(", "get_monopole_atom_potential("),
+        ("get_monopole_atom_potential(", "def new_d4sc("),
+    ):
+        body = d4sc.split(method, maxsplit=1)[1].split(next_method, maxsplit=1)[
+            0
+        ]
+        assert "self.model" not in body
+        assert "self.param" not in body
+        assert "self.rcov" not in body
+        assert "self.r4r2" not in body
+
+    singlepoint = (SRC / "_src" / "calculators" / "singlepoint.py").read_text()
+    assert "system.d4sc_interaction" in singlepoint
+    assert "build_d4sc_data(" in singlepoint
+    assert "system.d4sc_setup, positions" in singlepoint
+
+    interaction_list = (
+        SRC / "_src" / "components" / "interactions" / "list.py"
+    ).read_text()
+    assert "def update_d4sc(" not in interaction_list
+    assert "def reset_d4sc(" not in interaction_list
+
+
 def test_es2_uses_plain_torch_coulomb_construction() -> None:
     """ES2 Coulomb matrices do not use a custom autograd shortcut."""
     source = (

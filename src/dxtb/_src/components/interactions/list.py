@@ -84,8 +84,13 @@ class InteractionList(ComponentList[Interaction]):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
-        """Create a list and reject duplicate migrated Coulomb labels."""
-        for label in (LABEL_ES2, LABEL_ES3, LABEL_AES2):
+        """Create a list and reject duplicate migrated interaction labels."""
+        for label in (
+            LABEL_ES2,
+            LABEL_ES3,
+            LABEL_AES2,
+            LABEL_DISPERSIOND4SC,
+        ):
             matching = [
                 component
                 for component in components
@@ -94,7 +99,7 @@ class InteractionList(ComponentList[Interaction]):
             if len({id(component) for component in matching}) > 1:
                 raise ValueError(
                     f"Multiple interactions use the label '{label}'. "
-                    "Duplicate ES2/ES3 labels and AES2 labels are ambiguous."
+                    "Duplicate migrated interaction labels are ambiguous."
                 )
         super().__init__(*components, device=device, dtype=dtype)
 
@@ -109,7 +114,7 @@ class InteractionList(ComponentList[Interaction]):
     def reset_all(self) -> None:
         """Reset unmigrated interactions, leaving setup terms untouched."""
         for component in self.components:
-            if type(component) not in (ES2, ES3, AES2):
+            if type(component) not in (ES2, ES3, AES2, DispersionD4SC):
                 component.reset()
 
     @override
@@ -335,11 +340,6 @@ class InteractionList(ComponentList[Interaction]):
     ###########################################################################
 
     @_docstring_reset
-    def reset_d4sc(self) -> Interaction:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_DISPERSIOND4SC)
-
-    @_docstring_reset
     def reset_efield(self) -> Interaction:
         """Reset tensor attributes to a detached clone of the current state."""
         return self.reset(LABEL_EFIELD)
@@ -350,10 +350,6 @@ class InteractionList(ComponentList[Interaction]):
         return self.reset(LABEL_EFIELD_GRAD)
 
     ###########################################################################
-
-    @_docstring_update
-    def update_d4sc(self, **kwargs: Any) -> Interaction:
-        return self.update(LABEL_DISPERSIOND4SC, **kwargs)
 
     @_docstring_update
     def update_efield(

@@ -385,6 +385,32 @@ def _aes2_positions() -> Target:
     return build
 
 
+def _d4sc_positions() -> Target:
+    """GFN2 D4SC energy with fresh CN/matrix data per geometry call."""
+
+    def build():
+        from dxtb._src.components.interactions.dispersion.d4sc import (
+            build_d4sc_data,
+            new_d4sc,
+            setup_d4sc,
+        )
+
+        numbers, positions = _water()
+        par = _par("gfn2")
+        interaction = new_d4sc(numbers, par, **DD)
+        assert interaction is not None
+        setup = setup_d4sc(interaction, numbers)
+        charges = 0.05 * torch.arange(1, len(numbers) + 1, **DD)
+
+        def f(x: Tensor) -> Tensor:
+            data = build_d4sc_data(setup, x)
+            return interaction.get_monopole_atom_energy(data, charges)
+
+        return f, _leaf(positions)
+
+    return build
+
+
 ###############################################################################
 # integrals and core Hamiltonian
 
@@ -562,6 +588,7 @@ TARGETS: dict[str, Target] = {
     "aes2.dipoles": _interaction("aes2"),
     "aes2.positions": _aes2_positions(),
     "d4sc.charges": _interaction("d4sc"),
+    "d4sc.positions": _d4sc_positions(),
     "es2.positions": _interaction_positions("es2"),
     "eigensolver.degenerate_aufbau": _eigensolver("degenerate", "aufbau"),
     "eigensolver.degenerate_fermi": _eigensolver("degenerate", "fermi"),

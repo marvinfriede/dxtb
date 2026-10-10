@@ -1006,5 +1006,41 @@
   "seconds": 0.1101262120064348,
   "message": "",
   "peak_rss_mb": 363.8
+ },
+ "d4sc.positions:forward": {
+  "status": "pass",
+  "seconds": 0.30242390697821975,
+  "message": "",
+  "peak_rss_mb": 366.9
+ },
+ "d4sc.positions:jvp": {
+  "status": "pass",
+  "seconds": 0.1464380759280175,
+  "message": "",
+  "peak_rss_mb": 366.8
+ },
+ "d4sc.positions:order1": {
+  "status": "pass",
+  "seconds": 0.12529108813032508,
+  "message": "",
+  "peak_rss_mb": 360.7
+ },
+ "d4sc.positions:order2": {
+  "status": "pass",
+  "seconds": 0.23563486896455288,
+  "message": "",
+  "peak_rss_mb": 364.7
+ },
+ "d4sc.positions:order3": {
+  "status": "pass",
+  "seconds": 0.5181140739005059,
+  "message": "",
+  "peak_rss_mb": 364.5
+ },
+ "d4sc.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.08002154203131795,
+  "message": "",
+  "peak_rss_mb": 364.4
  }
 }

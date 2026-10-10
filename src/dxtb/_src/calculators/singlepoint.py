@@ -46,6 +46,7 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
     build_es2_coulomb,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
+from dxtb._src.components.interactions.dispersion.d4sc import build_d4sc_data
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
@@ -60,7 +61,7 @@ def _interaction_data(
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation.
 
-    Exact ES2, ES3, and AES2 use explicit System setup values. Other
+    Exact ES2, ES3, AES2, and D4SC use explicit System setup values. Other
     interactions keep their current cache APIs until their B6a packages, but
     returned data is local to this call.
     """
@@ -85,6 +86,12 @@ def _interaction_data(
                 raise RuntimeError("Single-system AES2 setup is missing.")
             data[interaction.label] = build_aes2_data(
                 system.aes2_setup, positions
+            )
+        elif interaction is system.d4sc_interaction:
+            if system.d4sc_setup is None:
+                raise RuntimeError("Single-system D4SC setup is missing.")
+            data[interaction.label] = build_d4sc_data(
+                system.d4sc_setup, positions
             )
         else:
             data[interaction.label] = interaction.get_cache(

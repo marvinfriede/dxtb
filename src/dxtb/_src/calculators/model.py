@@ -82,7 +82,12 @@ from dxtb._src.components.interactions.coulomb import (
     setup_es2,
     setup_es3,
 )
-from dxtb._src.components.interactions.dispersion import new_d4sc
+from dxtb._src.components.interactions.dispersion import (
+    D4SCSetup,
+    DispersionD4SC,
+    new_d4sc,
+    setup_d4sc,
+)
 from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.constants import defaults
@@ -151,6 +156,12 @@ class System:
 
     aes2_interaction: AES2 | None
     """Exact AES2 interaction associated with :attr:`aes2_setup`."""
+
+    d4sc_setup: D4SCSetup | None
+    """Numbers/parameter setup for the exact migrated D4SC term."""
+
+    d4sc_interaction: DispersionD4SC | None
+    """Exact D4SC interaction associated with :attr:`d4sc_setup`."""
 
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
@@ -344,6 +355,10 @@ class Model:
         aes2_interaction = next(
             (i for i in interactions.components if type(i) is AES2), None
         )
+        d4sc_interaction = next(
+            (i for i in interactions.components if type(i) is DispersionD4SC),
+            None,
+        )
         es2_setup = (
             setup_es2(
                 numbers,
@@ -369,6 +384,11 @@ class Model:
         aes2_setup = (
             setup_aes2(aes2_interaction, numbers, ihelp)
             if aes2_interaction is not None and batch_mode == 0
+            else None
+        )
+        d4sc_setup = (
+            setup_d4sc(d4sc_interaction, numbers)
+            if d4sc_interaction is not None and batch_mode == 0
             else None
         )
 
@@ -537,6 +557,8 @@ class Model:
             es3_interaction=es3_interaction,
             aes2_setup=aes2_setup,
             aes2_interaction=aes2_interaction,
+            d4sc_setup=d4sc_setup,
+            d4sc_interaction=d4sc_interaction,
             dd=dd,
         )
 
