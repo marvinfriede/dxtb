@@ -264,6 +264,20 @@ def test_call_local_potential_is_energy_charge_derivative() -> None:
     potential = interaction.get_monopole_atom_potential(data, charges)
     torch.testing.assert_close(gradient, potential)
 
+    def potential_from_charge(q: Tensor) -> Tensor:
+        return interaction.get_monopole_atom_potential(data, q)
+
+    charge_direction = torch.linspace(-0.3, 0.2, charges.numel(), **DD)
+    charge_leaf = charges.clone().requires_grad_(True)
+    potential_projection = (
+        potential_from_charge(charge_leaf) * charge_direction
+    ).sum()
+    (reverse_vjp,) = torch.autograd.grad(potential_projection, charge_leaf)
+    charge_jacobian = torch.func.jacfwd(potential_from_charge)(charges)
+    torch.testing.assert_close(
+        reverse_vjp, charge_jacobian.T @ charge_direction
+    )
+
     direction = torch.linspace(-0.2, 0.3, charges.numel(), **DD)
     _, tangent = torch.func.jvp(
         lambda q: interaction.get_monopole_atom_potential(data, q),
