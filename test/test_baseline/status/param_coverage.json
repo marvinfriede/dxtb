@@ -388,14 +388,14 @@
    "verdict": "ok"
   },
   "element.Bi.xbond": {
-   "energy_grad": "none",
+   "energy_grad": "zero",
    "fd_checks": {
     "PbH4-BiH3": {
      "ad": 0.0,
      "fd": 0.0
     }
    },
-   "forces_grad": "none",
+   "forces_grad": "zero",
    "relevant": true,
    "verdict": "no effect on this set"
   },
@@ -828,7 +828,7 @@
    "verdict": "ok"
   },
   "element.C.xbond": {
-   "energy_grad": "none",
+   "energy_grad": "zero",
    "fd_checks": {
     "CH4": {
      "ad": 0.0,
@@ -839,7 +839,7 @@
      "fd": 0.0
     }
    },
-   "forces_grad": "none",
+   "forces_grad": "zero",
    "relevant": true,
    "verdict": "no effect on this set"
   },
@@ -1028,14 +1028,14 @@
    "verdict": "ok"
   },
   "element.Fe.xbond": {
-   "energy_grad": "none",
+   "energy_grad": "zero",
    "fd_checks": {
     "Fe(CO)5": {
      "ad": 0.0,
      "fd": 0.0
     }
    },
-   "forces_grad": "none",
+   "forces_grad": "zero",
    "relevant": true,
    "verdict": "no effect on this set"
   },
@@ -2100,7 +2100,7 @@
    "verdict": "ok"
   },
   "element.O.xbond": {
-   "energy_grad": "none",
+   "energy_grad": "zero",
    "fd_checks": {
     "Fe(CO)5": {
      "ad": 0.0,
@@ -2115,7 +2115,7 @@
      "fd": 0.0
     }
    },
-   "forces_grad": "none",
+   "forces_grad": "zero",
    "relevant": true,
    "verdict": "no effect on this set"
   },
@@ -2308,14 +2308,14 @@
    "verdict": "ok"
   },
   "element.Pb.xbond": {
-   "energy_grad": "none",
+   "energy_grad": "zero",
    "fd_checks": {
     "PbH4-BiH3": {
      "ad": 0.0,
      "fd": 0.0
     }
    },
-   "forces_grad": "none",
+   "forces_grad": "zero",
    "relevant": true,
    "verdict": "no effect on this set"
   },

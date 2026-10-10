@@ -1,39 +1,75 @@
 {
  "aes2.dipoles:forward": {
   "status": "pass",
-  "seconds": 0.462937423000767,
+  "seconds": 0.17791918595321476,
   "message": "",
-  "peak_rss_mb": 700.4
+  "peak_rss_mb": 366.5
  },
  "aes2.dipoles:jvp": {
   "status": "pass",
-  "seconds": 0.3920020289988315,
+  "seconds": 0.12971753301098943,
   "message": "",
-  "peak_rss_mb": 698.6
+  "peak_rss_mb": 366.4
  },
  "aes2.dipoles:order1": {
   "status": "pass",
-  "seconds": 0.07993505900049058,
+  "seconds": 0.0953904869966209,
   "message": "",
-  "peak_rss_mb": 680.3
+  "peak_rss_mb": 362.7
  },
  "aes2.dipoles:order2": {
   "status": "pass",
-  "seconds": 0.11182204700162401,
+  "seconds": 0.13440306507982314,
   "message": "",
-  "peak_rss_mb": 680.3
+  "peak_rss_mb": 361.4
  },
  "aes2.dipoles:order3": {
   "status": "pass",
-  "seconds": 0.15697721600008663,
+  "seconds": 0.18426163285039365,
   "message": "",
-  "peak_rss_mb": 680.4
+  "peak_rss_mb": 364.4
  },
  "aes2.dipoles:vmap": {
-  "status": "error",
-  "seconds": 0.06539324599907559,
-  "message": "RuntimeError: output with shape [3] doesn't match the broadcast shape [2, 3] [dxtb/_src/components/interactions/base.py:352]",
-  "peak_rss_mb": 682.9
+  "status": "pass",
+  "seconds": 0.07014950201846659,
+  "message": "",
+  "peak_rss_mb": 363.4
+ },
+ "aes2.positions:forward": {
+  "status": "pass",
+  "seconds": 0.293797146063298,
+  "message": "",
+  "peak_rss_mb": 364.9
+ },
+ "aes2.positions:jvp": {
+  "status": "pass",
+  "seconds": 0.14564783009700477,
+  "message": "",
+  "peak_rss_mb": 367.4
+ },
+ "aes2.positions:order1": {
+  "status": "pass",
+  "seconds": 0.12009255099110305,
+  "message": "",
+  "peak_rss_mb": 364.4
+ },
+ "aes2.positions:order2": {
+  "status": "pass",
+  "seconds": 0.25038531702011824,
+  "message": "",
+  "peak_rss_mb": 364.4
+ },
+ "aes2.positions:order3": {
+  "status": "pass",
+  "seconds": 0.5982420628424734,
+  "message": "",
+  "peak_rss_mb": 364.4
+ },
+ "aes2.positions:vmap": {
+  "status": "pass",
+  "seconds": 0.07296193088404834,
+  "message": "",
+  "peak_rss_mb": 363.4
  },
  "d4sc.charges:forward": {
   "status": "pass",

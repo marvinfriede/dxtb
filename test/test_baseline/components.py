@@ -351,6 +351,40 @@ def _interaction_positions(name: str) -> Target:
     return build
 
 
+def _aes2_positions() -> Target:
+    """GFN2 AES2 energy with fresh position-dependent interaction data."""
+
+    def build():
+        from dxtb._src.components.interactions.container import Charges
+        from dxtb._src.components.interactions.coulomb import (
+            build_aes2_data,
+            new_aes2,
+            setup_aes2,
+        )
+
+        numbers, positions = _water()
+        par = _par("gfn2")
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        interaction = new_aes2(torch.unique(numbers), par, **DD)
+        assert interaction is not None
+        setup = setup_aes2(interaction, numbers, ihelp)
+        gen = torch.Generator().manual_seed(11)
+        charges = Charges(
+            mono=0.1 * torch.randn(ihelp.nao, generator=gen, **DD),
+            dipole=0.05
+            * torch.randn((numbers.numel(), 3), generator=gen, **DD),
+            quad=0.05 * torch.randn((numbers.numel(), 6), generator=gen, **DD),
+        )
+
+        def f(pos: Tensor) -> Tensor:
+            data = build_aes2_data(setup, pos)
+            return interaction.get_energy(data, charges, ihelp).sum()
+
+        return f, _leaf(positions)
+
+    return build
+
+
 ###############################################################################
 # integrals and core Hamiltonian
 
@@ -526,6 +560,7 @@ TARGETS: dict[str, Target] = {
     "es2.charges": _interaction("es2"),
     "es3.charges": _interaction("es3"),
     "aes2.dipoles": _interaction("aes2"),
+    "aes2.positions": _aes2_positions(),
     "d4sc.charges": _interaction("d4sc"),
     "es2.positions": _interaction_positions("es2"),
     "eigensolver.degenerate_aufbau": _eigensolver("degenerate", "aufbau"),

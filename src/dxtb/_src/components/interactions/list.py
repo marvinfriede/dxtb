@@ -37,6 +37,7 @@ from ..list import ComponentList, ComponentListCache
 from ..utils import _docstring_reset, _docstring_update
 from .base import Interaction
 from .container import Charges, Potential
+from .coulomb.multipole import AES2, LABEL_AES2
 from .coulomb.secondorder import ES2, LABEL_ES2
 from .coulomb.thirdorder import ES3, LABEL_ES3
 from .dispersion.d4sc import LABEL_DISPERSIOND4SC, DispersionD4SC
@@ -83,8 +84,8 @@ class InteractionList(ComponentList[Interaction]):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
-        """Create an interaction list and reject duplicate ES2/ES3 labels."""
-        for label in (LABEL_ES2, LABEL_ES3):
+        """Create a list and reject duplicate migrated Coulomb labels."""
+        for label in (LABEL_ES2, LABEL_ES3, LABEL_AES2):
             matching = [
                 component
                 for component in components
@@ -93,7 +94,7 @@ class InteractionList(ComponentList[Interaction]):
             if len({id(component) for component in matching}) > 1:
                 raise ValueError(
                     f"Multiple interactions use the label '{label}'. "
-                    "Duplicate ES2/ES3 labels are ambiguous."
+                    "Duplicate ES2/ES3 labels and AES2 labels are ambiguous."
                 )
         super().__init__(*components, device=device, dtype=dtype)
 
@@ -106,9 +107,9 @@ class InteractionList(ComponentList[Interaction]):
         return super().reset(name)
 
     def reset_all(self) -> None:
-        """Reset unmigrated interactions, leaving ES2/ES3 setup untouched."""
+        """Reset unmigrated interactions, leaving setup terms untouched."""
         for component in self.components:
-            if type(component) not in (ES2, ES3):
+            if type(component) not in (ES2, ES3, AES2):
                 component.reset()
 
     @override

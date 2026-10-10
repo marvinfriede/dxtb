@@ -38,6 +38,9 @@ from dxtb._src.components.classicals.halogen import Halogen, halogen_energy
 from dxtb._src.components.classicals.ies import IES, ies_energy
 from dxtb._src.components.classicals.repulsion.rep import Repulsion
 from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
+from dxtb._src.components.interactions.coulomb.multipole import (
+    build_aes2_data,
+)
 from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2Cache,
     build_es2_coulomb,
@@ -57,9 +60,9 @@ def _interaction_data(
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation.
 
-    Built-in ES2 and ES3 use explicit System setup values. Other interactions
-    keep their current cache APIs until their B6a packages, but returned data
-    is local to this call.
+    Exact ES2, ES3, and AES2 use explicit System setup values. Other
+    interactions keep their current cache APIs until their B6a packages, but
+    returned data is local to this call.
     """
     data = InteractionListCache()
     for interaction in system.interactions.components:
@@ -76,6 +79,12 @@ def _interaction_data(
             data[interaction.label] = ES3Cache(
                 system.es3_setup.hubbard_derivs,
                 shell_resolved=system.es3_setup.shell_resolved,
+            )
+        elif interaction is system.aes2_interaction:
+            if system.aes2_setup is None:
+                raise RuntimeError("Single-system AES2 setup is missing.")
+            data[interaction.label] = build_aes2_data(
+                system.aes2_setup, positions
             )
         else:
             data[interaction.label] = interaction.get_cache(

@@ -24,9 +24,11 @@ that uses a damped multipole expansion.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from tad_mctc import storch
-from tad_mctc.batch import eye, real_pairs
+from tad_mctc.batch import real_pairs
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
 
@@ -34,21 +36,96 @@ from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import (
     DD,
+    Any,
     Slicers,
     Tensor,
     TensorLike,
     get_default_dtype,
     override,
 )
-from dxtb._src.utils.tensors import grad_key, normalize_device
+from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
-__all__ = ["AES2", "LABEL_AES2", "new_aes2"]
+__all__ = [
+    "AES2",
+    "AES2Setup",
+    "LABEL_AES2",
+    "build_aes2_data",
+    "new_aes2",
+    "setup_aes2",
+]
 
 
 LABEL_AES2 = "AES2"
 """Label for the 'AES2' interaction, coinciding with the class name."""
+
+
+@dataclass(frozen=True, eq=False)
+class AES2Setup:
+    """Numbers- and parameter-derived data for one AES2 interaction."""
+
+    numbers: Tensor
+    dmp3: Tensor
+    dmp5: Tensor
+    shift: Tensor
+    kexp: Tensor
+    rmax: Tensor
+    dkernel: Tensor
+    qkernel: Tensor
+    rad: Tensor
+    vcn: Tensor
+    pair_mask: Tensor
+
+
+def setup_aes2(aes2: AES2, numbers: Tensor, ihelp: IndexHelper) -> AES2Setup:
+    """Resolve AES2 parameters and structural masks to atom resolution."""
+    return AES2Setup(
+        numbers=numbers,
+        dmp3=aes2.dmp3.clone(),
+        dmp5=aes2.dmp5.clone(),
+        shift=aes2.shift.clone(),
+        kexp=aes2.kexp.clone(),
+        rmax=aes2.rmax.clone(),
+        dkernel=ihelp.spread_uspecies_to_atom(aes2.dkernel),
+        qkernel=ihelp.spread_uspecies_to_atom(aes2.qkernel),
+        rad=ihelp.spread_uspecies_to_atom(aes2.rad),
+        vcn=ihelp.spread_uspecies_to_atom(aes2.vcn),
+        pair_mask=real_pairs(numbers, mask_diagonal=True),
+    )
+
+
+def build_aes2_data(setup: AES2Setup, positions: Tensor) -> AES2Cache:
+    """Build fresh geometry-dependent AES2 data from setup and positions."""
+    if positions.shape[-2:] != (setup.numbers.shape[-1], 3):
+        raise ValueError("positions must have shape (..., nat, 3).")
+    if positions.device != setup.dmp3.device:
+        raise RuntimeError("AES2 setup and positions must share a device.")
+    if positions.dtype != setup.dmp3.dtype:
+        raise RuntimeError("AES2 setup and positions must share a dtype.")
+
+    from dxtb._src.ncoord import cn_d3, gfn2_count
+
+    cn = cn_d3(setup.numbers, positions, counting_function=gfn2_count)
+    t1 = torch.exp(-setup.kexp * (cn - setup.vcn - setup.shift))
+    t2 = (setup.rmax - setup.rad) / (1.0 + t1)
+    mrad = setup.rad + t2
+    amat_sd, amat_dd, amat_sq = _build_atom_coulomb_matrix(
+        setup.numbers,
+        positions,
+        mrad,
+        setup.dmp3,
+        setup.dmp5,
+        setup.pair_mask,
+    )
+    return AES2Cache(
+        mrad=mrad,
+        dkernel=setup.dkernel.unsqueeze(-1),
+        qkernel=setup.qkernel.unsqueeze(-1),
+        amat_sd=amat_sd,
+        amat_dd=amat_dd,
+        amat_sq=amat_sq,
+    )
 
 
 class AES2Cache(InteractionCache, TensorLike):
@@ -275,8 +352,7 @@ class AES2(Interaction):
         positions: Tensor | None = None,
         ihelp: IndexHelper | None = None,
     ) -> AES2Cache:
-        """
-        Obtain the cache object.
+        """Build fresh AES2 data for the compatibility API.
 
         Parameters
         ----------
@@ -292,10 +368,6 @@ class AES2(Interaction):
         AES2Cache
             Cache object for anisotropic second order electrostatics.
 
-        Note
-        ----
-        The cache of an interaction requires ``positions`` as they do not change
-        during the self-consistent charge iterations.
         """
         if numbers is None:
             raise ValueError("Atomic numbers are required for AES2 cache.")
@@ -304,51 +376,7 @@ class AES2(Interaction):
         if ihelp is None:
             raise ValueError("IndexHelper is required for AES2 cache creation.")
 
-        cachvars = (numbers.detach().clone(), positions.detach().clone())
-
-        if self.cache_is_latest(cachvars, grad=(positions,)) is True:
-            if not isinstance(self.cache, AES2Cache):
-                raise TypeError(
-                    f"Cache in {self.label} is not of type '{self.label}."
-                    "Cache'. This can only happen if you manually manipulate "
-                    "the cache."
-                )
-            return self.cache
-
-        # if the cache is built, store the cachvar for validation
-        self._cachevars = cachvars
-        self._cachegrad = grad_key(positions)
-
-        dkernel = ihelp.spread_uspecies_to_atom(self.dkernel).unsqueeze(-1)
-        qkernel = ihelp.spread_uspecies_to_atom(self.qkernel).unsqueeze(-1)
-
-        from dxtb._src.ncoord import cn_d3, gfn2_count
-
-        vcn = ihelp.spread_uspecies_to_atom(self.vcn)
-        rad = ihelp.spread_uspecies_to_atom(self.rad)
-
-        cn = cn_d3(numbers, positions, counting_function=gfn2_count)
-
-        # tblite: coulomb/multipole.f90::get_mrad
-        t1 = torch.exp(-self.kexp * (cn - vcn - self.shift))
-        t2 = (self.rmax - rad) / (1.0 + t1)
-        mrad = rad + t2
-        # dmradcn = -self.kexp * t2 * t1 / (1 + t1)
-
-        amat_sd, amat_dd, amat_sq = self.get_atom_coulomb_matrix(
-            numbers, positions, mrad
-        )
-
-        self.cache = AES2Cache(
-            mrad=mrad,
-            dkernel=dkernel,
-            qkernel=qkernel,
-            amat_sd=amat_sd,
-            amat_dd=amat_dd,
-            amat_sq=amat_sq,
-        )
-
-        return self.cache
+        return build_aes2_data(setup_aes2(self, numbers, ihelp), positions)
 
     def get_atom_coulomb_matrix(
         self, numbers: Tensor, positions: Tensor, rad: Tensor
@@ -373,81 +401,32 @@ class AES2(Interaction):
             - dipoles and dipoles (shape: ``(..., nat, nat, 3, 3)``),
             - charges and quadrupoles (shape: ``(..., nat, nat, 6)``).
         """
-        eps = torch.tensor(torch.finfo(positions.dtype).eps, **self.dd)
-        mask = real_pairs(numbers, mask_diagonal=True)
-
-        dist = storch.cdist(positions, positions, p=2)
-
-        # (nb, nat, nat)
-        g1 = storch.safe_reciprocal(dist)
-        g3 = g1 * g1 * g1
-        g5 = g3 * g1 * g1
-
-        # (nb, nat, nat)
-        rr = 0.5 * (rad.unsqueeze(-1) + rad.unsqueeze(-2)) * g1
-        fdmp3 = 1.0 / (1.0 + 6.0 * rr**self.dmp3)
-        fdmp5 = 1.0 / (1.0 + 6.0 * rr**self.dmp5)
-
-        # (nb, nat, nat, 3)
-        rij = torch.where(
-            mask.unsqueeze(-1),
-            positions.unsqueeze(-2) - positions.unsqueeze(-3),
-            eps,
+        return _build_atom_coulomb_matrix(
+            numbers,
+            positions,
+            rad,
+            self.dmp3,
+            self.dmp5,
+            real_pairs(numbers, mask_diagonal=True),
         )
 
-        # Monopole / Dipole
+    def update(self, **kwargs: Any) -> None:
+        """Reject updates for exact setup-migrated AES2 interactions."""
+        if type(self) is AES2:
+            raise RuntimeError(
+                "AES2 parameters are setup-derived and cannot be updated. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().update(**kwargs)
 
-        # (nb, nat, nat, 1)
-        _g3 = g3.unsqueeze(-1)
-        _fdmp3 = fdmp3.unsqueeze(-1)
-
-        # (nb, nat, nat, 3) * (nb, nat, nat, 1) -> (nb, nat, nat, 3)
-        sd = rij * _g3 * _fdmp3
-
-        # Dipole / Dipole
-
-        # (nb, nat, nat, 1)
-        _g5 = g5.unsqueeze(-1)
-        _fdmp5 = fdmp5.unsqueeze(-1)
-        g5_fdmp5 = _g5 * _fdmp5
-
-        # (nb, nat, nat, 1, 1)
-        _g5_fdmp5 = g5_fdmp5.unsqueeze(-1)
-
-        # (nb, 1, 1, 3, 3)
-        unity = (
-            eye((*numbers.shape[:-2], 3, 3), **self.dd)
-            .unsqueeze(-3)
-            .unsqueeze(-3)
-        )
-
-        # (nb, nat, nat, 3, 3)
-        dd = (
-            unity * _g3.unsqueeze(-1) * _fdmp5.unsqueeze(-1)
-            - rij.unsqueeze(-1) * rij.unsqueeze(-2) * 3 * _g5_fdmp5
-        )
-
-        # Monopole / Quadrupole
-
-        # (nb, nat, nat, 6)
-        sq = torch.empty(
-            (*rij.shape[:-1], 6),
-            device=positions.device,
-            dtype=positions.dtype,
-        )
-
-        sq[..., 0] = rij[..., 0] * rij[..., 0]
-        sq[..., 2] = rij[..., 1] * rij[..., 1]
-        sq[..., 5] = rij[..., 2] * rij[..., 2]
-
-        sq[..., 1] = 2 * rij[..., 0] * rij[..., 1]
-        sq[..., 3] = 2 * rij[..., 0] * rij[..., 2]
-        sq[..., 4] = 2 * rij[..., 1] * rij[..., 2]
-
-        # (nb, nat, nat, 6) * (nb, nat, nat, 1) -> (nb, nat, nat, 6)
-        sq = sq * g5_fdmp5
-
-        return sd, dd, sq
+    def reset(self) -> None:
+        """Reject resets for exact setup-migrated AES2 interactions."""
+        if type(self) is AES2:
+            raise RuntimeError(
+                "AES2 parameters are setup-derived and cannot be reset. "
+                "Create a new Model/System/Calculator with changed parameters."
+            )
+        super().reset()
 
     @override
     def get_dipole_atom_energy(
@@ -527,7 +506,7 @@ class AES2(Interaction):
         # tblite: coulomb/multipole.f90::get_kernel_energy
         # (ke = dk * dot(qdp * scale, qdp))
         # Remember: cache.dkernel was unsqueezed in `get_cache`!
-        scale = torch.tensor([1, 2, 1, 2, 2, 1], **self.dd)
+        scale = qqp.new_tensor([1, 2, 1, 2, 2, 1])
         ke = einsum("...ix,...ix,x,...ix->...i", cache.qkernel, qqp, scale, qqp)
 
         return ke + einsum("...ix,...ix->...i", vqp, qqp)
@@ -636,10 +615,90 @@ class AES2(Interaction):
         vqp = einsum("...ijx,...i->...jx", cache.amat_sq, qat)
 
         # tblite: coulomb/multipole.f90::get_kernel_potential
-        scale = torch.tensor([1, 2, 1, 2, 2, 1], **self.dd)
+        scale = qqp.new_tensor([1, 2, 1, 2, 2, 1])
         kernel_pot_dp = 2 * cache.qkernel * qqp * scale
 
         return vqp + kernel_pot_dp
+
+
+def _build_atom_coulomb_matrix(
+    numbers: Tensor,
+    positions: Tensor,
+    rad: Tensor,
+    dmp3: Tensor,
+    dmp5: Tensor,
+    mask: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Construct atom-resolved AES2 matrices from explicit tensor inputs."""
+    eps = positions.new_tensor(torch.finfo(positions.dtype).eps)
+
+    dist = storch.cdist(positions, positions, p=2)
+
+    # (nb, nat, nat)
+    g1 = storch.safe_reciprocal(dist)
+    g3 = g1 * g1 * g1
+    g5 = g3 * g1 * g1
+
+    # (nb, nat, nat)
+    rr = 0.5 * (rad.unsqueeze(-1) + rad.unsqueeze(-2)) * g1
+    fdmp3 = 1.0 / (1.0 + 6.0 * rr**dmp3)
+    fdmp5 = 1.0 / (1.0 + 6.0 * rr**dmp5)
+
+    # (nb, nat, nat, 3)
+    rij = torch.where(
+        mask.unsqueeze(-1),
+        positions.unsqueeze(-2) - positions.unsqueeze(-3),
+        eps,
+    )
+
+    # Monopole / Dipole
+
+    # (nb, nat, nat, 1)
+    _g3 = g3.unsqueeze(-1)
+    _fdmp3 = fdmp3.unsqueeze(-1)
+
+    # (nb, nat, nat, 3) * (nb, nat, nat, 1) -> (nb, nat, nat, 3)
+    sd = rij * _g3 * _fdmp3
+
+    # Dipole / Dipole
+
+    # (nb, nat, nat, 1)
+    _g5 = g5.unsqueeze(-1)
+    _fdmp5 = fdmp5.unsqueeze(-1)
+    g5_fdmp5 = _g5 * _fdmp5
+
+    # (nb, nat, nat, 1, 1)
+    _g5_fdmp5 = g5_fdmp5.unsqueeze(-1)
+
+    # (nb, 1, 1, 3, 3)
+    unity = torch.eye(3, device=positions.device, dtype=positions.dtype)
+    unity = unity.unsqueeze(-3).unsqueeze(-3)
+
+    # (nb, nat, nat, 3, 3)
+    dd = (
+        unity * _g3.unsqueeze(-1) * _fdmp5.unsqueeze(-1)
+        - rij.unsqueeze(-1) * rij.unsqueeze(-2) * 3 * _g5_fdmp5
+    )
+
+    # Monopole / Quadrupole
+
+    # (nb, nat, nat, 6)
+    sq = torch.stack(
+        (
+            rij[..., 0] * rij[..., 0],
+            2 * rij[..., 0] * rij[..., 1],
+            rij[..., 1] * rij[..., 1],
+            2 * rij[..., 0] * rij[..., 2],
+            2 * rij[..., 1] * rij[..., 2],
+            rij[..., 2] * rij[..., 2],
+        ),
+        dim=-1,
+    )
+
+    # (nb, nat, nat, 6) * (nb, nat, nat, 1) -> (nb, nat, nat, 6)
+    sq = sq * g5_fdmp5
+
+    return sd, dd, sq
 
 
 def new_aes2(

@@ -33,10 +33,10 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, repulsion, SRB, classical D4, IES, and halogen setup separation are done, while other required setup/per-call work remains. |
+| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, AES2, repulsion, SRB, classical D4, IES, and halogen setup separation are done, while other required setup/per-call work remains. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batching remains until E6.                |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
-| B6             | partial                         | B6a ES2/ES3, repulsion, SRB, classical D4, IES, and halogen families are done; D3 remains blocked upstream and interaction families remain open. |
+| B6             | partial                         | B6a ES2/ES3, AES2, repulsion, SRB, classical D4, IES, and halogen families are done; D3 remains blocked upstream and D4SC/ALPB interactions remain open. |
 | B7             | not done                        | Explicit field API remains open.                                                                    |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -734,12 +734,12 @@ Geometry-dependent quantities are locals.
 
 Do the same for:
 
-- ES2;
-- ES3;
-- AES2/multipole;
-- D4SC;
-- ALPB/solvation;
-- field terms.
+- ES2 — done;
+- ES3 — done;
+- AES2/multipole — done; explicit setup and per-call geometry data pass position/dipole forward AD, JVP, reverse orders 1–3, jacfwd, and vmap;
+- D4SC — open;
+- ALPB/solvation — open;
+- field terms — remain in B7.
 
 For D4SC, for example:
 
@@ -1741,9 +1741,11 @@ Success means measured speed/memory improves without creating a second semantics
 
 B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batching remains scheduled for E6, and B3b remains incomplete until all required structural setup is explicit.
 
-E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: ES2/ES3, repulsion, SRB, classical D4, IES, and halogen are complete; D3 remains blocked upstream and interaction families remain open. B3b is partial: ES2, ES3, repulsion, SRB, classical D4, IES, and halogen setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
+E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. B6a is partial: ES2/ES3, AES2, repulsion, SRB, classical D4, IES, and halogen are complete; D3 remains blocked upstream and D4SC/ALPB interactions remain open. B3b is partial: ES2, ES3, AES2, repulsion, SRB, classical D4, IES, and halogen setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
 
 Package record: the IES family and classical D4 compatibility hardening were validated from task base `12d0182d6b0dff7214bddfcfe8f34eb22f8e77e2` and implemented in `635a6bbfbd1dbe07eabce68d46a42e3d03f35de1`. The independent Luna/high review found no blocker or major issue. The classical halogen family was then validated from task base `c71e4a082ddfd76a2683b005fe3f8420553a16fd`; its fixed-shape kernel changed `halogen.positions:vmap` from ERROR to PASS without changing reference values. Two broad-suite seeds each reported four implicit-SCF memory-leak failures; all seven distinct failing nodes reproduced against the task base with the same one-tensor leak signature. The independent Luna/high review found no blocker or major issue. D4SC, D3, and other B6 families were not migrated in the halogen package.
+
+The AES2/multipole package was validated from task base `f999f9fa3986e4bd73da6ad60d572bbb3cfedcde`. Halogen setup masks now honor the configured species lists. AES2 dipole vmap changed from ERROR to PASS, and the new position target passes forward AD, JVP, jacfwd, reverse orders 1–3, and vmap. Reference and parameter verdicts are unchanged. Broad seeds `20261010` and `20261011` showed nondeterministic implicit-SCF memory-leak failures under work stealing; every distinct failing node was reproduced against the task-base snapshot. The only current broad XPASS is the established implicit-matrix case; the base additionally XPASSes the old strict AES2-vmap xfail, as expected. Luna/high review found no blocker or major issue. D4SC, ALPB, fields/B7, E4, and other interaction families were not migrated.
 
 The next local package should be selected from the current dependency plan after review; do not begin it automatically. E1.3 remains an upstream dependency task and should resume when the D3 transform blocker is available. The separate E0 eigensolver/implicit-differentiation design still requires technical review before implementation.
 

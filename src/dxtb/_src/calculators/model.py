@@ -69,13 +69,16 @@ from dxtb._src.components.classicals import (
 from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
+    AES2,
     ES2,
     ES3,
+    AES2Setup,
     ES2Setup,
     ES3Setup,
     new_aes2,
     new_es2,
     new_es3,
+    setup_aes2,
     setup_es2,
     setup_es3,
 )
@@ -142,6 +145,12 @@ class System:
 
     es3_interaction: ES3 | None
     """Exact interaction associated with :attr:`es3_setup`, if any."""
+
+    aes2_setup: AES2Setup | None
+    """Numbers/parameter setup for per-call AES2 geometry data."""
+
+    aes2_interaction: AES2 | None
+    """Exact AES2 interaction associated with :attr:`aes2_setup`."""
 
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
@@ -332,6 +341,9 @@ class Model:
         es3_interaction = next(
             (i for i in interactions.components if type(i) is ES3), None
         )
+        aes2_interaction = next(
+            (i for i in interactions.components if type(i) is AES2), None
+        )
         es2_setup = (
             setup_es2(
                 numbers,
@@ -352,6 +364,11 @@ class Model:
                 shell_scale=es3_interaction.shell_scale,
             )
             if es3_interaction is not None and batch_mode == 0
+            else None
+        )
+        aes2_setup = (
+            setup_aes2(aes2_interaction, numbers, ihelp)
+            if aes2_interaction is not None and batch_mode == 0
             else None
         )
 
@@ -518,6 +535,8 @@ class Model:
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,
             es3_interaction=es3_interaction,
+            aes2_setup=aes2_setup,
+            aes2_interaction=aes2_interaction,
             dd=dd,
         )
 

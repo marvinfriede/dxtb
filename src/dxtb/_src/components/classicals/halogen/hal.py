@@ -58,12 +58,12 @@ def setup_halogen(
 ) -> HalogenSetup:
     """Gather element parameters and fixed-shape masks for halogen bonding."""
     xbond = ihelp.spread_uspecies_to_atom(halogen.bond_strength)
-    halogen_mask = (
-        (numbers == 17) | (numbers == 35) | (numbers == 53) | (numbers == 85)
-    )
-    base_mask = (
-        (numbers == 7) | (numbers == 8) | (numbers == 15) | (numbers == 16)
-    )
+    halogen_mask = torch.zeros_like(numbers, dtype=torch.bool)
+    for atomic_number in halogen.halogens:
+        halogen_mask = halogen_mask | (numbers == atomic_number)
+    base_mask = torch.zeros_like(numbers, dtype=torch.bool)
+    for atomic_number in halogen.bases:
+        base_mask = base_mask | (numbers == atomic_number)
     valid_atom_mask = numbers != 0
     return HalogenSetup(
         numbers=numbers,

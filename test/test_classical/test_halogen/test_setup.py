@@ -152,6 +152,88 @@ def test_no_halogen_no_base_and_cutoff_masks_return_finite_zero() -> None:
         torch.testing.assert_close(value, torch.zeros_like(value))
 
 
+def test_setup_honors_component_species_lists_and_freezes_them() -> None:
+    """Species lists configure setup and cannot mutate an existing System."""
+    from dxtb import IndexHelper
+
+    numbers, positions = _geometry()
+    par = get_param_module("gfn1", **DD)
+    default = new_halogen(torch.unique(numbers), par, **DD)
+    assert default is not None
+    custom = Halogen(
+        default.damp,
+        default.rscale,
+        default.bond_strength,
+        cutoff=default.cutoff,
+        **DD,
+    )
+    custom_system = Model(
+        par=par,
+        config=Config.create(exclude=(*_EXCLUDE, "hal")),
+        classical=(custom,),
+    ).setup(numbers)
+    assert custom_system.halogen_setup is not None
+
+    default_energy = _classical_energy(custom_system, positions)
+    assert not torch.isclose(default_energy, torch.zeros_like(default_energy))
+
+    # Setup captures the lists as masks; later object mutation affects only a
+    # newly constructed System.
+    custom.halogens = []
+    unchanged = _classical_energy(custom_system, positions.clone())
+    torch.testing.assert_close(unchanged, default_energy)
+    changed_system = Model(
+        par=par,
+        config=Config.create(exclude=(*_EXCLUDE, "hal")),
+        classical=(custom,),
+    ).setup(numbers)
+    torch.testing.assert_close(
+        _classical_energy(changed_system, positions),
+        torch.zeros_like(default_energy),
+    )
+
+    custom.halogens = [17, 35, 53, 85]
+    custom.bases = []
+    no_base_system = Model(
+        par=par,
+        config=Config.create(exclude=(*_EXCLUDE, "hal")),
+        classical=(custom,),
+    ).setup(numbers)
+    torch.testing.assert_close(
+        _classical_energy(no_base_system, positions),
+        torch.zeros_like(default_energy),
+    )
+
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    direct = custom.get_cache(numbers, ihelp)
+    assert direct.halogen_mask.any()
+    assert not direct.base_mask.any()
+
+
+def test_halogen_subclass_inherited_get_cache_honors_species_lists() -> None:
+    """Inherited compatibility setup reads a subclass's species lists."""
+    from dxtb import IndexHelper
+
+    numbers, _ = _geometry()
+    par = get_param_module("gfn1", **DD)
+    ordinary = new_halogen(torch.unique(numbers), par, **DD)
+    assert ordinary is not None
+
+    class CustomSpeciesHalogen(Halogen):
+        pass
+
+    custom = CustomSpeciesHalogen(
+        ordinary.damp,
+        ordinary.rscale,
+        ordinary.bond_strength,
+        cutoff=ordinary.cutoff,
+        **DD,
+    )
+    custom.halogens = []
+    setup = custom.get_cache(numbers, IndexHelper.from_numbers(numbers, par))
+    assert not setup.halogen_mask.any()
+
+
 def test_vmap_handles_distinct_cutoff_masks() -> None:
     """Cutoff changes alter mask values but retain fixed output shape."""
     from torch.func import vmap

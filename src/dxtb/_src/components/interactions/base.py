@@ -167,7 +167,7 @@ class Interaction(Component):
         )
 
         # spread to orbital-resolution
-        vsh += ihelp.spread_atom_to_shell(vat)
+        vsh = vsh + ihelp.spread_atom_to_shell(vat)
         vmono = ihelp.spread_shell_to_orbital(vsh)
 
         # multipole potentials
@@ -349,13 +349,13 @@ class Interaction(Component):
             edp = self.get_dipole_atom_energy(
                 cache, qat=qat, qdp=charges.dipole, qqp=charges.quad
             )
-            e += edp
+            e = e + edp
 
         if charges.quad is not None:
             eqp = self.get_quadrupole_atom_energy(
                 cache, qat=qat, qdp=charges.dipole, qqp=charges.quad
             )
-            e += eqp
+            e = e + eqp
 
         return e
 
