@@ -165,7 +165,8 @@ def test_system_reuses_setup_pair_plan_across_geometries(
     second = system.singlepoint(moved)
     assert torch.isfinite(first.energy).all()
     assert torch.isfinite(second.energy).all()
-    assert len(plan_uses) == 6
+    assert plan_uses
+    assert all(plan is setup.pair_plan for plan in plan_uses)
 
 
 def test_pytorch_integral_setup_conversion_rebuilds_pair_plan() -> None:

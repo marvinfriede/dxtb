@@ -44,7 +44,9 @@ Current state:
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
-| E3/E4/E6/E7/E8 | not done                        | These form the transform/batching critical path.                                                   |
+| E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
+| E4             | partial — E4.0 raw charge map done | Pure charge-mode physical map extracted; the current solver remains authoritative. Functional solvers, finite-temperature Fermi, potential/Fock modes, and full status integration remain open. |
+| E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -939,6 +941,34 @@ This follows P10.
 ---
 
 # 13. E4: replace the current mutable/culling SCF with a functional fixed-shape step
+
+## E4.0 — pure raw charge map extracted
+
+The new `scf/functional` module provides frozen `SCFInputs`, fixed
+`ChargeLayout`, immutable internal charge/potential values, `SCFMapResult`,
+and a pure zero-temperature charge-mode `scf_map(x, inputs)`. It computes the
+call-local inverse Cholesky at input construction, carries a structural
+orbital mask, and does not use legacy restart data or invoke interaction
+state-management operations. The raw map matches one current full-mode map
+evaluation for GFN1 H2O (initial and perturbed charge iterate), GFN2 H2O
+multipoles, a charged/spin case, a monopole-only layout, and an explicit
+electric field. Its reverse position derivatives through second order,
+parameter graph, repeated-map behavior, and vmap over charge iterates are
+covered by focused tests.
+
+The existing full/implicit solver engines remain the only production route.
+E4.0 does not add mixers, solver state, fixed-trip control flow, Fermi
+handling, potential/Fock modes, or free-energy partitioning. The transitional
+full-mode eigensolver is isolated in one helper and preserves its current
+`requires_grad`-selected Lorentzian behavior. On the characterized H2O map,
+JVP/jacfwd are finite but their numerical derivatives do not exactly match
+reverse mode under that legacy mode selection; this is the already-defined
+E3 spectral contract issue, not a map-plumbing failure. E3 still owns the
+spectral derivative correction.
+
+E4 remains partial. Functional solver integration, functional mixers,
+fixed-trip convergence and Fermi semantics, potential/Fock convergence
+modes, and removal of legacy culling remain subsequent E4 work.
 
 This is the most important structural package after state removal.
 
