@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0 raw charge map done | Pure charge-mode physical map extracted; the current solver remains authoritative. Functional solvers, finite-temperature Fermi, potential/Fock modes, and full status integration remain open. |
+| E4             | partial — E4.0/E4.1 parallel path done | Pure charge-mode map and fixed-trip functional simple solver are tested in parallel; production still uses the legacy engine. Functional Anderson/Broyden, finite-temperature Fermi, potential/Fock modes, and solver integration remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -980,9 +980,47 @@ inside the transitional eigensolver without map or interaction plumbing; it
 is the already-defined E3 spectral contract issue. E3 still owns the spectral
 derivative correction.
 
-E4 remains partial. Functional solver integration, functional mixers,
-fixed-trip convergence and Fermi semantics, potential/Fock convergence
-modes, and removal of legacy culling remain subsequent E4 work.
+E4 remains partial. Functional solver integration, advanced mixer state,
+finite-temperature Fermi semantics, potential/Fock convergence modes, and
+removal of legacy culling remain subsequent E4 work.
+
+## E4.1 — functional simple solver (done, parallel only)
+
+The internal `scf/functional/solver.py` implements frozen
+`SCFSolverSettings`, pure `simple_mix`, raw-residual status values, a
+fixed-trip charge solver, and separate finalization. It accepts only simple
+linear mixing, no dynamic damping, one System, charge mode, and the E4.0
+zero-temperature inputs. Anderson and Broyden are rejected rather than
+approximated. Effective `x_atol` and `x_atol_max` include the existing
+Simple-mixer dtype-resolution downgrade; `f_atol` is absent.
+
+The solver evaluates the initial `G(guess)` once. With `mix_guess=True`, it
+mixes that value but deliberately does not test convergence until the next raw
+map call. Positive budgets then perform up to `maxiter` additional fixed-trip
+calls. Convergence uses both L2 and max-absolute norms of the unmixed
+`G(x)-x`; the first converged raw map result is selected with tensor masking.
+`maxiter=0` returns the one-shot raw map, one reported evaluation, false
+convergence, and its residual. Nonconvergence returns the last raw map. The
+reported iteration count is the legacy-compatible active map-evaluation count,
+including the initial evaluation.
+
+Finalization is separate: `driving_potential` remains `V(x)` from the selected
+map evaluation, while final potential and interaction energy are recomputed
+from its mapped output charges `G(x)`. Hamiltonian, density, orbital energies,
+coefficients, and orbital energy contribution remain from that same selected
+spectral evaluation. E4.1 parity tests compare independent legacy and
+functional preparations over the six `(maxiter=0/1/2, mix_guess=False/True)`
+cases, converged/loose/nonconverged cases, finalization, and geometry/field
+derivatives. A smooth affine toy map verifies reverse/JVP/jacfwd/vmap solver
+composition; a real fixed-System charge-guess vmap is also covered.
+
+The implementation remains an internal parallel path. `Calculator`,
+`System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`, and implicit mode
+are unchanged. E4 remains partial: functional Anderson/Broyden, production
+solver integration, no-culling batch state, finite-temperature Fermi, and
+potential/Fock modes remain open. E3 still owns the transitional spectral
+derivative discrepancy; its test now attributes mode selection to explicit
+eigensolver branches without requiring the discrepancy to remain nonzero.
 
 This is the most important structural package after state removal.
 
@@ -1042,9 +1080,10 @@ def solver_step(
 The physical equation is `G(x) - x = 0`; mixer history belongs only to
 `SCFSolverState`. No mutation of inputs, map results, or incoming solver state.
 
-## E4.1 Functional mixers
+## E4.2 Functional Anderson/Broyden mixer state (open)
 
-Anderson/Broyden/simple mixing histories are state values.
+Advanced Anderson/Broyden histories are state values. Simple linear mixing is
+already implemented as the stateless E4.1 function.
 
 Refactor mixer classes so that:
 
@@ -1054,7 +1093,7 @@ new_value, new_mixer_state = mix(value, old_value, mixer_state, settings)
 
 No mixer object owns changing history.
 
-## E4.2 No culling
+## E4.3 No culling
 
 Delete the optimization where converged batch entries are sliced out and all dependent objects are culled/restored.
 
@@ -1108,7 +1147,7 @@ The loop trip count is static.
 
 An eager-only outer wrapper may eventually stop early if measurement justifies it, but the transform-critical function remains fixed-shape.
 
-## E4.3 Delete cull/restore after the new loop works
+## E4.4 Delete cull/restore after the new loop works
 
 Delete:
 
@@ -1682,15 +1721,20 @@ Recommended sequence:
 - ALPB;
 - fields separately in B7.
 
-### PR E4.1: functional mixer state
+### PR E4.1: parallel functional simple solver
 
-- preserve old SCF driver initially.
+- raw map and production driver stay unchanged.
+- characterize forward parity and transform behavior before routing.
 
-### PR E4.2: functional SCF state/step
+### PR E4.2: functional Anderson/Broyden state
 
-- old loop may call it.
+- keep solver history explicit; do not alter the production driver.
 
-### PR E4.3: fixed-shape loop, delete culling
+### PR E4.3: integrate functional SCF state/step
+
+- only after mixer state and compatibility semantics are accepted.
+
+### PR E4.4: fixed-shape loop, delete culling
 
 - then delete cull/restore.
 

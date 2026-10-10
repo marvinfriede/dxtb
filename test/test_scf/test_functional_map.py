@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from tad_mctc import storch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
@@ -603,7 +604,7 @@ def test_map_position_derivatives_and_iterate_vmap() -> None:
     _assert_tensor_equal(mapped, looped)
 
 
-def test_forward_derivative_mismatch_is_inside_transitional_spectrum() -> None:
+def test_transitional_spectral_derivative_branch_attribution() -> None:
     case = _prepare_case(GFN1_XTB)
     hamiltonian = scf_map(case.x, case.inputs).hamiltonian.detach()
     probe = torch.arange(
@@ -616,12 +617,29 @@ def test_forward_derivative_mismatch_is_inside_transitional_spectrum() -> None:
     direction = (direction + direction.mT) / hamiltonian.numel()
     occupation = case.inputs.occupation.sum(-2)
 
-    def spectral_projection(h: torch.Tensor) -> torch.Tensor:
-        _, coefficients = _transitional_diagonalize(h, case.inputs)
+    def spectral_projection(
+        h: torch.Tensor, broadening_method: str | None = "transitional"
+    ) -> torch.Tensor:
+        if broadening_method == "transitional":
+            _, coefficients = _transitional_diagonalize(h, case.inputs)
+        else:
+            _, coefficients = storch.eighb(
+                a=h,
+                b=None,
+                l_inv=case.inputs.inverse_cholesky,
+                is_posdef=True,
+                factor=torch.finfo(h.dtype).eps ** 0.5,
+                broadening_method=broadening_method,
+            )
         density = get_density(coefficients, occupation)
         return torch.sum(probe * density)
 
     _, tangent = jvp(spectral_projection, (hamiltonian,), (direction,))
+    _, explicit_forward_tangent = jvp(
+        lambda h: spectral_projection(h, None),
+        (hamiltonian,),
+        (direction,),
+    )
     h_leaf = hamiltonian.clone().requires_grad_(True)
     reverse_value = spectral_projection(h_leaf)
     (reverse_gradient,) = torch.autograd.grad(reverse_value, h_leaf)
@@ -629,14 +647,23 @@ def test_forward_derivative_mismatch_is_inside_transitional_spectrum() -> None:
     forward_jacobian = jacfwd(spectral_projection)(hamiltonian)
     jacfwd_tangent = torch.sum(forward_jacobian * direction)
 
-    jvp_discrepancy = torch.abs(tangent - reverse_tangent)
-    jacfwd_discrepancy = torch.abs(jacfwd_tangent - reverse_tangent)
-    assert torch.isfinite(jvp_discrepancy)
-    assert torch.isfinite(jacfwd_discrepancy)
-    # This intentionally records the known mode-selection discrepancy at the
-    # transitional eigensolver, before charge packing or interactions enter.
-    assert jvp_discrepancy > 1.0e-8
-    assert jacfwd_discrepancy > 1.0e-8
+    h_lorn = hamiltonian.clone().requires_grad_(True)
+    explicit_reverse_value = spectral_projection(h_lorn, "lorn")
+    (explicit_reverse_gradient,) = torch.autograd.grad(
+        explicit_reverse_value, h_lorn
+    )
+    explicit_reverse_tangent = torch.sum(explicit_reverse_gradient * direction)
+    explicit_jacobian = jacfwd(lambda h: spectral_projection(h, None))(
+        hamiltonian
+    )
+    explicit_jacfwd_tangent = torch.sum(explicit_jacobian * direction)
+
+    # Reverse-mode selection is explicitly Lorentzian; forward-mode selection
+    # is explicitly unbroadened. This attributes the known discrepancy to the
+    # transitional spectral mode selection without requiring it to persist.
+    _assert_tensor_equal(reverse_tangent, explicit_reverse_tangent)
+    _assert_tensor_equal(tangent, explicit_forward_tangent)
+    _assert_tensor_equal(jacfwd_tangent, explicit_jacfwd_tangent)
 
 
 def test_map_parameter_graph_reaches_param_module() -> None:
