@@ -86,7 +86,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active: (mapped, None),
+        mix_fn=lambda old, mapped, state, step, active, damp: (mapped, None),
     )
     spectral = outcome.map_result.spectral
     assert calls == 2
@@ -222,7 +222,7 @@ def test_trajectory_status_vmap_matches_python_loop() -> None:
             x_atol=0.1,
             x_atol_max=0.1,
             map_fn=map_fn,
-            mix_fn=lambda old, mapped, state, step, active: (
+            mix_fn=lambda old, mapped, state, step, active, damp: (
                 old + 0.5 * (mapped - old),
                 None,
             ),

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import ClassVar
 
 import torch
 from tad_mctc.batch import real_atoms
@@ -52,6 +53,9 @@ from .map import (
 )
 
 __all__ = [
+    "DynamicDampingSettings",
+    "DampingState",
+    "SCFSolverDiagnostics",
     "SCFResidual",
     "SCFSolveResult",
     "SCFTrajectoryStatus",
@@ -74,6 +78,29 @@ __all__ = [
 
 
 @dataclass(frozen=True, eq=False)
+class DynamicDampingSettings:
+    """Static configuration for legacy-compatible dynamic damping."""
+
+    threshold: ClassVar[float] = 0.1
+    enabled: bool = False
+    factor: float = 0.99
+
+
+@dataclass(frozen=True, eq=False)
+class DampingState:
+    """Tensor-valued effective ordinary damping during a solve."""
+
+    value: Tensor
+
+
+@dataclass(frozen=True, eq=False)
+class SCFSolverDiagnostics:
+    """Tensor-valued numerical diagnostics for eager compatibility."""
+
+    final_damp: Tensor
+
+
+@dataclass(frozen=True, eq=False)
 class SCFSolverSettings:
     """Static root-finding settings for the E4.1 simple solver."""
 
@@ -82,6 +109,7 @@ class SCFSolverSettings:
     damp: float
     x_atol: float
     x_atol_max: float
+    dynamic_damping: DynamicDampingSettings = DynamicDampingSettings()
 
 
 @dataclass(frozen=True, eq=False)
@@ -115,6 +143,7 @@ class SCFSolveResult:
     converged: Tensor
     residual: Tensor
     trajectory_status: SCFTrajectoryStatus | None
+    diagnostics: SCFSolverDiagnostics | None = None
 
     @property
     def hamiltonian(self) -> Tensor:
@@ -275,6 +304,7 @@ class _SolverOutcome:
     converged: Tensor
     residual: Tensor
     trajectory_status: SCFTrajectoryStatus | None
+    damping_state: DampingState
 
 
 def _resolve_tolerance(value: float, dtype: torch.dtype) -> float:
@@ -293,23 +323,36 @@ def setup_simple_solver_settings(
         raise NotImplementedError(
             "The E4.1 functional solver supports only simple linear mixing."
         )
-    if config.damp_dynamic:
-        raise NotImplementedError(
-            "The E4.1 functional solver does not support dynamic damping."
-        )
-
     return SCFSolverSettings(
         maxiter=config.maxiter,
         mix_guess=config.mix_guess,
         damp=config.damp,
         x_atol=_resolve_tolerance(config.x_atol, dtype),
         x_atol_max=_resolve_tolerance(config.x_atol_max, dtype),
+        dynamic_damping=DynamicDampingSettings(
+            enabled=config.damp_dynamic,
+            factor=config.damp_dynamic_factor,
+        ),
     )
 
 
-def simple_mix(old: Tensor, mapped: Tensor, damp: float) -> Tensor:
+def simple_mix(old: Tensor, mapped: Tensor, damp: Tensor | float) -> Tensor:
     """Apply one out-of-place linear mixing transition."""
     return old + (mapped - old) * damp
+
+
+def _update_damping(
+    current: DampingState,
+    residual_l2: Tensor,
+    transition_active: Tensor,
+    settings: DynamicDampingSettings,
+) -> DampingState:
+    """Select damping for the next transition using the legacy threshold."""
+    if not settings.enabled:
+        return current
+    switch = transition_active & (residual_l2 < settings.threshold)
+    factor = current.value.new_tensor(settings.factor)
+    return DampingState(torch.where(switch, factor, current.value))
 
 
 def _residual(delta: Tensor) -> SCFResidual:
@@ -446,8 +489,10 @@ def _solve_map(
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
         state_projection=state_projection,
-        mix_fn=lambda old, mapped, state, step, transition_active: (
-            simple_mix(old, mapped, settings.damp),
+        damping_settings=settings.dynamic_damping,
+        initial_damp=settings.damp,
+        mix_fn=lambda old, mapped, state, step, transition_active, damp: (
+            simple_mix(old, mapped, damp),
             None,
         ),
     )
@@ -462,9 +507,11 @@ def _solve_map_control(
     x_atol_max: float,
     map_fn: Callable[[Tensor], SCFMapResult],
     mix_fn: Callable[
-        [Tensor, Tensor, object | None, int, Tensor],
+        [Tensor, Tensor, object | None, int, Tensor, Tensor],
         tuple[Tensor, object | None],
     ],
+    initial_damp: float = 0.4,
+    damping_settings: DynamicDampingSettings = DynamicDampingSettings(),
     state_projection: Callable[[Tensor], Tensor] | None = None,
 ) -> _SolverOutcome:
     """Run common fixed-trip status control around a raw map and mixer."""
@@ -473,6 +520,7 @@ def _solve_map_control(
     initial_residual = _residual(initial.mapped_x - guess).as_tensor()
     iterations = torch.ones((), dtype=torch.int64, device=guess.device)
     active = torch.ones((), dtype=torch.bool, device=guess.device)
+    damping = DampingState(guess.new_tensor(initial_damp))
 
     if maxiter == 0:
         return _SolverOutcome(
@@ -481,12 +529,13 @@ def _solve_map_control(
             converged=torch.zeros_like(active),
             residual=initial_residual,
             trajectory_status=trajectory_status,
+            damping_state=damping,
         )
 
     mixer_state: object | None = None
     if mix_guess:
         current_x, mixer_state = mix_fn(
-            guess, initial.mapped_x, mixer_state, 1, active
+            guess, initial.mapped_x, mixer_state, 1, active, damping.value
         )
         if state_projection is not None:
             current_x = state_projection(current_x)
@@ -518,6 +567,13 @@ def _solve_map_control(
             mixer_state,
             mixer_step,
             transition_active,
+            damping.value,
+        )
+        damping = _update_damping(
+            damping,
+            candidate_residual.l2,
+            transition_active,
+            damping_settings,
         )
         if state_projection is not None:
             mixed_x = state_projection(mixed_x)
@@ -530,6 +586,7 @@ def _solve_map_control(
         converged=~active,
         residual=residual_value,
         trajectory_status=trajectory_status,
+        damping_state=damping,
     )
 
 
@@ -552,6 +609,7 @@ def finalize_scf(
     converged: Tensor,
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
+    damping_state: DampingState | None = None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -574,6 +632,13 @@ def finalize_scf(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
+        diagnostics=SCFSolverDiagnostics(
+            final_damp=(
+                map_result.mapped_x.new_tensor(0.0)
+                if damping_state is None
+                else damping_state.value
+            )
+        ),
     )
 
 
@@ -623,6 +688,7 @@ def finalize_scf_potential(
     converged: Tensor,
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
+    damping_state: DampingState | None = None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra representation conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -645,6 +711,13 @@ def finalize_scf_potential(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
+        diagnostics=SCFSolverDiagnostics(
+            final_damp=(
+                map_result.mapped_x.new_tensor(0.0)
+                if damping_state is None
+                else damping_state.value
+            )
+        ),
     )
 
 
@@ -655,6 +728,7 @@ def finalize_scf_fock(
     converged: Tensor,
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
+    damping_state: DampingState | None = None,
 ) -> SCFSolveResult:
     """Finalize Fock mode from one spectrum of the selected mapped matrix."""
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
@@ -676,6 +750,13 @@ def finalize_scf_fock(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
+        diagnostics=SCFSolverDiagnostics(
+            final_damp=(
+                map_result.mapped_x.new_tensor(0.0)
+                if damping_state is None
+                else damping_state.value
+            )
+        ),
     )
 
 
@@ -691,6 +772,7 @@ def solve_scf_simple(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )
 
 
@@ -715,6 +797,7 @@ def solve_scf_potential_simple(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )
 
 
@@ -730,4 +813,5 @@ def solve_scf_fock_simple(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )

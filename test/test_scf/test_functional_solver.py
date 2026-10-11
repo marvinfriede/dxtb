@@ -328,8 +328,8 @@ def test_simple_solver_tolerance_resolution_matches_legacy(
     assert config.x_atol_max == 1.0e-11
 
 
-def test_simple_solver_rejects_unsupported_mixer_and_damping() -> None:
-    """Functional setup refuses mixers it does not implement."""
+def test_simple_solver_rejects_unsupported_mixer_and_resolves_damping() -> None:
+    """Simple setup refuses other mixers and freezes dynamic damping."""
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
     with pytest.raises(NotImplementedError, match="simple linear mixing"):
         setup_simple_solver_settings(
@@ -341,15 +341,15 @@ def test_simple_solver_rejects_unsupported_mixer_and_damping() -> None:
             replace(case.system.config.scf, mixer=labels.MIXER_BROYDEN),
             torch.float64,
         )
-    with pytest.raises(NotImplementedError, match="dynamic damping"):
-        setup_simple_solver_settings(
-            replace(
-                case.system.config.scf,
-                mixer=labels.MIXER_LINEAR,
-                damp_dynamic=True,
-            ),
-            torch.float64,
-        )
+    dynamic = setup_simple_solver_settings(
+        replace(
+            case.system.config.scf,
+            mixer=labels.MIXER_LINEAR,
+            damp_dynamic=True,
+        ),
+        torch.float64,
+    )
+    assert dynamic.dynamic_damping.enabled
     with pytest.raises(ValueError, match="maxiter >= 0"):
         setup_simple_solver_settings(
             replace(case.system.config.scf, maxiter=-1), torch.float64

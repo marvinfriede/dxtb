@@ -16,6 +16,15 @@
 # limitations under the License.
 """Functional SCF building blocks, not yet used by the production solver."""
 
+from .eager import (
+    EagerFullResult,
+    FullSCFRoute,
+    FunctionalCoreResult,
+    functional_core_result,
+    resolve_full_scf_route,
+    run_functional_full_eager,
+)
+
 from .anderson import (
     AndersonSettings,
     AndersonState,
@@ -41,6 +50,7 @@ from .data import (
     unpack_charges,
     unpack_potential,
     validate_functional_scf_interactions,
+    functional_scf_interactions_eligible,
 )
 from .map import (
     evaluate_hamiltonian,
@@ -55,6 +65,9 @@ from .map import (
     validate_fock_state,
 )
 from .solver import (
+    DampingState,
+    DynamicDampingSettings,
+    SCFSolverDiagnostics,
     SCFResidual,
     SCFSolveResult,
     SCFSolverSettings,
@@ -77,6 +90,11 @@ from .solver import (
 
 __all__ = [
     "AndersonSettings",
+    "EagerFullResult",
+    "FullSCFRoute",
+    "FunctionalCoreResult",
+    "DampingState",
+    "DynamicDampingSettings",
     "AndersonState",
     "ChargeLayout",
     "FermiSettings",
@@ -88,6 +106,7 @@ __all__ = [
     "SCFSolveResult",
     "SCFTrajectoryStatus",
     "SCFSolverSettings",
+    "SCFSolverDiagnostics",
     "SCFPotential",
     "SCFSpectralResult",
     "pack_charges",
@@ -125,4 +144,8 @@ __all__ = [
     "unpack_charges",
     "unpack_potential",
     "validate_functional_scf_interactions",
+    "functional_scf_interactions_eligible",
+    "functional_core_result",
+    "resolve_full_scf_route",
+    "run_functional_full_eager",
 ]

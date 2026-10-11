@@ -55,6 +55,7 @@ __all__ = [
     "setup_scf_inputs",
     "unpack_potential",
     "validate_functional_scf_interactions",
+    "functional_scf_interactions_eligible",
 ]
 
 
@@ -329,6 +330,18 @@ def validate_functional_scf_interactions(
     interactions. Arbitrary subclasses remain supported by the legacy SCF
     route and must not be admitted to future functional SCF execution.
     """
+    eligible, names = functional_scf_interactions_eligible(interactions)
+    if not eligible:
+        raise TypeError(
+            "Functional SCF currently supports exact migrated built-in "
+            f"interactions only; unsupported extension(s): {names}."
+        )
+
+
+def functional_scf_interactions_eligible(
+    interactions: InteractionList,
+) -> tuple[bool, str]:
+    """Check exact interaction types before functional setup begins."""
     supported = (
         ES2,
         ES3,
@@ -343,15 +356,11 @@ def validate_functional_scf_interactions(
         for component in interactions.components
         if type(component) not in supported
     ]
-    if unsupported:
-        names = ", ".join(
-            f"{type(component).__module__}.{type(component).__qualname__}"
-            for component in unsupported
-        )
-        raise TypeError(
-            "Functional SCF currently supports exact migrated built-in "
-            f"interactions only; unsupported extension(s): {names}."
-        )
+    names = ", ".join(
+        f"{type(component).__module__}.{type(component).__qualname__}"
+        for component in unsupported
+    )
+    return not unsupported, names
 
 
 def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:

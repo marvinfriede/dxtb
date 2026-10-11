@@ -494,7 +494,10 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(functional_map, "_transitional_diagonalize", counted)
-    result = solve_scf_fock_simple(guess, case.inputs, settings)
+    if mixer == labels.MIXER_LINEAR:
+        result = solve_scf_fock_simple(guess, case.inputs, settings)
+    else:
+        result = solve_scf_fock_anderson(guess, case.inputs, settings)
     assert calls == 2
     assert int(result.iterations) == 1
     assert not bool(result.converged)

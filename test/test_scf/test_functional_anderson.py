@@ -261,10 +261,11 @@ def test_anderson_initial_map_history_semantics(
         current_settings: AndersonSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
+        damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         calls.append((old.clone(), mapped.clone(), state, step))
         return original(
-            old, mapped, state, current_settings, step, transition_active
+            old, mapped, state, current_settings, step, transition_active, damp
         )
 
     monkeypatch.setattr(anderson_module, "anderson_mix", record)
@@ -316,9 +317,10 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
         current_settings: AndersonSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
+        damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active
+            old, mapped, state, current_settings, step, transition_active, damp
         )
         calls.append(
             (
@@ -384,9 +386,10 @@ def test_anderson_inactive_initial_transition_keeps_initialized_state(
         current_settings: AndersonSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
+        damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active
+            old, mapped, state, current_settings, step, transition_active, damp
         )
         assert transition_active is not None
         calls.append(
@@ -443,9 +446,10 @@ def test_anderson_history_freezes_after_two_active_transitions(
         current_settings: AndersonSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
+        damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active
+            old, mapped, state, current_settings, step, transition_active, damp
         )
         assert transition_active is not None
         states.append((step, transition_active.clone(), next_state))
@@ -589,18 +593,18 @@ def test_anderson_gfn2_multipole_solver_matches_legacy() -> None:
     assert result.actual.final_charges.quad is not None
 
 
-def test_anderson_settings_reject_unsupported_modes() -> None:
-    """Anderson setup rejects Broyden and dynamic damping explicitly."""
+def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
+    """Anderson setup rejects Broyden and freezes dynamic settings."""
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_ANDERSON})
     config = case.system.config.scf
     with pytest.raises(NotImplementedError, match="effective Anderson"):
         setup_anderson_solver_settings(
             replace(config, mixer=labels.MIXER_BROYDEN), torch.float64
         )
-    with pytest.raises(NotImplementedError, match="dynamic damping"):
-        setup_anderson_solver_settings(
-            replace(config, damp_dynamic=True), torch.float64
-        )
+    dynamic = setup_anderson_solver_settings(
+        replace(config, damp_dynamic=True), torch.float64
+    )
+    assert dynamic.dynamic_damping.enabled
     with pytest.raises(ValueError, match="generations"):
         setup_anderson_solver_settings(
             replace(config, damp_generations=0), torch.float64

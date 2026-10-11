@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.4b parallel path done | Pure charge, potential, and single-System Fock maps plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
+| E4             | partial — E4.0–E4.5a parallel path done | Pure charge, potential, and single-System Fock maps plus fixed-trip functional Simple and Anderson solvers, tensor-status finite-temperature Fermi occupation, dynamic damping, and an unactivated eager compatibility adapter are tested in parallel; production still uses the legacy engine. Production routing and legacy-loop removal remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -1256,25 +1256,49 @@ has its own status in `final_evaluation`. Fock remains single-System only;
 matrix padding and packed batching belong to E6/E7. No production route uses
 this implementation yet.
 
-## E4.5 Production routing and eager compatibility (open)
+## E4.5a Dynamic damping and eager compatibility (done; parallel only)
 
-Only after finite-temperature and convergence-mode support, add the eager
-warning/error adapter and route production singlepoint through the functional
-solver. Current defaults are `MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and
-`FERMI_ETEMP=300 K`. Full/unrolled legacy mode resolves the default Broyden
-selection to Anderson with a warning when `strict=False`, and raises when
-`strict=True`. The functional numerical solver must receive effective
-Anderson settings; warning/error emission belongs to the future eager adapter.
-E4.2 alone is therefore not sufficient for production integration.
+The functional Simple and Anderson solvers carry immutable dynamic-damping
+settings and tensor-valued runtime damping. The compatibility threshold remains
+`0.1`; a nonconverged candidate is mixed with the previous damping first, then
+the damping for the next transition is replaced by `damp_dynamic_factor` when
+the raw L2 residual is below the threshold. Initial `mix_guess` transitions do
+not switch damping. Anderson warm-up continues to use `damp_init`; only its
+accelerated branch uses the runtime ordinary damping. Newly converged and
+inactive fixed-trip lanes freeze mixer and damping state.
+
+`functional/eager.py` provides a static route resolver and inactive eager
+compatibility adapter. Full, iterative, single-System calls with exact migrated
+interaction types are eligible. Configured Broyden resolves to effective
+Anderson with the legacy warning in non-strict mode and raises in strict mode.
+Custom interaction subclasses, implicit/experimental modes, non-SCF methods,
+and batches remain legacy-owned. The adapter interprets Fermi trajectory and
+final-spectrum status before outer convergence policy. It accepts valid
+`maxiter=0` one-shot results even with `force_convergence=True`, and applies
+legacy warning/error behavior for positive-budget nonconvergence. The
+transform-critical solve retains tensor-valued `iterations`, `converged`, and
+`residual`; only the eager adapter reads status on the host.
+
+The functional adapter is tested directly but is not called by
+`scf.solve`, `singlepoint`, Calculator, or `SelfConsistentFieldFull`.
+
+## E4.5b Production routing (open)
+
+Production routing must call the reviewed E4.5a adapter only after its
+side-by-side compatibility matrix is complete. Current defaults are
+`MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and `FERMI_ETEMP=300 K`; the static
+resolver now explicitly covers that combination. E4.5b still owns the actual
+production dispatch change and its full public-result parity review.
 
 Before routing, explicitly review the convergence-step mixer side effect:
 canonical functional control deliberately skips a transition after accepting
 a converged raw map, while the legacy loop calls `mixer.iter` before checking
-convergence. This is an accepted functional solver bug fix only after E4.5
-records that compatibility decision.
+convergence. This is the intentional E0 solver correction. E4.5b must retain
+and review this difference rather than restoring the legacy dead transition.
 
-Dynamic damping compatibility also remains open before routing. Do not silently
-ignore `damp_dynamic=True` in the functional path.
+Single-System dynamic damping is characterized in E4.5a. Legacy batch-only
+GFN2 auto-Fock/culling behavior remains deferred to E6/E7 and must not leak into
+this resolver.
 
 ## E4.6 Legacy loop/culling deletion (open)
 

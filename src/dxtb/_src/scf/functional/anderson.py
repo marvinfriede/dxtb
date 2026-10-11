@@ -31,6 +31,7 @@ from dxtb._src.typing import Tensor
 from .data import PotentialLayout, SCFInputs, SCFMapResult
 from .map import fock_map, potential_map, scf_map
 from .solver import (
+    DynamicDampingSettings,
     SCFSolveResult,
     _project_potential_padding,
     _resolve_tolerance,
@@ -65,6 +66,7 @@ class AndersonSettings:
     diagonal_offset: float | None
     x_atol: float
     x_atol_max: float
+    dynamic_damping: DynamicDampingSettings = DynamicDampingSettings()
 
 
 @dataclass(frozen=True, eq=False)
@@ -85,10 +87,6 @@ def setup_anderson_solver_settings(
         raise NotImplementedError(
             "Functional Anderson settings require the effective Anderson mixer."
         )
-    if config.damp_dynamic:
-        raise NotImplementedError(
-            "The functional Anderson solver does not support dynamic damping."
-        )
     if config.damp_generations < 1:
         raise ValueError("Anderson generations must be at least 1.")
 
@@ -102,6 +100,10 @@ def setup_anderson_solver_settings(
         diagonal_offset=config.damp_diagonal_offset,
         x_atol=_resolve_tolerance(config.x_atol, dtype),
         x_atol_max=_resolve_tolerance(config.x_atol_max, dtype),
+        dynamic_damping=DynamicDampingSettings(
+            enabled=config.damp_dynamic,
+            factor=config.damp_dynamic_factor,
+        ),
     )
 
 
@@ -121,6 +123,7 @@ def anderson_mix(
     settings: AndersonSettings,
     step: int,
     transition_active: Tensor | None = None,
+    damp: Tensor | float | None = None,
 ) -> tuple[Tensor, AndersonState]:
     """Apply one out-of-place transition matching the legacy Anderson mixer."""
     flat_old = old.reshape(-1)
@@ -173,7 +176,7 @@ def anderson_mix(
         f_bar = torch.einsum("h,hv->v", theta, -df)
         x_bar = x_bar + x_current[0]
         f_bar = f_bar + f_current[0]
-        mixed = x_bar + settings.damp * f_bar
+        mixed = x_bar + (settings.damp if damp is None else damp) * f_bar
     else:
         mixed = x_current[0] + f_current[0] * settings.damp_init
 
@@ -201,6 +204,7 @@ def _solve_map_anderson(
         state: object | None,
         step: int,
         transition_active: Tensor,
+        damp: Tensor,
     ) -> tuple[Tensor, object | None]:
         mixed, next_state = anderson_mix(
             old,
@@ -209,6 +213,7 @@ def _solve_map_anderson(
             settings,
             step,
             transition_active,
+            damp,
         )
         return mixed, next_state
 
@@ -221,6 +226,8 @@ def _solve_map_anderson(
         map_fn=map_fn,
         mix_fn=transition,
         state_projection=state_projection,
+        initial_damp=settings.damp,
+        damping_settings=settings.dynamic_damping,
     )
 
 
@@ -236,6 +243,7 @@ def solve_scf_anderson(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )
 
 
@@ -260,6 +268,7 @@ def solve_scf_potential_anderson(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )
 
 
@@ -277,4 +286,5 @@ def solve_scf_fock_anderson(
         outcome.converged,
         outcome.residual,
         outcome.trajectory_status,
+        outcome.damping_state,
     )
