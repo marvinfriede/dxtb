@@ -249,10 +249,12 @@ def test_anderson_initial_map_history_semantics(
         state: AndersonState | None,
         current_settings: AndersonSettings,
         step: int,
-        active: torch.Tensor | None = None,
+        transition_active: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         calls.append((old.clone(), mapped.clone(), state, step))
-        return original(old, mapped, state, current_settings, step, active)
+        return original(
+            old, mapped, state, current_settings, step, transition_active
+        )
 
     monkeypatch.setattr(anderson_module, "anderson_mix", record)
     guess = torch.tensor([0.1, -0.2], dtype=torch.float64)
@@ -273,6 +275,236 @@ def test_anderson_initial_map_history_semantics(
     else:
         assert len(calls) == 2
         assert calls[1][2] is not None
+
+
+def test_anderson_converged_accelerated_step_does_not_advance_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A converged candidate skips the next Anderson history transition."""
+    settings = replace(
+        _settings(
+            generations=1,
+            soft_start=False,
+            diagonal_offset=None,
+            damp_init=0.5,
+        ),
+        maxiter=3,
+        mix_guess=True,
+        x_atol=10.0,
+        x_atol_max=10.0,
+    )
+    guess = torch.tensor([0.1, -0.2], dtype=torch.float64)
+    increment = torch.tensor([0.5, 0.25], dtype=torch.float64)
+    calls: list[tuple[int, torch.Tensor | None, AndersonState]] = []
+    original = anderson_module.anderson_mix
+
+    def record(
+        old: torch.Tensor,
+        mapped: torch.Tensor,
+        state: AndersonState | None,
+        current_settings: AndersonSettings,
+        step: int,
+        transition_active: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, AndersonState]:
+        mixed, next_state = original(
+            old, mapped, state, current_settings, step, transition_active
+        )
+        calls.append(
+            (
+                step,
+                (
+                    None
+                    if transition_active is None
+                    else transition_active.clone()
+                ),
+                next_state,
+            )
+        )
+        return mixed, next_state
+
+    monkeypatch.setattr(anderson_module, "anderson_mix", record)
+
+    def constant_residual(x: torch.Tensor) -> SCFMapResult:
+        return _map_result(x + increment)
+
+    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    assert outcome.converged.item() is True
+    assert int(outcome.iterations) == 2
+    torch.testing.assert_close(
+        outcome.map_result.mapped_x,
+        constant_residual(guess + increment * settings.damp_init).mapped_x,
+    )
+    torch.testing.assert_close(
+        outcome.residual,
+        torch.tensor([0.3125**0.5, 0.5], dtype=torch.float64),
+    )
+    assert [step for step, _, _ in calls] == [1, 2, 3, 4]
+    assert calls[0][1] is not None and calls[0][1].item()
+    assert calls[1][1] is not None and not calls[1][1].item()
+    torch.testing.assert_close(calls[1][2].x_hist, calls[0][2].x_hist)
+    torch.testing.assert_close(calls[1][2].f_hist, calls[0][2].f_hist)
+    for _, transition_active, state in calls[2:]:
+        assert transition_active is not None and not transition_active.item()
+        torch.testing.assert_close(state.x_hist, calls[0][2].x_hist)
+        torch.testing.assert_close(state.f_hist, calls[0][2].f_hist)
+
+
+def test_anderson_inactive_initial_transition_keeps_initialized_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Convergence before the first mix leaves Anderson history unadvanced."""
+    settings = replace(
+        _settings(generations=2),
+        maxiter=1,
+        mix_guess=False,
+        x_atol=10.0,
+        x_atol_max=10.0,
+    )
+    guess = torch.tensor([0.1, -0.2], dtype=torch.float64)
+    calls: list[
+        tuple[torch.Tensor, AndersonState | None, torch.Tensor, AndersonState]
+    ] = []
+    original = anderson_module.anderson_mix
+
+    def record(
+        old: torch.Tensor,
+        mapped: torch.Tensor,
+        state: AndersonState | None,
+        current_settings: AndersonSettings,
+        step: int,
+        transition_active: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, AndersonState]:
+        mixed, next_state = original(
+            old, mapped, state, current_settings, step, transition_active
+        )
+        assert transition_active is not None
+        calls.append(
+            (old.clone(), state, transition_active.clone(), next_state)
+        )
+        return mixed, next_state
+
+    monkeypatch.setattr(anderson_module, "anderson_mix", record)
+
+    def constant_residual(x: torch.Tensor) -> SCFMapResult:
+        return _map_result(x + 0.2)
+
+    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    assert outcome.converged.item() is True
+    assert int(outcome.iterations) == 2
+    torch.testing.assert_close(
+        outcome.map_result.mapped_x,
+        constant_residual(constant_residual(guess).mapped_x).mapped_x,
+    )
+    assert len(calls) == 1
+    old, state, transition_active, next_state = calls[0]
+    assert state is None
+    assert not transition_active.item()
+    torch.testing.assert_close(next_state.x_hist[0], old)
+    torch.testing.assert_close(
+        next_state.x_hist[1:], torch.zeros_like(next_state.x_hist[1:])
+    )
+    torch.testing.assert_close(
+        next_state.f_hist, torch.zeros_like(next_state.f_hist)
+    )
+
+
+def test_anderson_history_freezes_after_two_active_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The accepted third candidate preserves history from the prior step."""
+    settings = replace(
+        _settings(generations=1, soft_start=False, diagonal_offset=0.05),
+        maxiter=4,
+        mix_guess=False,
+        x_atol=0.01,
+        x_atol_max=0.01,
+    )
+    matrix = torch.tensor([[0.25, 0.04], [-0.03, 0.4]], dtype=torch.float64)
+    bias = torch.tensor([0.1, -0.08], dtype=torch.float64)
+    guess = torch.tensor([0.1, 0.2], dtype=torch.float64)
+    states: list[tuple[int, torch.Tensor, AndersonState]] = []
+    original = anderson_module.anderson_mix
+
+    def record(
+        old: torch.Tensor,
+        mapped: torch.Tensor,
+        state: AndersonState | None,
+        current_settings: AndersonSettings,
+        step: int,
+        transition_active: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, AndersonState]:
+        mixed, next_state = original(
+            old, mapped, state, current_settings, step, transition_active
+        )
+        assert transition_active is not None
+        states.append((step, transition_active.clone(), next_state))
+        return mixed, next_state
+
+    monkeypatch.setattr(anderson_module, "anderson_mix", record)
+
+    def affine(x: torch.Tensor) -> SCFMapResult:
+        return _map_result(matrix @ x + bias)
+
+    outcome = _solve_map_anderson(guess, settings, affine)
+    assert outcome.converged.item() is True
+    assert int(outcome.iterations) == 4
+    assert [step for step, _, _ in states] == [1, 2, 3, 4]
+    assert all(mask.item() for _, mask, _ in states[:2])
+    assert all(not mask.item() for _, mask, _ in states[2:])
+    torch.testing.assert_close(states[2][2].x_hist, states[1][2].x_hist)
+    torch.testing.assert_close(states[2][2].f_hist, states[1][2].f_hist)
+    torch.testing.assert_close(states[3][2].x_hist, states[1][2].x_hist)
+    torch.testing.assert_close(states[3][2].f_hist, states[1][2].f_hist)
+
+
+def test_anderson_constant_residual_convergence_matches_legacy_control() -> (
+    None
+):
+    """An accelerated convergence step never solves singular history."""
+    settings = replace(
+        _settings(
+            generations=1,
+            soft_start=False,
+            diagonal_offset=None,
+            damp_init=0.5,
+        ),
+        maxiter=3,
+        mix_guess=True,
+        x_atol=10.0,
+        x_atol_max=10.0,
+    )
+    guess = torch.tensor([0.1, -0.2], dtype=torch.float64)
+    increment = torch.tensor([0.5, 0.25], dtype=torch.float64)
+
+    def constant_residual(x: torch.Tensor) -> SCFMapResult:
+        return _map_result(x + increment)
+
+    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    legacy_first_mixed, _ = anderson_mix(
+        guess, constant_residual(guess).mapped_x, None, settings, 1
+    )
+    legacy_candidate = constant_residual(legacy_first_mixed)
+    torch.testing.assert_close(
+        outcome.map_result.mapped_x, legacy_candidate.mapped_x
+    )
+    assert outcome.converged.item() is True
+    assert int(outcome.iterations) == 2
+
+    def solve(value: torch.Tensor) -> torch.Tensor:
+        return _solve_map_anderson(
+            value, settings, constant_residual
+        ).map_result.mapped_x.sum()
+
+    direction = torch.tensor([-0.3, 0.7], dtype=torch.float64)
+    _, tangent = jvp(solve, (guess,), (direction,))
+    leaf = guess.clone().requires_grad_(True)
+    gradient = torch.autograd.grad(solve(leaf), leaf)[0]
+    torch.testing.assert_close(tangent, torch.dot(gradient, direction))
+    torch.testing.assert_close(jacfwd(solve)(guess), gradient)
+    points = torch.stack((guess, guess + 0.2))
+    torch.testing.assert_close(
+        vmap(solve)(points), torch.stack([solve(point) for point in points])
+    )
 
 
 def test_anderson_accelerated_solver_matches_legacy() -> None:
@@ -506,7 +738,7 @@ def test_anderson_solver_mixed_convergence_vmap() -> None:
     initial = torch.stack(
         (
             fixed_point,
-            fixed_point + torch.tensor([0.02, 0.008], dtype=torch.float64),
+            fixed_point + torch.tensor([0.6, 0.3], dtype=torch.float64),
             fixed_point + torch.tensor([1000.0, 400.0], dtype=torch.float64),
         )
     )
@@ -516,7 +748,7 @@ def test_anderson_solver_mixed_convergence_vmap() -> None:
     )
     for actual, expected in zip(mapped, looped):
         torch.testing.assert_close(actual, expected)
-    assert torch.unique(mapped[1]).numel() > 1
+    assert mapped[1].tolist() == [2, 8, 9]
     assert torch.any(~mapped[2])
 
 

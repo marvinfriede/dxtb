@@ -1101,6 +1101,14 @@ is still unsupported by the functional solver and must be resolved before
 production routing. `generations=0` is rejected as invalid: the legacy mixer
 fails on its first transition when it reads the absent second history row.
 
+The raw convergence test precedes the mixer transition. A raw map that
+satisfies convergence becomes the selected physical result and does not
+advance functional mixer state. Fixed-trip execution may still evaluate a
+masked dummy transition, but its `transition_active` mask is false and no
+physical solver or history state advances. This mask is true only when a lane
+did not converge on the current raw map and requires a mixer transition to
+construct the next iterate.
+
 ## E4.3 Transform-compatible finite-temperature occupation (open)
 
 Implement fixed-trip tensor-masked Fermi occupation and free-energy response.
@@ -1165,10 +1173,11 @@ for _ in range(maxiter):
     residual = result.mapped_x - state.x
     newly_converged = active & convergence_test(residual)
     final_result = tree_where(active, result, final_result)
-    candidate = solver_step(state, result, settings)
-    state = tree_where(active, candidate, state)
+    transition_active = active & ~newly_converged
+    candidate = solver_step(state, result, settings, transition_active)
+    state = tree_where(transition_active, candidate, state)
     iterations = where(active, iterations + 1, iterations)
-    active = active & ~newly_converged
+    active = transition_active
 
 if maxiter > 0:
     converged = ~active

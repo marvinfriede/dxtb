@@ -197,7 +197,7 @@ def _solve_map(
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active: (
+        mix_fn=lambda old, mapped, state, step, transition_active: (
             simple_mix(old, mapped, settings.damp),
             None,
         ),
@@ -253,17 +253,17 @@ def _solve_map_control(
             active, candidate_residual.as_tensor(), residual_value
         )
         iterations = torch.where(active, iterations + 1, iterations)
-        active_after_step = active & ~is_converged
+        transition_active = active & ~is_converged
         mixer_step = index + (2 if mix_guess else 1)
         mixed_x, mixer_state = mix_fn(
             current_x,
             candidate.mapped_x,
             mixer_state,
             mixer_step,
-            active,
+            transition_active,
         )
-        current_x = _select_tensor(active_after_step, mixed_x, current_x)
-        active = active_after_step
+        current_x = _select_tensor(transition_active, mixed_x, current_x)
+        active = transition_active
 
     return _SolverOutcome(
         map_result=final_result,

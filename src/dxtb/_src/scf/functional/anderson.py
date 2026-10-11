@@ -114,7 +114,7 @@ def anderson_mix(
     state: AndersonState | None,
     settings: AndersonSettings,
     step: int,
-    active: Tensor | None = None,
+    transition_active: Tensor | None = None,
 ) -> tuple[Tensor, AndersonState]:
     """Apply one out-of-place transition matching the legacy Anderson mixer."""
     flat_old = old.reshape(-1)
@@ -156,10 +156,10 @@ def anderson_mix(
             )
             a = a * scale
 
-        if active is not None:
+        if transition_active is not None:
             eye = torch.eye(a.shape[-1], device=a.device, dtype=a.dtype)
-            a = torch.where(active, a, eye)
-            b = torch.where(active, b, torch.zeros_like(b))
+            a = torch.where(transition_active, a, eye)
+            b = torch.where(transition_active, b, torch.zeros_like(b))
         theta = torch.linalg.solve(a, b.unsqueeze(-1)).squeeze(-1)
         x_bar = torch.einsum(
             "h,hv->v", theta, x_current[1 : n + 1] - x_current[0]
@@ -176,8 +176,8 @@ def anderson_mix(
         x_hist=torch.cat((mixed.unsqueeze(0), rolled_x[1:]), dim=0),
         f_hist=torch.roll(f_current, 1, 0),
     )
-    if state is not None and active is not None:
-        next_state = _select_state(active, next_state, state)
+    if transition_active is not None:
+        next_state = _select_state(transition_active, next_state, previous)
     return mixed.reshape_as(mapped), next_state
 
 
@@ -193,7 +193,7 @@ def _solve_map_anderson(
         mapped: Tensor,
         state: object | None,
         step: int,
-        active: Tensor,
+        transition_active: Tensor,
     ) -> tuple[Tensor, object | None]:
         mixed, next_state = anderson_mix(
             old,
@@ -201,7 +201,7 @@ def _solve_map_anderson(
             cast(AndersonState | None, state),
             settings,
             step,
-            active,
+            transition_active,
         )
         return mixed, next_state
 
