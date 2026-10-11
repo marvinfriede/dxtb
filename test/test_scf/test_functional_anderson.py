@@ -91,6 +91,7 @@ def _compare_legacy_anderson(
     damp_generations: int = 5,
     damp_soft_start: bool = True,
     damp_diagonal_offset: float | None = 0.01,
+    extra_options: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     options: dict[str, object] = {
         "mixer": labels.MIXER_ANDERSON,
@@ -102,6 +103,8 @@ def _compare_legacy_anderson(
         "damp_soft_start": damp_soft_start,
         "damp_diagonal_offset": damp_diagonal_offset,
     }
+    if extra_options is not None:
+        options.update(extra_options)
     legacy = _prepare_case(method, scf_options=options)
     functional = _prepare_case(method, scf_options=options)
     torch.testing.assert_close(functional.x, legacy.x, rtol=0.0, atol=0.0)
@@ -152,6 +155,11 @@ def _compare_legacy_anderson(
         assert actual.final_potential.quad is not None
         _assert_tensor_equal(actual.final_potential.quad, potential.quad)
     _assert_tensor_equal(actual.energy, legacy.engine.get_energy(charges))
+    _assert_tensor_equal(
+        actual.fenergy, legacy.engine.get_electronic_free_energy()
+    )
+    if functional.inputs.fermi_settings is None:
+        assert torch.count_nonzero(actual.fenergy) == 0
     expected_converged = (
         legacy.engine.mixer.converged if maxiter > 0 else torch.tensor(False)
     )
@@ -911,3 +919,28 @@ def test_functional_anderson_has_no_legacy_mixer_or_host_control() -> None:
         ".reset(",
     ):
         assert forbidden not in text
+
+
+def test_finite_temperature_anderson_and_free_energy_match_legacy() -> None:
+    """Anderson acceleration and entropy agree at finite temperature."""
+    comparison = _compare_legacy_anderson(
+        maxiter=7,
+        mix_guess=True,
+        x_atol=1.0e-30,
+        x_atol_max=1.0e-30,
+        extra_options={"fermi_etemp": 300.0},
+    )
+    assert int(comparison.actual.iterations) == 8
+    assert comparison.actual.map_result.fermi_status is not None
+
+
+def test_finite_temperature_anderson_converged_parity() -> None:
+    """Finite-T Anderson converges with matched selected-map free energy."""
+    comparison = _compare_legacy_anderson(
+        maxiter=100,
+        mix_guess=True,
+        x_atol=1.0e-4,
+        x_atol_max=1.0e-5,
+        extra_options={"fermi_etemp": 300.0},
+    )
+    assert comparison.actual.converged.item() is True

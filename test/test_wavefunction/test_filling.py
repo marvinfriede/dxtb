@@ -465,6 +465,11 @@ def test_reference_root_finding(name: str, ktemp: float, nel: float):
 
     focc = filling.get_fermi_occupation(nab, emo, kt)
     assert pytest.approx(fermi(mu), abs=1e-8) == focc[0].cpu().numpy()
+    core = filling.get_fermi_occupation_core(nab, emo, kt)
+    assert (
+        pytest.approx(fermi(mu), abs=1e-8) == core.occupation[0].cpu().numpy()
+    )
+    assert bool(core.status.converged.all())
     assert (focc[1] == 0.0).all()
 
 

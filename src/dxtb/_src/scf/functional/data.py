@@ -38,10 +38,12 @@ from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults, labels
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
+from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb.config import ConfigSCF
 
 __all__ = [
     "ChargeLayout",
+    "FermiSettings",
     "SCFCharges",
     "SCFInputs",
     "SCFMapResult",
@@ -83,6 +85,17 @@ class SCFCharges:
 
 
 @dataclass(frozen=True, eq=False)
+class FermiSettings:
+    """Resolved finite-temperature occupation settings for one SCF call."""
+
+    kt: Tensor
+    maxiter: int
+    threshold: Tensor
+    diff_order: int
+    partition: int
+
+
+@dataclass(frozen=True, eq=False)
 class SCFPotential:
     """Immutable internal potential value."""
 
@@ -113,6 +126,7 @@ class SCFInputs:
     charge_layout: ChargeLayout
     inverse_cholesky: Tensor
     orbital_mask: Tensor
+    fermi_settings: FermiSettings | None
 
 
 @dataclass(frozen=True, eq=False)
@@ -134,6 +148,7 @@ class SCFMapResult:
     coefficients: Tensor
     occupation: Tensor
     orbital_energy: Tensor
+    fermi_status: FermiStatus | None = None
 
 
 def _single_system_layout(
@@ -170,10 +185,10 @@ def setup_scf_inputs(
         raise NotImplementedError(
             "E4.0 SCFInputs currently support the charge raw map only."
         )
-    if config.fermi.etemp * KELVIN2AU >= 3.0e-7:
-        raise NotImplementedError(
-            "E4.0 SCFInputs require effectively zero electronic temperature."
-        )
+    if config.fermi.etemp < 0.0:
+        raise ValueError("Electronic temperature must be non-negative.")
+    if config.fermi.maxiter < 0:
+        raise ValueError("Functional Fermi maxiter must be non-negative.")
     validate_functional_scf_interactions(interactions)
     if numbers.ndim != 1 or ihelp.batch_mode != 0:
         raise ValueError("E4.0 SCFInputs require one unbatched System.")
@@ -188,6 +203,29 @@ def setup_scf_inputs(
     from tad_mctc import storch
 
     inverse_cholesky = storch.inv_cholesky_factor(overlap, is_posdef=True)
+    kt = integrals.hcore.new_tensor(config.fermi.etemp * KELVIN2AU)
+    if config.fermi.etemp * KELVIN2AU < 3.0e-7:
+        fermi_settings = None
+    else:
+        if config.fermi.thresh is None:
+            eps = torch.finfo(integrals.hcore.dtype).eps
+            threshold = integrals.hcore.new_tensor(
+                min(eps**0.5, 1e5 * eps, 1e-4)
+            )
+        else:
+            threshold = torch.as_tensor(
+                config.fermi.thresh,
+                device=integrals.hcore.device,
+                dtype=integrals.hcore.dtype,
+            )
+        fermi_settings = FermiSettings(
+            kt=kt,
+            maxiter=config.fermi.maxiter,
+            threshold=threshold,
+            diff_order=config.fermi.diff_order,
+            partition=config.fermi.partition,
+        )
+
     return SCFInputs(
         numbers=numbers,
         ihelp=ihelp,
@@ -200,6 +238,7 @@ def setup_scf_inputs(
         charge_layout=_single_system_layout(numbers, integrals),
         inverse_cholesky=inverse_cholesky,
         orbital_mask=orbital_mask,
+        fermi_settings=fermi_settings,
     )
 
 

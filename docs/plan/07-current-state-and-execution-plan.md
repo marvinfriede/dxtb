@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0/E4.1/E4.2 parallel path done | Pure charge-mode map plus fixed-trip functional Simple and Anderson solvers are tested in parallel; production still uses the legacy engine. Finite-temperature Fermi, potential/Fock modes, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
+| E4             | partial — E4.0–E4.3 parallel path done | Pure charge-mode map plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Potential/Fock modes, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -1109,11 +1109,15 @@ physical solver or history state advances. This mask is true only when a lane
 did not converge on the current raw map and requires a mixer transition to
 construct the next iterate.
 
-## E4.3 Transform-compatible finite-temperature occupation (open)
+## E4.3 Transform-compatible finite-temperature occupation (done, parallel only)
 
-Implement fixed-trip tensor-masked Fermi occupation and free-energy response.
-The current functional map only supports charge mode at effectively zero
-electronic temperature.
+The functional charge map and Simple/Anderson solvers support finite-temperature
+occupation through a fixed-trip tensor-status Fermi core. The eager public API
+retains host-side error reporting, while both paths share the safeguarded
+Newton/bisection search step. Fermi status, the separate `1e-4` electron-count
+guard, and equal/atomic entropy partitions are preserved in the functional
+results. Production singlepoint still uses the legacy solver; this package
+does not change its routing or the whole-System `vmap` status.
 
 ## E4.4 Potential and Fock convergence modes (open)
 

@@ -22,11 +22,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
+from tad_mctc.batch import real_atoms
+from tad_mctc.math import einsum
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
+from dxtb._src.wavefunction import filling, mulliken
 
 from .data import (
     SCFCharges,
@@ -74,12 +77,18 @@ class SCFResidual:
 
 @dataclass(frozen=True, eq=False)
 class SCFSolveResult:
-    """Finalized physical result and tensor-valued solver status."""
+    """Finalized result and tensor-valued solver status.
+
+    ``energy`` contains the atom-resolved SCF electronic/interactions energy
+    excluding entropy. ``fenergy`` is the separately partitioned electronic
+    free-energy contribution, so the total electronic term is their sum.
+    """
 
     map_result: SCFMapResult
     final_charges: SCFCharges
     final_potential: SCFPotential
     energy: Tensor
+    fenergy: Tensor
     iterations: Tensor
     converged: Tensor
     residual: Tensor
@@ -155,6 +164,35 @@ def _select_map_result(
             raise ValueError("SCF map result structures must match.")
         return _select_tensor(mask, new_value, old_value)
 
+    if new.fermi_status is None and old.fermi_status is None:
+        fermi_status = None
+    elif new.fermi_status is None or old.fermi_status is None:
+        raise ValueError("SCF map result structures must match.")
+    else:
+        fermi_status = type(new.fermi_status)(
+            converged=_select_tensor(
+                mask, new.fermi_status.converged, old.fermi_status.converged
+            ),
+            residual=_select_tensor(
+                mask, new.fermi_status.residual, old.fermi_status.residual
+            ),
+            invalid_temperature=_select_tensor(
+                mask,
+                new.fermi_status.invalid_temperature,
+                old.fermi_status.invalid_temperature,
+            ),
+            too_many_electrons=_select_tensor(
+                mask,
+                new.fermi_status.too_many_electrons,
+                old.fermi_status.too_many_electrons,
+            ),
+            electron_count_ok=_select_tensor(
+                mask,
+                new.fermi_status.electron_count_ok,
+                old.fermi_status.electron_count_ok,
+            ),
+        )
+
     return SCFMapResult(
         mapped_x=_select_tensor(mask, new.mapped_x, old.mapped_x),
         charges=SCFCharges(
@@ -181,6 +219,7 @@ def _select_map_result(
         orbital_energy=_select_tensor(
             mask, new.orbital_energy, old.orbital_energy
         ),
+        fermi_status=fermi_status,
     )
 
 
@@ -301,11 +340,41 @@ def finalize_scf(
     final_potential = potential_from_charges(final_charges, inputs)
     h0_energy = inputs.ihelp.reduce_orbital_to_atom(map_result.orbital_energy)
     energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
+    if inputs.fermi_settings is None:
+        fenergy = torch.zeros_like(energy)
+    else:
+        settings = inputs.fermi_settings
+        entropy = filling.get_fermi_entropy_finite(
+            map_result.occupation,
+            map_result.emo,
+            settings.kt,
+            inputs.orbital_mask,
+        )
+        if settings.partition == labels.FERMI_PARTITION_EQUAL:
+            real = real_atoms(inputs.numbers)
+            count = real.count_nonzero(dim=-1).unsqueeze(-1)
+            equal = entropy.sum(-1, keepdim=True) / count
+            fenergy = torch.where(real, equal.expand_as(real), 0.0)
+        elif settings.partition == labels.FERMI_PARTITION_ATOMIC:
+            entropy_density = einsum(
+                "...ik,...k,...jk->...ij",
+                map_result.coefficients,
+                entropy,
+                map_result.coefficients,
+            )
+            fenergy = mulliken.get_atomic_populations(
+                inputs.integrals.overlap, entropy_density, inputs.ihelp
+            )
+        else:
+            raise ValueError(
+                f"Unknown Fermi free-energy partition {settings.partition}."
+            )
     return SCFSolveResult(
         map_result=map_result,
         final_charges=final_charges,
         final_potential=final_potential,
         energy=energy,
+        fenergy=fenergy,
         iterations=iterations,
         converged=converged,
         residual=residual,

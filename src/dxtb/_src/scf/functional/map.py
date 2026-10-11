@@ -27,6 +27,7 @@ from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.typing import Tensor
 
 from ..utils import get_density
+from ...wavefunction import filling
 from .data import (
     SCFCharges,
     SCFInputs,
@@ -172,7 +173,28 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
     )
 
     emo, coefficients = _transitional_diagonalize(hamiltonian, inputs)
-    occupation = inputs.occupation
+    fermi_status = None
+    if inputs.fermi_settings is None:
+        occupation = inputs.occupation
+    else:
+        settings = inputs.fermi_settings
+        channel_energies = emo.unsqueeze(-2).expand(
+            *inputs.nel.shape, emo.shape[-1]
+        )
+        channel_mask = inputs.orbital_mask.unsqueeze(-2).expand_as(
+            channel_energies
+        )
+        fermi_result = filling.get_fermi_occupation_core(
+            inputs.nel,
+            channel_energies,
+            settings.kt,
+            mask=channel_mask,
+            thr=settings.threshold,
+            maxiter=settings.maxiter,
+            diff_order=settings.diff_order,
+        )
+        occupation = fermi_result.occupation
+        fermi_status = fermi_result.status
     density = get_density(coefficients, occupation.sum(-2))
     charges_out, orbital_energy = _density_to_charges(density, inputs)
 
@@ -186,4 +208,5 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
         coefficients=coefficients,
         occupation=occupation,
         orbital_energy=orbital_energy,
+        fermi_status=fermi_status,
     )

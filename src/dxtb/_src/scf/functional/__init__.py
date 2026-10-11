@@ -25,6 +25,7 @@ from .anderson import (
 )
 from .data import (
     ChargeLayout,
+    FermiSettings,
     SCFCharges,
     SCFInputs,
     SCFMapResult,
@@ -50,6 +51,7 @@ __all__ = [
     "AndersonSettings",
     "AndersonState",
     "ChargeLayout",
+    "FermiSettings",
     "SCFCharges",
     "SCFInputs",
     "SCFMapResult",

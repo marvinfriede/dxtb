@@ -62,7 +62,8 @@ from .samples import samples
 def _prepare_case(
     method: int,
     *,
-    charge: float = 0.0,
+    sample_name: str = "H2O",
+    charge: float | torch.Tensor = 0.0,
     spin: float = 0.0,
     field: torch.Tensor | None = None,
     positions: torch.Tensor | None = None,
@@ -70,7 +71,7 @@ def _prepare_case(
     int_level: int | None = None,
     scf_options: dict[str, object] | None = None,
 ) -> SimpleNamespace:
-    sample = samples["H2O"]
+    sample = samples[sample_name]
     numbers = sample["numbers"].to(device="cpu")
     if positions is None:
         positions = (
@@ -106,7 +107,12 @@ def _prepare_case(
         opts=opts,
     )
     system = calc.model.setup(numbers, dd=calc.dd)
-    charge_tensor = positions.new_tensor([charge])
+    if isinstance(charge, torch.Tensor):
+        charge_tensor = charge.reshape(1).to(
+            device=positions.device, dtype=positions.dtype
+        )
+    else:
+        charge_tensor = positions.new_tensor([charge])
     spin_tensor = positions.new_tensor([spin])
     integrals, refocc, _ = build_integral_matrices(
         system.integral_setup,
@@ -159,6 +165,7 @@ def _prepare_case(
     )
     return SimpleNamespace(
         method=method,
+        sample_name=sample_name,
         int_level=int_level,
         field=field,
         par=par,
@@ -177,6 +184,7 @@ def _prepare_case(
         engine=engine,
         x=x,
         inputs=inputs,
+        scf_options=scf_options,
     )
 
 
@@ -237,12 +245,14 @@ def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
     """Compare raw maps built from independent mutable preparations."""
     kwargs: dict[str, object] = {
         "method": case.method,
+        "sample_name": case.sample_name,
         "charge": case.charge,
         "spin": case.spin,
         "field": case.field,
         "positions": case.positions.clone(),
         "par": case.par,
         "int_level": case.int_level,
+        "scf_options": case.scf_options,
     }
     legacy_case = _prepare_case(**kwargs)
     functional_case = _prepare_case(**kwargs)
@@ -258,6 +268,10 @@ def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
     _assert_tensor_equal(actual.emo, engine._data.evals)
     _assert_tensor_equal(actual.occupation, engine._data.occupation)
     _assert_tensor_equal(actual.orbital_energy, engine._data.energy)
+    if actual.fermi_status is not None:
+        assert torch.isfinite(actual.fermi_status.residual).all()
+        assert bool(actual.fermi_status.converged.all())
+        assert bool(actual.fermi_status.electron_count_ok.all())
 
     expected_charges = engine.converged_to_charges(expected_x)
     _assert_tensor_equal(actual.charges.mono, expected_charges.mono)
@@ -314,6 +328,39 @@ def test_gfn2_h2o_multipole_raw_map_matches_full_engine() -> None:
     case = _prepare_case(GFN2_XTB)
     assert case.inputs.charge_layout.dipole_shape is not None
     assert case.inputs.charge_layout.quadrupole_shape is not None
+    _compare_raw_map(case, case.x)
+
+
+@pytest.mark.parametrize(
+    "sample_name,method,charge,spin,temperature",
+    [
+        pytest.param("H2O", GFN1_XTB, 0.0, 0.0, 300.0, id="gfn1-300K"),
+        pytest.param("H2O", GFN1_XTB, 1.0, 1.0, 1000.0, id="open-shell"),
+        pytest.param(
+            "H2O", GFN1_XTB, 0.25, 0.0, 5000.0, id="fractional-charge"
+        ),
+        pytest.param(
+            "LiH", GFN1_XTB, 0.5, 0.0, 5000.0, id="small-gap-fractional"
+        ),
+        pytest.param("H2O", GFN2_XTB, 0.0, 0.0, 300.0, id="gfn2-multipoles"),
+    ],
+)
+def test_finite_temperature_raw_map_matches_full_engine(
+    sample_name: str,
+    method: int,
+    charge: float,
+    spin: float,
+    temperature: float,
+) -> None:
+    """Finite-T occupation, density and charge map match legacy physics."""
+    case = _prepare_case(
+        method,
+        sample_name=sample_name,
+        charge=charge,
+        spin=spin,
+        scf_options={"fermi_etemp": temperature},
+    )
+    assert case.inputs.fermi_settings is not None
     _compare_raw_map(case, case.x)
 
 
@@ -454,9 +501,19 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
         case.system.config.scf,
         fermi=replace(case.system.config.scf.fermi, etemp=1000.0),
     )
-    with pytest.raises(
-        NotImplementedError, match="zero electronic temperature"
-    ):
+    warm_inputs = setup_scf_inputs(
+        case.system.numbers,
+        case.integrals,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        warm_config,
+    )
+    assert warm_inputs.fermi_settings is not None
+    with pytest.raises(ValueError, match="non-negative"):
         setup_scf_inputs(
             case.system.numbers,
             case.integrals,
@@ -466,7 +523,25 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
             case.interactions,
             case.interaction_data,
             case.system.ihelp,
-            warm_config,
+            replace(
+                case.system.config.scf,
+                fermi=replace(case.system.config.scf.fermi, etemp=-1.0),
+            ),
+        )
+    with pytest.raises(ValueError, match="maxiter"):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            replace(
+                warm_config,
+                fermi=replace(warm_config.fermi, maxiter=-1),
+            ),
         )
 
     iterates = torch.stack((case.x, case.x + 0.01))

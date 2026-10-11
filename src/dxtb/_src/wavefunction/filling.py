@@ -40,21 +40,67 @@ References
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from numbers import Integral
 
 import torch
+from torch.utils import _pytree
 from tad_mctc.convert import any_to_tensor
 
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Tensor
 
 __all__ = [
+    "FermiOccupationResult",
+    "FermiStatus",
     "get_alpha_beta_occupation",
     "get_aufbau_occupation",
     "get_fermi_energy",
     "get_fermi_entropy",
+    "get_fermi_entropy_finite",
     "get_fermi_occupation",
+    "get_fermi_occupation_core",
 ]
+
+
+@dataclass(frozen=True, eq=False)
+class FermiStatus:
+    """Tensor-valued validity and convergence information for Fermi filling."""
+
+    converged: Tensor
+    residual: Tensor
+    invalid_temperature: Tensor
+    too_many_electrons: Tensor
+    electron_count_ok: Tensor
+
+
+@dataclass(frozen=True, eq=False)
+class FermiOccupationResult:
+    """Finite-temperature occupations and tensor-valued search status."""
+
+    occupation: Tensor
+    status: FermiStatus
+
+
+_pytree.register_pytree_node(
+    FermiStatus,
+    lambda status: (
+        [
+            status.converged,
+            status.residual,
+            status.invalid_temperature,
+            status.too_many_electrons,
+            status.electron_count_ok,
+        ],
+        None,
+    ),
+    lambda values, _: FermiStatus(*values),
+)
+_pytree.register_pytree_node(
+    FermiOccupationResult,
+    lambda result: ([result.occupation, result.status], None),
+    lambda values, _: FermiOccupationResult(*values),
+)
 
 
 # Number of iterations of the Fermi energy search between host
@@ -751,6 +797,198 @@ def get_fermi_occupation(
     return torch.where(full, full_occ, torch.where(active, fermi, 0.0))
 
 
+def get_fermi_occupation_core(
+    nel: Tensor,
+    emo: Tensor,
+    kt: Tensor,
+    mask: Tensor | None = None,
+    thr: Tensor | float | int | None = None,
+    maxiter: int = 200,
+    diff_order: int | None = None,
+) -> FermiOccupationResult:
+    """Evaluate Fermi occupations with fixed-trip tensor-only control flow.
+
+    Unlike :func:`get_fermi_occupation`, this function never reads tensor
+    status on the host and returns invalid or unconverged inputs as finite
+    diagnostic values.
+    """
+    if not isinstance(kt, Tensor):
+        raise TypeError("Electronic temperature must be `Tensor`.")
+    if kt.numel() != 1:
+        raise ValueError(
+            f"Electronic temperature must be a scalar (shape {kt.shape})."
+        )
+    if maxiter < 0:
+        raise ValueError("Fermi maxiter must be non-negative.")
+    if diff_order is None:
+        diff_order = defaults.FERMI_DIFF_ORDER
+    steps = _diff_steps(diff_order)
+    if diff_order > _MAX_SINGLE_DIFF_ORDER and emo.dtype != torch.double:
+        warnings.warn(
+            f"Derivatives of order {diff_order} of the Fermi occupations are "
+            f"dominated by rounding errors in {emo.dtype}; use double "
+            "precision.",
+            stacklevel=2,
+        )
+
+    kt = kt.reshape(()).to(emo.device)
+    eps = torch.finfo(emo.dtype).eps
+    if thr is None:
+        thr = min(eps**0.5, 1e5 * eps, 1e-4)
+    thresh = any_to_tensor(thr, device=emo.device, dtype=emo.dtype)
+    target = nel.unsqueeze(-1)
+    valid = None if mask is None else (mask != 0)
+    kt_pos = kt > 0.0
+    invalid_temperature = kt < 0.0
+    occupied = target > eps
+    safe_kt = torch.where(kt_pos, kt, kt.new_tensor(1.0))
+    norb = emo.shape[-1] if valid is None else valid.sum(-1, keepdim=True)
+    tol = _integer_tol(emo.dtype)
+    too_many = (target > norb + tol) & occupied & kt_pos
+    full = occupied & ((target - norb).abs() <= tol)
+    active = occupied & kt_pos & ~full & ~too_many
+
+    emo_d, kt_d, target_d = emo.detach(), safe_kt.detach(), target.detach()
+    n0, below, above = _partition(target_d, emo_d, valid)
+    e_fermi = _initial_fermi_energy(target_d, emo_d, mask)
+    (ref, offset), resid, done, lo, hi = _fermi_energy_search_fixed(
+        target_d - n0,
+        below,
+        above,
+        emo_d,
+        kt_d,
+        e_fermi,
+        active,
+        valid,
+        thresh,
+        maxiter,
+    )
+    polish_mask = active & done & ~too_many
+    offset = _polish(
+        emo_d - ref,
+        offset,
+        kt_d,
+        target_d - n0,
+        below,
+        above,
+        polish_mask,
+    )
+
+    delta = target - n0
+    diff_kt = torch.where(kt_pos, kt, kt.new_tensor(1.0))
+    rel, shift, gap = _attach_implicit_derivative(
+        (ref, offset), emo, diff_kt, delta, below, active, valid, steps
+    )
+    _, tail, _ = _fermi_distribution(rel, shift, diff_kt, valid, below)
+    info = torch.finfo(emo.dtype)
+    flush = torch.clamp(
+        _diff_floor(emo.dtype, steps) * diff_kt.detach() * info.eps,
+        min=info.tiny / info.eps,
+    )
+    tail = torch.where(tail < flush, 0.0, tail)
+    fermi = torch.where(below, 1.0 - tail, tail)
+    if steps > 0:
+        fermi = fermi + _gap_response(rel, delta, diff_kt, below, above, gap)
+
+    full_occ = (
+        torch.ones_like(fermi) if valid is None else valid.to(fermi.dtype)
+    )
+    positive_occ = torch.where(full, full_occ, torch.where(active, fermi, 0.0))
+    aufbau = _aufbau_occupation(
+        target, emo.shape[-1], valid, emo.dtype, emo.device
+    )
+    occupation = torch.where(kt_pos, positive_occ, aufbau)
+
+    electron_error = occupation.sum(-1) - nel
+    electron_count_ok = electron_error.abs() <= 1e-4
+    converged = done.squeeze(-1) & ~too_many.squeeze(-1)
+    converged = converged & ~invalid_temperature
+    status = FermiStatus(
+        converged=converged,
+        residual=resid.squeeze(-1).abs(),
+        invalid_temperature=invalid_temperature,
+        too_many_electrons=too_many.squeeze(-1),
+        electron_count_ok=electron_count_ok,
+    )
+    return FermiOccupationResult(occupation=occupation, status=status)
+
+
+def _fermi_energy_search_fixed(
+    delta: Tensor,
+    below: Tensor,
+    above: Tensor,
+    emo: Tensor,
+    kt: Tensor,
+    e_fermi: Tensor,
+    active: Tensor,
+    valid: Tensor | None,
+    thresh: Tensor,
+    maxiter: int,
+) -> tuple[tuple[Tensor, Tensor], Tensor, Tensor, Tensor, Tensor]:
+    """Run the shared safeguarded search for a static number of trips."""
+    if valid is None:
+        emin, emax = emo.amin(-1, keepdim=True), emo.amax(-1, keepdim=True)
+    else:
+        inf = torch.full_like(emo, torch.inf)
+        emin = torch.where(valid, emo, inf).amin(-1, keepdim=True)
+        emax = torch.where(valid, emo, -inf).amax(-1, keepdim=True)
+        emin = torch.where(torch.isfinite(emin), emin, 0.0)
+        emax = torch.where(torch.isfinite(emax), emax, 0.0)
+    lo = emin - 60.0 * kt
+    hi = emax + 60.0 * kt
+    e_fermi, lo, hi, active = torch.broadcast_tensors(e_fermi, lo, hi, active)
+    ref = torch.minimum(torch.maximum(e_fermi, lo), hi)
+    emo, lo, hi = emo - ref, lo - ref, hi - ref
+    e_fermi = torch.zeros_like(ref)
+    resid = torch.zeros_like(ref)
+    done = ~active
+    for step in range(maxiter + 1):
+        resid, done, next_e, next_lo, next_hi = _fermi_search_step(
+            delta,
+            below,
+            emo,
+            kt,
+            e_fermi,
+            lo,
+            hi,
+            active,
+            valid,
+            thresh,
+        )
+        if step < maxiter:
+            e_fermi, lo, hi = next_e, next_lo, next_hi
+    return (ref, e_fermi), resid, done, lo, hi
+
+
+def _fermi_search_step(
+    delta: Tensor,
+    below: Tensor,
+    emo: Tensor,
+    kt: Tensor,
+    e_fermi: Tensor,
+    lo: Tensor,
+    hi: Tensor,
+    active: Tensor,
+    valid: Tensor | None,
+    thresh: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Apply one shared safeguarded Newton/bisection search step."""
+    _, tail, dfermi = _fermi_distribution(emo, e_fermi, kt, valid, below)
+    resid, change, ok = _newton_step(
+        delta, tail, dfermi, below, _sqrttiny(emo.dtype)
+    )
+    done = ~active | _is_converged(resid, e_fermi, lo, hi, thresh)
+    candidate_lo = torch.where(resid > 0.0, e_fermi, lo)
+    candidate_hi = torch.where(resid < 0.0, e_fermi, hi)
+    lo_next = torch.where(done, lo, candidate_lo)
+    hi_next = torch.where(done, hi, candidate_hi)
+    newton = e_fermi + change
+    accept = ok & (newton > lo_next) & (newton < hi_next)
+    candidate = torch.where(accept, newton, 0.5 * (lo_next + hi_next))
+    next_e = torch.where(done, e_fermi, candidate)
+    return resid, done, next_e, lo_next, hi_next
+
+
 def get_fermi_entropy(
     occupation: Tensor, emo: Tensor, kt: Tensor, mask: Tensor | None = None
 ) -> Tensor:
@@ -800,15 +1038,29 @@ def get_fermi_entropy(
         device=occupation.device,
         dtype=occupation.dtype,
     )
+    g = torch.log(
+        torch.clamp(occupation, min=eps) ** torch.clamp(occupation, min=eps)
+        * torch.clamp(1 - occupation, min=eps)
+        ** torch.clamp(1 - occupation, min=eps)
+    )
+    if bool(torch.all(kt < 3e-7).item()):
+        return g.sum(-2) * kt
+    return get_fermi_entropy_finite(occupation, emo, kt, mask)
+
+
+def get_fermi_entropy_finite(
+    occupation: Tensor, emo: Tensor, kt: Tensor, mask: Tensor | None = None
+) -> Tensor:
+    """Evaluate positive-temperature entropy without a tensor-valued branch."""
+    eps = torch.tensor(
+        torch.finfo(occupation.dtype).eps,
+        device=occupation.device,
+        dtype=occupation.dtype,
+    )
 
     occ = torch.clamp(occupation, min=eps)
     occ1 = torch.clamp(1 - occupation, min=eps)
     g = torch.log(occ**occ * occ1**occ1)
-
-    # at (almost) zero temperature, the occupations are integers, there is no
-    # tail to restore, and the energy scale kt vanishes
-    if torch.all(kt < 3e-7):
-        return g.sum(-2) * kt
 
     emo = emo.unsqueeze(-2).expand_as(occupation)
     valid = (
@@ -1283,13 +1535,18 @@ def _fermi_energy_search(
     resid, done = None, None
     read: list[bool] = []
     for it in range(maxiter + 1):
-        _, tail, dfermi = _fermi_distribution(emo, e_fermi, kt, valid, below)
-        resid, change, ok = _newton_step(
-            delta, tail, dfermi, below, _sqrttiny(emo.dtype)
+        resid, done, next_e, next_lo, next_hi = _fermi_search_step(
+            delta,
+            below,
+            emo,
+            kt,
+            e_fermi,
+            lo,
+            hi,
+            active,
+            valid,
+            thresh,
         )
-
-        # channels that are not optimized (no electrons) are always done
-        done = ~active | _is_converged(resid, e_fermi, lo, hi, thresh)
 
         # check if all channels of all systems are converged (host
         # synchronization) and if the input was invalid; the flags only
@@ -1309,19 +1566,7 @@ def _fermi_energy_search(
 
         if it == maxiter:
             break
-
-        # too few (many) electrons: Fermi energy is above (below) the root
-        lo = torch.where(resid > 0.0, e_fermi, lo)
-        hi = torch.where(resid < 0.0, e_fermi, hi)
-
-        # Newton step if it stays within the bracket, bisection otherwise
-        newton = e_fermi + change
-        accept = ok & (newton > lo) & (newton < hi)
-        step = torch.where(accept, newton, 0.5 * (lo + hi))
-
-        # converged channels are frozen, i.e., a batch gives the same result
-        # as the individual systems
-        e_fermi = torch.where(done, e_fermi, step)
+        e_fermi, lo, hi = next_e, next_lo, next_hi
 
     msg = "Fermi energy failed to converge"
     if resid is not None and done is not None:
