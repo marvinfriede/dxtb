@@ -30,14 +30,16 @@ from dxtb._src.components.interactions.container import Charges
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling, mulliken
+from dxtb._src.wavefunction.filling import FermiStatus
 
 from .data import (
+    PotentialLayout,
     SCFCharges,
     SCFInputs,
     SCFMapResult,
-    SCFSpectralResult,
     SCFPotential,
-    PotentialLayout,
+    SCFSpectralResult,
+    pack_potential,
     unpack_potential,
 )
 from .map import (
@@ -50,9 +52,14 @@ from .map import (
 __all__ = [
     "SCFResidual",
     "SCFSolveResult",
+    "SCFTrajectoryStatus",
     "SCFSolverSettings",
     "finalize_scf",
-    "functional_result_ok",
+    "functional_subsolves_ok",
+    "functional_converged_and_valid",
+    "trajectory_status_from_map",
+    "accumulate_trajectory_status",
+    "fermi_status_ok",
     "interaction_energy_from_charges",
     "setup_simple_solver_settings",
     "simple_mix",
@@ -103,6 +110,7 @@ class SCFSolveResult:
     iterations: Tensor
     converged: Tensor
     residual: Tensor
+    trajectory_status: SCFTrajectoryStatus | None
 
     @property
     def hamiltonian(self) -> Tensor:
@@ -130,23 +138,128 @@ class SCFSolveResult:
         return self.final_evaluation.occupation
 
 
-def functional_result_ok(result: SCFSolveResult) -> Tensor:
-    """Return aggregate functional success without changing outer status.
+@dataclass(frozen=True, eq=False)
+class SCFTrajectoryStatus:
+    """Validity accumulated across physically executed raw-map spectra."""
 
-    ``result.converged`` describes only the outer SCF residual. Finite-
-    temperature occupation additionally requires every selected-map Fermi
-    channel to converge and pass its validity and electron-count checks.
-    """
-    status = result.final_evaluation.fermi_status
+    fermi_converged: Tensor
+    electron_count_ok: Tensor
+    invalid_temperature: Tensor
+    too_many_electrons: Tensor
+
+
+def trajectory_status_from_map(
+    status: FermiStatus | None,
+) -> SCFTrajectoryStatus | None:
+    """Initialize trajectory validity from its first physical map status."""
     if status is None:
-        return result.converged
+        return None
+    return SCFTrajectoryStatus(
+        fermi_converged=status.converged,
+        electron_count_ok=status.electron_count_ok,
+        invalid_temperature=status.invalid_temperature,
+        too_many_electrons=status.too_many_electrons,
+    )
+
+
+def accumulate_trajectory_status(
+    old: SCFTrajectoryStatus | None,
+    new_status: FermiStatus | None,
+    physical_active: Tensor,
+) -> SCFTrajectoryStatus | None:
+    """Accumulate status only for lanes executing a physical raw map."""
+    if new_status is None:
+        return old
+    if old is None:
+        initial = trajectory_status_from_map(new_status)
+        assert initial is not None
+        return SCFTrajectoryStatus(
+            fermi_converged=torch.where(
+                physical_active,
+                initial.fermi_converged,
+                torch.ones_like(initial.fermi_converged),
+            ),
+            electron_count_ok=torch.where(
+                physical_active,
+                initial.electron_count_ok,
+                torch.ones_like(initial.electron_count_ok),
+            ),
+            invalid_temperature=torch.where(
+                physical_active,
+                initial.invalid_temperature,
+                torch.zeros_like(initial.invalid_temperature),
+            ),
+            too_many_electrons=torch.where(
+                physical_active,
+                initial.too_many_electrons,
+                torch.zeros_like(initial.too_many_electrons),
+            ),
+        )
+    return SCFTrajectoryStatus(
+        fermi_converged=torch.where(
+            physical_active,
+            old.fermi_converged & new_status.converged,
+            old.fermi_converged,
+        ),
+        electron_count_ok=torch.where(
+            physical_active,
+            old.electron_count_ok & new_status.electron_count_ok,
+            old.electron_count_ok,
+        ),
+        invalid_temperature=torch.where(
+            physical_active,
+            old.invalid_temperature | new_status.invalid_temperature,
+            old.invalid_temperature,
+        ),
+        too_many_electrons=torch.where(
+            physical_active,
+            old.too_many_electrons | new_status.too_many_electrons,
+            old.too_many_electrons,
+        ),
+    )
+
+
+def _trajectory_status_ok(status: SCFTrajectoryStatus) -> Tensor:
     return (
-        result.converged
-        & status.converged.all()
+        status.fermi_converged.all()
         & status.electron_count_ok.all()
         & ~status.invalid_temperature.any()
         & ~status.too_many_electrons.any()
     )
+
+
+def fermi_status_ok(status: FermiStatus | None, *, like: Tensor) -> Tensor:
+    """Return one-spectrum validity, with structural absence treated as valid."""
+    if status is None:
+        return torch.ones((), dtype=torch.bool, device=like.device)
+    return (
+        status.converged.all()
+        & status.electron_count_ok.all()
+        & ~status.invalid_temperature.any()
+        & ~status.too_many_electrons.any()
+    )
+
+
+def functional_subsolves_ok(result: SCFSolveResult) -> Tensor:
+    """Return raw-trajectory and final-public-spectrum validity only.
+
+    This is not an eager return policy and does not include outer SCF
+    convergence. A future adapter must handle ``maxiter=0`` separately.
+    """
+    trajectory_ok = (
+        torch.ones((), dtype=torch.bool, device=result.converged.device)
+        if result.trajectory_status is None
+        else _trajectory_status_ok(result.trajectory_status)
+    )
+    final_ok = fermi_status_ok(
+        result.final_evaluation.fermi_status, like=result.converged
+    )
+    return trajectory_ok & final_ok
+
+
+def functional_converged_and_valid(result: SCFSolveResult) -> Tensor:
+    """Combine outer convergence and Fermi subsolve validity explicitly."""
+    return result.converged & functional_subsolves_ok(result)
 
 
 @dataclass(frozen=True, eq=False)
@@ -157,6 +270,7 @@ class _SolverOutcome:
     iterations: Tensor
     converged: Tensor
     residual: Tensor
+    trajectory_status: SCFTrajectoryStatus | None
 
 
 def _resolve_tolerance(value: float, dtype: torch.dtype) -> float:
@@ -203,6 +317,18 @@ def _residual(delta: Tensor) -> SCFResidual:
 
 def _select_tensor(mask: Tensor, new: Tensor, old: Tensor) -> Tensor:
     return torch.where(mask, new, old)
+
+
+def _project_potential_padding(
+    value: Tensor, layout: PotentialLayout
+) -> Tensor:
+    """Restore structural PADNZ tails after affine mixer arithmetic.
+
+    Anderson's affine combination can introduce roundoff into a row whose
+    entries are all the same PADNZ sentinel. Packing the structural components
+    again preserves those tails exactly without changing physical values.
+    """
+    return pack_potential(unpack_potential(value, layout), layout)
 
 
 def _select_map_result(
@@ -299,6 +425,7 @@ def _solve_map(
     guess: Tensor,
     settings: SCFSolverSettings,
     map_fn: Callable[[Tensor], SCFMapResult],
+    state_projection: Callable[[Tensor], Tensor] | None = None,
 ) -> _SolverOutcome:
     """Run a fixed-trip simple-mixing solver around one raw map callback."""
     return _solve_map_control(
@@ -308,6 +435,7 @@ def _solve_map(
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
+        state_projection=state_projection,
         mix_fn=lambda old, mapped, state, step, transition_active: (
             simple_mix(old, mapped, settings.damp),
             None,
@@ -327,9 +455,11 @@ def _solve_map_control(
         [Tensor, Tensor, object | None, int, Tensor],
         tuple[Tensor, object | None],
     ],
+    state_projection: Callable[[Tensor], Tensor] | None = None,
 ) -> _SolverOutcome:
     """Run common fixed-trip status control around a raw map and mixer."""
     initial = map_fn(guess)
+    trajectory_status = trajectory_status_from_map(initial.fermi_status)
     initial_residual = _residual(initial.mapped_x - guess).as_tensor()
     iterations = torch.ones((), dtype=torch.int64, device=guess.device)
     active = torch.ones((), dtype=torch.bool, device=guess.device)
@@ -340,6 +470,7 @@ def _solve_map_control(
             iterations=iterations,
             converged=torch.zeros_like(active),
             residual=initial_residual,
+            trajectory_status=trajectory_status,
         )
 
     mixer_state: object | None = None
@@ -347,6 +478,8 @@ def _solve_map_control(
         current_x, mixer_state = mix_fn(
             guess, initial.mapped_x, mixer_state, 1, active
         )
+        if state_projection is not None:
+            current_x = state_projection(current_x)
     else:
         current_x = initial.mapped_x
     final_result = initial
@@ -354,6 +487,9 @@ def _solve_map_control(
 
     for index in range(maxiter):
         candidate = map_fn(current_x)
+        trajectory_status = accumulate_trajectory_status(
+            trajectory_status, candidate.fermi_status, active
+        )
         raw_delta = candidate.mapped_x - current_x
         candidate_residual = _residual(raw_delta)
         is_converged = (candidate_residual.l2 < x_atol) & (
@@ -373,6 +509,8 @@ def _solve_map_control(
             mixer_step,
             transition_active,
         )
+        if state_projection is not None:
+            mixed_x = state_projection(mixed_x)
         current_x = _select_tensor(transition_active, mixed_x, current_x)
         active = transition_active
 
@@ -381,6 +519,7 @@ def _solve_map_control(
         iterations=iterations,
         converged=~active,
         residual=residual_value,
+        trajectory_status=trajectory_status,
     )
 
 
@@ -402,6 +541,7 @@ def finalize_scf(
     iterations: Tensor,
     converged: Tensor,
     residual: Tensor,
+    trajectory_status: SCFTrajectoryStatus | None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -423,6 +563,7 @@ def finalize_scf(
         iterations=iterations,
         converged=converged,
         residual=residual,
+        trajectory_status=trajectory_status,
     )
 
 
@@ -471,6 +612,7 @@ def finalize_scf_potential(
     iterations: Tensor,
     converged: Tensor,
     residual: Tensor,
+    trajectory_status: SCFTrajectoryStatus | None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra representation conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -492,6 +634,7 @@ def finalize_scf_potential(
         iterations=iterations,
         converged=converged,
         residual=residual,
+        trajectory_status=trajectory_status,
     )
 
 
@@ -506,6 +649,7 @@ def solve_scf_simple(
         outcome.iterations,
         outcome.converged,
         outcome.residual,
+        outcome.trajectory_status,
     )
 
 
@@ -517,7 +661,10 @@ def solve_scf_potential_simple(
 ) -> SCFSolveResult:
     """Solve the potential representation with functional simple mixing."""
     outcome = _solve_map(
-        guess, settings, lambda x: potential_map(x, inputs, layout)
+        guess,
+        settings,
+        lambda x: potential_map(x, inputs, layout),
+        state_projection=lambda x: _project_potential_padding(x, layout),
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -526,4 +673,5 @@ def solve_scf_potential_simple(
         outcome.iterations,
         outcome.converged,
         outcome.residual,
+        outcome.trajectory_status,
     )

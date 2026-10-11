@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -31,6 +32,7 @@ from .data import PotentialLayout, SCFInputs, SCFMapResult
 from .map import potential_map, scf_map
 from .solver import (
     SCFSolveResult,
+    _project_potential_padding,
     _resolve_tolerance,
     _solve_map_control,
     _SolverOutcome,
@@ -187,6 +189,7 @@ def _solve_map_anderson(
     guess: Tensor,
     settings: AndersonSettings,
     map_fn,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
 ) -> _SolverOutcome:
     """Run the Anderson fixed-trip solver around a raw-map callback."""
 
@@ -215,6 +218,7 @@ def _solve_map_anderson(
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
         mix_fn=transition,
+        state_projection=state_projection,
     )
 
 
@@ -229,6 +233,7 @@ def solve_scf_anderson(
         outcome.iterations,
         outcome.converged,
         outcome.residual,
+        outcome.trajectory_status,
     )
 
 
@@ -240,7 +245,10 @@ def solve_scf_potential_anderson(
 ) -> SCFSolveResult:
     """Solve the potential representation with functional Anderson mixing."""
     outcome = _solve_map_anderson(
-        guess, settings, lambda x: potential_map(x, inputs, layout)
+        guess,
+        settings,
+        lambda x: potential_map(x, inputs, layout),
+        state_projection=lambda x: _project_potential_padding(x, layout),
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -249,4 +257,5 @@ def solve_scf_potential_anderson(
         outcome.iterations,
         outcome.converged,
         outcome.residual,
+        outcome.trajectory_status,
     )

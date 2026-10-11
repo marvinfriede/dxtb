@@ -226,6 +226,37 @@ def test_full_mode_iteration_compatibility(
         OutputHandler.clear_warnings()
 
 
+def test_full_mode_maxiter_zero_ignores_force_convergence() -> None:
+    """Legacy maxiter=0 returns one-shot output even when forcing convergence."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"].to(device="cpu")
+    positions = sample["positions"].to(device="cpu", dtype=torch.double).clone()
+    par = get_param_module("gfn1", device="cpu", dtype=torch.double)
+    OutputHandler.clear_warnings()
+    try:
+        result = Calculator(
+            numbers,
+            par,
+            opts={
+                "verbosity": 0,
+                "scf_mode": labels.SCF_MODE_FULL,
+                "scp_mode": labels.SCP_MODE_CHARGE,
+                "mixer": "simple",
+                "maxiter": 0,
+                "force_convergence": True,
+                "int_driver": labels.INTDRIVER_PYTORCH,
+            },
+            device="cpu",
+            dtype=torch.double,
+        ).singlepoint(positions)
+        assert result.iterations.item() == 1
+        assert not any(
+            "does not converge" in msg for msg, _ in OutputHandler.warnings
+        )
+    finally:
+        OutputHandler.clear_warnings()
+
+
 def _full_result(
     *, f_atol: float, x_atol: float, x_atol_max: float
 ) -> tuple[Result, tuple[str, ...]]:

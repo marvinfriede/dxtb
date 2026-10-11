@@ -1133,10 +1133,30 @@ active: exactly zero temperature has zero free energy; positive temperatures
 below `3e-7` Hartree retain the legacy Aufbau occupation and clamped low-T
 entropy; the cutoff itself and higher temperatures use fixed-trip Fermi
 occupation. `SCFSolveResult.converged` describes only the outer raw SCF
-residual. A future eager adapter must aggregate that with selected-map Fermi
-search convergence, electron-count validity, and input-temperature/electron
-validity before reporting overall success. Below the smearing cutoff no Fermi
-search runs and `fermi_status` is `None`.
+residual. `trajectory_status` separately accumulates Fermi convergence,
+electron-count validity, invalid-temperature status, and too-many-electrons
+status over every physically executed raw-map spectrum. The final public
+representation-conversion spectrum has its own `final_evaluation.fermi_status`.
+Future eager acceptance must require both aggregate subsolve validity and the
+applicable outer-convergence policy; neither status may erase the other.
+Below the smearing cutoff no Fermi search runs and both trajectory and final
+Fermi status are structurally `None`.
+
+The legacy `hamiltonian_to_density()` path calls eager
+`get_fermi_occupation()`, which raises on search/input failure, and then
+independently raises if `abs(occupation.sum(-1) - nel) > 1e-4`. Therefore every
+physical spectrum in the SCF trajectory must contribute to eventual eager
+validity; a later successful spectrum cannot erase an earlier failure. The
+functional numerical solver retains these statuses without raising.
+
+`maxiter=0` is a valid one-shot compatibility mode: it evaluates one raw map,
+returns `converged=False`, and the legacy full solver returns before its
+nonconvergence warning/`force_convergence` error path. A future eager adapter
+must first reject invalid functional subsolves; if they are valid and
+`maxiter=0`, it accepts the one-shot result without an outer-convergence
+warning/error. For positive budgets it accepts a converged result and applies
+the existing `force_convergence` warning/error policy only to an unconverged
+result. This policy is not implemented until E4.5.
 
 ## E4.4a Functional potential representation (done, parallel only)
 
@@ -1187,12 +1207,29 @@ The selected `map_result` remains the raw potential map result. A separate
 `final_evaluation` performs exactly one additional spectrum from the selected
 mapped potential; it does not add an outer iteration. Public charges come
 from that final evaluation, public potential is recomputed from those charges,
-and energy/free energy use the final spectral phase. Aggregate Fermi validity
-also reads the final public evaluation status. Tests cover raw GFN1/GFN2 map
+and energy/free energy use the final spectral phase. `trajectory_status`
+summarizes all physical raw potential-map spectra, while
+`final_evaluation.fermi_status` reports only the final public conversion
+spectrum; future success checks require both. Tests cover raw GFN1/GFN2 map
 parity, each GFN2 potential row, the six Simple budgets, accelerated and
 converged Anderson, maxiter zero, finite-temperature equal/atomic entropy,
 fixed-System guess vmap, and geometry/parameter/field/fractional-charge
 derivatives. Production routing remains unchanged.
+
+Potential mixer transitions re-pack the fixed structural components after
+affine mixing. This is necessary because Anderson's floating-point affine
+combination can perturb constant `PADNZ` row tails even when every physical
+map preserves those tails exactly. Projection restores the structural
+sentinel before the next residual is evaluated; residual norms need no
+representation-specific padding mask.
+
+The functional result preserves three distinct facts: outer SCF residual
+convergence, validity accumulated across every physically executed raw-map
+spectrum, and validity of the final public conversion spectrum. Fixed-trip
+dummy maps after convergence do not contribute to trajectory validity. A
+future eager adapter must require subsolve validity first; valid `maxiter=0`
+remains an accepted one-shot result despite `converged=False`, matching the
+legacy early return before its warning/forced-convergence branch.
 
 ## E4.4b Functional Fock representation (open)
 

@@ -23,7 +23,8 @@ from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import GFN1_XTB, labels
 from dxtb._src.scf.functional import (
-    functional_result_ok,
+    functional_converged_and_valid,
+    functional_subsolves_ok,
     setup_simple_solver_settings,
     solve_scf_simple,
 )
@@ -121,6 +122,10 @@ def test_temperature_cutoff_boundaries_preserve_legacy_split() -> None:
                 ),
             )
             assert torch.count_nonzero(result.fenergy) == 0
+            assert result.trajectory_status is None
+            assert result.final_evaluation.fermi_status is None
+            assert functional_subsolves_ok(result).item() is True
+            assert functional_converged_and_valid(result).item() is False
         else:
             assert settings is not None
             assert settings.smear is expected_smear
@@ -137,6 +142,9 @@ def test_temperature_cutoff_boundaries_preserve_legacy_split() -> None:
                 assert result.map_result.fermi_status is None
             if not expected_smear:
                 assert torch.count_nonzero(result.fenergy) > 0
+                assert result.trajectory_status is None
+                assert result.final_evaluation.fermi_status is None
+                assert functional_subsolves_ok(result).item() is True
                 case.engine.scf(case.x, return_charges=False)
                 torch.testing.assert_close(
                     result.fenergy,
@@ -173,4 +181,4 @@ def test_outer_convergence_and_fermi_status_remain_separate() -> None:
     assert result.converged.item() is True
     assert status is not None
     assert not bool(status.converged.all())
-    assert functional_result_ok(result).item() is False
+    assert functional_subsolves_ok(result).item() is False

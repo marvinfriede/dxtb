@@ -19,26 +19,36 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import prod
 from types import SimpleNamespace
 
 import pytest
 import torch
-from torch.func import vmap
 from tad_mctc.units.energy import KELVIN2AU
+from torch.func import vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
+from dxtb._src.constants import defaults
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     SCFCharges,
-    functional_result_ok,
+)
+from dxtb._src.scf.functional import anderson as functional_anderson
+from dxtb._src.scf.functional import (
+    functional_converged_and_valid,
+    functional_subsolves_ok,
+)
+from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import (
     potential_initial_guess,
     setup_anderson_solver_settings,
     setup_simple_solver_settings,
+    simple_mix,
     solve_scf_anderson,
     solve_scf_potential_anderson,
     solve_scf_potential_simple,
 )
-from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
 
 from .test_functional_map import _assert_tensor_equal, _prepare_case
@@ -190,6 +200,25 @@ def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
     assert calls == int(result.iterations) + 1
 
 
+def test_potential_maxiter_zero_tracks_raw_and_final_fermi_status() -> None:
+    """One-shot potential mode tracks both spectra without outer convergence."""
+    _, result, _ = _run_legacy_and_functional(
+        {
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 0,
+            "fermi_etemp": 300.0,
+        }
+    )
+    assert not bool(result.converged)
+    assert result.trajectory_status is not None
+    assert result.map_result.fermi_status is not None
+    assert result.final_evaluation.fermi_status is not None
+    assert bool(result.trajectory_status.fermi_converged.all())
+    assert bool(result.final_evaluation.fermi_status.converged.all())
+    assert bool(functional_subsolves_ok(result))
+    assert not bool(functional_converged_and_valid(result))
+
+
 def test_potential_initial_guess_has_no_spectral_evaluation(
     monkeypatch,
 ) -> None:
@@ -261,6 +290,84 @@ def test_potential_anderson_gfn2_multipole_finite_budget() -> None:
     assert result.final_potential.quad is not None
 
 
+def test_gfn2_potential_padding_is_invariant_under_mixing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PADNZ potential tails have zero residual and survive both mixers."""
+    case = _prepare_case(
+        GFN2_XTB,
+        scf_options={
+            "scp_mode": labels.SCP_MODE_POTENTIAL,
+            "mixer": labels.MIXER_ANDERSON,
+            "maxiter": 2,
+            "mix_guess": True,
+            "damp_generations": 2,
+            "damp_soft_start": False,
+        },
+    )
+    guess, layout = _initial_guess(case)
+    mapped = apply_potential_map(guess, case.inputs, layout).mapped_x
+    row_lengths = [
+        prod(layout.mono_shape),
+        prod(layout.dipole_shape),
+        prod(layout.quadrupole_shape),
+    ]
+    for row, length in enumerate(row_lengths):
+        torch.testing.assert_close(
+            guess[row, length:],
+            torch.full_like(guess[row, length:], defaults.PADNZ),
+            rtol=0.0,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            mapped[row, length:] - guess[row, length:],
+            torch.zeros_like(mapped[row, length:]),
+            rtol=0.0,
+            atol=0.0,
+        )
+    simple = simple_mix(guess, mapped, 0.25)
+    torch.testing.assert_close(
+        simple, guess + 0.25 * (mapped - guess), rtol=0.0, atol=0.0
+    )
+    for row, length in enumerate(row_lengths):
+        torch.testing.assert_close(
+            simple[row, length:],
+            torch.full_like(simple[row, length:], defaults.PADNZ),
+            rtol=0.0,
+            atol=0.0,
+        )
+
+    mapped_pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
+    original = functional_map.potential_map
+
+    def record(value: torch.Tensor, inputs: object, layout: object):
+        result = original(value, inputs, layout)
+        mapped_pairs.append((value.clone(), result.mapped_x.clone()))
+        return result
+
+    monkeypatch.setattr(functional_anderson, "potential_map", record)
+    settings = setup_anderson_solver_settings(
+        case.system.config.scf, guess.dtype
+    )
+    result = solve_scf_potential_anderson(guess, case.inputs, layout, settings)
+    assert result.iterations.item() == 3
+    assert len(mapped_pairs) == 3  # initial, warm-up, accelerated transition
+    for value, mapped_value in mapped_pairs:
+        for row, length in enumerate(row_lengths):
+            torch.testing.assert_close(
+                value[row, length:],
+                torch.full_like(value[row, length:], defaults.PADNZ),
+                rtol=0.0,
+                atol=0.0,
+            )
+            torch.testing.assert_close(
+                mapped_value[row, length:] - value[row, length:],
+                torch.zeros_like(mapped_value[row, length:]),
+                rtol=0.0,
+                atol=0.0,
+            )
+
+
 @pytest.mark.parametrize(
     "partition",
     [labels.FERMI_PARTITION_EQUAL, labels.FERMI_PARTITION_ATOMIC],
@@ -281,7 +388,7 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
     )
     _assert_public_parity(result, legacy)
     assert result.final_evaluation.fermi_status is not None
-    assert functional_result_ok(result).shape == ()
+    assert functional_subsolves_ok(result).shape == ()
     assert result.final_evaluation is not result.map_result.spectral
 
     failed_status = replace(
@@ -298,7 +405,60 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
     )
     assert bool(result.map_result.fermi_status.converged.all())
     assert bool(result.converged)
-    assert not bool(functional_result_ok(failed_final))
+    assert not bool(functional_subsolves_ok(failed_final))
+
+
+def test_potential_trajectory_failure_survives_valid_final_spectrum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid physical map remains visible after valid later spectra."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "scp_mode": labels.SCP_MODE_POTENTIAL,
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 1,
+            "mix_guess": False,
+            "fermi_etemp": 300.0,
+            "x_atol": 1.0e6,
+            "x_atol_max": 1.0e6,
+        },
+    )
+    guess, layout = _initial_guess(case)
+    original = functional_solver.potential_map
+    map_calls = 0
+
+    def fail_initial_map(value: torch.Tensor, inputs: object, layout_: object):
+        nonlocal map_calls
+        result = original(value, inputs, layout_)
+        map_calls += 1
+        if map_calls == 1:
+            assert result.fermi_status is not None
+            failed_status = replace(
+                result.fermi_status,
+                converged=torch.zeros_like(result.fermi_status.converged),
+                electron_count_ok=torch.zeros_like(
+                    result.fermi_status.electron_count_ok
+                ),
+            )
+            result = replace(
+                result,
+                spectral=replace(result.spectral, fermi_status=failed_status),
+            )
+        return result
+
+    monkeypatch.setattr(functional_solver, "potential_map", fail_initial_map)
+    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    result = solve_scf_potential_simple(guess, case.inputs, layout, settings)
+    assert map_calls == 2
+    assert result.map_result.fermi_status is not None
+    assert result.final_evaluation.fermi_status is not None
+    assert bool(result.map_result.fermi_status.converged.all())
+    assert bool(result.final_evaluation.fermi_status.converged.all())
+    assert result.trajectory_status is not None
+    assert not bool(result.trajectory_status.fermi_converged.all())
+    assert not bool(result.trajectory_status.electron_count_ok.all())
+    assert not bool(functional_subsolves_ok(result))
 
 
 def test_potential_solver_vmap_over_fixed_system_guesses() -> None:
