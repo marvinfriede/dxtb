@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Pure raw physical map for single-System charge-mode SCF."""
+"""Pure raw physical maps and spectral evaluation for one System."""
 
 from __future__ import annotations
 
@@ -32,14 +32,23 @@ from .data import (
     SCFCharges,
     SCFInputs,
     SCFMapResult,
+    SCFSpectralResult,
+    PotentialLayout,
     SCFPotential,
+    pack_potential,
     pack_charges,
+    potential_layout,
     unpack_charges,
+    unpack_potential,
 )
 
 __all__ = [
+    "evaluate_hamiltonian",
+    "evaluate_potential",
     "potential_from_charges",
+    "potential_initial_guess",
     "potential_to_hamiltonian",
+    "potential_map",
     "scf_map",
 ]
 
@@ -153,25 +162,10 @@ def _density_to_charges(
     return SCFCharges(charges.mono, dipole=dipole, quad=quad), orbital_energy
 
 
-def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
-    """Evaluate one raw charge-mode map ``G(x)`` without solver state.
-
-    The map is single-System and contains no mixing, convergence check, or
-    persistent state. Charge-mode raw maps support both Aufbau occupation and
-    fixed-trip finite-temperature Fermi occupation.
-    """
-    charges_in = unpack_charges(x, inputs.charge_layout)
-    driving_potential = potential_from_charges(charges_in, inputs)
-    integrals = inputs.integrals
-    hamiltonian = potential_to_hamiltonian(
-        integrals.hcore,
-        integrals.overlap,
-        integrals.dipole,
-        integrals.quadrupole,
-        inputs.ihelp,
-        driving_potential,
-    )
-
+def evaluate_hamiltonian(
+    hamiltonian: Tensor, inputs: SCFInputs
+) -> SCFSpectralResult:
+    """Evaluate spectrum, occupation, density and charges for a Hamiltonian."""
     emo, coefficients = _transitional_diagonalize(hamiltonian, inputs)
     fermi_status = None
     if inputs.fermi_settings is None or not inputs.fermi_settings.smear:
@@ -196,17 +190,81 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
         occupation = fermi_result.occupation
         fermi_status = fermi_result.status
     density = get_density(coefficients, occupation.sum(-2))
-    charges_out, orbital_energy = _density_to_charges(density, inputs)
-
-    return SCFMapResult(
-        mapped_x=pack_charges(charges_out, inputs.charge_layout),
-        charges=charges_out,
-        driving_potential=driving_potential,
+    charges, orbital_energy = _density_to_charges(density, inputs)
+    return SCFSpectralResult(
         hamiltonian=hamiltonian,
         density=density,
         emo=emo,
         coefficients=coefficients,
         occupation=occupation,
+        charges=charges,
         orbital_energy=orbital_energy,
         fermi_status=fermi_status,
     )
+
+
+def evaluate_potential(
+    potential: SCFPotential, inputs: SCFInputs
+) -> SCFSpectralResult:
+    """Evaluate one potential-driven Hamiltonian spectral state."""
+    integrals = inputs.integrals
+    hamiltonian = potential_to_hamiltonian(
+        integrals.hcore,
+        integrals.overlap,
+        integrals.dipole,
+        integrals.quadrupole,
+        inputs.ihelp,
+        potential,
+    )
+    return evaluate_hamiltonian(hamiltonian, inputs)
+
+
+def _map_result(
+    mapped_x: Tensor,
+    driving_potential: SCFPotential,
+    spectral: SCFSpectralResult,
+) -> SCFMapResult:
+    """Bind representation-specific map values to a shared spectral result."""
+    return SCFMapResult(
+        mapped_x=mapped_x,
+        driving_potential=driving_potential,
+        spectral=spectral,
+    )
+
+
+def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
+    """Evaluate one raw charge-mode map ``G(x)`` without solver state.
+
+    The map is single-System and contains no mixing, convergence check, or
+    persistent state. Charge-mode raw maps support both Aufbau occupation and
+    fixed-trip finite-temperature Fermi occupation.
+    """
+    charges_in = unpack_charges(x, inputs.charge_layout)
+    driving_potential = potential_from_charges(charges_in, inputs)
+    spectral = evaluate_potential(driving_potential, inputs)
+    return _map_result(
+        pack_charges(spectral.charges, inputs.charge_layout),
+        driving_potential,
+        spectral,
+    )
+
+
+def potential_map(
+    x: Tensor, inputs: SCFInputs, layout: PotentialLayout
+) -> SCFMapResult:
+    """Evaluate one raw potential-representation map without solver state."""
+    driving_potential = unpack_potential(x, layout)
+    spectral = evaluate_potential(driving_potential, inputs)
+    mapped_potential = potential_from_charges(spectral.charges, inputs)
+    return _map_result(
+        pack_potential(mapped_potential, layout), driving_potential, spectral
+    )
+
+
+def potential_initial_guess(
+    charges: SCFCharges, inputs: SCFInputs
+) -> tuple[Tensor, PotentialLayout]:
+    """Build the packed potential guess from the initial physical charges."""
+    potential = potential_from_charges(charges, inputs)
+    layout = potential_layout(potential)
+    return pack_potential(potential, layout), layout

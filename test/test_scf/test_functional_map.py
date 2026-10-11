@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from tad_mctc import storch
-from torch.func import jacfwd, jvp, vmap
+from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.calculators.singlepoint import _interaction_data
@@ -41,12 +41,18 @@ from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     ChargeLayout,
     SCFCharges,
+    PotentialLayout,
     SCFPotential,
+    pack_potential,
+    potential_initial_guess,
+    potential_map,
+    potential_layout,
     pack_charges,
     potential_from_charges,
     scf_map,
     setup_scf_inputs,
     unpack_charges,
+    unpack_potential,
     validate_functional_scf_interactions,
 )
 from dxtb._src.scf.functional.map import _transitional_diagonalize
@@ -186,6 +192,7 @@ def _prepare_case(
         interaction_data=interaction_data,
         engine=engine,
         x=x,
+        initial_charges=guess,
         inputs=inputs,
         scf_options=scf_options,
     )
@@ -487,18 +494,20 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     potential_config = replace(
         case.system.config.scf, scp_mode=labels.SCP_MODE_POTENTIAL
     )
-    with pytest.raises(NotImplementedError, match="charge raw map only"):
-        setup_scf_inputs(
-            case.system.numbers,
-            case.integrals,
-            case.n0,
-            case.occupation,
-            case.nel,
-            case.interactions,
-            case.interaction_data,
-            case.system.ihelp,
-            potential_config,
-        )
+    potential_inputs = setup_scf_inputs(
+        case.system.numbers,
+        case.integrals,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        potential_config,
+    )
+    _assert_tensor_equal(
+        scf_map(case.x, potential_inputs).mapped_x, baseline.mapped_x
+    )
 
     warm_config = replace(
         case.system.config.scf,
@@ -563,8 +572,242 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
         iterates
     )
     _assert_tensor_equal(after_config_change, before_config_change)
-    after = scf_map(case.x, case.inputs)
-    _assert_tensor_equal(after.mapped_x, baseline.mapped_x)
+    after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
+        iterates
+    )
+    _assert_tensor_equal(after_config_change, before_config_change)
+
+
+def _initial_potential_guess(
+    case: SimpleNamespace,
+) -> tuple[torch.Tensor, PotentialLayout]:
+    layout = case.inputs.charge_layout
+    charges = SCFCharges(
+        mono=case.initial_charges,
+        dipole=(
+            None
+            if layout.dipole_shape is None
+            else case.initial_charges.new_zeros(layout.dipole_shape)
+        ),
+        quad=(
+            None
+            if layout.quadrupole_shape is None
+            else case.initial_charges.new_zeros(layout.quadrupole_shape)
+        ),
+    )
+    return potential_initial_guess(charges, case.inputs)
+
+
+def _legacy_density_charges(case: SimpleNamespace) -> SCFCharges:
+    density = case.engine._data.density
+    mono = case.n0 - torch.einsum("ik,ki->i", density, case.integrals.overlap)
+    dipole = None
+    if case.integrals.dipole is not None:
+        dipole = case.system.ihelp.reduce_orbital_to_atom(
+            -torch.einsum("ik,mki->im", density, case.integrals.dipole),
+            extra=True,
+            dim=-2,
+        )
+    quad = None
+    if case.integrals.quadrupole is not None:
+        quad = case.system.ihelp.reduce_orbital_to_atom(
+            -torch.einsum("ik,mki->im", density, case.integrals.quadrupole),
+            extra=True,
+            dim=-2,
+        )
+    return SCFCharges(mono=mono, dipole=dipole, quad=quad)
+
+
+@pytest.mark.parametrize(
+    "layout,potential",
+    [
+        (
+            PotentialLayout((5,)),
+            SCFPotential(mono=torch.arange(5, dtype=torch.double)),
+        ),
+        (
+            PotentialLayout((5,), (2, 3)),
+            SCFPotential(
+                mono=torch.arange(5, dtype=torch.double),
+                dipole=torch.arange(6, dtype=torch.double).reshape(2, 3),
+            ),
+        ),
+        (
+            PotentialLayout((5,), (2, 3), (2, 6)),
+            SCFPotential(
+                mono=torch.arange(5, dtype=torch.double),
+                dipole=torch.arange(6, dtype=torch.double).reshape(2, 3),
+                quad=torch.arange(12, dtype=torch.double).reshape(2, 6),
+            ),
+        ),
+    ],
+)
+def test_potential_layout_round_trip_and_transforms(
+    layout: PotentialLayout, potential: SCFPotential
+) -> None:
+    """Potential packing is fixed-shape and composes with AD transforms."""
+    packed = pack_potential(potential, layout)
+    unpacked = unpack_potential(packed, layout)
+    _assert_tensor_equal(pack_potential(unpacked, layout), packed)
+    _assert_tensor_equal(unpacked.mono, potential.mono)
+    if potential.dipole is not None:
+        assert unpacked.dipole is not None
+        _assert_tensor_equal(unpacked.dipole, potential.dipole)
+    if potential.quad is not None:
+        assert unpacked.quad is not None
+        _assert_tensor_equal(unpacked.quad, potential.quad)
+
+    def roundtrip(value: torch.Tensor) -> torch.Tensor:
+        return pack_potential(unpack_potential(value, layout), layout)
+
+    physical = torch.zeros(packed.numel(), dtype=torch.bool)
+    width = packed.shape[-1]
+    for row, shape in enumerate(layout.shapes):
+        physical[
+            row * width : row * width + int(torch.tensor(shape).prod())
+        ] = True
+    expected_jacobian = torch.diag(physical.to(packed.dtype))
+    jacobian = jacrev(roundtrip)(packed).reshape(packed.numel(), packed.numel())
+    torch.testing.assert_close(jacobian, expected_jacobian)
+    tangent = torch.randn_like(packed)
+    primal, tangent_out = jvp(roundtrip, (packed,), (tangent,))
+    _assert_tensor_equal(primal, packed)
+    _assert_tensor_equal(
+        tangent_out, (tangent.reshape(-1) * physical).reshape_as(tangent)
+    )
+    _assert_tensor_equal(jacfwd(roundtrip)(packed), jacrev(roundtrip)(packed))
+    batch = torch.stack((packed, packed + 0.25, packed - 0.5))
+    _assert_tensor_equal(
+        vmap(roundtrip)(batch), torch.stack([roundtrip(item) for item in batch])
+    )
+
+
+def test_potential_layout_rejects_incompatible_components() -> None:
+    """Potential packing rejects static row and component mismatches."""
+    mono_layout = PotentialLayout((5,))
+    mono = torch.zeros(5, dtype=torch.double)
+    dipole = torch.zeros((2, 3), dtype=torch.double)
+    with pytest.raises(ValueError, match="Unexpected dipole"):
+        pack_potential(SCFPotential(mono=mono, dipole=dipole), mono_layout)
+    with pytest.raises(ValueError, match="Dipole potential is required"):
+        pack_potential(SCFPotential(mono=mono), PotentialLayout((5,), (2, 3)))
+    with pytest.raises(ValueError, match="shape"):
+        pack_potential(
+            SCFPotential(mono=mono, dipole=torch.zeros((3, 2))),
+            PotentialLayout((5,), (2, 3)),
+        )
+    with pytest.raises(ValueError, match="Quadrupole potential requires"):
+        PotentialLayout((5,), quadrupole_shape=(2, 6))
+    with pytest.raises(ValueError, match="does not match the configured"):
+        unpack_potential(torch.zeros((2, 5)), mono_layout)
+    with pytest.raises(ValueError, match="Packed potential width"):
+        unpack_potential(torch.zeros((1, 4)), mono_layout)
+
+
+def _assert_potential_raw_parity(
+    method: int = GFN1_XTB,
+    *,
+    charge: float = 0.0,
+    spin: float = 0.0,
+    field: torch.Tensor | None = None,
+    temperature: float = 0.0,
+    row: int | None = None,
+) -> None:
+    options = {
+        "scp_mode": labels.SCP_MODE_POTENTIAL,
+        "mixer": labels.MIXER_LINEAR,
+        "maxiter": 0,
+        "fermi_etemp": temperature,
+    }
+    legacy = _prepare_case(
+        method,
+        charge=charge,
+        spin=spin,
+        field=field,
+        scf_options=options,
+        setup_functional=False,
+    )
+    functional = _prepare_case(
+        method,
+        charge=charge,
+        spin=spin,
+        field=field,
+        scf_options=options,
+    )
+    guess, layout = _initial_potential_guess(functional)
+    _assert_tensor_equal(guess, functional.x)
+    _assert_tensor_equal(guess, legacy.x)
+    if row is not None:
+        perturbed = guess.clone()
+        perturbed[row, 0] += 0.037
+        guess = perturbed
+    legacy_x = guess.clone()
+    mapped_legacy = legacy.engine.iterate_potential(legacy_x)
+    expected = potential_map(guess, functional.inputs, layout)
+    _assert_tensor_equal(expected.mapped_x, mapped_legacy)
+    for row, shape in enumerate(layout.shapes):
+        length = 1
+        for size in shape:
+            length *= size
+        if length < guess.shape[-1]:
+            assert torch.all(guess[row, length:] == defaults.PADNZ)
+            assert torch.all(mapped_legacy[row, length:] == defaults.PADNZ)
+            assert torch.all(
+                mapped_legacy[row, length:] - guess[row, length:] == 0.0
+            )
+    for attr, value in (
+        ("hamiltonian", legacy.engine._data.hamiltonian),
+        ("density", legacy.engine._data.density),
+        ("emo", legacy.engine._data.evals),
+        ("coefficients", legacy.engine._data.evecs),
+        ("occupation", legacy.engine._data.occupation),
+        ("orbital_energy", legacy.engine._data.energy),
+    ):
+        _assert_tensor_equal(getattr(expected, attr), value)
+    expected_charges = _legacy_density_charges(legacy)
+    _assert_tensor_equal(expected.charges.mono, expected_charges.mono)
+    if expected.charges.dipole is not None:
+        _assert_tensor_equal(expected.charges.dipole, expected_charges.dipole)
+    if expected.charges.quad is not None:
+        _assert_tensor_equal(expected.charges.quad, expected_charges.quad)
+    if temperature >= 300.0:
+        assert expected.fermi_status is not None
+        assert bool(expected.fermi_status.converged.all())
+
+
+@pytest.mark.parametrize(
+    "method,charge,spin,field,temperature",
+    [
+        (GFN1_XTB, 0.0, 0.0, None, 0.0),
+        (GFN1_XTB, 1.0, 1.0, None, 0.0),
+        (
+            GFN1_XTB,
+            0.0,
+            0.0,
+            torch.tensor([0.01, 0.02, -0.01], dtype=torch.float64),
+            0.0,
+        ),
+        (GFN1_XTB, 0.5, 0.0, None, 300.0),
+        (GFN2_XTB, 0.0, 0.0, None, 0.0),
+    ],
+)
+def test_potential_map_matches_legacy_physical_evaluation(
+    method: int,
+    charge: float,
+    spin: float,
+    field: torch.Tensor | None,
+    temperature: float,
+) -> None:
+    """Potential raw map matches an independently prepared legacy map."""
+    _assert_potential_raw_parity(
+        method, charge=charge, spin=spin, field=field, temperature=temperature
+    )
+
+
+@pytest.mark.parametrize("row", [0, 1, 2], ids=["mono", "dipole", "quad"])
+def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
+    """Each GFN2 potential row affects the next physical map."""
+    _assert_potential_raw_parity(GFN2_XTB, row=row)
 
 
 class _MutatingPotentialInteraction(Interaction):

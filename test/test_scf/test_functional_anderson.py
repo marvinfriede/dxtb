@@ -31,6 +31,7 @@ from dxtb._src.scf.functional import (
     AndersonState,
     SCFCharges,
     SCFMapResult,
+    SCFSpectralResult,
     SCFPotential,
 )
 from dxtb._src.scf.functional import anderson as anderson_module
@@ -49,14 +50,16 @@ from .test_functional_map import _assert_tensor_equal, _prepare_case
 def _map_result(mapped: torch.Tensor) -> SCFMapResult:
     return SCFMapResult(
         mapped_x=mapped,
-        charges=SCFCharges(mono=mapped),
         driving_potential=SCFPotential(mono=mapped),
-        hamiltonian=mapped,
-        density=mapped,
-        emo=mapped,
-        coefficients=mapped,
-        occupation=mapped,
-        orbital_energy=mapped,
+        spectral=SCFSpectralResult(
+            charges=SCFCharges(mono=mapped),
+            hamiltonian=mapped,
+            density=mapped,
+            emo=mapped,
+            coefficients=mapped,
+            occupation=mapped,
+            orbital_energy=mapped,
+        ),
     )
 
 

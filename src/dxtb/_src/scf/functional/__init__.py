@@ -22,6 +22,7 @@ from .anderson import (
     anderson_mix,
     setup_anderson_solver_settings,
     solve_scf_anderson,
+    solve_scf_potential_anderson,
 )
 from .data import (
     ChargeLayout,
@@ -30,12 +31,25 @@ from .data import (
     SCFInputs,
     SCFMapResult,
     SCFPotential,
+    PotentialLayout,
+    SCFSpectralResult,
     pack_charges,
+    pack_potential,
+    potential_layout,
     setup_scf_inputs,
     unpack_charges,
+    unpack_potential,
     validate_functional_scf_interactions,
 )
-from .map import potential_from_charges, potential_to_hamiltonian, scf_map
+from .map import (
+    evaluate_hamiltonian,
+    evaluate_potential,
+    potential_from_charges,
+    potential_initial_guess,
+    potential_map,
+    potential_to_hamiltonian,
+    scf_map,
+)
 from .solver import (
     SCFResidual,
     SCFSolveResult,
@@ -46,6 +60,8 @@ from .solver import (
     simple_mix,
     functional_result_ok,
     solve_scf_simple,
+    solve_scf_potential_simple,
+    finalize_scf_potential,
 )
 
 __all__ = [
@@ -53,6 +69,7 @@ __all__ = [
     "AndersonState",
     "ChargeLayout",
     "FermiSettings",
+    "PotentialLayout",
     "SCFCharges",
     "SCFInputs",
     "SCFMapResult",
@@ -60,12 +77,19 @@ __all__ = [
     "SCFSolveResult",
     "SCFSolverSettings",
     "SCFPotential",
+    "SCFSpectralResult",
     "pack_charges",
+    "pack_potential",
+    "potential_layout",
     "finalize_scf",
     "functional_result_ok",
     "anderson_mix",
+    "evaluate_hamiltonian",
+    "evaluate_potential",
     "interaction_energy_from_charges",
     "potential_from_charges",
+    "potential_initial_guess",
+    "potential_map",
     "potential_to_hamiltonian",
     "scf_map",
     "setup_scf_inputs",
@@ -73,7 +97,10 @@ __all__ = [
     "setup_simple_solver_settings",
     "simple_mix",
     "solve_scf_simple",
+    "solve_scf_potential_simple",
+    "solve_scf_potential_anderson",
     "solve_scf_anderson",
     "unpack_charges",
+    "unpack_potential",
     "validate_functional_scf_interactions",
 ]

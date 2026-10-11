@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,12 +26,82 @@ import torch
 from tad_mctc.batch import real_atoms
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
-from dxtb._src.components.interactions.container import Potential
-from dxtb._src.scf.pure import conversions
+from dxtb._src.components.interactions.container import Charges, Potential
+from dxtb._src.constants import defaults
 from dxtb._src.scf.utils import get_density
 from dxtb._src.wavefunction import filling
 
 from .test_functional_map import _prepare_case
+
+
+def _pure_charges_from_density(density: torch.Tensor, data: Any) -> Any:
+    """Reconstruct legacy Mulliken charges without mutating ``_Data``."""
+    integrals = data.ints
+    populations = torch.einsum("ik,ki->i", density, integrals.overlap)
+    mono = data.n0 - populations
+    dipole = None
+    if integrals.dipole is not None:
+        dipole = data.ihelp.reduce_orbital_to_atom(
+            -torch.einsum("ik,mki->im", density, integrals.dipole),
+            extra=True,
+            dim=-2,
+        )
+    quad = None
+    if integrals.quadrupole is not None:
+        quad = data.ihelp.reduce_orbital_to_atom(
+            -torch.einsum("ik,mki->im", density, integrals.quadrupole),
+            extra=True,
+            dim=-2,
+        )
+    return SimpleNamespace(mono=mono, dipole=dipole, quad=quad)
+
+
+def _assert_potential_packed_exact(
+    packed: torch.Tensor,
+    source_potential: Potential,
+    metadata: Any,
+) -> None:
+    """Check source packing, component round-trip, and independent PADNZ rows."""
+    roundtrip = Potential.from_tensor(packed, metadata, batch_mode=0)
+    for name in ("mono", "dipole", "quad"):
+        expected = getattr(source_potential, name)
+        actual = getattr(roundtrip, name)
+        if expected is None:
+            assert actual is None
+            continue
+        assert actual is not None
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+
+    components = [
+        value.reshape(-1)
+        for value in (
+            source_potential.mono,
+            source_potential.dipole,
+            source_potential.quad,
+        )
+        if value is not None
+    ]
+    width = max(value.numel() for value in components)
+    expected_rows = torch.stack(
+        [
+            torch.cat(
+                (
+                    value,
+                    value.new_full((width - value.numel(),), defaults.PADNZ),
+                )
+            )
+            for value in components
+        ]
+    )
+    source_packed = source_potential.as_tensor(pad=defaults.PADNZ)
+    torch.testing.assert_close(source_packed, expected_rows, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(packed, expected_rows, rtol=0.0, atol=0.0)
+    for row, value in enumerate(components):
+        torch.testing.assert_close(
+            packed[row, : value.numel()], value, rtol=0.0, atol=0.0
+        )
+        if value.numel() < width:
+            assert torch.all(packed[row, value.numel() :] == defaults.PADNZ)
 
 
 @pytest.mark.parametrize(
@@ -73,8 +144,8 @@ def test_legacy_representation_map_and_finalization_counts(
 
     def record_map(value: torch.Tensor) -> torch.Tensor:
         mapped = raw_map(value)
-        raw_charges = conversions.density_to_charges(
-            engine._data.density, engine._data, engine.config
+        raw_charges = _pure_charges_from_density(
+            engine._data.density, engine._data
         )
         raw_calls.append(
             {
@@ -120,8 +191,8 @@ def test_legacy_representation_map_and_finalization_counts(
     assert result["iterations"] == expected_maps
 
     last = raw_calls[-1]
-    charges_from_final_density = conversions.density_to_charges(
-        result["density"], engine._data, engine.config
+    charges_from_final_density = _pure_charges_from_density(
+        result["density"], engine._data
     )
     torch.testing.assert_close(
         final_charges.mono, charges_from_final_density.mono
@@ -247,8 +318,8 @@ def test_legacy_representation_final_conversion_at_finite_temperature(
     torch.testing.assert_close(
         result["occupation"].sum(-1), engine._data.nel, atol=1e-4, rtol=0.0
     )
-    charges_from_final_density = conversions.density_to_charges(
-        result["density"], engine._data, engine.config
+    charges_from_final_density = _pure_charges_from_density(
+        result["density"], engine._data
     )
     torch.testing.assert_close(
         result["charges"].mono, charges_from_final_density.mono
@@ -268,7 +339,7 @@ def test_legacy_representation_final_conversion_at_finite_temperature(
 
 
 def test_legacy_gfn2_potential_finalization_preserves_multipoles() -> None:
-    """Potential conversion retains GFN2 monopole/dipole/quadrupole rows."""
+    """Potential packing preserves exact GFN2 rows at both map phases."""
     case = _prepare_case(
         GFN2_XTB,
         sample_name="H2O",
@@ -281,8 +352,46 @@ def test_legacy_gfn2_potential_finalization_preserves_multipoles() -> None:
         },
         setup_functional=False,
     )
-    charges = case.engine.scf(case.x, return_charges=True)
-    potential = case.engine.charges_to_potential(charges)
+    engine = case.engine
+    zeros_dipole = torch.zeros(
+        (engine._data.numbers.shape[-1], engine._data.ints.dipole.shape[-3]),
+        dtype=case.x.dtype,
+    )
+    zeros_quad = torch.zeros(
+        (
+            engine._data.numbers.shape[-1],
+            engine._data.ints.quadrupole.shape[-3],
+        ),
+        dtype=case.x.dtype,
+    )
+    initial_charges = Charges(
+        mono=case.initial_charges, dipole=zeros_dipole, quad=zeros_quad
+    )
+    initial_source = engine.charges_to_potential(initial_charges)
+    initial = Potential.from_tensor(case.x, engine._data.potential)
+    _assert_potential_packed_exact(
+        case.x, initial_source, engine._data.potential
+    )
+
+    mapped_x = engine.iterate_potential(case.x.clone())
+    mapped_charge_values = _pure_charges_from_density(
+        engine._data.density, engine._data
+    )
+    mapped_charges = Charges(
+        mono=mapped_charge_values.mono,
+        dipole=mapped_charge_values.dipole,
+        quad=mapped_charge_values.quad,
+    )
+    mapped_source = engine.charges_to_potential(mapped_charges)
+    mapped = Potential.from_tensor(mapped_x, engine._data.potential)
+    _assert_potential_packed_exact(
+        mapped_x, mapped_source, engine._data.potential
+    )
+    assert tuple(initial.mono.shape) == tuple(mapped.mono.shape)
+    assert tuple(initial.dipole.shape) == tuple(mapped.dipole.shape)
+    assert tuple(initial.quad.shape) == tuple(mapped.quad.shape)
+    potential = mapped
+    charges = _pure_charges_from_density(engine._data.density, engine._data)
     assert charges.dipole is not None
     assert charges.quad is not None
     assert potential.dipole is not None

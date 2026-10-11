@@ -35,10 +35,17 @@ from .data import (
     SCFCharges,
     SCFInputs,
     SCFMapResult,
+    SCFSpectralResult,
     SCFPotential,
-    unpack_charges,
+    PotentialLayout,
+    unpack_potential,
 )
-from .map import potential_from_charges, scf_map
+from .map import (
+    evaluate_potential,
+    potential_from_charges,
+    potential_map,
+    scf_map,
+)
 
 __all__ = [
     "SCFResidual",
@@ -50,6 +57,8 @@ __all__ = [
     "setup_simple_solver_settings",
     "simple_mix",
     "solve_scf_simple",
+    "solve_scf_potential_simple",
+    "finalize_scf_potential",
 ]
 
 
@@ -86,6 +95,7 @@ class SCFSolveResult:
     """
 
     map_result: SCFMapResult
+    final_evaluation: SCFSpectralResult
     final_charges: SCFCharges
     final_potential: SCFPotential
     energy: Tensor
@@ -93,6 +103,31 @@ class SCFSolveResult:
     iterations: Tensor
     converged: Tensor
     residual: Tensor
+
+    @property
+    def hamiltonian(self) -> Tensor:
+        """Public final Hamiltonian phase."""
+        return self.final_evaluation.hamiltonian
+
+    @property
+    def density(self) -> Tensor:
+        """Public final density phase."""
+        return self.final_evaluation.density
+
+    @property
+    def emo(self) -> Tensor:
+        """Public final orbital energies."""
+        return self.final_evaluation.emo
+
+    @property
+    def coefficients(self) -> Tensor:
+        """Public final orbital coefficients."""
+        return self.final_evaluation.coefficients
+
+    @property
+    def occupation(self) -> Tensor:
+        """Public final occupation values."""
+        return self.final_evaluation.occupation
 
 
 def functional_result_ok(result: SCFSolveResult) -> Tensor:
@@ -102,7 +137,7 @@ def functional_result_ok(result: SCFSolveResult) -> Tensor:
     temperature occupation additionally requires every selected-map Fermi
     channel to converge and pass its validity and electron-count checks.
     """
-    status = result.map_result.fermi_status
+    status = result.final_evaluation.fermi_status
     if status is None:
         return result.converged
     return (
@@ -213,13 +248,38 @@ def _select_map_result(
             ),
         )
 
+    spectral = SCFSpectralResult(
+        hamiltonian=_select_tensor(
+            mask, new.spectral.hamiltonian, old.spectral.hamiltonian
+        ),
+        density=_select_tensor(
+            mask, new.spectral.density, old.spectral.density
+        ),
+        emo=_select_tensor(mask, new.spectral.emo, old.spectral.emo),
+        coefficients=_select_tensor(
+            mask, new.spectral.coefficients, old.spectral.coefficients
+        ),
+        occupation=_select_tensor(
+            mask, new.spectral.occupation, old.spectral.occupation
+        ),
+        charges=SCFCharges(
+            mono=_select_tensor(
+                mask, new.spectral.charges.mono, old.spectral.charges.mono
+            ),
+            dipole=select_optional(
+                new.spectral.charges.dipole, old.spectral.charges.dipole
+            ),
+            quad=select_optional(
+                new.spectral.charges.quad, old.spectral.charges.quad
+            ),
+        ),
+        orbital_energy=_select_tensor(
+            mask, new.spectral.orbital_energy, old.spectral.orbital_energy
+        ),
+        fermi_status=fermi_status,
+    )
     return SCFMapResult(
         mapped_x=_select_tensor(mask, new.mapped_x, old.mapped_x),
-        charges=SCFCharges(
-            mono=_select_tensor(mask, new.charges.mono, old.charges.mono),
-            dipole=select_optional(new.charges.dipole, old.charges.dipole),
-            quad=select_optional(new.charges.quad, old.charges.quad),
-        ),
         driving_potential=SCFPotential(
             mono=select_optional(
                 new.driving_potential.mono, old.driving_potential.mono
@@ -231,15 +291,7 @@ def _select_map_result(
                 new.driving_potential.quad, old.driving_potential.quad
             ),
         ),
-        hamiltonian=_select_tensor(mask, new.hamiltonian, old.hamiltonian),
-        density=_select_tensor(mask, new.density, old.density),
-        emo=_select_tensor(mask, new.emo, old.emo),
-        coefficients=_select_tensor(mask, new.coefficients, old.coefficients),
-        occupation=_select_tensor(mask, new.occupation, old.occupation),
-        orbital_energy=_select_tensor(
-            mask, new.orbital_energy, old.orbital_energy
-        ),
-        fermi_status=fermi_status,
+        spectral=spectral,
     )
 
 
@@ -360,42 +412,79 @@ def finalize_scf(
     final_potential = potential_from_charges(final_charges, inputs)
     h0_energy = inputs.ihelp.reduce_orbital_to_atom(map_result.orbital_energy)
     energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
-    if inputs.fermi_settings is None:
-        fenergy = torch.zeros_like(energy)
-    else:
-        settings = inputs.fermi_settings
-        if settings.smear:
-            entropy = filling.get_fermi_entropy_finite(
-                map_result.occupation,
-                map_result.emo,
-                settings.kt,
-                inputs.orbital_mask,
-            )
-        else:
-            entropy = filling.get_fermi_entropy_low_temperature(
-                map_result.occupation, settings.kt
-            )
-        if settings.partition == labels.FERMI_PARTITION_EQUAL:
-            real = real_atoms(inputs.numbers)
-            count = real.count_nonzero(dim=-1).unsqueeze(-1)
-            equal = entropy.sum(-1, keepdim=True) / count
-            fenergy = torch.where(real, equal.expand_as(real), 0.0)
-        elif settings.partition == labels.FERMI_PARTITION_ATOMIC:
-            entropy_density = einsum(
-                "...ik,...k,...jk->...ij",
-                map_result.coefficients,
-                entropy,
-                map_result.coefficients,
-            )
-            fenergy = mulliken.get_atomic_populations(
-                inputs.integrals.overlap, entropy_density, inputs.ihelp
-            )
-        else:
-            raise ValueError(
-                f"Unknown Fermi free-energy partition {settings.partition}."
-            )
+    fenergy = free_energy_from_spectral(map_result.spectral, inputs)
     return SCFSolveResult(
         map_result=map_result,
+        final_evaluation=map_result.spectral,
+        final_charges=final_charges,
+        final_potential=final_potential,
+        energy=energy,
+        fenergy=fenergy,
+        iterations=iterations,
+        converged=converged,
+        residual=residual,
+    )
+
+
+def free_energy_from_spectral(
+    spectral: SCFSpectralResult, inputs: SCFInputs
+) -> Tensor:
+    """Partition the entropy contribution from one selected spectral phase."""
+    if inputs.fermi_settings is None:
+        return inputs.integrals.hcore.new_zeros(inputs.numbers.shape)
+    settings = inputs.fermi_settings
+    if settings.smear:
+        entropy = filling.get_fermi_entropy_finite(
+            spectral.occupation,
+            spectral.emo,
+            settings.kt,
+            inputs.orbital_mask,
+        )
+    else:
+        entropy = filling.get_fermi_entropy_low_temperature(
+            spectral.occupation, settings.kt
+        )
+    if settings.partition == labels.FERMI_PARTITION_EQUAL:
+        real = real_atoms(inputs.numbers)
+        count = real.count_nonzero(dim=-1).unsqueeze(-1)
+        equal = entropy.sum(-1, keepdim=True) / count
+        return torch.where(real, equal.expand_as(real), 0.0)
+    if settings.partition == labels.FERMI_PARTITION_ATOMIC:
+        entropy_density = einsum(
+            "...ik,...k,...jk->...ij",
+            spectral.coefficients,
+            entropy,
+            spectral.coefficients,
+        )
+        return mulliken.get_atomic_populations(
+            inputs.integrals.overlap, entropy_density, inputs.ihelp
+        )
+    raise ValueError(
+        f"Unknown Fermi free-energy partition {settings.partition}."
+    )
+
+
+def finalize_scf_potential(
+    map_result: SCFMapResult,
+    inputs: SCFInputs,
+    layout: PotentialLayout,
+    iterations: Tensor,
+    converged: Tensor,
+    residual: Tensor,
+) -> SCFSolveResult:
+    """Finalize potential mode from one extra representation conversion."""
+    final_potential_state = unpack_potential(map_result.mapped_x, layout)
+    final_evaluation = evaluate_potential(final_potential_state, inputs)
+    final_charges = final_evaluation.charges
+    final_potential = potential_from_charges(final_charges, inputs)
+    h0_energy = inputs.ihelp.reduce_orbital_to_atom(
+        final_evaluation.orbital_energy
+    )
+    energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
+    fenergy = free_energy_from_spectral(final_evaluation, inputs)
+    return SCFSolveResult(
+        map_result=map_result,
+        final_evaluation=final_evaluation,
         final_charges=final_charges,
         final_potential=final_potential,
         energy=energy,
@@ -414,6 +503,26 @@ def solve_scf_simple(
     return finalize_scf(
         outcome.map_result,
         inputs,
+        outcome.iterations,
+        outcome.converged,
+        outcome.residual,
+    )
+
+
+def solve_scf_potential_simple(
+    guess: Tensor,
+    inputs: SCFInputs,
+    layout: PotentialLayout,
+    settings: SCFSolverSettings,
+) -> SCFSolveResult:
+    """Solve the potential representation with functional simple mixing."""
+    outcome = _solve_map(
+        guess, settings, lambda x: potential_map(x, inputs, layout)
+    )
+    return finalize_scf_potential(
+        outcome.map_result,
+        inputs,
+        layout,
         outcome.iterations,
         outcome.converged,
         outcome.residual,

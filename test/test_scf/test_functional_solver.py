@@ -30,6 +30,7 @@ from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     SCFCharges,
     SCFMapResult,
+    SCFSpectralResult,
     SCFPotential,
     SCFSolverSettings,
     setup_simple_solver_settings,
@@ -45,14 +46,16 @@ from .test_functional_map import _assert_tensor_equal, _prepare_case
 def _map_result(mapped: torch.Tensor, driving: torch.Tensor) -> SCFMapResult:
     return SCFMapResult(
         mapped_x=mapped,
-        charges=SCFCharges(mono=mapped),
         driving_potential=SCFPotential(mono=driving),
-        hamiltonian=driving,
-        density=driving,
-        emo=driving,
-        coefficients=driving,
-        occupation=driving,
-        orbital_energy=driving,
+        spectral=SCFSpectralResult(
+            charges=SCFCharges(mono=mapped),
+            hamiltonian=driving,
+            density=driving,
+            emo=driving,
+            coefficients=driving,
+            occupation=driving,
+            orbital_energy=driving,
+        ),
     )
 
 

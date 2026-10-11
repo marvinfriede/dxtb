@@ -27,14 +27,15 @@ from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
-from .data import SCFInputs, SCFMapResult
-from .map import scf_map
+from .data import PotentialLayout, SCFInputs, SCFMapResult
+from .map import potential_map, scf_map
 from .solver import (
     SCFSolveResult,
     _resolve_tolerance,
     _solve_map_control,
     _SolverOutcome,
     finalize_scf,
+    finalize_scf_potential,
 )
 
 __all__ = [
@@ -43,6 +44,7 @@ __all__ = [
     "anderson_mix",
     "setup_anderson_solver_settings",
     "solve_scf_anderson",
+    "solve_scf_potential_anderson",
 ]
 
 
@@ -224,6 +226,26 @@ def solve_scf_anderson(
     return finalize_scf(
         outcome.map_result,
         inputs,
+        outcome.iterations,
+        outcome.converged,
+        outcome.residual,
+    )
+
+
+def solve_scf_potential_anderson(
+    guess: Tensor,
+    inputs: SCFInputs,
+    layout: PotentialLayout,
+    settings: AndersonSettings,
+) -> SCFSolveResult:
+    """Solve the potential representation with functional Anderson mixing."""
+    outcome = _solve_map_anderson(
+        guess, settings, lambda x: potential_map(x, inputs, layout)
+    )
+    return finalize_scf_potential(
+        outcome.map_result,
+        inputs,
+        layout,
         outcome.iterations,
         outcome.converged,
         outcome.residual,

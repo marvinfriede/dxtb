@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.3 parallel path done | Pure charge-mode map plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Potential/Fock modes, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
+| E4             | partial — E4.0–E4.4a parallel path done | Pure charge and potential maps plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Fock mode, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -944,12 +944,13 @@ This follows P10.
 
 ## E4.0 — pure raw charge map extracted
 
-The new `scf/functional` module provides frozen `SCFInputs`, fixed
+The initial `scf/functional` module provides frozen `SCFInputs`, fixed
 `ChargeLayout`, immutable internal charge/potential values, `SCFMapResult`,
-and a zero-temperature charge-mode `scf_map(x, inputs)`. Charge mode,
-zero-temperature scope, single-System shape, and exact migrated built-in
-interaction eligibility are checked when inputs are prepared; `ConfigSCF` and
-solver settings are not retained by the map. The map computes call-local
+and a zero-temperature charge-mode `scf_map(x, inputs)`. At E4.0, charge mode
+and zero-temperature scope were the supported input scope. Single-System
+shape and exact migrated built-in interaction eligibility are checked when
+inputs are prepared; `ConfigSCF` and solver settings are not retained by the
+map. The map computes call-local
 inverse Cholesky at input construction, carries a structural orbital mask,
 and does not use legacy restart data or invoke interaction state-management
 operations. Its result names the potential `driving_potential` because it is
@@ -1137,10 +1138,10 @@ search convergence, electron-count validity, and input-temperature/electron
 validity before reporting overall success. Below the smearing cutoff no Fermi
 search runs and `fermi_status` is `None`.
 
-## E4.4 Potential and Fock convergence modes (open)
+## E4.4a Functional potential representation (done, parallel only)
 
-Before implementation, executable legacy characterizations lock the three
-representation phases. Charge mode maps `q_k -> V(q_k) -> H -> density ->
+Executable legacy characterizations lock the three representation phases.
+Charge mode maps `q_k -> V(q_k) -> H -> density ->
 q_(k+1)` and returns `q_(k+1)` without another eigensolve. Potential mode maps
 `p_k -> H(p_k) -> density -> q_(k+1) -> p_(k+1)`; after selecting the mapped
 potential, legacy final conversion evaluates `p_(k+1) -> H -> density ->
@@ -1172,13 +1173,34 @@ energy computed from the returned charges. The zero-budget case has one raw
 map in all modes and an additional conversion spectrum only in potential and
 Fock modes; this conversion does not increment the SCF iteration count.
 
-Implement in separate steps: E4.4a functional potential representation first,
-then E4.4b Fock representation. Factor one pure potential-driven spectral
-evaluator where practical, but keep representation-specific finalization.
-The Fermi status/free-energy inputs for potential/Fock public results must
-come from the final conversion spectrum. `SCFInputs` remains physical/setup
-data only; solver settings and a static convergence representation belong in
-separate values.
+The legacy representation characterization above is now enforced by a
+functional potential implementation. `SCFInputs` has no `scp_mode`; that
+representation is selected at the solver API boundary. `PotentialLayout` is
+fixed structural metadata, and pure pack/unpack preserves legacy single-System
+mono/dipole/quadrupole rows and `PADNZ` tails. A call-local potential guess is
+formed from initial charges without a spectrum. Charge and potential maps
+share the immutable `SCFSpectralResult` through `evaluate_hamiltonian` and
+`evaluate_potential`.
+
+Potential Simple and Anderson solvers use the common fixed-trip mixer control.
+The selected `map_result` remains the raw potential map result. A separate
+`final_evaluation` performs exactly one additional spectrum from the selected
+mapped potential; it does not add an outer iteration. Public charges come
+from that final evaluation, public potential is recomputed from those charges,
+and energy/free energy use the final spectral phase. Aggregate Fermi validity
+also reads the final public evaluation status. Tests cover raw GFN1/GFN2 map
+parity, each GFN2 potential row, the six Simple budgets, accelerated and
+converged Anderson, maxiter zero, finite-temperature equal/atomic entropy,
+fixed-System guess vmap, and geometry/parameter/field/fractional-charge
+derivatives. Production routing remains unchanged.
+
+## E4.4b Functional Fock representation (open)
+
+Fock mode remains unimplemented. The shared `evaluate_hamiltonian` spectral
+evaluator is the intended starting point, but matrix layout, raw-map behavior,
+and extra final conversion require their own executable characterization and
+representation-specific tests. Do not infer Fock behavior from charge or
+potential mode.
 
 ## E4.5 Production routing and eager compatibility (open)
 
@@ -1847,7 +1869,7 @@ Recommended sequence:
 ### PR E4.3-E4.6: staged solver completion
 
 - E4.3 finite-temperature occupation/Fermi;
-- E4.4 potential mode and remaining Fock-mode support;
+- E4.4a potential representation (done); E4.4b remaining Fock-mode support;
 - E4.5 eager compatibility adapter and production routing;
 - E4.6 fixed-shape cleanup and legacy loop/cull/restore deletion after parity.
 
