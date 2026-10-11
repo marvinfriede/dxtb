@@ -43,7 +43,9 @@ from .data import (
     unpack_potential,
 )
 from .map import (
+    evaluate_hamiltonian,
     evaluate_potential,
+    fock_map,
     potential_from_charges,
     potential_map,
     scf_map,
@@ -55,6 +57,7 @@ __all__ = [
     "SCFTrajectoryStatus",
     "SCFSolverSettings",
     "finalize_scf",
+    "finalize_scf_fock",
     "functional_subsolves_ok",
     "functional_converged_and_valid",
     "trajectory_status_from_map",
@@ -65,6 +68,7 @@ __all__ = [
     "simple_mix",
     "solve_scf_simple",
     "solve_scf_potential_simple",
+    "solve_scf_fock_simple",
     "finalize_scf_potential",
 ]
 
@@ -404,9 +408,12 @@ def _select_map_result(
         ),
         fermi_status=fermi_status,
     )
-    return SCFMapResult(
-        mapped_x=_select_tensor(mask, new.mapped_x, old.mapped_x),
-        driving_potential=SCFPotential(
+    if new.driving_potential is None and old.driving_potential is None:
+        driving_potential = None
+    elif new.driving_potential is None or old.driving_potential is None:
+        raise ValueError("SCF map result structures must match.")
+    else:
+        driving_potential = SCFPotential(
             mono=select_optional(
                 new.driving_potential.mono, old.driving_potential.mono
             ),
@@ -416,8 +423,11 @@ def _select_map_result(
             quad=select_optional(
                 new.driving_potential.quad, old.driving_potential.quad
             ),
-        ),
+        )
+    return SCFMapResult(
+        mapped_x=_select_tensor(mask, new.mapped_x, old.mapped_x),
         spectral=spectral,
+        driving_potential=driving_potential,
     )
 
 
@@ -638,6 +648,37 @@ def finalize_scf_potential(
     )
 
 
+def finalize_scf_fock(
+    map_result: SCFMapResult,
+    inputs: SCFInputs,
+    iterations: Tensor,
+    converged: Tensor,
+    residual: Tensor,
+    trajectory_status: SCFTrajectoryStatus | None,
+) -> SCFSolveResult:
+    """Finalize Fock mode from one spectrum of the selected mapped matrix."""
+    final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
+    final_charges = final_evaluation.charges
+    final_potential = potential_from_charges(final_charges, inputs)
+    h0_energy = inputs.ihelp.reduce_orbital_to_atom(
+        final_evaluation.orbital_energy
+    )
+    energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
+    fenergy = free_energy_from_spectral(final_evaluation, inputs)
+    return SCFSolveResult(
+        map_result=map_result,
+        final_evaluation=final_evaluation,
+        final_charges=final_charges,
+        final_potential=final_potential,
+        energy=energy,
+        fenergy=fenergy,
+        iterations=iterations,
+        converged=converged,
+        residual=residual,
+        trajectory_status=trajectory_status,
+    )
+
+
 def solve_scf_simple(
     guess: Tensor, inputs: SCFInputs, settings: SCFSolverSettings
 ) -> SCFSolveResult:
@@ -670,6 +711,21 @@ def solve_scf_potential_simple(
         outcome.map_result,
         inputs,
         layout,
+        outcome.iterations,
+        outcome.converged,
+        outcome.residual,
+        outcome.trajectory_status,
+    )
+
+
+def solve_scf_fock_simple(
+    guess: Tensor, inputs: SCFInputs, settings: SCFSolverSettings
+) -> SCFSolveResult:
+    """Solve single-System Fock mode with functional simple mixing."""
+    outcome = _solve_map(guess, settings, lambda x: fock_map(x, inputs))
+    return finalize_scf_fock(
+        outcome.map_result,
+        inputs,
         outcome.iterations,
         outcome.converged,
         outcome.residual,

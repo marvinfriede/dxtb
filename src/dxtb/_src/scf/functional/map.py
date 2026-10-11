@@ -26,17 +26,17 @@ from dxtb import IndexHelper
 from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.typing import Tensor
 
-from ..utils import get_density
 from ...wavefunction import filling
+from ..utils import get_density
 from .data import (
+    PotentialLayout,
     SCFCharges,
     SCFInputs,
     SCFMapResult,
-    SCFSpectralResult,
-    PotentialLayout,
     SCFPotential,
-    pack_potential,
+    SCFSpectralResult,
     pack_charges,
+    pack_potential,
     potential_layout,
     unpack_charges,
     unpack_potential,
@@ -45,11 +45,14 @@ from .data import (
 __all__ = [
     "evaluate_hamiltonian",
     "evaluate_potential",
+    "fock_initial_guess",
+    "fock_map",
     "potential_from_charges",
     "potential_initial_guess",
     "potential_to_hamiltonian",
     "potential_map",
     "scf_map",
+    "validate_fock_state",
 ]
 
 
@@ -221,14 +224,14 @@ def evaluate_potential(
 
 def _map_result(
     mapped_x: Tensor,
-    driving_potential: SCFPotential,
     spectral: SCFSpectralResult,
+    driving_potential: SCFPotential | None = None,
 ) -> SCFMapResult:
     """Bind representation-specific map values to a shared spectral result."""
     return SCFMapResult(
         mapped_x=mapped_x,
-        driving_potential=driving_potential,
         spectral=spectral,
+        driving_potential=driving_potential,
     )
 
 
@@ -244,8 +247,8 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
     spectral = evaluate_potential(driving_potential, inputs)
     return _map_result(
         pack_charges(spectral.charges, inputs.charge_layout),
-        driving_potential,
         spectral,
+        driving_potential,
     )
 
 
@@ -257,8 +260,49 @@ def potential_map(
     spectral = evaluate_potential(driving_potential, inputs)
     mapped_potential = potential_from_charges(spectral.charges, inputs)
     return _map_result(
-        pack_potential(mapped_potential, layout), driving_potential, spectral
+        pack_potential(mapped_potential, layout), spectral, driving_potential
     )
+
+
+def validate_fock_state(hamiltonian: Tensor, inputs: SCFInputs) -> None:
+    """Validate fixed single-System Fock matrix structure."""
+    expected = inputs.integrals.hcore.shape
+    if hamiltonian.ndim != 2 or hamiltonian.shape != expected:
+        raise ValueError(
+            "Fock state must be a single-System matrix with shape "
+            f"{expected}; received shape {tuple(hamiltonian.shape)}."
+        )
+
+
+def fock_initial_guess(charges: SCFCharges, inputs: SCFInputs) -> Tensor:
+    """Build the initial Fock matrix from the physical charge guess."""
+    potential = potential_from_charges(charges, inputs)
+    integrals = inputs.integrals
+    return potential_to_hamiltonian(
+        integrals.hcore,
+        integrals.overlap,
+        integrals.dipole,
+        integrals.quadrupole,
+        inputs.ihelp,
+        potential,
+    )
+
+
+def fock_map(hamiltonian: Tensor, inputs: SCFInputs) -> SCFMapResult:
+    """Evaluate one raw Fock map ``H -> spectrum -> charges -> potential -> H``."""
+    validate_fock_state(hamiltonian, inputs)
+    spectral = evaluate_hamiltonian(hamiltonian, inputs)
+    mapped_potential = potential_from_charges(spectral.charges, inputs)
+    integrals = inputs.integrals
+    mapped_hamiltonian = potential_to_hamiltonian(
+        integrals.hcore,
+        integrals.overlap,
+        integrals.dipole,
+        integrals.quadrupole,
+        inputs.ihelp,
+        mapped_potential,
+    )
+    return _map_result(mapped_hamiltonian, spectral)
 
 
 def potential_initial_guess(

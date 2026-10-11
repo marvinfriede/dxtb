@@ -29,7 +29,7 @@ from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
 from .data import PotentialLayout, SCFInputs, SCFMapResult
-from .map import potential_map, scf_map
+from .map import fock_map, potential_map, scf_map
 from .solver import (
     SCFSolveResult,
     _project_potential_padding,
@@ -37,6 +37,7 @@ from .solver import (
     _solve_map_control,
     _SolverOutcome,
     finalize_scf,
+    finalize_scf_fock,
     finalize_scf_potential,
 )
 
@@ -47,6 +48,7 @@ __all__ = [
     "setup_anderson_solver_settings",
     "solve_scf_anderson",
     "solve_scf_potential_anderson",
+    "solve_scf_fock_anderson",
 ]
 
 
@@ -254,6 +256,23 @@ def solve_scf_potential_anderson(
         outcome.map_result,
         inputs,
         layout,
+        outcome.iterations,
+        outcome.converged,
+        outcome.residual,
+        outcome.trajectory_status,
+    )
+
+
+def solve_scf_fock_anderson(
+    guess: Tensor, inputs: SCFInputs, settings: AndersonSettings
+) -> SCFSolveResult:
+    """Solve single-System Fock mode with functional Anderson mixing."""
+    outcome = _solve_map_anderson(
+        guess, settings, lambda x: fock_map(x, inputs)
+    )
+    return finalize_scf_fock(
+        outcome.map_result,
+        inputs,
         outcome.iterations,
         outcome.converged,
         outcome.residual,

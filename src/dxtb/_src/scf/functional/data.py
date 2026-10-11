@@ -166,14 +166,16 @@ class SCFMapResult:
     """Physical outputs from one raw representation-map evaluation.
 
     ``mapped_x`` is the raw output in the selected solver representation.
-    ``driving_potential`` is the potential supplied to the spectral
-    evaluation. ``spectral`` owns the Hamiltonian, density, charges, orbital
-    energies, coefficients, occupation and status produced by that evaluation.
+    ``driving_potential`` is the potential supplied to a charge- or
+    potential-driven spectral evaluation. It is structurally absent for a
+    Fock-driven evaluation. ``spectral`` owns the Hamiltonian, density,
+    charges, orbital energies, coefficients, occupation and status produced
+    by that evaluation.
     """
 
     mapped_x: Tensor
-    driving_potential: SCFPotential
     spectral: SCFSpectralResult
+    driving_potential: SCFPotential | None = None
 
     @property
     def charges(self) -> SCFCharges:

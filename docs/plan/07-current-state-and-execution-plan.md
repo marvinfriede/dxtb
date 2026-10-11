@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.4a parallel path done | Pure charge and potential maps plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Fock mode, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
+| E4             | partial — E4.0–E4.4b parallel path done | Pure charge, potential, and single-System Fock maps plus fixed-trip functional Simple and Anderson solvers, including tensor-status finite-temperature Fermi occupation and free energy, are tested in parallel; production still uses the legacy engine. Dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -1231,13 +1231,30 @@ future eager adapter must require subsolve validity first; valid `maxiter=0`
 remains an accepted one-shot result despite `converged=False`, matching the
 legacy early return before its warning/forced-convergence branch.
 
-## E4.4b Functional Fock representation (open)
+## E4.4b Functional Fock representation (done; parallel only)
 
-Fock mode remains unimplemented. The shared `evaluate_hamiltonian` spectral
-evaluator is the intended starting point, but matrix layout, raw-map behavior,
-and extra final conversion require their own executable characterization and
-representation-specific tests. Do not infer Fock behavior from charge or
-potential mode.
+The functional single-System Fock map consumes an exact `(nao, nao)` matrix
+without value-based `PADNZ` cleanup or packed-batch semantics. It shares
+`evaluate_hamiltonian` with charge/potential maps and the common fixed-trip
+Simple/Anderson solver controls. Initial guess formation is the pure
+charge-to-potential-to-Hamiltonian conversion and performs no spectrum.
+
+Fock finalization deliberately distinguishes map and public phases:
+
+| Value | Phase |
+| --- | --- |
+| `map_result.mapped_x` | selected mapped `H_(k+1)` |
+| `map_result.spectral.hamiltonian` | input `H_k` that generated that raw map |
+| `final_evaluation.hamiltonian` and public Hamiltonian | one extra spectrum of selected `H_(k+1)` |
+| public charges | `q_(k+2)` from that extra spectrum |
+| public potential | `V(q_(k+2))` |
+| energy and free energy | extra final spectral phase and its charges/occupation |
+
+That extra spectrum does not increment SCF iterations. All physically active
+raw-map Fermi statuses accumulate in `trajectory_status`; the final spectrum
+has its own status in `final_evaluation`. Fock remains single-System only;
+matrix padding and packed batching belong to E6/E7. No production route uses
+this implementation yet.
 
 ## E4.5 Production routing and eager compatibility (open)
 
