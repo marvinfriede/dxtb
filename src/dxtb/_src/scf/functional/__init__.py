@@ -16,6 +16,13 @@
 # limitations under the License.
 """Functional SCF building blocks, not yet used by the production solver."""
 
+from .anderson import (
+    AndersonSettings,
+    AndersonState,
+    anderson_mix,
+    setup_anderson_solver_settings,
+    solve_scf_anderson,
+)
 from .data import (
     ChargeLayout,
     SCFCharges,
@@ -40,6 +47,8 @@ from .solver import (
 )
 
 __all__ = [
+    "AndersonSettings",
+    "AndersonState",
     "ChargeLayout",
     "SCFCharges",
     "SCFInputs",
@@ -50,14 +59,17 @@ __all__ = [
     "SCFPotential",
     "pack_charges",
     "finalize_scf",
+    "anderson_mix",
     "interaction_energy_from_charges",
     "potential_from_charges",
     "potential_to_hamiltonian",
     "scf_map",
     "setup_scf_inputs",
+    "setup_anderson_solver_settings",
     "setup_simple_solver_settings",
     "simple_mix",
     "solve_scf_simple",
+    "solve_scf_anderson",
     "unpack_charges",
     "validate_functional_scf_interactions",
 ]

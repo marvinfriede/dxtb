@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0/E4.1 parallel path done | Pure charge-mode map and fixed-trip functional simple solver are tested in parallel; production still uses the legacy engine. Functional Anderson/Broyden, finite-temperature Fermi, potential/Fock modes, and solver integration remain open. |
+| E4             | partial — E4.0/E4.1/E4.2 parallel path done | Pure charge-mode map plus fixed-trip functional Simple and Anderson solvers are tested in parallel; production still uses the legacy engine. Finite-temperature Fermi, potential/Fock modes, dynamic damping compatibility, eager adapter, production routing, and legacy-loop removal remain open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -990,8 +990,8 @@ The internal `scf/functional/solver.py` implements frozen
 `SCFSolverSettings`, pure `simple_mix`, raw-residual status values, a
 fixed-trip charge solver, and separate finalization. It accepts only simple
 linear mixing, no dynamic damping, one System, charge mode, and the E4.0
-zero-temperature inputs. Anderson and Broyden are rejected rather than
-approximated. Effective `x_atol` and `x_atol_max` include the existing
+zero-temperature inputs. Anderson and Broyden are unsupported by E4.1 rather
+than approximated. Effective `x_atol` and `x_atol_max` include the existing
 Simple-mixer dtype-resolution downgrade; `f_atol` is absent.
 
 The solver evaluates the initial `G(guess)` once. With `mix_guess=True`, it
@@ -1016,9 +1016,9 @@ composition; a real fixed-System charge-guess vmap is also covered.
 
 The implementation remains an internal parallel path. `Calculator`,
 `System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`, and implicit mode
-are unchanged. E4 remains partial: functional Anderson/Broyden, production
-solver integration, no-culling batch state, finite-temperature Fermi, and
-potential/Fock modes remain open. E3 still owns the transitional spectral
+are unchanged. E4 remains partial: production solver integration, no-culling
+legacy cleanup, finite-temperature Fermi, and potential/Fock modes remain
+open. E3 still owns the transitional spectral
 derivative discrepancy; its test now attributes mode selection to explicit
 eigensolver branches without requiring the discrepancy to remain nonzero.
 
@@ -1080,20 +1080,58 @@ def solver_step(
 The physical equation is `G(x) - x = 0`; mixer history belongs only to
 `SCFSolverState`. No mutation of inputs, map results, or incoming solver state.
 
-## E4.2 Functional Anderson/Broyden mixer state (open)
+## E4.2 Functional Anderson mixer state (done, parallel only)
 
-Advanced Anderson/Broyden histories are state values. Simple linear mixing is
-already implemented as the stateless E4.1 function.
+The functional full-solver mixer scope is Simple and Anderson. Legacy full
+mode resolves configured linear mixing to Simple and Anderson to Anderson;
+configured Broyden warns and falls back to Anderson unless strict mode is on,
+where it raises `NotImplementedError`. Functional numerical settings receive
+the already-resolved effective mixer. A future eager compatibility adapter
+owns that warning/error behavior.
 
-Refactor mixer classes so that:
+Functional Broyden is not a full-solver prerequisite. The legacy implicit
+root solver uses xitorch `broyden1`; replacement of that root-solving route and
+its Broyden behavior belongs to future E3/implicit work around the common
+`G(x)-x=0` map.
 
-```python
-new_value, new_mixer_state = mix(value, old_value, mixer_state, settings)
-```
+Anderson history is a frozen state value, and the transition reproduces the
+legacy warm-up, history ordering, diagonal rescaling, and linear solve without
+in-place writes. E4.1 Simple solver behavior remains unchanged. Dynamic damping
+is still unsupported by the functional solver and must be resolved before
+production routing. `generations=0` is rejected as invalid: the legacy mixer
+fails on its first transition when it reads the absent second history row.
 
-No mixer object owns changing history.
+## E4.3 Transform-compatible finite-temperature occupation (open)
 
-## E4.3 No culling
+Implement fixed-trip tensor-masked Fermi occupation and free-energy response.
+The current functional map only supports charge mode at effectively zero
+electronic temperature.
+
+## E4.4 Potential and Fock convergence modes (open)
+
+Extend the functional map/solver to potential mode and then resolve remaining
+Fock-mode support without changing the common physical-map semantics.
+
+## E4.5 Production routing and eager compatibility (open)
+
+Only after finite-temperature and convergence-mode support, add the eager
+warning/error adapter and route production singlepoint through the functional
+solver. Current defaults are `MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and
+`FERMI_ETEMP=300 K`. Full/unrolled legacy mode resolves the default Broyden
+selection to Anderson with a warning when `strict=False`, and raises when
+`strict=True`. The functional numerical solver must receive effective
+Anderson settings; warning/error emission belongs to the future eager adapter.
+E4.2 alone is therefore not sufficient for production integration.
+
+Dynamic damping compatibility also remains open before routing. Do not silently
+ignore `damp_dynamic=True` in the functional path.
+
+## E4.6 Legacy loop/culling deletion (open)
+
+After production parity is established, remove the old iteration loop and
+cull/restore machinery. Do not implement this before E4.5 parity.
+
+## Functional solver loop contract
 
 Delete the optimization where converged batch entries are sliced out and all dependent objects are culled/restored.
 
@@ -1726,17 +1764,17 @@ Recommended sequence:
 - raw map and production driver stay unchanged.
 - characterize forward parity and transform behavior before routing.
 
-### PR E4.2: functional Anderson/Broyden state
+### PR E4.2: functional Anderson state
 
-- keep solver history explicit; do not alter the production driver.
+- keep Anderson history explicit; Broyden remains future implicit/E3 work.
+- do not alter the production driver.
 
-### PR E4.3: integrate functional SCF state/step
+### PR E4.3-E4.6: staged solver completion
 
-- only after mixer state and compatibility semantics are accepted.
-
-### PR E4.4: fixed-shape loop, delete culling
-
-- then delete cull/restore.
+- E4.3 finite-temperature occupation/Fermi;
+- E4.4 potential mode and remaining Fock-mode support;
+- E4.5 eager compatibility adapter and production routing;
+- E4.6 fixed-shape cleanup and legacy loop/cull/restore deletion after parity.
 
 ### PR C5+: Node migration from leaves upward
 

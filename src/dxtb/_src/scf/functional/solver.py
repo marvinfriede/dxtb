@@ -190,12 +190,40 @@ def _solve_map(
     map_fn: Callable[[Tensor], SCFMapResult],
 ) -> _SolverOutcome:
     """Run a fixed-trip simple-mixing solver around one raw map callback."""
+    return _solve_map_control(
+        guess,
+        maxiter=settings.maxiter,
+        mix_guess=settings.mix_guess,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
+        map_fn=map_fn,
+        mix_fn=lambda old, mapped, state, step, active: (
+            simple_mix(old, mapped, settings.damp),
+            None,
+        ),
+    )
+
+
+def _solve_map_control(
+    guess: Tensor,
+    *,
+    maxiter: int,
+    mix_guess: bool,
+    x_atol: float,
+    x_atol_max: float,
+    map_fn: Callable[[Tensor], SCFMapResult],
+    mix_fn: Callable[
+        [Tensor, Tensor, object | None, int, Tensor],
+        tuple[Tensor, object | None],
+    ],
+) -> _SolverOutcome:
+    """Run common fixed-trip status control around a raw map and mixer."""
     initial = map_fn(guess)
     initial_residual = _residual(initial.mapped_x - guess).as_tensor()
     iterations = torch.ones((), dtype=torch.int64, device=guess.device)
     active = torch.ones((), dtype=torch.bool, device=guess.device)
 
-    if settings.maxiter == 0:
+    if maxiter == 0:
         return _SolverOutcome(
             map_result=initial,
             iterations=iterations,
@@ -203,20 +231,22 @@ def _solve_map(
             residual=initial_residual,
         )
 
-    current_x = (
-        simple_mix(guess, initial.mapped_x, settings.damp)
-        if settings.mix_guess
-        else initial.mapped_x
-    )
+    mixer_state: object | None = None
+    if mix_guess:
+        current_x, mixer_state = mix_fn(
+            guess, initial.mapped_x, mixer_state, 1, active
+        )
+    else:
+        current_x = initial.mapped_x
     final_result = initial
     residual_value = initial_residual
 
-    for _ in range(settings.maxiter):
+    for index in range(maxiter):
         candidate = map_fn(current_x)
         raw_delta = candidate.mapped_x - current_x
         candidate_residual = _residual(raw_delta)
-        is_converged = (candidate_residual.l2 < settings.x_atol) & (
-            candidate_residual.max_abs < settings.x_atol_max
+        is_converged = (candidate_residual.l2 < x_atol) & (
+            candidate_residual.max_abs < x_atol_max
         )
         final_result = _select_map_result(active, candidate, final_result)
         residual_value = _select_tensor(
@@ -224,7 +254,14 @@ def _solve_map(
         )
         iterations = torch.where(active, iterations + 1, iterations)
         active_after_step = active & ~is_converged
-        mixed_x = simple_mix(current_x, candidate.mapped_x, settings.damp)
+        mixer_step = index + (2 if mix_guess else 1)
+        mixed_x, mixer_state = mix_fn(
+            current_x,
+            candidate.mapped_x,
+            mixer_state,
+            mixer_step,
+            active,
+        )
         current_x = _select_tensor(active_after_step, mixed_x, current_x)
         active = active_after_step
 
