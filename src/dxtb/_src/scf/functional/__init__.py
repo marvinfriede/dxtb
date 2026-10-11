@@ -44,6 +44,7 @@ from .solver import (
     interaction_energy_from_charges,
     setup_simple_solver_settings,
     simple_mix,
+    functional_result_ok,
     solve_scf_simple,
 )
 
@@ -61,6 +62,7 @@ __all__ = [
     "SCFPotential",
     "pack_charges",
     "finalize_scf",
+    "functional_result_ok",
     "anderson_mix",
     "interaction_energy_from_charges",
     "potential_from_charges",

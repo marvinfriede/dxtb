@@ -1033,19 +1033,22 @@ def get_fermi_entropy(
     Tensor
         Orbital-resolved free energy, summed over the channels (``[b, n]``).
     """
+    if bool(torch.all(kt < 3e-7).item()):
+        return get_fermi_entropy_low_temperature(occupation, kt)
+    return get_fermi_entropy_finite(occupation, emo, kt, mask)
+
+
+def get_fermi_entropy_low_temperature(occupation: Tensor, kt: Tensor) -> Tensor:
+    """Return the legacy clamped entropy expression below the Fermi cutoff."""
     eps = torch.tensor(
         torch.finfo(occupation.dtype).eps,
         device=occupation.device,
         dtype=occupation.dtype,
     )
-    g = torch.log(
-        torch.clamp(occupation, min=eps) ** torch.clamp(occupation, min=eps)
-        * torch.clamp(1 - occupation, min=eps)
-        ** torch.clamp(1 - occupation, min=eps)
-    )
-    if bool(torch.all(kt < 3e-7).item()):
-        return g.sum(-2) * kt
-    return get_fermi_entropy_finite(occupation, emo, kt, mask)
+    occ = torch.clamp(occupation, min=eps)
+    hole = torch.clamp(1 - occupation, min=eps)
+    g = torch.log(occ**occ * hole**hole)
+    return g.sum(-2) * kt
 
 
 def get_fermi_entropy_finite(

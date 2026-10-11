@@ -276,11 +276,14 @@ if maxiter > 0:  # static configuration branch; zero is supported
         final_map_result = tree_where(active, map_result, final_map_result)
         residual = tree_where(active, residual_values(raw_residual), residual)
         iterations = where(active, iterations + 1, iterations)
+        transition_active = active & ~newly_converged
         candidate_solver_state = solver_step(
-            solver_state, map_result, solver_settings
+            solver_state, map_result, solver_settings, transition_active
         )
-        solver_state = tree_where(active, candidate_solver_state, solver_state)
-        active = active & ~newly_converged
+        solver_state = tree_where(
+            transition_active, candidate_solver_state, solver_state
+        )
+        active = transition_active
 
 converged = zeros_like(active)
 if maxiter > 0:
@@ -303,8 +306,19 @@ The candidate physical result is accepted for currently active systems,
 including systems that converge on that evaluation; later evaluations freeze
 their physical result and status. Anderson/Broyden/simple mixer history and
 dynamic damping state belong only to `SCFSolverState`; mixer settings belong to
-`SCFInputs` or static solver configuration. The solver transition is a pure
-function.
+a separate static solver-settings value, never `SCFInputs`. The solver
+transition is a pure function.
+
+The canonical functional control deliberately uses the post-convergence
+`transition_active = active & ~newly_converged` mask for the mixer transition.
+Current mutable `SelfConsistentFieldFull` instead calls `mixer.iter(q_new, q)`
+before checking `mixer.converged`, so it advances the mixer on a converged raw
+map. E4 removes this dead transition. The selected converged physical map
+result is unchanged, but this is not exact legacy side-effect/error parity:
+legacy Anderson may fail while solving a mixer system after the raw residual
+already meets convergence; canonical E4 accepts that map without the physical
+transition. E4.5 must review this deliberate compatibility decision before
+production routing.
 
 The raw convergence residual is exactly:
 

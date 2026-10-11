@@ -1101,13 +1101,21 @@ is still unsupported by the functional solver and must be resolved before
 production routing. `generations=0` is rejected as invalid: the legacy mixer
 fails on its first transition when it reads the absent second history row.
 
-The raw convergence test precedes the mixer transition. A raw map that
-satisfies convergence becomes the selected physical result and does not
-advance functional mixer state. Fixed-trip execution may still evaluate a
-masked dummy transition, but its `transition_active` mask is false and no
-physical solver or history state advances. This mask is true only when a lane
-did not converge on the current raw map and requires a mixer transition to
-construct the next iterate.
+The canonical functional solver tests the raw convergence residual before its
+physical mixer transition. A raw map that satisfies convergence becomes the
+selected physical result and does not advance functional mixer state. Fixed-
+trip execution may evaluate a masked dummy transition, but
+`transition_active` is false and no solver/history state advances.
+
+This intentionally removes one legacy side effect. Current
+`SelfConsistentFieldFull` calls `mixer.iter(q_new, q)` and only then reads
+`mixer.converged`; thus it advances the mixer on the convergence step. The
+canonical functional solver does not perform that dead transition. The
+selected converged physical map result is unchanged, but error/side-effect
+parity is not exact: legacy Anderson may fail while solving the mixer system
+for a residual that already satisfies convergence, while canonical E4 accepts
+the raw physical result without that transition. E4.5 must review and accept
+this deliberate solver-bug fix before production routing.
 
 ## E4.3 Transform-compatible finite-temperature occupation (done, parallel only)
 
@@ -1119,10 +1127,58 @@ guard, and equal/atomic entropy partitions are preserved in the functional
 results. Production singlepoint still uses the legacy solver; this package
 does not change its routing or the whole-System `vmap` status.
 
+The temperature/free-energy value exists independently of whether smearing is
+active: exactly zero temperature has zero free energy; positive temperatures
+below `3e-7` Hartree retain the legacy Aufbau occupation and clamped low-T
+entropy; the cutoff itself and higher temperatures use fixed-trip Fermi
+occupation. `SCFSolveResult.converged` describes only the outer raw SCF
+residual. A future eager adapter must aggregate that with selected-map Fermi
+search convergence, electron-count validity, and input-temperature/electron
+validity before reporting overall success. Below the smearing cutoff no Fermi
+search runs and `fermi_status` is `None`.
+
 ## E4.4 Potential and Fock convergence modes (open)
 
-Extend the functional map/solver to potential mode and then resolve remaining
-Fock-mode support without changing the common physical-map semantics.
+Before implementation, executable legacy characterizations lock the three
+representation phases. Charge mode maps `q_k -> V(q_k) -> H -> density ->
+q_(k+1)` and returns `q_(k+1)` without another eigensolve. Potential mode maps
+`p_k -> H(p_k) -> density -> q_(k+1) -> p_(k+1)`; after selecting the mapped
+potential, legacy final conversion evaluates `p_(k+1) -> H -> density ->
+q_(k+2)`, then reports `V(q_(k+2))`. Fock mode maps `H_k -> density ->
+q_(k+1) -> p_(k+1) -> H_(k+1)`; final conversion evaluates `H_(k+1) ->
+density -> q_(k+2)` and reports `V(q_(k+2))`.
+
+Consequently, potential/Fock public charges, potential, density, occupation,
+and free energy can come from a final spectral evaluation beyond the selected
+raw map. Their returned Hamiltonian/energy fields must be characterized
+individually; charge-mode finalization cannot simply be reused. The focused
+characterization counts raw map evaluations, mixer transitions, and final
+conversion eigensolves for `maxiter=0/1/2` and both `mix_guess` values, and
+also covers 300 K final conversion plus GFN2 potential multipoles.
+
+The characterized phase ownership is: charge mode returns charges from the
+selected `G(q_k)` output, while Hamiltonian, density, `emo`, coefficients,
+occupation, orbital energy, and `fenergy` remain from the selected spectral
+evaluation driven by `V(q_k)`; public potential and interaction energy use
+`V(q_(k+1))` and `q_(k+1)`. Potential mode returns `q_(k+2)` and
+`V(q_(k+2))`; its Hamiltonian, density, `emo`, coefficients, occupation,
+orbital energy, and `fenergy` come from the extra final spectrum driven by
+selected `p_(k+1)`. Fock mode returns `q_(k+2)` and `V(q_(k+2))`; its public
+Hamiltonian is selected raw `H_(k+1)`, while density, `emo`, coefficients,
+occupation, orbital energy, and `fenergy` come from the final spectrum of
+that same `H_(k+1)`. The public electronic energy combines the orbital energy
+from the final phase applicable to each representation with interaction
+energy computed from the returned charges. The zero-budget case has one raw
+map in all modes and an additional conversion spectrum only in potential and
+Fock modes; this conversion does not increment the SCF iteration count.
+
+Implement in separate steps: E4.4a functional potential representation first,
+then E4.4b Fock representation. Factor one pure potential-driven spectral
+evaluator where practical, but keep representation-specific finalization.
+The Fermi status/free-energy inputs for potential/Fock public results must
+come from the final conversion spectrum. `SCFInputs` remains physical/setup
+data only; solver settings and a static convergence representation belong in
+separate values.
 
 ## E4.5 Production routing and eager compatibility (open)
 
@@ -1134,6 +1190,12 @@ selection to Anderson with a warning when `strict=False`, and raises when
 `strict=True`. The functional numerical solver must receive effective
 Anderson settings; warning/error emission belongs to the future eager adapter.
 E4.2 alone is therefore not sufficient for production integration.
+
+Before routing, explicitly review the convergence-step mixer side effect:
+canonical functional control deliberately skips a transition after accepting
+a converged raw map, while the legacy loop calls `mixer.iter` before checking
+convergence. This is an accepted functional solver bug fix only after E4.5
+records that compatibility decision.
 
 Dynamic damping compatibility also remains open before routing. Do not silently
 ignore `damp_dynamic=True` in the functional path.
@@ -1198,7 +1260,7 @@ The loop trip count is static.
 
 An eager-only outer wrapper may eventually stop early if measurement justifies it, but the transform-critical function remains fixed-shape.
 
-## E4.4 Delete cull/restore after the new loop works
+### Cleanup scope
 
 Delete:
 

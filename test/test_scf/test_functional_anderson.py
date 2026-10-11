@@ -465,10 +465,8 @@ def test_anderson_history_freezes_after_two_active_transitions(
     torch.testing.assert_close(states[3][2].f_hist, states[1][2].f_hist)
 
 
-def test_anderson_constant_residual_convergence_matches_legacy_control() -> (
-    None
-):
-    """An accelerated convergence step never solves singular history."""
+def test_anderson_constant_residual_converges_without_next_transition() -> None:
+    """Canonical control accepts the converged map before another transition."""
     settings = replace(
         _settings(
             generations=1,

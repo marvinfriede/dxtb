@@ -89,6 +89,7 @@ class FermiSettings:
     """Resolved finite-temperature occupation settings for one SCF call."""
 
     kt: Tensor
+    smear: bool
     maxiter: int
     threshold: Tensor
     diff_order: int
@@ -203,8 +204,8 @@ def setup_scf_inputs(
     from tad_mctc import storch
 
     inverse_cholesky = storch.inv_cholesky_factor(overlap, is_posdef=True)
-    kt = integrals.hcore.new_tensor(config.fermi.etemp * KELVIN2AU)
-    if config.fermi.etemp * KELVIN2AU < 3.0e-7:
+    kt_value = config.fermi.etemp * KELVIN2AU
+    if kt_value == 0.0:
         fermi_settings = None
     else:
         if config.fermi.thresh is None:
@@ -219,7 +220,8 @@ def setup_scf_inputs(
                 dtype=integrals.hcore.dtype,
             )
         fermi_settings = FermiSettings(
-            kt=kt,
+            kt=integrals.hcore.new_tensor(kt_value),
+            smear=kt_value >= 3.0e-7,
             maxiter=config.fermi.maxiter,
             threshold=threshold,
             diff_order=config.fermi.diff_order,

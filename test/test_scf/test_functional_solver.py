@@ -256,6 +256,35 @@ def test_finite_temperature_simple_budget_matrix(
     assert comparison.actual.converged.item() is False
 
 
+def test_atomic_partition_supports_reverse_and_vmap() -> None:
+    """Atomic finite-T free energy supports gradients and fixed-System vmap."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 2,
+            "fermi_etemp": 300.0,
+            "fermi_partition": labels.FERMI_PARTITION_ATOMIC,
+        },
+    )
+    settings = setup_simple_solver_settings(
+        case.system.config.scf, case.positions.dtype
+    )
+
+    def free_energy(guess: torch.Tensor) -> torch.Tensor:
+        return solve_scf_simple(guess, case.inputs, settings).fenergy.sum()
+
+    leaf = case.x.clone().requires_grad_(True)
+    gradient = torch.autograd.grad(free_energy(leaf), leaf)[0]
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+    guesses = torch.stack((case.x, case.x + 1.0e-3, case.x - 1.0e-3))
+    mapped = vmap(free_energy)(guesses)
+    looped = torch.stack([free_energy(guess) for guess in guesses])
+    _assert_tensor_equal(mapped, looped)
+
+
 def test_finite_temperature_simple_normal_convergence() -> None:
     """Finite-T Simple reaches the same converged legacy result."""
     comparison = _compare_legacy_simple(

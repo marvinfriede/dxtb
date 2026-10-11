@@ -45,6 +45,7 @@ __all__ = [
     "SCFSolveResult",
     "SCFSolverSettings",
     "finalize_scf",
+    "functional_result_ok",
     "interaction_energy_from_charges",
     "setup_simple_solver_settings",
     "simple_mix",
@@ -92,6 +93,25 @@ class SCFSolveResult:
     iterations: Tensor
     converged: Tensor
     residual: Tensor
+
+
+def functional_result_ok(result: SCFSolveResult) -> Tensor:
+    """Return aggregate functional success without changing outer status.
+
+    ``result.converged`` describes only the outer SCF residual. Finite-
+    temperature occupation additionally requires every selected-map Fermi
+    channel to converge and pass its validity and electron-count checks.
+    """
+    status = result.map_result.fermi_status
+    if status is None:
+        return result.converged
+    return (
+        result.converged
+        & status.converged.all()
+        & status.electron_count_ok.all()
+        & ~status.invalid_temperature.any()
+        & ~status.too_many_electrons.any()
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -344,12 +364,17 @@ def finalize_scf(
         fenergy = torch.zeros_like(energy)
     else:
         settings = inputs.fermi_settings
-        entropy = filling.get_fermi_entropy_finite(
-            map_result.occupation,
-            map_result.emo,
-            settings.kt,
-            inputs.orbital_mask,
-        )
+        if settings.smear:
+            entropy = filling.get_fermi_entropy_finite(
+                map_result.occupation,
+                map_result.emo,
+                settings.kt,
+                inputs.orbital_mask,
+            )
+        else:
+            entropy = filling.get_fermi_entropy_low_temperature(
+                map_result.occupation, settings.kt
+            )
         if settings.partition == labels.FERMI_PARTITION_EQUAL:
             real = real_atoms(inputs.numbers)
             count = real.count_nonzero(dim=-1).unsqueeze(-1)

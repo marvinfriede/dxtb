@@ -70,6 +70,7 @@ def _prepare_case(
     par: ParamModule | None = None,
     int_level: int | None = None,
     scf_options: dict[str, object] | None = None,
+    setup_functional: bool = True,
 ) -> SimpleNamespace:
     sample = samples[sample_name]
     numbers = sample["numbers"].to(device="cpu")
@@ -152,17 +153,19 @@ def _prepare_case(
         system.config.scf.guess,
     )
     x = engine._guess(guess)
-    inputs = setup_scf_inputs(
-        numbers,
-        integrals,
-        n0,
-        occupation,
-        nel,
-        interactions,
-        interaction_data,
-        system.ihelp,
-        system.config.scf,
-    )
+    inputs = None
+    if setup_functional:
+        inputs = setup_scf_inputs(
+            numbers,
+            integrals,
+            n0,
+            occupation,
+            nel,
+            interactions,
+            interaction_data,
+            system.ihelp,
+            system.config.scf,
+        )
     return SimpleNamespace(
         method=method,
         sample_name=sample_name,

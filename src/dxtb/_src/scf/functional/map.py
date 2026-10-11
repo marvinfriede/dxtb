@@ -157,8 +157,8 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
     """Evaluate one raw charge-mode map ``G(x)`` without solver state.
 
     The map is single-System and contains no mixing, convergence check, or
-    persistent state. Finite-temperature occupation remains deferred to the
-    transform-compatible Fermi work in a later E4 package.
+    persistent state. Charge-mode raw maps support both Aufbau occupation and
+    fixed-trip finite-temperature Fermi occupation.
     """
     charges_in = unpack_charges(x, inputs.charge_layout)
     driving_potential = potential_from_charges(charges_in, inputs)
@@ -174,7 +174,7 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
 
     emo, coefficients = _transitional_diagonalize(hamiltonian, inputs)
     fermi_status = None
-    if inputs.fermi_settings is None:
+    if inputs.fermi_settings is None or not inputs.fermi_settings.smear:
         occupation = inputs.occupation
     else:
         settings = inputs.fermi_settings
