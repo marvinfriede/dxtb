@@ -83,7 +83,12 @@ def _run_simple(
 def _run_simple_values(
     initial: torch.Tensor, offset: torch.Tensor, slope: torch.Tensor
 ) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
 ]:
     """Return tensor leaves so the solver outcome can be mapped with vmap."""
     outcome = _run_simple(initial, offset, slope)
@@ -93,6 +98,7 @@ def _run_simple_values(
         outcome.converged,
         outcome.residual,
         outcome.damping_state.value,
+        outcome.damping_state.switched,
     )
 
 
@@ -129,6 +135,7 @@ def test_dynamic_damping_switches_after_transition_for_next_step() -> None:
     torch.testing.assert_close(
         outcome.damping_state.value, torch.tensor(0.8, dtype=torch.float64)
     )
+    assert outcome.damping_state.switched
 
 
 def test_mix_guess_does_not_switch_and_convergence_freezes_damping() -> None:
@@ -160,6 +167,7 @@ def test_mix_guess_does_not_switch_and_convergence_freezes_damping() -> None:
         seen[1], torch.tensor(0.008, dtype=torch.float64)
     )
     assert bool(outcome.converged)
+    assert not outcome.damping_state.switched
     torch.testing.assert_close(
         outcome.damping_state.value, torch.tensor(0.2, dtype=torch.float64)
     )
@@ -174,14 +182,15 @@ def test_dynamic_damping_is_lane_local_under_vmap() -> None:
     looped = [
         _run_simple_values(initials[i], offsets[i], slopes[i]) for i in range(3)
     ]
-    for mapped_value, index in zip(mapped, range(5)):
+    for mapped_value, index in zip(mapped, range(6)):
         torch.testing.assert_close(
             mapped_value, torch.stack([value[index] for value in looped])
         )
     assert torch.equal(
-        mapped[-1],
+        mapped[-2],
         torch.tensor([0.2, 0.8, 0.8], dtype=torch.float64),
     )
+    assert mapped[-1].tolist() == [False, True, True]
 
 
 def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
@@ -216,18 +225,20 @@ def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
             outcome.converged,
             outcome.residual,
             outcome.damping_state.value,
+            outcome.damping_state.switched,
         )
 
     mapped = vmap(run)(initials, offsets)
     looped = [run(initials[i], offsets[i]) for i in range(3)]
-    for mapped_value, index in zip(mapped, range(5)):
+    for mapped_value, index in zip(mapped, range(6)):
         torch.testing.assert_close(
             mapped_value, torch.stack([value[index] for value in looped])
         )
     assert torch.equal(
-        mapped[-1],
+        mapped[-2],
         torch.tensor([0.2, 0.8, 0.8], dtype=torch.float64),
     )
+    assert mapped[-1].tolist() == [False, True, True]
 
 
 def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:

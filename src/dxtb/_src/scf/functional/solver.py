@@ -91,6 +91,7 @@ class DampingState:
     """Tensor-valued effective ordinary damping during a solve."""
 
     value: Tensor
+    switched: Tensor
 
 
 @dataclass(frozen=True, eq=False)
@@ -98,6 +99,7 @@ class SCFSolverDiagnostics:
     """Tensor-valued numerical diagnostics for eager compatibility."""
 
     final_damp: Tensor
+    dynamic_damping_switched: Tensor
 
 
 @dataclass(frozen=True, eq=False)
@@ -179,6 +181,41 @@ class SCFTrajectoryStatus:
     electron_count_ok: Tensor
     invalid_temperature: Tensor
     too_many_electrons: Tensor
+    first_failure: Tensor
+
+
+FERMI_FAILURE_NONE = 0
+FERMI_FAILURE_INVALID_TEMPERATURE = 1
+FERMI_FAILURE_TOO_MANY_ELECTRONS = 2
+FERMI_FAILURE_NONCONVERGENCE = 3
+FERMI_FAILURE_ELECTRON_COUNT = 4
+
+
+def fermi_failure_code(status: FermiStatus | None, *, like: Tensor) -> Tensor:
+    """Return the first eager failure category for one spectral evaluation."""
+    if status is None:
+        return torch.zeros((), dtype=torch.int64, device=like.device)
+    code = torch.zeros((), dtype=torch.int64, device=status.converged.device)
+    code = torch.where(
+        ~status.electron_count_ok.all(),
+        torch.full_like(code, FERMI_FAILURE_ELECTRON_COUNT),
+        code,
+    )
+    code = torch.where(
+        ~status.converged.all(),
+        torch.full_like(code, FERMI_FAILURE_NONCONVERGENCE),
+        code,
+    )
+    code = torch.where(
+        status.too_many_electrons.any(),
+        torch.full_like(code, FERMI_FAILURE_TOO_MANY_ELECTRONS),
+        code,
+    )
+    return torch.where(
+        status.invalid_temperature.any(),
+        torch.full_like(code, FERMI_FAILURE_INVALID_TEMPERATURE),
+        code,
+    )
 
 
 def trajectory_status_from_map(
@@ -192,6 +229,7 @@ def trajectory_status_from_map(
         electron_count_ok=status.electron_count_ok,
         invalid_temperature=status.invalid_temperature,
         too_many_electrons=status.too_many_electrons,
+        first_failure=fermi_failure_code(status, like=status.converged),
     )
 
 
@@ -227,7 +265,13 @@ def accumulate_trajectory_status(
                 initial.too_many_electrons,
                 torch.zeros_like(initial.too_many_electrons),
             ),
+            first_failure=torch.where(
+                physical_active,
+                initial.first_failure,
+                torch.zeros_like(initial.first_failure),
+            ),
         )
+    new_failure = fermi_failure_code(new_status, like=new_status.converged)
     return SCFTrajectoryStatus(
         fermi_converged=torch.where(
             physical_active,
@@ -248,6 +292,15 @@ def accumulate_trajectory_status(
             physical_active,
             old.too_many_electrons | new_status.too_many_electrons,
             old.too_many_electrons,
+        ),
+        first_failure=torch.where(
+            physical_active & (old.first_failure == FERMI_FAILURE_NONE),
+            torch.where(
+                new_failure != FERMI_FAILURE_NONE,
+                new_failure,
+                old.first_failure,
+            ),
+            old.first_failure,
         ),
     )
 
@@ -352,7 +405,10 @@ def _update_damping(
         return current
     switch = transition_active & (residual_l2 < settings.threshold)
     factor = current.value.new_tensor(settings.factor)
-    return DampingState(torch.where(switch, factor, current.value))
+    return DampingState(
+        torch.where(switch, factor, current.value),
+        current.switched | switch,
+    )
 
 
 def _residual(delta: Tensor) -> SCFResidual:
@@ -520,7 +576,10 @@ def _solve_map_control(
     initial_residual = _residual(initial.mapped_x - guess).as_tensor()
     iterations = torch.ones((), dtype=torch.int64, device=guess.device)
     active = torch.ones((), dtype=torch.bool, device=guess.device)
-    damping = DampingState(guess.new_tensor(initial_damp))
+    damping = DampingState(
+        guess.new_tensor(initial_damp),
+        torch.zeros((), dtype=torch.bool, device=guess.device),
+    )
 
     if maxiter == 0:
         return _SolverOutcome(
@@ -637,7 +696,14 @@ def finalize_scf(
                 map_result.mapped_x.new_tensor(0.0)
                 if damping_state is None
                 else damping_state.value
-            )
+            ),
+            dynamic_damping_switched=(
+                torch.zeros(
+                    (), dtype=torch.bool, device=map_result.mapped_x.device
+                )
+                if damping_state is None
+                else damping_state.switched
+            ),
         ),
     )
 
@@ -716,7 +782,14 @@ def finalize_scf_potential(
                 map_result.mapped_x.new_tensor(0.0)
                 if damping_state is None
                 else damping_state.value
-            )
+            ),
+            dynamic_damping_switched=(
+                torch.zeros(
+                    (), dtype=torch.bool, device=map_result.mapped_x.device
+                )
+                if damping_state is None
+                else damping_state.switched
+            ),
         ),
     )
 
@@ -755,7 +828,14 @@ def finalize_scf_fock(
                 map_result.mapped_x.new_tensor(0.0)
                 if damping_state is None
                 else damping_state.value
-            )
+            ),
+            dynamic_damping_switched=(
+                torch.zeros(
+                    (), dtype=torch.bool, device=map_result.mapped_x.device
+                )
+                if damping_state is None
+                else damping_state.switched
+            ),
         ),
     )
 

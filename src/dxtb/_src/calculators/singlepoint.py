@@ -70,6 +70,13 @@ from dxtb._src.typing import Tensor
 __all__ = ["singlepoint"]
 
 
+def _iteration_tensor(value: int | Tensor, like: Tensor) -> Tensor:
+    """Preserve functional iteration tensors and normalize legacy integers."""
+    if isinstance(value, Tensor):
+        return value
+    return torch.tensor(value, dtype=torch.int64, device=like.device)
+
+
 def _interaction_data(
     system: System, positions: Tensor, interactions=None
 ) -> InteractionListCache:
@@ -440,9 +447,5 @@ def singlepoint(
         dipole_integrals=matrices.dipole,
         quadrupole_integrals=matrices.quadrupole,
         overlap_norm=overlap_norm,
-        iterations=torch.tensor(
-            scf_results["iterations"],
-            dtype=torch.int64,
-            device=positions.device,
-        ),
+        iterations=_iteration_tensor(scf_results["iterations"], positions),
     )

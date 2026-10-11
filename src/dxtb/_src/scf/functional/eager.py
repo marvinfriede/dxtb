@@ -49,6 +49,11 @@ from .data import (
     setup_scf_inputs,
 )
 from .solver import (
+    FERMI_FAILURE_ELECTRON_COUNT,
+    FERMI_FAILURE_INVALID_TEMPERATURE,
+    FERMI_FAILURE_NONCONVERGENCE,
+    FERMI_FAILURE_NONE,
+    FERMI_FAILURE_TOO_MANY_ELECTRONS,
     SCFSolveResult,
     SCFSolverSettings,
     setup_simple_solver_settings,
@@ -129,6 +134,8 @@ def resolve_full_scf_route(
         return FullSCFRoute(
             "legacy", config.scp_mode, config.mixer, reason="non-SCF method"
         )
+    if config.maxiter < 0:
+        raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
         return FullSCFRoute(
             "legacy", config.scp_mode, config.mixer, reason="batched System"
@@ -140,6 +147,13 @@ def resolve_full_scf_route(
             config.scp_mode,
             config.mixer,
             reason=f"unsupported interaction extension(s): {names}",
+        )
+    if config.fermi.maxiter < 0:
+        return FullSCFRoute(
+            "legacy",
+            config.scp_mode,
+            config.mixer,
+            reason="negative Fermi maxiter retains legacy behavior",
         )
     if config.mixer == labels.MIXER_BROYDEN:
         message = (
@@ -179,40 +193,44 @@ def functional_core_result(result: SCFSolveResult) -> FunctionalCoreResult:
 
 
 def _check_subsolve_status(result: SCFSolveResult) -> None:
-    """Apply legacy-compatible eager error priority to tensor statuses."""
-    statuses = []
+    """Interpret trajectory failures before the later public spectrum."""
     if result.trajectory_status is not None:
-        status = result.trajectory_status
-        statuses.append(
-            (
-                status.fermi_converged,
-                status.electron_count_ok,
-                status.invalid_temperature,
-                status.too_many_electrons,
-            )
-        )
+        failure = result.trajectory_status.first_failure
+        if bool((failure != FERMI_FAILURE_NONE).any()):
+            _raise_failure_code(failure)
     status = result.final_evaluation.fermi_status
     if status is not None:
-        statuses.append(
-            (
-                status.converged,
-                status.electron_count_ok,
-                status.invalid_temperature,
-                status.too_many_electrons,
-            )
-        )
-    if not statuses:
-        return
-    invalid = any(bool(value[2].any()) for value in statuses)
-    if invalid:
+        from .solver import fermi_failure_code
+
+        code = fermi_failure_code(status, like=result.converged)
+        if bool((code != FERMI_FAILURE_NONE).any()):
+            _raise_failure_code(code)
+
+
+def _raise_failure_code(code: Tensor) -> None:
+    """Raise the eager error family encoded by the earliest failure code."""
+    if bool((code == FERMI_FAILURE_INVALID_TEMPERATURE).any()):
         raise ValueError("Electronic Temperature must be non-negative.")
-    too_many = any(bool(value[3].any()) for value in statuses)
-    if too_many:
+    if bool((code == FERMI_FAILURE_TOO_MANY_ELECTRONS).any()):
         raise ValueError("Number of electrons exceeds the number of orbitals.")
-    if any(not bool(value[0].all()) for value in statuses):
+    if bool((code == FERMI_FAILURE_NONCONVERGENCE).any()):
         raise RuntimeError("Fermi energy failed to converge.")
-    if any(not bool(value[1].all()) for value in statuses):
+    if bool((code == FERMI_FAILURE_ELECTRON_COUNT).any()):
         raise RuntimeError("Number of electrons changed during Fermi smearing.")
+
+
+def _nonconvergence_message(
+    config: ConfigSCF, route: FullSCFRoute, switched: bool
+) -> str:
+    """Format the legacy warning from configured Python values."""
+    mixer_label = (
+        "Simple" if route.effective_mixer == labels.MIXER_LINEAR else "Anderson"
+    )
+    damp = config.damp_dynamic_factor if switched else config.damp
+    return (
+        f"SCF does not converge after {config.maxiter} cycles using "
+        f"{mixer_label} mixing with a damping factor of {damp}."
+    )
 
 
 def _solver_settings(config: ConfigSCF, dtype: torch.dtype):
@@ -334,11 +352,60 @@ def run_functional_full_eager(
         )(guess)
         return EagerFullResult(route, None, legacy)
 
-    if route.warning is not None:
-        OutputHandler.warn(route.warning)
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
+    if route.warning is not None:
+        OutputHandler.warn(route.warning)
     functional_config = replace(config, mixer=route.effective_mixer)
+    result = run_prepared_functional_full(
+        numbers,
+        guess,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        cache,
+        ihelp,
+        functional_config,
+        integrals,
+        route,
+    )
+    _check_subsolve_status(result)
+
+    # maxiter=0 is the explicitly accepted one-shot policy, even under
+    # force_convergence; only positive budgets apply outer convergence policy.
+    if config.maxiter > 0 and not bool(result.converged):
+        assert result.diagnostics is not None
+        message = _nonconvergence_message(
+            config,
+            route,
+            bool(result.diagnostics.dynamic_damping_switched),
+        )
+        if config.force_convergence:
+            raise SCFConvergenceError(message)
+        OutputHandler.warn(message, SCFConvergenceWarning)
+
+    return EagerFullResult(route, functional_core_result(result), None)
+
+
+def run_prepared_functional_full(
+    numbers: Tensor,
+    guess: Tensor,
+    n0: Tensor,
+    occupation: Tensor,
+    nel: Tensor,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    route: FullSCFRoute,
+) -> SCFSolveResult:
+    """Run only functional physics after common SCF preparation is complete."""
+    if route.kind != "functional":
+        raise ValueError(
+            "The prepared functional runner requires a functional route."
+        )
     inputs = setup_scf_inputs(
         numbers,
         integrals,
@@ -348,26 +415,6 @@ def run_functional_full_eager(
         interactions,
         cache,
         ihelp,
-        functional_config,
+        config,
     )
-    result = _solve_representation(guess, inputs, functional_config)
-    _check_subsolve_status(result)
-
-    # maxiter=0 is the explicitly accepted one-shot policy, even under
-    # force_convergence; only positive budgets apply outer convergence policy.
-    if config.maxiter > 0 and not bool(result.converged):
-        mixer_label = (
-            "Simple"
-            if route.effective_mixer == labels.MIXER_LINEAR
-            else "Anderson"
-        )
-        damp = float(result.diagnostics.final_damp)
-        message = (
-            f"SCF does not converge after {config.maxiter} cycles using "
-            f"{mixer_label} mixing with a damping factor of {damp}."
-        )
-        if config.force_convergence:
-            raise SCFConvergenceError(message)
-        OutputHandler.warn(message, SCFConvergenceWarning)
-
-    return EagerFullResult(route, functional_core_result(result), None)
+    return _solve_representation(guess, inputs, config)

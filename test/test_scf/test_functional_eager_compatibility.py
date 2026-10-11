@@ -26,17 +26,24 @@ from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
 
 from dxtb._src.calculators.config.scf import ConfigFermi
 from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.calculators.singlepoint import _iteration_tensor
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.scf.functional import (
     resolve_full_scf_route,
+    run_prepared_functional_full,
     run_functional_full_eager,
 )
+from dxtb._src.scf.functional import eager as functional_eager
 from dxtb._src.scf.functional.solver import (
+    FERMI_FAILURE_ELECTRON_COUNT,
+    FERMI_FAILURE_NONE,
     SCFTrajectoryStatus,
 )
-from dxtb._src.scf.functional.eager import _check_subsolve_status
+from dxtb._src.scf.functional.eager import (
+    _check_subsolve_status,
+)
 from dxtb._src.scf.functional import anderson as functional_anderson
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.wavefunction.filling import FermiStatus
@@ -55,6 +62,7 @@ def test_default_full_route_resolves_potential_and_broyden_compatibility() -> (
         scp_mode=labels.SCP_MODE_POTENTIAL,
         fermi=ConfigFermi(),
     )
+    OutputHandler.clear_warnings()
     route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
     assert route.kind == "functional"
     assert route.representation == labels.SCP_MODE_POTENTIAL
@@ -64,6 +72,7 @@ def test_default_full_route_resolves_potential_and_broyden_compatibility() -> (
         "Using Anderson mixer instead."
     )
     assert config.fermi.etemp == 300.0
+    assert OutputHandler.warnings == []
 
 
 def test_broyden_strict_is_rejected_by_static_resolver() -> None:
@@ -72,6 +81,137 @@ def test_broyden_strict_is_rejected_by_static_resolver() -> None:
     config = replace(case.system.config.scf, strict=True)
     with pytest.raises(NotImplementedError, match="Broyden mixer"):
         resolve_full_scf_route(config, case.interactions, case.system.ihelp)
+
+
+def test_invalid_spin_precedes_broyden_warning_in_both_routes() -> None:
+    """Shared reference preparation fails before mixer compatibility warnings."""
+    from dxtb._src.scf.iterator import solve as legacy_solve
+
+    case = _prepare_case(GFN1_XTB)
+    invalid_spin = case.spin + 1.0
+    OutputHandler.clear_warnings()
+    with pytest.raises(ValueError, match="unpaired electrons") as legacy_error:
+        legacy_solve(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+            case.integrals,
+            case.refocc,
+        )
+    assert OutputHandler.warnings == []
+
+    OutputHandler.clear_warnings()
+    with pytest.raises(type(legacy_error.value), match="unpaired electrons"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+            case.integrals,
+            case.refocc,
+        )
+    assert OutputHandler.warnings == []
+
+
+def test_negative_fermi_maxiter_is_legacy_owned() -> None:
+    """Negative Fermi iteration limits retain legacy runtime behavior."""
+    OutputHandler.clear_warnings()
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "fermi_etemp": 300.0,
+            "fermi_maxiter": -1,
+            "mixer": labels.MIXER_BROYDEN,
+            "scp_mode": labels.SCP_MODE_CHARGE,
+            "maxiter": 0,
+        },
+        setup_functional=False,
+    )
+    route = resolve_full_scf_route(
+        case.system.config.scf, case.interactions, case.system.ihelp
+    )
+    assert route.kind == "legacy"
+    assert route.reason == "negative Fermi maxiter retains legacy behavior"
+    legacy_warnings = list(OutputHandler.warnings)
+    OutputHandler.clear_warnings()
+    with pytest.raises(RuntimeError, match="Fermi energy failed to converge"):
+        case.engine(case.initial_charges.clone())
+    assert OutputHandler.warnings == []
+    OutputHandler.clear_warnings()
+    with pytest.raises(RuntimeError, match="Fermi energy failed to converge"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+            case.integrals,
+            case.refocc,
+        )
+    assert OutputHandler.warnings == legacy_warnings
+
+
+def test_negative_scf_maxiter_is_functional_configuration_error() -> None:
+    """E0's negative outer iteration policy is rejected before execution."""
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, maxiter=-1)
+    with pytest.raises(ValueError, match="maxiter >= 0"):
+        resolve_full_scf_route(config, case.interactions, case.system.ihelp)
+
+
+def test_float32_damping_warning_uses_configured_decimal() -> None:
+    """Legacy and functional float32 warnings preserve configured decimals."""
+    options = {
+        "mixer": labels.MIXER_LINEAR,
+        "scp_mode": labels.SCP_MODE_CHARGE,
+        "maxiter": 12,
+        "damp": 0.2,
+        "damp_dynamic": True,
+        "damp_dynamic_factor": 0.99,
+        "x_atol": 0.0,
+        "x_atol_max": 0.0,
+    }
+    legacy_case = _prepare_case(
+        GFN1_XTB, dtype=torch.float32, scf_options=options
+    )
+    functional_case = _prepare_case(
+        GFN1_XTB, dtype=torch.float32, scf_options=options
+    )
+    OutputHandler.clear_warnings()
+    legacy_case.engine(legacy_case.initial_charges.clone())
+    legacy_warnings = list(OutputHandler.warnings)
+    OutputHandler.clear_warnings()
+    functional = run_functional_full_eager(
+        functional_case.system.numbers,
+        functional_case.positions,
+        functional_case.charge,
+        functional_case.spin,
+        functional_case.interactions,
+        functional_case.interaction_data,
+        functional_case.system.ihelp,
+        functional_case.system.config.scf,
+        functional_case.integrals,
+        functional_case.refocc,
+    )
+    assert functional.functional is not None
+    diagnostics = functional.functional.solve_result.diagnostics
+    assert diagnostics is not None
+    assert diagnostics.dynamic_damping_switched
+    assert OutputHandler.warnings == legacy_warnings
+    assert OutputHandler.warnings
+    assert "damping factor of 0.99." in OutputHandler.warnings[-1][0]
 
 
 @pytest.mark.parametrize(
@@ -194,6 +334,14 @@ def test_eager_subsolve_error_priority(
         electron_count_ok=status.electron_count_ok,
         invalid_temperature=status.invalid_temperature,
         too_many_electrons=status.too_many_electrons,
+        first_failure=torch.tensor(
+            (
+                FERMI_FAILURE_ELECTRON_COUNT
+                if category == "electron_count_ok"
+                else 0
+            ),
+            dtype=torch.int64,
+        ),
     )
     synthetic = replace(
         solve_result,
@@ -201,6 +349,118 @@ def test_eager_subsolve_error_priority(
         trajectory_status=trajectory,
     )
     with pytest.raises(exception, match=message):
+        _check_subsolve_status(synthetic)
+
+
+@pytest.mark.parametrize(
+    ("representation", "first_code", "final_code", "message"),
+    [
+        (
+            labels.SCP_MODE_CHARGE,
+            FERMI_FAILURE_ELECTRON_COUNT,
+            0,
+            "Number of electrons changed during Fermi smearing",
+        ),
+        (
+            labels.SCP_MODE_POTENTIAL,
+            FERMI_FAILURE_ELECTRON_COUNT,
+            3,
+            "Number of electrons changed during Fermi smearing",
+        ),
+        (
+            labels.SCP_MODE_POTENTIAL,
+            3,
+            4,
+            "Fermi energy failed to converge",
+        ),
+        (
+            labels.SCP_MODE_POTENTIAL,
+            0,
+            3,
+            "Fermi energy failed to converge",
+        ),
+        (
+            labels.SCP_MODE_FOCK,
+            FERMI_FAILURE_ELECTRON_COUNT,
+            3,
+            "Number of electrons changed during Fermi smearing",
+        ),
+        (
+            labels.SCP_MODE_FOCK,
+            3,
+            4,
+            "Fermi energy failed to converge",
+        ),
+        (
+            labels.SCP_MODE_FOCK,
+            0,
+            3,
+            "Fermi energy failed to converge",
+        ),
+    ],
+    ids=[
+        "charge-earlier-error",
+        "potential-electron-before-fermi",
+        "potential-fermi-before-electron",
+        "potential-final-only",
+        "fock-electron-before-fermi",
+        "fock-fermi-before-electron",
+        "fock-final-only",
+    ],
+)
+def test_eager_failure_order_is_chronological(
+    representation: int, first_code: int, final_code: int, message: str
+) -> None:
+    """Trajectory failures precede later final-spectrum failures."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "scp_mode": representation,
+            "fermi_etemp": 300.0,
+            "maxiter": 0,
+        },
+    )
+    result = run_functional_full_eager(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+        case.integrals,
+        case.refocc,
+    ).functional
+    assert result is not None
+    solve_result = result.solve_result
+    trajectory = solve_result.trajectory_status
+    if first_code == 0:
+        trajectory = None
+    else:
+        assert trajectory is not None
+        trajectory = replace(
+            trajectory,
+            first_failure=torch.tensor(first_code, dtype=torch.int64),
+        )
+    final_status = solve_result.final_evaluation.fermi_status
+    assert final_status is not None
+    final_status = replace(
+        final_status,
+        converged=torch.tensor(final_code != 3),
+        electron_count_ok=torch.tensor(final_code != 4),
+        invalid_temperature=torch.tensor(final_code == 1),
+        too_many_electrons=torch.tensor(final_code == 2),
+    )
+    synthetic = replace(
+        solve_result,
+        trajectory_status=trajectory,
+        final_evaluation=replace(
+            solve_result.final_evaluation, fermi_status=final_status
+        ),
+    )
+    with pytest.raises(RuntimeError, match=message):
         _check_subsolve_status(synthetic)
 
 
@@ -443,6 +703,56 @@ def test_core_result_boundary_keeps_solver_status_tensors() -> None:
     assert isinstance(result.converged, torch.Tensor)
     assert isinstance(result.residual, torch.Tensor)
     assert result.iterations.ndim == 0
+    assert result.iterations is result.solve_result.iterations
+    assert result.converged is result.solve_result.converged
+    assert result.residual is result.solve_result.residual
+
+
+def test_iteration_tensor_boundary_preserves_existing_tensor() -> None:
+    """The future Result boundary does not copy functional iteration status."""
+    like = torch.ones((), dtype=torch.float64)
+    functional_iterations = torch.tensor(3, dtype=torch.int64)
+    assert (
+        _iteration_tensor(functional_iterations, like) is functional_iterations
+    )
+    legacy_iterations = _iteration_tensor(3, like)
+    assert legacy_iterations.dtype == torch.int64
+    assert legacy_iterations.device == like.device
+    assert legacy_iterations.item() == 3
+
+
+def test_prepared_functional_runner_does_not_repeat_common_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared functional execution consumes prepared tensors directly."""
+    case = _prepare_case(GFN1_XTB)
+    route = resolve_full_scf_route(
+        case.system.config.scf, case.interactions, case.system.ihelp
+    )
+    assert route.kind == "functional"
+    config = replace(case.system.config.scf, mixer=route.effective_mixer)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("common SCF preparation was repeated")
+
+    monkeypatch.setattr(functional_eager, "get_refocc", unexpected)
+    monkeypatch.setattr(functional_eager, "get_guess", unexpected)
+    result = run_prepared_functional_full(
+        case.system.numbers,
+        case.initial_charges,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        route,
+    )
+    assert isinstance(result.iterations, torch.Tensor)
+    assert isinstance(result.converged, torch.Tensor)
+    assert isinstance(result.residual, torch.Tensor)
 
 
 @pytest.mark.parametrize(

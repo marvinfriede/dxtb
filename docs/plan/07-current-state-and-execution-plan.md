@@ -1279,6 +1279,29 @@ legacy warning/error behavior for positive-budget nonconvergence. The
 transform-critical solve retains tensor-valued `iterations`, `converged`, and
 `residual`; only the eager adapter reads status on the host.
 
+E4.5a hardening preserves chronological failure policy. Each physically
+executed raw-map spectrum records its first failing Fermi category in tensor
+state; fixed-trip dummy maps after convergence do not participate. Eager
+interpretation checks that trajectory failure first, then the separate final
+public-spectrum status, and only then applies outer convergence policy.
+Exception types and stable message families are compatibility requirements;
+full legacy diagnostic suffixes are not retained by tensor status.
+
+The adapter resolves the route without side effects. It then shares
+`get_refocc` and, for iterative methods, `get_guess` preparation with legacy
+dispatch before emitting a configured-Broyden fallback warning.
+`run_prepared_functional_full` is the functional-only seam for E4.5b: it
+receives prepared tensors and has no legacy/implicit/experimental dispatch.
+Production `scf.solve` remains the owner of common preparation, non-SCF early
+return, existing mode dispatch, and legacy `*args`/`**kwargs` forwarding.
+
+Negative Fermi `maxiter` is not rejected by `ConfigFermi`; the functional
+resolver therefore marks that configuration legacy-owned until a separate
+configuration policy changes it. Negative outer SCF `maxiter` remains the E0
+canonical functional configuration error. Eager convergence warnings use
+configured Python damping values, while runtime damping and its switched
+state remain tensors.
+
 The functional adapter is tested directly but is not called by
 `scf.solve`, `singlepoint`, Calculator, or `SelfConsistentFieldFull`.
 
@@ -1295,6 +1318,19 @@ canonical functional control deliberately skips a transition after accepting
 a converged raw map, while the legacy loop calls `mixer.iter` before checking
 convergence. This is the intentional E0 solver correction. E4.5b must retain
 and review this difference rather than restoring the legacy dead transition.
+
+E4.5b must preserve eager ordering: first raw-trajectory subsolve failure,
+then final-public-spectrum failure, then positive-budget outer convergence
+policy. `maxiter=0` remains an accepted one-shot if both subsolve phases are
+valid, including with `force_convergence=True`. Negative Fermi `maxiter` stays
+on legacy until its global configuration policy is deliberately changed;
+negative SCF `maxiter` is intentionally rejected by E0. The production
+`Result.snapshot()` boundary must pass functional `iterations`, `converged`,
+and `residual` tensors directly, while legacy iteration integers may be
+normalized eagerly. The current singlepoint iteration normalization helper
+returns an existing Tensor unchanged and only creates a Tensor for legacy
+integer values. Do not force functional values through legacy
+`SCFResult(iterations: int)`.
 
 Single-System dynamic damping is characterized in E4.5a. Legacy batch-only
 GFN2 auto-Fock/culling behavior remains deferred to E6/E7 and must not leak into

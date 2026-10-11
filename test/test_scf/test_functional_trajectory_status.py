@@ -32,8 +32,13 @@ from dxtb._src.scf.functional import (
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional.solver import (
+    FERMI_FAILURE_ELECTRON_COUNT,
+    FERMI_FAILURE_INVALID_TEMPERATURE,
+    FERMI_FAILURE_NONE,
+    FERMI_FAILURE_NONCONVERGENCE,
     _solve_map_control,
     accumulate_trajectory_status,
+    fermi_failure_code,
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 
@@ -117,6 +122,34 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     assert functional_converged_and_valid(result).item() is False
 
 
+def test_newly_converged_candidate_contributes_first_failure() -> None:
+    """The physical map accepted by outer convergence still contributes status."""
+    calls = 0
+
+    def map_fn(x: torch.Tensor) -> SCFMapResult:
+        nonlocal calls
+        calls += 1
+        return _toy_result(torch.ones_like(x), valid=calls == 1)
+
+    outcome = _solve_map_control(
+        torch.zeros((), dtype=torch.float64),
+        maxiter=1,
+        mix_guess=False,
+        x_atol=0.1,
+        x_atol_max=0.1,
+        map_fn=map_fn,
+        mix_fn=lambda old, mapped, state, step, active, damp: (mapped, None),
+    )
+    assert outcome.converged.item()
+    assert outcome.map_result.fermi_status is not None
+    assert outcome.map_result.fermi_status.converged.item() is False
+    assert outcome.trajectory_status is not None
+    assert (
+        outcome.trajectory_status.first_failure.item()
+        == FERMI_FAILURE_INVALID_TEMPERATURE
+    )
+
+
 def test_trajectory_status_combines_failure_categories() -> None:
     """Each trajectory failure category remains visible after later success."""
     good = _toy_result(torch.ones(()), valid=True).fermi_status
@@ -127,6 +160,7 @@ def test_trajectory_status_combines_failure_categories() -> None:
         electron_count_ok=torch.tensor(True),
         invalid_temperature=torch.tensor(False),
         too_many_electrons=torch.tensor(False),
+        first_failure=torch.tensor(FERMI_FAILURE_NONE),
     )
 
     for field in (
@@ -170,6 +204,94 @@ def test_trajectory_status_combines_failure_categories() -> None:
             assert recovered.too_many_electrons.item()
 
 
+def test_first_failure_is_chronological_and_category_specific() -> None:
+    """An early post-smearing failure remains before later Fermi failure."""
+
+    def status(*, converged: bool, electron_count_ok: bool) -> FermiStatus:
+        return FermiStatus(
+            converged=torch.tensor(converged),
+            residual=torch.tensor(0.0),
+            invalid_temperature=torch.tensor(False),
+            too_many_electrons=torch.tensor(False),
+            electron_count_ok=torch.tensor(electron_count_ok),
+        )
+
+    active = torch.tensor(True)
+    trajectory = accumulate_trajectory_status(
+        None, status(converged=True, electron_count_ok=False), active
+    )
+    trajectory = accumulate_trajectory_status(
+        trajectory, status(converged=False, electron_count_ok=True), active
+    )
+    assert trajectory is not None
+    assert trajectory.first_failure.item() == FERMI_FAILURE_ELECTRON_COUNT
+    assert not trajectory.fermi_converged.item()
+    assert not trajectory.electron_count_ok.item()
+
+    reverse = accumulate_trajectory_status(
+        None, status(converged=False, electron_count_ok=True), active
+    )
+    reverse = accumulate_trajectory_status(
+        reverse, status(converged=True, electron_count_ok=False), active
+    )
+    assert reverse is not None
+    assert reverse.first_failure.item() == FERMI_FAILURE_NONCONVERGENCE
+
+
+def test_one_spectrum_priority_matches_eager_fermi_order() -> None:
+    """Search failure outranks post-smearing count failure in one spectrum."""
+    status = FermiStatus(
+        converged=torch.tensor([True, False]),
+        residual=torch.zeros(2),
+        invalid_temperature=torch.tensor([False, False]),
+        too_many_electrons=torch.tensor([False, False]),
+        electron_count_ok=torch.tensor([False, True]),
+    )
+    code = fermi_failure_code(status, like=torch.zeros(()))
+    assert code.item() == FERMI_FAILURE_NONCONVERGENCE
+
+
+def test_first_failure_vmap_is_lane_local() -> None:
+    """Each mapped lane retains its own earliest category and ignores dummies."""
+
+    def combine(lane: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        step_one = FermiStatus(
+            converged=lane != 2,
+            residual=lane.new_zeros(()),
+            invalid_temperature=torch.zeros_like(lane, dtype=torch.bool),
+            too_many_electrons=torch.zeros_like(lane, dtype=torch.bool),
+            electron_count_ok=lane != 1,
+        )
+        step_two = FermiStatus(
+            converged=lane != 1,
+            residual=lane.new_zeros(()),
+            invalid_temperature=torch.zeros_like(lane, dtype=torch.bool),
+            too_many_electrons=torch.zeros_like(lane, dtype=torch.bool),
+            electron_count_ok=lane != 2,
+        )
+        first = accumulate_trajectory_status(
+            None, step_one, torch.tensor(True, device=lane.device)
+        )
+        active = lane != 3
+        combined = accumulate_trajectory_status(first, step_two, active)
+        assert combined is not None
+        return (
+            combined.first_failure,
+            combined.fermi_converged,
+            combined.electron_count_ok,
+            active,
+        )
+
+    lanes = torch.arange(4)
+    actual = vmap(combine)(lanes)
+    expected = tuple(
+        torch.stack(values) for values in zip(*(combine(i) for i in lanes))
+    )
+    for got, want in zip(actual, expected):
+        torch.testing.assert_close(got, want, rtol=0.0, atol=0.0)
+    assert actual[0].tolist() == [0, 4, 3, 0]
+
+
 def test_inactive_dummy_status_does_not_pollute_trajectory() -> None:
     """Inactive fixed-trip map statuses do not change accumulated validity."""
     valid = _toy_result(torch.ones(()), valid=True).fermi_status
@@ -183,6 +305,7 @@ def test_inactive_dummy_status_does_not_pollute_trajectory() -> None:
     assert accumulated.fermi_converged.item()
     assert accumulated.electron_count_ok.item()
     assert not accumulated.invalid_temperature.item()
+    assert accumulated.first_failure.item() == FERMI_FAILURE_NONE
 
 
 def test_trajectory_status_vmap_matches_python_loop() -> None:

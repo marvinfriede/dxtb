@@ -22,6 +22,7 @@ from .eager import (
     FunctionalCoreResult,
     functional_core_result,
     resolve_full_scf_route,
+    run_prepared_functional_full,
     run_functional_full_eager,
 )
 
@@ -148,4 +149,5 @@ __all__ = [
     "functional_core_result",
     "resolve_full_scf_route",
     "run_functional_full_eager",
+    "run_prepared_functional_full",
 ]

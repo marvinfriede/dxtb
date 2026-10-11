@@ -74,6 +74,7 @@ def _prepare_case(
     field: torch.Tensor | None = None,
     positions: torch.Tensor | None = None,
     par: ParamModule | None = None,
+    dtype: torch.dtype = torch.float64,
     int_level: int | None = None,
     scf_options: dict[str, object] | None = None,
     setup_functional: bool = True,
@@ -81,14 +82,12 @@ def _prepare_case(
     sample = samples[sample_name]
     numbers = sample["numbers"].to(device="cpu")
     if positions is None:
-        positions = (
-            sample["positions"].to(device="cpu", dtype=torch.float64).clone()
-        )
+        positions = sample["positions"].to(device="cpu", dtype=dtype).clone()
     if par is None:
         par = get_param_module(
             "gfn1" if method == GFN1_XTB else "gfn2",
             device="cpu",
-            dtype=torch.float64,
+            dtype=dtype,
         )
     if int_level is None:
         int_level = (
@@ -110,7 +109,7 @@ def _prepare_case(
         numbers,
         par,
         device="cpu",
-        dtype=torch.float64,
+        dtype=dtype,
         opts=opts,
     )
     system = calc.model.setup(numbers, dd=calc.dd)
