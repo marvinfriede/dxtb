@@ -20,6 +20,7 @@ from .eager import (
     EagerFullResult,
     FullSCFRoute,
     FunctionalCoreResult,
+    apply_functional_full_policy,
     functional_core_result,
     resolve_full_scf_route,
     run_prepared_functional_full,
@@ -148,6 +149,7 @@ __all__ = [
     "functional_scf_interactions_eligible",
     "functional_core_result",
     "resolve_full_scf_route",
+    "apply_functional_full_policy",
     "run_functional_full_eager",
     "run_prepared_functional_full",
 ]

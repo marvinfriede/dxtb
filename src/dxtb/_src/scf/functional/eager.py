@@ -75,6 +75,7 @@ __all__ = [
     "FunctionalCoreResult",
     "EagerFullResult",
     "resolve_full_scf_route",
+    "apply_functional_full_policy",
     "functional_core_result",
     "run_functional_full_eager",
 ]
@@ -134,8 +135,6 @@ def resolve_full_scf_route(
         return FullSCFRoute(
             "legacy", config.scp_mode, config.mixer, reason="non-SCF method"
         )
-    if config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
         return FullSCFRoute(
             "legacy", config.scp_mode, config.mixer, reason="batched System"
@@ -155,6 +154,8 @@ def resolve_full_scf_route(
             config.mixer,
             reason="negative Fermi maxiter retains legacy behavior",
         )
+    if config.maxiter < 0:
+        raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if config.mixer == labels.MIXER_BROYDEN:
         message = (
             "Broyden mixer is not implemented for SCF with full gradient "
@@ -233,6 +234,29 @@ def _nonconvergence_message(
     )
 
 
+def apply_functional_full_policy(
+    result: SCFSolveResult,
+    config: ConfigSCF,
+    route: FullSCFRoute,
+) -> FunctionalCoreResult:
+    """Apply eager Fermi and convergence policy to a completed solve."""
+    _check_subsolve_status(result)
+
+    # maxiter=0 is an accepted one-shot even when force_convergence is set.
+    if config.maxiter > 0 and not bool(result.converged):
+        assert result.diagnostics is not None
+        message = _nonconvergence_message(
+            config,
+            route,
+            bool(result.diagnostics.dynamic_damping_switched),
+        )
+        if config.force_convergence:
+            raise SCFConvergenceError(message)
+        OutputHandler.warn(message, SCFConvergenceWarning)
+
+    return functional_core_result(result)
+
+
 def _solver_settings(config: ConfigSCF, dtype: torch.dtype):
     if config.mixer == labels.MIXER_LINEAR:
         return setup_simple_solver_settings(config, dtype)
@@ -303,6 +327,8 @@ def run_functional_full_eager(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
+    *args: object,
+    **kwargs: object,
 ) -> EagerFullResult:
     """Run the parallel functional route with legacy eager policy handling.
 
@@ -310,22 +336,30 @@ def run_functional_full_eager(
     Tensor-status inspection and warning/error behavior live here, outside
     the fixed-trip numerical solver.
     """
+    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
+    if not config.requires_iterations:
+        route = resolve_full_scf_route(config, interactions, ihelp, numbers)
+        legacy = solve_nonselfconsistent(
+            numbers,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            n0,
+            occupation,
+            **kwargs,
+        )
+        return EagerFullResult(route, None, legacy)
+
+    guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
     route = resolve_full_scf_route(config, interactions, ihelp, numbers)
     if route.kind == "legacy":
-        n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
-        if not config.requires_iterations:
-            legacy = solve_nonselfconsistent(
-                numbers,
-                interactions,
-                cache,
-                ihelp,
-                config,
-                integrals,
-                n0,
-                occupation,
+        if not isinstance(config.scf_mode, int):
+            raise ValueError(
+                "SCF mode must be an integer within `solve`. This can only "
+                "happen if you explicitly change the configuration object."
             )
-            return EagerFullResult(route, None, legacy)
-        guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
         if config.scf_mode == labels.SCF_MODE_IMPLICIT:
             from dxtb._src.scf.implicit import SelfConsistentFieldImplicit
 
@@ -334,29 +368,30 @@ def run_functional_full_eager(
             from dxtb._src.scf.unrolling import SelfConsistentFieldSingleShot
 
             engine_type = SelfConsistentFieldSingleShot
-        else:
+        elif config.scf_mode == labels.SCF_MODE_FULL:
             from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 
             engine_type = SelfConsistentFieldFull
+        else:
+            raise ValueError(f"Unknown SCF mode '{config.scf_mode}'.")
 
         legacy = engine_type(
             interactions,
             occupation,
             n0,
+            *args,
             numbers=numbers,
             ihelp=ihelp,
             cache=cache,
             integrals=integrals,
             config=config,
             nel=nel,
+            **kwargs,
         )(guess)
         return EagerFullResult(route, None, legacy)
 
-    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
-    guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
     if route.warning is not None:
         OutputHandler.warn(route.warning)
-    functional_config = replace(config, mixer=route.effective_mixer)
     result = run_prepared_functional_full(
         numbers,
         guess,
@@ -366,26 +401,12 @@ def run_functional_full_eager(
         interactions,
         cache,
         ihelp,
-        functional_config,
+        config,
         integrals,
         route,
     )
-    _check_subsolve_status(result)
-
-    # maxiter=0 is the explicitly accepted one-shot policy, even under
-    # force_convergence; only positive budgets apply outer convergence policy.
-    if config.maxiter > 0 and not bool(result.converged):
-        assert result.diagnostics is not None
-        message = _nonconvergence_message(
-            config,
-            route,
-            bool(result.diagnostics.dynamic_damping_switched),
-        )
-        if config.force_convergence:
-            raise SCFConvergenceError(message)
-        OutputHandler.warn(message, SCFConvergenceWarning)
-
-    return EagerFullResult(route, functional_core_result(result), None)
+    functional = apply_functional_full_policy(result, config, route)
+    return EagerFullResult(route, functional, None)
 
 
 def run_prepared_functional_full(
@@ -406,6 +427,12 @@ def run_prepared_functional_full(
         raise ValueError(
             "The prepared functional runner requires a functional route."
         )
+    if route.representation != config.scp_mode:
+        raise ValueError(
+            "The prepared functional route representation does not match "
+            "the SCF configuration."
+        )
+    effective_config = replace(config, mixer=route.effective_mixer)
     inputs = setup_scf_inputs(
         numbers,
         integrals,
@@ -415,6 +442,6 @@ def run_prepared_functional_full(
         interactions,
         cache,
         ihelp,
-        config,
+        effective_config,
     )
-    return _solve_representation(guess, inputs, config)
+    return _solve_representation(guess, inputs, effective_config)

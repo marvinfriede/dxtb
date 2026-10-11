@@ -1287,27 +1287,63 @@ public-spectrum status, and only then applies outer convergence policy.
 Exception types and stable message families are compatibility requirements;
 full legacy diagnostic suffixes are not retained by tensor status.
 
-The adapter resolves the route without side effects. It then shares
-`get_refocc` and, for iterative methods, `get_guess` preparation with legacy
-dispatch before emitting a configured-Broyden fallback warning.
-`run_prepared_functional_full` is the functional-only seam for E4.5b: it
-receives prepared tensors and has no legacy/implicit/experimental dispatch.
-Production `scf.solve` remains the owner of common preparation, non-SCF early
-return, existing mode dispatch, and legacy `*args`/`**kwargs` forwarding.
+The route resolver is static and side-effect free. Eager execution preserves
+the legacy preparation order: `get_refocc`, the non-SCF early return, then
+`get_guess`, and only then route resolution. Thus invalid spin/reference
+occupation errors precede strict-Broyden and functional-only configuration
+errors, while the configured-Broyden fallback warning is emitted only after
+both common preparation steps succeed. Direct resolver calls may report a
+route error without preparation; user-facing eager execution does not.
+`run_prepared_functional_full` is the functional-only seam for E4.5b. It
+accepts the original configuration, validates representation consistency,
+normalizes the configured mixer from `route.effective_mixer` in one place,
+and has no legacy/implicit/experimental dispatch. The separate
+`apply_functional_full_policy` owns eager Fermi and outer-convergence
+interpretation so E4.5b does not duplicate it. Production `scf.solve` remains
+the owner of common preparation, non-SCF early return, existing mode dispatch,
+and legacy `*args`/`**kwargs` forwarding.
 
 Negative Fermi `maxiter` is not rejected by `ConfigFermi`; the functional
 resolver therefore marks that configuration legacy-owned until a separate
-configuration policy changes it. Negative outer SCF `maxiter` remains the E0
-canonical functional configuration error. Eager convergence warnings use
-configured Python damping values, while runtime damping and its switched
-state remain tensors.
+configuration policy changes it. Negative outer SCF `maxiter` is the E0
+canonical configuration error only after common preparation and only for an
+otherwise functional-eligible single-System full-SCF route. Batch,
+custom-interaction, non-full, non-SCF, and negative-Fermi-maxiter
+legacy-owned configurations remain legacy-owned even when their SCF budget is
+negative. In particular, negative Fermi plus negative SCF `maxiter` stays on
+legacy. Eager convergence warnings use configured Python damping values,
+while runtime damping and its switched state remain tensors.
+
+`Result.snapshot()` accepts structural charge/potential values, so immutable
+functional charge/potential tensors pass through without conversion to legacy
+mutable containers. Functional `iterations`, `converged`, and `residual`
+tensors are passed through by identity; legacy Python iteration integers are
+normalized at the singlepoint boundary. The inactive eager adapter follows
+the same ordering and is not a replacement for the legacy dispatch function.
 
 The functional adapter is tested directly but is not called by
 `scf.solve`, `singlepoint`, Calculator, or `SelfConsistentFieldFull`.
 
 ## E4.5b Production routing (open)
 
-Production routing must call the reviewed E4.5a adapter only after its
+The E4.5b integration contract is to preserve `scf.iterator.solve()` as the
+common preparation and dispatch owner:
+
+```text
+get_refocc()
+if non-SCF: existing early return
+get_guess()
+if full mode: resolve route
+    if functional: emit route warning, run_prepared_functional_full,
+                   apply_functional_full_policy, return tensor result
+    else: existing SelfConsistentFieldFull path with *args/**kwargs
+elif implicit: existing implicit path
+elif experimental: existing experimental path
+```
+
+The legacy path keeps its forwarded `*args`/`**kwargs`; there is no
+catch-all functional-to-legacy fallback after numerical execution begins.
+Production routing must call the reviewed E4.5a prepared runner only after its
 side-by-side compatibility matrix is complete. Current defaults are
 `MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and `FERMI_ETEMP=300 K`; the static
 resolver now explicitly covers that combination. E4.5b still owns the actual

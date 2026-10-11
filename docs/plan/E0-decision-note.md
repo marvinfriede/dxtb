@@ -413,8 +413,13 @@ energy `-5.768234535786348`, and no warning. This confirms that the full-mode
 convergence point is controlled by the x tolerances, not by `f_atol`.
 
 Negative `maxiter` is outside the canonical E4 contract and must be rejected
-as invalid static configuration when the functional solver lands. This does
-not preserve accidental legacy behavior for a negative budget.
+as invalid static configuration when an otherwise functional-eligible,
+single-System full-SCF route is selected. Common `get_refocc` and `get_guess`
+preparation still precede that route decision. Batch, custom-interaction,
+non-full, non-SCF, and negative-Fermi-maxiter legacy-owned routes remain under
+their existing behavior; E4 does not seize ownership of their negative SCF
+budgets. This does not preserve accidental legacy behavior for a negative
+budget on the canonical functional route.
 
 The future core returns tensor-valued per-system `iterations`, `converged`, and
 `residual`. `converged` and `residual` describe the raw map criterion and the

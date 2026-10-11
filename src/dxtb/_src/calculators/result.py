@@ -24,13 +24,39 @@ Immutable values produced by a single-point calculation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from dxtb import OutputHandler
-from dxtb._src.components.interactions import Charges, Potential
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
 
 __all__ = ["ChargeResult", "Multipoles", "PotentialResult", "Result"]
+
+
+class ChargeLike(Protocol):
+    """Structural charge values accepted by Result.snapshot."""
+
+    @property
+    def mono(self) -> Tensor: ...
+
+    @property
+    def dipole(self) -> Tensor | None: ...
+
+    @property
+    def quad(self) -> Tensor | None: ...
+
+
+class PotentialLike(Protocol):
+    """Structural potential values accepted by Result.snapshot."""
+
+    @property
+    def mono(self) -> Tensor | None: ...
+
+    @property
+    def dipole(self) -> Tensor | None: ...
+
+    @property
+    def quad(self) -> Tensor | None: ...
 
 
 @dataclass(frozen=True, eq=False)
@@ -63,12 +89,12 @@ class Multipoles:
 class Result:
     """Immutable structure for single-system or legacy-batch outputs.
 
-    SCF currently exposes iteration count but no reliable convergence flag or
-    residual value, so those two planned fields remain ``None``. Fields are
-    never rebound by evaluation, and later evaluations do not mutate a prior
-    Result. Tensor values remain ordinary PyTorch tensors, so callers can still
-    mutate them in place. Charge and potential outputs use plain immutable
-    values whose tensors remain graph-connected.
+    Functional full-SCF routes provide convergence and residual tensors;
+    legacy fallback routes may leave those fields ``None``. Fields are never
+    rebound by evaluation, and later evaluations do not mutate a prior Result.
+    Tensor values remain ordinary PyTorch tensors, so callers can still mutate
+    them in place. Charge and potential outputs use plain immutable values
+    whose tensors remain graph-connected.
     """
 
     energy: Tensor
@@ -100,12 +126,12 @@ class Result:
         classical: tuple[tuple[str, Tensor], ...],
         fenergy: Tensor | None,
         iterations: Tensor,
-        charges: Charges | None = None,
+        charges: ChargeLike | None = None,
         density: Tensor | None = None,
         coefficients: Tensor | None = None,
         emo: Tensor | None = None,
         occupation: Tensor | None = None,
-        potential: Potential | None = None,
+        potential: PotentialLike | None = None,
         hamiltonian: Tensor | None = None,
         overlap: Tensor | None = None,
         hcore: Tensor | None = None,

@@ -25,6 +25,7 @@ import torch
 from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
 
 from dxtb._src.calculators.config.scf import ConfigFermi
+from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.calculators.singlepoint import _iteration_tensor
 from dxtb._src.components.interactions import InteractionList
@@ -83,6 +84,25 @@ def test_broyden_strict_is_rejected_by_static_resolver() -> None:
         resolve_full_scf_route(config, case.interactions, case.system.ihelp)
 
 
+def test_strict_broyden_valid_preparation_raises_after_guess() -> None:
+    """Strict mixer rejection remains after successful common preparation."""
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, strict=True)
+    with pytest.raises(NotImplementedError, match="Broyden mixer"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+
+
 def test_invalid_spin_precedes_broyden_warning_in_both_routes() -> None:
     """Shared reference preparation fails before mixer compatibility warnings."""
     from dxtb._src.scf.iterator import solve as legacy_solve
@@ -100,6 +120,45 @@ def test_invalid_spin_precedes_broyden_warning_in_both_routes() -> None:
             case.interaction_data,
             case.system.ihelp,
             case.system.config.scf,
+            case.integrals,
+            case.refocc,
+        )
+    assert OutputHandler.warnings == []
+
+
+def test_strict_broyden_invalid_spin_precedes_route_error() -> None:
+    """Common spin validation precedes strict mixer resolution."""
+    from dxtb._src.scf.iterator import solve as legacy_solve
+
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, strict=True)
+    invalid_spin = case.spin + 1.0
+    OutputHandler.clear_warnings()
+    with pytest.raises(ValueError, match="unpaired electrons") as legacy_error:
+        legacy_solve(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+    assert OutputHandler.warnings == []
+
+    with pytest.raises(type(legacy_error.value), match="unpaired electrons"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
             case.integrals,
             case.refocc,
         )
@@ -171,6 +230,102 @@ def test_negative_scf_maxiter_is_functional_configuration_error() -> None:
         resolve_full_scf_route(config, case.interactions, case.system.ihelp)
 
 
+def test_negative_scf_maxiter_invalid_spin_precedes_e0_error() -> None:
+    """Common reference validation precedes functional maxiter validation."""
+    from dxtb._src.scf.iterator import solve as legacy_solve
+
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, maxiter=-1)
+    invalid_spin = case.spin + 1.0
+    with pytest.raises(ValueError, match="unpaired electrons"):
+        legacy_solve(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+    with pytest.raises(ValueError, match="unpaired electrons"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            invalid_spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+
+
+def test_negative_scf_maxiter_valid_preparation_raises_e0_error() -> None:
+    """Functional-only negative maxiter is rejected after common setup."""
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, maxiter=-1)
+    with pytest.raises(ValueError, match="maxiter >= 0"):
+        run_functional_full_eager(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+
+
+def test_legacy_owned_routes_precede_negative_scf_maxiter() -> None:
+    """Batch, extensions and negative Fermi limits stay legacy-owned."""
+    case = _prepare_case(GFN1_XTB)
+    negative = replace(case.system.config.scf, maxiter=-1)
+    assert (
+        resolve_full_scf_route(
+            negative,
+            case.interactions,
+            case.system.ihelp,
+            case.system.numbers.unsqueeze(0),
+        ).kind
+        == "legacy"
+    )
+
+    class ExtendedField(ElectricField):
+        """A user extension retained by the legacy engine."""
+
+    extended = InteractionList(
+        *case.interactions.components,
+        ExtendedField(torch.zeros(3, dtype=case.positions.dtype)),
+    )
+    assert (
+        resolve_full_scf_route(
+            negative, extended, case.system.ihelp, case.system.numbers
+        ).kind
+        == "legacy"
+    )
+
+    negative_fermi = replace(
+        negative,
+        fermi=replace(negative.fermi, maxiter=-1),
+    )
+    route = resolve_full_scf_route(
+        negative_fermi,
+        case.interactions,
+        case.system.ihelp,
+        case.system.numbers,
+    )
+    assert route.kind == "legacy"
+    assert route.reason == "negative Fermi maxiter retains legacy behavior"
+
+
 def test_float32_damping_warning_uses_configured_decimal() -> None:
     """Legacy and functional float32 warnings preserve configured decimals."""
     options = {
@@ -237,6 +392,38 @@ def test_nonselfconsistent_method_remains_legacy_owned() -> None:
     assert not config.requires_iterations
     route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
     assert route.kind == "legacy"
+
+
+def test_nonselfconsistent_legacy_kwargs_are_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The eager wrapper preserves non-SCF iterator keyword forwarding."""
+    case = _prepare_case(GFN1_XTB)
+    config = replace(case.system.config.scf, method=labels.GFN0_XTB)
+    seen: dict[str, object] = {}
+
+    def capture(*args: object, **kwargs: object) -> dict[str, object]:
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(functional_eager, "solve_nonselfconsistent", capture)
+    options = {"method": "exacteig"}
+    result = run_functional_full_eager(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        case.refocc,
+        eigen_options=options,
+    )
+    assert result.route.kind == "legacy"
+    assert result.legacy == {}
+    assert seen["eigen_options"] is options
 
 
 def test_batched_numbers_remain_legacy_owned() -> None:
@@ -730,7 +917,6 @@ def test_prepared_functional_runner_does_not_repeat_common_preparation(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
     assert route.kind == "functional"
-    config = replace(case.system.config.scf, mixer=route.effective_mixer)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("common SCF preparation was repeated")
@@ -746,13 +932,132 @@ def test_prepared_functional_runner_does_not_repeat_common_preparation(
         case.interactions,
         case.interaction_data,
         case.system.ihelp,
-        config,
+        case.system.config.scf,
         case.integrals,
         route,
     )
     assert isinstance(result.iterations, torch.Tensor)
     assert isinstance(result.converged, torch.Tensor)
     assert isinstance(result.residual, torch.Tensor)
+
+
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_BROYDEN, labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
+    ids=["default-broyden", "simple", "anderson"],
+)
+def test_prepared_runner_uses_route_effective_mixer(mixer: int) -> None:
+    """Prepared execution normalizes mixer settings from the static route."""
+    options = {
+        "mixer": mixer,
+        "scp_mode": labels.SCP_MODE_POTENTIAL,
+        "fermi_etemp": 300.0,
+        "maxiter": 0,
+    }
+    case = _prepare_case(GFN1_XTB, scf_options=options)
+    config = case.system.config.scf
+    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
+    assert route.kind == "functional"
+    if mixer == labels.MIXER_BROYDEN:
+        assert route.effective_mixer == labels.MIXER_ANDERSON
+
+    direct = run_prepared_functional_full(
+        case.system.numbers,
+        case.initial_charges,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        route,
+    )
+    eager = run_functional_full_eager(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        case.refocc,
+    )
+    assert eager.functional is not None
+    _assert_tensor_equal(direct.hamiltonian, eager.functional.hamiltonian)
+
+
+def test_prepared_runner_rejects_representation_mismatch() -> None:
+    """A route cannot be reused with another convergence representation."""
+    case = _prepare_case(GFN1_XTB)
+    route = resolve_full_scf_route(
+        case.system.config.scf, case.interactions, case.system.ihelp
+    )
+    mismatched = replace(case.system.config.scf, scp_mode=labels.SCP_MODE_FOCK)
+    with pytest.raises(ValueError, match="representation does not match"):
+        run_prepared_functional_full(
+            case.system.numbers,
+            case.initial_charges,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            mismatched,
+            case.integrals,
+            route,
+        )
+
+
+def test_result_snapshot_retains_functional_tensor_identity() -> None:
+    """Result.snapshot accepts immutable outputs and retains tensor leaves."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "scp_mode": labels.SCP_MODE_CHARGE,
+            "maxiter": 0,
+        },
+    )
+    functional = run_functional_full_eager(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+        case.integrals,
+        case.refocc,
+    ).functional
+    assert functional is not None
+    snapshot = Result.snapshot(
+        energy=functional.energy,
+        scf=None,
+        classical=(),
+        fenergy=functional.fenergy,
+        iterations=functional.iterations,
+        charges=functional.charges,
+        potential=functional.potential,
+        converged=functional.converged,
+        residual=functional.residual,
+    )
+    assert snapshot.charges is not None
+    assert snapshot.potential is not None
+    assert snapshot.charges.mono is functional.charges.mono
+    assert snapshot.charges.dipole is functional.charges.dipole
+    assert snapshot.charges.quadrupole is functional.charges.quad
+    assert snapshot.potential.mono is functional.potential.mono
+    assert snapshot.potential.dipole is functional.potential.dipole
+    assert snapshot.potential.quadrupole is functional.potential.quad
+    assert snapshot.iterations is functional.iterations
+    assert snapshot.converged is functional.converged
+    assert snapshot.residual is functional.residual
 
 
 @pytest.mark.parametrize(
