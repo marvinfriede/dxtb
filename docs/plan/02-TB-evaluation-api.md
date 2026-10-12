@@ -83,7 +83,7 @@ use Calculator.
 2. Implement `setup(numbers)` as a pure function of parameters and numbers:
    - index helper and basis;
    - per-atom and per-shell parameters gathered from the element tables;
-   - classical-term setup data that today sits in caches keyed only on `numbers` (repulsion, D3, D4, halogen bond, short-range bond, IES, third-order Coulomb).
+   - classical-term setup data that today sits in caches keyed only on `numbers` (repulsion, DFT-D3, DFT-D4, halogen bond, short-range bond, IES, third-order Coulomb).
 3. Move all data-dependent operations (`torch.unique`, masks that decide shapes) into `setup` (P3).
 4. Make `setup` differentiable with respect to the parameters (needed by G3); check with the T0.9 coverage test.
 5. Keep the old calculator constructor as a thin wrapper until B5 lands.
@@ -187,8 +187,14 @@ class SCFFailureCode(IntEnum):
     ELECTRON_COUNT = 4
 ```
 
-The enum provides static names for integer tensor values; enum objects do not
-appear as pytree leaves.
+Define it once in `src/dxtb/_src/scf/status.py` and re-export it from
+`src/dxtb/__init__.py` as `dxtb.SCFFailureCode`. This is the canonical user
+import path; the implementation must not create a second solver-local mapping. The
+enum provides static names for integer tensor values; enum objects do not
+appear as pytree leaves. These numeric values are stable public API values,
+including when stored with a Result; changing them requires an explicit
+migration note. Acceptance includes a top-level import/API test and exact
+agreement between internal category projection and the public constants.
 The trajectory code is the first failure among physical raw-map evaluations;
 the final code describes only the final public spectrum. Eager interpretation
 therefore preserves chronological trajectory-before-final ordering without
@@ -217,6 +223,17 @@ negative-temperature policy remains deferred and is not decided by E6a.
 **B6a:** remove all state persistent across calls. Temporary per-call SCF data
 may still be mutable because the old batched SCF culls it.
 
+**B6a-SCF (complete):** the bounded state-removal subset required by the
+canonical functional SCF inputs and raw map. It covers self-consistent
+interaction/setup data used by `SCFInputs`; it excludes classical terms added
+outside the SCF result. E4core depends on this completed subset, not on the
+broader B6a package. The source audit found that DFT-D3 is an outer classical
+term: `DispersionD3.get_energy()` reads the System's stored component and
+numbers-only `DispersionD3Cache`, computes coordination numbers, weights, C6,
+and energy locally, and does not mutate the component or cache. Those legacy
+setup/cache objects still need B6a migration; their separate forward-mode
+blocker belongs to E1.3.
+
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.
 This does not delete cull/restore from the separate legacy batch adapter.
@@ -226,7 +243,8 @@ E6b owns production batch routing and the batch-critical E7 padding gate
 passes. E4.6b removes the remaining legacy FULL loop only after every fallback
 is migrated, globally rejected, or retired.
 
-Dependencies: B6a needs B5 and B4; B6b-core follows B6a and E4.5b; C5
+Dependencies: B6a needs B5 and B4; B6a-SCF is its completed SCF-only subset;
+B6b-core follows B6a-SCF, E4core, and E4.5b; C5
 Node-migrates the immutable structural boundary established by B6b-core.
 
 **Goal.** Geometry-dependent intermediates are computed inside each call; no component or driver keeps state between calls.
@@ -245,7 +263,7 @@ Node-migrates the immutable structural boundary established by B6b-core.
 - The T0.5 test 1 scenario is impossible by construction (call history no longer matters).
 - T0.2 reference reproduced, including Hessians and IR/Raman without manual resets.
 
-**Needs.** B5, B4. **Unblocks.** C6, C7, E4core, F3. **Size.** L (can be split: interactions, classicals, driver).
+**Needs.** B5, B4. **Unblocks.** C6, C7, E4core through B6a-SCF, F3. **Size.** L (can be split: interactions, classicals, driver).
 
 ---
 
@@ -314,7 +332,8 @@ B8b: third-order and mixed-response properties after E3.
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
-| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
+| B6a-SCF | Completed self-consistent-input state-removal subset; excludes outer classical DFT-D3 | B5, B4 | done |
+| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a-SCF, E4core, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
 | B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |
 | B9 | ASE adapter (optional) | B8 | S |

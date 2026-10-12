@@ -43,7 +43,8 @@ E0 remains a hard design gate for G1.
 
 **Done when.** The note is agreed.
 
-**Needs.** T0.3, T0.4. **Unblocks.** E3. **Size.** M.
+**Needs.** T0.3, T0.4. **Unblocks.** E3.0 and, after full E1, full E3.
+**Size.** M.
 
 ---
 
@@ -72,7 +73,8 @@ profiling proves a need.
 
 **Done when.** Both pass T0.4's checks at orders 1–3, forward mode and `vmap`, or are deleted.
 
-**Needs.** T0.4. **Unblocks.** E3, E6a, E8, D2. **Size.** M.
+**Needs.** T0.4. **Unblocks.** E3.0 through the completed E1.1/E1.2 subset;
+full E3, E6a, E8, and D2 still require full E1. **Size.** M.
 
 ---
 
@@ -104,6 +106,63 @@ Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as 
 
 ## E3 SCF differentiation
 
+E3 has a runnable preflight milestone and a separate full-completion gate.
+
+### E3.0 Spectral derivative / NO2 preflight and invariant eigensolver audit
+
+**Scope.** Audit the spectral/Fermi derivative seam and isolate the open-shell
+GFN2 NO2 third-order failure before starting the full E3 strategy. Inspect
+`src/dxtb/_src/scf/functional/map.py` (`_transitional_diagonalize`,
+`evaluate_hamiltonian`), `src/dxtb/_src/wavefunction/filling.py`
+(`get_fermi_occupation_core`, density/occupation response and entropy), the
+`storch.eighb` generalized eigensolver path, and these tests:
+`test/test_scf/test_functional_map.py`,
+`test/test_scf/test_fermi_derivatives.py`,
+`test/test_wavefunction/test_functional_filling.py`,
+`test/test_wavefunction/test_fermi_derivatives.py`,
+`test/test_wavefunction/test_filling.py`,
+`test/test_baseline/components.py`,
+`test/test_baseline/test_derivatives.py`, and
+`test/test_baseline/test_reference.py`. Do not include DFT-D3/tad-dftd3
+dispersion in this preflight.
+
+Use the repository's `test/molecules.py::samples["NO2"]` geometry unchanged,
+GFN2 with the existing open-shell `spin=1` setup recorded in
+`test/test_baseline/molecules.py::SYSTEMS["NO2"]`, and the T0.2/T0.3 baseline
+property configuration. For the functional production-path comparison, record
+the explicit setup as FULL SCF, potential representation, non-strict configured
+Broyden (effective Anderson), and 300 K; retain the T0.3 driver/mode cell
+settings for the isolated comparisons. Add a zero-T spectral/filling case where
+the occupations are defined. Retain a GFN1 comparison around the same converged
+state. First test Fermi/occupation response with frozen NO2-representative
+electron counts, spin channels, temperatures, and orbital-energy spectra;
+then test the common spectral-density primitive with frozen Hamiltonian and
+overlap; then one pure SCF map at a fixed converged input; only then compare
+the full fixed point. Include zero-T and finite-T cases where defined,
+exact/near degeneracies, and gauge-invariant density, occupation, and energy
+outputs. Test reverse and forward first derivatives plus nested second and
+third derivatives on the affected smooth paths, and compare against central
+finite differences over a double-precision step sweep from `1e-2` through
+`1e-5`, recording the stable region and truncation/roundoff behavior.
+
+E3.0 is complete when it records the first layer that fails, distinguishes
+Fermi, eigensolver, density, pure-map, and full-fixed-point causes, and gives
+a reproducible diagnosis. A narrowly isolated spectral/eigensolver fix may
+land in E3.0 only when a regression identifies that primitive as the cause;
+full SCF implicit/unrolled differentiation remains E3 work. Do not change the
+`KNOWN_WRONG` NO2 entry, references, or tolerances in E3.0. If a fix makes the
+stored result agree with nested derivatives and a stable finite-difference
+region, record that evidence and leave marker/reference maintenance to an
+explicit follow-up.
+
+**Needs.** E0, E4core, T0.2/T0.3/T0.4 baselines, and the completed E1.1/E1.2
+primitives used by the selected non-DFT-D3 path. It does not require E1.3 or
+full E1 completion. The overview DAG names this milestone E3.0 and makes each
+completed prerequisite explicit. **Unblocks.** Full E3 diagnosis/implementation.
+**Size.** M.
+
+### Full E3 implementation and acceptance
+
 **Goal.** Implement the strategy chosen in E0, so SCF results are differentiable to third order, in forward mode and under `vmap`.
 
 **Steps (assuming E0 chooses torch.func-native implicit differentiation; adjust otherwise).**
@@ -115,7 +174,8 @@ Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as 
 
 **Done when.** All T0.3 SCF cells pass at orders 1–3 for GFN1 and GFN2 (with the driver chosen in E0); forward mode works; `vmap` over conformers works.
 
-**Needs.** E0, E1, E4core. **Unblocks.** E8, F2d, F3, D2. **Size.** L.
+**Needs.** E3.0, E0, full E1 (including E1.3), and E4core. **Unblocks.** E8,
+F2d, F3, D2. **Size.** L.
 
 ---
 
@@ -146,7 +206,7 @@ compatibility machinery after E6c1 W2/W3 and batch-critical E7 clearances.
 T0.2, and its fixed-trip solver passes transform checks. This does not require
 repository-wide culling deletion or migration of legacy production batches.
 
-**Needs.** T0.2, B5, B6a. **Unblocks.** E3, E6a after its transform-safe
+**Needs.** T0.2, B5, B6a-SCF. **Unblocks.** E3.0, E6a after its transform-safe
 entrypoint, B6b-core, C5, D1, F4. **Size.** L.
 
 ---
@@ -249,7 +309,9 @@ the batch-critical E7 gate.
 **Needs.** E6a, B3b, E4core, C5/C8b, and defined padding. E7 owns padding
 validation; only its batch-critical subset gates route activation. The broader
 E7 audit may continue afterward.
-**Unblocks.** E4.6a and D3. **Size.** L.
+**Unblocks.** E6c1 W3 measurement and batch-critical E7 validation on the new
+route; after those gates and E6c1 W2/W3 clearance, E6broute may become
+authoritative. E6bimpl alone does not unblock E4.6a or Track D3. **Size.** L.
 
 ---
 
@@ -312,7 +374,7 @@ clearances were already required by E6c1. A missing GPU baseline blocks final
 GPU/G2 performance acceptance, not the CPU correctness decision or the E6b
 route migration after E6c1 review.
 
-**Needs.** E6c1, E6b route, T0.8 W2/W3, and the T0.8 GPU baseline for GPU
+**Needs.** E6c1, E6broute, T0.8 W2/W3, and the T0.8 GPU baseline for GPU
 acceptance. **Size.** M.
 
 ---
@@ -341,15 +403,16 @@ acceptance. **Size.** M.
 | E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
 | E2 | Fixed-shape pair kernels (from PairPlan) | T0.2, B3a, B4 | L |
-| E3 | SCF differentiation | E0, E1, E4core | L |
-| E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a | L |
+| E3.0 | Spectral derivative / NO2 preflight and invariant eigensolver audit | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
+| E3 | Full SCF differentiation and GFN1/GFN2 transform acceptance | E3.0, E0, full E1, E4core | L |
+| E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
 | E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
-| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding | L |
+| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding | L; unblocks E6c1 W3 and batch-critical E7 validation |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
-| E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M |
+| E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M; unblocks E4.6a and Track D3 |
 | E6c2 | Final W2/W3/GPU G2 performance acceptance | E6c1, E6broute, T0.8 GPU | M |
 | E4.6a | Remove legacy batch cull/restore after batch fallback retirement | E6broute, E6c1 W2/W3, batch-critical E7 | M |
 | E4.6b | Delete remaining legacy FULL loop after all fallback owners retire | E4.6a, fallback migrations/policy decisions | M |

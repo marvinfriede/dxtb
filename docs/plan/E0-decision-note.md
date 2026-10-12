@@ -228,8 +228,8 @@ Acceptance ultimately includes reverse orders 1–3 where defined, `jvp`,
 `jacfwd`, `vmap`, parameter and geometry dependence, padding, and small-gap
 continuity. At an exact zero-temperature occupied/unoccupied crossing, test
 the documented nondifferentiability policy instead of asserting a fabricated
-derivative. If any listed target is not stable and standalone when E3 starts,
-record and repair that test in E3 before changing the mathematics.
+derivative. If any listed target is not stable and standalone, record that in
+E3.0's preflight before full E3 changes the differentiation strategy.
 
 ## 5. Generalized eigenproblem and structural padding
 
@@ -527,6 +527,7 @@ of a custom eigensolver/autograd primitive; plain PyTorch is preferred, and
 any custom spectral primitive is a separately reviewed design/implementation
 package subject to the complete transform ladder.
 
-This note does not start E3, E4, E6, B8, Node migration, D3 work, or GPU work.
+This note does not start E3, E4, E6, B8, Node migration, DFT-D3/tad-dftd3
+dispersion work, Track D packages, or GPU work.
 It changes no runtime behavior, references, tolerances, `KNOWN_WRONG` entries,
 SCF defaults, mode defaults, eigensolver factors, or Fermi thresholds.

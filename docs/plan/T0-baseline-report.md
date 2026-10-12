@@ -251,7 +251,7 @@ every classical and interaction energy, the eigensolver), 6 checks each
   mode but have no `jvp` and no `setup_context`/vmap support.
   `RepulsionAG` recurses without bound when differentiated with respect to
   its parameters (its backward differentiates its own output).
-- **D3 dispersion** (tad-dftd3): custom function without `jvp`;
+- **DFT-D3 dispersion** (tad-dftd3): custom function without `jvp`;
   `vmap` fails at a batch-size heuristic on `numbers`.
 - **Eigensolver** (`storch.eighb`, Lorentzian broadening): exactly
   degenerate occupied pair - first order right, second and third order
@@ -285,8 +285,8 @@ fallback warnings are errors.
 | check | GFN1 PyTorch | GFN1 libcint | GFN2 PyTorch | GFN2 libcint |
 | --- | --- | --- | --- | --- |
 | `jacrev(energy)` | works | works | works | works |
-| `jacfwd(energy)` | error (D3 `jvp`) | error (D3 `jvp`) | **works** | error (libcint `jvp`) |
-| `hessian(energy)` (`jacfwd(jacrev)`) | error (D3 `jvp`) | error (D3 `jvp`) | **works** | error (libcint `jvp`) |
+| `jacfwd(energy)` | error (DFT-D3 `jvp`) | error (DFT-D3 `jvp`) | **works** | error (libcint `jvp`) |
+| `hessian(energy)` (`jacfwd(jacrev)`) | error (DFT-D3 `jvp`) | error (DFT-D3 `jvp`) | **works** | error (libcint `jvp`) |
 | `vmap(energy)`, single | error | error | error | error |
 | `vmap(forces)`, single | error | error | error | error |
 | `vmap(energy)`, conformer batch | error | error | error | error |

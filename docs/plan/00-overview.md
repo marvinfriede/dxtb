@@ -210,7 +210,13 @@ At the review point:
 - T0 is complete except for the GPU portion of T0.8;
 - B1 is agreed; B2 is implemented; B3a (structural Model/System split) is
   implemented while B3b remains open;
-- B4-B8 remain;
+- B3b remains open. B4 and B5 are complete for the single-System core; B6 is
+  partial (`B6a-SCF` is complete, while broader B6a/B6b-core and legacy purge
+  work remain); B7 is done; B8 remains open;
+- E1 is partial: E1.1/E1.2 are done and E1.3 `tad-dftd3` forward-mode support
+  remains blocked upstream. E2 is partial with its single-System core complete
+  and packed legacy-driver cleanup deferred to E6b. E4core is accepted while
+  the E4 umbrella remains partial;
 - E4core (E4.0–E4.5b) is accepted; the E4 umbrella remains partial while
   E4.6a/E4.6b compatibility cleanup is blocked on its documented owners;
 - Node and ModuleNode already exist upstream;
@@ -233,11 +239,19 @@ graph LR
   B4 --> B5
   B3a --> B5
   B5 --> B6a & B7
-  T0R --> E1
-  B3a --> E1
-  B6a & B4 --> E4core[E4core: accepted single-System functional SCF]
-  E4core --> B6bcore[B6b-core]
-  E0 & E1 & E4core --> E3
+  B5 & B4 --> B6aSCF[B6a-SCF: complete SCF-only state-removal subset]
+  T0R --> E11[E1.1 RepulsionAG complete]
+  B3a --> E12[E1.2 CoulombMatrixAG/ES2 complete]
+  T0R --> E13[E1.3 DFT-D3/tad-dftd3 forward-mode blocker]
+  E11 & E12 & E13 --> E1[E1 full transform support]
+  B6aSCF & B4 --> E4core[E4core: accepted single-System functional SCF]
+  E4core & B6aSCF --> B6bcore[B6b-core]
+  T02[T0.2 reference baseline] --> E30[E3.0 spectral/NO2 preflight]
+  T03[T0.3 derivative baseline and padded-operation safety cases] --> E30
+  T04[T0.4 transform baseline] --> E30
+  T03 & T04 --> E0[E0 SCF differentiation decision]
+  E0 & E11 & E12 & E4core & T02 & T03 & T04 --> E30
+  E30 & E1 & E4core --> E3[E3 complete SCF differentiation]
   B3a & B4 --> E2
   B6bcore --> C5
   C5 --> C6 & C7
@@ -254,7 +268,7 @@ graph LR
   E6a & T0W2 --> E6c1w2[E6c1 W2 conformer performance clearance]
   E6bimpl & T0W3 --> E6c1w3[E6c1 W3 mixed-System performance clearance]
   E6c1w2 & E6c1w3 --> E6c1[E6c1 pre-retirement performance clearance]
-  T03[T0.3 padded-operation safety cases] --> E7batch
+  T03 --> E7batch
   E6bimpl & E7batch & E6c1 --> E6broute[E6b production batch route authoritative]
   E6broute & T0W2 & T0W3 & T08G --> E6c2[E6c2 final W2/W3/GPU performance acceptance]
   E6broute --> E46a[E4.6a batch cull/restore cleanup]
@@ -263,7 +277,7 @@ graph LR
   C2 & C3 & C4 & C8a & C8b & E46a & E46b --> C9
   B7 --> B8a
   B8a & E3 --> B8b & E8
-  B5 & B6a --> F0
+  B5 --> F0[F0 early training invariant and bounded fresh-setup check]
   T0R --> T012[T0.12 refocc fix] --> B3a
   B8b & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
   F2c --> F2d
@@ -279,16 +293,16 @@ C1 and C1b are completed prerequisites (tad-mctc 0.9.1) and no longer graph
 nodes; E5 is completed. B3 is split into B3a (done) and B3b (open), see
 `02-TB-evaluation-api.md`. The old "all of B, C, D, E precede F1" path is not
 the only training validation: F0 (an early training invariant) runs as soon
-as B5 and B6a exist. For the detailed E4.6/E6 dependency split and the B1
+as B5 exists. For the detailed E4.6/E6 dependency split and the B1
 conformer API implementation boundary, see `07-current-state-and-execution-plan.md`.
 
 ### Critical paths per goal
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 → E1, E4core → E3 → B8b → E8 (B8a after B7) |
+| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 supported non-DFT-D3 preflight → full E3 after full E1 → B8b → E8 (B8a after B7) |
 | G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
-| G3 | T0.9 → T0.12 → B3a → B5/B6a → F0 (early invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
+| G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
 The open T0.8 GPU baseline gates E6c2 final GPU/G2 performance acceptance,

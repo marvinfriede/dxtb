@@ -36,15 +36,17 @@ Current state:
 | B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are done; other required setup/per-call work remains. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6b production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
-| B6             | partial                         | The new single-System core-purity milestone is separated from repository-wide legacy compatibility cleanup. B6 overall remains partial while D3 and legacy-only mutable/cull infrastructure remain. |
+| B6a-SCF        | done                            | SCF-input state-removal subset required by E4core; this is a completed bounded milestone, not completion of broader B6a. |
+| B6             | partial                         | Broader B6a remains open for the legacy-shaped DFT-D3 outer classical setup/cache path; B6b-core and the separately owned legacy purge remain open. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | C5-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6b prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
-| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
+| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6b. E2 is no longer a blocker for E4core. |
-| E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
+| E3.0            | open; ready next                | Non-DFT-D3 spectral derivative / NO2 preflight can start with E4core and the completed E1.1/E1.2 subset; it does not wait for full E1. |
+| E3             | not done                        | Full GFN1/GFN2 SCF differentiation still requires full E1 plus the E3.0 diagnosis and implementation. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6b batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
@@ -194,7 +196,7 @@ The restructuring branch currently uses:
 - `dxtb._src.mctc_shim`;
 - `dxtb._src.ncoord.legacy`.
 
-The baseline workflow knows this, but the ordinary package dependency declaration does not install D3/D4.
+The baseline workflow knows this, but the ordinary package dependency declaration does not install tad-dftd3/tad-dftd4.
 
 Add one documented development-environment mechanism used by tox/CI.
 
@@ -202,14 +204,14 @@ Do not pretend the temporary combination is a releasable dependency set.
 
 A suitable short-term arrangement is:
 
-1. keep D3/D4 out of `install_requires` while their dependency pins conflict;
+1. keep tad-dftd3/tad-dftd4 out of `install_requires` while their dependency pins conflict;
 2. make tox explicitly install them with `pip install --no-deps` before running tests;
 3. add a clean-environment import smoke test;
 4. add a release check that fails while `_src/mctc_shim.py` exists.
 
 When compatible upstream releases exist:
 
-1. restore D3 and D4 as normal runtime dependencies;
+1. restore tad-dftd3 and tad-dftd4 as normal runtime dependencies;
 2. remove the no-deps workaround;
 3. remove `mctc_shim.py`;
 4. remove `ncoord/legacy.py`;
@@ -685,7 +687,7 @@ Delete `with_analytical_gradient` if it has no remaining distinct implementation
 
 ## E1.2 `CoulombMatrixAG`
 
-Status: done. `CoulombMatrixAG` is removed; the plain-PyTorch `ES2Setup`/builder is authoritative for exact migrated ES2 terms. B6a removed the ES2/ES3 mutable-object/setup dual authority, resolved custom/additional exact-term selection, and rejects ambiguous duplicate labels. E1 remains partial because the D3 forward-mode work is blocked upstream.
+Status: done. `CoulombMatrixAG` is removed; the plain-PyTorch `ES2Setup`/builder is authoritative for exact migrated ES2 terms. B6a-SCF removed the ES2/ES3 mutable-object/setup dual authority, resolved custom/additional exact-term selection, and rejects ambiguous duplicate labels. E1 remains partial because DFT-D3/tad-dftd3 forward-mode work is blocked upstream.
 
 Do not repair the current Function by adding progressively more custom rules.
 
@@ -709,7 +711,7 @@ not:
 interaction.get_cache(numbers, positions, ihelp)
 ```
 
-## E1.3 D3 external blocker
+## E1.3 DFT-D3/tad-dftd3 external blocker
 
 GFN1 forward mode currently stops inside tad-dftd3.
 
@@ -723,7 +725,7 @@ The required tad-dftd3 component tests are:
 - `jvp`;
 - `jacfwd`;
 - `vmap`;
-- parameter gradient for all active D3 parameters;
+- parameter gradient for all active DFT-D3 parameters;
 - gradient from `s9=0` when the three-body term is made trainable.
 
 Until the dependency satisfies these tests, G1 is not done for GFN1.
@@ -748,6 +750,27 @@ fixed-shape single-System solver, but does not delete culling from the legacy
 batch route. B6b-core closes purity for the new core; repository-wide legacy
 compatibility cleanup is a separate, later milestone after fallback migration.
 
+## B6a-SCF completed subset and DFT-D3 source audit
+
+E4core's formal B6 prerequisite is the completed `B6a-SCF` subset: state
+removal for self-consistent interaction/setup data used by `SCFInputs` and the
+functional raw map. It excludes classical terms that are added outside the
+SCF result. This is the state-removal contract E4core actually consumes; it
+does not imply that broader B6a or B6 is complete.
+
+Source audit of DFT-D3: `System` stores a `DispersionD3` component (with
+`numbers`, parameters and charge configuration) plus a numbers-only
+`DispersionD3Cache`. `System.singlepoint()` supplies that stored cache to
+`DispersionD3.get_energy()`. The method reads the component/cache and computes
+coordination numbers, reference weights, C6 values and energy into locals; it
+does not write per-call values back to the component or cache. Those mutable,
+legacy-shaped setup/cache objects still violate the broader B6a setup/value
+target and remain there for later migration. The forward-mode failure is a
+separate E1.3 tad-dftd3 custom-operation blocker. Classical DFT-D3 energy is
+added outside `SCFInputs`/the self-consistent map, so it is not an E4core
+SCF-state prerequisite. E3.0 excludes DFT-D3 rather than treating its
+unrelated outer-energy transform as a prerequisite.
+
 ## B6a.1 Classical components
 
 Convert each classical contribution to:
@@ -762,7 +785,8 @@ No term caches its most recent call.
 Families and current status:
 
 - repulsion — done;
-- D3 — blocked upstream for forward AD;
+- DFT-D3/tad-dftd3 — legacy-shaped component/cache setup remains in broader
+  B6a; forward AD is separately blocked upstream under E1.3;
 - D4 — classical D4 done; D4SC remains under interactions;
 - halogen — done; fixed-shape setup/kernel removes the data-dependent-control-flow vmap error;
 - IES — done;
@@ -888,8 +912,10 @@ Finite-temperature degeneracies use the analytic spectral divided-difference
 limit, and a zero-temperature occupied/unoccupied crossing is not assigned an
 artificial derivative. E4core owns both the pure physical map and the
 functional fixed-shape solver around it, including tensor-masked SCF/Fermi
-control flow and per-call spectral inputs. E3 owns invariant spectral
-differentiation and the NO2 diagnosis/fix using the raw E4core map. E6a owns
+control flow and per-call spectral inputs. E3.0 owns the NO2/spectral
+preflight; full E3 owns invariant spectral differentiation using the raw
+E4core map, except for any narrowly isolated primitive fix accepted by E3.0.
+E6a owns
 conformer mapping over a fixed System; E6b owns mixed-System batching. E0
 changes no SCF implementation and does not mark E3, the E4 umbrella, E6a, or
 E6b done.
@@ -1036,8 +1062,10 @@ JVP/jacfwd are finite but their numerical derivatives differ from reverse
 mode by about `1.205e-6` for an isolated Hamiltonian-to-density spectral
 projection under that legacy mode selection. The discrepancy reproduces
 inside the transitional eigensolver without map or interaction plumbing; it
-is the already-defined E3 spectral contract issue. E3 still owns the spectral
-derivative correction.
+is the already-defined spectral contract issue. E3.0 owns its preflight and
+layer diagnosis; any narrowly isolated spectral primitive fix may land there
+only under E3.0's acceptance rule, while broader derivative work remains full
+E3.
 
 The legacy full solver is no longer the ordinary eligible single-System
 production route, but remains an intentional compatibility/fallback engine.
@@ -1080,8 +1108,8 @@ At the E4.1 milestone this implementation was an internal parallel path;
 and implicit mode were unchanged. Production FULL routing was integrated later
 by E4.5b. E4core is accepted; the E4 umbrella remains partial while E4.6
 cleanup is blocked by remaining legacy fallback ownership.
-E3 still owns the transitional spectral
-derivative discrepancy; its test now attributes mode selection to explicit
+E3.0 owns preflight of the transitional spectral derivative discrepancy; its
+test now attributes mode selection to explicit
 eigensolver branches without requiring the discrepancy to remain nonzero.
 
 This is the most important structural package after state removal.
@@ -1599,6 +1627,10 @@ compatibility object in the repository. They have different prerequisites.
 
 ## B6b-core: new single-System core purity
 
+This milestone follows completed `B6a-SCF` and accepted `E4core`; it does not
+wait for broader B6a, whose remaining DFT-D3 outer-classical setup/cache work
+is outside the functional SCF inputs.
+
 B6b-core requires:
 
 - `Model` has no per-call mutable state;
@@ -1643,7 +1675,7 @@ For the new core, enforce the strong P4 rule:
 This rule does not require deleting a separately isolated legacy adapter
 object that an explicit fallback route still needs. Core evaluation must not
 observe that adapter state. B6b-core enables C5 core migration, but does not
-mark B6 complete while D3 or other declared B6 scope remains open.
+mark B6 complete while DFT-D3 or other declared B6 scope remains open.
 
 ## Legacy compatibility purge
 
@@ -1656,18 +1688,19 @@ fallbacks are migrated, globally rejected, or explicitly retired.
 
 ---
 
-# 15. E3: higher-order SCF differentiation
+# 15. E3.0 preflight and full E3 differentiation
 
-E3 starts only after:
+The next runnable package is E3.0, specified in
+[`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#e30-spectral-derivative--no2-preflight-and-invariant-eigensolver-audit).
+It audits the open-shell GFN2 NO2 spectral/Fermi derivative path on supported
+non-DFT-D3 single-System calculations. Its prerequisites are E0, accepted
+E4core, the T0.2/T0.3/T0.4 baseline cases, and the completed E1.1/E1.2
+primitives used by that path; it does not wait for E1.3 or full E1. E3.0 is
+independent of E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
 
-- E0 decision approved;
-- E1 transform blockers addressed;
-- E4core pure fixed-point map available.
-
-E3 work on supported non-D3 single-System paths may proceed from the existing
-functional raw map and solver. It does not wait for E6a, E6b, E4.6, legacy
-batch cleanup, or Node migration. D3 forward-mode remains blocked by its separate
-upstream transform issue.
+Full E3 implementation and GFN1/GFN2 transform acceptance requires E3.0, E0,
+full E1 (including E1.3 DFT-D3/tad-dftd3 forward-mode support), and E4core.
+The DFT-D3 blocker is separate from the E3.0 non-DFT-D3 preflight.
 
 Do not build higher-order implicit differentiation around today's mutable `_Data` closure.
 
@@ -2126,7 +2159,9 @@ Do not retroactively mix GPU numbers into the original CPU files without identif
 
 The full training track can remain downstream, but the architecture needs a tiny training smoke test much earlier.
 
-Add F0 after B5/B6a.
+F0 can run after B5 without waiting for broad B6a. It is an early, bounded
+state-history regression whose acceptance itself verifies fresh setup for the
+selected GFN1 H2O training fixture; it does not claim broader B6a completion.
 
 Status: done. F0 uses `torch.func.functional_call` and `torch.func.grad` with three active GFN1 H2O parameters, constructs a fresh System for every evaluation, checks finite-difference agreement, applies functional updates that reduce an artificial energy loss, verifies the original ParamModule is unchanged, and retains a mixed force/parameter derivative check. This does not start the broader training track.
 
@@ -2163,7 +2198,7 @@ Inventory every table or external model whose maximum supported element can limi
 - shell structure;
 - reference occupations;
 - STO-nG/basis data;
-- D3 reference data;
+- DFT-D3 reference data;
 - D4 model data;
 - covalent/VDW radii;
 - electronegativities;
@@ -2269,7 +2304,7 @@ Calculator retains eager policy through its separate adapter.
 
 ```text
 E4.5b production single-System routing
-  ├──> E3 supported non-D3 spectral/SCF work (independent of E6a/E6b/E4.6/Node)
+  ├──> E3.0 non-DFT-D3 spectral/NO2 preflight (independent of E6a/E6b/E4.6/Node)
   ├──> B6b-core ──> C5 core structural migration ──> C6/C7 ──> C8b
   ├──> B5 + E4core ──> B5.6 public solver-status schema ──> C8a Result pytree
   └──> fixed-trip functional SCF ──> private transform boundary
@@ -2293,9 +2328,10 @@ remaining compatibility fallback migrations/retirements
 
 C2-C4 + C8a/C8b + E4.6a + E4.6b ──> C9 final TensorLike/ModuleLike purge
 
-E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
-B5/B6a ──> F0 training invariant
-B6b-core + C1b + E3 ──> F3/F4
+E3.0 ──> full E3 only after full E1, including E1.3 DFT-D3/tad-dftd3
+full E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
+B5 ──> F0 bounded training/state-history invariant
+B6b-core + C1b + full E3 ──> F3/F4
 C8b + stable training core ──> F1/F2
 E4core + E6a + T0.8 GPU ──> D1 conformer compile
 F2d + E6b production route ──> D3 mixed-System compile
@@ -2303,9 +2339,10 @@ E6b production route + D3 ──> D5 pair concatenation (conditional)
 E6b route + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
 ```
 
-Recommended early ordering remains: R0, E0, E1, B4/B5/B6a, B7, E2, and E4core
-according to their independent prerequisites. After E4.5b, E3 and B6b-core may
-proceed independently. B5.6 closes public solver-status fields before C8a;
+Recommended early ordering remains: R0, E0, the E1.1/E1.2 supported subset,
+B4/B5/B6a-SCF, B7, E2, and E4core according to their prerequisites. After
+E4.5b, E3.0 and B6b-core may proceed independently; full E3 waits for full E1.
+B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
 finally tested. B3b/C5/C6/C7/C8b unblock E6b. E6a does not wait for C5/C8b or
@@ -2313,9 +2350,9 @@ E4.6a.
 
 The recommended next implementation package is **E3.0 — spectral derivative /
 NO2 preflight and invariant eigensolver audit** on the already functional
-single-System path. This is a source/test audit and focused preflight, not the
-full E3 eigensolver implementation. It does not wait for the cleanup or
-batching branches above.
+single-System path. It is a source/test audit and focused preflight, not the
+full E3 eigensolver/SCF-differentiation implementation. It does not wait for
+the cleanup or batching branches above.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 
@@ -2468,7 +2505,7 @@ Before claiming G1/G2 architecture complete:
 - E0 decisions implemented;
 - degenerate eigensolver cases correct;
 - NO2 GFN2 third order correct;
-- D3 forward-mode blocker fixed;
+- DFT-D3/tad-dftd3 forward-mode blocker fixed;
 - E4core functional SCF;
 - E3 required derivative modes pass;
 - E6a conformer `vmap` passes;
@@ -2534,17 +2571,17 @@ Success means measured speed/memory improves without creating a second semantics
 
 B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batch construction remains scheduled for E6b, and B3b remains incomplete until all required structural setup is explicit.
 
-E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. All currently unblocked B6a component families are migrated: ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB. B6a remains partial because D3 is blocked upstream. B3b remains partial: ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because D3 forward-mode support is blocked upstream.
+E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. All currently unblocked B6a component families are migrated: ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB. The bounded B6a-SCF subset is complete; broader B6a remains partial because legacy-shaped DFT-D3 setup/cache work remains. B3b remains partial: ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because DFT-D3/tad-dftd3 forward-mode support is blocked upstream.
 
-Package record: the IES family and classical D4 compatibility hardening were validated from task base `12d0182d6b0dff7214bddfcfe8f34eb22f8e77e2` and implemented in `635a6bbfbd1dbe07eabce68d46a42e3d03f35de1`. The independent Luna/high review found no blocker or major issue. The classical halogen family was then validated from task base `c71e4a082ddfd76a2683b005fe3f8420553a16fd`; its fixed-shape kernel changed `halogen.positions:vmap` from ERROR to PASS without changing reference values. Two broad-suite seeds each reported four implicit-SCF memory-leak failures; all seven distinct failing nodes reproduced against the task base with the same one-tensor leak signature. The independent Luna/high review found no blocker or major issue. D4SC, D3, and other B6 families were not migrated in the halogen package.
+Package record: the IES family and classical DFT-D4 compatibility hardening were validated from task base `12d0182d6b0dff7214bddfcfe8f34eb22f8e77e2` and implemented in `635a6bbfbd1dbe07eabce68d46a42e3d03f35de1`. The independent Luna/high review found no blocker or major issue. The classical halogen family was then validated from task base `c71e4a082ddfd76a2683b005fe3f8420553a16fd`; its fixed-shape kernel changed `halogen.positions:vmap` from ERROR to PASS without changing reference values. Two broad-suite seeds each reported four implicit-SCF memory-leak failures; all seven distinct failing nodes reproduced against the task base with the same one-tensor leak signature. The independent Luna/high review found no blocker or major issue. D4SC, DFT-D3, and other B6 families were not migrated in the halogen package.
 
 The AES2/multipole package was validated from task base `f999f9fa3986e4bd73da6ad60d572bbb3cfedcde`. Halogen setup masks now honor the configured species lists. AES2 dipole vmap changed from ERROR to PASS, and the new position target passes forward AD, JVP, jacfwd, reverse orders 1–3, and vmap. Reference and parameter verdicts are unchanged. Broad seeds `20261010` and `20261011` showed nondeterministic implicit-SCF memory-leak failures under work stealing; every distinct failing node was reproduced against the task-base snapshot. The only current broad XPASS is the established implicit-matrix case; the base additionally XPASSes the old strict AES2-vmap xfail, as expected. Luna/high review found no blocker or major issue. D4SC, ALPB, fields/B7, E4, and other interaction families were not migrated.
 
-The D4SC package was validated from task base `79d6f1115f19548b47b1d4ed55607d61dc7d172c`. On the task base, a fresh parameter-coverage generation produced `zero/zero` gradients for the five GFN1 xbond entries (`Bi`, `C`, `Fe`, `O`, `Pb`) while the checked-in base status still said `none/none`; the committed `zero` status is stale-baseline catch-up, with the `no effect on this set` verdict unchanged. D4SC now uses frozen `D4SCSetup` and fresh call-local model/CN/dispersion-matrix data; culling no longer mutates the persistent component model. The existing charge transform target remains green, and `d4sc.positions` passes forward AD, JVP, reverse orders 1–3, and vmap. Potential VJP matches its jacfwd result, and same-System neutral/charged/geometry/neutral SCF calls match a fresh neutral evaluation. D4SC references, classical-D4 regressions, component/reference baselines, and parameter verdicts are unchanged. Broad seeds `20261010` and `20261011` each had four implicit-SCF memory-leak failures; the union of eight exact nodes reproduced on the task base with the same one-tensor leak signature. One established implicit-matrix XPASS remained. Luna/high review found no blocker or major issue; it noted that custom external `D4Model` subclasses must accept the standard constructor and have extension state limited to tensors, scalar values, and basic containers, with unsupported state rejected explicitly. ALPB, D3, B7, E4, E6, and other families were not migrated.
+The D4SC package was validated from task base `79d6f1115f19548b47b1d4ed55607d61dc7d172c`. On the task base, a fresh parameter-coverage generation produced `zero/zero` gradients for the five GFN1 xbond entries (`Bi`, `C`, `Fe`, `O`, `Pb`) while the checked-in base status still said `none/none`; the committed `zero` status is stale-baseline catch-up, with the `no effect on this set` verdict unchanged. D4SC now uses frozen `D4SCSetup` and fresh call-local model/CN/dispersion-matrix data; culling no longer mutates the persistent component model. The existing charge transform target remains green, and `d4sc.positions` passes forward AD, JVP, reverse orders 1–3, and vmap. Potential VJP matches its jacfwd result, and same-System neutral/charged/geometry/neutral SCF calls match a fresh neutral evaluation. D4SC references, classical-D4 regressions, component/reference baselines, and parameter verdicts are unchanged. Broad seeds `20261010` and `20261011` each had four implicit-SCF memory-leak failures; the union of eight exact nodes reproduced on the task base with the same one-tensor leak signature. One established implicit-matrix XPASS remained. Luna/high review found no blocker or major issue; it noted that custom external `D4Model` subclasses must accept the standard constructor and have extension state limited to tensors, scalar values, and basic containers, with unsupported state rejected explicitly. ALPB, DFT-D3, B7, E4, E6, Node, GPU, and other families were not migrated.
 
-The D4SC closure and ALPB package was validated from task base `170babe22d825a9d4680bbe967d61ce79ac16012`. Direct and System D4SC paths preserve sparse parameter mappings with `s9` or `s10` omitted; the stale-component test now reassigns its tensor without mutating the source ParamModule leaf. ALPB now uses frozen `GeneralizedBornSetup` and fresh per-call Born radii/matrix data, with exact System evaluation bypassing persistent `get_cache()`. P16 and Still references are unchanged. Preflight geometry and charge transforms passed; `alpb.positions` passes forward AD, JVP, reverse orders 1–3, and vmap; potential and Born-radii transform checks pass. Charge derivatives match the monopole potential, and dielectric and mixed position/dielectric gradients are finite and nonzero. The five-environment D4SC/ALPB focused matrix passed (75 tests per environment), and the later mixed-derivative/Calculator-reset additions passed in all five environments (2 tests per environment). Component and reference baselines passed; parameter-coverage verdicts were unchanged and generated floating-detail noise was restored. The ALPB-enabled packed legacy batch remains unsupported as on the task base; the non-ALPB packed case passes. Final broad seed `20261010` reported five memory-leak failures and seed `20261011` reported four, all in `test_a_memory_leak/test_scf.py`; repeated identical seeded work-stealing runs changed the exact parameterized nodes. The task base reproduced the same failure family under both seeds, and every exact node from the final current runs failed when rerun alone against the task base. One existing implicit-matrix XPASS remained. The independent Luna/high review found no remaining findings. No D3, B7, E4/E6, Node, GPU, or unrelated component-family work was done.
+The D4SC closure and ALPB package was validated from task base `170babe22d825a9d4680bbe967d61ce79ac16012`. Direct and System D4SC paths preserve sparse parameter mappings with `s9` or `s10` omitted; the stale-component test now reassigns its tensor without mutating the source ParamModule leaf. ALPB now uses frozen `GeneralizedBornSetup` and fresh per-call Born radii/matrix data, with exact System evaluation bypassing persistent `get_cache()`. P16 and Still references are unchanged. Preflight geometry and charge transforms passed; `alpb.positions` passes forward AD, JVP, reverse orders 1–3, and vmap; potential and Born-radii transform checks pass. Charge derivatives match the monopole potential, and dielectric and mixed position/dielectric gradients are finite and nonzero. The five-environment D4SC/ALPB focused matrix passed (75 tests per environment), and the later mixed-derivative/Calculator-reset additions passed in all five environments (2 tests per environment). Component and reference baselines passed; parameter-coverage verdicts were unchanged and generated floating-detail noise was restored. The ALPB-enabled packed legacy batch remains unsupported as on the task base; the non-ALPB packed case passes. Final broad seed `20261010` reported five memory-leak failures and seed `20261011` reported four, all in `test_a_memory_leak/test_scf.py`; repeated identical seeded work-stealing runs changed the exact parameterized nodes. The task base reproduced the same failure family under both seeds, and every exact node from the final current runs failed when rerun alone against the task base. One existing implicit-matrix XPASS remained. The independent Luna/high review found no remaining findings. No DFT-D3, B7, E4/E6, Node, GPU, or unrelated component-family work was done.
 
-The ALPB fresh-setup and F0 package was validated from task base `cf0c98266d8c12c1fa3d572c7acc8d65fec528ae`. Fresh GeneralizedBorn construction and setup inside a transformed function pass dielectric reverse, JVP, jacfwd, and central finite-difference agreement; a tensor-valued Born-scale configuration also passes fresh-setup JVP. The `bool(alpbet > 0)` setup branch remains unchanged because scalar dielectric differentiation passes; heterogeneous solvent-configuration setup vmap is outside the single-System contract. F0 exercises full GFN1 H2O with D3 enabled, `functional_call`, and fresh System construction on each evaluation for `element.O.arep`, `element.O.gam`, and `repulsion.effective.kexp`. Initial gradients agree with central finite differences, four fixed functional updates monotonically reduce the loss, original selected and unselected ParamModule leaves remain unchanged, and the mixed force/parameter derivative is finite and nonzero. Torch 2.6 exposed `Tensor.tolist()` on a functorch GradTrackingTensor during H0 setup; replacing it with a structural integer-list conversion made F0 pass in all five supported environments. Component and reference baselines pass, parameter-coverage verdicts are unchanged, and the generated finite-difference detail noise was restored. Broad seeds `20261010` and `20261011` had three and one implicit-SCF memory-leak failures respectively; the four distinct exact nodes reproduced when isolated on the task base. Each run also had the established implicit-matrix XPASS. Requested Luna/high review found no blocker or major issue; its minor scalar-state recommendation is covered by an explicit assertion. No references, tolerances, xfails, D3 behavior, B7, E4/E6, Node, GPU, or other component families were changed.
+The ALPB fresh-setup and F0 package was validated from task base `cf0c98266d8c12c1fa3d572c7acc8d65fec528ae`. Fresh GeneralizedBorn construction and setup inside a transformed function pass dielectric reverse, JVP, jacfwd, and central finite-difference agreement; a tensor-valued Born-scale configuration also passes fresh-setup JVP. The `bool(alpbet > 0)` setup branch remains unchanged because scalar dielectric differentiation passes; heterogeneous solvent-configuration setup vmap is outside the single-System contract. F0 exercises full GFN1 H2O with DFT-D3 enabled, `functional_call`, and fresh System construction on each evaluation for `element.O.arep`, `element.O.gam`, and `repulsion.effective.kexp`. Initial gradients agree with central finite differences, four fixed functional updates monotonically reduce the loss, original selected and unselected ParamModule leaves remain unchanged, and the mixed force/parameter derivative is finite and nonzero. Torch 2.6 exposed `Tensor.tolist()` on a functorch GradTrackingTensor during H0 setup; replacing it with a structural integer-list conversion made F0 pass in all five supported environments. Component and reference baselines pass, parameter-coverage verdicts are unchanged, and the generated finite-difference detail noise was restored. Broad seeds `20261010` and `20261011` had three and one implicit-SCF memory-leak failures respectively; the four distinct exact nodes reproduced when isolated on the task base. Each run also had the established implicit-matrix XPASS. Requested Luna/high review found no blocker or major issue; its minor scalar-state recommendation is covered by an explicit assertion. No references, tolerances, xfails, DFT-D3 behavior, B7, E4/E6, Node, GPU, or other component families were changed.
 
 B7 compatibility hardening: exact Calculator field defaults now reject any retained same-label interaction during construction, rather than deferring the ambiguity to evaluation. Custom same-label field subclasses remain ordinary legacy interactions for energy and forces; generic standard-field response methods report that they cannot infer a differentiation variable from an arbitrary extension. On the pre-B7 base, same-label `ElectricField` subclasses supported energy, dipole, and polarizability, while same-label `ElectricFieldGrad` subclasses supported energy, quadrupole, and numerical quadrupole when their perturbation tensors required gradients. The explicit-field architecture intentionally narrows those response APIs to exact/default/explicit standard perturbations; no interaction mutation is restored. Whole-public-singlepoint `vmap` remains deferred to E6a: the B1 System method must use fixed-trip tensor status and Result must be a pytree, while the eager Calculator adapter retains host warning/error inspection outside transforms.
 
@@ -2562,5 +2599,5 @@ quadrupole evaluation across geometries. The per-entry structural setup loop
 in the legacy packed `IntDriverPytorch` remains until E6b replaces that batch
 path; no batch behavior was changed here. E0 decisions are accepted and
 remain design-only. The next package is selected separately after review;
-E4, E3, E6, D3, Node migration, and GPU work are not started by this package.
+E4, E3, E6, Track D3, DFT-D3, Node migration, and GPU work are not started by this package.
 

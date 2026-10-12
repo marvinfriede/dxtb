@@ -64,13 +64,16 @@ canonical names and representations are:
 | `potential` | Actual nested `PotentialResult | None` field; each present component is a dynamic leaf and absent components are static structure. |
 | `hamiltonian`, `overlap`, `hcore`, `dipole_integrals`, `quadrupole_integrals`, `overlap_norm` | Actual optional tensor fields; dynamic leaves when present. `hcore` is canonical; `h0` is not a Result field. |
 | `iterations`, `converged`, `residual` | Actual tensor fields for functional per-System results; dynamic leaves. `converged` means outer raw-residual convergence only. Legacy routes may retain `None` for convergence/residual. |
-| `status` | Actual `SCFStatus | None` field. Functional results carry two dynamic integer-tensor leaves, `trajectory_failure` and `final_failure`; legacy routes may use `None`. Their category meanings are defined by the canonical `SCFFailureCode` API enum from B5.6. |
+| `status` | Actual `SCFStatus | None` field. Functional results carry two dynamic integer-tensor leaves, `trajectory_failure` and `final_failure`; legacy routes may use `None`. Their category meanings are defined by the canonical `dxtb.SCFFailureCode` API enum from B5.6. |
 
 `Result`, `ChargeResult`, `PotentialResult`, `Multipoles`, and `SCFStatus` are
 immutable values. Optional `None` fields and classical labels are static
 pytree structure; status-code tensors and other tensor values remain dynamic
-leaves. The `SCFFailureCode` integer-to-category mapping is static public API
-metadata, not pytree context or a tensor leaf. `SCFStatus` preserves the
+leaves. The `dxtb.SCFFailureCode` integer-to-category mapping is static public
+API metadata, not pytree context or a tensor leaf. It is defined once in
+`src/dxtb/_src/scf/status.py` and re-exported from `src/dxtb/__init__.py` as
+`dxtb.SCFFailureCode`; its numeric values are
+stable public API values. `SCFStatus` preserves the
 first physical-trajectory failure separately from the final-public-spectrum
 failure, so the eager adapter can report trajectory failure first, final
 spectrum failure second, and outer nonconvergence last without exposing

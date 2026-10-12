@@ -16,7 +16,9 @@
 
 A tiny architecture regression test, not the production training workflow.
 
-Needs: B5 and enough of B6a that call history cannot affect the result.
+Needs: B5. F0 is deliberately an early, bounded state-history regression; its
+own acceptance verifies fresh setup for the selected training fixture and does
+not require broader B6a completion.
 
 Select a few existing parameters, build System inside the loss from the
 current Model, differentiate an energy loss, make several functional updates,
@@ -57,7 +59,7 @@ the complete F1/F2 workflow.
 3. Reference occupations.
 4. Which parameters are trainable for the new elements; which are fixed or shared.
 5. Element coverage of the dependencies:
-   - D4 reference data (tad-dftd4) and D3 references (tad-dftd3, for GFN1);
+   - DFT-D4 reference data (tad-dftd4) and DFT-D3 references (tad-dftd3, for GFN1);
    - EEQ parameters (tad-multicharge);
    - any other element-indexed tables.
 
@@ -192,7 +194,7 @@ the complete F1/F2 workflow.
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| F0 | Early training invariant | B5, B6a | S |
+| F0 | Early training invariant | B5; verifies its own bounded fresh-setup/state-history invariant | S |
 | F1 | Training basics (last) | T0.12, B8, C9, E8, D1, D2 | M |
 | F2a | Structure and element range | F1 | M |
 | F2b | Defaults and constraints | F2a | S |

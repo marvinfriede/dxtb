@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | SCF step, many small molecules on GPU | largest relative | launch and Python overhead dominate; a fixed-shape step can be captured as a CUDA graph |
 | Integrals and H0 | high | long elementwise chains over shell pairs; fusion reduces memory traffic |
-| Pairwise terms (Coulomb, multipoles, ALPB, repulsion, D3/D4) | high | memory-bound pair intermediates avoided by fusion |
+| Pairwise terms (Coulomb, multipoles, ALPB, repulsion, DFT-D3/DFT-D4) | high | memory-bound pair intermediates avoided by fusion |
 | Higher-order derivatives | high, mostly memory | very large graphs of small operations |
 | Training loss | medium | same kernels; recompiles per shape unless bucketed |
 | `eigh`, setup, convergence loop, libcint | none | library call, one-time or data-dependent code, C extension |
