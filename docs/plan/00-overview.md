@@ -72,7 +72,9 @@ Compiling is used where measurements show a benefit (TD). It is not a goal in it
 
 - Backward compatibility of the Python API. Breaking changes are allowed and are collected into one stable restructuring release (section 8).
 - Float32 for the physics. Higher-order derivatives and SCF convergence need float64.
-- Removing libcint, unless E0 shows it blocks G1 or G2.
+- Removing libcint from dxtb is not a goal. For transform acceptance, follow
+  the canonical PyTorch G1 driver contract in Track E; libcint remains an
+  eager/reference/analytical backend within its supported capabilities.
 
 ---
 
@@ -304,7 +306,7 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 (B8a after B7) |
+| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
 | G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
@@ -351,7 +353,7 @@ Short documents (one to two pages), written before the packages that depend on t
 | Note | Decides | Written in | Blocks |
 | --- | --- | --- | --- |
 | [B1 Evaluation API and state](B1-decision-note.md)  | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8a/C8b, F2a |
-| E0 SCF differentiation | E0a canonical SCF differentiation path (unrolled versus implicit; replacement for xitorch); E0b degenerate/small-gap eigensolver response; E0c open-shell GFN2 NO2 third-order failure. PyTorch multipole integrals are done (E5) | TE | E3 |
+| E0 SCF differentiation | E0a canonical SCF differentiation path (unrolled versus implicit; replacement for xitorch); E0b degenerate/small-gap eigensolver response; E0c NO2 ownership boundary (diagnosis E3.0, fix E3.1; no cause/fix owned by E0). PyTorch multipole integrals are done (E5) | TE | E3 |
 | F2a Element structure | shell layout for actinides; which parameters are structural and which trainable | TF | F2b–F2e |
 | D4 Compile policy | minimum torch for compiled use; enforcement | TD | D-track releases |
 

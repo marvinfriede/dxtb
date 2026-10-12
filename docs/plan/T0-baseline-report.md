@@ -492,7 +492,7 @@ dominate the runtime besides the baseline itself.
 Findings that the decision notes have to answer. Each points to the
 evidence above.
 
-**E0 (SCF differentiation and integrals)**
+**E0 (SCF differentiation; historical integral-driver evidence)**
 
 1. *Implicit differentiation works with autograd, not with transforms.* The
    fixed-point solver of #272 gives correct derivatives to third order
@@ -525,7 +525,10 @@ evidence above.
 5. *PyTorch multipole integrals* exist since #270 and pass every check to
    third order, forward mode and `vmap` (T0.4). Analytical forces, and hence
    `hessian_numerical`, still require libcint ("no analytical overlap
-   gradient"). E0 can decide to drop libcint from the derivative paths.
+   gradient"). The Track E G1 transform-driver contract now selects PyTorch
+   for higher-order transform acceptance and retains libcint for eager,
+   reference, and analytical use within its documented capabilities. This
+   does not remove libcint or its existing reference regressions.
 6. *`RepulsionAG` parameter gradients recurse without bound* (T0.4); remove
    the custom function rather than fix it (E1).
 

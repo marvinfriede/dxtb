@@ -416,6 +416,12 @@ Do not solve mixed-composition batching here. E6b handles it by stacking and vma
 
 ## B4.3 libcint driver
 
+Follow the canonical G1 transform-driver contract in
+[`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#g1-transform-driver-contract):
+PyTorch owns higher-order transform acceptance; libcint remains an
+eager/reference/analytical backend within its documented capabilities. This
+does not relax libcint value and reference regressions.
+
 The libcint path may need a local wrapper built from positions.
 
 Its setup becomes:
@@ -1739,16 +1745,20 @@ The next runnable package is diagnosis-only E3.0, specified in
 It audits the open-shell GFN2 NO2 spectral/Fermi derivative path on supported
 non-DFT-D3 single-System calculations. It first reproduces both GFN2/NO2
 `KNOWN_WRONG` endpoints for PyTorch and libcint under exact T0.2 reference
-settings, then isolates the
-first failing layer. Its prerequisites are E0, accepted E4core, T0.2/T0.3/T0.4
-baseline cases, and completed E1.1/E1.2 primitives used by that path; it does
-not wait for E1.3 or full E1. E3.0 makes no mathematical/spectral change and is
-independent of E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
+settings, then isolates the first failing layer. Its prerequisites are E0,
+accepted E4core, T0.2/T0.3/T0.4 baseline cases, and completed E1.1/E1.2
+primitives used by that path; it does not wait for E1.3 or full E1. All four
+endpoint cases are required by the current baseline marker independently of
+the transform-driver policy. E3.0 makes no mathematical/spectral change and
+is independent of E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
 
 E3.1 implements SCF differentiation after E3.0 using the SCF-relevant E1.1/E1.2
-subset; outer classical DFT-D3 does not block that algorithm. Full E3
-end-to-end GFN1/GFN2 acceptance additionally requires full E1 (including E1.3
-DFT-D3/tad-dftd3 forward-mode support) and E2-core. The DFT-D3 blocker is separate
+subset on the canonical PyTorch transform driver; outer classical DFT-D3 does
+not block that algorithm. Full E3 end-to-end GFN1/GFN2 transform acceptance
+uses PyTorch and additionally requires full E1 (including E1.3
+DFT-D3/tad-dftd3 forward-mode support) and E2-core. Preserve PyTorch and
+libcint eager/reference regression coverage wherever supported; libcint
+higher-order transform parity is not required. The DFT-D3 blocker is separate
 from E3.0/E3.1's SCF-map work but remains a full end-to-end acceptance blocker
 where that outer term is active.
 
@@ -2175,7 +2185,9 @@ parameter-force mixed derivatives
 
 The implementation is composition of the pure energy function, not a separate mutable pathway.
 
-E8 is the acceptance package proving all baseline cells required by G1.
+E8 is the acceptance package proving G1 third-order transforms on the
+canonical PyTorch driver. Existing libcint eager/reference regressions remain
+enforced but do not expand E8's transform-driver scope.
 
 ---
 
@@ -2406,8 +2418,8 @@ derivative / NO2 preflight** on the already functional single-System path. It
 must reproduce both GFN2/NO2 known-wrong endpoints for PyTorch and libcint
 using exact T0.2 settings. A local environment without libcint may skip those
 cases, but package completion requires evidence from a supported
-libcint-enabled environment unless E0 explicitly removes libcint from the
-marker scope; record each environment and driver version. E3.0 then localizes
+libcint-enabled environment because the current baseline marker covers both
+drivers; record each environment and driver version. E3.0 then localizes
 each failure; it makes no mathematical/spectral implementation change. E3.1 owns subsequent SCF differentiation implementation and can
 proceed without outer DFT-D3/E1.3. Full E3 acceptance still waits for full E1
 and E2-core. E3.0 does not wait for E2-legacy cleanup or batching branches above.

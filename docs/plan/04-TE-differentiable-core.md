@@ -14,12 +14,12 @@
 
 ## E0 Decision note: SCF differentiation
 
-**Goal.** Decide, from measurements, how the SCF is differentiated. E0 is split into three explicit decisions:
+**Goal.** Decide, from measurements, how the SCF is differentiated. E0 records two numerical decisions and one ownership boundary:
 
 ```text
 E0a canonical SCF differentiation path
 E0b degenerate/small-gap eigensolver response
-E0c open-shell GFN2 NO2 third-order failure
+E0c NO2 handling boundary (diagnosis in E3.0; any fix in E3.1)
 ```
 
 Changing the Lorentzian broadening parameter is not an acceptable resolution of E0b.
@@ -39,12 +39,30 @@ E0 remains a hard design gate for G1.
 - SCF differentiation strategy for each order (unrolled, implicit, or mixed: implicit for the fixed point, unrolled where cheaper).
 - Whether xitorch is replaced.
 - E0b: how the eigensolver response at degeneracies and small gaps is handled (not by changing the broadening parameter).
-- E0c: the cause and fix of the open-shell GFN2 NO2 third-order failure.
+- E0c: NO2 remains an unresolved G1 correctness blocker; E3.0 owns diagnosis
+  and E3.1 owns any mathematical/spectral fix. E0 does not infer the cause or
+  change NO2 tolerances, references, or markers.
 
 **Done when.** The note is agreed.
 
 **Needs.** T0.3, T0.4. **Unblocks.** E3.0 and, after full E1, full E3.
 **Size.** M.
+
+## G1 transform-driver contract
+
+PyTorch is the canonical integral driver for higher-order `torch.func`
+composition and full E3/E8 transform acceptance. This follows the fixed-shape
+PyTorch `PairPlan` path (E2-core) and PyTorch GFN2 multipole path (E5).
+`libcint` remains supported for eager, reference, and analytical use within
+its documented capabilities; its lack of JVP/`jacfwd`/`vmap` support does not
+block the G1 transform contract. This policy does not remove libcint from
+dxtb or weaken any existing libcint value/reference regression.
+
+This is the canonical driver-scope statement for Track E. B4.3, E3.0, E3.1,
+full E3, and E8 follow it; E0 selects SCF differentiation and spectral
+semantics, not an integral driver. Any future requirement for libcint
+transform parity needs a separately scoped implementation package before it
+can become an acceptance prerequisite.
 
 ---
 
@@ -147,13 +165,21 @@ hyperpolarizability, GFN2/libcint hyperpolarizability, GFN2/PyTorch
 until all four cases reproduce. If drivers or quantities fail at
 different layers, report each separately.
 
+For transform experiments in the diagnosis ladder, use the canonical PyTorch
+driver defined above. The libcint cases remain mandatory historical
+reference/derivative reproductions because the existing marker covers them;
+they do not make libcint JVP/`jacfwd`/`vmap` part of the G1 transform contract.
+
 A local environment without libcint may skip those cases, but this is not
 package-completion evidence. E3.0 cannot be marked complete until all four
-cases have been run in supported environments with the corresponding driver
-available, unless the accepted E0 driver contract explicitly removes libcint
-from this marker's supported scope. Record the Python, PyTorch, dxtb, and
-driver/library versions and environment for every case; results from separate
-supported environments may be combined in the package evidence.
+cases currently covered by the method-wide NO2 marker and supported by the
+baseline reference suite have been run in supported environments with the
+corresponding driver available. The G1 transform-driver contract does not
+change this marker/reference scope. Only a separately reviewed change to the
+libcint eager/reference API scope, baseline reference inventory, or marker
+scope can remove a libcint case. Record Python, PyTorch, dxtb, and
+driver/library versions and environment for each case; evidence from separate
+supported environments may be combined.
 
 For these historical reproductions, reuse the T0.2 calculation path in
 `test/test_baseline/compute.py::SCF_OPTIONS` and
@@ -255,8 +281,10 @@ E3.1 owns the concrete implementation:
    and the replacement passes compatibility/derivative tests; otherwise
    defer deletion until its final consumer is retired.
 
-E3.1 excludes outer classical DFT-D3: SCF differentiation can proceed without
-E1.3 because DFT-D3 is not part of the self-consistent map.
+E3.1 uses the canonical PyTorch transform driver. It excludes outer classical
+DFT-D3: SCF differentiation can proceed without E1.3 because DFT-D3 is not
+part of the self-consistent map. Existing libcint eager/reference behavior
+remains covered separately within its supported scope.
 
 There are two legal paths for a T0.2 NO2 fix. If the fix is common to both
 drivers, validate PyTorch and libcint, regenerate both affected stored
@@ -264,11 +292,21 @@ references, remove the quantity from the method-wide marker, and land code,
 references, and marker update together. If only one driver is fixed, extend
 the marker schema in the same change so lookup receives the driver (for
 example, `known_wrong(name, method, driver)`) and the strict unexpected-fix
-sentinel is independent for each driver. Remove only the fixed driver's
-entry; retain the other driver's entry until it is also corrected. A
-driver-specific numerical fix may not land while retaining the current broad
-method-wide marker, because that marker makes the corrected driver's strict
-sentinel fail. Reference maintenance is atomic over every affected
+sentinel is independent for each driver. Preserve backward-compatible scope
+precedence: system-wide and method-wide markers continue to apply to every
+matching method/driver unless a more-specific per-quantity declaration
+overrides them. A driver-specific fixed/tombstone declaration suppresses an
+inherited broad marker only for that driver and quantity; a driver-specific
+wrong declaration marks only that driver. Unmentioned quantities inherit
+their broader markers. Thus existing C6H6 and Fe(CO)5 system-wide markers
+continue to apply to both methods and drivers, while NO2 can split by driver.
+Test broad-marker inheritance, the NO2 split, a fixed PyTorch result with
+libcint still marked wrong, strict failure for an unexpectedly fixed
+libcint result, and normal enforcement of an unmarked quantity. Remove only
+the fixed driver's entry; retain the other driver's entry until it is also
+corrected. A driver-specific numerical fix may not land while retaining the
+current broad method-wide marker, because that marker makes the corrected
+driver's strict sentinel fail. Reference maintenance is atomic over every affected
 `(method, driver, system, quantity)` and every affected stored file (the
 `gfn2-pytorch/NO2.npz` and `gfn2-libcint/NO2.npz` files when both change).
 Enumerate affected files; recompute through the ordinary reference-generation
@@ -293,8 +331,10 @@ end-to-end model. Full E3 does not introduce a second implementation.
 
 **Steps.**
 
-1. Validate complete GFN1 and GFN2 paths on the T0.2 reference set using the
-   integral drivers selected by E0.
+1. Validate complete GFN1 and GFN2 transform paths on the T0.2 reference set
+   using the canonical PyTorch transform driver. Separately retain eager and
+   reference/value regression coverage for PyTorch and libcint wherever each
+   is supported; libcint is not required to pass higher-order transforms.
 2. Validate DFT-D3-enabled GFN1 after E1.3; until then, that end-to-end row is
    blocked rather than approximated by silently omitting the classical term.
 3. Check reverse orders 1–3, JVP, `jacfwd`, and `vmap` composition of the E3
@@ -304,16 +344,19 @@ end-to-end model. Full E3 does not introduce a second implementation.
    composition remains E6a ownership and is not required to mark E3 complete.
 4. Where both strategies remain, compare unrolled and implicit physical
    derivatives at the same converged root within solver convergence error.
-5. Confirm the selected integral-driver contract and no regression in
-   unaffected methods, drivers, or derivative quantities.
+5. Confirm the canonical PyTorch transform-driver contract and no regression
+   in unaffected methods or derivative quantities. Preserve libcint
+   eager/reference regressions within its supported scope.
 
 **Done when.** The supported complete GFN1/GFN2 end-to-end transform contract
-passes T0.3 tolerances for the driver/method scope selected by E0; the
+passes T0.3 tolerances on the canonical PyTorch transform driver, with
+libcint eager/reference regressions retained where supported; the
 DFT-D3-enabled GFN1 row waits for E1.3.
 
 **Needs.** E3.1, E0, full E1 (including E1.3), E2-core, and E4core. Full E3
 cannot be marked complete until the supported end-to-end GFN1/GFN2 transform
-contract, including outer DFT-D3 where applicable, passes. **Unblocks.** E8,
+contract on PyTorch, including outer DFT-D3 where applicable, passes and
+libcint eager/reference regressions remain covered where supported. **Unblocks.** E8,
 F2d, F3, D2. **Size.** L.
 
 ---
@@ -522,6 +565,10 @@ acceptance. **Size.** M.
 
 **Goal.** End-to-end validation of goal G1.
 
+E8 uses the same canonical PyTorch transform-driver scope as full E3.
+Libcint's supported eager/reference regressions remain enforced, but E8 does
+not add a requirement for libcint higher-order transform parity.
+
 **Steps.**
 
 1. Third-order force constants for GFN1 and GFN2 on the T0.2 set: forward-over-reverse against finite differences of Hessians.
@@ -529,7 +576,9 @@ acceptance. **Size.** M.
 3. Raman (polarizability derivatives) and IR (dipole derivatives) against T0.2.
 4. Cost: time and memory against T0.8 W4/W5; record whether compiling (D2) is worth pursuing.
 
-**Done when.** All within T0.3 tolerances; results added to the reference data.
+**Done when.** Third-order transforms pass T0.3 tolerances on the canonical
+PyTorch transform driver and results are added to the reference data.
+Libcint remains subject to its separate eager/reference regression contract.
 
 **Needs.** E1, E2-core, E3, B8. **Size.** M.
 
@@ -539,7 +588,7 @@ acceptance. **Size.** M.
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
+| E0 | Decision note: SCF differentiation and NO2 ownership boundary (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
 | E2-core | Fixed-shape single-System PairPlan/integral path | T0.2, B3a, B4 | L |
 | E2-legacy | Retire packed legacy driver's per-entry setup loop | E6broute | S |
