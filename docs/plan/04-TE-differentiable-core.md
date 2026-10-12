@@ -100,7 +100,7 @@ single-System use, reference values and derivatives are reproduced, and
 parameter gradients remain connected. Packed legacy-driver cleanup is tracked
 separately as E2-legacy.
 
-**Needs.** T0.2, B3a, B4. **Unblocks.** E6a, E3, D1. **Size.** L.
+**Needs.** T0.2, B3a, B4. **Unblocks.** E6a, E3.1, D1. **Size.** L.
 
 ### E2-legacy packed-driver cleanup
 
@@ -141,11 +141,19 @@ Use `test/molecules.py::samples["NO2"]` geometry unchanged and the existing
 open-shell `spin=1` setup in `test/test_baseline/molecules.py::SYSTEMS["NO2"]`.
 First reproduce both exact entries in `KNOWN_WRONG[("NO2", "gfn2")]`,
 individually, for every driver covered by that method-wide marker:
-`pytorch` and `libcint` where available. The four cases are GFN2/PyTorch
+`pytorch` and `libcint`. The four cases are GFN2/PyTorch
 hyperpolarizability, GFN2/libcint hyperpolarizability, GFN2/PyTorch
 `pol_deriv`, and GFN2/libcint `pol_deriv`. Do not diagnose a lower layer
-until all available cases reproduce. If drivers or quantities fail at
+until all four cases reproduce. If drivers or quantities fail at
 different layers, report each separately.
+
+A local environment without libcint may skip those cases, but this is not
+package-completion evidence. E3.0 cannot be marked complete until all four
+cases have been run in supported environments with the corresponding driver
+available, unless the accepted E0 driver contract explicitly removes libcint
+from this marker's supported scope. Record the Python, PyTorch, dxtb, and
+driver/library versions and environment for every case; results from separate
+supported environments may be combined in the package evidence.
 
 For these historical reproductions, reuse the T0.2 calculation path in
 `test/test_baseline/compute.py::SCF_OPTIONS` and
@@ -250,12 +258,17 @@ E3.1 owns the concrete implementation:
 E3.1 excludes outer classical DFT-D3: SCF differentiation can proceed without
 E1.3 because DFT-D3 is not part of the self-consistent map.
 
-If a fix makes a T0.2 NO2 observable agree with its independent reference,
-validate it for both PyTorch and libcint before removing that quantity from
-the current `(system, method)` marker. A driver-specific fix keeps the
-broader marker until both covered drivers are correct, unless a separately
-reviewed schema change adds driver granularity while preserving the strict
-unexpected-fix sentinel. Reference maintenance is atomic over every affected
+There are two legal paths for a T0.2 NO2 fix. If the fix is common to both
+drivers, validate PyTorch and libcint, regenerate both affected stored
+references, remove the quantity from the method-wide marker, and land code,
+references, and marker update together. If only one driver is fixed, extend
+the marker schema in the same change so lookup receives the driver (for
+example, `known_wrong(name, method, driver)`) and the strict unexpected-fix
+sentinel is independent for each driver. Remove only the fixed driver's
+entry; retain the other driver's entry until it is also corrected. A
+driver-specific numerical fix may not land while retaining the current broad
+method-wide marker, because that marker makes the corrected driver's strict
+sentinel fail. Reference maintenance is atomic over every affected
 `(method, driver, system, quantity)` and every affected stored file (the
 `gfn2-pytorch/NO2.npz` and `gfn2-libcint/NO2.npz` files when both change).
 Enumerate affected files; recompute through the ordinary reference-generation
@@ -284,9 +297,11 @@ end-to-end model. Full E3 does not introduce a second implementation.
    integral drivers selected by E0.
 2. Validate DFT-D3-enabled GFN1 after E1.3; until then, that end-to-end row is
    blocked rather than approximated by silently omitting the classical term.
-3. Check reverse orders 1–3, JVP, `jacfwd`, and conformer `vmap` under the
-   finalized API, including parameter, geometry, field, and mixed derivatives
-   required by T0.3.
+3. Check reverse orders 1–3, JVP, `jacfwd`, and `vmap` composition of the E3
+   transform-safe single-System differentiation path, including parameter,
+   geometry, field, and mixed derivatives required by T0.3. The exact B1
+   public `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions_batch)`
+   composition remains E6a ownership and is not required to mark E3 complete.
 4. Where both strategies remain, compare unrolled and implicit physical
    derivatives at the same converged root within solver convergence error.
 5. Confirm the selected integral-driver contract and no regression in

@@ -782,16 +782,16 @@ treating its unrelated outer-energy transform as a prerequisite.
 already accepted E4core. Its existing executable evidence is limited to the
 following source/test map; this is not proof of the expanded matrix below:
 
-| Interaction/data | Existing executable evidence | What it establishes | Remaining matrix gap |
+| Interaction/data | Existing executable tests | What they establish | Remaining matrix gap |
 | --- | --- | --- | --- |
-| ES2 | `test/test_calculator/test_cache/test_stale.py::test_es2_es3_reused_system_random_call_history`; `test/test_baseline/components.py` targets `es2.positions` and `es2.charges` | Reused Calculator output/forces and component derivative paths are history independent | No one test combines System snapshots, explicit `_interaction_data()` freshness, geometry A/B/A, and gradients |
-| ES3 | `test_es2_es3_reused_system_random_call_history`; component target `es3.charges` | Reused output/force history and charge derivative coverage | Geometry-dependent data is structurally N/A for this setup-derived term; no composite state-snapshot matrix |
-| AES2 | `test/test_baseline/components.py` targets `aes2.positions` and `aes2.dipoles` | Per-call position-dependent builder and component derivatives | No System-level A/B/A snapshot/gradient matrix |
-| D4SC | `test/test_baseline/components.py` targets `d4sc.positions` and `d4sc.charges` | Fresh CN/matrix data builder and component derivatives | No System-level A/B/A snapshot/gradient matrix |
-| GeneralizedBorn | component target `alpb.positions`; `test/test_baseline/test_reference.py` solvated reference cases | Position-dependent data builder and physical reference coverage | No explicit System-level A/B/A gradient plus setup snapshot test |
-| ElectricField | `test/test_calculator/test_field_inputs.py::test_system_field_inputs_are_fresh_and_history_independent`; `test/test_scf/test_functional_map.py::test_explicit_field_raw_map_matches_full_engine` | Call-local field handling, repeated-call history independence, and raw-map parity | Geometry A/B/A and full setup snapshot are not combined in this test |
-| ElectricFieldGrad | `test_system_field_inputs_are_fresh_and_history_independent`; `test_field_call_data_vmap_matches_loop`, `test_system_field_jvp_and_jacfwd_match_reverse`, and `test_field_gradient_geometry_mixed_derivative` in `test/test_calculator/test_field_inputs.py` | Call-local field-gradient handling and derivative coverage | Geometry A/B/A and full setup snapshot are not combined in these tests |
-| Shared functional inputs | `test/test_scf/test_functional_map.py::test_map_inputs_are_not_mutated_and_values_are_frozen`; `test_functional_eligibility_rejects_custom_mutable_interactions` | Functional input nonmutation/frozen values and custom-interaction rejection | Does not by itself prove every interaction-specific fresh-data/A-B-A row or explicitly assert DFT-D3 absence |
+| ES2 | `test/test_calculator/test_cache/test_stale.py::test_es2_es3_reused_system_random_call_history`; `test/test_baseline/test_components.py::test_component` for `es2.positions`/`es2.charges` | Reused Calculator outputs/forces are history independent; generated component checks exercise derivative targets | Component checks do not prove System `_interaction_data()` freshness or snapshots; reused-System test lacks explicit persistent-state snapshots |
+| ES3 | `test/test_calculator/test_cache/test_stale.py::test_es2_es3_reused_system_random_call_history`; `test/test_baseline/test_components.py::test_component` for `es3.charges` | Reused System outputs/forces and component charge derivatives are exercised | Geometry-dependent call data is structurally N/A for setup-derived ES3; explicit setup/component snapshot matrix remains absent |
+| AES2 | `test/test_baseline/test_components.py::test_component` for `aes2.positions`/`aes2.dipoles`; `test/test_scf/test_functional_map.py::test_map_is_history_independent_and_repeated_backward_is_fresh` | Component derivative targets and generic functional-map history/fresh-backward behavior | No AES2-specific System A/B/A outputs, gradients, and persistent-state snapshots in one test |
+| D4SC | `test/test_baseline/test_components.py::test_component` for `d4sc.positions`/`d4sc.charges`; `test/test_classical/test_dispersion/test_d4sc_setup.py::test_direct_get_cache_is_fresh_and_nonpersistent`, `test_setup_is_frozen_and_contains_only_static_data`, `test_d4sc_charge_and_geometry_history_is_independent`, `test_system_scf_charge_history_is_independent`, and `test_stale_component_mutation_does_not_change_existing_setup` | Component derivative targets, direct fresh-cache/setup immutability, A/B/A geometry/charge history, System SCF charge history, and stale-component isolation | No one test combines System A/B/A observable/gradient comparison with a full setup/component snapshot |
+| GeneralizedBorn | `test/test_solvation/test_setup.py::test_setup_is_frozen_and_call_data_is_fresh`, `test_position_transforms_rebuild_call_data`, `test_geometry_charge_and_backward_history_is_independent`, `test_core_repeated_force_matches_fresh_system`; `test/test_solvation/test_grad.py::test_gb_scf_grad`; `test/test_solvation/test_alpb.py::test_gb_scf` | Frozen setup and fresh direct builder data; geometry/charge A/B/A direct-energy history; repeated System force parity against a fresh System; solvated System energy and force references | Direct builder A/B/A and System force/reference tests are separate; no single System-level A/B/A output/gradient plus full setup/component snapshot test. No `test_baseline/test_reference.py` case is an ALPB reference |
+| ElectricField | `test/test_calculator/test_field_inputs.py::test_system_field_inputs_are_fresh_and_history_independent`; `test/test_scf/test_functional_map.py::test_explicit_field_raw_map_matches_full_engine` | Field `_interaction_data()` call freshness/history and raw-map parity | No geometry A/B/A plus full setup/component snapshot in one test |
+| ElectricFieldGrad | `test/test_calculator/test_field_inputs.py::test_system_field_inputs_are_fresh_and_history_independent`, `test_field_call_data_vmap_matches_loop`, `test_system_field_jvp_and_jacfwd_match_reverse`, `test_field_gradient_geometry_mixed_derivative` | Field-gradient call-data freshness, mapped builder parity, and derivative connectivity | No geometry A/B/A plus full setup/component snapshot in one test |
+| Shared functional inputs | `test/test_scf/test_functional_map.py::test_map_inputs_are_not_mutated_and_values_are_frozen`; `test_functional_eligibility_rejects_custom_mutable_interactions`; `test_functional_map_has_no_legacy_stateful_hooks` | Functional-input immutability checks, custom-interaction exclusion, and absence of legacy stateful hooks | These do not prove every interaction-specific freshness/A-B/A row or explicitly assert DFT-D3 absence from `SCFInputs` |
 
 The follow-up `B6a-SCF-validation` remains **partial / validation pending** until
 a focused parametrized matrix records, for each applicable exact built-in
@@ -1738,8 +1738,8 @@ The next runnable package is diagnosis-only E3.0, specified in
 [`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#e30-diagnosis-only-spectral-derivative--no2-preflight).
 It audits the open-shell GFN2 NO2 spectral/Fermi derivative path on supported
 non-DFT-D3 single-System calculations. It first reproduces both GFN2/NO2
-`KNOWN_WRONG` endpoints for PyTorch and libcint where available under exact
-T0.2 reference settings, then isolates the
+`KNOWN_WRONG` endpoints for PyTorch and libcint under exact T0.2 reference
+settings, then isolates the
 first failing layer. Its prerequisites are E0, accepted E4core, T0.2/T0.3/T0.4
 baseline cases, and completed E1.1/E1.2 primitives used by that path; it does
 not wait for E1.3 or full E1. E3.0 makes no mathematical/spectral change and is
@@ -2404,9 +2404,11 @@ E4.6a.
 The recommended next runtime package is **E3.0 — diagnosis-only spectral
 derivative / NO2 preflight** on the already functional single-System path. It
 must reproduce both GFN2/NO2 known-wrong endpoints for PyTorch and libcint
-where available, using exact T0.2 settings,
-then localize each failure; it makes no mathematical/spectral implementation
-change. E3.1 owns subsequent SCF differentiation implementation and can
+using exact T0.2 settings. A local environment without libcint may skip those
+cases, but package completion requires evidence from a supported
+libcint-enabled environment unless E0 explicitly removes libcint from the
+marker scope; record each environment and driver version. E3.0 then localizes
+each failure; it makes no mathematical/spectral implementation change. E3.1 owns subsequent SCF differentiation implementation and can
 proceed without outer DFT-D3/E1.3. Full E3 acceptance still waits for full E1
 and E2-core. E3.0 does not wait for E2-legacy cleanup or batching branches above.
 
