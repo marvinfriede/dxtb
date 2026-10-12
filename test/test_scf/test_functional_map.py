@@ -1545,7 +1545,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
 
 _B6A_FAMILY_ROWS = (
     pytest.param("ES2", "positions", "geometry", id="es2"),
-    pytest.param("ES3", "positions", "static-setup", id="es3"),
+    pytest.param("ES3", "setup", "static-setup", id="es3"),
     pytest.param("AES2", "positions", "geometry", id="aes2"),
     pytest.param("DispersionD4SC", "positions", "geometry", id="d4sc"),
     pytest.param(
@@ -1575,7 +1575,7 @@ def test_b6a_functional_interaction_family_matrix(
     """Isolate each supported interaction's data, map, gradient, and state."""
     expected_owners = {
         "ES2": "positions",
-        "ES3": "positions",
+        "ES3": "setup",
         "AES2": "positions",
         "DispersionD4SC": "positions",
         "GeneralizedBorn": "positions",

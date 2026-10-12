@@ -842,8 +842,8 @@ includes `shell_resolved=False/True`, while `test_es3_setup.py` covers
 atom/shell resolution and GFN2 shell-scale gradients. There is no dedicated
 ES2 setup file. The seven-row parameterized family matrix passed, and the
 separate all-seven integration stress test passed, on each of the five
-supported environments (8 passes total per focused selection). The exact
-focused command was:
+supported environments (8 passes total per focused selection). The focused
+command template used in each supported environment was:
 
 ```bash
 python -m pytest -vv -n logical --dist worksteal -rxX \
