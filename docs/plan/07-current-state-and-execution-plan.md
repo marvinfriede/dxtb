@@ -34,7 +34,7 @@ Current state:
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
 | B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are done; other required setup/per-call work remains. |
-| B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6b production migration. |
+| B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
 | B6a-SCF-validation | partial — validation pending | Expanded all-seven-interaction A/B/A, gradient, call-data freshness, and setup-snapshot matrix is not yet mechanically complete; it is not retroactively added to E4core's prerequisite contract. |
@@ -50,7 +50,7 @@ Current state:
 | E3.1            | not started                     | Owns SCF differentiation implementation/fixes after E3.0; uses E2-core and SCF-relevant E1.1/E1.2, not outer classical DFT-D3. |
 | E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6b batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. |
+| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b's authoritative PyTorch mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -93,7 +93,9 @@ The final `System` must not contain `batch_mode`.
 
 Do not infer batching from `numbers.ndim`, `positions.ndim`, tensor shapes or lengths inside the new core.
 
-Legacy `Calculator` support may continue to use existing batch modes until E6b retires the production batch route, but keep this behavior in the compatibility layer and do not design new APIs around it.
+Legacy `Calculator` support may continue to use existing batch modes until
+E6broute retires the production batch route, but keep this behavior in the
+compatibility layer and do not design new APIs around it.
 
 ## 2.3 Device and dtype
 
@@ -968,7 +970,9 @@ E6b done.
 # 12. E2: fixed-shape integral path and legacy batch boundary
 
 The original E2 assumptions are stale. The single-System E2 core prerequisite
-is implemented; the remaining packed-driver cleanup belongs to E6b.
+is implemented; E6bimpl validates the replacement path, and E6broute retires
+the remaining packed-driver cleanup only when the new route becomes
+authoritative.
 
 The current PyTorch pair builder already:
 
@@ -1018,7 +1022,9 @@ path, per-entry:
 
 inside its Python loop. Keep this compatibility behavior until E6broute replaces
 packed Calculator evaluation with externally mapped/stacked single-System
-evaluation. Removing it now would break legacy batching or begin E6b
+evaluation. E6bimpl validates the replacement route; E6broute retires this
+packed per-entry path when the PyTorch mixed-System route becomes authoritative.
+Removing it before that point would break legacy batching or begin E6b
 prematurely. This cleanup is the only remaining E2 umbrella item and does not
 block E4core or any single-System transform consumer.
 
@@ -1996,6 +2002,12 @@ execution boundary statically by API path.
 
 ## E6a conformers
 
+The B1 public call is backend-independent in shape, but the E6a transform
+guarantee is scoped to Systems configured with PyTorch, the canonical G2
+transform/batching driver. Keep libcint eager/reference/analytical regressions
+where supported; E6a does not promise whole-System libcint `torch.func`
+composition.
+
 Prerequisites:
 
 - B6b-core purity;
@@ -2007,8 +2019,9 @@ Prerequisites:
 - transform-critical custom operations solved for the tested method.
 
 E6a does not require C5/C8b mixed-System stackability or E4.6a legacy batch
-cull/restore deletion. Its first target maps one fixed System over geometries
-using the B1 call shown above. No additional public function is introduced.
+cull/restore deletion. Its first target maps one fixed PyTorch-driver System
+over geometries using the B1 call shown above. No additional public function
+is introduced.
 
 Tests:
 
@@ -2047,6 +2060,13 @@ configuration or change Calculator behavior.
 
 ## E6b mixed composition
 
+For the authoritative PyTorch production route, mixed-System batching is
+stack plus `vmap` over single-System physics. The no-`batch_mode` and no
+driver-internal per-entry physics-loop requirements apply to that route. A
+retained libcint eager/reference batch compatibility API may use an outer
+Python loop over independent single-System calls; it is not the authoritative
+G2 route and is outside G2 no-loop and throughput acceptance.
+
 Prerequisites:
 
 - B6b-core and C5 core structural migration;
@@ -2065,7 +2085,10 @@ Map over `(system_batch, positions_batch)`.
 
 No physics function receives a `batch_mode`.
 
-No integral driver constructs one System per batch entry internally.
+No integral driver constructs one System per batch entry internally on the
+authoritative PyTorch path. Delete driver-internal batch construction/physics
+loops in both PyTorch and libcint drivers; this does not prohibit a separate
+outer libcint compatibility API loop over independent single-System calls.
 
 E6b owns mixed-System construction, stacking/vmap composition, production
 routing, and retirement of the legacy production batch FULL route. E7 owns
@@ -2084,8 +2107,8 @@ legacy batch FULL route.
 
 ## E6c1 pre-retirement performance gates
 
-E6c1 is the required pre-retirement clearance for both branches against their
-corresponding T0.8 workloads:
+E6c1 is the required pre-retirement clearance for both branches on the
+authoritative PyTorch route against their corresponding T0.8 workloads:
 
 - W2 for E6a conformers mapped over one fixed System;
 - W3 for E6b mixed/training-like padded Systems, compared with the recorded
@@ -2105,7 +2128,8 @@ second permanent batched physics core.
 ## E6c2 final performance acceptance
 
 Record complete W2/W3 results, parameter-gradient timing when available, and
-GPU throughput/memory against the deferred T0.8 GPU baseline. E6c2 is final G2
+PyTorch-route GPU throughput/memory against the deferred T0.8 GPU baseline.
+E6c2 is final G2
 performance sign-off. The GPU baseline may remain outstanding after CPU E6b
 route retirement because E6c1 already cleared both CPU workloads. An explicit
 E6c1 architecture-review waiver may permit route retirement despite a CPU
@@ -2617,11 +2641,16 @@ All known-wrong baseline cases are resolved, third-order reverse and forward com
 
 ## G2
 
-Success means the single-system implementation is the only physics implementation.
-
-Batching is composition with `vmap`/stacking, not a parallel batch-mode codebase.
-
-Legacy batch modes are deleted.
+Success means the single-System implementation is the only physics
+implementation for the authoritative PyTorch production route. Batching is
+composition with `vmap`/stacking, not a parallel batch-mode codebase. G2's
+no-per-entry-loop and throughput criteria apply to that PyTorch route. A
+retained libcint eager/reference compatibility API may compose independent
+single-System calls with an outer loop; that composition is outside G2
+production/performance acceptance and must not become a second physics
+implementation. Legacy PyTorch production batch modes are deleted after route
+migration; libcint remains supported within its documented
+eager/reference/analytical capabilities.
 
 ## G3
 

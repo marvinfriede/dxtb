@@ -44,7 +44,18 @@ Two cases:
 
 - conformer throughput at least matches the current `batch_mode = 2` on the T0.8 workloads (target fixed after T0.8);
 - per-system derivatives contain no cross-system blocks;
-- no per-entry Python loops in the per-call path.
+- no per-entry Python loops in the canonical authoritative PyTorch batching
+  route. A retained libcint eager/reference compatibility composition may use
+  an outer loop over independent single-System calls; it is outside G2's
+  production architecture and throughput acceptance.
+
+**G2 driver scope.** PyTorch is the authoritative transform/batching driver
+for E6a, E6b, E6c1/E6c2, and G2. The public API shape remains backend-independent:
+conformers use the B1 `vmap(system.singlepoint)` expression. Libcint remains an
+eager/reference/analytical backend within its documented capabilities. Any
+retained libcint batch compatibility API may compose independent
+single-System calls with an outer Python loop, but it is not the authoritative
+G2 production route and does not satisfy G2 no-loop or throughput criteria.
 
 ### G3: Parameter learning, including new elements
 
@@ -179,7 +190,7 @@ grads = torch.func.grad(loss)(params)
 | Removed | Replaced by | Package |
 | --- | --- | --- |
 | `TensorLike`, `ModuleLike`, `_clone_tensorlike` | `Node` | TC |
-| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | B1 conformer `vmap(system.singlepoint)` (E6a) and stacked mixed-System `vmap` (E6b) | E6a/E6b; legacy batch mode remains until E6b production migration |
+| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | B1 conformer `vmap(system.singlepoint)` (E6a) and stacked mixed-System `vmap` (E6b) | E6a/E6bimpl; legacy batch mode remains until E6broute production migration |
 | `CalculatorCache`, `@cdec.cache`, `opts.cache`, `store_*` flags | result object | B5 |
 | `Component._cache`, `_cachevars`, `cache_is_latest`, `cache_enable`/`disable`, `update`, `reset` | per-call values, `replace()` | B6 |
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
@@ -307,7 +318,7 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
-| G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
+| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
@@ -318,7 +329,9 @@ can retire legacy batch FULL; its clearance may be measured acceptance or an
 explicit architecture-review decision accepting a regression. Such a waiver
 permits route retirement only; it does not satisfy G2's throughput target.
 E6c2/G2 remains open until the documented throughput target is met or that
-acceptance criterion is explicitly amended. Missing measurements are never
+acceptance criterion is explicitly amended. E6c1 W2/W3 and E6c2 measurements
+are for the authoritative PyTorch route; a retained libcint compatibility
+loop is outside those performance gates. Missing measurements are never
 clearance.
 
 ---

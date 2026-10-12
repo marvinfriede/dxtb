@@ -61,7 +61,7 @@ use Calculator.
 
 1. Convert `Config` and all sub-configs to frozen dataclasses with value equality and hashing.
 2. Remove `device` and `dtype` from the configuration.
-3. Remove `batch_mode` from the new core configuration (superseded by B1 item 5). The old Calculator may continue deriving it for its legacy adapter; that adapter's batch state is retired only when E6b makes mixed-System production routing authoritative. Conformer throughput uses the B1 `vmap(system.singlepoint, ...)` contract in E6a and does not require a public `batch_mode` option.
+3. Remove `batch_mode` from the new core configuration (superseded by B1 item 5). The old Calculator may continue deriving it for its legacy adapter; that adapter's batch state is retired only when E6broute makes mixed-System production routing authoritative. Conformer throughput uses the B1 `vmap(system.singlepoint, ...)` contract in E6a and does not require a public `batch_mode` option.
 4. Replace post-construction adjustments (integral level from the method) with construction-time derivation.
 5. Change the CLI to build a new configuration with `replace()`.
 

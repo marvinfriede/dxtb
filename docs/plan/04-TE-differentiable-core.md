@@ -64,6 +64,16 @@ semantics, not an integral driver. Any future requirement for libcint
 transform parity needs a separately scoped implementation package before it
 can become an acceptance prerequisite.
 
+**G2 batching-driver scope.** PyTorch is the authoritative transform and
+batching driver for E6a, E6b, E6c1/E6c2, and G2. The public API shape remains
+backend-independent, but E6a's transform guarantee is tested on Systems using
+the canonical PyTorch driver. Libcint remains an eager/reference/analytical
+backend within documented capabilities; no whole-System `torch.func`
+guarantee is implied. A retained libcint batch compatibility API may compose
+independent single-System calls with an outer Python loop. That is not the
+authoritative G2 route and is excluded from G2 no-loop and throughput
+acceptance.
+
 ---
 
 ## E1 Custom autograd functions
@@ -292,21 +302,22 @@ references, remove the quantity from the method-wide marker, and land code,
 references, and marker update together. If only one driver is fixed, extend
 the marker schema in the same change so lookup receives the driver (for
 example, `known_wrong(name, method, driver)`) and the strict unexpected-fix
-sentinel is independent for each driver. Preserve backward-compatible scope
-precedence: system-wide and method-wide markers continue to apply to every
-matching method/driver unless a more-specific per-quantity declaration
-overrides them. A driver-specific fixed/tombstone declaration suppresses an
-inherited broad marker only for that driver and quantity; a driver-specific
-wrong declaration marks only that driver. Unmentioned quantities inherit
-their broader markers. Thus existing C6H6 and Fe(CO)5 system-wide markers
-continue to apply to both methods and drivers, while NO2 can split by driver.
-Test broad-marker inheritance, the NO2 split, a fixed PyTorch result with
-libcint still marked wrong, strict failure for an unexpectedly fixed
-libcint result, and normal enforcement of an unmarked quantity. Remove only
-the fixed driver's entry; retain the other driver's entry until it is also
-corrected. A driver-specific numerical fix may not land while retaining the
-current broad method-wide marker, because that marker makes the corrected
-driver's strict sentinel fail. Reference maintenance is atomic over every affected
+sentinel is independent for each driver. For this driver-specific transition,
+atomically remove the affected quantity from the broad NO2 method marker and
+add an explicit wrong entry only for any still-failing driver. For example,
+if the broad NO2 marker initially lists `{hyperpolarizability, pol_deriv}`,
+then after a PyTorch-only hyperpolarizability fix the broad marker lists only
+`{pol_deriv}`, while a libcint-specific marker lists
+`{hyperpolarizability}`. PyTorch has no wrong entry for that quantity and is
+normally enforced against its reference. Do not use tombstones or retain a
+broad marker for a quantity fixed on one driver. Unaffected quantities
+continue inheriting broad markers, so existing C6H6 and Fe(CO)5 system-wide
+markers retain their current method/driver scope. Test broad system- and
+method-marker inheritance, driver-specific wrong entries, corrected
+PyTorch/still-wrong libcint, the inverse split, strict failure when a
+still-marked result unexpectedly becomes correct, normal enforcement of an
+unmarked quantity, unrelated-quantity inheritance, and final removal after
+both drivers are corrected. Reference maintenance is atomic over every affected
 `(method, driver, system, quantity)` and every affected stored file (the
 `gfn2-pytorch/NO2.npz` and `gfn2-libcint/NO2.npz` files when both change).
 Enumerate affected files; recompute through the ordinary reference-generation
@@ -407,8 +418,12 @@ vmap. Keep regression tests; do not reimplement.
 **Public API.** Preserve the B1 call:
 `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`. E6a changes
 the implementation beneath this call; it does not introduce a public
-conformer function. C8a Result pytree support is a separate prerequisite, so
-E6a does not mix result-container migration into the physics change.
+conformer function. The API shape is backend-independent; the transform
+guarantee is for Systems configured with the canonical PyTorch transform
+driver. Retain libcint eager/reference regressions where supported, without
+implying whole-System libcint transform support. C8a Result pytree support is
+a separate prerequisite, so E6a does not mix result-container migration into
+the physics change.
 
 **Goal.** Confirm that one fixed System mapped over conformer positions matches
 a Python loop and the legacy reference path.
@@ -432,8 +447,10 @@ a Python loop and the legacy reference path.
    solver-step implementation, mixer formulas, and finalization. Only the
    controller and eager policy differ.
 4. Compare one fixed System over real GFN1 and GFN2 conformer sets against a
-   Python loop, with vmap fallback warnings as errors. Mixed padded
-   compositions belong to E6b.
+   Python loop, with vmap fallback warnings as errors, using Systems
+   configured with the canonical PyTorch transform driver. Mixed padded
+   compositions belong to E6b. Keep libcint eager/reference coverage where
+   supported; it is not part of the transform guarantee.
 5. Record time and memory on T0.8 W2.
 
 **Result pytree prerequisite (C8a).** C8a independently proves the closed
@@ -470,15 +487,30 @@ or E4.6a. **Size.** M.
 
 ## E6b Mixed-System production batching through `vmap`
 
-**Goal.** All batching goes through `vmap`; `batch_mode` disappears (P2). Integral and SCF code do not handle `batch_mode` themselves; the only final batching composition is single-System `vmap` plus stacked padded Systems.
+**Goal.** For the authoritative PyTorch production route, mixed-System
+batching is stack plus `vmap` over single-System physics; `batch_mode`
+disappears (P2). Integral and SCF implementations do not handle `batch_mode`
+or per-entry physics loops. The final PyTorch composition is conformer
+`vmap` plus stacked padded Systems. A retained libcint eager/reference batch
+compatibility API may compose independent single-System evaluations with an
+outer Python loop. That compatibility layer does not retain driver-internal
+batch state, is not the authoritative G2 route, and is excluded from E6c/G2
+performance and no-loop acceptance.
 
 **Steps.**
 
 1. Mixed sets: per-molecule `setup`, padding to size buckets, stacking with a tree map, `vmap` with `in_dims=(0, 0)` (stacking needs C8b).
 2. A pad-and-stack helper, with configurable bucket sizes.
 3. Batch entry points from B1 (no shape-based guessing).
-4. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
-5. Batched GFN2 runs through the PyTorch multipole integrals (E5); a libcint path is a plain loop over systems.
+4. Delete `batch_mode`, driver-internal per-entry batch construction/physics
+   loops (including those in `integral/driver/pytorch/driver.py` and
+   `libcint/driver.py`), and batched/unbatched implementation branches (for
+   example, the two einsum strings in `BaseIntegral.normalize`). This does not
+   prohibit an outer compatibility API loop over independent libcint
+   single-System calls.
+5. Authoritative batched GFN2 uses the PyTorch multipole integrals (E5).
+   Libcint remains eager/reference/analytical compatibility, and any outer-loop
+   batch composition is not used to satisfy G2 acceptance.
 
 **Done when.** The mixed-System implementation composes under stack/vmap;
 T0.2 batched references are reproduced and per-System Hessians have no
@@ -519,7 +551,8 @@ batch-critical E7 subset, not by the entire eventual audit.
 ## E6c1 Pre-retirement performance gates
 
 E6c1 is the explicit performance clearance required before E6b retires the
-shared legacy production batch route. It includes both batching branches:
+shared legacy production batch route. Both measurements use the authoritative
+PyTorch route. It includes both batching branches:
 
 - **E6a/W2 conformers:** same-System positions mapped with the exact B1
   `vmap(system.singlepoint)` call;
@@ -549,9 +582,9 @@ explicitly amended; missing measurements are never clearance.
 ## E6c2 Final performance acceptance
 
 Record the complete W2 and W3 result, including the C8b training-tree
-parameter-gradient timing when available, together with GPU throughput and
-memory against the deferred T0.8 GPU baseline. E6c2 is the final G2
-performance sign-off; it may follow route migration because CPU W2/W3
+parameter-gradient timing when available, together with PyTorch-route GPU
+throughput and memory against the deferred T0.8 GPU baseline. E6c2 is the final
+G2 performance sign-off; it may follow route migration because CPU W2/W3
 clearances were already required by E6c1. A missing GPU baseline blocks final
 GPU/G2 performance acceptance, not the CPU correctness decision or the E6b
 route migration after E6c1 review.
