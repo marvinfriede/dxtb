@@ -84,7 +84,12 @@ acceptance.
 
 ## E1 Full transform support
 
-**Goal.** Every custom autograd function supports reverse mode to third order, forward mode and `vmap`; or is deleted.
+**Goal.** All terms required by the canonical PyTorch transform path support
+the required reverse-mode derivatives through third order, forward-mode
+derivatives, and `vmap`.
+dxtb-local transform-hostile custom shortcuts are removed or made compliant;
+external dependencies required by the supported physics path satisfy the
+same transform acceptance at their component boundary.
 
 **Status.** E1.1 `RepulsionAG` is complete and its local shortcut is removed.
 E1.2 `CoulombMatrixAG`/ES2 is complete; the shortcut is removed and the plain
@@ -101,18 +106,38 @@ external blocker; removed classes are not candidates for new derivative rules.
 | `CoulombMatrixAG` | Removed under E1.2; plain setup/builder path is authoritative |
 | DFT-D3/`tad-dftd3` forward mode | Open under E1.3; blocked upstream |
 
-Prefer plain torch over custom rules for any still-active operation unless
-profiling and the transform contract justify a custom primitive. Apply these
-steps only to active operations; do not restore the removed local shortcuts.
+**Local custom-operation policy.** For any future dxtb-local transform-hostile
+custom operation:
 
-**Steps per active operation.**
+1. Prefer ordinary torch.
+2. Retain a custom primitive only when profiling justifies it.
+3. If retained, require `setup_context`, differentiable backward, `jvp`, and
+   appropriate `vmap` support.
+4. Test reverse orders 1–3, forward mode, and `vmap`.
 
-1. Measure plain-torch performance (autograd through the forward code) against the custom function, for first-order cost and memory (T0.8 workloads).
-2. If plain torch is within an agreed margin: delete the custom function.
-3. Otherwise: convert to the `setup_context` form; add `jvp`; make `backward` use only differentiable operations; add a vmap rule (`generate_vmap_rule = True` where the body is pure torch).
-4. Tests: orders 1–3 by `gradcheck` chains, forward mode, `vmap` with fallback warnings as errors (from T0.4).
+E1.1 and E1.2 have already satisfied this policy and are complete. It is not
+the implementation plan for E1.3. Do not remove DFT-D3 from the supported
+GFN1 physics path, add a second local dispersion implementation, or introduce
+different DFT-D3 semantics to satisfy transform acceptance.
 
-**Done when.** Both pass T0.4's checks at orders 1–3, forward mode and `vmap`, or are deleted.
+**E1.3 acceptance.** The relevant `tad-dftd3` component path must pass:
+
+- reverse mode through third order;
+- `jvp`, `jacfwd`, and `vmap`;
+- parameter gradients for every active DFT-D3 parameter;
+- a gradient from `s9=0` when the three-body term is made trainable.
+
+The upstream/subproject fix must preserve the same physical DFT-D3 semantics.
+Do not obtain forward-mode acceptance by excluding DFT-D3 from the GFN1
+physics path or by replacing it with a second local dispersion implementation.
+
+**Done when.** E1.1 and E1.2 are complete. Full E1 is complete only when
+E1.3's DFT-D3/`tad-dftd3` component path satisfies the required
+reverse-third-order, `jvp`, `jacfwd`, `vmap`, and parameter-gradient contract,
+including the trainable `s9=0` gradient where applicable; the T0 component
+status is updated; and no previously passing component regresses. No
+dxtb-local first-order-only custom derivative shortcut may remain on the
+authoritative transform path.
 
 **Needs.** T0.4. **Unblocks.** E3.0 through the completed E1.1/E1.2 subset;
 full E3, E6a, E8, and D2 still require full E1. **Size.** M.
