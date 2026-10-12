@@ -34,7 +34,11 @@ packages currently need the `mctc_shim` bridge, see `00-overview.md` section 2).
 | deleting `TensorLike` in the release that adds `Node` | deletion is a separate final step (C9) |
 | caches as explicit values (step 4) | replaced by TB |
 
-**Order.** C1/C1b are done. C2–C4 are external cleanup (verify state first). dxtb's own classes (C5–C8) migrate after the TB packages that remove their mutable state, from the bottom of the object tree up.
+**Order.** C1/C1b are done. C2–C4 are external cleanup (verify state first).
+C8a is the separate Result-output pytree prerequisite and can follow B5/C1
+without waiting for C5-C7. The structural core values (C5-C7) and C8b
+Model/System stackability proceed bottom-up after their TB mutation-removal
+prerequisites.
 
 ---
 
@@ -133,9 +137,41 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 ---
 
-## C8 Model, system and result as nodes
+## C8a Result pytree representation
 
-**Goal.** The B3/B5 objects become nodes, so systems can be stacked and models partitioned.
+**Goal.** Make the immutable public `Result` returned by
+`System.singlepoint()` a valid `torch.func` pytree before E6a. This package is
+independent of C5/C6/C7 and does not add mixed-System stackability.
+
+**Steps.** Register or migrate `Result`, `ChargeResult`, `PotentialResult`,
+`Multipoles`, and nested result containers as pytree/Node values. `None` fields
+and classical-term string labels must live in static pytree context, never as
+ordinary mapped leaves; tensors, including each classical energy, remain
+dynamic leaves.
+
+**Acceptance.** Use the exact B1 API with default `out_dims`:
+
+```python
+mapped = torch.func.vmap(
+    system.singlepoint,
+    in_dims=(0,),
+)(positions_batch)
+```
+
+`mapped` remains a `Result`; every tensor-valued result has exactly one new
+leading conformer dimension; absent optional fields remain `None`; classical
+labels remain static; nested charge/potential results reconstruct; and a
+Python conformer loop agrees field-by-field. Cover GFN1 and GFN2, including
+configurations with different optional integral/multipole fields. No private
+tuple-return workaround or custom public `out_dims` is acceptable.
+
+**Needs.** B5, C1. **Unblocks.** E6a. **Size.** M.
+
+## C8b Model/System stackability
+
+**Goal.** The B3 Model/System objects become stackable nodes so mixed systems
+can be composed and models partitioned. C8a separately establishes Result's
+transform-compatible pytree representation for E6a.
 
 Before converting System to Node, remove `model`, `batch_mode`, `dd` and all
 live mutable builder/cache objects. Stacking a System must not stack complete
@@ -143,13 +179,14 @@ Model parameter tables.
 
 **Steps.**
 
-1. Model, system and result become `Node` subclasses.
+1. Model and System become `Node` subclasses; retain the Result representation
+   established by C8a.
 2. Verify stacking: two systems of different composition, padded to the same size bucket, have identical tree structure (P9).
 3. Remove `Calculator.type` and any remaining custom conversion; `.to()` comes from the base.
 
 **Done when.** A stacked batch of padded systems runs under `vmap`; `partition` of a model works for training; T0.2 reproduced.
 
-**Needs.** C6, C7, B5, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
+**Needs.** C5, C6, C7, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
 
 ---
 
@@ -157,7 +194,7 @@ Model parameter tables.
 
 **Goal.** Remove the old base classes and every piece of scaffolding.
 
-**Preconditions.** C2-C4 and C8 are complete, and E4.6a/E4.6b have retired
+**Preconditions.** C2-C4 and C8a/C8b are complete, and E4.6a/E4.6b have retired
 every legacy batch/FULL fallback object that still inherits from or requires
 `TensorLike`/`ModuleLike`. C9 is not complete while such a compatibility
 object remains, and C9 does not block E6b.
@@ -169,11 +206,14 @@ object remains, and C9 does not block E6b.
 3. Coordinated releases: tad-mctc, then tad-multicharge, tad-dftd3, tad-dftd4, then the dxtb restructuring release (`00-overview.md` section 8), each pinning the others exactly.
 
 **Done when.** `rg -n "TensorLike|ModuleLike" src/dxtb` finds no remaining
-runtime references; external scaffolding is removed and coordinated releases
-are complete. C9 cannot be marked done while any runtime reference remains;
-all legacy owners must first be retired or migrated under E4.6a/E4.6b.
+runtime references, and the corresponding source-tree search has been run in
+each participating external package (tad-mctc, tad-multicharge, tad-dftd3,
+tad-dftd4) before its coordinated release. External scaffolding is removed
+and coordinated releases are complete. C9 cannot be marked done while any
+runtime reference remains in dxtb or a participating package; all legacy
+owners must first be retired or migrated under E4.6a/E4.6b.
 
-**Needs.** C2–C4, C8, E4.6a, E4.6b. **Size.** S.
+**Needs.** C2–C4, C8a/C8b, E4.6a, E4.6b. **Size.** S.
 
 ---
 
@@ -189,5 +229,6 @@ all legacy owners must first be retired or migrated under E4.6a/E4.6b.
 | C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4 | M |
 | C6 | Core components and lists | C5, B6b-core | L |
 | C7 | Integrals, Hamiltonian, driver | C5, B4, B6b-core | M |
-| C8 | Model, system, result as nodes | C6, C7, B5, B2 | M |
-| C9 | Final repository-wide `TensorLike`/`ModuleLike` purge | C2–C4, C8, E4.6a, E4.6b | S |
+| C8a | Result pytree representation | B5, C1 | M |
+| C8b | Model/System stackability | C5, C6, C7, B2 | M |
+| C9 | Final repository-wide `TensorLike`/`ModuleLike` purge | C2–C4, C8a/C8b, E4.6a, E4.6b | S |

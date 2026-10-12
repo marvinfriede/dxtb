@@ -17,7 +17,8 @@
 
 - Compile the SCF step, not the SCF loop.
 - Compile the outermost transformed function (for example, `compile(jacfwd(jacrev(energy)))`); never rely on `.backward(create_graph=True)` through a compiled region (double backward through compiled code isn't supported, as far as known).
-- Fixed shapes: masking instead of culling (E4); size buckets for mixed sets (E6).
+- Fixed shapes: masking instead of culling (E4); size buckets for mixed
+  compositions (E6b). E6a conformers use one fixed System and W2 positions.
 
 **Gates.**
 
@@ -25,7 +26,8 @@
   baseline.
 - No compile-specific architectural workaround may be introduced before the
   same function works correctly in eager mode under the required transforms.
-- Compile work stays downstream of E4/E6.
+- Compile work stays downstream of E4 and the relevant E6 branch: E6a for
+  conformers, E6b for mixed Systems.
 
 ---
 
@@ -35,14 +37,17 @@
 
 **Steps.**
 
-1. Compile the pure SCF step (E4) under `vmap` over conformers (E6).
+1. Compile the pure SCF step (E4) under `vmap` over conformers (E6a), using
+   the exact B1 `vmap(system.singlepoint)` API and C8a Result pytree output.
 2. Try `mode="reduce-overhead"` (CUDA graphs) and `fullgraph=True`.
 3. Compile the per-call build stages (integrals, H0, Coulomb) as one function per call.
-4. Compare with T0.8 W2 (eager, current code) and with eager E6.
+4. Compare with T0.8 W2 conformers (eager legacy baseline), the E6a
+   fixed-trip `System.singlepoint`, and the eager Calculator adapter.
 
-**Done when.** Speed-up and compile time recorded; enabled by default for batch entry points if worthwhile.
+**Done when.** Speed-up and compile time recorded; enabled by default for the conformer entrypoint if worthwhile.
 
-**Needs.** E4, E6 (E5, done, for GFN2 on GPU), T0.8 including the GPU baseline. **Size.** M.
+**Needs.** E4, E6a, T0.8 including the GPU baseline (E5 is done for GFN2 on
+GPU). C8b/E6b mixed-System stackability is not required. **Size.** M.
 
 ---
 
@@ -70,11 +75,13 @@
 
 1. Compile `grad(loss)` per size bucket.
 2. Tune bucket sizes against padding waste and number of compiled graphs.
-3. Compare with eager on T0.8 W3 and the F2d workflow.
+3. Compare with eager on T0.8 W3 and the F2d workflow after the E6b
+   mixed-System route is authoritative.
 
 **Done when.** Results recorded; bucket defaults set.
 
-**Needs.** F2d, E6. **Size.** M.
+**Needs.** F2d and the E6b mixed-System production route (including its
+batch-critical E7 gate and W3 route-retirement performance gate). **Size.** M.
 
 ---
 
@@ -97,7 +104,8 @@
 
 ## D5 Concatenated batching for pair stages (conditional)
 
-**Goal.** Remove padding waste for very mixed training sets, if E6a or D3 show it matters.
+**Goal.** Remove padding waste for very mixed training sets, if W2/E6a
+profiling or D3/W3 shows it matters.
 
 **Steps.**
 
@@ -107,7 +115,8 @@
 
 **Done when.** Measured; adopted only if clearly better.
 
-**Needs.** E6, D3. **Size.** L. **Start only if** padding waste is shown to dominate.
+**Needs.** E6b mixed-System production route and D3. **Size.** L. **Start only
+if** padding waste is shown to dominate.
 
 ---
 
@@ -127,9 +136,9 @@
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| D1 | Compiled SCF step and CUDA graphs | E4, E6 (E5), T0.8 | M |
+| D1 | Compiled SCF step and CUDA graphs for conformers | E4, E6a, T0.8 GPU (E5 done for GFN2) | M |
 | D2 | Compiled derivative functions | E1, E3, B8 | M |
-| D3 | Compiled training loss with buckets | F2d, E6 | M |
+| D3 | Compiled mixed-System training loss with buckets | F2d, E6b route, W3/E7 gates | M |
 | D4 | Compile policy and tooling | D1 | S |
-| D5 | Concatenated pair batching (conditional) | E6, D3 | L |
+| D5 | Concatenated pair batching (conditional) | E6b route, D3 | L |
 | D6 | Eigensolver (conditional) | T0.8 | M |

@@ -35,6 +35,18 @@
 
 **Done when.** The note is agreed and linked from `00-overview.md`.
 
+**E6a migration note.** The public conformer call remains
+`torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`. After E6a,
+direct eager `System.singlepoint` intentionally uses fixed-trip execution,
+returns tensor-valued convergence/subsolve status, and does not emit eager
+SCF/Fermi warnings or errors. `Calculator.singlepoint` becomes the eager
+compatibility boundary and no longer gets its result merely by delegating to
+`System.singlepoint`; it retains early stop and warning/error policy. Both
+share the same physical map, spectral/Fermi primitives, solver step and mixer
+formulas, and finalization. This behavioral migration must be described in
+the public migration guide; callers needing eager compatibility policy should
+use Calculator.
+
 **Needs.** T0.11. **Size.** S.
 
 ---
@@ -156,7 +168,7 @@ called by the new System.
 
 **Done when.** No code reads or writes a calculator-level cache; T0.2 reference reproduced; T0.5 tests 2 and 3 no longer apply and are removed.
 
-**Needs.** B3, B4. **Unblocks.** B6, B7, C8, E4. **Size.** M.
+**Needs.** B3, B4. **Unblocks.** B6, B7, C8b, E4. **Size.** M.
 
 ---
 

@@ -5,7 +5,7 @@ self-consistent terms in `System`, `refocc` fix as requirement T0.12). Package B
 Written against `main` at `3b6a90f` plus the Track 0 branch. Evidence for each
 point is in `T0-baseline-report.md` (section numbers in brackets).
 
-The note fixes the shape of the API so that B2-B8 and C8/F1 can start. Where a
+The note fixes the shape of the API so that B2-B8 and C8a/C8b/F1 can start. Where a
 choice is open, the proposal comes first, then the alternative and why it was
 not taken. Items marked **[decide]** needed an explicit answer before B2 starts; the remaining ones are listed in section 5 and 12.
 
@@ -27,12 +27,13 @@ not taken. Items marked **[decide]** needed an explicit answer before B2 starts;
 
 | Level | Holds | Built by | Methods |
 | --- | --- | --- | --- |
-| `Model` | parameters (per-element tables as tensors, trainable or not), frozen configuration, the list of terms | `dxtb.GFN1(...)`, `dxtb.GFN2(...)`, `dxtb.GFN0(...)`, or `Model(par, config, terms)` | `setup(numbers)`, `replace(...)`, `to`-style tree maps (C8) |
+| `Model` | parameters (per-element tables as tensors, trainable or not), frozen configuration, the list of terms | `dxtb.GFN1(...)`, `dxtb.GFN2(...)`, `dxtb.GFN0(...)`, or `Model(par, config, terms)` | `setup(numbers)`, `replace(...)`, `to`-style tree maps (C8b) |
 | `System` | everything that depends on `numbers` alone: index helper, basis, gathered per-atom and per-shell parameters, classical-term setup data | `model.setup(numbers)` | `singlepoint(positions, chrg, spin, field, field_grad)`, `energy(...)` |
 | `Result` | outputs of one SCF (section 2) | `system.singlepoint(...)` | none; plain data |
 
-- `Model` and `System` are frozen `Node`s (C1) once `Node` lands. Until then
-  they are frozen dataclasses with the same fields, so C8 only changes the base.
+- `Model` and `System` are frozen values. C8b makes them stackable `Node`s;
+  C8a separately gives the immutable Result tree transform-compatible pytree
+  structure, including static optional/string metadata.
 - `System` does not keep the complete Model or complete parameter tables.
   `setup` gathers the tensors needed by this composition, and those tensors
   retain their autograd relationship to the Model parameter leaves. A
@@ -43,7 +44,7 @@ not taken. Items marked **[decide]** needed an explicit answer before B2 starts;
 
 **Alternative rejected:** keep one `Calculator(numbers, par)` and make it
 immutable. It would keep `numbers` and parameters in one object, so stacking
-systems of different composition (C8) and training with `torch.func` (F1) would
+systems of different composition (C8b) and training with `torch.func` (F1) would
 still need the split.
 
 ## 2. Result contents (question 2)
@@ -117,7 +118,7 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
    Property functions are written so the same `vmap` pattern gives per-system
    results with no cross-system blocks.
 3. Mixed compositions: `dxtb.batch.setup(model, numbers_batch)` returns stacked
-   padded systems (C8). `dxtb.batch.singlepoint` and the property variants
+   padded systems (C8b). `dxtb.batch.singlepoint` and the property variants
    take them and loop or `vmap` internally. Batch size is never inferred
    from shapes.
 4. `batch_mode` and the shape-based guessing are removed (104 references today).
@@ -139,11 +140,27 @@ compositions use the generic `dxtb.batch.*` API.
 `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`; E6a does not
 add a public conformer entrypoint. At present the production `System.singlepoint`
 path still uses eager convergence/status inspection and is not assumed to be
-transformable. E6a will put fixed-trip numerical execution and tensor-valued
-status under `System.singlepoint`, then keep eager warning/error policy in
-the Calculator/top-level eager adapter, outside the transformed function.
-The private implementation boundary may be refactored, but callers do not
-select it by functorch detection and the B1 public API does not change.
+transformable. C8a must first register the complete immutable `Result` tree,
+including nested charge/potential/multipole values, with optional `None`
+fields and classical labels represented as static pytree context. Its exact
+default-`out_dims` `vmap` acceptance is a separate container prerequisite,
+not a private tuple-return workaround inside E6a.
+
+E6a puts fixed-trip numerical execution and tensor-valued status under
+`System.singlepoint`; the private fixed-trip boundary is an implementation
+detail, not a new public API. The ordinary eager `Calculator.singlepoint`
+adapter owns eager early stop and warning/error policy outside transformed
+execution and no longer obtains its eager result simply by delegating to
+`System.singlepoint`. Both routes share the same physical SCF map, spectral
+and Fermi primitives, solver step/mixer formulas, and finalization; only
+controller and policy ownership differ. Direct eager calls to
+`System.singlepoint` intentionally use the fixed-trip controller, run the
+configured trips after convergence, return tensor-valued validity status, and
+do not perform eager Fermi/convergence warning or error inspection. This is
+an explicit behavior change to the direct-System call, which E6a must cover
+with migration notes and separate tests for direct System and Calculator
+semantics. No functorch detection is permitted and the public conformer call
+does not change.
 
 ## 6. Parameter storage (question 6)
 
@@ -169,7 +186,7 @@ until the training work (F1, now the last package of the plan); the model conver
 **Confirmed.** Neither is stored in the configuration or on the model. Both are
 read from the input tensors (`positions`, then the parameter tables).
 `dxtb.GFN1(dtype=..., device=...)` stays as a constructor convenience that
-creates the tables; afterwards `model.to(...)` is a tree map (C8). Float64 is
+creates the tables; afterwards `model.to(...)` is a tree map (C8b). Float64 is
 the documented requirement; float32 inputs raise a clear error in the SCF, not
 silently run.
 

@@ -164,32 +164,66 @@ vmap. Keep regression tests; do not reimplement.
 
 **Public API.** Preserve the B1 call:
 `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`. E6a changes
-its implementation only; it does not introduce a public conformer function.
+the implementation beneath this call; it does not introduce a public
+conformer function. C8a Result pytree support is a separate prerequisite, so
+E6a does not mix result-container migration into the physics change.
 
 **Goal.** Confirm that one fixed System mapped over conformer positions matches
 a Python loop and the legacy reference path.
 
 **Steps.**
 
-1. Route the existing B1 `System.singlepoint` method through a private
-   transform-safe fixed-trip boundary for transformed execution.
-2. Keep eager warning/error policy in the Calculator/top-level eager adapter;
-   neither that policy nor tensor convergence inspection runs inside `vmap`.
-3. Compare one fixed System over a real conformer set (GFN1 energy/forces,
-   PyTorch driver) against a Python loop, with `vmap` fallback warnings as
-   errors. Mixed padded compositions belong to E6b.
-4. Record time and memory.
+1. `System.singlepoint` statically uses the fixed-trip transform-safe
+   controller, returns tensor-valued convergence/subsolve diagnostics, and
+   performs no host warning/error inspection. A direct eager call to
+   `System.singlepoint` intentionally follows those same fixed-trip semantics:
+   it evaluates the configured trip count after convergence, returns invalid
+   subsolve status instead of raising for Fermi failures, and does not emit
+   nonconvergence warnings or errors. This is an explicit B1 behavior change,
+   not an accidental side effect of making `vmap` work.
+2. `Calculator.singlepoint` no longer obtains its ordinary eager result merely
+   by delegating to `System.singlepoint`. Its eager compatibility adapter owns
+   eager early stop and host warning/error interpretation and produces the
+   same public `Result` contract. No functorch or tensor-wrapper detection is
+   used.
+3. Both paths share the same `scf_map`, spectral/Fermi numerical primitive,
+   solver-step implementation, mixer formulas, and finalization. Only the
+   controller and eager policy differ.
+4. Compare one fixed System over real GFN1 and GFN2 conformer sets against a
+   Python loop, with vmap fallback warnings as errors. Mixed padded
+   compositions belong to E6b.
+5. Record time and memory on T0.8 W2.
+
+**Result pytree acceptance (C8a prerequisite).** The exact public call above
+must use default `out_dims=0` and return a `Result`. Every tensor-valued field
+has exactly one leading conformer dimension; `None` optionals remain `None`;
+classical labels and other static metadata live in pytree context while their
+energy tensors are batched; nested charges, potentials, and multipoles
+reconstruct correctly. A Python loop agrees field-by-field. Cover GFN1 and
+GFN2 setups where optional integral and multipole fields differ. No private
+tuple-return workaround or custom `out_dims` is accepted.
+
+**Eager compatibility acceptance.** Test direct eager `System.singlepoint`
+and `Calculator.singlepoint` separately for converged positive-budget,
+nonconverged warning, `force_convergence=True`, `maxiter=0`, finite-T Fermi
+subsolve failures and chronological error policy, dynamic damping, iteration
+count, and selected physical result. Calculator retains legacy eager policy;
+direct System follows the explicit fixed-trip/status-only behavior above.
 
 **Decision rule.**
 
-- Close to today's code: proceed with E6a conformer mapping, then E6b mixed-System batching under its C8/padding gates.
-- One operation slow: give it a batching rule; proceed.
-- Broadly slower: keep an explicitly batched core and record the cost for higher-order derivatives (cross-system blocks).
+- If performance is acceptable, proceed.
+- If one operation is responsible, profile it and add a transform/batching
+  rule where justified.
+- If performance is broadly unacceptable, record an E6 performance blocker
+  and require explicit architecture review before retiring the legacy route.
+  Do not silently create or preserve a second permanent batched physics core.
 
 **Done when.** Results and decision recorded.
 
-**Needs.** E1, E2, E4, B6b-core, T0.8, and the private fixed-trip boundary
-under the B1 public method. It does not need C8 or E4.6a. **Size.** M.
+**Needs.** E1, E2, E4, B6b-core, C8a Result pytree representation, T0.8,
+and the private fixed-trip boundary under the B1 public method. It does not
+need C5/C8b mixed-System stackability or E4.6a. **Size.** M.
 
 ---
 
@@ -199,7 +233,7 @@ under the B1 public method. It does not need C8 or E4.6a. **Size.** M.
 
 **Steps.**
 
-1. Mixed sets: per-molecule `setup`, padding to size buckets, stacking with a tree map, `vmap` with `in_dims=(0, 0)` (stacking needs C8).
+1. Mixed sets: per-molecule `setup`, padding to size buckets, stacking with a tree map, `vmap` with `in_dims=(0, 0)` (stacking needs C8b).
 2. A pad-and-stack helper, with configurable bucket sizes.
 3. Batch entry points from B1 (no shape-based guessing).
 4. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
@@ -211,10 +245,12 @@ per-System Hessians have no cross-system blocks. E6b owns batch construction,
 composition, production routing, and retirement of the legacy batch FULL
 route.
 
-**Needs.** E6a, B3, E4, C5/C8, and defined padding. The route becomes
-authoritative only after the batch-critical E7 padding-safety gate passes;
-the broader E7 audit may continue afterward. **Unblocks.** E4.6a, D1, D3.
-**Size.** L.
+**Needs.** E6a, B3b, E4, C5/C8b, and defined padding. The E6b production
+route becomes authoritative only after its implementation, the batch-critical
+E7 padding-safety gate, and the W3 mixed-System performance comparison pass.
+E6b owns route migration and retirement; E7 owns padding validation. The
+broader E7 audit may continue afterward. **Unblocks.** E4.6a and D3. **Size.**
+L.
 
 ---
 
@@ -234,7 +270,32 @@ production route, not completion of every eventual E7 audit item.
 
 **Done when.** T0.3 padded cells finite at every order that passes for single systems.
 
-**Needs.** T0.3. **Size.** M.
+**Needs.** T0.3. **Size.** M. The E6b production route is gated by the
+batch-critical E7 subset, not by the entire eventual audit.
+
+## E6c Performance acceptance
+
+E6c covers both batching branches and keeps their workloads distinct:
+
+- **E6a/W2 conformers:** same-System positions mapped with the exact B1
+  `vmap(system.singlepoint)` call;
+- **E6b/W3 mixed Systems:** padded/stacked compositions compared with the
+  recorded legacy W3 mixed/training-like baseline.
+
+For both, record wall time, peak memory, CPU threads, and padding/bucket costs
+where applicable. Record GPU throughput/memory when the deferred T0.8 GPU
+baseline is available. W3 must include mixed-System forward time, force
+evaluation where applicable, peak memory, padding overhead, bucket
+count/size distribution, and parameter-gradient timing once the C8b training
+tree exists.
+
+The batch-critical E7 safety checks and E6b value/derivative correctness are
+hard prerequisites for route migration. W3 comparison is also a hard gate
+before retiring the legacy production batch route: if throughput or memory is
+broadly unacceptable, keep the fallback and require explicit architecture
+review. Final G2 performance acceptance additionally requires the full E6c
+record, including W2 and the eventual GPU measurements; a failed performance
+result cannot silently authorize a second permanent batched physics core.
 
 ---
 
@@ -265,7 +326,8 @@ production route, not completion of every eventual E7 audit item.
 | E3 | SCF differentiation | E0, E1, E4 | L |
 | E4 | Pure SCF step, masked loop | T0.2, B5, B6a | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
-| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, T0.8, private fixed-trip boundary | M |
-| E6b | Mixed-System construction, stack/vmap, and production batch-route migration | E6a, B3, E4, C5/C8, defined padding, batch-critical E7 gate | L |
+| C8a | Result pytree output for default-out-dims vmap | B5, C1 | M |
+| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, C8a, T0.8, private fixed-trip boundary | M |
+| E6b | Mixed-System construction, stack/vmap, and production batch-route migration | E6a, B3b, E4, C5/C8b, defined padding, batch-critical E7 gate, W3 performance gate | L |
 | E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
 | E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |

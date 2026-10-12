@@ -37,7 +37,7 @@ the complete F1/F2 workflow.
 
 1. Confirm the T0.9 coverage table has no bug entries (`refocc` is fixed in T0.12, before B3).
 2. Reparametrize positive-only parameters (exponents, scalings) through `log` or `softplus`, so an optimiser can't push them out of range. Provide the transform in the model, not in user code.
-3. Minimal training loop with `torch.func` (`partition`/`combine` once C1/C8 land; plain `ParamModule` before): energies of a small set against reference energies.
+3. Minimal training loop with `torch.func` (`partition`/`combine` once C1/C8b land; plain `ParamModule` before): energies of a small set against reference energies.
 4. Recovery test: perturb the parameters of one element, train against values computed with the original parameters, and check the original values are recovered.
 
 **Done when.** Coverage table has no bug entries; the recovery test passes in CI.
@@ -121,7 +121,7 @@ the complete F1/F2 workflow.
 1. **Dataset format.** Per structure: numbers, positions, charge, spin; reference energy, forces, optionally charges, dipoles. Loader that groups by size bucket (E6b) or iterates per molecule.
 2. **Loss.** Weighted sum of energy, force (second-order derivatives through the SCF, needs E3), charge and dipole terms; regularisation towards the defaults.
 3. **Optimiser loop.** `torch.func.grad` over the loss; per-step `setup` for every molecule (parameters change every step).
-4. **Batching.** Mixed compositions through stacked padded systems and `vmap` (E6b, C8), or a plain loop over molecules until E6b lands.
+4. **Batching.** Mixed compositions through stacked padded systems and `vmap` (E6b, C8b), or a plain loop over molecules until E6b lands.
 5. **Export.** Trained values written back to a parameter file (reverse of loading; `_revert` in `param/module/param.py` exists for this direction).
 6. **Reproducibility.** Seeds, configuration and dataset hash written with the output.
 

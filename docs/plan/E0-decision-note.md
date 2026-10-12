@@ -480,11 +480,19 @@ matrix green.
 (B) the pure functional solver around that map: immutable `SCFInputs`, explicit
 `SCFSolverState`, functional mixers, a fixed-shape solver loop, fixed-trip
 tensor-masked SCF/Fermi control flow, convergence/status tensors, removal of
-SCF/cache `cull`/`restore`, and per-call spectral inputs such as the inverse-
-Cholesky factor. E4 may reuse numerical formulas, but it must not combine the
-physical map and solver transition into one opaque state update. This note
-does not declare today's `BaseSCF._Data`, `_MapData`, or `pure.iterations`
-suitable as the final explicit API.
+`cull`/`restore` from the canonical functional single-System SCF path, and
+per-call spectral inputs such as the inverse-Cholesky factor. E4 establishes
+fixed-shape masked control; it does not require deleting separately isolated
+`cull`/`restore` machinery still owned by the legacy production batch FULL
+adapter. E4 may reuse numerical formulas, but it must not combine the physical
+map and solver transition into one opaque state update. This note does not
+declare today's `BaseSCF._Data`, `_MapData`, or `pure.iterations` suitable as
+the final explicit API.
+
+E6b retires the legacy production batch route after its batch-critical padding
+safety gate; E4.6a then removes the now-unowned batch cull/restore machinery.
+E4.6b separately deletes the remaining legacy FULL loop only after every
+other compatibility fallback is migrated, rejected, or explicitly retired.
 
 **E3 owns**, after E0 is accepted and E4 supplies the raw physical map,
 invariant spectral/density differentiation, the NO2 isolation and fix,
@@ -498,11 +506,14 @@ invariant spectral primitive must land before E4 can function, split that work
 into a narrowly approved spectral-prerequisite package; E4 must not improvise
 its derivative contract.
 
-**E6 owns** external batching and `vmap` of complete Systems. E4 must make the
-single-System SCF transform-compatible enough for E6. The B7 field kernels
-are already vmap-safe; the B7 whole-System failure is generic host scalar
-extraction in the occupation/Fermi search and is deferred to E4/E6 under this
-decision. This does not start E4 or E6.
+**E6a owns** conformer mapping over one fixed System using the B1 public
+`vmap(system.singlepoint)` contract, after the transform-safe controller and
+Result pytree prerequisites exist. **E6b owns** heterogeneous mixed-System
+construction, stacking/vmap composition, and production batch-route
+migration. The B7 field kernels are already vmap-safe; the B7 whole-System
+failure is generic host scalar extraction in the occupation/Fermi search and
+is resolved on the E4 fixed-trip path before E6a. This does not start E4 or
+E6.
 
 Keep `scf_mode="implicit"` publicly available during transition as a legacy
 ordinary-autograd/reverse-oriented optimization. Do not advertise it as the
