@@ -1544,22 +1544,14 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
 
 
 _B6A_FAMILY_ROWS = (
-    pytest.param("ES2", "positions", "geometry", id="es2"),
-    pytest.param("ES3", "setup", "static-setup", id="es3"),
-    pytest.param("AES2", "positions", "geometry", id="aes2"),
-    pytest.param("DispersionD4SC", "positions", "geometry", id="d4sc"),
-    pytest.param(
-        "GeneralizedBorn", "positions", "geometry", id="generalized-born"
-    ),
-    pytest.param(
-        "ElectricField",
-        "positions+field",
-        "geometry+field",
-        id="electric-field",
-    ),
+    pytest.param("ES2", "geometry", id="es2"),
+    pytest.param("ES3", "static-setup", id="es3"),
+    pytest.param("AES2", "geometry", id="aes2"),
+    pytest.param("DispersionD4SC", "geometry", id="d4sc"),
+    pytest.param("GeneralizedBorn", "geometry", id="generalized-born"),
+    pytest.param("ElectricField", "geometry+field", id="electric-field"),
     pytest.param(
         "ElectricFieldGrad",
-        "positions+field_grad",
         "geometry+field_grad",
         id="electric-field-grad",
     ),
@@ -1567,10 +1559,11 @@ _B6A_FAMILY_ROWS = (
 
 
 @pytest.mark.parametrize(
-    "family,input_owners,expected_data_behavior", _B6A_FAMILY_ROWS
+    "family,expected_data_behavior",
+    _B6A_FAMILY_ROWS,
 )
 def test_b6a_functional_interaction_family_matrix(
-    family: str, input_owners: str, expected_data_behavior: str
+    family: str, expected_data_behavior: str
 ) -> None:
     """Isolate each supported interaction's data, map, gradient, and state."""
     assert len(_FUNCTIONAL_SCF_INTERACTION_TYPES) == 7

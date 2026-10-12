@@ -807,7 +807,7 @@ remains the all-seven integration stress test. The actual matrix is
 `test/test_scf/test_functional_map.py::test_b6a_functional_interaction_family_matrix`,
 parameterized independently for ES2, ES3, AES2, D4SC, GeneralizedBorn,
 ElectricField, and ElectricFieldGrad. Each row isolates its interaction in
-`setup_scf_inputs`/`scf_map`, records its input owners and dependency behavior,
+`setup_scf_inputs`/`scf_map`, isolates and tests its input-dependency behavior,
 and compares raw SCFMapResult tensor leaves (not only a scalar norm) across
 A, B, A-again, and fresh-System A. A deterministic nonuniform projection is
 used only for gradient checks. ElectricField and ElectricFieldGrad each have

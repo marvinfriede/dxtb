@@ -221,12 +221,12 @@ The reviewed branch state is tracked in
 At the review point:
 
 - T0 is complete except for the GPU portion of T0.8;
-- B1 is agreed; B2 is implemented; B3a (structural Model/System split) is
-  implemented while B3b remains open;
-- B3b remains open. B4 and B5 are complete for the single-System core; B6 is
-  partial (`B6a-SCF-core` is the completed E4core prerequisite, its expanded
-  validation matrix is pending, and broader B6a/B6b-core plus legacy purge
-  work remain); B7 is done; B8 remains open;
+- B1 and B2 are complete; B3a (structural Model/System split) is implemented
+  while B3b remains open;
+- B4 and B5 are complete for the single-System core. B6 is partial:
+  B6a-SCF-core and B6a-SCF-validation are complete; broader B6a remains open
+  for the legacy-shaped DFT-D3 setup/cache path, B6b-core remains open, and
+  legacy-purge work remains separately owned. B7 is done; B8 remains open;
 - E1 is partial: E1.1/E1.2 are done and E1.3 `tad-dftd3` forward-mode support
   remains blocked upstream. E2 is partial with E2-core complete and packed
   E2-legacy cleanup deferred to E6broute. E4core is accepted while
@@ -236,7 +236,9 @@ At the review point:
 - Node and ModuleNode already exist upstream;
 - E5 is complete;
 - E2-core is complete; the E2 umbrella remains partial until E2-legacy retires;
-- E0 remains a hard design gate for G1.
+- E0 is complete and its SCF differentiation decision is fixed; that contract
+  remains authoritative for downstream G1 work. E3.0 is the next open
+  spectral/NO2 diagnosis and preflight package.
 
 ---
 
