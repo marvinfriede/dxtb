@@ -84,15 +84,16 @@ acceptance.
 
 ## E1 Full transform support
 
-**Goal.** All interaction/classical terms owned by E1 and required by the
-canonical PyTorch transform path support reverse-mode derivatives through
-third order, forward-mode derivatives, and `vmap`.
+**Goal.** E1 is the term/component transform-support track. It owns
+transform-hostile interaction/classical term implementations and term-side
+external dependencies required by the canonical PyTorch transform path,
+currently including `tad-dftd3` under E1.3. Those terms must support
+reverse-mode derivatives through third order, forward-mode derivatives, and
+`vmap` at their component boundary. dxtb-local transform-hostile term
+shortcuts are removed or made compliant.
 
-dxtb-local transform-hostile term shortcuts are removed or made compliant.
-External term dependencies owned by E1, currently `tad-dftd3` under E1.3,
-must satisfy the corresponding transform contract at their component
-boundary. Spectral, eigensolver, occupation/Fermi, and SCF differentiation
-defects remain owned by E3.0/E3.1 and are not E1 completion criteria.
+Spectral, generalized-eigensolver, occupation/Fermi, and SCF differentiation
+defects remain E3.0/E3.1 ownership and are not E1 completion criteria.
 
 **Status.** E1.1 `RepulsionAG` is complete and its local shortcut is removed.
 E1.2 `CoulombMatrixAG`/ES2 is complete; the shortcut is removed and the plain
@@ -595,7 +596,7 @@ E6bcompat-policy has no performance-gate role. The batch inventory is about
 not losing currently supported behavior when the shared packed legacy FULL
 route is removed. Final single-System fallback policy remains E4.6b-owned.
 
-**Needs.** E6a, B3b, E4core, C5/C8b, defined padding, and
+**Needs.** E6a, B3b, E4core, C5/C6/C7/C8b, E2-core, defined padding, and
 E6bcompat-policy. The policy is completed before implementation scope is
 frozen. E7 owns padding validation; only its batch-critical subset gates route
 activation. The broader E7 audit may continue afterward.
@@ -692,7 +693,7 @@ not add a requirement for libcint higher-order transform parity.
 PyTorch transform driver and results are added to the reference data.
 Libcint remains subject to its separate eager/reference regression contract.
 
-**Needs.** E1, E2-core, E3, B8. **Size.** M.
+**Needs.** E1, E2-core, E3, B8a, B8b. **Size.** M.
 
 ---
 
@@ -713,7 +714,7 @@ Libcint remains subject to its separate eager/reference regression contract.
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
 | E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2-core, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
 | E6bcompat-policy | Retain/retire policy for each legacy FULL batch-facing behavior using both the public batch API and legacy dispatch contracts | B1 batch API contract, E4.5b legacy FULL compatibility contract | S; freezes E6bimpl scope |
-| E6bimpl | PyTorch mixed-System construction, stack/vmap, correctness; replacements required by E6bcompat-policy | E6a, B3b, E4core, C5/C8b, defined padding, E2-core, E6bcompat-policy | L; unblocks E6c1 W3, batch-critical E7, and E6bcompat validation |
+| E6bimpl | PyTorch mixed-System construction, stack/vmap, correctness; replacements required by E6bcompat-policy | E6a, B3b, E4core, C5/C6/C7/C8b, defined padding, E2-core, E6bcompat-policy | L; unblocks E6c1 W3, batch-critical E7, and E6bcompat validation |
 | E6bcompat | Validate retained batch replacements or explicit API retirement/migration/error behavior | E6bcompat-policy, E6bimpl | S; required before E6broute |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
 | E6broute | Authoritative PyTorch mixed-System production route; retire shared legacy batch FULL | E6bimpl, E6bcompat-policy, E6bcompat, E6c1 W2/W3 clearances, batch-critical E7 gate | M; unblocks E4.6a and Track D3 |

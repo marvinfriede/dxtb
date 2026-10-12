@@ -137,18 +137,25 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
    the exact System integration call is tested in E6a after the fixed-trip
    SCF boundary exists.
 3. Mixed compositions: `dxtb.batch.setup(model, numbers_batch)` returns stacked
-   padded systems (C8b). `dxtb.batch.singlepoint` and the property variants
-   take them and loop or `vmap` internally. Batch size is never inferred
-   from shapes.
+   padded systems (C8b). The accepted mixed-System implementation uses stack
+   plus `vmap` for the authoritative PyTorch route. The generic public mixed
+   batch API remains compatible while the legacy packed route is migrated;
+   after E6broute it uses the E6bimpl route or an explicitly retained outer
+   libcint compatibility composition selected by E6bcompat-policy. Batch size
+   is never inferred from shapes.
 4. `batch_mode` and the shape-based guessing are removed (104 references today).
-5. The SCF driver loops over entries until `vmap` rules exist for the
-   eigensolver (E6a). Until then `dxtb.batch.*` is the supported path and
-   `vmap` over the whole singlepoint is the target.
+5. E6a owns conformer mapping for one fixed System using the exact public
+   `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)` call. E6a
+   does not retire the heterogeneous mixed-System packed batch route. Mixed
+   `dxtb.batch.*` compatibility and its entry-loop fallback remain until
+   E6broute activates the E6bimpl mixed-System implementation or an explicitly
+   retained libcint outer-loop compatibility path.
 
 The temporary `System.batch_mode` used by the legacy Calculator during the
 migration is not part of this contract. Remove it from the new core before
 E6a; any separately isolated legacy batch adapter may retain batch state until
-E6broute retires that route after its correctness and activation gates pass.
+E6broute retires the mixed-System route after its correctness and activation
+gates pass. E6a conformer mapping does not delete mixed-System entry loops.
 
 **Decision.** A batched call with one composition and many geometries (the
 common CREST case) uses `setup(numbers)` once and then the conformer call in

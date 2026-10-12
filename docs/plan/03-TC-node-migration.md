@@ -106,7 +106,7 @@ does not require deleting the legacy adapter.
 
 **Done when.** Both migrated; conversion moves their tensors with the parent's `.to(device)`; T0.2 reproduced.
 
-**Needs.** C1, B3, B6b-core, E2-core, E4core. **Size.** M.
+**Needs.** C1, B3a, B6b-core, E2-core, E4core. **Size.** M.
 
 ---
 

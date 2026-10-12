@@ -68,7 +68,7 @@ GPU). C8b/E6b mixed-System stackability is not required. **Size.** M.
 
 **Done when.** Results recorded; defaults set.
 
-**Needs.** E1, E3, B8. **Size.** M.
+**Needs.** Full E3 and B8b. **Size.** M.
 
 ---
 
@@ -103,7 +103,7 @@ batch-critical E7 gate and W3 route-retirement performance gate). **Size.** M.
 
 **Done when.** Policy documented; wrapper and CI in place.
 
-**Needs.** D1. **Size.** S.
+**Needs.** D1, D2, and D3. **Size.** S.
 
 ---
 
@@ -142,8 +142,8 @@ if** padding waste is shown to dominate.
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
 | D1 | Compiled SCF step and CUDA graphs for conformers | E4core, E6a, T0.8 GPU (E5 done for GFN2) | M |
-| D2 | Compiled derivative functions | E1, E3, B8 | M |
+| D2 | Compiled derivative/property functions | Full E3, B8b | M |
 | D3 | Compiled mixed-System training loss with buckets | F2d, E6broute, W3/E7 gates | M |
-| D4 | Compile policy and tooling | D1 | S |
+| D4 | Compile policy and tooling | D1, D2, D3 | S |
 | D5 | Concatenated pair batching (conditional) | E6broute, D3 | L |
 | D6 | Eigensolver (conditional) | T0.8 | M |

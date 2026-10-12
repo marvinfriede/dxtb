@@ -14,7 +14,12 @@ E1.2 review point:
 - Luna/high-reviewed E1.2 implementation commit: `47c07e02bd906ebc9a92610feaa630908073ee1c`
 - E1.2 implementation status was recorded, but closure was subsequently found incomplete; this package resolves the ownership and selection gaps.
 
-This document supersedes package status and ordering in the earlier track files where they conflict. The architectural goals and principles P1-P10 of `00-overview.md` remain authoritative.
+**Current status authority.** Section 1 records current package state, section 25
+is the authoritative dependency/order DAG, and section 30 names immediate
+actionable work. Track files define package contracts and acceptance criteria.
+Historical baseline reports, completed-package implementation plans, and
+package-validation records remain evidence of their recorded point in time;
+they do not override the current status or ordering above.
 
 ---
 
@@ -33,12 +38,12 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional; B3b ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are done; other required setup/per-call work remains. |
+| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; remaining masks/index mappings, transform-critical gathers, mutable integral container, and transitional System fields remain. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
 | B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for the separate DFT-D3 setup/cache work. |
-| B6             | partial                         | Broader B6a remains open for the legacy-shaped DFT-D3 outer classical setup/cache path; B6b-core and the separately owned legacy purge remain open. |
+| B6             | partial                         | B6a-SCF-core and B6a-SCF-validation are complete. Broader B6a remains open for legacy-shaped DFT-D3 setup/cache migration; B6b-core and the separately owned legacy compatibility purge remain open. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -50,7 +55,7 @@ Current state:
 | E3.1            | not started                     | Owns SCF differentiation implementation/fixes after E3.0; uses E2-core and SCF-relevant E1.1/E1.2, not outer classical DFT-D3. |
 | E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6broute also requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires B6b-core, full E1 term support, E2-core, the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, defined padding, and that policy. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -334,17 +339,30 @@ Document them as scheduled for removal.
 
 ## B3b Complete setup/per-call separation — open
 
-B3 is finally complete only after:
+**Completed setup work:**
 
-1. ES2 element/shell hardness data is gathered in setup;
-2. ES3 Hubbard derivative data is gathered in setup;
-3. repulsion pair parameters and masks are gathered in setup;
-4. integral structural data such as the PyTorch pair plan is created in setup;
-5. all other numbers-only masks/index mappings needed by per-call kernels are created in setup;
-6. no parameter-to-element gather remains in a transform-critical per-call kernel unless it is a fixed-shape tensor gather intentionally retained and tested;
-7. System no longer owns a live mutable integral container.
+- [x] ES2 element/shell hardness data;
+- [x] ES3 Hubbard derivative data;
+- [x] repulsion pair parameters and masks;
+- [x] setup separation for AES2, SRB, classical D4, IES, halogen, D4SC,
+  and ALPB;
+- [x] E2-core setup-owned PyTorch `PairPlan` used by overlap, dipole, and
+  quadrupole builders.
 
-B3b can be completed incrementally through B4/E1/B6. Do not block B5 on every B3b detail; mark B3 complete only when all are finished.
+**Remaining B3b contract:**
+
+- [ ] move remaining numbers-only masks/index mappings required by transformed
+  kernels into setup;
+- [ ] move remaining transform-critical parameter-to-element gathers into
+  setup where they are structural setup work; any retained fixed-shape tensor
+  gather must be intentionally documented and tested;
+- [ ] remove the final live mutable integral container from `System`;
+- [ ] remove transitional final-System fields such as `model`, `batch_mode`,
+  `dd`, and other legacy-only mutable objects before C8b freezes the layout.
+
+B3b can be completed incrementally through B4/E1/B6. B3a, not full B3, was
+the prerequisite for B5. Mark B3 complete only when every remaining item is
+closed.
 
 ---
 
@@ -2114,6 +2132,7 @@ composition.
 
 Prerequisites:
 
+- full E1 term/component transform support for the tested method;
 - B6b-core purity;
 - B5.6 public solver-status schema;
 - C8a Result pytree representation, accepted with its tensor-built Result probe;
@@ -2173,10 +2192,14 @@ G2 route and is outside G2 no-loop and throughput acceptance.
 
 Prerequisites:
 
+- full E1 term/component transform support for the tested method;
+- E6a's accepted transform-safe single-System/public conformer boundary;
 - B6b-core and C5 core structural migration;
-- C8b stackable Model/System values (C8a separately covers Result);
+- C5, C6, C7, and C8b stackable core structural/Model/System values (C8a
+  separately covers Result);
 - defined padding structure and E7-relevant padding safety;
 - E2-core structural integral plan and E4core fixed-shape SCF;
+- E6bcompat-policy completed before implementation scope is frozen;
 - transform-critical custom operations solved for the tested method.
 
 Build Systems independently in setup.
@@ -2522,46 +2545,41 @@ Calculator retains eager policy through its separate adapter.
 ## Acyclic dependency DAG
 
 ```text
-E4.5b production single-System routing
-  ├──> E3.0 exact NO2 diagnosis-only preflight ──> E3.1 SCF differentiation implementation
-  ├──> B6b-core ──> C5 core structural migration ──> C6/C7 ──> C8b
-  ├──> B5 + E4core ──> B5.6 public solver-status schema ──> C8a Result pytree
-  └──> fixed-trip functional SCF ──> private transform boundary
+T0.3/T0.4 + E0 + E4core + E1.1/E1.2 ──> E3.0 diagnosis-only preflight
+E3.0 ──> E3.1 SCF/spectral differentiation implementation
+E3.1 + full E1/E1.3 + E2-core + E4core ──> full E3 acceptance
 
-B1 public system.singlepoint + B6b-core + E2-core + private transform boundary
-  + B5.6 status schema + C8a Result pytree
-  └──> E6a conformer vmap over one fixed System (no C5/C8b or E4.6a)
-
-C5/C6/C7 + B3b + C8b + E2-core/E4core + defined padding
-B1 batch API + E4.5b legacy FULL compatibility contract
-  └──> E6bcompat-policy retain/retire decisions before E6bimpl scope freezes
-E6bcompat-policy
-  └──> E6bimpl PyTorch mixed-System construction/stack-vmap + required replacement paths
-          ├──> E6bcompat validation of retained paths or retirement contracts
-          └──> batch-critical E7 padding-safety gate
-
-E6a + T0.8 W2 ──> E6c1 W2 conformer performance clearance
-E6bimpl + T0.8 W3 ──> E6c1 W3 mixed-System performance clearance
-E6c1 W2/W3 clearances + E6bimpl + E6bcompat-policy + E6bcompat
-  + batch-critical E7 gate
-  └──> E6broute PyTorch production route authoritative; retire shared legacy batch FULL
-          └──> E4.6a batch cull/restore removal
-
-remaining compatibility fallback migrations/retirements
-  └──> E4.6b final SelfConsistentFieldFull loop deletion
-
-C2-C4 + C8a/C8b + E4.6a + E4.6b ──> C9 final TensorLike/ModuleLike purge
-
-E3.0 ──> E3.1 on SCF-relevant E1.1/E1.2 subset
-E3.1 + full E1 (including E1.3 DFT-D3/tad-dftd3) + E2-core ──> full E3 acceptance
-full E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
+B3a ──> B5; B4 ──> B5
+B3a + B4 ──> E2-core fixed-shape single-System PairPlan/integral path
+B5 + E4core ──> B5.6 ──> C8a Result pytree
+B4 + B5 + B6a-SCF-core ──> E4core
+B6a-SCF-core + E4core + E4.5b ──> B6b-core ──> C5 ──> C6/C7
+B3b + C5/C6/C7 + B2 ──> C8b
+B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
-B6b-core + C1b + full E3 ──> F3/F4
-C8b + stable training core ──> F1/F2
-E4core + E6a + T0.8 GPU ──> D1 conformer compile
-F2d + E6broute ──> D3 mixed-System compile
-E6broute + D3 ──> D5 pair concatenation (conditional)
-E6broute + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
+
+B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
+  + B5.6 + C8a ──> E6a conformer vmap ──> E6c1-W2
+B1 batch API + E4.5b ──> E6bcompat-policy (may run early)
+E6a + B3b + C5/C6/C7/C8b + E2-core + E4core
+  + E6bcompat-policy + defined padding ──> E6bimpl mixed-System composition
+E6bimpl ──> E6bcompat validation
+E6bimpl + batch-critical E7 ──> E7 batch-safety gate
+E6bimpl + T0.8 W3 ──> E6c1-W3
+E6c1-W2 + E6c1-W3 + E6bcompat + E7 batch gate + E6bimpl
+  ──> E6broute authoritative mixed-System route; retire packed legacy batch FULL
+E6broute ──> E2-legacy packed-driver loop retired
+E6broute ──> E4.6a ──> E4.6b ──> C9 (with C2-C4 and C8a/C8b)
+remaining single-System fallback migrations/retirements ──> E4.6b
+E6broute + T0.8 GPU + E6c1 ──> E6c2 final W2/W3/GPU G2 acceptance
+
+full E3 + B8b ──> D2
+E4core + E6a + T0.8 GPU ──> D1
+B8b + C9 + E8 + D1 + D2 + F0 + T0.12 ──> F1
+F1 ──> F2a ──> F2b ──> F2c ──> F2d ──> F2e
+F2d + E6broute ──> Track D3; E6broute + D3 ──> D5 (conditional)
+D1 + D2 + D3 ──> D4 compile policy/tooling
+B6b-core + C1b + full E3 + E4core + E6a ──> F3 ──> F4 (conditional)
 ```
 
 Recommended early ordering remains: R0, E0, the E1.1/E1.2 supported subset,
@@ -2572,7 +2590,7 @@ E3 acceptance waits for full E1.
 B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
-finally tested. B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not wait for C5/C8b or
+finally tested. E6a + B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not wait for C5/C8b or
 E4.6a.
 
 The recommended next runtime package is **E3.0 — diagnosis-only spectral
@@ -2719,16 +2737,20 @@ Do not:
 
 # 28. Merge gates
 
-## Structural API gate
+## New-core structural gate (not repository-wide legacy purge)
 
-Before calling Track B complete:
+Before calling the new structural core complete:
 
-- B2-B8a complete;
+- B2, final B3b core layout, B4, B5, B6a-SCF-core,
+  B6a-SCF-validation, B6b-core, B7, and B8a complete;
 - no calculator/core caches;
 - no mutable external fields;
 - Result immutable;
 - core evaluation is System + explicit inputs -> Result;
 - T0.2 reproduced.
+
+This milestone does not imply completion of broader B6a DFT-D3 setup/cache
+migration, E4.6a/E4.6b, or C9 repository-wide compatibility cleanup.
 
 ## Transform gate
 
@@ -2806,9 +2828,15 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batch construction remains until E6broute activates the replacement route; E6bimpl owns that replacement, and B3b remains incomplete until all required structural setup is explicit.
+**Immediate runtime package: E3.0 diagnosis-only spectral/NO2 preflight.**
 
-E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. All currently unblocked B6a component families are migrated: ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB. B6a-SCF-core and the retrospective B6a-SCF-validation matrix are complete. Broader B6a remains partial because legacy-shaped DFT-D3 setup/cache work remains. B3b remains partial: ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because DFT-D3/tad-dftd3 forward-mode support remains owned by E1.3/upstream work. B6b-core and later legacy-purge work remain open and are not completed by B6a-SCF-validation.
+Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
+E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
+
+Still separately open: E1.3; B6b-core; B3b; B5.6/C8a; C5-C8b; E6 batch
+migration; broader B6a DFT-D3 setup/cache migration.
+
+## Historical package records
 
 Package record: the IES family and classical DFT-D4 compatibility hardening were validated from task base `12d0182d6b0dff7214bddfcfe8f34eb22f8e77e2` and implemented in `635a6bbfbd1dbe07eabce68d46a42e3d03f35de1`. The independent Luna/high review found no blocker or major issue. The classical halogen family was then validated from task base `c71e4a082ddfd76a2683b005fe3f8420553a16fd`; its fixed-shape kernel changed `halogen.positions:vmap` from ERROR to PASS without changing reference values. Two broad-suite seeds each reported four implicit-SCF memory-leak failures; all seven distinct failing nodes reproduced against the task base with the same one-tensor leak signature. The independent Luna/high review found no blocker or major issue. D4SC, DFT-D3, and other B6 families were not migrated in the halogen package.
 
@@ -2835,6 +2863,7 @@ for E4. The setup-owned `PairPlan` is reused by overlap, dipole, and
 quadrupole evaluation across geometries. The per-entry structural setup loop
 in the legacy packed `IntDriverPytorch` remains until E6broute replaces that batch
 path; no batch behavior was changed here. E0 decisions are accepted and
-remain design-only. The next package is selected separately after review;
-E4, E3, E6, Track D3, DFT-D3, Node migration, and GPU work are not started by this package.
+remain binding design constraints. The package records above describe their
+own validation points and do not replace the current status and next action
+at the start of this section.
 

@@ -39,16 +39,20 @@ the complete F1/F2 workflow.
 
 1. Confirm the T0.9 coverage table has no bug entries (`refocc` is fixed in T0.12, before B3).
 2. Reparametrize positive-only parameters (exponents, scalings) through `log` or `softplus`, so an optimiser can't push them out of range. Provide the transform in the model, not in user code.
-3. Minimal training loop with `torch.func` (`partition`/`combine` once C1/C8b land; plain `ParamModule` before): energies of a small set against reference energies.
+3. Minimal training loop with `torch.func` using the final `partition`/`combine`
+   Model tree established by C8b/C9: energies of a small set against reference
+   energies. F1 is scheduled after C9 and has no pre-final-tree production
+   fallback.
 4. Recovery test: perturb the parameters of one element, train against values computed with the original parameters, and check the original values are recovered.
 
 **Done when.** Coverage table has no bug entries; the recovery test passes in CI.
 
-**Needs.** T0.12, F0, B8, C9, E8, D1, D2 (the full workflow stays downstream; the early training check is F0). **Unblocks.** F2a–F2e. **Size.** M.
+**Needs.** T0.12, F0, B8b, C9, E8, D1, D2. The full workflow stays
+downstream; the early training check is F0. **Unblocks.** F2a–F2e. **Size.** M.
 
 ---
 
-## F2a Structure and element range (decision note plus implementation)
+## F2a Structure and element range (decision note)
 
 **Goal.** Fix the discrete structure of the new elements before any training. These choices set array shapes and can't be trained.
 
@@ -67,13 +71,15 @@ the complete F1/F2 workflow.
 
 **Prerequisite.** A machine-readable Z=89-103 support inventory (per dependency and per element-indexed table: covered, defaulted, missing) must exist before any actinide table is edited.
 
-**Implementation.**
+**F2a scope.** Produce the machine-readable Z=89-103 capability inventory,
+decide shell/layout and structural-versus-trainable parameter policy, specify
+required table/schema extensions, and decide the maximum-element structural
+policy. No F2b numeric parameter values or numerically usable actinide
+calculation are required to close F2a.
 
-1. Raise `MAX_ELEMENT` to 103; extend every element-indexed array, filling new entries from F2b.
-2. Extend the dependency tables as decided.
-3. Tests: an actinide-containing molecule runs through `setup` and `singlepoint` with default parameters (values not yet meaningful).
-
-**Done when.** Note agreed; an actinide system runs end to end.
+**Done when.** The support inventory, shell/layout decisions, parameter
+classification, table/schema requirements, and maximum-element policy are
+agreed and machine-readable where applicable.
 
 **Needs.** F1. **Size.** M.
 
@@ -85,10 +91,15 @@ the complete F1/F2 workflow.
 
 **Steps.**
 
-1. Defaults from neighbouring elements or lanthanide analogues (documented per parameter), or from literature where available.
-2. A parameter file format for new elements (same format as the existing parameter files), loadable by the model.
-3. Bounds and reparametrizations (from F1) per parameter.
-4. Sanity checks: SCF converges with the defaults for a small actinide test set.
+1. Populate the actual new-element parameter values using neighbouring
+   elements, lanthanide analogues, or literature, documented per parameter.
+2. Extend element-indexed numeric arrays and external dependency tables
+   according to F2a's structural decisions.
+3. Add a parameter file in the existing format and make it loadable by the
+   model.
+4. Apply F1 bounds and reparameterizations per parameter.
+5. Run the first actinide `setup`, singlepoint, and SCF smoke tests with the
+   selected defaults.
 
 **Done when.** Default file committed; SCF converges for the test set.
 
@@ -110,7 +121,9 @@ the complete F1/F2 workflow.
 
 **Done when.** The bit-identical test passes; gradients reach only the selected rows.
 
-**Needs.** B3 (setup), C1 (partition; a plain mask-based variant works before C1). **Size.** M.
+**Needs.** F2b, B3a, C8b, and C9. Use the final functional-tree/partition
+mechanism established by F1; there is no pre-C1 plain-mask fallback.
+**Size.** M.
 
 ---
 
@@ -120,16 +133,24 @@ the complete F1/F2 workflow.
 
 **Steps.**
 
-1. **Dataset format.** Per structure: numbers, positions, charge, spin; reference energy, forces, optionally charges, dipoles. The reusable batching implementation groups by E6bimpl-compatible size buckets; a development fallback may iterate per molecule before that capability exists.
+1. **Dataset format.** Per structure: numbers, positions, charge, spin;
+   reference energy, forces, optionally charges and dipoles. Group structures
+   into the accepted E6b mixed-System size buckets.
 2. **Loss.** Weighted sum of energy, force (second-order derivatives through the SCF, needs E3), charge and dipole terms; regularisation towards the defaults.
 3. **Optimiser loop.** `torch.func.grad` over the loss; per-step `setup` for every molecule (parameters change every step).
-4. **Batching.** The batching capability is supplied by E6bimpl/C8b; use stacked padded-System `vmap`, with a plain molecule loop available for development before E6bimpl exists. F2d has no direct E6broute capability dependency. Under the current global schedule, however, F1/C9 places the production F2 workflow transitively after E6broute. That scheduling order does not transfer mixed-System construction ownership from E6bimpl to E6broute.
+4. **Batching.** Consume the authoritative E6b PyTorch stacked/padded-System
+   `vmap` route. E6bimpl owns construction and composition; E6broute owns
+   production activation. F2d does not introduce a second training batching
+   implementation. One-off molecule loops may be used in debugging tests or
+   examples, not as a supported training architecture.
 5. **Export.** Trained values written back to a parameter file (reverse of loading; `_revert` in `param/module/param.py` exists for this direction).
 6. **Reproducibility.** Seeds, configuration and dataset hash written with the output.
 
 **Done when.** A documented script trains actinide parameters on a reference set and writes a parameter file.
 
-**Needs.** F2b, F2c, E3 (force matching), B8. **Unblocks.** D3. **Size.** L.
+**Needs.** F2b, F2c, full E3 (force matching), B8b, C9, and E6broute.
+**Unblocks.** F2e; with E6broute it supplies the Track D3 training workflow.
+**Size.** L.
 
 ---
 
@@ -170,7 +191,9 @@ the complete F1/F2 workflow.
 
 **Done when.** The example term passes all tests and trains in a short example script.
 
-**Needs.** B6 (per-call interaction data), C1b, E3 (consistent SCF derivatives), E4core (pure step). **Unblocks.** F4. **Size.** L.
+**Needs.** B6b-core, C1b, full E3, E4core, and E6a for the public whole-System
+conformer transform used by the ML-augmented integration test. **Unblocks.** F4.
+**Size.** L.
 
 ---
 
@@ -195,11 +218,11 @@ the complete F1/F2 workflow.
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
 | F0 | Early training invariant | B5; verifies its own bounded fresh-setup/state-history invariant | S |
-| F1 | Training basics (last) | T0.12, B8, C9, E8, D1, D2 | M |
+| F1 | Training basics (late workflow) | T0.12, F0, B8b, C9, E8, D1, D2 | M |
 | F2a | Structure and element range | F1 | M |
 | F2b | Defaults and constraints | F2a | S |
-| F2c | Train only new elements | B3, C1 | M |
-| F2d | Training workflow | F2b, F2c, E3, B8 | L |
+| F2c | Train only new elements | F2b, B3a, C8b, C9 | M |
+| F2d | Training workflow using authoritative mixed-System batching | F2b, F2c, full E3, B8b, C9, E6broute | L |
 | F2e | Validation | F2d | M |
-| F3 | ML interaction interface | B6, C1b, E3, E4core | L |
+| F3 | ML interaction interface | B6b-core, C1b, full E3, E4core, E6a | L |
 | F4 | Density-matrix ML term (conditional) | F3, E4core | L |

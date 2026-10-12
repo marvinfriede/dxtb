@@ -94,22 +94,25 @@ use Calculator.
 - Gradients flow from energies to every parameter leaf the method uses and match finite differences, `refocc` included (T0.9 table, T0.12).
 - T0.2 reference reproduced.
 
-**Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2-core (index lists in setup). **Size.** L.
+**Needs.** B1, B2, T0.12. **Unblocks.** B3a unblocks B5, the C5 structural starting point, and E2-core. B3b unblocks C8b and therefore E6bimpl mixed-System stackability. **Size.** L.
 
-**Status: partial.**
+**Status: partial. B3a is done; B3b remains open.**
 
 **B3a — structural split: done.** Model/System exist, the legacy Calculator
 constructs them, classical numbers-only setup is built once and parameter
 coverage is preserved.
 
-**B3b — setup/per-call separation: open.** The original B3 done criterion is
-not yet met. ES2/ES3 numbers-only data remains in the interaction path,
-integral structural setup remains coupled to mutable integral/driver objects,
-and transitional System fields (`model`, `batch_mode`, `dd`, mutable
-`integrals`) are not part of the target architecture.
+**B3b — setup/per-call separation: open.** Setup separation is complete for
+ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB.
+The setup-owned PyTorch `PairPlan` is complete under E2-core. Remaining work is
+limited to numbers-only masks/index mappings needed by transformed kernels,
+transform-critical parameter-to-element gathers that belong in setup, the
+final live mutable integral container, and transitional System fields such as
+`model`, `batch_mode`, `dd`, and other legacy-only mutable objects before C8b
+freezes the layout.
 
-B3b is completed incrementally by B4/E1/B6 and is only marked done when every
-numbers-only operation required by the transformed core has moved to setup.
+B3b is completed incrementally through B4/E1/B6; it is not a prerequisite for
+B5, which depends on the completed B3a structural split.
 
 The complete Model must not be retained by the final System. Gathered setup
 tensors retain the gradient path to Model parameters.
@@ -119,6 +122,9 @@ B3a record: `dxtb.calculators.Model` (parameters, configuration, additional comp
 ---
 
 ## B4 Pure integral builders
+
+**Status: done for the single-System core.** The legacy Calculator batch
+construction path remains separately owned by E6broute.
 
 **Goal.** Integral and Hamiltonian builders return matrices; no integral object changes after construction.
 
@@ -148,6 +154,9 @@ B3a record: `dxtb.calculators.Model` (parameters, configuration, additional comp
 
 ## B5 Result object and `singlepoint`
 
+**Status: done for the immutable single-System Result/core singlepoint
+boundary.** B5.6 separately closes the public solver-status schema.
+
 **Goal.** `system.singlepoint(...)` returns a frozen result; nothing is stored on the calculator.
 
 **Steps.**
@@ -168,7 +177,7 @@ called by the new System.
 
 **Done when.** No code reads or writes a calculator-level cache; T0.2 reference reproduced; T0.5 tests 2 and 3 no longer apply and are removed.
 
-**Needs.** B3, B4. **Unblocks.** B5.6, B6, B7, C8b, E4core. **Size.** M.
+**Needs.** B3a, B4. **Unblocks.** B5.6, B6a-SCF-core, B7, and E4core. C8b additionally needs B3b and C5-C7; it is not unblocked by B5 alone. **Size.** M.
 
 ### B5.6 Close the public solver-status Result schema
 
@@ -218,6 +227,10 @@ negative-temperature policy remains deferred and is not decided by E6a.
 
 ## B6 Per-call geometry data; remove all caches and mutation methods
 
+**Current status.** B6a-SCF-core and B6a-SCF-validation are complete. Broader
+B6a remains partial for legacy-shaped DFT-D3 setup/cache migration. B6b-core is
+open; legacy compatibility purge is separately gated by E4.6a/E4.6b.
+
 **Split.**
 
 **B6a:** remove all state persistent across calls. Temporary per-call SCF data
@@ -259,10 +272,11 @@ E6broute owns production batch routing and the batch-critical E7 padding gate
 passes. E4.6b removes the remaining legacy FULL loop only after every fallback
 is migrated, globally rejected, or retired.
 
-Dependencies: B6a needs B5 and B4; B6a-SCF-core is the completed SCF-only
-implementation prerequisite; B6b-core follows B6a-SCF-core, E4core, and
-E4.5b; C5
-Node-migrates the immutable structural boundary established by B6b-core.
+**Dependency split.** B6a-SCF-core is the E4core prerequisite. B6b-core owns
+the immutable core structural/component boundary and is a prerequisite for
+C5/C6/C7 and F3. The legacy compatibility purge belongs to E4.6a/E4.6b after
+its separate migration gates. Generic B6 does not unblock E4core or F3; those
+consumers require B6a-SCF-core and B6b-core, respectively.
 
 **Goal.** Geometry-dependent intermediates are computed inside each call; no component or driver keeps state between calls.
 
@@ -280,11 +294,17 @@ Node-migrates the immutable structural boundary established by B6b-core.
 - The T0.5 test 1 scenario is impossible by construction (call history no longer matters).
 - T0.2 reference reproduced, including Hessians and IR/Raman without manual resets.
 
-**Needs.** B5, B4. **Unblocks.** C6, C7, E4core through B6a-SCF-core, F3. **Size.** L (can be split: interactions, classicals, driver).
+**Needs.** B5, B4. **Unblocks.** The B6a-SCF-core subset is the E4core
+prerequisite; B6b-core is the prerequisite for C5/C6/C7 and F3. The broader
+B6 umbrella does not itself unblock E4core or F3. **Size.** L (can be split:
+interactions, classicals, driver).
 
 ---
 
 ## B7 External fields as inputs
+
+**Status: done.** Fields are explicit inputs on the core path; legacy field
+components remain isolated in the Calculator compatibility adapter.
 
 **Goal.** Electric field and field gradient are arguments of `singlepoint`, not mutable components (P5). Required for hyperpolarizabilities (G1).
 
@@ -299,11 +319,14 @@ Node-migrates the immutable structural boundary established by B6b-core.
 
 **Done when.** No mutable field state; dipole, polarizability and hyperpolarizability reproduce T0.2 by both autograd and finite differences.
 
-**Needs.** B5. **Unblocks.** B8, E8. **Size.** M.
+**Needs.** B5. **Unblocks.** B8a property functions and, transitively, B8b/E8. **Size.** M.
 
 ---
 
 ## B8 Property functions
+
+**Status.** B8a and B8b remain open packages; B8a may complete before E3, while
+B8b requires B8a and full E3. E8 is separate final acceptance.
 
 **Split.**
 
@@ -312,7 +335,12 @@ B8b: third-order and mixed-response properties after E3.
 
 **Goal.** All properties are functions of the system and the call inputs, implemented with `torch.func`. They replace the calculator mixins (`AnalyticalCalculator`, `AutogradCalculator`, `NumericalCalculator`).
 
-**Functions.** `energy`, `forces`, `hessian`, `third_order` (new), `dipole`, `quadrupole`, `polarizability`, `hyperpolarizability`, `dipole_derivative`, `polarizability_derivative`, `vibration`, `ir`, `raman`, `bond_orders`, plus `*_numerical` variants.
+**B8a functions.** `energy`, `forces`, `hessian`, `dipole`, `quadrupole`,
+`polarizability`, `bond_orders`, and numerical variants.
+
+**B8b functions.** `third_order` (new), `hyperpolarizability`,
+`dipole_derivative`, `polarizability_derivative`, `vibration`, `ir`, `raman`,
+and mixed parameter/force responses.
 
 **Steps.**
 
@@ -321,9 +349,17 @@ B8b: third-order and mixed-response properties after E3.
 3. Numerical variants call the same functions with perturbed inputs; no state.
 4. Delete the calculator mixins and the `numerical` decorator's state handling.
 
-**Done when.** Every property in T0.2 reproduced; third-order force constants available (validated in E8).
+**B8a done when.** Its listed first/second-order properties and numerical
+variants are pure functions of the System and explicit inputs and reproduce
+the applicable T0.2 references.
 
-**Needs.** B7; full third-order support needs TE (E1, E3). **Size.** L.
+**B8b done when.** Its third-order and mixed-response functions compose the
+B8a functional API, pass the applicable T0.3 transform contract after full
+E3, and reproduce T0.2 references. E8 is the final G1 acceptance package; it
+does not implement B8b.
+
+**Needs.** B8a needs B7. B8b needs B8a and full E3 (including full E1 where
+DFT-D3 is active). **Size.** L.
 
 ---
 
@@ -345,15 +381,19 @@ B8b: third-order and mixed-response properties after E3.
 | --- | --- | --- | --- |
 | B1 | Decision note | T0.11 | S |
 | B2 | Frozen configuration | B1 | M |
-| B3 | Model and setup (B3a done, B3b open) | B1, B2 | L |
+| B3a | Model/System structural split (done, transitional) | B1, B2 | done |
+| B3b | Remaining setup/per-call structural separation | B3a, B4/E1/B6 work as applicable | open |
 | B4 | Pure integral builders | B1 | L |
-| B5 | Result object and `singlepoint` | B3, B4 | M |
+| B5 | Result object and `singlepoint` | B3a, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
-| B6a-SCF-core | Completed self-consistent-input state-removal implementation prerequisite; excludes outer classical DFT-D3 | B5, B4 | done |
-| B6a-SCF-validation | Retrospective seven-interaction execution matrix | B6a-SCF-core | done |
-| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a-SCF-core, E4core, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
+| B6a-SCF-core | SCF-only state-removal prerequisite for E4core | B5, B4 | done |
+| B6a-SCF-validation | Retrospective seven-family validation | B6a-SCF-core | done |
+| B6a (broader) | Legacy-shaped DFT-D3 setup/cache migration | B4/B6a-SCF-core | partial |
+| B6b-core | Immutable core structural/component boundary | B6a-SCF-core, E4core, E4.5b | open |
+| Legacy compatibility purge | Remove fallback-owned cull/reset machinery | E4.6a/E4.6b | later |
 | B7 | Fields as inputs | B5 | M |
-| B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |
-| B9 | ASE adapter (optional) | B8 | S |
+| B8a | Energy/forces/Hessian/dipole/quadrupole/polarizability/bond_orders and numerical variants | B7 | L |
+| B8b | Third-order, mixed-response properties, IR/Raman/vibration | B8a, full E3 | L |
+| B9 | ASE adapter (optional) | B8a/B8b as needed | S |
 
-**Release gate.** No intermediate public release is planned; the structural-core milestone (B2–B8a, see `00-overview.md` section 8) feeds the single public restructuring release, with a migration guide built from B1's removal list.
+**Release gate.** No intermediate public release is planned; the structural-core milestone defined in `00-overview.md` section 8 feeds the single public restructuring release, with a migration guide built from B1's removal list.

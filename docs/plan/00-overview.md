@@ -19,6 +19,13 @@ and `07-current-state-and-execution-plan.md` define the current starting point.
 Do not implement a package from the old line references without first checking
 the current source. Package IDs in these files supersede the IDs used in earlier review discussions.
 
+**Planning authority.** Section 1, section 25, and section 30 of
+`07-current-state-and-execution-plan.md` govern current status,
+dependency/order, and immediate work. Track files define package contracts
+and acceptance criteria. Baseline reports, completed-package plans, and
+validation records remain historical evidence and do not override those
+active sections.
+
 ---
 
 ## 1. Design goals
@@ -210,8 +217,8 @@ grads = torch.func.grad(loss)(params)
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
 | TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after B3b; C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
-| TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
-| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for mixed-System profiling; D3 after F2d/E6broute | compiled conformer step, mixed-System training, conditional optimisations |
+| TF Machine learning | `05-TF-machine-learning.md` | F1 after B8b/C9/E8/D1/D2; F2a–F2e sequential; D3 after F2d/E6broute | training workflow, new elements, ML interaction interface |
+| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for early mixed-System profiling; D3 after F2d/E6broute | compiled conformer step, mixed-System training, conditional optimisations |
 
 ### Current status
 
@@ -297,34 +304,39 @@ graph LR
   fallbacks[Remaining fallback migrations or retirements] --> E46b
   C2 & C3 & C4 & C8a & C8b & E46a & E46b --> C9
   B7 --> B8a
-  B8a & E3 --> B8b & E8
+  B8a & E3 --> B8b
+  B8b & E3 --> E8
   B5 --> F0[F0 early training invariant and bounded fresh-setup check]
   T0R --> T012[T0.12 refocc fix] --> B3a
-  B8b & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
-  F2c --> F2d
-  E3 --> F2d --> F2e
-  B6bcore & E3 --> F3 --> F4
+  B8b & C9 & E8 & D1 & D2 & F0 & T012 --> F1 --> F2a --> F2b --> F2c --> F2d --> F2e
+  C8b & C9 --> F2c
+  E3 --> F2d
+  B8b --> F2d
+  E6broute --> F2d
+  B6bcore & E3 & E4core & E6a --> F3 --> F4
   E4core & E6a & T08G --> D1[D1 conformer compile]
-  E3 --> D2
+  E3 & B8b --> D2
   F2d & E6broute --> D3[D3 mixed-System training compile]
   E6broute & D3 --> D5[D5 concatenated pair batching]
+  D1 & D2 & D3 --> D4[D4 compile support policy]
 ```
 
-C1 and C1b are completed prerequisites (tad-mctc 0.9.1) and no longer graph
-nodes; E5 is completed. B3 is split into B3a (done) and B3b (open), see
-`02-TB-evaluation-api.md`. The old "all of B, C, D, E precede F1" path is not
-the only training validation: F0 (an early training invariant) runs as soon
-as B5 exists. For the detailed E4.6/E6 dependency split and the B1
-conformer API implementation boundary, see `07-current-state-and-execution-plan.md`.
+C1 and C1b are completed prerequisites (tad-mctc 0.9.1) and are omitted from
+the executable graph; E5 is completed. B3 is split into B3a (done) and B3b (open), see
+`02-TB-evaluation-api.md`. F0 is an early training invariant that runs as soon
+as B5 exists; the late F1/F2 workflow follows the explicit package
+prerequisites shown above. For the detailed E4.6/E6 dependency split and the
+B1 conformer API implementation boundary, see
+`07-current-state-and-execution-plan.md`.
 
 ### Critical paths per goal
 
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
-| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6bcompat-policy → E6bimpl → E6c1 W3 clearance + batch-critical E7 + E6bcompat validation → E6broute. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
-| G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
-| G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
+| G2 | Authoritative PyTorch route. Conformers: B6b-core + full E1 term support + E2-core + E4core/private fixed-trip boundary + B5.6 + C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2. Mixed Systems: E6bcompat-policy can run early; E6a + B3b + C5/C6/C7/C8b + E2-core + E4core + policy → E6bimpl → E6bcompat + batch-critical E7 + E6c1 W3 → E6broute. E6c2 records final W2/W3/GPU PyTorch-route acceptance. |
+| G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant). Late path: B8b + C9 + E8 + D1 + D2 → F1 → F2a → F2b → F2c → F2d → F2e; F2d + E6broute → Track D3. |
+| G4 | T0.12 → B6b-core + C1b + full E3 + E4core + E6a → F3 → F4 if justified. |
 
 The open T0.8 GPU baseline gates E6c2 final GPU/G2 performance acceptance,
 not E6a correctness or CPU batch-route retirement. E6c1 clears W2 conformer
@@ -342,6 +354,12 @@ clearance.
 
 ## 8. Releases and milestones
 
+The **structural-core milestone** means the new core boundary, not
+repository-wide legacy removal. It comprises B2, final B3b core layout, B4,
+B5, B6a-SCF-core, B6a-SCF-validation, B6b-core, B7, and B8a. E4.6a/E4.6b
+compatibility purge remains separately gated, and broader B6a DFT-D3 setup/cache
+migration remains open.
+
 The restructure should not publish an intermediate API merely because the
 dataclass version exists before the Node version. Prefer internal milestones
 and one stable public breaking release unless a concrete downstream need
@@ -349,7 +367,7 @@ justifies two releases.
 
 | Milestone | Gate |
 | --- | --- |
-| Structural-core milestone | B2-B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced |
+| Structural-core milestone | B2 + final B3b core layout + B4/B5 + B6a-SCF-core/validation + B6b-core + B7/B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced; excludes repository-wide legacy purge |
 | Transform milestone | E0/E1/E3/E4core/C8a/E6a conformer and E6bimpl/E6broute mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
 | Pytree milestone | C5-C7, C8a Result pytree, and C8b Model/System stackability; final C9 `TensorLike`/`ModuleLike` purge follows E4.6a/E4.6b legacy retirement |
 | Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |
@@ -372,7 +390,7 @@ Short documents (one to two pages), written before the packages that depend on t
 | [B1 Evaluation API and state](B1-decision-note.md)  | model/system/result, result contents, fields as inputs, batching API, parameter storage | TB | all of TB, C8a/C8b, F2a |
 | E0 SCF differentiation | E0a canonical SCF differentiation path (unrolled versus implicit; replacement for xitorch); E0b degenerate/small-gap eigensolver response; E0c NO2 ownership boundary (diagnosis E3.0, fix E3.1; no cause/fix owned by E0). PyTorch multipole integrals are done (E5) | TE | E3 |
 | F2a Element structure | shell layout for actinides; which parameters are structural and which trainable | TF | F2b–F2e |
-| D4 Compile policy | minimum torch for compiled use; enforcement | TD | D-track releases |
+| D4 Compile policy | minimum torch for compiled use; enforcement after D1/D2/D3 behavior is measured | TD | D-track releases |
 
 ---
 
