@@ -215,7 +215,7 @@ grads = torch.func.grad(loss)(params)
 | --- | --- | --- | --- |
 | T0 Baseline | `01-T0-baseline.md` | immediately | reference data, derivative status matrix, performance profile, known issues |
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
-| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after final B3b (including built-in DFT-D3 setup/cache migration); C9 waits for legacy fallback retirement |
+| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after final B3b (including built-in DFT-D3 setup and final generic built-in cache removal); C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F1 after B8b/C9/E8/D1/D2; F2a–F2e sequential; D3 after F2d/E6broute | training workflow, new elements, ML interaction interface |
 | TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for early mixed-System profiling; D3 after F2d/E6broute | compiled conformer step, mixed-System training, conditional optimisations |
@@ -259,7 +259,7 @@ graph LR
   end
   T0R --> B1 --> B2 & B3a & B4
   B3a --> B3b[B3b final setup/per-call layout]
-  B6aD3[B6a built-in DFT-D3 setup/cache migration] --> B3b
+  B6aD3[B6a built-in DFT-D3 setup and final generic cache removal] --> B3b
   B4 --> B5
   B3a --> B5
   B5 --> B6a & B7
@@ -335,7 +335,7 @@ B1 conformer API implementation boundary, see
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
-| G2 | Authoritative PyTorch route. Conformers: B6b-core + full E1 term support + E2-core + E4core/private fixed-trip boundary + B5.6 + C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2. Mixed Systems: E6bcompat-policy can run early; E6a + final B3b (including broader B6a built-in DFT-D3 setup/cache migration) + C5/C6/C7/C8b + E2-core + E4core + policy → E6bimpl → E6bcompat + batch-critical E7 + E6c1 W3 → E6broute. E6c2 records final W2/W3/GPU PyTorch-route acceptance. |
+| G2 | Authoritative PyTorch route. Conformers: B6b-core + full E1 term support + E2-core + E4core/private fixed-trip boundary + B5.6 + C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2. Mixed Systems: E6bcompat-policy can run early; E6a + final B3b (including broader B6a built-in DFT-D3 setup and final generic built-in cache removal) + C5/C6/C7/C8b + E2-core + E4core + policy → E6bimpl → E6bcompat + batch-critical E7 + E6c1 W3 → E6broute. E6c2 records final W2/W3/GPU PyTorch-route acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant). Late path: B8b + C9 + E8 + D1 + D2 → F1 → F2a → F2b → F2c → F2d → F2e; F2d + E6broute → Track D3. |
 | G4 | T0.12 → B6b-core + C1b + full E3 + E4core + E6a → F3 → F4 if justified. |
 
@@ -357,7 +357,8 @@ clearance.
 
 The **structural-core milestone** means the new core boundary, not
 repository-wide legacy removal. It comprises B2, final B3b core layout
-(including broader B6a's built-in DFT-D3 setup/cache migration), B4, B5,
+(including broader B6a's built-in DFT-D3 setup and final generic built-in cache
+removal), B4, B5,
 B6a-SCF-core, B6a-SCF-validation, B6b-core, B7, and B8a. E4.6a/E4.6b
 compatibility purge and C9's repository-wide scaffold cleanup remain separately
 gated.
@@ -369,7 +370,7 @@ justifies two releases.
 
 | Milestone | Gate |
 | --- | --- |
-| Structural-core milestone | B2 + final B3b core layout (including broader B6a built-in DFT-D3 setup/cache migration) + B4/B5 + B6a-SCF-core/validation + B6b-core + B7/B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced; excludes repository-wide legacy purge |
+| Structural-core milestone | B2 + final B3b core layout (including broader B6a built-in DFT-D3 setup and final generic built-in ClassicalListCache removal) + B4/B5 + B6a-SCF-core/validation + B6b-core + B7/B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced; excludes repository-wide legacy purge |
 | Transform milestone | E0/E1/E3/E4core/C8a/E6a conformer and E6bimpl/E6broute mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
 | Pytree milestone | C5-C7, C8a Result pytree, and C8b Model/System stackability; final C9 `TensorLike`/`ModuleLike` purge follows E4.6a/E4.6b legacy retirement |
 | Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |

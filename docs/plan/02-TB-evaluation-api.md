@@ -90,7 +90,9 @@ use Calculator.
 
 **Done when.**
 
-- `setup` contains every numbers-only computation; classical components have no `get_cache` keyed on `numbers`.
+- `setup` contains every numbers-only computation for the final exact built-in
+  core; those built-in classical families do not use `get_cache` keyed on
+  `numbers`. Explicitly legacy/custom extensions remain outside this contract.
 - Gradients flow from energies to every parameter leaf the method uses and match finite differences, `refocc` included (T0.9 table, T0.12).
 - T0.2 reference reproduced.
 
@@ -112,13 +114,23 @@ layout. The complete Model and live mutable integral container are already
 removed from System; `integral_setup` and `h0_setup` are established.
 
 Final B3b closure also requires broader B6a's built-in DFT-D3 setup/cache
-migration: move its numbers-only data out of `ClassicalListCache`/
-`DispersionD3.get_cache()` into explicit setup data so the final built-in
-stackable System does not depend on `classical_cache` for DFT-D3 evaluation.
-This does not require arbitrary custom classical extensions to become
-stackable; those remain under the explicit legacy compatibility policy. The
-migration belongs to broader B6a, not a new package. B6b-core and E3.0 do not
-wait for it. B3a, not full B3, was the prerequisite for B5.
+migration, which retires the last generic built-in classical-cache boundary:
+
+1. Give exact built-in DFT-D3 explicit setup data.
+2. Construct exact built-in setup values directly through their setup
+   builders/values, without first building a generic `ClassicalListCache`.
+3. Remove `System.classical_cache` from the final built-in System layout.
+4. Ensure core `System.singlepoint` never reads `System.classical_cache` for an
+   exact built-in classical family.
+5. Retain generic `ClassicalListCache`/`get_cache` only on explicitly
+   legacy/custom-extension paths outside the final stackable core.
+
+Reuse existing explicit builders for migrated families, including the
+repulsion, SRB, D4, IES, and halogen setup paths already present. This does not
+require arbitrary custom classical extensions to become stackable; those
+remain under the explicit legacy compatibility policy. The migration belongs
+to broader B6a, not a new package. B6b-core and E3.0 do not wait for it. B3a,
+not full B3, was the prerequisite for B5.
 
 The complete Model must not be retained by the final System. Gathered setup
 tensors retain the gradient path to Model parameters.
@@ -234,8 +246,9 @@ negative-temperature policy remains deferred and is not decided by E6a.
 ## B6 Per-call geometry data; remove all caches and mutation methods
 
 **Current status.** B6a-SCF-core and B6a-SCF-validation are complete. Broader
-B6a remains partial for legacy-shaped DFT-D3 setup/cache migration. B6b-core is
-open; legacy compatibility purge is separately gated by E4.6a/E4.6b.
+B6a remains partial for built-in DFT-D3 explicit setup and removal of the final
+generic stored built-in `ClassicalListCache` boundary. B6b-core is open; legacy
+compatibility purge is separately gated by E4.6a/E4.6b.
 
 **Split.**
 
@@ -388,13 +401,13 @@ DFT-D3 is active). **Size.** L.
 | B1 | Decision note | T0.11 | S |
 | B2 | Frozen configuration | B1 | M |
 | B3a | Model/System structural split (done, transitional) | B1, B2 | done |
-| B3b | Remaining setup/per-call structural separation, including broader B6a built-in DFT-D3 setup/cache migration before final closure | B3a, B4/E1 and broader B6a DFT-D3 work as applicable | open |
+| B3b | Remaining setup/per-call structural separation, including broader B6a built-in DFT-D3 setup and final generic stored built-in ClassicalListCache removal | B3a, B4/E1 and broader B6a DFT-D3 work as applicable | open |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3a, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | B6a-SCF-core | SCF-only state-removal prerequisite for E4core | B5, B4 | done |
 | B6a-SCF-validation | Retrospective seven-family validation | B6a-SCF-core | done |
-| B6a (broader) | Legacy-shaped DFT-D3 setup/cache migration | B4/B6a-SCF-core | partial |
+| B6a (broader) | Built-in DFT-D3 explicit setup and final generic stored built-in ClassicalListCache removal | B4/B6a-SCF-core | partial |
 | B6b-core | Immutable core structural/component boundary | B6a-SCF-core, E4core, E4.5b | open |
 | Legacy compatibility purge | Remove fallback-owned cull/reset machinery | E4.6a/E4.6b | later |
 | B7 | Fields as inputs | B5 | M |

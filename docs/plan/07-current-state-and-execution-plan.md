@@ -38,12 +38,12 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. Remaining work includes masks/index mappings, transform-critical gathers, `batch_mode`/`dd`, and broader B6a's built-in DFT-D3 numbers-only setup/cache migration from `classical_cache`. Final B3b closure waits for that existing broader B6a work; B6b-core and E3.0 do not. |
+| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. Remaining work includes masks/index mappings, transform-critical gathers, `batch_mode`/`dd`, and broader B6a's built-in DFT-D3 setup/cache migration and removal of the final generic stored built-in `ClassicalListCache` boundary. Final B3b closure waits for that existing broader B6a work; B6b-core and E3.0 do not. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
-| B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for the separate DFT-D3 setup/cache work. |
-| B6             | partial                         | B6a-SCF-core and B6a-SCF-validation are complete. Broader B6a remains open for legacy-shaped DFT-D3 setup/cache migration; B6b-core and the separately owned legacy compatibility purge remain open. |
+| B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for built-in DFT-D3 setup and final generic stored built-in classical-cache removal. |
+| B6             | partial                         | B6a-SCF-core and B6a-SCF-validation are complete. Broader B6a remains open for built-in DFT-D3 explicit setup and final generic stored built-in classical-cache removal; B6b-core and the separately owned legacy compatibility purge remain open. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -361,16 +361,21 @@ Document them as scheduled for removal.
   gather must be intentionally documented and tested;
 - [ ] remove transitional `System.batch_mode` and `System.dd` from the final
   layout before C8b freezes it;
-- [ ] under broader B6a, migrate exact built-in DFT-D3 numbers-only data out
-  of `ClassicalListCache`/`DispersionD3.get_cache()` into explicit setup data,
-  so final built-in stackable Systems do not depend on `classical_cache` for
-  DFT-D3 evaluation. This does not require arbitrary custom classical
-  extensions to become stackable; those remain under E6b compatibility policy.
+- [ ] under broader B6a, migrate exact built-in DFT-D3 to explicit setup data
+  and retire the generic stored `ClassicalListCache` from the final built-in
+  System. All exact built-in classical families with numbers-only setup must
+  construct setup values directly, without first constructing the generic
+  cache; core `System.singlepoint` must not read `System.classical_cache`.
+  Generic cache/`get_cache` compatibility may remain only on explicitly legacy/custom
+  extension paths outside the stackable core.
 
-Final B3b closure depends on broader B6a's built-in DFT-D3 setup/cache
-migration. B6b-core and E3.0 remain independent of that migration. B3a, not
-full B3, was the prerequisite for B5. Mark B3 complete only when every
-remaining item is closed.
+Use existing explicit builders already present for migrated families,
+including repulsion, SRB, D4, IES, and halogen. The broader B6a/B3b
+acceptance is removal of the generic stored built-in cache mechanism, not only
+DFT-D3's individual evaluation lookup. Final B3b closure
+depends on that broader B6a work. B6b-core and E3.0 remain independent of it.
+B3a, not full B3, was the prerequisite for B5. Mark B3 complete only when
+every remaining item is closed.
 
 ---
 
@@ -2009,8 +2014,9 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 ## C8b Model/System stackability
 
 C8b follows final B3b, B6b-core, C5, C6, C7, and B2. Final B3b establishes the
-layout, including removal of transitional `batch_mode`/`dd`, and the broader
-B6a migration of built-in DFT-D3 numbers-only data out of `classical_cache`.
+layout, including removal of transitional `batch_mode`/`dd`, explicit setup
+for built-in DFT-D3, and removal of the generic stored built-in
+`ClassicalListCache` boundary.
 The complete Model and live mutable integral container have already been
 removed; `integral_setup` and `h0_setup` are established. C8b migrates that
 already-correct built-in layout to stackable Nodes; it does not own
@@ -2021,13 +2027,10 @@ support is established separately by C8a.
 
 Before conversion, ensure the dataclass layouts already match the target architecture.
 
-Before C8b, complete the remaining final-System migration:
-
-```text
-batch_mode
-dd
-the built-in DFT-D3 numbers-only data currently held through classical_cache
-```
+Before C8b, remove `batch_mode` and `dd`, migrate built-in DFT-D3 numbers-only
+data from `classical_cache`, and remove `System.classical_cache` after exact
+built-in setup values are built directly without constructing the generic
+`ClassicalListCache`.
 
 The complete Model and live mutable integral container are already absent;
 `integral_setup` and `h0_setup` are setup-owned values. Arbitrary custom
@@ -2568,7 +2571,7 @@ B3a + B4 ──> E2-core fixed-shape single-System PairPlan/integral path
 B5 + E4core ──> B5.6 ──> C8a Result pytree
 B4 + B5 + B6a-SCF-core ──> E4core
 B6a-SCF-core + E4core + E4.5b ──> B6b-core ──> C5 ──> C6/C7
-broader B6a built-in DFT-D3 setup/cache migration ──> final B3b closure
+broader B6a built-in DFT-D3 setup and final generic stored built-in cache removal ──> final B3b closure
 final B3b + C5/C6/C7 + B2 ──> C8b
 B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
@@ -2756,8 +2759,9 @@ Do not:
 
 Before calling the new structural core complete:
 
-- B2, final B3b core layout (including broader B6a's built-in DFT-D3
-  setup/cache migration), B4, B5, B6a-SCF-core, B6a-SCF-validation,
+- B2, final B3b core layout (including broader B6a's built-in DFT-D3 setup
+  and final generic stored built-in classical-cache removal), B4, B5,
+  B6a-SCF-core, B6a-SCF-validation,
   B6b-core, B7, and B8a complete;
 - no calculator/core caches;
 - no mutable external fields;
@@ -2850,7 +2854,8 @@ Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
 Still separately open: E1.3; B6b-core; B3b; B5.6/C8a; C5-C8b; E6 batch
-migration; broader B6a DFT-D3 setup/cache migration.
+migration; broader B6a DFT-D3 explicit setup and final generic stored built-in
+cache removal.
 
 ## Historical package records
 
