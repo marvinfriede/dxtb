@@ -65,7 +65,7 @@ transform parity needs a separately scoped implementation package before it
 can become an acceptance prerequisite.
 
 **G2 batching-driver scope.** PyTorch is the authoritative transform and
-batching driver for E6a, E6b, E6c1/E6c2, and G2. The public API shape remains
+batching driver for E6a, E6bimpl/E6broute, E6c1/E6c2, and G2. The public API shape remains
 backend-independent, but E6a's transform guarantee is tested on Systems using
 the canonical PyTorch driver. Libcint remains an eager/reference/analytical
 backend within documented capabilities; no whole-System `torch.func`
@@ -378,7 +378,7 @@ F2d, F3, D2. **Size.** L.
 
 **Goal.** The functional single-System SCF iteration is a pure function of its
 state and uses fixed-shape solver control. Legacy production batch culling
-remains isolated until E6b retires that route and E4.6a removes its
+remains isolated until E6broute retires that route and E4.6a removes its
 compatibility machinery after E6c1 W2/W3 and batch-critical E7 clearances.
 
 **Steps.**
@@ -390,7 +390,7 @@ compatibility machinery after E6c1 W2/W3 and batch-critical E7 clearances.
 3. Mixer state per system, part of the step's state (so it can be vmapped) or handled in the driver.
 4. Keep the functional core free of cull/restore calls. Do not remove those
    methods from a shared legacy adapter while production batch FULL still uses
-   it; that deletion is E4.6a after E6b retires the production batch route
+   it; that deletion is E4.6a after E6broute retires the production batch route
    and the E6c1 W2/W3 plus batch-critical E7 gates pass.
 5. Benchmark fixed-trip masking against eager early-stop and legacy batch
    culling on the relevant T0.8 workloads.
@@ -449,7 +449,7 @@ a Python loop and the legacy reference path.
 4. Compare one fixed System over real GFN1 and GFN2 conformer sets against a
    Python loop, with vmap fallback warnings as errors, using Systems
    configured with the canonical PyTorch transform driver. Mixed padded
-   compositions belong to E6b. Keep libcint eager/reference coverage where
+   compositions belong to E6bimpl. Keep libcint eager/reference coverage where
    supported; it is not part of the transform guarantee.
 5. Record time and memory on T0.8 W2.
 
@@ -512,20 +512,32 @@ performance and no-loop acceptance.
    Libcint remains eager/reference/analytical compatibility, and any outer-loop
    batch composition is not used to satisfy G2 acceptance.
 
-**Done when.** The mixed-System implementation composes under stack/vmap;
-T0.2 batched references are reproduced and per-System Hessians have no
-cross-system blocks. E6b owns batch construction, composition, production
-routing, and retirement of the legacy batch FULL route. Keep implementation
-and route activation distinct: implementation can be completed and measured
-first; the route becomes authoritative only after E6c1's W2/W3 clearances and
-the batch-critical E7 gate.
+**Done when.** The PyTorch mixed-System implementation composes under
+stack/vmap; T0.2 batched references are reproduced and per-System Hessians
+have no cross-system blocks. E6bimpl owns mixed-System construction,
+composition, and correctness. E6broute owns authoritative production
+activation and retirement of the legacy batch FULL route. Keep implementation
+and route activation distinct: E6bimpl can be completed and measured first;
+E6broute proceeds only after the E6c1 W2/W3 clearances and batch-critical E7
+gate.
+
+**Retained libcint batch compatibility gate (E6bcompat).** If a public
+batch-facing libcint API is retained, E6bimpl must provide an outer
+composition of independent libcint single-System evaluations. E6bcompat must
+prove supported eager/reference values and API behavior before E6broute
+retires the shared legacy batch FULL route; no libcint driver-internal packed
+batch state or per-entry setup loop may remain. This is a correctness/API
+gate, not an E6c/G2 performance or no-loop criterion. If libcint batch
+compatibility is instead retired, that requires an explicit compatibility/API
+retirement decision before E6broute.
 
 **Needs.** E6a, B3b, E4core, C5/C8b, and defined padding. E7 owns padding
 validation; only its batch-critical subset gates route activation. The broader
 E7 audit may continue afterward.
 **Unblocks.** E6c1 W3 measurement and batch-critical E7 validation on the new
-route; after those gates and E6c1 W2/W3 clearance, E6broute may become
-authoritative. E6bimpl alone does not unblock E4.6a or Track D3. **Size.** L.
+route; after those gates, the libcint compatibility correctness/API gate, and
+E6c1 W2/W3 clearance, E6broute may become authoritative. E6bimpl alone does
+not unblock E4.6a or Track D3. **Size.** L.
 
 ---
 
@@ -539,24 +551,26 @@ authoritative. E6bimpl alone does not unblock E4.6a or Track D3. **Size.** L.
 2. Apply double-`where`: mask the input before the singular operation, mask the output after.
 3. Tests: padded systems in T0.3 finite to order 3, including under `vmap`.
 
-E7 owns padding-safety validation and hardening; E6b owns batch-route
-migration. E6b requires only the E7 checks for padded operations used by its
-production route, not completion of every eventual E7 audit item.
+E7 owns padding-safety validation and hardening; E6bimpl owns mixed-System
+construction/composition/correctness, and E6broute owns production activation
+and legacy-route retirement. E6broute requires only the E7 checks for padded
+operations used by its production route, not completion of every eventual E7
+audit item.
 
 **Done when.** T0.3 padded cells finite at every order that passes for single systems.
 
-**Needs.** T0.3. **Size.** M. The E6b production route is gated by the
+**Needs.** T0.3. **Size.** M. E6broute activation is gated by the
 batch-critical E7 subset, not by the entire eventual audit.
 
 ## E6c1 Pre-retirement performance gates
 
-E6c1 is the explicit performance clearance required before E6b retires the
+E6c1 is the explicit performance clearance required before E6broute retires the
 shared legacy production batch route. Both measurements use the authoritative
 PyTorch route. It includes both batching branches:
 
 - **E6a/W2 conformers:** same-System positions mapped with the exact B1
   `vmap(system.singlepoint)` call;
-- **E6b/W3 mixed Systems:** padded/stacked compositions compared with the
+- **E6bimpl/W3 mixed Systems:** padded/stacked compositions compared with the
   recorded legacy W3 mixed/training-like baseline.
 
 For both, record CPU wall time, peak memory, CPU threads, and padding/bucket
@@ -569,7 +583,7 @@ gradient timing is recorded when the C8b training tree exists.
 Each clearance requires an acceptable measured result or an explicit
 architecture-review decision accepting a regression. Missing measurements or
 silence do not count as clearance. The batch-critical E7 safety checks and
-E6b value/derivative correctness are also hard prerequisites. Without W2,
+E6bimpl value/derivative correctness are also hard prerequisites. Without W2,
 W3, and E7 clearance, keep the legacy batch route. A broadly unacceptable
 result blocks retirement until explicit review; it cannot silently authorize
 a second permanent batched physics core.
@@ -586,8 +600,8 @@ parameter-gradient timing when available, together with PyTorch-route GPU
 throughput and memory against the deferred T0.8 GPU baseline. E6c2 is the final
 G2 performance sign-off; it may follow route migration because CPU W2/W3
 clearances were already required by E6c1. A missing GPU baseline blocks final
-GPU/G2 performance acceptance, not the CPU correctness decision or the E6b
-route migration after E6c1 review.
+GPU/G2 performance acceptance, not the CPU correctness decision or the E6broute
+migration after E6c1 review.
 
 **Needs.** E6c1, E6broute, T0.8 W2/W3, and the T0.8 GPU baseline for GPU
 acceptance. **Size.** M.
@@ -633,11 +647,12 @@ Libcint remains subject to its separate eager/reference regression contract.
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
 | E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2-core, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
-| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding, E2-core | L; unblocks E6c1 W3 and batch-critical E7 validation |
+| E6bimpl | PyTorch mixed-System construction, stack/vmap, correctness; replacement outer-loop path if libcint batch compatibility is retained | E6a, B3b, E4core, C5/C8b, defined padding, E2-core | L; unblocks E6c1 W3, batch-critical E7, and E6bcompat |
+| E6bcompat | Retained libcint batch compatibility correctness/API gate through outer single-System composition, or explicit libcint batch-API retirement decision | E6bimpl | S; required before E6broute |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
-| E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M; unblocks E4.6a and Track D3 |
+| E6broute | Authoritative PyTorch mixed-System production route; retire shared legacy batch FULL | E6bimpl, E6bcompat (or explicit libcint-batch API retirement), E6c1 W2/W3 clearances, batch-critical E7 gate | M; unblocks E4.6a and Track D3 |
 | E6c2 | Final W2/W3/GPU G2 performance acceptance | E6c1, E6broute, T0.8 GPU | M |
 | E4.6a | Remove legacy batch cull/restore after batch fallback retirement | E6broute, E6c1 W2/W3, batch-critical E7 | M |
 | E4.6b | Delete remaining legacy FULL loop after all fallback owners retire | E4.6a, fallback migrations/policy decisions | M |
-| E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
+| E7 | Padding-safety validation; batch-critical subset gates E6broute activation | T0.3 | M |
 | E8 | Third-order acceptance | E1, E2-core, E3, B8a, B8b | M |

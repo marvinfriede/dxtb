@@ -120,10 +120,10 @@ the complete F1/F2 workflow.
 
 **Steps.**
 
-1. **Dataset format.** Per structure: numbers, positions, charge, spin; reference energy, forces, optionally charges, dipoles. Loader that groups by size bucket (E6broute) or iterates per molecule.
+1. **Dataset format.** Per structure: numbers, positions, charge, spin; reference energy, forces, optionally charges, dipoles. Group into E6bimpl-compatible size buckets when that implementation is available; otherwise iterate per molecule.
 2. **Loss.** Weighted sum of energy, force (second-order derivatives through the SCF, needs E3), charge and dipole terms; regularisation towards the defaults.
 3. **Optimiser loop.** `torch.func.grad` over the loss; per-step `setup` for every molecule (parameters change every step).
-4. **Batching.** Mixed compositions through stacked padded systems and `vmap` (E6broute, C8b), or a plain loop over molecules until E6broute makes the mixed-System production route authoritative.
+4. **Batching.** Use E6bimpl/C8b stacked padded-System `vmap` when available; otherwise use a plain loop over molecules. E6broute determines when the mixed-System path becomes the authoritative production route. F2d does not wait for route retirement or its E7/performance gates unless a deployment explicitly requires that production route.
 5. **Export.** Trained values written back to a parameter file (reverse of loading; `_revert` in `param/module/param.py` exists for this direction).
 6. **Reproducibility.** Seeds, configuration and dataset hash written with the output.
 

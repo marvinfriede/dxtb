@@ -18,7 +18,7 @@
 - Compile the SCF step, not the SCF loop.
 - Compile the outermost transformed function (for example, `compile(jacfwd(jacrev(energy)))`); never rely on `.backward(create_graph=True)` through a compiled region (double backward through compiled code isn't supported, as far as known).
 - Fixed shapes: masking instead of culling (E4core); size buckets for mixed
-  compositions (E6b). E6a conformers use one fixed System and W2 positions.
+  compositions (E6bimpl). E6a conformers use one fixed System and W2 positions.
 
 **Gates.**
 
@@ -26,8 +26,8 @@
   baseline.
 - No compile-specific architectural workaround may be introduced before the
   same function works correctly in eager mode under the required transforms.
-- Compile work stays downstream of E4core and the relevant E6 branch: E6a for
-  conformers, E6b for mixed Systems.
+- Compile work stays downstream of E4core and the relevant implementation:
+  E6a for conformers, E6bimpl for mixed Systems.
 
 ---
 
@@ -77,12 +77,12 @@ GPU). C8b/E6b mixed-System stackability is not required. **Size.** M.
 
 1. Compile `grad(loss)` per size bucket.
 2. Tune bucket sizes against padding waste and number of compiled graphs.
-3. Compare with eager on T0.8 W3 and the F2d workflow after the E6b
+3. Compare with eager on T0.8 W3 and the F2d workflow after the E6broute
    mixed-System route is authoritative.
 
 **Done when.** Results recorded; bucket defaults set.
 
-**Needs.** F2d and the E6b mixed-System production route (including its
+**Needs.** F2d and the E6broute mixed-System production route (including its
 batch-critical E7 gate and W3 route-retirement performance gate). **Size.** M.
 
 ---
@@ -106,7 +106,7 @@ batch-critical E7 gate and W3 route-retirement performance gate). **Size.** M.
 
 ## D5 Concatenated batching for pair stages (conditional)
 
-**Goal.** Remove padding waste for very mixed training sets, if W3/E6b
+**Goal.** Remove padding waste for very mixed training sets, if W3/E6bimpl
 profiling or D3 shows it matters.
 
 **Steps.**
@@ -117,7 +117,7 @@ profiling or D3 shows it matters.
 
 **Done when.** Measured; adopted only if clearly better.
 
-**Needs.** E6b mixed-System production route and D3. **Size.** L. **Start only
+**Needs.** E6broute mixed-System production route and D3. **Size.** L. **Start only
 if** padding waste is shown to dominate.
 
 ---
@@ -140,7 +140,7 @@ if** padding waste is shown to dominate.
 | --- | --- | --- | --- |
 | D1 | Compiled SCF step and CUDA graphs for conformers | E4core, E6a, T0.8 GPU (E5 done for GFN2) | M |
 | D2 | Compiled derivative functions | E1, E3, B8 | M |
-| D3 | Compiled mixed-System training loss with buckets | F2d, E6b route, W3/E7 gates | M |
+| D3 | Compiled mixed-System training loss with buckets | F2d, E6broute, W3/E7 gates | M |
 | D4 | Compile policy and tooling | D1 | S |
-| D5 | Concatenated pair batching (conditional) | E6b route, D3 | L |
+| D5 | Concatenated pair batching (conditional) | E6broute, D3 | L |
 | D6 | Eigensolver (conditional) | T0.8 | M |

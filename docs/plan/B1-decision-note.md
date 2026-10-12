@@ -148,7 +148,7 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
 The temporary `System.batch_mode` used by the legacy Calculator during the
 migration is not part of this contract. Remove it from the new core before
 E6a; any separately isolated legacy batch adapter may retain batch state until
-E6b retires that route.
+E6broute retires that route after its correctness and activation gates pass.
 
 **Decision.** A batched call with one composition and many geometries (the
 common CREST case) uses `setup(numbers)` once and then the conformer call in

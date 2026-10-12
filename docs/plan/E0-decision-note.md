@@ -489,7 +489,7 @@ map and solver transition into one opaque state update. This note does not
 declare today's `BaseSCF._Data`, `_MapData`, or `pure.iterations` suitable as
 the final explicit API.
 
-E6b retires the legacy production batch route after the batch-critical E7
+E6broute retires the legacy production batch route after the batch-critical E7
 padding-safety gate and both E6c1 performance clearances (W2 conformers and
 W3 mixed Systems); the broader E7 audit may continue. An explicit
 architecture-review waiver may allow route retirement after a documented CPU
@@ -512,12 +512,12 @@ its derivative contract.
 
 **E6a owns** conformer mapping over one fixed System using the B1 public
 `vmap(system.singlepoint)` contract, after the transform-safe controller and
-Result pytree prerequisites exist. **E6b owns** heterogeneous mixed-System
-construction, stacking/vmap composition, and production batch-route
-migration. The B7 field kernels are already vmap-safe; the B7 whole-System
-failure is generic host scalar extraction in the occupation/Fermi search and
-is resolved on the E4core fixed-trip path before E6a. This does not start E4core or
-E6.
+Result pytree prerequisites exist. **E6bimpl owns** heterogeneous mixed-System
+construction, stacking/vmap composition, and correctness. **E6broute owns**
+production batch-route activation and legacy-route retirement. The B7 field
+kernels are already vmap-safe; the B7 whole-System failure is generic host
+scalar extraction in the occupation/Fermi search and is resolved on the E4core
+fixed-trip path before E6a. This does not start E4core or E6.
 
 Keep `scf_mode="implicit"` publicly available during transition as a legacy
 ordinary-autograd/reverse-oriented optimization. Do not advertise it as the

@@ -42,15 +42,15 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | not done                        | C5-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6b prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
+| C5-C9          | not done                        | C5-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6bimpl prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | open; ready next                | Diagnosis-only preflight must first reproduce both GFN2/NO2 known-wrong endpoints under exact T0.2 settings; it needs only E4core and completed E1.1/E1.2 subset, not E1.3. |
 | E3.1            | not started                     | Owns SCF differentiation implementation/fixes after E3.0; uses E2-core and SCF-relevant E1.1/E1.2, not outer classical DFT-D3. |
 | E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
-| E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6b batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b's authoritative PyTorch mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
+| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6broute authoritative PyTorch mixed-System activation requires C8b, batch-critical E7, E6c1 W2/W3 clearance, and retained-libcint compatibility correctness (if retained). Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -961,7 +961,9 @@ localizes both NO2 endpoints; E3.1 owns mathematical fixes and invariant
 spectral/SCF differentiation using the raw E4core map. No such fix is part of
 E3.0.
 E6a owns
-conformer mapping over a fixed System; E6b owns mixed-System batching. E0
+conformer mapping over a fixed System; E6bimpl owns mixed-System construction,
+composition, and correctness, while E6broute owns production activation and
+legacy-route retirement. E0
 changes no SCF implementation and does not mark E3, the E4 umbrella, E6a, or
 E6b done.
 
@@ -1024,7 +1026,7 @@ inside its Python loop. Keep this compatibility behavior until E6broute replaces
 packed Calculator evaluation with externally mapped/stacked single-System
 evaluation. E6bimpl validates the replacement route; E6broute retires this
 packed per-entry path when the PyTorch mixed-System route becomes authoritative.
-Removing it before that point would break legacy batching or begin E6b
+Removing it before that point would break legacy batching or begin E6bimpl
 prematurely. This cleanup is the only remaining E2 umbrella item and does not
 block E4core or any single-System transform consumer.
 
@@ -1073,7 +1075,7 @@ and explicitly excludes E4.6a/E4.6b legacy compatibility cleanup. Every
 upstream dependency on the functional SCF means `E4core`, never completion of
 the E4 umbrella.
 
-The E4 umbrella remains partial: E4core is accepted; E4.6a is blocked on E6b
+The E4 umbrella remains partial: E4core is accepted; E4.6a is blocked on E6broute
 production batch-route retirement with W2/W3 and batch-critical E7 clearance;
 E4.6b is blocked until every remaining legacy FULL fallback is migrated,
 globally rejected, or explicitly retired.
@@ -1400,7 +1402,8 @@ Fock finalization deliberately distinguishes map and public phases:
 That extra spectrum does not increment SCF iterations. All physically active
 raw-map Fermi statuses accumulate in `trajectory_status`; the final spectrum
 has its own status in `final_evaluation`. Fock remains single-System only;
-matrix padding and packed batching belong to E6b/E7. E4.5b routes eligible
+matrix padding and packed batching implementation belongs to E6bimpl, with
+batch-critical safety in E7. E4.5b routes eligible
 single-System FULL calculations through this implementation; legacy full SCF
 remains responsible for batch calls and other explicitly unsupported cases.
 
@@ -1529,8 +1532,8 @@ values. Functional values are not forced through legacy
 `SCFResult(iterations: int)`.
 
 Single-System dynamic damping is characterized in E4.5a. Legacy batch-only
-GFN2 auto-Fock/culling behavior remains deferred to E6b/E7 and must not leak into
-this resolver.
+GFN2 auto-Fock behavior remains with E6bimpl/E7; cull/restore retirement is
+owned by E4.6a after E6broute. Neither belongs in this resolver.
 
 ## E4.6 Legacy cleanup (blocked/deferred)
 
@@ -1540,7 +1543,7 @@ remain:
 
 | Current owner | Prerequisite before removal |
 | --- | --- |
-| Batch fallback and batch cull/restore | E6b owns production batch construction, composition, routing, and retirement of the legacy FULL batch route. The batch-critical E7 padding-safety gate and E6c1 W2 conformer plus W3 mixed-System performance clearances must pass before E6b makes that route authoritative. E6a conformer mapping alone is insufficient. |
+| Batch fallback and batch cull/restore | E6bimpl owns PyTorch mixed-System construction/composition/correctness; E6broute owns authoritative production activation and retirement of legacy batch FULL. E6broute requires the batch-critical E7 gate, E6c1 W2/W3 clearances, and a correctness/API gate for every retained backend: libcint batch APIs must be redirected to a tested outer loop over independent single-System evaluations with supported eager/reference behavior preserved, or libcint batch support must be explicitly retired before the shared route is removed. E6a mapping alone is insufficient. |
 | Custom `Interaction` subclasses | Define a pure extension protocol or an explicit compatibility policy. |
 | Negative electronic temperature | Make a global configuration-policy decision. |
 | Negative Fermi `maxiter` | Make a global configuration-policy decision. |
@@ -1550,8 +1553,8 @@ remain:
 Split the work by dependency:
 
 ```text
-E4.6a — remove batch cull/restore only after E6b retires the production batch
-         route, with batch-critical E7 and E6c1 W2/W3 gates passed
+E4.6a — remove batch cull/restore only after E6broute retires the production
+         batch route, with batch-critical E7 and E6c1 W2/W3 gates passed
 E4.6b — delete the remaining legacy full loop only after every fallback above
          is migrated, globally rejected, or explicitly retired
 ```
@@ -1588,9 +1591,11 @@ the legacy adapter before removing those methods.
 
 The new single-System functional core has no cull/restore operations. The
 legacy batch solver may continue slicing converged entries and culling its
-batch-dependent compatibility objects until E6b retires that production
-route after the batch-critical E7 gate and E6c1 W2/W3 performance clearances
-pass. E6b owns route migration; E7 owns safety validation. Do not delete the
+batch-dependent compatibility objects until E6broute retires that production
+route after the batch-critical E7 gate, E6c1 W2/W3 performance clearances,
+and retained-backend compatibility correctness gate pass. E6bimpl owns
+replacement construction/composition/correctness; E6broute owns route
+migration; E7 owns safety validation. Do not delete the
 legacy optimization while batch FULL calls still use it.
 
 For mapped execution, use an active/converged mask and preserve the previous state after convergence.
@@ -1652,7 +1657,7 @@ that follows from E4core single-System routing:
 - legacy mixer culling;
 - shape recomputation after legacy batch systems converge.
 
-Remove these only through E4.6a after E6b retires the production batch route
+Remove these only through E4.6a after E6broute retires the production batch route
 and the batch-critical E7 gate plus E6c1 W2/W3 clearances pass. C5 migrates
 the surviving immutable core structural representation and does not wait for
 deletion of a separate legacy-only adapter.
@@ -1737,7 +1742,7 @@ mark B6 complete while DFT-D3 or other declared B6 scope remains open.
 
 Repository-wide removal of cull/restore, mutable per-call containers, and
 legacy reset paths is later cleanup. Batch-owned machinery belongs to E4.6a
-after E6b retires the production batch route and the batch-critical E7
+after E6broute retires the production batch route and the batch-critical E7
 padding-safety gate plus E6c1 W2/W3 clearances pass. Remaining legacy FULL
 compatibility objects and the loop belong to E4.6b after all documented
 fallbacks are migrated, globally rejected, or explicitly retired.
@@ -1833,7 +1838,7 @@ implementation (and may receive the same call-local object). That class still
 owns `batch_mode` plus mutable `cull/restore` storage. B6b-core first separates
 the frozen core structural value from this legacy object; C5 Node-migrates the
 core value. The legacy batch adapter may temporarily keep the current
-batch-aware `IndexHelper` and cull behavior until E6b retires that production
+batch-aware `IndexHelper` and cull behavior until E6broute retires that production
 route after the batch-critical E7 gate and E6c1 W2/W3 performance clearances
 pass. Do not
 remove cull/restore from the shared class while that legacy route uses it, and
@@ -2090,20 +2095,31 @@ authoritative PyTorch path. Delete driver-internal batch construction/physics
 loops in both PyTorch and libcint drivers; this does not prohibit a separate
 outer libcint compatibility API loop over independent single-System calls.
 
-E6b owns mixed-System construction, stacking/vmap composition, production
-routing, and retirement of the legacy production batch FULL route. E7 owns
-padding-safety validation/hardening. The E6b implementation subphase may
-proceed while W2/W3 performance clearances and the broader E7 audit continue.
-Production routing becomes authoritative only after the E6b implementation,
-the batch-critical E7 gate, and both E6c1 performance clearances pass. E6c1
-requires W2 conformer clearance from E6a and W3 mixed-System clearance from
-the E6b implementation. Each requires acceptable measured performance or an
-explicit architecture-review decision accepting a regression; missing
-measurements do not count. The minimum E7 gate inventories padded operations
-used by the route, verifies safe masking of singular inputs, and passes the
-E6b value/derivative tests for supported mapped orders. The broader E7 audit
-may continue afterward. E6a conformer support alone does not retire the
-legacy batch FULL route.
+E6bimpl owns PyTorch mixed-System construction, stacking/vmap composition,
+and correctness. E6broute owns authoritative production activation and
+retirement of the legacy production batch FULL route. E7 owns padding-safety
+validation/hardening. E6bimpl may proceed while W2/W3 performance clearances
+and the broader E7 audit continue. E6broute proceeds only after the E6bimpl
+correctness suite, the batch-critical E7 gate, and both E6c1 performance
+clearances pass. E6c1 requires W2 conformer clearance from E6a and W3
+mixed-System clearance from E6bimpl. Each requires acceptable measured
+performance or an explicit architecture-review decision accepting a
+regression; missing measurements do not count. The minimum E7 gate inventories
+padded operations used by the route, verifies safe masking of singular inputs,
+and passes E6bimpl value/derivative tests for supported mapped orders. The
+broader E7 audit may continue afterward.
+
+Before E6broute retires the shared legacy batch FULL route, every retained
+batch-facing backend must have a replacement execution path. The authoritative
+PyTorch route uses stack/vmap. If libcint batch compatibility is retained,
+E6bimpl must provide a replacement outer composition of independent
+single-System calls. E6bcompat must prove that the retained API preserves
+supported eager/reference values and behavior, with no libcint
+driver-internal packed state or per-entry setup loop remaining. This is a
+correctness/API gate, not part of E6c/G2 performance or no-loop acceptance.
+Otherwise libcint batch support must be explicitly retired by a
+compatibility/API decision before E6broute. E6a
+conformer support alone does not retire the legacy batch FULL route.
 
 ## E6c1 pre-retirement performance gates
 
@@ -2130,8 +2146,8 @@ second permanent batched physics core.
 Record complete W2/W3 results, parameter-gradient timing when available, and
 PyTorch-route GPU throughput/memory against the deferred T0.8 GPU baseline.
 E6c2 is final G2
-performance sign-off. The GPU baseline may remain outstanding after CPU E6b
-route retirement because E6c1 already cleared both CPU workloads. An explicit
+performance sign-off. The GPU baseline may remain outstanding after CPU
+E6broute retirement because E6c1 already cleared both CPU workloads. An explicit
 E6c1 architecture-review waiver may permit route retirement despite a CPU
 regression, but it does not satisfy G2's throughput target; E6c2/G2 remains
 open until documented throughput targets are met or the acceptance criterion
@@ -2220,7 +2236,7 @@ enforced but do not expand E8's transform-driver scope.
 This is not a blocker for B4-B8.
 
 It blocks E6c2's final GPU/G2 performance acceptance and any D-track GPU
-performance conclusion that depends on these measurements. CPU E6b route
+performance conclusion that depends on these measurements. CPU E6broute
 retirement is gated earlier by E6c1's W2/W3 clearances and the batch-critical
 E7 checks; it does not wait for the GPU baseline.
 
@@ -2346,8 +2362,8 @@ Acceptance tests must include:
 
 # 24. D performance track
 
-Do not start compile-oriented restructuring before E4core and its relevant E6
-branch (E6a for conformers, E6b for mixed Systems).
+Do not start compile-oriented restructuring before E4core and its relevant
+implementation (E6a for conformers, E6bimpl for mixed Systems).
 
 The order is:
 
@@ -2366,7 +2382,8 @@ Likely compile targets:
 
 Do not compile inside an autograd callback or custom backward.
 
-Do not add size buckets until mixed-batch E6b is correct and their benefit is measured.
+Do not add size buckets until E6bimpl mixed-batch execution is correct and
+their benefit is measured.
 
 ---
 
@@ -2376,14 +2393,14 @@ Do not add size buckets until mixed-batch E6b is correct and their benefit is me
 
 The previous requirements could not be executed literally: B6b required
 repository-wide deletion of every cull/restore path; C5 started after B6b and
-required a cull-free `IndexHelper`; C8b depended on C5; and E6b required both
-B6b-core and C8b. Yet E4.6a required E6b and E7 to migrate batch execution
+required a cull-free `IndexHelper`; C8b depended on C5; and E6bimpl required both
+B6b-core and C8b. Yet E4.6a required E6broute and E7 to migrate batch execution
 before batch cull/restore could be deleted, while the legacy batch FULL route
-still needed that machinery. Thus B6b-core/C5/C8b/E6b could not all complete
+still needed that machinery. Thus B6b-core/C5/C8b/E6bimpl could not all complete
 before the migration that was itself required to finish cleanup. The split between B6b-core and
 legacy compatibility purge removes this cycle. C8 is now split as well:
 C8a Result pytree support gates E6a, while C8b Model/System stackability gates
-E6b. The E6a public method also uses fixed-trip status-only semantics directly;
+E6bimpl. The E6a public method also uses fixed-trip status-only semantics directly;
 Calculator retains eager policy through its separate adapter.
 
 ## Acyclic dependency DAG
@@ -2400,13 +2417,15 @@ B1 public system.singlepoint + B6b-core + E2-core + private transform boundary
   └──> E6a conformer vmap over one fixed System (no C5/C8b or E4.6a)
 
 C5/C6/C7 + B3b + C8b + E2-core/E4core + defined padding
-  └──> E6b mixed-System construction/stack-vmap implementation
+  └──> E6bimpl PyTorch mixed-System construction/stack-vmap implementation
+          ├──> E6bcompat retained-libcint outer-loop correctness/API gate
           └──> batch-critical E7 padding-safety gate
 
 E6a + T0.8 W2 ──> E6c1 W2 conformer performance clearance
-E6b implementation + T0.8 W3 ──> E6c1 W3 mixed-System performance clearance
-E6c1 W2/W3 clearances + E6b implementation + batch-critical E7 gate
-  └──> E6b production route authoritative; retire legacy batch FULL
+E6bimpl + T0.8 W3 ──> E6c1 W3 mixed-System performance clearance
+E6c1 W2/W3 clearances + E6bimpl + E6bcompat (or explicit libcint-batch API
+retirement) + batch-critical E7 gate
+  └──> E6broute PyTorch production route authoritative; retire shared legacy batch FULL
           └──> E4.6a batch cull/restore removal
 
 remaining compatibility fallback migrations/retirements
@@ -2421,9 +2440,9 @@ B5 ──> F0 bounded training/state-history invariant
 B6b-core + C1b + full E3 ──> F3/F4
 C8b + stable training core ──> F1/F2
 E4core + E6a + T0.8 GPU ──> D1 conformer compile
-F2d + E6b production route ──> D3 mixed-System compile
-E6b production route + D3 ──> D5 pair concatenation (conditional)
-E6b route + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
+F2d + E6broute ──> D3 mixed-System compile
+E6broute + D3 ──> D5 pair concatenation (conditional)
+E6broute + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
 ```
 
 Recommended early ordering remains: R0, E0, the E1.1/E1.2 supported subset,
@@ -2434,7 +2453,7 @@ E3 acceptance waits for full E1.
 B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
-finally tested. B3b/C5/C6/C7/C8b unblock E6b. E6a does not wait for C5/C8b or
+finally tested. B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not wait for C5/C8b or
 E4.6a.
 
 The recommended next runtime package is **E3.0 — diagnosis-only spectral
@@ -2524,7 +2543,7 @@ Recommended sequence:
 - E4.4a potential representation (done); E4.4b Fock representation (done);
 - E4.5a dynamic damping and eager compatibility (done); E4.5b production routing
   (done);
-- E4.6a batch cull/restore cleanup (deferred until E6b retires the legacy
+- E4.6a batch cull/restore cleanup (deferred until E6broute retires the legacy
   production batch route after batch-critical E7 and E6c1 W2/W3 clearance);
 - E4.6b legacy full-loop deletion (blocked on compatibility fallback migration
   or explicit retirement).
@@ -2538,9 +2557,9 @@ Recommended sequence:
 E6a preserves the exact B1 conformer `vmap(system.singlepoint, ...)` call with
 default `out_dims`, after C8a makes Result pytree-compatible. E6a explicitly
 changes direct-System calls to fixed-trip/status-only semantics; Calculator
-keeps eager early-stop/warning/error behavior in its own adapter. E6b adds
-mixed-System stacking/composition and owns production batch-route migration;
-its route is authoritative only after the batch-critical E7 gate and both
+keeps eager early-stop/warning/error behavior in its own adapter. E6bimpl adds
+mixed-System stacking/composition; E6broute owns production batch-route
+activation and legacy-route retirement. The route is authoritative only after the batch-critical E7 gate and both
 E6c1 performance clearances pass: W2 for conformers and W3 for mixed Systems.
 
 Each PR description must state:
@@ -2668,7 +2687,7 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batch construction remains scheduled for E6b, and B3b remains incomplete until all required structural setup is explicit.
+B4's single-system pure integral/H0 core and B5's immutable Result/core singlepoint are complete. Legacy Calculator batch construction remains until E6broute activates the replacement route; E6bimpl owns that replacement, and B3b remains incomplete until all required structural setup is explicit.
 
 E1.1 (`RepulsionAG`) and E1.2 (`CoulombMatrixAG`/ES2 setup and ownership closure) are done. All currently unblocked B6a component families are migrated: ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB. The B6a-SCF-core implementation prerequisite is complete; its expanded interaction validation matrix is pending, and broader B6a remains partial because legacy-shaped DFT-D3 setup/cache work remains. B3b remains partial: ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB setup separation are complete, while other required setup/per-call separation remains. E1 remains partial because DFT-D3/tad-dftd3 forward-mode support is blocked upstream.
 
@@ -2695,7 +2714,7 @@ point.
 E2-core's single-System prerequisite is complete and is no longer a blocker
 for E4. The setup-owned `PairPlan` is reused by overlap, dipole, and
 quadrupole evaluation across geometries. The per-entry structural setup loop
-in the legacy packed `IntDriverPytorch` remains until E6b replaces that batch
+in the legacy packed `IntDriverPytorch` remains until E6broute replaces that batch
 path; no batch behavior was changed here. E0 decisions are accepted and
 remain design-only. The next package is selected separately after review;
 E4, E3, E6, Track D3, DFT-D3, Node migration, and GPU work are not started by this package.

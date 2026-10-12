@@ -50,7 +50,7 @@ Two cases:
   production architecture and throughput acceptance.
 
 **G2 driver scope.** PyTorch is the authoritative transform/batching driver
-for E6a, E6b, E6c1/E6c2, and G2. The public API shape remains backend-independent:
+for E6a, E6bimpl/E6broute, E6c1/E6c2, and G2. The public API shape remains backend-independent:
 conformers use the B1 `vmap(system.singlepoint)` expression. Libcint remains an
 eager/reference/analytical backend within its documented capabilities. Any
 retained libcint batch compatibility API may compose independent
@@ -190,12 +190,12 @@ grads = torch.func.grad(loss)(params)
 | Removed | Replaced by | Package |
 | --- | --- | --- |
 | `TensorLike`, `ModuleLike`, `_clone_tensorlike` | `Node` | TC |
-| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | B1 conformer `vmap(system.singlepoint)` (E6a) and stacked mixed-System `vmap` (E6b) | E6a/E6bimpl; legacy batch mode remains until E6broute production migration |
+| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | B1 conformer `vmap(system.singlepoint)` (E6a) and stacked mixed-System `vmap` (E6bimpl) | E6a/E6bimpl; legacy batch mode remains until E6broute production migration |
 | `CalculatorCache`, `@cdec.cache`, `opts.cache`, `store_*` flags | result object | B5 |
 | `Component._cache`, `_cachevars`, `cache_is_latest`, `cache_enable`/`disable`, `update`, `reset` | per-call values, `replace()` | B6 |
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
 | Electric field as a mutable component, `update_efield`, `requires_efield*` decorators | fields as inputs | B7 |
-| culling in the functional single-System SCF path | fixed-shape masked loop | E4core; legacy batch cull/restore remains until E6b migration and E4.6a cleanup |
+| culling in the functional single-System SCF path | fixed-shape masked loop | E4core; legacy batch cull/restore remains until E6broute migration and E4.6a cleanup |
 | per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2-core; packed legacy loop remains E2-legacy until E6broute |
 | Calculator mixins (analytical, autograd, numerical) | property functions | B8 |
 | Vendored xitorch implicit SCF | decided in E0 | E3 |
@@ -211,7 +211,7 @@ grads = torch.func.grad(loss)(params)
 | TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after B3b; C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
-| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6b for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
+| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
 
 ### Current status
 
@@ -280,13 +280,14 @@ graph LR
   B6bcore & E2core & E1 --> E6a
   E6a & B3b & C8b & E2core & E4core --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
+  E6bimpl --> E6bcompat[E6b retained-libcint compatibility correctness or explicit API retirement]
   T0W3[T0.8 W3 mixed-System baseline]
   T0W2[T0.8 W2 conformer baseline]
   E6a & T0W2 --> E6c1w2[E6c1 W2 conformer performance clearance]
   E6bimpl & T0W3 --> E6c1w3[E6c1 W3 mixed-System performance clearance]
   E6c1w2 & E6c1w3 --> E6c1[E6c1 pre-retirement performance clearance]
   T03 --> E7batch
-  E6bimpl & E7batch & E6c1 --> E6broute[E6b production batch route authoritative]
+  E6bimpl & E6bcompat & E7batch & E6c1 --> E6broute[E6broute: PyTorch production batch route authoritative]
   E6broute & T0W2 & T0W3 & T08G --> E6c2[E6c2 final W2/W3/GPU performance acceptance]
   E6broute --> E46a[E4.6a batch cull/restore cleanup]
   E46a --> E46b[E4.6b all remaining FULL fallback cleanup]
@@ -318,14 +319,14 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
-| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
+| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6bimpl → E6c1 W3 clearance + batch-critical E7 + retained-libcint compatibility correctness → E6broute. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
 The open T0.8 GPU baseline gates E6c2 final GPU/G2 performance acceptance,
 not E6a correctness or CPU batch-route retirement. E6c1 clears W2 conformer
-and W3 mixed-System performance separately before the E6b production route
-can retire legacy batch FULL; its clearance may be measured acceptance or an
+and W3 mixed-System performance separately before E6broute can retire legacy
+batch FULL; its clearance may be measured acceptance or an
 explicit architecture-review decision accepting a regression. Such a waiver
 permits route retirement only; it does not satisfy G2's throughput target.
 E6c2/G2 remains open until the documented throughput target is met or that
@@ -346,7 +347,7 @@ justifies two releases.
 | Milestone | Gate |
 | --- | --- |
 | Structural-core milestone | B2-B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced |
-| Transform milestone | E0/E1/E3/E4core/C8a/E6a conformer and E6b mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
+| Transform milestone | E0/E1/E3/E4core/C8a/E6a conformer and E6bimpl/E6broute mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
 | Pytree milestone | C5-C7, C8a Result pytree, and C8b Model/System stackability; final C9 `TensorLike`/`ModuleLike` purge follows E4.6a/E4.6b legacy retirement |
 | Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |
 

@@ -245,7 +245,7 @@ state purity and establish immutable structural/interaction input values.
 This does not delete cull/restore from the separate legacy batch adapter.
 
 **Legacy compatibility purge:** E4.6a removes batch cull/restore only after
-E6b owns production batch routing and the batch-critical E7 padding gate
+E6broute owns production batch routing and the batch-critical E7 padding gate
 passes. E4.6b removes the remaining legacy FULL loop only after every fallback
 is migrated, globally rejected, or retired.
 

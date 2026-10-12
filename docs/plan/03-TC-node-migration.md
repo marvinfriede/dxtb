@@ -89,7 +89,7 @@ Delivered as `ModuleNode` in tad-mctc 0.9.1. Unblocks F3.
 **Preconditions.** B6b-core has established an immutable structural value for
 the functional single-System core; structural values are built in `setup`
 (B3). The legacy batch adapter may still use its existing mutable,
-batch-aware `IndexHelper` until E6b retires that route; E4.6a then removes
+batch-aware `IndexHelper` until E6broute retires that route; E4.6a then removes
 its cull/restore machinery.
 
 **Steps.**
@@ -204,7 +204,7 @@ Model parameter tables.
 
 **Done when.** A stacked batch of padded systems runs under `vmap`; `partition` of a model works for training; T0.2 reproduced.
 
-**Needs.** B3b, C5, C6, C7, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
+**Needs.** B3b, C5, C6, C7, B2. **Unblocks.** E6bimpl (stacked mixed-System batches), F2c. **Size.** M.
 
 ---
 
