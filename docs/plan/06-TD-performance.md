@@ -44,7 +44,9 @@
 4. Compare with T0.8 W2 conformers (eager legacy baseline), the E6a
    fixed-trip `System.singlepoint`, and the eager Calculator adapter.
 
-**Done when.** Speed-up and compile time recorded; enabled by default for the conformer entrypoint if worthwhile.
+**Done when.** Record speed-up, memory use, and compile cost for the exact B1
+conformer composition. If compilation is adopted, D4 decides its public
+exposure/default policy; D1 does not introduce a new conformer entrypoint.
 
 **Needs.** E4, E6a, T0.8 including the GPU baseline (E5 is done for GFN2 on
 GPU). C8b/E6b mixed-System stackability is not required. **Size.** M.
@@ -104,8 +106,8 @@ batch-critical E7 gate and W3 route-retirement performance gate). **Size.** M.
 
 ## D5 Concatenated batching for pair stages (conditional)
 
-**Goal.** Remove padding waste for very mixed training sets, if W2/E6a
-profiling or D3/W3 shows it matters.
+**Goal.** Remove padding waste for very mixed training sets, if W3/E6b
+profiling or D3 shows it matters.
 
 **Steps.**
 

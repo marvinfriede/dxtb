@@ -195,7 +195,7 @@ grads = torch.func.grad(loss)(params)
 | --- | --- | --- | --- |
 | T0 Baseline | `01-T0-baseline.md` | immediately | reference data, derivative status matrix, performance profile, known issues |
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
-| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | C8a makes Result transform-compatible for E6a; C8b supplies mixed-System stackability; C9 waits for legacy fallback retirement |
+| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after B3b; C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
 | TD Performance | `06-TD-performance.md` | E4/E6a for conformers; E6b for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
@@ -239,19 +239,22 @@ graph LR
   B3a & B4 --> E2
   B6bcore --> C5
   C5 --> C6 & C7
-  B5 & C1 --> C8a[C8a Result pytree representation]
-  C5 & C6 & C7 & B2 --> C8b[C8b Model/System stackability]
+  B5 & E4 --> B56[B5.6 public solver-status schema]
+  B56 --> C8a[C8a Result pytree representation]
+  B3b & C5 & C6 & C7 & B2 --> C8b[C8b Model/System stackability]
   E4 & B6bcore & E2 --> TF[private fixed-trip boundary under B1 system.singlepoint]
   TF & C8a --> E6a[E6a conformer vmap]
   B6bcore & E2 & E1 --> E6a
   E6a & B3b & C8b & E2 & E4 --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
   T0W3[T0.8 W3 mixed-System baseline]
-  E6bimpl & T0W3 --> E6bperf[E6b mixed-System performance gate]
   T0W2[T0.8 W2 conformer baseline]
+  E6a & T0W2 --> E6c1w2[E6c1 W2 conformer performance clearance]
+  E6bimpl & T0W3 --> E6c1w3[E6c1 W3 mixed-System performance clearance]
+  E6c1w2 & E6c1w3 --> E6c1[E6c1 pre-retirement performance clearance]
   T03[T0.3 padded-operation safety cases] --> E7batch
-  E6bimpl & E7batch & E6bperf --> E6broute[E6b production batch route authoritative]
-  E6broute & T0W2 & T0W3 & T08G --> E6cperf[E6c W2/W3/GPU performance acceptance]
+  E6bimpl & E7batch & E6c1 --> E6broute[E6b production batch route authoritative]
+  E6broute & T0W2 & T0W3 & T08G --> E6c2[E6c2 final W2/W3/GPU performance acceptance]
   E6broute --> E46a[E4.6a batch cull/restore cleanup]
   E46a --> E46b[E4.6b all remaining FULL fallback cleanup]
   fallbacks[Remaining fallback migrations or retirements] --> E46b
@@ -263,7 +266,7 @@ graph LR
   B8b & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
   F2c --> F2d
   E3 --> F2d --> F2e
-  C1b & B6bcore & E3 --> F3 --> F4
+  B6bcore & E3 --> F3 --> F4
   E4 & E6a & T08G --> D1[D1 conformer compile]
   E3 --> D2
   F2d & E6broute --> D3[D3 mixed-System training compile]
@@ -282,14 +285,15 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8b → E8 (B8a after B7) |
-| G2 | T0.8 → B3a → E2 → E4 → C8a Result pytree → E6a conformers (B1 `system.singlepoint`) → D1; mixed batches separately require C5/C8b, E6b, the batch-critical E7 gate, and W3 performance acceptance |
+| G2 | Conformers: T0.8 W2 → E4/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4 → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5/B6a → F0 (early invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
-The open T0.8 GPU baseline gates final GPU E6/D performance acceptance, not
-E6a correctness or structural Track B work. E6c records W2 conformer and W3
-mixed-System performance separately; the W3 comparison and batch-critical
-E7 checks gate E6b production route retirement.
+The open T0.8 GPU baseline gates E6c2 final GPU/G2 performance acceptance,
+not E6a correctness or CPU batch-route retirement. E6c1 clears W2 conformer
+and W3 mixed-System performance separately before the E6b production route
+can retire legacy batch FULL; its clearance may be measured acceptance or an
+explicit architecture-review decision accepting a regression.
 
 ---
 

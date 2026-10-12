@@ -194,14 +194,12 @@ a Python loop and the legacy reference path.
    compositions belong to E6b.
 5. Record time and memory on T0.8 W2.
 
-**Result pytree acceptance (C8a prerequisite).** The exact public call above
-must use default `out_dims=0` and return a `Result`. Every tensor-valued field
-has exactly one leading conformer dimension; `None` optionals remain `None`;
-classical labels and other static metadata live in pytree context while their
-energy tensors are batched; nested charges, potentials, and multipoles
-reconstruct correctly. A Python loop agrees field-by-field. Cover GFN1 and
-GFN2 setups where optional integral and multipole fields differ. No private
-tuple-return workaround or custom `out_dims` is accepted.
+**Result pytree prerequisite (C8a).** C8a independently proves the closed
+Result schema can flatten/unflatten, vmap a tensor-built Result probe with
+default `out_dims=0`, reconstruct nested values and static metadata, and
+preserve autograd. It does not call `System.singlepoint` or exercise SCF
+control. The exact public call belongs only to the E6a integration acceptance
+below.
 
 **Eager compatibility acceptance.** Test direct eager `System.singlepoint`
 and `Calculator.singlepoint` separately for converged positive-budget,
@@ -222,8 +220,9 @@ direct System follows the explicit fixed-trip/status-only behavior above.
 **Done when.** Results and decision recorded.
 
 **Needs.** E1, E2, E4, B6b-core, C8a Result pytree representation, T0.8,
-and the private fixed-trip boundary under the B1 public method. It does not
-need C5/C8b mixed-System stackability or E4.6a. **Size.** M.
+the B5.6 public solver-status schema, and the private fixed-trip boundary
+under the B1 public method. It does not need C5/C8b mixed-System stackability
+or E4.6a. **Size.** M.
 
 ---
 
@@ -239,18 +238,18 @@ need C5/C8b mixed-System stackability or E4.6a. **Size.** M.
 4. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
 5. Batched GFN2 runs through the PyTorch multipole integrals (E5); a libcint path is a plain loop over systems.
 
-**Done when.** Mixed-System production calls route through the new stack/vmap
-path with no unsupported fallbacks; T0.2 batched references reproduced;
-per-System Hessians have no cross-system blocks. E6b owns batch construction,
-composition, production routing, and retirement of the legacy batch FULL
-route.
+**Done when.** The mixed-System implementation composes under stack/vmap;
+T0.2 batched references are reproduced and per-System Hessians have no
+cross-system blocks. E6b owns batch construction, composition, production
+routing, and retirement of the legacy batch FULL route. Keep implementation
+and route activation distinct: implementation can be completed and measured
+first; the route becomes authoritative only after E6c1's W2/W3 clearances and
+the batch-critical E7 gate.
 
-**Needs.** E6a, B3b, E4, C5/C8b, and defined padding. The E6b production
-route becomes authoritative only after its implementation, the batch-critical
-E7 padding-safety gate, and the W3 mixed-System performance comparison pass.
-E6b owns route migration and retirement; E7 owns padding validation. The
-broader E7 audit may continue afterward. **Unblocks.** E4.6a and D3. **Size.**
-L.
+**Needs.** E6a, B3b, E4, C5/C8b, and defined padding. E7 owns padding
+validation; only its batch-critical subset gates route activation. The broader
+E7 audit may continue afterward.
+**Unblocks.** E4.6a and D3. **Size.** L.
 
 ---
 
@@ -273,29 +272,43 @@ production route, not completion of every eventual E7 audit item.
 **Needs.** T0.3. **Size.** M. The E6b production route is gated by the
 batch-critical E7 subset, not by the entire eventual audit.
 
-## E6c Performance acceptance
+## E6c1 Pre-retirement performance gates
 
-E6c covers both batching branches and keeps their workloads distinct:
+E6c1 is the explicit performance clearance required before E6b retires the
+shared legacy production batch route. It includes both batching branches:
 
 - **E6a/W2 conformers:** same-System positions mapped with the exact B1
   `vmap(system.singlepoint)` call;
 - **E6b/W3 mixed Systems:** padded/stacked compositions compared with the
   recorded legacy W3 mixed/training-like baseline.
 
-For both, record wall time, peak memory, CPU threads, and padding/bucket costs
-where applicable. Record GPU throughput/memory when the deferred T0.8 GPU
-baseline is available. W3 must include mixed-System forward time, force
-evaluation where applicable, peak memory, padding overhead, bucket
-count/size distribution, and parameter-gradient timing once the C8b training
-tree exists.
+For both, record CPU wall time, peak memory, CPU threads, and padding/bucket
+costs where applicable. W2 clearance compares conformer throughput with the
+legacy `batch_mode=2` target. W3 clearance compares mixed-System forward time,
+force evaluation where applicable, peak memory, padding overhead, and bucket
+count/size distribution with the legacy mixed-batch baseline. Parameter-
+gradient timing is recorded when the C8b training tree exists.
 
-The batch-critical E7 safety checks and E6b value/derivative correctness are
-hard prerequisites for route migration. W3 comparison is also a hard gate
-before retiring the legacy production batch route: if throughput or memory is
-broadly unacceptable, keep the fallback and require explicit architecture
-review. Final G2 performance acceptance additionally requires the full E6c
-record, including W2 and the eventual GPU measurements; a failed performance
-result cannot silently authorize a second permanent batched physics core.
+Each clearance requires an acceptable measured result or an explicit
+architecture-review decision accepting a regression. Missing measurements or
+silence do not count as clearance. The batch-critical E7 safety checks and
+E6b value/derivative correctness are also hard prerequisites. Without W2,
+W3, and E7 clearance, keep the legacy batch route. A broadly unacceptable
+result blocks retirement until explicit review; it cannot silently authorize
+a second permanent batched physics core.
+
+## E6c2 Final performance acceptance
+
+Record the complete W2 and W3 result, including the C8b training-tree
+parameter-gradient timing when available, together with GPU throughput and
+memory against the deferred T0.8 GPU baseline. E6c2 is the final G2
+performance sign-off; it may follow route migration because CPU W2/W3
+clearances were already required by E6c1. A missing GPU baseline blocks final
+GPU/G2 performance acceptance, not the CPU correctness decision or the E6b
+route migration after E6c1 review.
+
+**Needs.** E6c1, E6b route, T0.8 W2/W3, and the T0.8 GPU baseline for GPU
+acceptance. **Size.** M.
 
 ---
 
@@ -326,8 +339,12 @@ result cannot silently authorize a second permanent batched physics core.
 | E3 | SCF differentiation | E0, E1, E4 | L |
 | E4 | Pure SCF step, masked loop | T0.2, B5, B6a | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
-| C8a | Result pytree output for default-out-dims vmap | B5, C1 | M |
-| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, C8a, T0.8, private fixed-trip boundary | M |
-| E6b | Mixed-System construction, stack/vmap, and production batch-route migration | E6a, B3b, E4, C5/C8b, defined padding, batch-critical E7 gate, W3 performance gate | L |
+| B5.6 | Public tensor-valued solver-status Result schema | B5, E4 | S |
+| C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
+| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
+| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4, C5/C8b, defined padding | L |
+| E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
+| E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M |
+| E6c2 | Final W2/W3/GPU G2 performance acceptance | E6c1, E6broute, T0.8 GPU | M |
 | E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
 | E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |

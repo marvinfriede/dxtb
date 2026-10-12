@@ -168,7 +168,32 @@ called by the new System.
 
 **Done when.** No code reads or writes a calculator-level cache; T0.2 reference reproduced; T0.5 tests 2 and 3 no longer apply and are removed.
 
-**Needs.** B3, B4. **Unblocks.** B6, B7, C8b, E4. **Size.** M.
+**Needs.** B3, B4. **Unblocks.** B5.6, B6, B7, C8b, E4. **Size.** M.
+
+### B5.6 Close the public solver-status Result schema
+
+Before C8a registers the Result pytree, add the agreed immutable
+`SCFStatus | None` field to Result and `Result.snapshot()`. Its functional
+value contains tensor-valued `trajectory_failure` and `final_failure` codes;
+outer convergence remains the separate `converged` field. The stable code
+priority is `0` none, `1` invalid temperature, `2` too many electrons, `3`
+Fermi-search nonconvergence, and `4` post-smearing electron-count failure.
+The trajectory code is the first failure among physical raw-map evaluations;
+the final code describes only the final public spectrum. Eager interpretation
+therefore preserves chronological trajectory-before-final ordering without
+exposing the internal solver result. Legacy routes may leave `status=None`.
+
+This schema closure also resolves the canonical field spellings and
+representations in B1 (`hcore`, tuple-of-pairs `classical`, and
+`multipoles` derived from `charges`) before any pytree layout is frozen.
+Regression requirements cover zero-T and finite-T success, each failure
+category, trajectory-versus-final priority, valid subsolves with outer
+nonconvergence, and `maxiter=0`. Invalid configured input may still be
+rejected during static preparation; tensor-detected spectral status remains
+available in the returned Result.
+
+**Needs.** B5 and E4 finite-temperature/trajectory-status outputs.
+**Unblocks.** C8a and E6a. **Size.** S.
 
 ---
 
@@ -275,6 +300,7 @@ B8b: third-order and mixed-response properties after E3.
 | B3 | Model and setup (B3a done, B3b open) | B1, B2 | L |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3, B4 | M |
+| B5.6 | Public tensor-valued solver-status Result schema | B5, E4 | S |
 | B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
 | B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |

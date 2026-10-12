@@ -49,20 +49,31 @@ still need the split.
 
 ## 2. Result contents (question 2)
 
-**Proposal: everything, always.** Memory is the only cost, and the SCF holds
-these tensors anyway.
+**Decision: close the schema before C8a freezes its pytree definition.** The
+canonical names and representations are:
 
-| Group | Fields |
+| Name | Representation and pytree role |
 | --- | --- |
-| Energies | `energy` (total), `scf` (per atom), `classical` (dict by term), `fenergy` (free-energy term) |
-| SCF state | `charges` (atom, shell, orbital), `multipoles` (dipole, quadrupole, where the method has them), `density`, `coefficients`, `emo`, `occupation`, `potential`, `hamiltonian` |
-| Integrals | `overlap`, `h0`, dipole and quadrupole integrals when built |
-| Diagnostics | `iterations`, `converged` (bool tensor per system), `residual` |
+| `energy` | Actual `Tensor` field; dynamic total-energy leaf. |
+| `scf` | Actual `Tensor | None` field; dynamic leaf when present, optional static structure when absent. Per-atom SCF energy. |
+| `classical` | Actual tuple of `(label, Tensor)` pairs; tuple order/labels are static structure and each energy is a dynamic leaf. It is not a dictionary field. |
+| `fenergy` | Actual `Tensor | None` field; dynamic leaf when present, optional static structure when absent. |
+| `charges` | Actual nested `ChargeResult | None` field; monopole is a dynamic leaf; optional dipole/quadrupole are static structure when absent and dynamic leaves when present. |
+| `multipoles` | Derived property over `charges`, not an independent field or duplicated pytree leaf. It returns the dipole/quadrupole view as `Multipoles`. |
+| `density`, `coefficients`, `emo`, `occupation` | Actual optional tensor fields; dynamic leaves when present. |
+| `potential` | Actual nested `PotentialResult | None` field; each present component is a dynamic leaf and absent components are static structure. |
+| `hamiltonian`, `overlap`, `hcore`, `dipole_integrals`, `quadrupole_integrals`, `overlap_norm` | Actual optional tensor fields; dynamic leaves when present. `hcore` is canonical; `h0` is not a Result field. |
+| `iterations`, `converged`, `residual` | Actual tensor fields for functional per-System results; dynamic leaves. `converged` means outer raw-residual convergence only. Legacy routes may retain `None` for convergence/residual. |
+| `status` | Actual `SCFStatus | None` field. Functional results carry two integer-code tensor leaves, `trajectory_failure` and `final_failure`; legacy routes may use `None`. The code mapping is static context: 0 none, 1 invalid temperature, 2 too many electrons, 3 Fermi nonconvergence, 4 post-smearing electron-count failure. |
 
-The current `Result` (`calculators/result.py`) already has most of these;
-`converged`, `iterations` and `multipoles` are new. The result is a frozen
-`Node`; `integrals` becomes a plain tuple of tensors, not the live
-`IntegralMatrices` object (B4).
+`Result`, `ChargeResult`, `PotentialResult`, `Multipoles`, and `SCFStatus` are
+immutable values. Optional `None` fields and classical labels are static
+pytree structure; tensor values remain leaves. `SCFStatus` preserves the
+first physical-trajectory failure separately from the final-public-spectrum
+failure, so the eager adapter can report trajectory failure first, final
+spectrum failure second, and outer nonconvergence last without exposing
+internal `SCFSolveResult` state. The legacy `h0` spelling is resolved to the
+canonical `hcore` field before C8a.
 
 Analytical forces and bond orders take a result as input (B8 step 2); they read
 `density`, `emo`, `coefficients`, `overlap` from it, never from a store.
@@ -114,9 +125,12 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
 
 1. Core functions accept one system, possibly padded. No batch dimension in
    physics code (P2).
-2. Conformers: `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`.
-   Property functions are written so the same `vmap` pattern gives per-system
-   results with no cross-system blocks.
+2. Conformers: the public call is
+   `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`. Property
+   functions use the same pattern for per-system results without cross-system
+   blocks. C8a first proves Result pytree behavior with a tensor-built probe;
+   the exact System integration call is tested in E6a after the fixed-trip
+   SCF boundary exists.
 3. Mixed compositions: `dxtb.batch.setup(model, numbers_batch)` returns stacked
    padded systems (C8b). `dxtb.batch.singlepoint` and the property variants
    take them and loop or `vmap` internally. Batch size is never inferred
@@ -138,13 +152,11 @@ compositions use the generic `dxtb.batch.*` API.
 
 **Canonical contract and E6a target.** The public conformer call remains
 `torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`; E6a does not
-add a public conformer entrypoint. At present the production `System.singlepoint`
-path still uses eager convergence/status inspection and is not assumed to be
-transformable. C8a must first register the complete immutable `Result` tree,
-including nested charge/potential/multipole values, with optional `None`
-fields and classical labels represented as static pytree context. Its exact
-default-`out_dims` `vmap` acceptance is a separate container prerequisite,
-not a private tuple-return workaround inside E6a.
+add a public conformer entrypoint. B5.6 first closes Result's public
+solver-status schema. C8a is then strictly an output-container package: it
+proves the closed Result tree with a tensor-built probe, independently of
+`System.singlepoint` and SCF control. The exact default-`out_dims` public call
+is tested only in E6a, after its fixed-trip controller exists.
 
 E6a puts fixed-trip numerical execution and tensor-valued status under
 `System.singlepoint`; the private fixed-trip boundary is an implementation
@@ -156,11 +168,13 @@ and Fermi primitives, solver step/mixer formulas, and finalization; only
 controller and policy ownership differ. Direct eager calls to
 `System.singlepoint` intentionally use the fixed-trip controller, run the
 configured trips after convergence, return tensor-valued validity status, and
-do not perform eager Fermi/convergence warning or error inspection. This is
-an explicit behavior change to the direct-System call, which E6a must cover
-with migration notes and separate tests for direct System and Calculator
-semantics. No functorch detection is permitted and the public conformer call
-does not change.
+do not perform eager Fermi/convergence warning or error inspection. Tensor-
+detected spectral failures are returned in `SCFStatus`; statically invalid
+configuration such as a negative configured temperature may still fail
+during setup. This is an explicit behavior change to the direct-System call,
+which E6a must cover with migration notes and separate tests for direct
+System and Calculator semantics. No functorch detection is permitted and the
+public conformer call does not change.
 
 ## 6. Parameter storage (question 6)
 

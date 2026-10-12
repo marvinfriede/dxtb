@@ -35,10 +35,10 @@ packages currently need the `mctc_shim` bridge, see `00-overview.md` section 2).
 | caches as explicit values (step 4) | replaced by TB |
 
 **Order.** C1/C1b are done. C2–C4 are external cleanup (verify state first).
-C8a is the separate Result-output pytree prerequisite and can follow B5/C1
-without waiting for C5-C7. The structural core values (C5-C7) and C8b
-Model/System stackability proceed bottom-up after their TB mutation-removal
-prerequisites.
+C8a is the separate Result-output pytree prerequisite and can follow
+B5/B5.6/C1 without waiting for C5-C7. The structural core values (C5-C7)
+and C8b Model/System stackability proceed bottom-up after their TB
+mutation-removal prerequisites.
 
 ---
 
@@ -149,23 +149,35 @@ and classical-term string labels must live in static pytree context, never as
 ordinary mapped leaves; tensors, including each classical energy, remain
 dynamic leaves.
 
-**Acceptance.** Use the exact B1 API with default `out_dims`:
+**Acceptance.** Keep this package strictly about the output container. Use a
+transform-safe probe that builds the complete Result tree from tensor inputs,
+independently of SCF or `System.singlepoint` control:
 
 ```python
-mapped = torch.func.vmap(
-    system.singlepoint,
-    in_dims=(0,),
-)(positions_batch)
+def result_probe(x):
+    return Result.snapshot(
+        energy=..., scf=..., classical=(("probe", ...),), fenergy=...,
+        iterations=..., charges=..., density=..., coefficients=..., emo=...,
+        occupation=..., potential=..., hamiltonian=..., overlap=...,
+        hcore=..., dipole_integrals=..., quadrupole_integrals=...,
+        overlap_norm=..., converged=..., residual=..., status=...,
+    )
+
+mapped = torch.func.vmap(result_probe)(xs)
 ```
 
-`mapped` remains a `Result`; every tensor-valued result has exactly one new
-leading conformer dimension; absent optional fields remain `None`; classical
-labels remain static; nested charge/potential results reconstruct; and a
-Python conformer loop agrees field-by-field. Cover GFN1 and GFN2, including
-configurations with different optional integral/multipole fields. No private
-tuple-return workaround or custom public `out_dims` is acceptable.
+Require flatten/unflatten round-trip and default `out_dims=0`; `mapped` remains
+a `Result`; every tensor leaf has exactly one new leading dimension; optional
+static `None` fields remain `None`; classical labels remain static pytree
+context while energy tensors are mapped; nested charges, potential, and
+`SCFStatus` reconstruct; and autograd through tensor leaves is preserved.
+Cover the complete schema from B1/B5.6, including distinct optional-field
+layouts. No `System.singlepoint`, SCF-excluded special case, private tuple
+workaround, or custom `out_dims` is part of C8a acceptance. The exact public
+B1 call is tested only in E6a after both this pytree and the fixed-trip
+controller exist.
 
-**Needs.** B5, C1. **Unblocks.** E6a. **Size.** M.
+**Needs.** B5, B5.6, C1. **Unblocks.** E6a. **Size.** M.
 
 ## C8b Model/System stackability
 
@@ -173,8 +185,10 @@ tuple-return workaround or custom public `out_dims` is acceptable.
 can be composed and models partitioned. C8a separately establishes Result's
 transform-compatible pytree representation for E6a.
 
-Before converting System to Node, remove `model`, `batch_mode`, `dd` and all
-live mutable builder/cache objects. Stacking a System must not stack complete
+**Precondition.** B3b must already have removed `model`, `batch_mode`, `dd`,
+live mutable integrals, and legacy Calculator state from the final System
+layout. C8b verifies that boundary and migrates it to Node; it does not own
+setup/per-call physics refactoring. Stacking a System must not stack complete
 Model parameter tables.
 
 **Steps.**
@@ -186,7 +200,7 @@ Model parameter tables.
 
 **Done when.** A stacked batch of padded systems runs under `vmap`; `partition` of a model works for training; T0.2 reproduced.
 
-**Needs.** C5, C6, C7, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
+**Needs.** B3b, C5, C6, C7, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
 
 ---
 
@@ -229,6 +243,6 @@ owners must first be retired or migrated under E4.6a/E4.6b.
 | C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4 | M |
 | C6 | Core components and lists | C5, B6b-core | L |
 | C7 | Integrals, Hamiltonian, driver | C5, B4, B6b-core | M |
-| C8a | Result pytree representation | B5, C1 | M |
-| C8b | Model/System stackability | C5, C6, C7, B2 | M |
+| C8a | Result pytree representation | B5, B5.6, C1 | M |
+| C8b | Model/System stackability of the final System layout | B3b, C5, C6, C7, B2 | M |
 | C9 | Final repository-wide `TensorLike`/`ModuleLike` purge | C2–C4, C8a/C8b, E4.6a, E4.6b | S |

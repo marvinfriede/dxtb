@@ -46,7 +46,7 @@ Current state:
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6b. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
 | E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 cleanup is deferred while production fallback routes still depend on the legacy full engine. |
-| E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires its private fixed-trip boundary plus C8a Result pytree support; E6b mixed-System batching requires C8b, its batch-critical E7 gate, and W3 performance acceptance. |
+| E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -501,33 +501,60 @@ Required fields from B1:
 ```text
 energy
 scf
-classical
+classical  # tuple[(label, Tensor), ...]; labels are static context
 fenergy
 
-charges
-multipoles
+charges    # nested ChargeResult pytree
 density
 coefficients
 emo
 occupation
-potential
+potential  # nested PotentialResult pytree
 hamiltonian
 
 overlap
 hcore
 dipole_integrals
 quadrupole_integrals
+overlap_norm
 
 iterations
 converged
 residual
+status     # SCFStatus | None; B5.6 closes this schema before C8a
 ```
 
-Naming can be adjusted once, here.
+`multipoles` is a derived property over `charges`, not a separate Result field
+or duplicated pytree leaf. `hcore` is the canonical Result field; `h0` is not
+used here. `SCFStatus` contains integer-code tensor leaves for the first
+physical-trajectory failure and final-public-spectrum failure. Code values
+are static context (0 none, 1 invalid temperature, 2 too many electrons, 3
+Fermi nonconvergence, 4 post-smearing electron-count failure). Existing
+functional normalization drops this internal status today; B5.6 must carry it
+through the common SCF-output representation and `Result.snapshot()` without
+exposing `SCFSolveResult` itself.
+
+The B1 names and field/derived-property distinctions above are closed before
+C8a; do not change the pytree schema as part of E6a.
 
 Use `energy`, not a mixture of `total`, `get_energy` and cache keys, as the canonical total-energy field.
 
 `iterations`, `converged` and `residual` must be tensors where they are per-system values.
+
+### B5.6 Public solver-status schema
+
+Before C8a freezes Result's pytree layout, add immutable `SCFStatus | None`
+to the Result value and `Result.snapshot()`. Functional output carries
+tensor-valued `trajectory_failure` and `final_failure` codes; outer convergence
+remains the separate `converged` field. Codes are 0 none, 1 invalid
+temperature, 2 too many electrons, 3 Fermi nonconvergence, and 4
+post-smearing electron-count failure. This preserves the eager policy order:
+first failure in physical raw-map trajectory, then final-public-spectrum
+failure, then outer nonconvergence. Legacy routes may use `status=None`.
+Future checks cover zero/finite temperature, each category, trajectory versus
+final failure, valid subsolves with outer nonconvergence, and `maxiter=0`.
+`_normalize_scf_output()` must retain the projected public status rather than
+discarding it or exposing internal `SCFSolveResult`.
 
 Do not make Result own live `IntegralMatrices` builders.
 
@@ -1336,8 +1363,11 @@ while runtime damping and its switched state remain tensors.
 functional charge/potential tensors pass through without conversion to legacy
 mutable containers. Functional `iterations`, `converged`, and `residual`
 tensors are passed through by identity; legacy Python iteration integers are
-normalized at the singlepoint boundary. The inactive eager adapter follows
-the same ordering and is not a replacement for the legacy dispatch function.
+normalized at the singlepoint boundary. B5.6 adds the public `SCFStatus` to
+the common output and snapshot boundary, projecting trajectory and final
+failure-code tensors without copying them or exposing `SCFSolveResult`. The
+inactive eager adapter follows the same ordering and is not a replacement for
+the legacy dispatch function.
 
 The eager adapter is retained for side-by-side compatibility tests. Production
 `scf.solve()` calls only its prepared functional runner and policy helper after
@@ -1407,7 +1437,7 @@ remain:
 
 | Current owner | Prerequisite before removal |
 | --- | --- |
-| Batch fallback and batch cull/restore | E6b owns production batch construction, composition, routing, and retirement of the legacy FULL batch route. The batch-critical E7 padding-safety gate must pass before E6b makes that route authoritative. E6a conformer mapping alone is insufficient. |
+| Batch fallback and batch cull/restore | E6b owns production batch construction, composition, routing, and retirement of the legacy FULL batch route. The batch-critical E7 padding-safety gate and E6c1 W2 conformer plus W3 mixed-System performance clearances must pass before E6b makes that route authoritative. E6a conformer mapping alone is insufficient. |
 | Custom `Interaction` subclasses | Define a pure extension protocol or an explicit compatibility policy. |
 | Negative electronic temperature | Make a global configuration-policy decision. |
 | Negative Fermi `maxiter` | Make a global configuration-policy decision. |
@@ -1418,7 +1448,7 @@ Split the work by dependency:
 
 ```text
 E4.6a — remove batch cull/restore only after E6b retires the production batch
-         route, with the required batch-critical E7 padding gate passed
+         route, with batch-critical E7 and E6c1 W2/W3 gates passed
 E4.6b — delete the remaining legacy full loop only after every fallback above
          is migrated, globally rejected, or explicitly retired
 ```
@@ -1456,9 +1486,9 @@ the legacy adapter before removing those methods.
 The new single-System functional core has no cull/restore operations. The
 legacy batch solver may continue slicing converged entries and culling its
 batch-dependent compatibility objects until E6b retires that production
-route after the batch-critical E7 gate passes. E6b owns route migration; E7
-owns safety validation. Do not delete the legacy optimization while batch
-FULL calls still use it.
+route after the batch-critical E7 gate and E6c1 W2/W3 performance clearances
+pass. E6b owns route migration; E7 owns safety validation. Do not delete the
+legacy optimization while batch FULL calls still use it.
 
 For mapped execution, use an active/converged mask and preserve the previous state after convergence.
 
@@ -1520,8 +1550,8 @@ that follows from E4 single-System routing:
 - shape recomputation after legacy batch systems converge.
 
 Remove these only through E4.6a after E6b retires the production batch route
-and the required batch-critical E7 padding gate passes. C5 migrates the
-surviving immutable core structural representation and does not wait for
+and the batch-critical E7 gate plus E6c1 W2/W3 clearances pass. C5 migrates
+the surviving immutable core structural representation and does not wait for
 deletion of a separate legacy-only adapter.
 
 ## E4 acceptance
@@ -1601,9 +1631,9 @@ mark B6 complete while D3 or other declared B6 scope remains open.
 Repository-wide removal of cull/restore, mutable per-call containers, and
 legacy reset paths is later cleanup. Batch-owned machinery belongs to E4.6a
 after E6b retires the production batch route and the batch-critical E7
-padding-safety gate passes. Remaining legacy FULL compatibility objects and
-the loop belong to E4.6b after all documented fallbacks are migrated, globally
-rejected, or explicitly retired.
+padding-safety gate plus E6c1 W2/W3 clearances pass. Remaining legacy FULL
+compatibility objects and the loop belong to E4.6b after all documented
+fallbacks are migrated, globally rejected, or explicitly retired.
 
 ---
 
@@ -1686,7 +1716,8 @@ owns `batch_mode` plus mutable `cull/restore` storage. B6b-core first separates
 the frozen core structural value from this legacy object; C5 Node-migrates the
 core value. The legacy batch adapter may temporarily keep the current
 batch-aware `IndexHelper` and cull behavior until E6b retires that production
-route after the batch-critical E7 gate passes. Do not
+route after the batch-critical E7 gate and E6c1 W2/W3 performance clearances
+pass. Do not
 remove cull/restore from the shared class while that legacy route uses it, and
 do not Node-migrate an object solely because a legacy fallback still uses it.
 
@@ -1713,22 +1744,26 @@ Do not turn old mutable driver classes into Nodes merely to preserve them.
 ## C8a Result pytree representation
 
 C8a is a separate output-container prerequisite for E6a and can proceed from
-B5 and the available `Node`/pytree support without waiting for C5/C6/C7.
-Register or migrate `Result`, `ChargeResult`, `PotentialResult`, `Multipoles`,
-and nested outputs so the exact default-out-dims call
-`torch.func.vmap(system.singlepoint, in_dims=(0,))(positions_batch)` returns a
-`Result`. Optional `None` fields and classical string labels must be static
-pytree context; tensor fields, including classical energies, remain leaves.
-Acceptance checks GFN1 and GFN2, one leading conformer dimension on all tensor
-fields, unchanged `None` optionals, reconstructed nested charge/potential
-values, and field-by-field Python-loop parity. No custom `out_dims` or
-tuple-return wrapper is allowed.
+B5/B5.6 and the available `Node`/pytree support without waiting for
+C5/C6/C7. Acceptance uses a transform-safe probe that constructs the complete
+Result tree from tensor inputs with `Result.snapshot()`, not
+`System.singlepoint` or the SCF controller. Require flatten/unflatten
+round-trip, default `out_dims=0`, reconstructed `Result`/nested types, one new
+leading dimension on every tensor leaf, optional static `None` preservation,
+static classical labels with mapped energy leaves, and autograd connectivity.
+The exact public B1 `vmap(system.singlepoint, in_dims=(0,))(positions_batch)`
+integration acceptance belongs only to E6a after its fixed-trip controller
+exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 
 ## C8b Model/System stackability
 
-C8b follows B6b-core, C5, C6, C7, and B2. Its stackability is required for
-E6b mixed composition, not for E6a mapping over one fixed System; Result
-pytree support is established separately by C8a.
+C8b follows B3b, B6b-core, C5, C6, C7, and B2. B3b must first establish the
+final System layout, including removal of transitional ownership such as
+`model`, `batch_mode`, `dd`, live mutable integrals, and legacy Calculator
+state. C8b migrates that already-correct layout to stackable Nodes; it does
+not own setup/per-call physics refactoring. Its stackability is required for
+E6b mixed composition, not E6a mapping over one fixed System; Result pytree
+support is established separately by C8a.
 
 Before conversion, ensure the dataclass layouts already match the target architecture.
 
@@ -1849,7 +1884,8 @@ execution boundary statically by API path.
 Prerequisites:
 
 - B6b-core purity;
-- C8a Result pytree representation, accepted with the exact public call above;
+- B5.6 public solver-status schema;
+- C8a Result pytree representation, accepted with its tensor-built Result probe;
 - E2 structural integral plan;
 - E4 fixed-shape SCF;
 - the transform-safe single-System entrypoint above;
@@ -1880,6 +1916,16 @@ Tests:
   and does not inspect status to warn or raise; `Calculator.singlepoint`
   retains eager early stop and compatibility warning/error behavior.
 
+The public `Result.status` is the stable B5.6 `SCFStatus`, not internal
+`SCFSolveResult`: it preserves trajectory and final-spectrum failure codes
+separately while `converged` remains outer convergence only. Test valid
+zero-T and finite-T solves, tensor-detected invalid-temperature status, too
+many electrons, Fermi nonconvergence, electron-count failure,
+trajectory-versus-final failure, valid subsolves with outer nonconvergence,
+and `maxiter=0`. A statically invalid configured temperature may still fail
+during preparation; other tensor-detected spectral status is returned without
+eager warning/error interpretation.
+
 ## E6b mixed composition
 
 Prerequisites:
@@ -1904,33 +1950,46 @@ No integral driver constructs one System per batch entry internally.
 
 E6b owns mixed-System construction, stacking/vmap composition, production
 routing, and retirement of the legacy production batch FULL route. E7 owns
-padding-safety validation/hardening. E6b implementation may proceed while the
-broader E7 audit continues, but production routing becomes authoritative only
-after the minimum batch-critical E7 gate passes: all padded operations used by
-the migrated route are inventoried, singular inputs are safely masked, and
-the E6b value/derivative tests pass for supported orders under mapped
-execution. The W3 mixed-System performance comparison is also required before
-retiring the legacy route. The full eventual E7 audit may continue afterward.
-E6a conformer support alone does not retire the legacy batch FULL route.
+padding-safety validation/hardening. The E6b implementation subphase may
+proceed while W2/W3 performance clearances and the broader E7 audit continue.
+Production routing becomes authoritative only after the E6b implementation,
+the batch-critical E7 gate, and both E6c1 performance clearances pass. E6c1
+requires W2 conformer clearance from E6a and W3 mixed-System clearance from
+the E6b implementation. Each requires acceptable measured performance or an
+explicit architecture-review decision accepting a regression; missing
+measurements do not count. The minimum E7 gate inventories padded operations
+used by the route, verifies safe masking of singular inputs, and passes the
+E6b value/derivative tests for supported mapped orders. The broader E7 audit
+may continue afterward. E6a conformer support alone does not retire the
+legacy batch FULL route.
 
-## E6c performance gate
+## E6c1 pre-retirement performance gates
 
-E6c covers both branches against their corresponding T0.8 workloads:
+E6c1 is the required pre-retirement clearance for both branches against their
+corresponding T0.8 workloads:
 
 - W2 for E6a conformers mapped over one fixed System;
 - W3 for E6b mixed/training-like padded Systems, compared with the recorded
   legacy mixed-batch baseline.
 
-For each record wall time and peak memory. W3 additionally records force
-evaluation where applicable, padding overhead, bucket count and size
-distribution, and parameter-gradient timing once the C8b training tree is
-available. Record CPU threads and GPU memory/throughput when the deferred GPU
-baseline permits. W3 comparison and the batch-critical E7 gate are hard
-prerequisites for E6b route retirement; the complete W2/W3 and eventual GPU
-record is required for final G2 performance acceptance. If broadly
-unacceptable performance appears, keep the legacy fallback and require
-explicit architecture review; do not create a second permanent batched
-physics core.
+W2 compares conformer throughput with the legacy `batch_mode=2` target. W3
+compares mixed-System forward time, force evaluation where applicable, peak
+memory, padding overhead, and bucket count/size distribution with the recorded
+legacy mixed-batch baseline. Record CPU threads. Parameter-gradient timing is
+added once the C8b training tree is available. Each gate needs acceptable
+measured performance or an explicit architecture-review decision accepting a
+regression; silence or a missing measurement is not clearance. The E7
+batch-critical safety gate remains separate. Broadly unacceptable performance
+blocks retirement pending explicit review; it cannot silently authorize a
+second permanent batched physics core.
+
+## E6c2 final performance acceptance
+
+Record complete W2/W3 results, parameter-gradient timing when available, and
+GPU throughput/memory against the deferred T0.8 GPU baseline. E6c2 is final G2
+performance sign-off. The GPU baseline may remain outstanding after CPU E6b
+route retirement because E6c1 already cleared both CPU workloads; without GPU
+measurements, final GPU/G2 performance acceptance remains open.
 
 ---
 
@@ -2012,7 +2071,10 @@ E8 is the acceptance package proving all baseline cells required by G1.
 
 This is not a blocker for B4-B8.
 
-It is a blocker for final E6a/E6b and D performance conclusions.
+It blocks E6c2's final GPU/G2 performance acceptance and any D-track GPU
+performance conclusion that depends on these measurements. CPU E6b route
+retirement is gated earlier by E6c1's W2/W3 clearances and the batch-critical
+E7 checks; it does not wait for the GPU baseline.
 
 Run the same named workloads and record:
 
@@ -2180,19 +2242,20 @@ Calculator retains eager policy through its separate adapter.
 E4.5b production single-System routing
   ├──> E3 supported non-D3 spectral/SCF work (independent of E6a/E6b/E4.6/Node)
   ├──> B6b-core ──> C5 core structural migration ──> C6/C7 ──> C8b
-  ├──> B5 + C1 ──> C8a Result pytree representation
+  ├──> B5 + E4 ──> B5.6 public solver-status schema ──> C8a Result pytree
   └──> fixed-trip functional SCF ──> private transform boundary
 
 B1 public system.singlepoint + B6b-core + E2 + private transform boundary
-  + C8a Result pytree
+  + B5.6 status schema + C8a Result pytree
   └──> E6a conformer vmap over one fixed System (no C5/C8b or E4.6a)
 
-C5/C8b + B3b + E2/E4 + defined padding
+C5/C6/C7 + B3b + C8b + E2/E4 + defined padding
   └──> E6b mixed-System construction/stack-vmap implementation
-          ├──> batch-critical E7 padding-safety gate
-          └──> T0.8 W3 mixed-System performance comparison
+          └──> batch-critical E7 padding-safety gate
 
-E6b implementation + batch-critical E7 gate + W3 performance gate
+E6a + T0.8 W2 ──> E6c1 W2 conformer performance clearance
+E6b implementation + T0.8 W3 ──> E6c1 W3 mixed-System performance clearance
+E6c1 W2/W3 clearances + E6b implementation + batch-critical E7 gate
   └──> E6b production route authoritative; retire legacy batch FULL
           └──> E4.6a batch cull/restore removal
 
@@ -2208,14 +2271,16 @@ C8b + stable training core ──> F1/F2
 E4 + E6a + T0.8 GPU ──> D1 conformer compile
 F2d + E6b production route ──> D3 mixed-System compile
 E6b production route + D3 ──> D5 pair concatenation (conditional)
-T0.8 W2/W3 + GPU baseline ──> final E6/D performance acceptance
+E6b route + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
 ```
 
 Recommended early ordering remains: R0, E0, E1, B4/B5/B6a, B7, E2, and E4
 according to their independent prerequisites. After E4.5b, E3 and B6b-core may
-proceed independently. C8a Result pytree support plus the transform-safe
-single-System boundary unblock E6a; C5/C6/C7/C8b unblock E6b. E6a does not
-wait for C5/C8b or E4.6a.
+proceed independently. B5.6 closes public solver-status fields before C8a;
+C8a's tensor-built Result probe is independent of SCF control. C8a plus the
+private transform boundary unblock E6a, where the exact B1 public call is
+finally tested. B3b/C5/C6/C7/C8b unblock E6b. E6a does not wait for C5/C8b or
+E4.6a.
 
 The recommended next implementation package is **E3.0 — spectral derivative /
 NO2 preflight and invariant eigensolver audit** on the already functional
@@ -2300,7 +2365,7 @@ Recommended sequence:
 - E4.5a dynamic damping and eager compatibility (done); E4.5b production routing
   (done);
 - E4.6a batch cull/restore cleanup (deferred until E6b retires the legacy
-  production batch route after the batch-critical E7 padding gate);
+  production batch route after batch-critical E7 and E6c1 W2/W3 clearance);
 - E4.6b legacy full-loop deletion (blocked on compatibility fallback migration
   or explicit retirement).
 
@@ -2315,8 +2380,8 @@ default `out_dims`, after C8a makes Result pytree-compatible. E6a explicitly
 changes direct-System calls to fixed-trip/status-only semantics; Calculator
 keeps eager early-stop/warning/error behavior in its own adapter. E6b adds
 mixed-System stacking/composition and owns production batch-route migration;
-its route is authoritative only after the batch-critical E7 gate and W3
-performance gate pass.
+its route is authoritative only after the batch-critical E7 gate and both
+E6c1 performance clearances pass: W2 for conformers and W3 for mixed Systems.
 
 Each PR description must state:
 
