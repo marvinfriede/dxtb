@@ -8,7 +8,7 @@
 - SCF: default mode unrolls all iterations (`SCF_MODE_FULL`); implicit modes use a vendored copy of xitorch (`scf/implicit/base.py`).
 - GFN2 multipole integrals exist in PyTorch (E5, done).
 - The PyTorch overlap uses the PairPlan builder (E2).
-- Batched SCF culls converged systems in place (`IndexHelper.cull`/`restore`, cache `cull`/`restore`).
+- The legacy production batch FULL solver culls converged systems in place (`IndexHelper.cull`/`restore`, cache `cull`/`restore`); the new functional single-System path is separately fixed-shape.
 
 ---
 
@@ -123,19 +123,31 @@ Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as 
 
 **Note.** The currently named `scf/pure` functions are not the final pure design because `_Data` is mutable. E4 requires functional SCF state and functional mixer state.
 
-**Goal.** The SCF iteration is a pure function of its state; the convergence loop runs outside it and handles batches by masking, not culling.
+**Goal.** The functional single-System SCF iteration is a pure function of its
+state and uses fixed-shape solver control. Legacy production batch culling
+remains isolated until E6b retires that route and E4.6a removes its
+compatibility machinery.
 
 **Steps.**
 
 1. Define the SCF state (charges or potential, mixer history) and the step `state -> state` as a pure function of system, call inputs and state.
-2. Driver loop: run the step on the whole batch; per-system convergence flags; converged entries frozen with `torch.where`; stop when all have converged or the iteration limit is reached.
+2. Fixed-trip transform controller: use per-system convergence flags and
+   freeze converged entries with `torch.where`; do not use tensor-dependent
+   Python control flow.
 3. Mixer state per system, part of the step's state (so it can be vmapped) or handled in the driver.
-4. Delete `IndexHelper.cull`/`restore`, the cache `cull`/`restore` methods and their `__store` slots.
-5. Benchmark masking against today's culling on T0.8 W2 and W3 (masking wastes compute on converged systems).
+4. Keep the functional core free of cull/restore calls. Do not remove those
+   methods from a shared legacy adapter while production batch FULL still uses
+   it; that deletion is E4.6a after E6b retires the production batch route
+   and the batch-critical E7 padding gate passes.
+5. Benchmark fixed-trip masking against eager early-stop and legacy batch
+   culling on the relevant T0.8 workloads.
 
-**Done when.** No in-place culling remains; T0.2 reproduced, including batched cases; benchmark recorded.
+**Done when.** The single-System functional path is mutation-free, matches
+T0.2, and its fixed-trip solver passes transform checks. This does not require
+repository-wide culling deletion or migration of legacy production batches.
 
-**Needs.** T0.2, B5, B6a. **Unblocks.** E3, E6a, B6b, C5, D1, F4. **Size.** L.
+**Needs.** T0.2, B5, B6a. **Unblocks.** E3, E6a after its transform-safe
+entrypoint, B6b-core, C5, D1, F4. **Size.** L.
 
 ---
 
@@ -148,44 +160,61 @@ vmap. Keep regression tests; do not reimplement.
 
 ---
 
-## E6a Measurement: `vmap` against hand-written batching
+## E6a Conformers: `vmap` against hand-written batching
 
-**Goal.** Confirm that a single-system core with `vmap` matches today's batched code before deleting it.
+**Public API.** Preserve the B1 call:
+`torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`. E6a changes
+its implementation only; it does not introduce a public conformer function.
+
+**Goal.** Confirm that one fixed System mapped over conformer positions matches
+a Python loop and the legacy reference path.
 
 **Steps.**
 
-1. Port one path (GFN1 energy and forces, PyTorch driver) to a single-system core, using E1, E2 and E4.
-2. Compare against `batch_mode = 2` on a real conformer set and `batch_mode = 1` on a padded mixed set (T0.8 W2, W3), with `vmap` fallback warnings as errors.
-3. Record time and memory.
+1. Route the existing B1 `System.singlepoint` method through a private
+   transform-safe fixed-trip boundary for transformed execution.
+2. Keep eager warning/error policy in the Calculator/top-level eager adapter;
+   neither that policy nor tensor convergence inspection runs inside `vmap`.
+3. Compare one fixed System over a real conformer set (GFN1 energy/forces,
+   PyTorch driver) against a Python loop, with `vmap` fallback warnings as
+   errors. Mixed padded compositions belong to E6b.
+4. Record time and memory.
 
 **Decision rule.**
 
-- Close to today's code: proceed with E6.
+- Close to today's code: proceed with E6a conformer mapping, then E6b mixed-System batching under its C8/padding gates.
 - One operation slow: give it a batching rule; proceed.
 - Broadly slower: keep an explicitly batched core and record the cost for higher-order derivatives (cross-system blocks).
 
 **Done when.** Results and decision recorded.
 
-**Needs.** E1, E2, E4, T0.8. **Size.** M.
+**Needs.** E1, E2, E4, B6b-core, T0.8, and the private fixed-trip boundary
+under the B1 public method. It does not need C8 or E4.6a. **Size.** M.
 
 ---
 
-## E6 Batching through `vmap`
+## E6b Mixed-System production batching through `vmap`
 
 **Goal.** All batching goes through `vmap`; `batch_mode` disappears (P2). Integral and SCF code do not handle `batch_mode` themselves; the only final batching composition is single-System `vmap` plus stacked padded Systems.
 
 **Steps.**
 
-1. Conformers: one system, `vmap` over positions (`in_dims=(None, 0)`).
-2. Mixed sets: per-molecule `setup`, padding to size buckets, stacking with a tree map, `vmap` with `in_dims=(0, 0)` (stacking needs C8).
-3. A pad-and-stack helper, with configurable bucket sizes.
-4. Batch entry points from B1 (no shape-based guessing).
-5. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
-6. Batched GFN2 runs through the PyTorch multipole integrals (E5); a libcint path is a plain loop over systems.
+1. Mixed sets: per-molecule `setup`, padding to size buckets, stacking with a tree map, `vmap` with `in_dims=(0, 0)` (stacking needs C8).
+2. A pad-and-stack helper, with configurable bucket sizes.
+3. Batch entry points from B1 (no shape-based guessing).
+4. Delete `batch_mode`, the per-entry loops in driver setup (`integral/driver/pytorch/driver.py`, `libcint/driver.py`) and batched/unbatched code branches (for example, the two einsum strings in `BaseIntegral.normalize`).
+5. Batched GFN2 runs through the PyTorch multipole integrals (E5); a libcint path is a plain loop over systems.
 
-**Done when.** Both batching modes run through `vmap` with no fallbacks; T0.2 batched references reproduced; per-system Hessians computed with `vmap(hessian)` without cross-system blocks.
+**Done when.** Mixed-System production calls route through the new stack/vmap
+path with no unsupported fallbacks; T0.2 batched references reproduced;
+per-System Hessians have no cross-system blocks. E6b owns batch construction,
+composition, production routing, and retirement of the legacy batch FULL
+route.
 
-**Needs.** E6a, B3, E4; C8 for stacked mixed batches. **Unblocks.** D1, D3. **Size.** L.
+**Needs.** E6a, B3, E4, C5/C8, and defined padding. The route becomes
+authoritative only after the batch-critical E7 padding-safety gate passes;
+the broader E7 audit may continue afterward. **Unblocks.** E4.6a, D1, D3.
+**Size.** L.
 
 ---
 
@@ -198,6 +227,10 @@ vmap. Keep regression tests; do not reimplement.
 1. Inventory every masked singular operation in the per-call path (`1/r`, `sqrt`, `exp` of large arguments, divisions by counts).
 2. Apply double-`where`: mask the input before the singular operation, mask the output after.
 3. Tests: padded systems in T0.3 finite to order 3, including under `vmap`.
+
+E7 owns padding-safety validation and hardening; E6b owns batch-route
+migration. E6b requires only the E7 checks for padded operations used by its
+production route, not completion of every eventual E7 audit item.
 
 **Done when.** T0.3 padded cells finite at every order that passes for single systems.
 
@@ -232,7 +265,7 @@ vmap. Keep regression tests; do not reimplement.
 | E3 | SCF differentiation | E0, E1, E4 | L |
 | E4 | Pure SCF step, masked loop | T0.2, B5, B6a | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
-| E6a | `vmap` versus hand-written batching | E1, E2, E4, T0.8 | M |
-| E6 | Batching through `vmap` | E6a, B3, E4 (C8) | L |
-| E7 | Padding-safe masking | T0.3 | M |
+| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, T0.8, private fixed-trip boundary | M |
+| E6b | Mixed-System construction, stack/vmap, and production batch-route migration | E6a, B3, E4, C5/C8, defined padding, batch-critical E7 gate | L |
+| E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
 | E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |

@@ -126,12 +126,24 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
    `vmap` over the whole singlepoint is the target.
 
 The temporary `System.batch_mode` used by the legacy Calculator during the
-migration is not part of this contract and must be removed before C8/E6.
+migration is not part of this contract. Remove it from the new core before
+E6a; any separately isolated legacy batch adapter may retain batch state until
+E6b retires that route.
 
-**[decide]** whether a batched call with a single composition and many
-geometries gets a dedicated `setup(numbers)` + `positions[nb, nat, 3]` entry
-(the common CREST case) or only the generic `dxtb.batch.*`. Proposal: the
-former is just `vmap` over positions and needs no extra function.
+**Decision.** A batched call with one composition and many geometries (the
+common CREST case) uses `setup(numbers)` once and then the conformer call in
+the public contract above. It needs no additional public function. Mixed
+compositions use the generic `dxtb.batch.*` API.
+
+**Canonical contract and E6a target.** The public conformer call remains
+`torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)`; E6a does not
+add a public conformer entrypoint. At present the production `System.singlepoint`
+path still uses eager convergence/status inspection and is not assumed to be
+transformable. E6a will put fixed-trip numerical execution and tensor-valued
+status under `System.singlepoint`, then keep eager warning/error policy in
+the Calculator/top-level eager adapter, outside the transformed function.
+The private implementation boundary may be refactored, but callers do not
+select it by functorch detection and the B1 public API does not change.
 
 ## 6. Parameter storage (question 6)
 

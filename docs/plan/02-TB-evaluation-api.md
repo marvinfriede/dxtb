@@ -49,7 +49,7 @@
 
 1. Convert `Config` and all sub-configs to frozen dataclasses with value equality and hashing.
 2. Remove `device` and `dtype` from the configuration.
-3. Remove `batch_mode` from the configuration (superseded by B1 item 5). The calculator derives it from the shape of `numbers` (the `batch_mode` option, mode 2 for conformers, stays a constructor option) and the index helper carries it; the SCF reads it from there. The mode itself is removed with the batching rewrite (E6), because conformer throughput (G2) still depends on mode 2.
+3. Remove `batch_mode` from the new core configuration (superseded by B1 item 5). The old Calculator may continue deriving it for its legacy adapter; that adapter's batch state is retired only when E6b makes mixed-System production routing authoritative. Conformer throughput uses the B1 `vmap(system.singlepoint, ...)` contract in E6a and does not require a public `batch_mode` option.
 4. Replace post-construction adjustments (integral level from the method) with construction-time derivation.
 5. Change the CLI to build a new configuration with `replace()`.
 
@@ -167,10 +167,17 @@ called by the new System.
 **B6a:** remove all state persistent across calls. Temporary per-call SCF data
 may still be mutable because the old batched SCF culls it.
 
-**B6b:** after E4 replaces culling with a fixed-shape loop, delete cull/restore
-and freeze all remaining per-call data.
+**B6b-core:** after the E4 functional single-System path lands, close core
+state purity and establish immutable structural/interaction input values.
+This does not delete cull/restore from the separate legacy batch adapter.
 
-Dependencies: B6a needs B5 and B4; B6b needs E4 (and C5 for the Node conversion of the index helper).
+**Legacy compatibility purge:** E4.6a removes batch cull/restore only after
+E6b owns production batch routing and the batch-critical E7 padding gate
+passes. E4.6b removes the remaining legacy FULL loop only after every fallback
+is migrated, globally rejected, or retired.
+
+Dependencies: B6a needs B5 and B4; B6b-core follows B6a and E4.5b; C5
+Node-migrates the immutable structural boundary established by B6b-core.
 
 **Goal.** Geometry-dependent intermediates are computed inside each call; no component or driver keeps state between calls.
 
@@ -256,7 +263,7 @@ B8b: third-order and mixed-response properties after E3.
 | B3 | Model and setup (B3a done, B3b open) | B1, B2 | L |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3, B4 | M |
-| B6 | Per-call geometry data; remove caches and mutation (B6a: B5, B4; B6b: E4) | B5, B4 | L |
+| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
 | B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |
 | B9 | ASE adapter (optional) | B8 | S |

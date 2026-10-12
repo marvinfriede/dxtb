@@ -82,19 +82,27 @@ Delivered as `ModuleNode` in tad-mctc 0.9.1. Unblocks F3.
 
 **Goal.** Migrate the classes at the bottom of dxtb's object tree.
 
-**Preconditions.** `IndexHelper.cull`/`restore` are gone (E4); both classes are built in `setup` (B3).
+**Preconditions.** B6b-core has established an immutable structural value for
+the functional single-System core; structural values are built in `setup`
+(B3). The legacy batch adapter may still use its existing mutable,
+batch-aware `IndexHelper` until E6b retires that route; E4.6a then removes
+its cull/restore machinery.
 
 **Steps.**
 
-1. Convert to `Node`; integer index tensors are children; per-molecule counts are tensors, not context (P9).
+1. Migrate the surviving immutable core structural value to `Node`; integer
+   index tensors are children; per-molecule counts are tensors, not context
+   (P9).
 2. Remove `allowed_dtypes` (integer handling now comes from the strict conversion rule: integer tensors keep their dtype).
 
-`batch_mode` is not migrated. IndexHelper becomes a single-system structural
-Node after E4 deletes cull/restore.
+`batch_mode` and cull/restore are not migrated into the core Node. Do not
+remove those methods from the separately isolated legacy `IndexHelper` while
+the production batch fallback still uses it. C5 migrates the core value; it
+does not require deleting the legacy adapter.
 
 **Done when.** Both migrated; conversion moves their tensors with the parent's `.to(device)`; T0.2 reproduced.
 
-**Needs.** C1, B3, E4. **Size.** M.
+**Needs.** C1, B3, B6b-core, E2, E4. **Size.** M.
 
 ---
 
@@ -102,13 +110,14 @@ Node after E4 deletes cull/restore.
 
 **Goal.** Migrate all classical and interaction components and their list containers.
 
-**Preconditions.** No caches or mutation methods remain (B6).
+**Preconditions.** Core component/setup values satisfy B6b-core. Separately
+isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 **Steps.** Convert per component (can be split into one PR per component family: Coulomb, dispersion, repulsion, halogen/SRB/IES, solvation, fields). Settings changes go through `replace()`. Component lists keep order (no sets).
 
 **Done when.** No `TensorLike` subclass among components; T0.2 reproduced.
 
-**Needs.** C5, B6. **Size.** L (split per family).
+**Needs.** C5, B6b-core. **Size.** L (split per family).
 
 ---
 
@@ -116,11 +125,11 @@ Node after E4 deletes cull/restore.
 
 **Goal.** Migrate the integral description objects, the Hamiltonian and the driver.
 
-**Preconditions.** Builders are pure and objects hold no matrices (B4); driver setup returns a value (B6).
+**Preconditions.** Builders are pure and objects hold no matrices (B4); driver setup returns a value (B6a/B6b-core).
 
 **Done when.** No `TensorLike` subclass among them; T0.2 reproduced.
 
-**Needs.** C5, B4, B6. **Size.** M.
+**Needs.** C5, B4, B6b-core. **Size.** M.
 
 ---
 
@@ -140,7 +149,7 @@ Model parameter tables.
 
 **Done when.** A stacked batch of padded systems runs under `vmap`; `partition` of a model works for training; T0.2 reproduced.
 
-**Needs.** C6, C7, B5, B2. **Unblocks.** E6 (stacked batches), F2c. **Size.** M.
+**Needs.** C6, C7, B5, B2. **Unblocks.** E6b (stacked mixed-System batches), F2c. **Size.** M.
 
 ---
 
@@ -148,15 +157,23 @@ Model parameter tables.
 
 **Goal.** Remove the old base classes and every piece of scaffolding.
 
+**Preconditions.** C2-C4 and C8 are complete, and E4.6a/E4.6b have retired
+every legacy batch/FULL fallback object that still inherits from or requires
+`TensorLike`/`ModuleLike`. C9 is not complete while such a compatibility
+object remains, and C9 does not block E6b.
+
 **Steps.**
 
 1. Delete `TensorLike`, `ModuleLike` and `_clone_tensorlike` in tad-mctc.
 2. Delete dxtb's remaining conversion scaffolding.
 3. Coordinated releases: tad-mctc, then tad-multicharge, tad-dftd3, tad-dftd4, then the dxtb restructuring release (`00-overview.md` section 8), each pinning the others exactly.
 
-**Done when.** `grep -r TensorLike` finds nothing in any of the packages; all released.
+**Done when.** `rg -n "TensorLike|ModuleLike" src/dxtb` finds no remaining
+runtime references; external scaffolding is removed and coordinated releases
+are complete. C9 cannot be marked done while any runtime reference remains;
+all legacy owners must first be retired or migrated under E4.6a/E4.6b.
 
-**Needs.** C2–C4, C8. **Size.** S.
+**Needs.** C2–C4, C8, E4.6a, E4.6b. **Size.** S.
 
 ---
 
@@ -169,8 +186,8 @@ Model parameter tables.
 | C2 | tad-mctc classes | C1 | S |
 | C3 | tad-multicharge | C1 | S |
 | C4 | tad-dftd3, tad-dftd4 | C1, C3 | M |
-| C5 | `IndexHelper`, `Basis` | C1, B3a, E4 | M |
-| C6 | Components and lists | C5, B6b | L |
-| C7 | Integrals, Hamiltonian, driver | C5, B4, B6b | M |
+| C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4 | M |
+| C6 | Core components and lists | C5, B6b-core | L |
+| C7 | Integrals, Hamiltonian, driver | C5, B4, B6b-core | M |
 | C8 | Model, system, result as nodes | C6, C7, B5, B2 | M |
-| C9 | Delete `TensorLike` | C2–C4, C8 | S |
+| C9 | Final repository-wide `TensorLike`/`ModuleLike` purge | C2–C4, C8, E4.6a, E4.6b | S |

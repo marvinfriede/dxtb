@@ -40,13 +40,13 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4/E6. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | not done                        | dxtb still heavily uses `TensorLike` and mutable objects.                                          |
+| C5-C9          | not done                        | Core Node migration and final scaffold purge remain; C9 waits for E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
 | E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 cleanup is deferred while production fallback routes still depend on the legacy full engine. |
-| E6/E7/E8       | not done                        | E6a conformer mapping awaits an explicit transform-safe entrypoint; E6b mixed-System batching, padding hardening, and remaining transform work remain open. |
+| E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and needs its private fixed-trip boundary; E6b mixed-System batching and its batch-critical E7 gate remain open. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -89,7 +89,7 @@ The final `System` must not contain `batch_mode`.
 
 Do not infer batching from `numbers.ndim`, `positions.ndim`, tensor shapes or lengths inside the new core.
 
-Legacy `Calculator` support may continue to use existing batch modes until E6, but keep this behavior in the compatibility layer and do not design new APIs around it.
+Legacy `Calculator` support may continue to use existing batch modes until E6b retires the production batch route, but keep this behavior in the compatibility layer and do not design new APIs around it.
 
 ## 2.3 Device and dtype
 
@@ -1138,7 +1138,7 @@ Newton/bisection search step. Fermi status, the separate `1e-4` electron-count
 guard, and equal/atomic entropy partitions are preserved in the functional
 results. Production routing was activated later in E4.5b for eligible
 single-System FULL calculations; whole-System public `vmap` remains deferred to
-E6 because eager policy performs host inspection.
+E6a because the eager policy performs host inspection.
 
 The temperature/free-energy value exists independently of whether smearing is
 active: exactly zero temperature has zero free energy; positive temperatures
@@ -1404,7 +1404,7 @@ remain:
 
 | Current owner | Prerequisite before removal |
 | --- | --- |
-| Batch fallback and batch cull/restore | E6b/E7 must make the new mixed/batched execution authoritative for the production batch route and retire its legacy FULL dependency. E6a conformer mapping alone is insufficient. |
+| Batch fallback and batch cull/restore | E6b owns production batch construction, composition, routing, and retirement of the legacy FULL batch route. The batch-critical E7 padding-safety gate must pass before E6b makes that route authoritative. E6a conformer mapping alone is insufficient. |
 | Custom `Interaction` subclasses | Define a pure extension protocol or an explicit compatibility policy. |
 | Negative electronic temperature | Make a global configuration-policy decision. |
 | Negative Fermi `maxiter` | Make a global configuration-policy decision. |
@@ -1414,8 +1414,8 @@ remain:
 Split the work by dependency:
 
 ```text
-E4.6a — remove batch cull/restore only after E6b/E7 migrate production batch
-         execution away from `SelfConsistentFieldFull`
+E4.6a — remove batch cull/restore only after E6b retires the production batch
+         route, with the required batch-critical E7 padding gate passed
 E4.6b — delete the remaining legacy full loop only after every fallback above
          is migrated, globally rejected, or explicitly retired
 ```
@@ -1452,9 +1452,10 @@ the legacy adapter before removing those methods.
 
 The new single-System functional core has no cull/restore operations. The
 legacy batch solver may continue slicing converged entries and culling its
-batch-dependent compatibility objects until E6b/E7 retires that production
-route. Do not delete the legacy optimization while batch FULL calls still use
-it.
+batch-dependent compatibility objects until E6b retires that production
+route after the batch-critical E7 gate passes. E6b owns route migration; E7
+owns safety validation. Do not delete the legacy optimization while batch
+FULL calls still use it.
 
 For mapped execution, use an active/converged mask and preserve the previous state after convergence.
 
@@ -1515,9 +1516,10 @@ that follows from E4 single-System routing:
 - legacy mixer culling;
 - shape recomputation after legacy batch systems converge.
 
-Remove these only through E4.6a after E6b/E7 retires the production batch
-route. C5 migrates the surviving immutable core structural representation and
-does not wait for deletion of a separate legacy-only adapter.
+Remove these only through E4.6a after E6b retires the production batch route
+and the required batch-critical E7 padding gate passes. C5 migrates the
+surviving immutable core structural representation and does not wait for
+deletion of a separate legacy-only adapter.
 
 ## E4 acceptance
 
@@ -1552,13 +1554,33 @@ B6b-core requires:
 - functional SCF inputs and solver state are immutable explicit values;
 - migrated components have no persistent per-call caches.
 
-B6b-core also establishes the structural adapter boundary needed for those
-inputs: functional SCF receives a frozen, mutation-free core structural value
-derived from basis/index setup, while legacy FULL continues to receive the
-existing batch-aware `IndexHelper`. This small immutable value boundary is a
-B6b-core purity requirement; C5 later migrates that surviving value into the
-Node-based structural representation. Do not pass the mutable compatibility
-`IndexHelper` itself into core SCF inputs once B6b-core is closed.
+B6b-core also establishes the structural and interaction adapter boundaries
+needed by those inputs. The current non-Tensor children reachable from
+`SCFInputs` are:
+
+| Child | Current representation | B6b-core classification/target |
+| --- | --- | --- |
+| `ihelp` | Shared mutable, batch-aware `IndexHelper` with `cull/restore` | Legacy-only adapter; core receives a frozen structural value derived from it. |
+| `integrals` | Frozen `IntegralMatrices` containing tensor leaves | Immutable core value; no replacement or in-place field update during evaluation. |
+| `interactions` | Mutable `InteractionList` containing component objects | Core receives immutable/read-only descriptors or setup values for eligible built-ins; mutable legacy list and unsupported extensions stay outside the core. |
+| `interaction_data` | Mutable `InteractionListCache` mapping with cache objects | Core receives a call-local data value with immutable structure and tensor leaves; no cache mutation API is called or reachable from core evaluation. |
+| layouts/settings | Frozen `ChargeLayout`, `PotentialLayout`, `FermiSettings` values | Immutable structural/configuration descriptors. |
+| reachable components | Mutable legacy `Interaction` objects in the current list | Core uses immutable/read-only setup descriptors or explicit per-call values; no component object is updated, reset, invalidated, culled, or restored. |
+
+This is behavioral immutability as well as frozen outer dataclasses: no core
+evaluation may call `update`, `reset`, `cache_invalidate`, `cull`, `restore`,
+or otherwise change any attribute reachable from its inputs after SCF input
+construction. Tensor leaves remain explicit differentiable values. Legacy
+FULL continues to receive the existing batch-aware `IndexHelper`, mutable
+`InteractionList`, and cache adapters. C5 later Node-migrates the frozen
+structural value established here; do not pass the mutable compatibility
+objects themselves into core SCF inputs once B6b-core is closed.
+
+B6b-core regressions snapshot structural fields, identities, list membership,
+cache keys/entries, component attributes, and integral container state before
+and after repeated functional raw-map and full solver evaluations. They must
+prove the input/container state is unchanged, including on finite-temperature
+and potential/Fock paths.
 
 For the new core, enforce the strong P4 rule:
 
@@ -1573,9 +1595,10 @@ mark B6 complete while D3 or other declared B6 scope remains open.
 
 Repository-wide removal of cull/restore, mutable per-call containers, and
 legacy reset paths is later cleanup. Batch-owned machinery belongs to E4.6a
-after E6b/E7 migrates production batch execution. Remaining legacy FULL
-compatibility objects and the loop belong to E4.6b after all documented
-fallbacks are migrated, globally rejected, or explicitly retired.
+after E6b retires the production batch route and the batch-critical E7
+padding-safety gate passes. Remaining legacy FULL compatibility objects and
+the loop belong to E4.6b after all documented fallbacks are migrated, globally
+rejected, or explicitly retired.
 
 ---
 
@@ -1657,7 +1680,8 @@ implementation (and may receive the same call-local object). That class still
 owns `batch_mode` plus mutable `cull/restore` storage. B6b-core first separates
 the frozen core structural value from this legacy object; C5 Node-migrates the
 core value. The legacy batch adapter may temporarily keep the current
-batch-aware `IndexHelper` and cull behavior until E6b/E7 migration. Do not
+batch-aware `IndexHelper` and cull behavior until E6b retires that production
+route after the batch-critical E7 gate passes. Do not
 remove cull/restore from the shared class while that legacy route uses it, and
 do not Node-migrate an object solely because a legacy fallback still uses it.
 
@@ -1718,26 +1742,47 @@ loss = ...
 grads = torch.func.grad(loss)(params)
 ```
 
-## C9 TensorLike deletion
+## C9 final TensorLike/ModuleLike scaffold purge
 
-Only migrate objects that survive the restructure.
+C9 is the final repository-wide scaffold deletion, not a prerequisite for E6b.
+It requires C2-C4, C8, E4.6a, and E4.6b: every legacy batch and FULL
+fallback owner must first be migrated, globally rejected, or explicitly
+retired. Do not mark C9 done while any surviving legacy compatibility object
+still inherits from or requires `TensorLike`/`ModuleLike`.
 
-Then delete TensorLike/ModuleLike scaffolding.
+Only migrate objects that survive the restructure. Then remove the scaffolding
+from tad-mctc and dxtb and complete coordinated releases. Its acceptance
+check includes:
 
-Do not spend time porting a class to Node if B4/B5/B6 is scheduled to delete the class.
+```bash
+rg -n "TensorLike|ModuleLike" src/dxtb
+```
+
+The command must find no remaining runtime references. C9 cannot be marked
+complete while any runtime reference remains; every legacy owner must first be
+retired or migrated under E4.6a/E4.6b.
+
+Do not spend time porting a class to Node if B4/B5/B6 is scheduled to delete
+the class.
 
 ---
 
-# 17. E6a/E6: batching
+# 17. E6a/E6b: batching
 
 Separate conformer mapping over one fixed System from heterogeneous mixed-
 System batching. The former does not require `Node.stack`; the latter does.
 
 ## Transform-safe single-System entrypoint (E6a prerequisite)
 
-Before E6a can claim core/public conformer `vmap`, add a distinct entrypoint
-that exposes the fixed-trip functional numerical path through a transform-safe
-boundary. It must:
+The canonical public conformer call remains the B1 contract:
+
+```python
+torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)
+```
+
+E6a changes the implementation under that existing public call, not the B1
+API. `System.singlepoint` exposes the transform-safe numerical result and
+delegates internally to a private fixed-trip boundary. That boundary must:
 
 - use the fixed-trip SCF controller;
 - keep eager warning/error host inspection outside the transformed function;
@@ -1745,20 +1790,20 @@ boundary. It must:
 - share the same physical map and finalization as eager production;
 - return tensor-valued convergence and subsolve diagnostics.
 
-The current production `System.singlepoint()` uses the eager early-stop
-controller and eager compatibility policy. It deliberately performs
-host-side convergence and failure inspection, so neither current
-`torch.func.vmap(system.singlepoint)` nor a future `vmap(system.energy)` is
-assumed to work because E4.5b production routing landed. Ordinary eager
-production owns early-stop and warning/error policy; transform composition
-owns fixed-trip execution and tensor status. Both use the same raw physical
-map and immutable solver-step logic.
+The private fixed-trip boundary owns transformed execution and tensor-valued
+convergence/subsolve status; it contains no host warning/error policy. The
+ordinary eager Calculator/top-level compatibility adapter owns eager early
+stop and warning/error interpretation outside the transformed function. It
+uses the same raw physical map, finalization, and immutable solver-step logic.
+Currently production `System.singlepoint` still follows the eager controller
+and host policy, so its transformability is not assumed. E6a refactors that
+implementation so `System.singlepoint` uses the fixed-trip boundary while
+the ordinary Calculator/top-level path applies eager policy outside it. The
+private boundary is an implementation detail, not a new public conformer API.
 
 Do not auto-detect functorch state or tensor wrapper types inside physics to
-choose a controller. The entrypoint must be an explicit architectural API or
-internal boundary, selected by the caller. A separate design review must
-choose whether this is an explicit transform-safe core function, a separate
-internal System method, or a public functional API with an eager wrapper.
+choose a controller. The public method and eager adapter select their
+execution boundary statically by API path.
 
 ## E6a conformers
 
@@ -1771,20 +1816,8 @@ Prerequisites:
 - transform-critical custom operations solved for the tested method.
 
 E6a does not require C8 mixed-System stackability or E4.6a legacy batch
-cull/restore deletion. Its first target maps one fixed System over geometries:
-
-```python
-system = model.setup(numbers)
-
-energies = torch.func.vmap(
-    explicit_transform_safe_entrypoint,
-    in_dims=(None, 0),
-)(system, positions_batch)
-```
-
-`explicit_transform_safe_entrypoint` is a placeholder for the API selected by
-the later source-level design review; it does not choose between the boundary
-options listed above.
+cull/restore deletion. Its first target maps one fixed System over geometries
+using the B1 call shown above. No additional public function is introduced.
 
 Tests:
 
@@ -1816,8 +1849,15 @@ No physics function receives a `batch_mode`.
 
 No integral driver constructs one System per batch entry internally.
 
-E6b mixed-System production migration is the prerequisite for E4.6a. E6a
-conformer support alone does not retire the legacy batch FULL route.
+E6b owns mixed-System construction, stacking/vmap composition, production
+routing, and retirement of the legacy production batch FULL route. E7 owns
+padding-safety validation/hardening. E6b implementation may proceed while the
+broader E7 audit continues, but production routing becomes authoritative only
+after the minimum batch-critical E7 gate passes: all padded operations used by
+the migrated route are inventoried, singular inputs are safely masked, and
+the E6b value/derivative tests pass for supported orders under the mapped
+execution. The full eventual E7 audit may continue afterward. E6a conformer
+support alone does not retire the legacy batch FULL route.
 
 ## E6c performance gate
 
@@ -2078,18 +2118,21 @@ legacy compatibility purge removes this cycle.
 E4.5b production single-System routing
   ├──> E3 supported non-D3 spectral/SCF work (independent of E6/E4.6/Node)
   ├──> B6b-core ──> C5 core structural migration ──> C8 stackable core
-  │                                            └────> E6b mixed composition
-  └──> fixed-trip functional SCF
-          └──> transform-safe core entrypoint ──> E6a conformer vmap
+  └──> fixed-trip functional SCF ──> private transform boundary
 
-B6b-core + E2 + transform-safe entrypoint ──> E6a
-E2 + E4 fixed-shape SCF + E7-relevant padding safety ──> E6b
+B1 public system.singlepoint + B6b-core + E2 + private transform boundary
+  └──> E6a conformer vmap (no C8 or E4.6a prerequisite)
 
-C8 + defined padding + E7 safety ──> E6b mixed-System production migration
-                                      └──> E4.6a legacy batch cull/restore removal
+C5/C8 + E2/E4 + defined padding
+  ├──> E6b implementation: mixed-System construction, stack/vmap, route
+  └──> E7 batch-critical padding gate
+          └──> E6b production route authoritative; retire legacy batch FULL
+                  └──> E4.6a batch cull/restore removal
 
 remaining compatibility fallback migrations/retirements
   └──> E4.6b final SelfConsistentFieldFull loop deletion
+
+C2-C4 + C8 + E4.6a + E4.6b ──> C9 final TensorLike/ModuleLike purge
 
 E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
 B5/B6a ──> F0 training invariant
@@ -2185,8 +2228,8 @@ Recommended sequence:
 - E4.4a potential representation (done); E4.4b Fock representation (done);
 - E4.5a dynamic damping and eager compatibility (done); E4.5b production routing
   (done);
-- E4.6a batch cull/restore cleanup (deferred until E6b/E7 retire the legacy
-  production batch route);
+- E4.6a batch cull/restore cleanup (deferred until E6b retires the legacy
+  production batch route after the batch-critical E7 padding gate);
 - E4.6b legacy full-loop deletion (blocked on compatibility fallback migration
   or explicit retirement).
 
@@ -2194,7 +2237,12 @@ Recommended sequence:
 
 - never mix Node migration with physics changes.
 
-### PR E6: `vmap` only after the single-system path passes standalone transform tests.
+### PR E6a/E6b: `vmap` after the single-System path passes standalone transform tests.
+
+E6a preserves the B1 conformer `vmap(system.singlepoint, ...)` call over one
+fixed System. E6b adds mixed-System stacking/composition and owns production
+batch-route migration; its route is authoritative after the batch-critical E7
+padding gate passes.
 
 Each PR description must state:
 
@@ -2255,7 +2303,7 @@ Before claiming G1/G2 architecture complete:
 - D3 forward-mode blocker fixed;
 - E4 functional SCF;
 - E3 required derivative modes pass;
-- E6 conformer `vmap` passes;
+- E6a conformer `vmap` passes;
 - no cross-system derivative blocks.
 
 ## Node gate

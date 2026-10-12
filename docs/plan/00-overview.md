@@ -176,12 +176,12 @@ grads = torch.func.grad(loss)(params)
 | Removed | Replaced by | Package |
 | --- | --- | --- |
 | `TensorLike`, `ModuleLike`, `_clone_tensorlike` | `Node` | TC |
-| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | single-system core plus `vmap` | E6 |
+| `batch_mode` 0/1/2, shape-based mode guessing, per-entry driver loops | B1 conformer `vmap(system.singlepoint)` (E6a) and stacked mixed-System `vmap` (E6b) | E6a/E6b; legacy batch mode remains until E6b production migration |
 | `CalculatorCache`, `@cdec.cache`, `opts.cache`, `store_*` flags | result object | B5 |
 | `Component._cache`, `_cachevars`, `cache_is_latest`, `cache_enable`/`disable`, `update`, `reset` | per-call values, `replace()` | B6 |
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
 | Electric field as a mutable component, `update_efield`, `requires_efield*` decorators | fields as inputs | B7 |
-| `IndexHelper.cull`/`restore`, cache `cull`/`restore` | masked SCF loop | E4 |
+| culling in the functional single-System SCF path | fixed-shape masked loop | E4; legacy batch cull/restore remains until E6b migration and E4.6a cleanup |
 | per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2 |
 | Calculator mixins (analytical, autograd, numerical) | property functions | B8 |
 | Vendored xitorch implicit SCF | decided in E0 | E3 |
@@ -194,7 +194,7 @@ grads = torch.func.grad(loss)(params)
 | --- | --- | --- | --- |
 | T0 Baseline | `01-T0-baseline.md` | immediately | reference data, derivative status matrix, performance profile, known issues |
 | TB Evaluation API | `02-TB-evaluation-api.md` | after T0.11 | model/system/result, result object, no caches, fields as inputs, property functions |
-| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after E4 | `Node` in tad-mctc, all containers migrated, `TensorLike` deleted |
+| TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | Core values migrated to `Node`; C9 scaffold deletion waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
 | TD Performance | `06-TD-performance.md` | after E4/E6 | compiled step and derivatives, size buckets, conditional optimisations |
@@ -233,39 +233,51 @@ graph LR
   T0R --> E1
   B3a --> E1
   B6a & B4 --> E4
-  E4 --> B6b
+  E4 --> B6bcore[B6b-core]
   E0 & E1 & E4 --> E3
   B3a & B4 --> E2
-  E2 & E4 & C8 & E1 --> E6
+  B6bcore --> C5
+  C5 --> C6 & C7
+  C6 & C7 & B5 --> C8
+  E4 & B6bcore & E2 --> TF[private fixed-trip boundary under B1 system.singlepoint]
+  TF --> E6a
+  B6bcore & E2 & E1 --> E6a
+  E6a & B3 & C8 & E2 & E4 --> E6bimpl[E6b mixed-System implementation]
+  E6bimpl --> E7batch[E7 batch-critical padding gate]
+  T03[T0.3 padded-operation safety cases] --> E7batch
+  E6bimpl & E7batch --> E6broute[E6b production batch route authoritative]
+  E6broute --> E46a[E4.6a batch cull/restore cleanup]
+  E46a --> E46b[E4.6b all remaining FULL fallback cleanup]
+  fallbacks[Remaining fallback migrations or retirements] --> E46b
+  C2 & C3 & C4 & C8 & E46a & E46b --> C9
   B7 --> B8a
   B8a & E3 --> B8b & E8
-  B6b & C5 --> C6 & C7
-  C6 & C7 & B5 --> C8 --> C9
   B5 & B6a --> F0
   T0R --> T012[T0.12 refocc fix] --> B3a
   B8b & C9 & E8 & D1 & D2 --> F1 --> F2a --> F2b --> F2d
   F2c --> F2d
   E3 --> F2d --> F2e
-  C1b & B6b & E3 --> F3 --> F4
-  E4 & E6 --> D1
+  C1b & B6bcore & E3 --> F3 --> F4
+  E4 & E6a --> D1
   E3 --> D2
   T08G --> D1
-  T08G --> E6
-  F2d & E6 --> D3
+  T08G --> E6a
+  F2d & E6b --> D3
 ```
 
 C1 and C1b are completed prerequisites (tad-mctc 0.9.1) and no longer graph
 nodes; E5 is completed. B3 is split into B3a (done) and B3b (open), see
 `02-TB-evaluation-api.md`. The old "all of B, C, D, E precede F1" path is not
 the only training validation: F0 (an early training invariant) runs as soon
-as B5 and B6a exist.
+as B5 and B6a exist. For the detailed E4.6/E6 dependency split and the B1
+conformer API implementation boundary, see `07-current-state-and-execution-plan.md`.
 
 ### Critical paths per goal
 
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8b → E8 (B8a after B7) |
-| G2 | T0.8 (CPU done, GPU open) → B3a → E2 → E4 → E6a → E6 (with C8 for stacked mixed batches) → D1 |
+| G2 | T0.8 (CPU done, GPU open) → B3a → E2 → E4 → E6a conformers (B1 `system.singlepoint` contract) → E6b mixed batches (C8) → D1 |
 | G3 | T0.9 → T0.12 → B3a → B5/B6a → F0 (early invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
@@ -283,8 +295,8 @@ justifies two releases.
 | Milestone | Gate |
 | --- | --- |
 | Structural-core milestone | B2-B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced |
-| Transform milestone | E0/E1/E3/E4/E6/E8 acceptance; known-wrong G1 baseline cases resolved |
-| Pytree milestone | C5-C9; System stacking and model partitioning work; TensorLike removed |
+| Transform milestone | E0/E1/E3/E4/E6a conformer and E6b mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
+| Pytree milestone | C5-C8 core migration and stacking; final C9 `TensorLike`/`ModuleLike` purge follows E4.6a/E4.6b legacy retirement |
 | Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |
 
 The transitional `Model/System` layout is not a public API promise. Do not
