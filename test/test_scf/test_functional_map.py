@@ -355,37 +355,46 @@ def _persistent_identity_snapshot(system) -> tuple[object, ...]:
         system.d4sc_interaction,
         system.generalized_born_interaction,
     )
-    identities = tuple(id(value) for value in roots)
-    tensors: list[tuple[int, torch.Tensor, bool]] = []
+    tensor_state: list[tuple[torch.Tensor, torch.Tensor, bool]] = []
     seen: set[int] = set()
     for root in roots:
         for tensor in _tensor_leaves(root, seen):
-            tensors.append((id(tensor), tensor.clone(), tensor.requires_grad))
-    return identities, tuple(tensors)
+            tensor_state.append(
+                (tensor, tensor.detach().clone(), tensor.requires_grad)
+            )
+    # Strong references make this an actual identity check and prevent id reuse.
+    return roots, tuple(tensor_state)
 
 
 def _assert_persistent_identity_unchanged(
     system, before: tuple[object, ...]
 ) -> None:
     after = _persistent_identity_snapshot(system)
-    before_ids, before_tensors = before
-    after_ids, after_tensors = after
-    assert after_ids == before_ids
+    before_roots, before_tensors = before
+    after_roots, after_tensors = after
+    assert len(after_roots) == len(before_roots)
+    for actual, expected in zip(after_roots, before_roots):
+        assert actual is expected
     assert len(after_tensors) == len(before_tensors)
-    for (actual_id, actual, actual_grad), (
-        expected_id,
+    for (actual, actual_value, actual_grad), (
         expected,
+        expected_value,
         expected_grad,
     ) in zip(after_tensors, before_tensors):
-        assert actual_id == expected_id
+        assert actual is expected
         assert actual.requires_grad == expected_grad
         assert actual_grad == expected_grad
-        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        torch.testing.assert_close(
+            actual_value, expected_value, rtol=0.0, atol=0.0
+        )
 
 
 def _assert_pairwise_distinct(values: tuple[object, ...]) -> None:
-    identities = [id(value) for value in values]
-    assert len(identities) == len(set(identities))
+    assert all(
+        left is not right
+        for index, left in enumerate(values)
+        for right in values[index + 1 :]
+    )
 
 
 def _assert_map_result_equal(actual, expected) -> None:
@@ -400,6 +409,23 @@ def _assert_map_result_equal(actual, expected) -> None:
         "orbital_energy",
     ):
         _assert_tensor_equal(getattr(actual, name), getattr(expected, name))
+
+    actual_fermi = actual.fermi_status
+    expected_fermi = expected.fermi_status
+    if actual_fermi is None:
+        assert expected_fermi is None
+    else:
+        assert expected_fermi is not None
+        for name in (
+            "converged",
+            "residual",
+            "invalid_temperature",
+            "too_many_electrons",
+            "electron_count_ok",
+        ):
+            _assert_tensor_equal(
+                getattr(actual_fermi, name), getattr(expected_fermi, name)
+            )
 
     for name in ("mono", "dipole", "quad"):
         actual_value = getattr(actual.charges, name)
@@ -1587,7 +1613,6 @@ def test_b6a_functional_interaction_family_matrix(
         auto_int_level=False,
     )
     system = model.setup(case.system.numbers)
-    fresh_system = model.setup(case.system.numbers)
 
     class_by_name = {
         cls.__name__: cls for cls in _FUNCTIONAL_SCF_INTERACTION_TYPES
@@ -1681,10 +1706,12 @@ def test_b6a_functional_interaction_family_matrix(
         gradients = torch.autograd.grad(projection, grad_variables)
         assert all(torch.isfinite(gradient).all() for gradient in gradients)
         cache = data[interaction.label]
-        return result, projection, gradients, data, cache
+        if family == "ES3":
+            assert current_system.es3_setup is not None
+            assert cache.hd is current_system.es3_setup.hubbard_derivs
+        return result, projection, gradients, data, cache, current_system
 
     before = _persistent_identity_snapshot(system)
-    shared_data_ids = {id(tensor) for tensor in _tensor_leaves(system)}
 
     if family in ("ElectricField", "ElectricFieldGrad"):
         assert (
@@ -1699,6 +1726,7 @@ def test_b6a_functional_interaction_family_matrix(
             field_only_b = evaluate(system, positions_a, field_b)
             geometry_only_b = evaluate(system, positions_b, field_a)
             a_again = evaluate(system, positions_a, field_a)
+            fresh_system = model.setup(case.system.numbers)
             fresh_a = evaluate(fresh_system, positions_a, field_a)
             assert not torch.equal(a[4].vat, field_only_b[4].vat)
             assert not torch.equal(a[4].vdp, field_only_b[4].vdp)
@@ -1714,6 +1742,7 @@ def test_b6a_functional_interaction_family_matrix(
                 system, positions_b, field_grad=field_grad_a
             )
             a_again = evaluate(system, positions_a, field_grad=field_grad_a)
+            fresh_system = model.setup(case.system.numbers)
             fresh_a = evaluate(
                 fresh_system, positions_a, field_grad=field_grad_a
             )
@@ -1731,6 +1760,7 @@ def test_b6a_functional_interaction_family_matrix(
         a = evaluate(system, positions_a)
         geometry_b = evaluate(system, positions_b)
         a_again = evaluate(system, positions_a)
+        fresh_system = model.setup(case.system.numbers)
         fresh_a = evaluate(fresh_system, positions_a)
         changed_runs = (geometry_b,)
         if expected_data_behavior == "geometry":
@@ -1763,9 +1793,28 @@ def test_b6a_functional_interaction_family_matrix(
     _assert_pairwise_distinct(tuple(item[4] for item in evaluations))
 
     for item in evaluations:
-        cache_tensor_ids = {id(tensor) for tensor in _tensor_leaves(item[4])}
-        if family != "ES3":
-            assert not cache_tensor_ids & shared_data_ids
+        cache_tensors = _tensor_leaves(item[4])
+        current_system = item[5]
+        persistent_tensors = _tensor_leaves(current_system)
+        shared = tuple(
+            tensor
+            for tensor in cache_tensors
+            if any(tensor is persistent for persistent in persistent_tensors)
+        )
+        if family == "ES3":
+            assert current_system.es3_setup is not None
+            assert len(shared) == 1
+            assert shared[0] is current_system.es3_setup.hubbard_derivs
+        else:
+            assert shared == ()
+
+    if family == "ES3":
+        assert system.es3_setup is not None
+        assert fresh_system.es3_setup is not None
+        assert (
+            fresh_system.es3_setup.hubbard_derivs
+            is not system.es3_setup.hubbard_derivs
+        )
     _assert_persistent_identity_unchanged(system, before)
 
 

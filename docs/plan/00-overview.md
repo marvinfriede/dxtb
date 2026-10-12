@@ -254,7 +254,7 @@ graph LR
   B3a --> B5
   B5 --> B6a & B7
   B5 & B4 --> B6aSCF[B6a-SCF-core: completed SCF-only state-removal subset]
-  B6aSCF --> B6aSCFval[B6a-SCF-validation: per-family matrix complete]
+  B6aSCF --> B6aSCFval[B6a-SCF-validation: validated per-family matrix]
   T0R --> E11[E1.1 RepulsionAG complete]
   B3a --> E12[E1.2 CoulombMatrixAG/ES2 complete]
   T0R --> E13[E1.3 DFT-D3/tad-dftd3 forward-mode blocker]

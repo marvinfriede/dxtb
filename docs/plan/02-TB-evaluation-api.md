@@ -234,14 +234,16 @@ and energy locally, and does not mutate the component or cache. Those legacy
 setup/cache objects still need B6a migration; their separate forward-mode
 blocker belongs to E1.3.
 
-**B6a-SCF-validation (complete):** a parameterized isolated-family matrix
-proves each of the seven exact functional SCF interaction families' input
-dependencies, raw output parity, gradient history, call-data identity, and
-persistent-state identity. It passed in all five supported environments; the
-supporting family-specific evidence and exact commands are recorded in
-`07-current-state-and-execution-plan.md`. This retrospective validation does
-not change E4core's accepted implementation dependency or close broader B6a's
-legacy-shaped DFT-D3 setup/cache migration.
+**B6a-SCF-validation (complete):** the parameterized isolated-family matrix
+constructs its fresh-System oracle after reused-System history and retains
+strong references for persistent identity and value checks. It passes on all
+five supported environments. The large supporting run encountered
+intermittent PySCF native-loader errors that were reproduced on the pinned
+parent as the same undefined-symbol failure family; exact candidate nodes pass
+in isolation. See `07-current-state-and-execution-plan.md` for the run counts
+and node identities. This retrospective validation does not change E4core's
+accepted implementation dependency or close broader B6a's legacy-shaped
+DFT-D3 setup/cache migration.
 
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.
