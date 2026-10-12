@@ -388,9 +388,7 @@ def run_functional_full_eager(
         return EagerFullResult(route, None, legacy)
 
     guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
-    legacy_engine_overrides = bool(args) or any(
-        key in kwargs for key in ("fwd_options", "bck_options", "eigen_options")
-    )
+    legacy_engine_overrides = bool(args) or bool(kwargs)
     route = resolve_full_scf_route(
         config,
         interactions,

@@ -154,7 +154,14 @@ def test_negative_temperature_uses_legacy_eager_behavior(mixer: int) -> None:
 
 @pytest.mark.parametrize(
     "override",
-    ["eigen_options", "fwd_options", "bck_options", "positional"],
+    [
+        "eigen_options",
+        "fwd_options",
+        "bck_options",
+        "unexpected_option",
+        "solver_options",
+        "positional",
+    ],
 )
 def test_full_engine_overrides_remain_legacy_owned(
     monkeypatch: pytest.MonkeyPatch, override: str
@@ -208,6 +215,48 @@ def test_full_engine_overrides_remain_legacy_owned(
         assert forwarded_args[3] is marker
     else:
         assert forwarded_kwargs[override] is options
+
+
+@pytest.mark.parametrize("key", ["unexpected_option", "solver_options"])
+@pytest.mark.parametrize("runner", ["production", "adapter"])
+def test_arbitrary_full_kwargs_preserve_legacy_typeerror(
+    monkeypatch: pytest.MonkeyPatch, key: str, runner: str
+) -> None:
+    """Arbitrary FULL keywords reach legacy and are never silently dropped."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
+        setup_functional=False,
+    )
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("nonempty FULL kwargs cannot enter functional SCF")
+
+    monkeypatch.setattr(
+        functional_eager, "run_prepared_functional_full", unexpected
+    )
+    call = (
+        scf_iterator.solve
+        if runner == "production"
+        else run_functional_full_eager
+    )
+    with pytest.raises(
+        TypeError,
+        match=rf"unexpected keyword argument '{key}'",
+    ):
+        call(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+            case.integrals,
+            case.refocc,
+            **{key: object()},
+        )
 
 
 def test_legacy_engine_options_are_retained_by_full_engine() -> None:

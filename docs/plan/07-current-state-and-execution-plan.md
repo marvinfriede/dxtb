@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 legacy-loop/culling cleanup remains open. |
+| E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 cleanup is deferred while production fallback routes still depend on the legacy full engine. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -982,9 +982,10 @@ inside the transitional eigensolver without map or interaction plumbing; it
 is the already-defined E3 spectral contract issue. E3 still owns the spectral
 derivative correction.
 
-E4 remains partial until E4.6 removes the obsolete full-mode loop/culling
-machinery after downstream parity is secured. Production FULL routing for
-eligible single-System calls is handled by the later E4.5b package below.
+The legacy full solver is no longer the ordinary eligible single-System
+production route, but remains an intentional compatibility/fallback engine.
+E4 remains partial while those fallback owners depend on it. E4.6 cleanup is
+sequenced after the remaining batch and compatibility migrations below.
 
 ## E4.1 — functional simple solver (done; production-routed by E4.5b)
 
@@ -1019,7 +1020,8 @@ composition; a real fixed-System charge-guess vmap is also covered.
 At the E4.1 milestone this implementation was an internal parallel path;
 `Calculator`, `System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`,
 and implicit mode were unchanged. Production FULL routing was integrated later
-by E4.5b. E4 remains partial only until no-culling legacy cleanup in E4.6.
+by E4.5b. E4 remains partial while E4.6 cleanup is blocked by remaining
+legacy fallback ownership.
 E3 still owns the transitional spectral
 derivative discrepancy; its test now attributes mode selection to explicit
 eigensolver branches without requiring the discrepancy to remain nonzero.
@@ -1385,10 +1387,31 @@ Single-System dynamic damping is characterized in E4.5a. Legacy batch-only
 GFN2 auto-Fock/culling behavior remains deferred to E6/E7 and must not leak into
 this resolver.
 
-## E4.6 Legacy loop/culling deletion (open)
+## E4.6 Legacy cleanup (blocked/deferred)
 
-After production parity is established, remove the old iteration loop and
-cull/restore machinery. Do not implement this before E4.5 parity.
+The legacy full solver remains required by current production fallbacks. Do
+not delete `SelfConsistentFieldFull` or its loop while any of these consumers
+remain:
+
+| Current owner | Prerequisite before removal |
+| --- | --- |
+| Batch fallback and batch cull/restore | E6/E7 must migrate batch execution away from `SelfConsistentFieldFull`. |
+| Custom `Interaction` subclasses | Define a pure extension protocol or an explicit compatibility policy. |
+| Negative electronic temperature | Make a global configuration-policy decision. |
+| Negative Fermi `maxiter` | Make a global configuration-policy decision. |
+| Legacy `fwd_options`, `bck_options`, `eigen_options`, `*args`, and `**kwargs` | Migrate their semantics or explicitly retire the accepted API. |
+| Missing/malformed integral inputs | Decide validation ownership and preserve the selected error contract. |
+
+Split the work by dependency:
+
+```text
+E4.6a — remove batch cull/restore only after E6/E7 migrate batch execution
+E4.6b — delete the remaining legacy full loop only after every fallback above
+         is migrated, globally rejected, or explicitly retired
+```
+
+The cull/restore machinery is still used by the legacy batch route; do not
+remove it while batch FULL calls remain legacy-owned.
 
 ## Functional solver loop contract
 
@@ -2036,8 +2059,9 @@ Recommended sequence:
 - E4.4a potential representation (done); E4.4b Fock representation (done);
 - E4.5a dynamic damping and eager compatibility (done); E4.5b production routing
   (done);
-- E4.6 fixed-shape cleanup and legacy loop/cull/restore deletion after parity
-  (open).
+- E4.6a batch cull/restore cleanup (deferred until E6/E7 migrate batch calls);
+- E4.6b legacy full-loop deletion (blocked on compatibility fallback migration
+  or explicit retirement).
 
 ### PR C5+: Node migration from leaves upward
 
