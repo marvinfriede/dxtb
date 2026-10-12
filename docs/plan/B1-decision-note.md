@@ -152,10 +152,14 @@ arguments too, so `d/d chrg` works with the fractional electron count of #271.
    retained libcint outer-loop compatibility path.
 
 The temporary `System.batch_mode` used by the legacy Calculator during the
-migration is not part of this contract. Remove it from the new core before
-E6a; any separately isolated legacy batch adapter may retain batch state until
-E6broute retires the mixed-System route after its correctness and activation
-gates pass. E6a conformer mapping does not delete mixed-System entry loops.
+migration is transitional legacy metadata, not part of the public/core
+batching contract. E6a must not branch on, infer semantics from, or otherwise
+depend on this field for the public fixed-System conformer `vmap` path; E6a
+does not require B3b. B3b removes `batch_mode` from the final System layout
+before C8b freezes that layout and E6bimpl stacks mixed Systems. Any separately
+isolated legacy batch adapter may retain batch state until E6broute retires the
+mixed-System route after its correctness and activation gates pass. E6a
+conformer mapping does not delete mixed-System entry loops.
 
 **Decision.** A batched call with one composition and many geometries (the
 common CREST case) uses `setup(numbers)` once and then the conformer call in

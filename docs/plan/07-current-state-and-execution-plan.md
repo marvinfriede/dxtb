@@ -38,7 +38,7 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; remaining masks/index mappings, transform-critical gathers, mutable integral container, and transitional System fields remain. |
+| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. Remaining work includes masks/index mappings, transform-critical gathers, `batch_mode`/`dd`, and broader B6a's built-in DFT-D3 numbers-only setup/cache migration from `classical_cache`. Final B3b closure waits for that existing broader B6a work; B6b-core and E3.0 do not. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
@@ -301,7 +301,7 @@ with:
 
 Consequences:
 
-- remove `System.model` before C8b;
+- `System.model` has been removed; retain this as a completed B3b item;
 - stacking Systems does not duplicate complete parameter tables;
 - setup remains the single gateway from model parameters to per-system data;
 - after an optimizer update, call `model.setup(numbers)` again rather than expecting a previously created System to reflect new parameter values.
@@ -348,6 +348,9 @@ Document them as scheduled for removal.
   and ALPB;
 - [x] E2-core setup-owned PyTorch `PairPlan` used by overlap, dipole, and
   quadrupole builders.
+- [x] remove the complete `Model` (`System.model`) from the final core System;
+- [x] remove the live mutable integral container and establish explicit
+  `integral_setup`/`h0_setup` values.
 
 **Remaining B3b contract:**
 
@@ -356,13 +359,18 @@ Document them as scheduled for removal.
 - [ ] move remaining transform-critical parameter-to-element gathers into
   setup where they are structural setup work; any retained fixed-shape tensor
   gather must be intentionally documented and tested;
-- [ ] remove the final live mutable integral container from `System`;
-- [ ] remove transitional final-System fields such as `model`, `batch_mode`,
-  `dd`, and other legacy-only mutable objects before C8b freezes the layout.
+- [ ] remove transitional `System.batch_mode` and `System.dd` from the final
+  layout before C8b freezes it;
+- [ ] under broader B6a, migrate exact built-in DFT-D3 numbers-only data out
+  of `ClassicalListCache`/`DispersionD3.get_cache()` into explicit setup data,
+  so final built-in stackable Systems do not depend on `classical_cache` for
+  DFT-D3 evaluation. This does not require arbitrary custom classical
+  extensions to become stackable; those remain under E6b compatibility policy.
 
-B3b can be completed incrementally through B4/E1/B6. B3a, not full B3, was
-the prerequisite for B5. Mark B3 complete only when every remaining item is
-closed.
+Final B3b closure depends on broader B6a's built-in DFT-D3 setup/cache
+migration. B6b-core and E3.0 remain independent of that migration. B3a, not
+full B3, was the prerequisite for B5. Mark B3 complete only when every
+remaining item is closed.
 
 ---
 
@@ -2000,25 +2008,31 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 
 ## C8b Model/System stackability
 
-C8b follows B3b, B6b-core, C5, C6, C7, and B2. B3b must first establish the
-final System layout, including removal of transitional ownership such as
-`model`, `batch_mode`, `dd`, live mutable integrals, and legacy Calculator
-state. C8b migrates that already-correct layout to stackable Nodes; it does
-not own setup/per-call physics refactoring. Its stackability is required for
+C8b follows final B3b, B6b-core, C5, C6, C7, and B2. Final B3b establishes the
+layout, including removal of transitional `batch_mode`/`dd`, and the broader
+B6a migration of built-in DFT-D3 numbers-only data out of `classical_cache`.
+The complete Model and live mutable integral container have already been
+removed; `integral_setup` and `h0_setup` are established. C8b migrates that
+already-correct built-in layout to stackable Nodes; it does not own
+setup/per-call physics refactoring or require arbitrary legacy custom
+classical extensions to become stackable. Its stackability is required for
 E6b mixed composition, not E6a mapping over one fixed System; Result pytree
 support is established separately by C8a.
 
 Before conversion, ensure the dataclass layouts already match the target architecture.
 
-Specifically remove from final System:
+Before C8b, complete the remaining final-System migration:
 
 ```text
-model
 batch_mode
 dd
-live mutable integrals
-legacy Calculator cache/list state
+the built-in DFT-D3 numbers-only data currently held through classical_cache
 ```
+
+The complete Model and live mutable integral container are already absent;
+`integral_setup` and `h0_setup` are setup-owned values. Arbitrary custom
+legacy classical extensions remain outside the stackable built-in core and
+follow the E6b compatibility policy.
 
 Then convert Model/System to stackable Nodes while retaining C8a's Result
 pytree representation.
@@ -2554,14 +2568,15 @@ B3a + B4 ──> E2-core fixed-shape single-System PairPlan/integral path
 B5 + E4core ──> B5.6 ──> C8a Result pytree
 B4 + B5 + B6a-SCF-core ──> E4core
 B6a-SCF-core + E4core + E4.5b ──> B6b-core ──> C5 ──> C6/C7
-B3b + C5/C6/C7 + B2 ──> C8b
+broader B6a built-in DFT-D3 setup/cache migration ──> final B3b closure
+final B3b + C5/C6/C7 + B2 ──> C8b
 B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
 
 B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
   + B5.6 + C8a ──> E6a conformer vmap ──> E6c1-W2
 B1 batch API + E4.5b ──> E6bcompat-policy (may run early)
-E6a + B3b + C5/C6/C7/C8b + E2-core + E4core
+E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
   + E6bcompat-policy + defined padding ──> E6bimpl mixed-System composition
 E6bimpl ──> E6bcompat validation
 E6bimpl + batch-critical E7 ──> E7 batch-safety gate
@@ -2590,8 +2605,8 @@ E3 acceptance waits for full E1.
 B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
-finally tested. E6a + B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not wait for C5/C8b or
-E4.6a.
+finally tested. E6a + final B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not
+wait for B3b, C5/C8b, or E4.6a.
 
 The recommended next runtime package is **E3.0 — diagnosis-only spectral
 derivative / NO2 preflight** on the already functional single-System path. It
@@ -2741,16 +2756,17 @@ Do not:
 
 Before calling the new structural core complete:
 
-- B2, final B3b core layout, B4, B5, B6a-SCF-core,
-  B6a-SCF-validation, B6b-core, B7, and B8a complete;
+- B2, final B3b core layout (including broader B6a's built-in DFT-D3
+  setup/cache migration), B4, B5, B6a-SCF-core, B6a-SCF-validation,
+  B6b-core, B7, and B8a complete;
 - no calculator/core caches;
 - no mutable external fields;
 - Result immutable;
 - core evaluation is System + explicit inputs -> Result;
 - T0.2 reproduced.
 
-This milestone does not imply completion of broader B6a DFT-D3 setup/cache
-migration, E4.6a/E4.6b, or C9 repository-wide compatibility cleanup.
+This milestone does not imply completion of E4.6a/E4.6b or C9 repository-wide
+compatibility cleanup.
 
 ## Transform gate
 

@@ -106,13 +106,19 @@ coverage is preserved.
 ES2, ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, and ALPB.
 The setup-owned PyTorch `PairPlan` is complete under E2-core. Remaining work is
 limited to numbers-only masks/index mappings needed by transformed kernels,
-transform-critical parameter-to-element gathers that belong in setup, the
-final live mutable integral container, and transitional System fields such as
-`model`, `batch_mode`, `dd`, and other legacy-only mutable objects before C8b
-freezes the layout.
+transform-critical parameter-to-element gathers that belong in setup, and the
+transitional `System.batch_mode` and `System.dd` fields before C8b freezes the
+layout. The complete Model and live mutable integral container are already
+removed from System; `integral_setup` and `h0_setup` are established.
 
-B3b is completed incrementally through B4/E1/B6; it is not a prerequisite for
-B5, which depends on the completed B3a structural split.
+Final B3b closure also requires broader B6a's built-in DFT-D3 setup/cache
+migration: move its numbers-only data out of `ClassicalListCache`/
+`DispersionD3.get_cache()` into explicit setup data so the final built-in
+stackable System does not depend on `classical_cache` for DFT-D3 evaluation.
+This does not require arbitrary custom classical extensions to become
+stackable; those remain under the explicit legacy compatibility policy. The
+migration belongs to broader B6a, not a new package. B6b-core and E3.0 do not
+wait for it. B3a, not full B3, was the prerequisite for B5.
 
 The complete Model must not be retained by the final System. Gathered setup
 tensors retain the gradient path to Model parameters.
@@ -382,7 +388,7 @@ DFT-D3 is active). **Size.** L.
 | B1 | Decision note | T0.11 | S |
 | B2 | Frozen configuration | B1 | M |
 | B3a | Model/System structural split (done, transitional) | B1, B2 | done |
-| B3b | Remaining setup/per-call structural separation | B3a, B4/E1/B6 work as applicable | open |
+| B3b | Remaining setup/per-call structural separation, including broader B6a built-in DFT-D3 setup/cache migration before final closure | B3a, B4/E1 and broader B6a DFT-D3 work as applicable | open |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3a, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
