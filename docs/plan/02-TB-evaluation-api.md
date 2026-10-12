@@ -234,16 +234,21 @@ and energy locally, and does not mutate the component or cache. Those legacy
 setup/cache objects still need B6a migration; their separate forward-mode
 blocker belongs to E1.3.
 
-**B6a-SCF-validation (complete):** the parameterized isolated-family matrix
-constructs its fresh-System oracle after reused-System history and retains
-strong references for persistent identity and value checks. It passes on all
-five supported environments. The large supporting run encountered
-intermittent PySCF native-loader errors that were reproduced on the pinned
-parent as the same undefined-symbol failure family; exact candidate nodes pass
+**B6a-SCF-validation (complete):** the seven-row parameterized isolated-family
+matrix constructs its fresh-System oracle after reused-System history and
+checks reused-System state both before and after fresh-System setup/evaluation.
+The separate all-seven integration stress test also passes. The focused B6a
+selection reports 8 passes per environment (40 passes across the five
+supported environments).
+Strong references are retained for persistent identity and value checks. The
+large supporting invocation reported an intermittent PySCF native-loader
+error from `libcvhf.so`; the same undefined-symbol failure family was
+reproduced on pre-package base
+`3f41f7f280a3c6df364cf7639360ca602b945118`, and the exact candidate node passes
 in isolation. See `07-current-state-and-execution-plan.md` for the run counts
-and node identities. This retrospective validation does not change E4core's
-accepted implementation dependency or close broader B6a's legacy-shaped
-DFT-D3 setup/cache migration.
+and node identities. This retrospective
+validation does not change E4core's accepted implementation dependency or
+close broader B6a's legacy-shaped DFT-D3 setup/cache migration.
 
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.

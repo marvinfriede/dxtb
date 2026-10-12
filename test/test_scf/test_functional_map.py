@@ -1726,6 +1726,7 @@ def test_b6a_functional_interaction_family_matrix(
             field_only_b = evaluate(system, positions_a, field_b)
             geometry_only_b = evaluate(system, positions_b, field_a)
             a_again = evaluate(system, positions_a, field_a)
+            _assert_persistent_identity_unchanged(system, before)
             fresh_system = model.setup(case.system.numbers)
             fresh_a = evaluate(fresh_system, positions_a, field_a)
             assert not torch.equal(a[4].vat, field_only_b[4].vat)
@@ -1742,6 +1743,7 @@ def test_b6a_functional_interaction_family_matrix(
                 system, positions_b, field_grad=field_grad_a
             )
             a_again = evaluate(system, positions_a, field_grad=field_grad_a)
+            _assert_persistent_identity_unchanged(system, before)
             fresh_system = model.setup(case.system.numbers)
             fresh_a = evaluate(
                 fresh_system, positions_a, field_grad=field_grad_a
@@ -1760,6 +1762,7 @@ def test_b6a_functional_interaction_family_matrix(
         a = evaluate(system, positions_a)
         geometry_b = evaluate(system, positions_b)
         a_again = evaluate(system, positions_a)
+        _assert_persistent_identity_unchanged(system, before)
         fresh_system = model.setup(case.system.numbers)
         fresh_a = evaluate(fresh_system, positions_a)
         changed_runs = (geometry_b,)

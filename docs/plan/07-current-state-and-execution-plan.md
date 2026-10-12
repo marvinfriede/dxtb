@@ -37,7 +37,7 @@ Current state:
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
-| B6a-SCF-validation | done | Fresh-System ordering and strong-reference identity assertions pass in all five environments; the intermittent PySCF loader failure family was reproduced on the pinned parent. Broader B6a remains partial for the separate DFT-D3 setup/cache work. |
+| B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for the separate DFT-D3 setup/cache work. |
 | B6             | partial                         | Broader B6a remains open for the legacy-shaped DFT-D3 outer classical setup/cache path; B6b-core and the separately owned legacy purge remain open. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
@@ -840,23 +840,71 @@ the active GFN2 ES2/ES3 setup instances. Separate setup suites cover atom- and
 shell-resolved builder branches and parameter connectivity: `test_es2_pure.py`
 includes `shell_resolved=False/True`, while `test_es3_setup.py` covers
 atom/shell resolution and GFN2 shell-scale gradients. There is no dedicated
-ES2 setup file. The final isolated-family matrix passed 8 tests in each of
-the five supported environments. The large candidate supporting rerun passed
-622 tests, skipped 2, and retained 20 existing XFAILs; two cases failed while
+ES2 setup file. The seven-row parameterized family matrix passed, and the
+separate all-seven integration stress test passed, on each of the five
+supported environments (8 passes total per focused selection). The exact
+focused command was:
+
+```bash
+python -m pytest -vv -n logical --dist worksteal -rxX \
+  --junitxml=/tmp/b6a-presnapshot-<environment>.xml \
+  test/test_scf/test_functional_map.py \
+  -k 'test_b6a_functional_interaction_family_matrix or test_b6a_functional_interaction_boundary_is_history_independent'
+```
+
+The primary-environment supporting rerun used the worktree based on candidate
+SHA `28e85ee8a8cb6ad944151393aa743181c851216c` plus the pre-fresh assertion
+change in this follow-up. It ran on Python 3.14/Torch 2.14.1 with this exact
+command:
+
+```bash
+set -o pipefail
+export OMP_NUM_THREADS=1
+/tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1/bin/python -m pytest -vv \
+  -n logical --dist worksteal -rxX --durations=30 \
+  --junitxml=/tmp/b6a-final-supporting.xml \
+  test/test_scf/test_functional_map.py \
+  test/test_scf/test_functional_eager_compatibility.py \
+  test/test_calculator/test_singlepoint_core.py \
+  test/test_calculator/test_field_inputs.py \
+  test/test_coulomb/test_es2_pure.py \
+  test/test_coulomb/test_es2_atom.py \
+  test/test_coulomb/test_es2_general.py \
+  test/test_coulomb/test_es2_shell.py \
+  test/test_coulomb/test_es3_setup.py \
+  test/test_coulomb/test_aes2_setup.py \
+  test/test_classical/test_dispersion/test_d4sc_setup.py \
+  test/test_classical/test_dispersion/test_d4sc.py \
+  test/test_classical/test_dispersion/test_d4sc_grad.py \
+  test/test_solvation \
+  test/test_interaction/test_list.py \
+  test/test_baseline/test_components.py \
+  2>&1 | tee /tmp/b6a-final-supporting.log
+rc=${PIPESTATUS[0]}
+echo "pytest exit code: $rc"
+```
+
+This supporting invocation reported 623 passed, 2 skipped, 20 expected XFAILs,
+and 1 PySCF native-loader error (exit code 1). The error occurred while
 loading PySCF `libcvhf.so` with undefined symbol
-`int2e_spsp1spsp2_spinor`:
-`test/test_solvation/test_setup.py::test_exact_mutation_rejected_and_duplicates_rejected`
-and
+`int2e_spsp1spsp2_spinor` in
+`test/test_solvation/test_setup.py::test_exact_mutation_rejected_and_duplicates_rejected`.
+A prior candidate run also reported this loader family in
 `test/test_classical/test_dispersion/test_d4sc.py::test_batch[MB16_43_01-LiH-dtype1]`.
-Both exact candidate nodes passed in a focused rerun. The same loader failure
-family was reproduced on the pinned parent in
+The supporting command used Python 3.14/Torch 2.14.1 and 128 logical xdist
+workers. The exact solvation node passed in a focused rerun. The same loader
+failure family was reproduced on pre-package comparison SHA
+`3f41f7f280a3c6df364cf7639360ca602b945118` in
 `test/test_classical/test_dispersion/test_d4sc_setup.py::test_sparse_d4_parameters_are_preserved[s9]`
 (616 passed, 2 skipped, 20 XFAILs, 1 loader failure); another parent rerun was
 clean (617 passed, 2 skipped, 20 XFAILs). A serial diagnostic also hit the
 same loader error, after which tests in that process cascaded on the failed
-PySCF import; this was not treated as an acceptance run. The exact NO2
-reference subset passed 8 tests and retained its 2 expected third-derivative
-XFAILs. The cross-revision reproduction and isolated candidate passes
+PySCF import; this was not treated as an acceptance run. The GFN2-only NO2
+reference selection was run with `python -m pytest -vv -n logical --dist
+worksteal -rxX --junitxml=/tmp/b6a-no2-reference.xml
+test/test_baseline/test_reference.py -k 'NO2 and gfn2'`; it passed 8 cases
+and retained 2 expected third-derivative XFAILs. The
+cross-revision reproduction and isolated candidate passes
 attribute these intermittent native-loader errors to the shared environment,
 not the interaction-matrix change. No reference, tolerance, or xfail marker
 changed. This retrospective validation does not alter E4core's accepted
