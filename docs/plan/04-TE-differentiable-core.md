@@ -84,12 +84,15 @@ acceptance.
 
 ## E1 Full transform support
 
-**Goal.** All terms required by the canonical PyTorch transform path support
-the required reverse-mode derivatives through third order, forward-mode
-derivatives, and `vmap`.
-dxtb-local transform-hostile custom shortcuts are removed or made compliant;
-external dependencies required by the supported physics path satisfy the
-same transform acceptance at their component boundary.
+**Goal.** All interaction/classical terms owned by E1 and required by the
+canonical PyTorch transform path support reverse-mode derivatives through
+third order, forward-mode derivatives, and `vmap`.
+
+dxtb-local transform-hostile term shortcuts are removed or made compliant.
+External term dependencies owned by E1, currently `tad-dftd3` under E1.3,
+must satisfy the corresponding transform contract at their component
+boundary. Spectral, eigensolver, occupation/Fermi, and SCF differentiation
+defects remain owned by E3.0/E3.1 and are not E1 completion criteria.
 
 **Status.** E1.1 `RepulsionAG` is complete and its local shortcut is removed.
 E1.2 `CoulombMatrixAG`/ES2 is complete; the shortcut is removed and the plain
@@ -137,7 +140,9 @@ reverse-third-order, `jvp`, `jacfwd`, `vmap`, and parameter-gradient contract,
 including the trainable `s9=0` gradient where applicable; the T0 component
 status is updated; and no previously passing component regresses. No
 dxtb-local first-order-only custom derivative shortcut may remain on the
-authoritative transform path.
+authoritative transform path. Full E1 completion does not assert that the
+generalized eigensolver, Fermi/occupation behavior, or complete SCF higher
+derivatives are correct; those remain separately owned by E3.
 
 **Needs.** T0.4. **Unblocks.** E3.0 through the completed E1.1/E1.2 subset;
 full E3, E6a, E8, and D2 still require full E1. **Size.** M.
