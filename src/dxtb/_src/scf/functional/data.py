@@ -28,13 +28,9 @@ from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.components.interactions.coulomb.multipole import AES2
-from dxtb._src.components.interactions.coulomb.secondorder import ES2
-from dxtb._src.components.interactions.coulomb.thirdorder import ES3
-from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
-from dxtb._src.components.interactions.field.efield import ElectricField
-from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
-from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
+from dxtb._src.components.interactions.list import (
+    _FUNCTIONAL_SCF_INTERACTION_TYPES,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
@@ -342,19 +338,10 @@ def functional_scf_interactions_eligible(
     interactions: InteractionList,
 ) -> tuple[bool, str]:
     """Check exact interaction types before functional setup begins."""
-    supported = (
-        ES2,
-        ES3,
-        AES2,
-        DispersionD4SC,
-        GeneralizedBorn,
-        ElectricField,
-        ElectricFieldGrad,
-    )
     unsupported = [
         component
         for component in interactions.components
-        if type(component) not in supported
+        if type(component) not in _FUNCTIONAL_SCF_INTERACTION_TYPES
     ]
     names = ", ".join(
         f"{type(component).__module__}.{type(component).__qualname__}"

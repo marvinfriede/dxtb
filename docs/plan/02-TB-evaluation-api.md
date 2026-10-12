@@ -234,16 +234,14 @@ and energy locally, and does not mutate the component or cache. Those legacy
 setup/cache objects still need B6a migration; their separate forward-mode
 blocker belongs to E1.3.
 
-**B6a-SCF-validation (complete):**
-`test/test_scf/test_functional_map.py::test_b6a_functional_interaction_boundary_is_history_independent`
-provides the focused seven-interaction matrix, including fresh call data,
-repeated calls, A/B/A geometry and field history, fresh-System output/gradient
-parity, and unchanged persistent setup/component state. The exact whitelist
-and absence of outer classical DFT-D3 from functional SCF inputs are asserted.
-Existing family-specific tests supplement that matrix; the evidence and
-validation commands are recorded in `07-current-state-and-execution-plan.md`.
-This does not change E4core's accepted implementation dependency or close
-broader B6a's legacy-shaped DFT-D3 setup/cache migration.
+**B6a-SCF-validation (complete):** a parameterized isolated-family matrix
+proves each of the seven exact functional SCF interaction families' input
+dependencies, raw output parity, gradient history, call-data identity, and
+persistent-state identity. It passed in all five supported environments; the
+supporting family-specific evidence and exact commands are recorded in
+`07-current-state-and-execution-plan.md`. This retrospective validation does
+not change E4core's accepted implementation dependency or close broader B6a's
+legacy-shaped DFT-D3 setup/cache migration.
 
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.

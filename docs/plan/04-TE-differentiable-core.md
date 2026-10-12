@@ -521,11 +521,11 @@ and route activation distinct: E6bimpl can be completed and measured first;
 E6broute proceeds only after the E6c1 W2/W3 clearances and batch-critical E7
 gate.
 
-**E6bcompat-policy (before E6bimpl scope is frozen).** Decide retain or
-retire for every currently supported legacy FULL batch-facing behavior listed
-in the compatibility inventory below. This policy determines what E6bimpl
-must replace; it cannot first be decided during post-implementation
-validation.
+**E6bcompat-policy (before E6bimpl scope is frozen).** Use the accepted B1
+public batch API contract together with E4.5b's legacy FULL dispatch contract
+to decide retain or retire for every currently supported legacy FULL
+batch-facing behavior listed below. This policy determines what E6bimpl must
+replace; it cannot first be decided during post-implementation validation.
 
 **E6bcompat validation.** Validate the policy selected above. For each
 retained behavior, prove the replacement preserves its supported values and
@@ -542,7 +542,7 @@ gate, not an E6c/G2 performance or no-loop criterion.
 | Standard PyTorch FULL batch | Reaches packed legacy FULL and its batch-aware integral/SCF path | Canonical stacked/padded `vmap`; E6bimpl | Compare supported values, status, and public batch shape with legacy. |
 | Standard libcint batch | Reaches packed legacy FULL and driver batch setup | Outer independent single-System composition if retained; E6bimpl | Preserve supported eager/reference values and API behavior, or explicitly retire batch API. |
 | Custom/unsupported interaction batch | Legacy FULL receives the extension and preserves its current behavior/error | Outer legacy single-System FULL calls if retained; E6bimpl composition over the E4.5b fallback | Prove extension behavior is preserved, or document explicit batch retirement/error. |
-| FULL batch with positional extras, `*args`, `**kwargs`, `fwd_options`, `bck_options`, `eigen_options`, or equivalent overrides | Arguments/options are forwarded unchanged to the legacy engine | Forward unchanged to each single-System legacy FULL call if retained | Assert the override reaches the legacy engine; otherwise document the retired API/error. |
+| FULL batch with `unexpected_option`, `solver_options`, any other unknown/nonempty `**kwargs`, positional engine args, `fwd_options`, `bck_options`, or `eigen_options` | E4.5b forwards all nonempty `args`/`kwargs` unchanged to the legacy constructor; unknown keywords raise its characterized `TypeError` family | Forward every argument/keyword unchanged to each retained single-System legacy FULL call; do not filter, normalize, or silently discard arbitrary kwargs | Test batch+`unexpected_option`, batch+`solver_options`, positional extra, and each named option. Unsupported keywords preserve the characterized exception family; supported options preserve constructor semantics, or document explicit API retirement/error. |
 | Negative configured electronic temperature | Legacy warning order and eager exception family/message are authoritative | Outer legacy single-System FULL calls while policy remains supported | Compare warning order and exception/message family, or explicitly retire batch behavior. |
 | Negative Fermi `maxiter` | Legacy Fermi result/error behavior is authoritative | Outer legacy single-System FULL calls while policy remains supported | Preserve characterized result/error, or explicitly retire batch behavior. |
 | Negative outer SCF `maxiter` | Batch is legacy-owned before the functional-only E0 rejection | Preserve characterized per-entry legacy behavior if retained | Record the actual batch result/error, or explicitly retire batch behavior. |
@@ -669,7 +669,7 @@ Libcint remains subject to its separate eager/reference regression contract.
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
 | E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2-core, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
-| E6bcompat-policy | Retain/retire policy for each legacy FULL batch-facing behavior | E4core/E4.5b compatibility contract | S; freezes E6bimpl scope |
+| E6bcompat-policy | Retain/retire policy for each legacy FULL batch-facing behavior using both the public batch API and legacy dispatch contracts | B1 batch API contract, E4.5b legacy FULL compatibility contract | S; freezes E6bimpl scope |
 | E6bimpl | PyTorch mixed-System construction, stack/vmap, correctness; replacements required by E6bcompat-policy | E6a, B3b, E4core, C5/C8b, defined padding, E2-core, E6bcompat-policy | L; unblocks E6c1 W3, batch-critical E7, and E6bcompat validation |
 | E6bcompat | Validate retained batch replacements or explicit API retirement/migration/error behavior | E6bcompat-policy, E6bimpl | S; required before E6broute |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |

@@ -37,7 +37,7 @@ Current state:
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
-| B6a-SCF-validation | done | Focused seven-interaction A/B/A, gradient, call-data freshness, and setup-snapshot matrix passed in all five supported environments; family-specific, compatibility, solvation, D4SC, component, and reference regressions passed on Python 3.14/Torch 2.14.1. |
+| B6a-SCF-validation | done | The old all-seven case remains an integration stress test. The isolated seven-row matrix passed on all five supported environments; supporting focused regressions passed, with two PySCF load failures in the combined run individually passing on exact-node rerun. |
 | B6             | partial                         | Broader B6a remains open for the legacy-shaped DFT-D3 outer classical setup/cache path; B6b-core and the separately owned legacy purge remain open. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
@@ -802,27 +802,51 @@ additional direct and physical-path coverage.
 | ElectricFieldGrad | `test/test_calculator/test_field_inputs.py::test_system_field_inputs_are_fresh_and_history_independent`, `test_field_call_data_vmap_matches_loop`, `test_system_field_jvp_and_jacfwd_match_reverse`, `test_field_gradient_geometry_mixed_derivative`; focused matrix below | Field-gradient call-data freshness, mapped builder parity, and derivative connectivity | Field-gradient and geometry A/B/A outputs/gradients, fresh-System parity, and setup/component snapshots pass |
 | Shared functional inputs | `test/test_scf/test_functional_map.py::test_map_inputs_are_not_mutated_and_values_are_frozen`; `test_functional_eligibility_rejects_custom_mutable_interactions`; `test_functional_map_has_no_legacy_stateful_hooks`; `test/test_scf/test_functional_eager_compatibility.py::test_custom_interaction_routes_to_legacy_and_keeps_extension_behavior`; focused matrix below | Functional-input immutability, custom-interaction exclusion and legacy routing, and absence of legacy stateful hooks | Exact seven-family whitelist, call-local data, unchanged persistent setup/component state, and absence of outer DFT-D3 in the SCF interaction inputs pass |
 
-The complete matrix is
-`test/test_scf/test_functional_map.py::test_b6a_functional_interaction_boundary_is_history_independent`.
-It checks fresh call-local objects and tensor values, repeated-call parity,
-geometry/field A/B/A history, reused-versus-fresh System outputs and gradients,
-and unchanged persistent System/setup/component snapshots. Geometry-dependent
-call data is explicitly N/A for ES3; its setup-derived data remains equal.
-The shared-boundary assertions check the exact seven-family whitelist,
-unsupported custom-interaction legacy routing, and no outer DFT-D3 in
-functional SCF interaction data. The new matrix passed in each supported
-environment: Python 3.10/Torch 2.6, Python 3.11/Torch 2.8, Python
-3.12/Torch 2.11, Python 3.12/Torch 2.13, and Python 3.14/Torch 2.14.
+`test/test_scf/test_functional_map.py::test_b6a_functional_interaction_boundary_is_history_independent`
+remains the all-seven integration stress test. The actual matrix is
+`test/test_scf/test_functional_map.py::test_b6a_functional_interaction_family_matrix`,
+parameterized independently for ES2, ES3, AES2, D4SC, GeneralizedBorn,
+ElectricField, and ElectricFieldGrad. Each row isolates its interaction in
+`setup_scf_inputs`/`scf_map`, records its input owners and dependency behavior,
+and compares raw SCFMapResult tensor leaves (not only a scalar norm) across
+A, B, A-again, and fresh-System A. A deterministic nonuniform projection is
+used only for gradient checks. ElectricField and ElectricFieldGrad each have
+separate field-only and geometry-only perturbations; ES3 geometry-dependent
+data is explicitly N/A and its setup-derived tensor is stable. Call-data/cache
+objects are pairwise fresh across A, B, A-again, and fresh-System A, except
+that ES3 may share its documented setup-derived tensor leaf. Persistent
+System/setup/component objects and tensor leaves are checked for identity,
+value, and `requires_grad` preservation. The test also imports the canonical
+internal whitelist and requires exactly the seven intended exact classes;
+it checks custom-extension rejection and verifies that an outer DFT-D3
+component is absent from functional SCF inputs. The final focused matrix
+passed all seven isolated rows and the integration test on Python 3.10/Torch
+2.6, Python 3.11/Torch 2.8, Python 3.12/Torch 2.11, Python 3.12/Torch 2.13,
+and Python 3.14/Torch 2.14.1.
 
-On Python 3.14/Torch 2.14, the affected interaction-family validation also
-passed: `test_functional_map.py` (36 passed), `test_functional_eager_compatibility.py`
-(97 passed), `test_singlepoint_core.py` (59 passed), `test_field_inputs.py`
-(20 passed), `test_solvation` (59 passed), D4SC tests (70 passed), interaction
-tests (45 passed), and the component baseline (160 passed, 20 existing
-XFAILs). The NO2 reference subset passed with 18 passed and the two existing
-GFN2 third-derivative XFAILs. No reference, tolerance, or xfail marker changed.
-This retrospective validation does not alter E4core's accepted implementation
-dependency or close broader B6a's legacy-shaped DFT-D3 setup/cache migration.
+The acceptance command set is recorded explicitly: `test/test_scf/test_functional_map.py`,
+`test/test_scf/test_functional_eager_compatibility.py`,
+`test/test_calculator/test_singlepoint_core.py`,
+`test/test_calculator/test_field_inputs.py`,
+`test/test_coulomb/test_es2_pure.py` plus the ES2 atom/general/pure/shell
+coverage, `test/test_coulomb/test_es3_setup.py`,
+`test/test_coulomb/test_aes2_setup.py`,
+`test/test_classical/test_dispersion/test_d4sc_setup.py` and the D4SC SCF/grad
+tests, `test/test_solvation/test_setup.py`, `test/test_solvation/test_grad.py`,
+`test/test_solvation/test_alpb.py`, `test/test_interaction/test_list.py`, the
+custom-extension cases in `test/test_scf/test_functional_eager_compatibility.py`,
+the component baseline, and the NO2 reference subset. There is no dedicated
+ES2 setup file; `test_es2_pure.py` contains the setup-builder and transform
+tests. The combined supporting run passed 622 tests, skipped 2, and retained
+20 existing XFAILs, but twice encountered two PySCF `libcvhf.so`
+undefined-symbol load errors in `test_exact_mutation_rejected_and_duplicates_rejected`
+and `test_aes2_subclass_remains_a_cache_driven_extension`. Both exact nodes
+passed when rerun alone; the error did not reproduce outside the large
+concurrent invocation. The dedicated NO2 reference subset passed 18 tests with
+its two existing GFN2 third-derivative XFAILs. No reference, tolerance, or
+xfail marker changed. This retrospective validation does not alter E4core's
+accepted implementation dependency or close broader B6a's legacy-shaped
+DFT-D3 setup/cache migration.
 
 Neither milestone replaces B6b-core's stronger immutable-container/purity
 work, nor closes broader B6a's legacy-shaped DFT-D3 setup/cache migration.
@@ -1555,7 +1579,7 @@ remain:
 
 | Current owner | Prerequisite before removal |
 | --- | --- |
-| Every legacy FULL batch-facing behavior | E6bcompat-policy decides retain/retire before E6bimpl scope is frozen; its inventory is above. E6bimpl provides the selected replacements, and E6bcompat validates retained values/API or explicit retirement/migration/error behavior. This covers standard PyTorch and libcint batches, custom/unsupported interactions, nonempty FULL args/kwargs and engine options, negative SCF `maxiter`, negative temperature, negative Fermi `maxiter`, and missing/malformed `hcore` or overlap. E6broute requires E6bcompat plus batch-critical E7 and E6c1 W2/W3; E6a mapping alone is insufficient. |
+| Every legacy FULL batch-facing behavior | E6bcompat-policy decides retain/retire before E6bimpl scope is frozen; its inventory is above. E6bimpl provides the selected replacements, and E6bcompat validates retained values/API or explicit retirement/migration/error behavior. This covers standard PyTorch and libcint batches, custom/unsupported interactions, `unexpected_option`, `solver_options`, any other nonempty/unknown `**kwargs`, positional engine extras, `fwd_options`, `bck_options`, `eigen_options`, negative SCF `maxiter`, negative temperature, negative Fermi `maxiter`, and missing/malformed `hcore` or overlap. For each retained legacy single-System call, forward `*args`/`**kwargs` unchanged: do not filter, normalize, or silently discard them. Preserve characterized `TypeError` behavior for unsupported options and constructor semantics for supported options. E6bcompat tests batch+`unexpected_option`, batch+`solver_options`, positional extra, and each named option. E6broute requires E6bcompat plus batch-critical E7 and E6c1 W2/W3; E6a mapping alone is insufficient. |
 | Custom `Interaction` subclasses | Define a pure extension protocol or an explicit compatibility policy. |
 | Negative electronic temperature | Make a global configuration-policy decision. |
 | Negative Fermi `maxiter` | Make a global configuration-policy decision. |
@@ -2107,19 +2131,28 @@ authoritative PyTorch path. Delete driver-internal batch construction/physics
 loops in both PyTorch and libcint drivers; this does not prohibit a separate
 outer libcint compatibility API loop over independent single-System calls.
 
-E6bcompat-policy is a required step before E6bimpl scope is frozen. Inventory
-every legacy FULL batch-facing case currently routed to the packed legacy
-engine: standard PyTorch and libcint batches; custom/unsupported interactions;
-positional extras, `*args`, `**kwargs`, and `fwd_options`/`bck_options`/
-`eigen_options`; negative configured electronic temperature; negative Fermi
-`maxiter`; negative outer SCF `maxiter`; and missing or malformed
-`hcore`/overlap. For each, record current
+E6bcompat-policy is a required step before E6bimpl scope is frozen. It consumes
+the accepted B1 public batch API contract and E4.5b legacy FULL dispatch
+contract. Inventory every legacy FULL batch-facing case currently routed to
+the packed legacy engine: standard PyTorch and libcint batches;
+custom/unsupported interactions; unknown/arbitrary keywords including
+`unexpected_option`, `solver_options`, and any other nonempty `**kwargs`;
+positional engine extras; `fwd_options`, `bck_options`, and `eigen_options`;
+negative configured electronic temperature; negative Fermi `maxiter`;
+negative outer SCF `maxiter`; and missing or malformed `hcore`/overlap. For
+each, record current
 behavior, whether it is retained or retired as a batch API, its replacement
 owner, an acceptance test, and the migration/error contract if retired.
 Retained compatibility may use an outer composition of independent
 single-System legacy FULL calls until E4.6b decides the final single-System
-fallback policy. This does not make E6broute responsible for resolving those
-final fallback semantics.
+fallback policy. Forward every nonempty `*args`/`**kwargs` unchanged to each
+retained single-System legacy call; never filter, normalize, or silently
+discard arbitrary keywords. Preserve the characterized `TypeError` family for
+unsupported keywords and the constructor semantics of supported options. Tests
+cover batch+`unexpected_option`, batch+`solver_options`, a positional extra,
+and batch+each of `fwd_options`, `bck_options`, and `eigen_options`. This does
+not make E6broute responsible for resolving final single-System fallback
+semantics.
 
 E6bimpl owns PyTorch mixed-System construction, stacking/vmap composition,
 and correctness, plus any replacement composition required by
@@ -2437,13 +2470,13 @@ B1 public system.singlepoint + B6b-core + E2-core + private transform boundary
   └──> E6a conformer vmap over one fixed System (no C5/C8b or E4.6a)
 
 C5/C6/C7 + B3b + C8b + E2-core/E4core + defined padding
-E4core/E4.5b compatibility contract ──> E6bcompat-policy retain/retire decisions
+B1 batch API + E4.5b legacy FULL compatibility contract
+  └──> E6bcompat-policy retain/retire decisions before E6bimpl scope freezes
 E6bcompat-policy
   └──> E6bimpl PyTorch mixed-System construction/stack-vmap + required replacement paths
           ├──> E6bcompat validation of retained paths or retirement contracts
           └──> batch-critical E7 padding-safety gate
 
-E4core ──> E6bcompat-policy: decide batch retain/retire inventory before implementation
 E6a + T0.8 W2 ──> E6c1 W2 conformer performance clearance
 E6bimpl + T0.8 W3 ──> E6c1 W3 mixed-System performance clearance
 E6c1 W2/W3 clearances + E6bimpl + E6bcompat-policy + E6bcompat

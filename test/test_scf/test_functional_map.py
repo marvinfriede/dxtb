@@ -42,7 +42,10 @@ from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
-from dxtb._src.components.interactions.list import InteractionListCache
+from dxtb._src.components.interactions.list import (
+    InteractionListCache,
+    _FUNCTIONAL_SCF_INTERACTION_TYPES,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
@@ -307,12 +310,122 @@ def _tensor_leaves(
     for cls in type(value).__mro__:
         declared = getattr(cls, "__slots__", ())
         slots.extend((declared,) if isinstance(declared, str) else declared)
-    return tuple(
-        leaf
-        for name in dict.fromkeys(slots)
-        if name not in ("__dict__", "__weakref__") and hasattr(value, name)
-        for leaf in _tensor_leaves(getattr(value, name), seen)
+    if slots:
+        return tuple(
+            leaf
+            for name in dict.fromkeys(slots)
+            if name not in ("__dict__", "__weakref__") and hasattr(value, name)
+            for leaf in _tensor_leaves(getattr(value, name), seen)
+        )
+    if hasattr(value, "__dict__"):
+        return _tensor_leaves(vars(value), seen)
+    return ()
+
+
+def _persistent_identity_snapshot(system) -> tuple[object, ...]:
+    """Record persistent object/tensor identity and tensor state."""
+    roots = (
+        system.ihelp,
+        system.interactions,
+        *system.interactions.components,
+        system.classicals,
+        *system.classicals.components,
+        system.es2_setup,
+        system.es3_setup,
+        system.aes2_setup,
+        system.d4sc_setup,
+        system.generalized_born_setup,
+        system.integral_setup,
+        system.h0_setup,
+        system.classical_cache,
+        *system.classical_cache.values(),
+        system.repulsion_setup,
+        system.repulsion_classical,
+        system.srb_setup,
+        system.srb_classical,
+        system.d4_setup,
+        system.d4_classical,
+        system.ies_setup,
+        system.ies_classical,
+        system.halogen_setup,
+        system.halogen_classical,
+        system.es2_interaction,
+        system.es3_interaction,
+        system.aes2_interaction,
+        system.d4sc_interaction,
+        system.generalized_born_interaction,
     )
+    identities = tuple(id(value) for value in roots)
+    tensors: list[tuple[int, torch.Tensor, bool]] = []
+    seen: set[int] = set()
+    for root in roots:
+        for tensor in _tensor_leaves(root, seen):
+            tensors.append((id(tensor), tensor.clone(), tensor.requires_grad))
+    return identities, tuple(tensors)
+
+
+def _assert_persistent_identity_unchanged(
+    system, before: tuple[object, ...]
+) -> None:
+    after = _persistent_identity_snapshot(system)
+    before_ids, before_tensors = before
+    after_ids, after_tensors = after
+    assert after_ids == before_ids
+    assert len(after_tensors) == len(before_tensors)
+    for (actual_id, actual, actual_grad), (
+        expected_id,
+        expected,
+        expected_grad,
+    ) in zip(after_tensors, before_tensors):
+        assert actual_id == expected_id
+        assert actual.requires_grad == expected_grad
+        assert actual_grad == expected_grad
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+
+
+def _assert_pairwise_distinct(values: tuple[object, ...]) -> None:
+    identities = [id(value) for value in values]
+    assert len(identities) == len(set(identities))
+
+
+def _assert_map_result_equal(actual, expected) -> None:
+    """Compare every stable tensor output from two raw physical maps."""
+    for name in (
+        "mapped_x",
+        "hamiltonian",
+        "density",
+        "emo",
+        "coefficients",
+        "occupation",
+        "orbital_energy",
+    ):
+        _assert_tensor_equal(getattr(actual, name), getattr(expected, name))
+
+    for name in ("mono", "dipole", "quad"):
+        actual_value = getattr(actual.charges, name)
+        expected_value = getattr(expected.charges, name)
+        if actual_value is None:
+            assert expected_value is None
+        else:
+            assert expected_value is not None
+            _assert_tensor_equal(actual_value, expected_value)
+
+    for name in ("mono", "dipole", "quad"):
+        actual_value = (
+            None
+            if actual.driving_potential is None
+            else getattr(actual.driving_potential, name)
+        )
+        expected_value = (
+            None
+            if expected.driving_potential is None
+            else getattr(expected.driving_potential, name)
+        )
+        if actual_value is None:
+            assert expected_value is None
+        else:
+            assert expected_value is not None
+            _assert_tensor_equal(actual_value, expected_value)
 
 
 @pytest.mark.parametrize(
@@ -1238,7 +1351,7 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
 
 
 def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
-    """All seven functional interactions use fresh data without state mutation."""
+    """All seven interactions together exercise the functional-map boundary."""
     case = _prepare_case(GFN2_XTB)
     numbers = case.system.numbers
     d3_case = _prepare_case(GFN1_XTB)
@@ -1402,6 +1515,258 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
             ), f"{label} call data did not respond to changed geometry/input"
 
     _assert_snapshot_equal(persistent_snapshot(system), before)
+
+
+_B6A_FAMILY_ROWS = (
+    pytest.param("ES2", "positions", "geometry", id="es2"),
+    pytest.param("ES3", "positions", "static-setup", id="es3"),
+    pytest.param("AES2", "positions", "geometry", id="aes2"),
+    pytest.param("DispersionD4SC", "positions", "geometry", id="d4sc"),
+    pytest.param(
+        "GeneralizedBorn", "positions", "geometry", id="generalized-born"
+    ),
+    pytest.param(
+        "ElectricField",
+        "positions+field",
+        "geometry+field",
+        id="electric-field",
+    ),
+    pytest.param(
+        "ElectricFieldGrad",
+        "positions+field_grad",
+        "geometry+field_grad",
+        id="electric-field-grad",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "family,input_owners,expected_data_behavior", _B6A_FAMILY_ROWS
+)
+def test_b6a_functional_interaction_family_matrix(
+    family: str, input_owners: str, expected_data_behavior: str
+) -> None:
+    """Isolate each supported interaction's data, map, gradient, and state."""
+    expected_owners = {
+        "ES2": "positions",
+        "ES3": "positions",
+        "AES2": "positions",
+        "DispersionD4SC": "positions",
+        "GeneralizedBorn": "positions",
+        "ElectricField": "positions+field",
+        "ElectricFieldGrad": "positions+field_grad",
+    }
+    assert input_owners == expected_owners[family]
+    assert len(_FUNCTIONAL_SCF_INTERACTION_TYPES) == 7
+    assert set(_FUNCTIONAL_SCF_INTERACTION_TYPES) == {
+        ES2,
+        ES3,
+        AES2,
+        DispersionD4SC,
+        GeneralizedBorn,
+        ElectricField,
+        ElectricFieldGrad,
+    }
+
+    case = _prepare_case(GFN2_XTB)
+    d3_case = _prepare_case(GFN1_XTB)
+    d3_component = next(
+        item
+        for item in d3_case.system.classicals.components
+        if type(item) is DispersionD3
+    )
+    model = Model(
+        par=case.par,
+        config=case.system.config,
+        classical=(d3_component,),
+        interaction=(
+            GeneralizedBorn(
+                case.system.numbers, 78.9, device="cpu", dtype=torch.float64
+            ),
+        ),
+        auto_int_level=False,
+    )
+    system = model.setup(case.system.numbers)
+    fresh_system = model.setup(case.system.numbers)
+
+    class_by_name = {
+        cls.__name__: cls for cls in _FUNCTIONAL_SCF_INTERACTION_TYPES
+    }
+    interaction_type = class_by_name[family]
+
+    positions_a = case.positions
+    positions_b = positions_a.clone()
+    positions_b[1, 2] += 0.07
+    field_a = torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64)
+    field_b = field_a + torch.tensor([0.0003, 0.0002, -0.0001])
+    field_grad_a = torch.tensor(
+        [
+            [0.0001, 0.0003, -0.0002],
+            [-0.0001, 0.0002, 0.0004],
+            [0.0005, -0.0003, -0.0003],
+        ],
+        dtype=torch.float64,
+    )
+    field_grad_b = field_grad_a + torch.tensor(
+        [
+            [0.0002, -0.0001, 0.0003],
+            [0.0004, 0.0001, -0.0002],
+            [-0.0003, 0.0005, -0.0001],
+        ],
+        dtype=torch.float64,
+    )
+
+    def evaluate(current_system, positions, field=None, field_grad=None):
+        positions = positions.clone().requires_grad_(True)
+        if family == "ElectricField":
+            assert field is not None
+            interaction = ElectricField(field.clone().requires_grad_(True))
+            grad_variables = (positions, interaction.field)
+        elif family == "ElectricFieldGrad":
+            assert field_grad is not None
+            interaction = ElectricFieldGrad(
+                field_grad.clone().requires_grad_(True)
+            )
+            grad_variables = (positions, interaction.field_grad)
+        else:
+            interaction = next(
+                item
+                for item in current_system.interactions.components
+                if type(item) is interaction_type
+            )
+            grad_variables = (positions,)
+
+        interactions = InteractionList(interaction)
+        data = _interaction_data(current_system, positions, interactions)
+        integrals, _, _ = build_integral_matrices(
+            current_system.integral_setup,
+            current_system.h0_setup,
+            positions,
+            case.charge,
+        )
+        inputs = setup_scf_inputs(
+            case.system.numbers,
+            integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            interactions,
+            data,
+            current_system.ihelp,
+            current_system.config.scf,
+        )
+        assert functional_scf_interactions_eligible(interactions) == (True, "")
+        assert {type(item) for item in inputs.interactions.components} == {
+            interaction_type
+        }
+        assert any(
+            type(item) is DispersionD3
+            for item in current_system.classicals.components
+        )
+        assert len(data) == 1
+        result = scf_map(case.x, inputs)
+
+        x_probe = torch.linspace(
+            0.17, 1.13, result.mapped_x.numel(), dtype=result.mapped_x.dtype
+        ).reshape_as(result.mapped_x)
+        h_probe = torch.linspace(
+            1.07,
+            0.13,
+            result.hamiltonian.numel(),
+            dtype=result.hamiltonian.dtype,
+        ).reshape_as(result.hamiltonian)
+        projection = (result.mapped_x * x_probe).sum() + (
+            result.hamiltonian * h_probe
+        ).sum()
+        gradients = torch.autograd.grad(projection, grad_variables)
+        assert all(torch.isfinite(gradient).all() for gradient in gradients)
+        cache = data[interaction.label]
+        return result, projection, gradients, data, cache
+
+    before = _persistent_identity_snapshot(system)
+    shared_data_ids = {id(tensor) for tensor in _tensor_leaves(system)}
+
+    if family in ("ElectricField", "ElectricFieldGrad"):
+        assert (
+            expected_data_behavior
+            == {
+                "ElectricField": "geometry+field",
+                "ElectricFieldGrad": "geometry+field_grad",
+            }[family]
+        )
+        if family == "ElectricField":
+            a = evaluate(system, positions_a, field_a)
+            field_only_b = evaluate(system, positions_a, field_b)
+            geometry_only_b = evaluate(system, positions_b, field_a)
+            a_again = evaluate(system, positions_a, field_a)
+            fresh_a = evaluate(fresh_system, positions_a, field_a)
+            assert not torch.equal(a[4].vat, field_only_b[4].vat)
+            assert not torch.equal(a[4].vdp, field_only_b[4].vdp)
+            assert not torch.equal(a[4].vat, geometry_only_b[4].vat)
+            _assert_tensor_equal(a[4].vdp, geometry_only_b[4].vdp)
+            changed_runs = (field_only_b, geometry_only_b)
+        else:
+            a = evaluate(system, positions_a, field_grad=field_grad_a)
+            field_only_b = evaluate(
+                system, positions_a, field_grad=field_grad_b
+            )
+            geometry_only_b = evaluate(
+                system, positions_b, field_grad=field_grad_a
+            )
+            a_again = evaluate(system, positions_a, field_grad=field_grad_a)
+            fresh_a = evaluate(
+                fresh_system, positions_a, field_grad=field_grad_a
+            )
+            for name in ("vat", "vdp", "vqp"):
+                assert not torch.equal(
+                    getattr(a[4], name), getattr(field_only_b[4], name)
+                )
+            for name in ("vat", "vdp"):
+                assert not torch.equal(
+                    getattr(a[4], name), getattr(geometry_only_b[4], name)
+                )
+            _assert_tensor_equal(a[4].vqp, geometry_only_b[4].vqp)
+            changed_runs = (field_only_b, geometry_only_b)
+    else:
+        a = evaluate(system, positions_a)
+        geometry_b = evaluate(system, positions_b)
+        a_again = evaluate(system, positions_a)
+        fresh_a = evaluate(fresh_system, positions_a)
+        changed_runs = (geometry_b,)
+        if expected_data_behavior == "geometry":
+            data_a = _tensor_leaves(a[4])
+            data_b = _tensor_leaves(geometry_b[4])
+            assert len(data_a) == len(data_b)
+            assert any(
+                not torch.equal(first, changed)
+                for first, changed in zip(data_a, data_b)
+            ), f"{family} call data did not respond to geometry alone"
+        else:
+            assert expected_data_behavior == "static-setup"
+            _assert_snapshot_equal(
+                _snapshot_tree(a[4]), _snapshot_tree(geometry_b[4])
+            )
+            assert a[4].hd is system.es3_setup.hubbard_derivs
+            assert geometry_b[4].hd is system.es3_setup.hubbard_derivs
+
+    _assert_map_result_equal(a[0], a_again[0])
+    _assert_map_result_equal(a[0], fresh_a[0])
+    for actual, expected in zip(a_again[2], a[2]):
+        _assert_tensor_equal(actual, expected)
+    for actual, expected in zip(fresh_a[2], a[2]):
+        _assert_tensor_equal(actual, expected)
+    for changed in changed_runs:
+        assert all(torch.isfinite(gradient).all() for gradient in changed[2])
+
+    evaluations = (a, *changed_runs, a_again, fresh_a)
+    _assert_pairwise_distinct(tuple(item[3] for item in evaluations))
+    _assert_pairwise_distinct(tuple(item[4] for item in evaluations))
+
+    for item in evaluations:
+        cache_tensor_ids = {id(tensor) for tensor in _tensor_leaves(item[4])}
+        if family != "ES3":
+            assert not cache_tensor_ids & shared_data_ids
+    _assert_persistent_identity_unchanged(system, before)
 
 
 def test_functional_map_has_no_legacy_stateful_hooks() -> None:

@@ -254,7 +254,7 @@ graph LR
   B3a --> B5
   B5 --> B6a & B7
   B5 & B4 --> B6aSCF[B6a-SCF-core: completed SCF-only state-removal subset]
-  B6aSCF --> B6aSCFval[B6a-SCF-validation: expanded interaction matrix complete]
+  B6aSCF --> B6aSCFval[B6a-SCF-validation: per-family matrix complete]
   T0R --> E11[E1.1 RepulsionAG complete]
   B3a --> E12[E1.2 CoulombMatrixAG/ES2 complete]
   T0R --> E13[E1.3 DFT-D3/tad-dftd3 forward-mode blocker]
@@ -278,7 +278,7 @@ graph LR
   E4core & B6bcore & E2core --> TF[private fixed-trip boundary under B1 system.singlepoint]
   TF & C8a --> E6a[E6a conformer vmap]
   B6bcore & E2core & E1 --> E6a
-  E4core --> E6bcompatpolicy[E6bcompat-policy: retain/retire legacy batch behavior]
+  B1 & E4core --> E6bcompatpolicy[E6bcompat-policy: retain/retire legacy batch behavior]
   E6a & B3b & C8b & E2core & E4core & E6bcompatpolicy --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
   E6bimpl --> E6bcompat[E6bcompat: validate retained replacements or explicit API retirement]
