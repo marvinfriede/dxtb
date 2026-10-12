@@ -4,7 +4,9 @@
 
 **Starting point.** See `07-current-state-and-execution-plan.md`.
 
-- Remaining custom autograd functions: `CoulombMatrixAG` and optional `RepulsionAG`; none has a `jvp` rule.
+- The dxtb-local `RepulsionAG` and `CoulombMatrixAG` shortcuts have been
+  removed under E1.1 and E1.2. The remaining full-E1 blocker is E1.3,
+  DFT-D3/`tad-dftd3` forward-mode support, which remains upstream-owned.
 - SCF: default mode unrolls all iterations (`SCF_MODE_FULL`); implicit modes use a vendored copy of xitorch (`scf/implicit/base.py`).
 - GFN2 multipole integrals exist in PyTorch (E5, done).
 - The PyTorch overlap uses the PairPlan builder (E2-core).
@@ -13,6 +15,8 @@
 ---
 
 ## E0 Decision note: SCF differentiation
+
+**Status: complete — decision fixed.**
 
 **Goal.** Decide, from measurements, how the SCF is differentiated. E0 records two numerical decisions and one ownership boundary:
 
@@ -24,7 +28,8 @@ E0c NO2 handling boundary (diagnosis in E3.0; any fix in E3.1)
 
 Changing the Lorentzian broadening parameter is not an acceptable resolution of E0b.
 
-E0 remains a hard design gate for G1.
+E0 is complete. Its accepted SCF differentiation and ownership decisions
+remain binding constraints for G1 and downstream E3 work.
 
 **Investigations (using the T0.3/T0.4 harness).**
 
@@ -39,9 +44,10 @@ E0 remains a hard design gate for G1.
 - SCF differentiation strategy for each order (unrolled, implicit, or mixed: implicit for the fixed point, unrolled where cheaper).
 - Whether xitorch is replaced.
 - E0b: how the eigensolver response at degeneracies and small gaps is handled (not by changing the broadening parameter).
-- E0c: NO2 remains an unresolved G1 correctness blocker; E3.0 owns diagnosis
-  and E3.1 owns any mathematical/spectral fix. E0 does not infer the cause or
-  change NO2 tolerances, references, or markers.
+- E0c's ownership decision is complete: the historical NO2 failures remain
+  unresolved; E3.0 owns diagnosis, and E3.1 owns any resulting mathematical
+  or spectral correction. E0 does not infer the cause or change NO2
+  tolerances, references, or markers.
 
 **Done when.** The note is agreed.
 
@@ -76,23 +82,30 @@ acceptance.
 
 ---
 
-## E1 Custom autograd functions
+## E1 Full transform support
 
 **Goal.** Every custom autograd function supports reverse mode to third order, forward mode and `vmap`; or is deleted.
 
-**Starting point.** `OverlapAG` and `EFunction` are already gone. Remaining dxtb-local shortcuts
-include `CoulombMatrixAG` and optional `RepulsionAG`; external blockers include
-tad-dftd3 and the generalized eigensolver path.
+**Status.** E1.1 `RepulsionAG` is complete and its local shortcut is removed.
+E1.2 `CoulombMatrixAG`/ES2 is complete; the shortcut is removed and the plain
+setup/builder path is authoritative. E1.3 DFT-D3/`tad-dftd3` forward-mode
+support remains open and blocked upstream. Full E1 remains partial.
 
-Prefer removal in favor of plain torch rather than adding custom rules unless
-profiling proves a need.
+`OverlapAG` and `EFunction` were also removed earlier. The following table
+records the disposition of the former local shortcuts and the remaining
+external blocker; removed classes are not candidates for new derivative rules.
 
-| Function | Location | Today |
-| --- | --- | --- |
-| `RepulsionAG` | `components/classicals/repulsion/rep.py` | `setup_context`, `generate_vmap_rule`, no `jvp`; optional |
-| `CoulombMatrixAG` | `components/interactions/coulomb/secondorder.py` | no `jvp`, no vmap rule |
+| Former shortcut/blocker | Current disposition |
+| --- | --- |
+| `RepulsionAG` | Removed under E1.1 |
+| `CoulombMatrixAG` | Removed under E1.2; plain setup/builder path is authoritative |
+| DFT-D3/`tad-dftd3` forward mode | Open under E1.3; blocked upstream |
 
-**Steps per function.**
+Prefer plain torch over custom rules for any still-active operation unless
+profiling and the transform contract justify a custom primitive. Apply these
+steps only to active operations; do not restore the removed local shortcuts.
+
+**Steps per active operation.**
 
 1. Measure plain-torch performance (autograd through the forward code) against the custom function, for first-order cost and memory (T0.8 workloads).
 2. If plain torch is within an agreed margin: delete the custom function.
@@ -657,8 +670,8 @@ Libcint remains subject to its separate eager/reference regression contract.
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| E0 | Decision note: SCF differentiation and NO2 ownership boundary (E0a/E0b/E0c) | T0.3, T0.4 | M |
-| E1 | Custom autograd functions | T0.4 | M |
+| E0 | Decision note: SCF differentiation and NO2 ownership boundary (done; E0a/E0b/E0c) | T0.3, T0.4 | M |
+| E1 | Full transform support: E1.1/E1.2 done; E1.3 DFT-D3 blocker remains | T0.4 | M |
 | E2-core | Fixed-shape single-System PairPlan/integral path | T0.2, B3a, B4 | L |
 | E2-legacy | Retire packed legacy driver's per-entry setup loop | E6broute | S |
 | E3.0 | Diagnosis-only spectral derivative / NO2 preflight | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
