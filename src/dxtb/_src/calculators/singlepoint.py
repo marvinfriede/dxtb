@@ -23,13 +23,14 @@ Single-system evaluation from explicit System and call inputs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import System
-from dxtb._src.calculators.result import Result
+from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
 from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
     dispersion_d4_energy,
@@ -65,7 +66,7 @@ from dxtb._src.components.interactions.solvation.alpb import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.timing import timer
-from dxtb._src.typing import Tensor
+from dxtb._src.typing import Any, Tensor
 
 __all__ = ["singlepoint"]
 
@@ -75,6 +76,60 @@ def _iteration_tensor(value: int | Tensor, like: Tensor) -> Tensor:
     if isinstance(value, Tensor):
         return value
     return torch.tensor(value, dtype=torch.int64, device=like.device)
+
+
+@dataclass(frozen=True, eq=False)
+class _SCFOutput:
+    """Common read-only view over the legacy and functional result contracts."""
+
+    energy: Tensor
+    fenergy: Tensor
+    charges: ChargeLike
+    density: Tensor
+    coefficients: Tensor
+    emo: Tensor
+    occupation: Tensor
+    potential: PotentialLike
+    hamiltonian: Tensor
+    iterations: Tensor
+    converged: Tensor | None
+    residual: Tensor | None
+
+
+def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
+    """Read SCF outputs once without copying functional tensors."""
+    from dxtb._src.scf.functional.eager import FunctionalCoreResult
+
+    if isinstance(result, FunctionalCoreResult):
+        return _SCFOutput(
+            energy=result.energy,
+            fenergy=result.fenergy,
+            charges=result.charges,
+            density=result.density,
+            coefficients=result.coefficients,
+            emo=result.emo,
+            occupation=result.occupation,
+            potential=result.potential,
+            hamiltonian=result.hamiltonian,
+            iterations=_iteration_tensor(result.iterations, like),
+            converged=result.converged,
+            residual=result.residual,
+        )
+
+    return _SCFOutput(
+        energy=result["energy"],
+        fenergy=result["fenergy"],
+        charges=result["charges"],
+        density=result["density"],
+        coefficients=result["coefficients"],
+        emo=result["emo"],
+        occupation=result["occupation"],
+        potential=result["potential"],
+        hamiltonian=result["hamiltonian"],
+        iterations=_iteration_tensor(result["iterations"], like),
+        converged=None,
+        residual=None,
+    )
 
 
 def _interaction_data(
@@ -426,26 +481,27 @@ def singlepoint(
         matrices,
         refocc,
     )
+    scf_output = _normalize_scf_output(scf_results, positions)
 
-    total_energy = (
-        classical_energy + scf_results["energy"] + scf_results["fenergy"]
-    )
+    total_energy = classical_energy + scf_output.energy + scf_output.fenergy
     return Result.snapshot(
         energy=total_energy,
-        scf=scf_results["energy"],
+        scf=scf_output.energy,
         classical=tuple(classical.items()),
-        fenergy=scf_results["fenergy"],
-        charges=scf_results["charges"],
-        density=scf_results["density"],
-        coefficients=scf_results["coefficients"],
-        emo=scf_results["emo"],
-        occupation=scf_results["occupation"],
-        potential=scf_results["potential"],
-        hamiltonian=scf_results["hamiltonian"],
+        fenergy=scf_output.fenergy,
+        charges=scf_output.charges,
+        density=scf_output.density,
+        coefficients=scf_output.coefficients,
+        emo=scf_output.emo,
+        occupation=scf_output.occupation,
+        potential=scf_output.potential,
+        hamiltonian=scf_output.hamiltonian,
         overlap=matrices.overlap,
         hcore=matrices.hcore,
         dipole_integrals=matrices.dipole,
         quadrupole_integrals=matrices.quadrupole,
         overlap_norm=overlap_norm,
-        iterations=_iteration_tensor(scf_results["iterations"], positions),
+        iterations=scf_output.iterations,
+        converged=scf_output.converged,
+        residual=scf_output.residual,
     )

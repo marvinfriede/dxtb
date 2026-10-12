@@ -25,8 +25,7 @@ import torch
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler, Result
 from dxtb._src.constants import labels
-from dxtb._src.scf import base as scf_base
-from dxtb._src.scf.mixer.simple import Simple
+from dxtb._src.scf.functional import solver as functional_solver
 
 from ..utils import get_param_module
 from .samples import samples
@@ -156,21 +155,21 @@ def test_full_mode_iteration_compatibility(
     energy: float,
     charges: list[float],
 ) -> None:
-    """Lock map-evaluation counts and raw final-map outputs for E4."""
+    """Lock production map counts and raw final-map outputs for E4."""
     counts = {"map": 0, "mixer": 0}
-    original_map: Callable = scf_base.iterations.iterate_charges
-    original_mixer: Callable = Simple.iter
+    original_map: Callable = functional_solver.scf_map
+    original_mixer: Callable = functional_solver.simple_mix
 
     def count_map(*args, **kwargs):
         counts["map"] += 1
         return original_map(*args, **kwargs)
 
-    def count_mixer(self, x_new, x_old=None):
+    def count_mixer(x_old, x_new, damp):
         counts["mixer"] += 1
-        return original_mixer(self, x_new, x_old)
+        return original_mixer(x_old, x_new, damp)
 
-    monkeypatch.setattr(scf_base.iterations, "iterate_charges", count_map)
-    monkeypatch.setattr(Simple, "iter", count_mixer)
+    monkeypatch.setattr(functional_solver, "scf_map", count_map)
+    monkeypatch.setattr(functional_solver, "simple_mix", count_mixer)
 
     sample = samples["H2O"]
     numbers = sample["numbers"].to(device="cpu")

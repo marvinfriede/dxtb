@@ -82,10 +82,7 @@ def test_scf_object_freed_without_gc(
     scp_mode: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    The SCF object (and with it everything it holds) is freed by reference
-    counting alone after forward, gradient and (double) backward.
-    """
+    """Functional FULL avoids an engine; implicit engines free after backward."""
     import gc
     import weakref
 
@@ -115,8 +112,11 @@ def test_scf_object_freed_without_gc(
         del e, g
         # the calculator caches results (and hence the graph) until reset
         calc.reset()
-        assert len(probes) == 1
-        assert probes[0]() is None
+        if mode == "implicit":
+            assert len(probes) == 1
+            assert probes[0]() is None
+        else:
+            assert probes == []
     finally:
         gc.enable()
 

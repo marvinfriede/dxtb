@@ -36,6 +36,7 @@ from .solver import (
     _project_potential_padding,
     _resolve_tolerance,
     _solve_map_control,
+    _solve_map_control_eager,
     _SolverOutcome,
     finalize_scf,
     finalize_scf_fock,
@@ -195,8 +196,10 @@ def _solve_map_anderson(
     settings: AndersonSettings,
     map_fn,
     state_projection: Callable[[Tensor], Tensor] | None = None,
+    *,
+    eager: bool = False,
 ) -> _SolverOutcome:
-    """Run the Anderson fixed-trip solver around a raw-map callback."""
+    """Run Anderson with transform-fixed or eager single-System control."""
 
     def transition(
         old: Tensor,
@@ -217,7 +220,8 @@ def _solve_map_anderson(
         )
         return mixed, next_state
 
-    return _solve_map_control(
+    controller = _solve_map_control_eager if eager else _solve_map_control
+    return controller(
         guess,
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,
@@ -232,10 +236,16 @@ def _solve_map_anderson(
 
 
 def solve_scf_anderson(
-    guess: Tensor, inputs: SCFInputs, settings: AndersonSettings
+    guess: Tensor,
+    inputs: SCFInputs,
+    settings: AndersonSettings,
+    *,
+    eager: bool = False,
 ) -> SCFSolveResult:
-    """Solve the single-System charge map with functional Anderson mixing."""
-    outcome = _solve_map_anderson(guess, settings, lambda x: scf_map(x, inputs))
+    """Solve charge mode with Anderson and selected eager/fixed control."""
+    outcome = _solve_map_anderson(
+        guess, settings, lambda x: scf_map(x, inputs), eager=eager
+    )
     return finalize_scf(
         outcome.map_result,
         inputs,
@@ -252,13 +262,16 @@ def solve_scf_potential_anderson(
     inputs: SCFInputs,
     layout: PotentialLayout,
     settings: AndersonSettings,
+    *,
+    eager: bool = False,
 ) -> SCFSolveResult:
-    """Solve the potential representation with functional Anderson mixing."""
+    """Solve potential mode with Anderson and selected eager/fixed control."""
     outcome = _solve_map_anderson(
         guess,
         settings,
         lambda x: potential_map(x, inputs, layout),
         state_projection=lambda x: _project_potential_padding(x, layout),
+        eager=eager,
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -273,11 +286,15 @@ def solve_scf_potential_anderson(
 
 
 def solve_scf_fock_anderson(
-    guess: Tensor, inputs: SCFInputs, settings: AndersonSettings
+    guess: Tensor,
+    inputs: SCFInputs,
+    settings: AndersonSettings,
+    *,
+    eager: bool = False,
 ) -> SCFSolveResult:
-    """Solve single-System Fock mode with functional Anderson mixing."""
+    """Solve Fock mode with Anderson and selected eager/fixed control."""
     outcome = _solve_map_anderson(
-        guess, settings, lambda x: fock_map(x, inputs)
+        guess, settings, lambda x: fock_map(x, inputs), eager=eager
     )
     return finalize_scf_fock(
         outcome.map_result,

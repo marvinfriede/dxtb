@@ -19,13 +19,21 @@
 from __future__ import annotations
 
 import inspect
+import importlib
 import sys
 from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
 
-from dxtb import Calculator, GFN1_XTB, ParamModule, labels
+from dxtb import (
+    Calculator,
+    GFN1_XTB,
+    GFN2_XTB,
+    OutputHandler,
+    ParamModule,
+    labels,
+)
 from dxtb._src.components.interactions.container import Charges, Potential
 from tad_mctc.exceptions import DeviceError, DtypeError
 from dxtb._src.calculators.config import Config
@@ -212,6 +220,451 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         assert not hasattr(value, "label")
         assert not hasattr(value, "reset")
         assert not hasattr(value, "nullify_padding")
+
+
+def test_default_full_singlepoint_uses_functional_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default FULL singlepoint bypasses the mutable legacy full engine."""
+    from dxtb._src.scf.functional.eager import FunctionalCoreResult
+    from dxtb._src.scf import unrolling
+
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    system = Model(par=ParamModule(GFN1_XTB, dtype=positions.dtype)).setup(
+        torch.tensor([1, 1])
+    )
+    assert system.config.scf.scf_mode == labels.SCF_MODE_FULL
+    assert system.config.scf.scp_mode == labels.SCP_MODE_POTENTIAL
+    assert system.config.scf.mixer == labels.MIXER_BROYDEN
+    assert system.config.scf.fermi.etemp == 300.0
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("eligible default route must use functional SCF")
+
+    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", unexpected)
+    core_module = importlib.import_module("dxtb._src.calculators.singlepoint")
+    original_solve = core_module.scf.solve
+    captured: dict[str, object] = {}
+
+    def capture_solve(*args: object, **kwargs: object) -> object:
+        result = original_solve(*args, **kwargs)
+        captured["result"] = result
+        return result
+
+    monkeypatch.setattr(core_module.scf, "solve", capture_solve)
+    OutputHandler.clear_warnings()
+    result = singlepoint(system, positions)
+    assert len(OutputHandler.warnings) == 1
+    assert "Using Anderson mixer instead" in OutputHandler.warnings[0][0]
+    functional = captured["result"]
+    assert isinstance(functional, FunctionalCoreResult)
+    assert result.charges is not None
+    assert result.potential is not None
+    assert result.charges.mono is functional.charges.mono
+    assert result.charges.dipole is functional.charges.dipole
+    assert result.charges.quadrupole is functional.charges.quad
+    assert result.potential.mono is functional.potential.mono
+    assert result.potential.dipole is functional.potential.dipole
+    assert result.potential.quadrupole is functional.potential.quad
+    assert result.iterations is functional.iterations
+    assert result.converged is functional.converged
+    assert result.residual is functional.residual
+
+
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
+def test_production_converged_route_executes_only_physical_maps(
+    monkeypatch: pytest.MonkeyPatch, method: int
+) -> None:
+    """Eager production stops mapping after convergence, unlike fixed trips."""
+    from test.test_scf.test_functional_map import _prepare_case
+    from dxtb._src.scf.functional import anderson, map as functional_map
+    from dxtb._src.scf.unrolling.base import BaseTSCF
+
+    options = {
+        "scp_mode": labels.SCP_MODE_POTENTIAL,
+        "mixer": labels.MIXER_BROYDEN,
+        "fermi_etemp": 300.0,
+        "maxiter": 100,
+        "verbosity": 0,
+    }
+    legacy_case = _prepare_case(
+        method, scf_options=options, setup_functional=False
+    )
+    legacy_spectra = 0
+    original_diagonalize = BaseTSCF.diagonalize
+
+    def count_legacy_spectrum(self, hamiltonian):
+        nonlocal legacy_spectra
+        legacy_spectra += 1
+        return original_diagonalize(self, hamiltonian)
+
+    monkeypatch.setattr(BaseTSCF, "diagonalize", count_legacy_spectrum)
+    legacy_result = legacy_case.engine(legacy_case.initial_charges.clone())
+    legacy_raw_maps = legacy_case.engine._data.iter
+    assert legacy_result["iterations"] == legacy_raw_maps
+    assert legacy_spectra == legacy_raw_maps + 1
+
+    production_case = _prepare_case(
+        method, scf_options=options, setup_functional=False
+    )
+    functional_counts = {"raw_maps": 0, "spectra": 0}
+    original_map = anderson.potential_map
+    original_evaluate = functional_map.evaluate_hamiltonian
+
+    def count_functional_map(*args, **kwargs):
+        functional_counts["raw_maps"] += 1
+        return original_map(*args, **kwargs)
+
+    def count_functional_spectrum(*args, **kwargs):
+        functional_counts["spectra"] += 1
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(anderson, "potential_map", count_functional_map)
+    monkeypatch.setattr(
+        functional_map, "evaluate_hamiltonian", count_functional_spectrum
+    )
+    production_result = singlepoint(
+        production_case.system, production_case.positions
+    )
+    assert production_result.converged is not None
+    assert production_result.converged.item()
+    assert production_result.iterations.item() == legacy_raw_maps
+    assert functional_counts["raw_maps"] == production_result.iterations.item()
+    assert functional_counts["spectra"] == functional_counts["raw_maps"] + 1
+
+
+@pytest.mark.parametrize(
+    ("representation", "mixer"),
+    [
+        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
+        (labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
+        (labels.SCP_MODE_POTENTIAL, labels.MIXER_LINEAR),
+        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
+        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
+        (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
+    ],
+    ids=[
+        "charge-simple",
+        "charge-anderson",
+        "potential-simple",
+        "potential-anderson",
+        "fock-simple",
+        "fock-anderson",
+    ],
+)
+@pytest.mark.parametrize("temperature", [0.0, 300.0], ids=["zero-k", "300-k"])
+def test_production_singlepoint_matches_legacy_full(
+    representation: int, mixer: int, temperature: float
+) -> None:
+    """Production FULL dispatch preserves legacy values in each route."""
+    from dxtb._src.scf.functional import FunctionalCoreResult
+    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+    from test.test_scf.test_functional_map import _prepare_case
+
+    options = {
+        "scp_mode": representation,
+        "mixer": mixer,
+        "maxiter": 2,
+        "mix_guess": True,
+        "x_atol": 0.0,
+        "x_atol_max": 0.0,
+        "fermi_etemp": temperature,
+    }
+    legacy_case = _prepare_case(
+        GFN1_XTB, scf_options=options, setup_functional=False
+    )
+    production_case = _prepare_case(
+        GFN1_XTB, scf_options=options, setup_functional=False
+    )
+    expected = legacy_case.engine(legacy_case.initial_charges.clone())
+    actual = singlepoint(production_case.system, production_case.positions)
+    assert not isinstance(expected, FunctionalCoreResult)
+    for name in (
+        "density",
+        "coefficients",
+        "emo",
+        "occupation",
+        "hamiltonian",
+    ):
+        torch.testing.assert_close(getattr(actual, name), expected[name])
+    torch.testing.assert_close(actual.scf, expected["energy"])
+    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+    assert actual.charges is not None and actual.potential is not None
+    for legacy_name, result_name in (
+        ("mono", "mono"),
+        ("dipole", "dipole"),
+        ("quad", "quadrupole"),
+    ):
+        expected_charge = getattr(expected["charges"], legacy_name, None)
+        expected_potential = getattr(expected["potential"], legacy_name, None)
+        actual_charge = getattr(actual.charges, result_name)
+        actual_potential = getattr(actual.potential, result_name)
+        if expected_charge is None:
+            assert actual_charge is None
+        else:
+            assert actual_charge is not None
+            torch.testing.assert_close(actual_charge, expected_charge)
+        if expected_potential is None:
+            assert actual_potential is None
+        else:
+            assert actual_potential is not None
+            torch.testing.assert_close(actual_potential, expected_potential)
+    assert actual.iterations.item() == expected["iterations"]
+    assert actual.converged is not None and not actual.converged
+    assert actual.residual is not None
+
+
+@pytest.mark.parametrize(
+    ("representation", "mixer"),
+    [
+        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
+        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
+        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
+    ],
+    ids=["charge-simple", "potential-anderson", "fock-simple"],
+)
+@pytest.mark.parametrize("force_convergence", [False, True])
+def test_production_maxiter_zero_is_valid_one_shot(
+    representation: int, mixer: int, force_convergence: bool
+) -> None:
+    """The production boundary preserves maxiter=0 for every representation."""
+    from test.test_scf.test_functional_map import _prepare_case
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "scp_mode": representation,
+            "mixer": mixer,
+            "maxiter": 0,
+            "force_convergence": force_convergence,
+            "fermi_etemp": 300.0,
+        },
+        setup_functional=False,
+    )
+    expected = case.engine(case.initial_charges.clone())
+    OutputHandler.clear_warnings()
+    actual = singlepoint(case.system, case.positions)
+    assert actual.iterations.item() == 1
+    assert actual.converged is not None and not actual.converged
+    assert actual.residual is not None
+    assert OutputHandler.warnings == []
+    torch.testing.assert_close(actual.scf, expected["energy"])
+    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+
+
+@pytest.mark.parametrize("force_convergence", [False, True])
+def test_production_positive_budget_nonconvergence_policy(
+    force_convergence: bool,
+) -> None:
+    """Production FULL policy warns or raises after a positive failed budget."""
+    from dxtb._src.typing.exceptions import (
+        SCFConvergenceError,
+        SCFConvergenceWarning,
+    )
+    from test.test_scf.test_functional_map import _prepare_case
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "scp_mode": labels.SCP_MODE_POTENTIAL,
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 1,
+            "force_convergence": force_convergence,
+            "x_atol": 0.0,
+            "x_atol_max": 0.0,
+        },
+        setup_functional=False,
+    )
+    OutputHandler.clear_warnings()
+    if force_convergence:
+        with pytest.raises(SCFConvergenceError):
+            singlepoint(case.system, case.positions)
+        assert OutputHandler.warnings == []
+    else:
+        result = singlepoint(case.system, case.positions)
+        assert result.converged is not None and not result.converged
+        assert len(OutputHandler.warnings) == 1
+        assert OutputHandler.warnings[0][1] is SCFConvergenceWarning
+
+
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_LINEAR, labels.MIXER_BROYDEN],
+    ids=["linear", "broyden"],
+)
+def test_production_negative_temperature_preserves_legacy_results(
+    mixer: int,
+) -> None:
+    """Negative temperature keeps legacy low-T results and warning ordering."""
+    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+    from test.test_scf.test_functional_map import _prepare_case
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": mixer,
+            "maxiter": 1,
+            "fermi_etemp": -1.0,
+        },
+        setup_functional=False,
+    )
+    OutputHandler.clear_warnings()
+    engine = SelfConsistentFieldFull(
+        case.interactions,
+        case.occupation,
+        case.n0,
+        numbers=case.system.numbers,
+        ihelp=case.system.ihelp,
+        cache=case.interaction_data,
+        integrals=case.integrals,
+        config=case.system.config.scf,
+        nel=case.nel,
+    )
+    expected = engine(case.initial_charges.clone())
+    legacy_warnings = list(OutputHandler.warnings)
+
+    OutputHandler.clear_warnings()
+    actual = singlepoint(case.system, case.positions)
+    assert OutputHandler.warnings == legacy_warnings
+    torch.testing.assert_close(actual.scf, expected["energy"])
+    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+    torch.testing.assert_close(actual.density, expected["density"])
+    torch.testing.assert_close(actual.hamiltonian, expected["hamiltonian"])
+    assert actual.converged is None
+    assert actual.residual is None
+
+
+@pytest.mark.parametrize(
+    ("representation", "mixer"),
+    [
+        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
+        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
+        (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
+    ],
+    ids=["charge-simple", "potential-anderson", "fock-anderson"],
+)
+def test_production_dynamic_damping_matches_legacy(
+    representation: int, mixer: int
+) -> None:
+    """Production routing retains dynamic-damping trajectory and warnings."""
+    from test.test_scf.test_functional_map import _prepare_case
+
+    maxiter = 12 if representation == labels.SCP_MODE_CHARGE else 8
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "scp_mode": representation,
+            "mixer": mixer,
+            "maxiter": maxiter,
+            "mix_guess": True,
+            "damp": 0.2,
+            "damp_init": 0.05,
+            "damp_dynamic": True,
+            "damp_dynamic_factor": 0.75,
+            "damp_generations": 2,
+            "damp_soft_start": True,
+            "x_atol": 0.0,
+            "x_atol_max": 0.0,
+        },
+        setup_functional=False,
+    )
+    OutputHandler.clear_warnings()
+    expected = case.engine(case.initial_charges.clone())
+    legacy_warnings = list(OutputHandler.warnings)
+    OutputHandler.clear_warnings()
+    actual = singlepoint(case.system, case.positions)
+    assert OutputHandler.warnings == legacy_warnings
+    assert actual.iterations.item() == expected["iterations"]
+    for name in (
+        "density",
+        "emo",
+        "occupation",
+        "hamiltonian",
+    ):
+        torch.testing.assert_close(
+            getattr(actual, name),
+            expected[name],
+            msg=f"production field: {name}",
+        )
+    torch.testing.assert_close(
+        actual.coefficients @ actual.coefficients.mT,
+        expected["coefficients"] @ expected["coefficients"].mT,
+    )
+    torch.testing.assert_close(actual.scf, expected["energy"])
+    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+
+
+def test_production_gfn2_default_broyden_route_matches_legacy() -> None:
+    """GFN2 default potential/Broyden/300 K route matches legacy outputs."""
+    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+    from test.test_scf.test_functional_map import _prepare_case
+
+    options = {
+        "scp_mode": labels.SCP_MODE_POTENTIAL,
+        "mixer": labels.MIXER_BROYDEN,
+        "fermi_etemp": 300.0,
+        "maxiter": 2,
+    }
+    legacy_case = _prepare_case(
+        GFN2_XTB,
+        scf_options=options,
+        setup_functional=False,
+    )
+    production_case = _prepare_case(
+        GFN2_XTB,
+        scf_options=options,
+        setup_functional=False,
+    )
+    OutputHandler.clear_warnings()
+    legacy_engine = SelfConsistentFieldFull(
+        legacy_case.interactions,
+        legacy_case.occupation,
+        legacy_case.n0,
+        numbers=legacy_case.system.numbers,
+        ihelp=legacy_case.system.ihelp,
+        cache=legacy_case.interaction_data,
+        integrals=legacy_case.integrals,
+        config=legacy_case.system.config.scf,
+        nel=legacy_case.nel,
+    )
+    expected = legacy_engine(legacy_case.initial_charges.clone())
+    legacy_warnings = list(OutputHandler.warnings)
+    OutputHandler.clear_warnings()
+    actual = singlepoint(production_case.system, production_case.positions)
+    assert OutputHandler.warnings == legacy_warnings
+    assert (
+        sum(
+            "Using Anderson mixer instead" in warning[0]
+            for warning in legacy_warnings
+        )
+        == 1
+    )
+    for name in ("density", "emo", "occupation", "hamiltonian"):
+        torch.testing.assert_close(getattr(actual, name), expected[name])
+    torch.testing.assert_close(actual.scf, expected["energy"])
+    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+    assert actual.charges is not None and actual.potential is not None
+    for legacy_name, result_name in (
+        ("mono", "mono"),
+        ("dipole", "dipole"),
+        ("quad", "quadrupole"),
+    ):
+        expected_charge = getattr(expected["charges"], legacy_name, None)
+        expected_potential = getattr(expected["potential"], legacy_name, None)
+        actual_charge = getattr(actual.charges, result_name)
+        actual_potential = getattr(actual.potential, result_name)
+        if expected_charge is None:
+            assert actual_charge is None
+        else:
+            assert actual_charge is not None
+            torch.testing.assert_close(actual_charge, expected_charge)
+        if expected_potential is None:
+            assert actual_potential is None
+        else:
+            assert actual_potential is not None
+            torch.testing.assert_close(actual_potential, expected_potential)
 
 
 def test_core_singlepoint_supports_independent_position_gradients() -> None:

@@ -45,7 +45,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6. E2 is no longer a blocker for E4. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.5a parallel path done | Pure charge, potential, and single-System Fock maps plus fixed-trip functional Simple and Anderson solvers, tensor-status finite-temperature Fermi occupation, dynamic damping, and an unactivated eager compatibility adapter are tested in parallel; production still uses the legacy engine. Production routing and legacy-loop removal remain open. |
+| E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 legacy-loop/culling cleanup remains open. |
 | E6/E7/E8       | not done                        | Complete-System batching, padding hardening, and remaining transform work remain open.             |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -969,9 +969,10 @@ covered by focused tests. Functional purity is guaranteed only for exact
 migrated built-in interactions. Custom Interaction subclasses remain on the
 legacy solver path until a separate pure extension protocol is designed.
 
-The existing full/implicit solver engines remain the only production route.
-E4.0 does not add mixers, solver state, fixed-trip control flow, Fermi
-handling, potential/Fock modes, or free-energy partitioning. The transitional
+At the E4.0 milestone, the existing full/implicit solver engines remained the
+only production route. E4.0 did not add mixers, solver state, fixed-trip
+control flow, Fermi handling, potential/Fock modes, or free-energy
+partitioning. The transitional
 full-mode eigensolver is isolated in one helper and preserves its current
 `requires_grad`-selected Lorentzian behavior. On the characterized H2O map,
 JVP/jacfwd are finite but their numerical derivatives differ from reverse
@@ -981,11 +982,11 @@ inside the transitional eigensolver without map or interaction plumbing; it
 is the already-defined E3 spectral contract issue. E3 still owns the spectral
 derivative correction.
 
-E4 remains partial. Functional solver integration, advanced mixer state,
-finite-temperature Fermi semantics, potential/Fock convergence modes, and
-removal of legacy culling remain subsequent E4 work.
+E4 remains partial until E4.6 removes the obsolete full-mode loop/culling
+machinery after downstream parity is secured. Production FULL routing for
+eligible single-System calls is handled by the later E4.5b package below.
 
-## E4.1 — functional simple solver (done, parallel only)
+## E4.1 — functional simple solver (done; production-routed by E4.5b)
 
 The internal `scf/functional/solver.py` implements frozen
 `SCFSolverSettings`, pure `simple_mix`, raw-residual status values, a
@@ -1015,11 +1016,11 @@ cases, converged/loose/nonconverged cases, finalization, and geometry/field
 derivatives. A smooth affine toy map verifies reverse/JVP/jacfwd/vmap solver
 composition; a real fixed-System charge-guess vmap is also covered.
 
-The implementation remains an internal parallel path. `Calculator`,
-`System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`, and implicit mode
-are unchanged. E4 remains partial: production solver integration, no-culling
-legacy cleanup, finite-temperature Fermi, and potential/Fock modes remain
-open. E3 still owns the transitional spectral
+At the E4.1 milestone this implementation was an internal parallel path;
+`Calculator`, `System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`,
+and implicit mode were unchanged. Production FULL routing was integrated later
+by E4.5b. E4 remains partial only until no-culling legacy cleanup in E4.6.
+E3 still owns the transitional spectral
 derivative discrepancy; its test now attributes mode selection to explicit
 eigensolver branches without requiring the discrepancy to remain nonzero.
 
@@ -1081,7 +1082,7 @@ def solver_step(
 The physical equation is `G(x) - x = 0`; mixer history belongs only to
 `SCFSolverState`. No mutation of inputs, map results, or incoming solver state.
 
-## E4.2 Functional Anderson mixer state (done, parallel only)
+## E4.2 Functional Anderson mixer state (done; production-routed by E4.5b)
 
 The functional full-solver mixer scope is Simple and Anderson. Legacy full
 mode resolves configured linear mixing to Simple and Anderson to Anderson;
@@ -1105,28 +1106,28 @@ fails on its first transition when it reads the absent second history row.
 The canonical functional solver tests the raw convergence residual before its
 physical mixer transition. A raw map that satisfies convergence becomes the
 selected physical result and does not advance functional mixer state. Fixed-
-trip execution may evaluate a masked dummy transition, but
 `transition_active` is false and no solver/history state advances.
 
 This intentionally removes one legacy side effect. Current
 `SelfConsistentFieldFull` calls `mixer.iter(q_new, q)` and only then reads
 `mixer.converged`; thus it advances the mixer on the convergence step. The
 canonical functional solver does not perform that dead transition. The
-selected converged physical map result is unchanged, but error/side-effect
 parity is not exact: legacy Anderson may fail while solving the mixer system
 for a residual that already satisfies convergence, while canonical E4 accepts
-the raw physical result without that transition. E4.5 must review and accept
-this deliberate solver-bug fix before production routing.
+the raw physical result without that transition. E4.5b accepted this deliberate
+solver-bug fix for eligible production FULL routing.
 
-## E4.3 Transform-compatible finite-temperature occupation (done, parallel only)
+## E4.3 Transform-compatible finite-temperature occupation (done; production-routed by E4.5b)
 
-The functional charge map and Simple/Anderson solvers support finite-temperature
-occupation through a fixed-trip tensor-status Fermi core. The eager public API
+At the E4.3 milestone, the functional charge map and Simple/Anderson solvers
+support finite-temperature occupation through a fixed-trip tensor-status
+Fermi core. The eager public API
 retains host-side error reporting, while both paths share the safeguarded
 Newton/bisection search step. Fermi status, the separate `1e-4` electron-count
 guard, and equal/atomic entropy partitions are preserved in the functional
-results. Production singlepoint still uses the legacy solver; this package
-does not change its routing or the whole-System `vmap` status.
+results. Production routing was activated later in E4.5b for eligible
+single-System FULL calculations; whole-System public `vmap` remains deferred to
+E6 because eager policy performs host inspection.
 
 The temperature/free-energy value exists independently of whether smearing is
 active: exactly zero temperature has zero free energy; positive temperatures
@@ -1147,18 +1148,20 @@ The legacy `hamiltonian_to_density()` path calls eager
 independently raises if `abs(occupation.sum(-1) - nel) > 1e-4`. Therefore every
 physical spectrum in the SCF trajectory must contribute to eventual eager
 validity; a later successful spectrum cannot erase an earlier failure. The
-functional numerical solver retains these statuses without raising.
+functional numerical solver retains these statuses without raising; the
+E4.5a eager policy interprets them before accepting production results.
 
 `maxiter=0` is a valid one-shot compatibility mode: it evaluates one raw map,
 returns `converged=False`, and the legacy full solver returns before its
-nonconvergence warning/`force_convergence` error path. A future eager adapter
-must first reject invalid functional subsolves; if they are valid and
+nonconvergence warning/`force_convergence` error path. The E4.5a eager policy
+first rejects invalid functional subsolves; if they are valid and
 `maxiter=0`, it accepts the one-shot result without an outer-convergence
 warning/error. For positive budgets it accepts a converged result and applies
 the existing `force_convergence` warning/error policy only to an unconverged
-result. This policy is not implemented until E4.5.
+result. E4.5a implements this policy and E4.5b activates it for eligible
+production FULL calls.
 
-## E4.4a Functional potential representation (done, parallel only)
+## E4.4a Functional potential representation (done; production-routed by E4.5b)
 
 Executable legacy characterizations lock the three representation phases.
 Charge mode maps `q_k -> V(q_k) -> H -> density ->
@@ -1214,7 +1217,7 @@ spectrum; future success checks require both. Tests cover raw GFN1/GFN2 map
 parity, each GFN2 potential row, the six Simple budgets, accelerated and
 converged Anderson, maxiter zero, finite-temperature equal/atomic entropy,
 fixed-System guess vmap, and geometry/parameter/field/fractional-charge
-derivatives. Production routing remains unchanged.
+derivatives. At the E4.4a milestone, production routing remained unchanged.
 
 Potential mixer transitions re-pack the fixed structural components after
 affine mixing. This is necessary because Anderson's floating-point affine
@@ -1226,12 +1229,12 @@ representation-specific padding mask.
 The functional result preserves three distinct facts: outer SCF residual
 convergence, validity accumulated across every physically executed raw-map
 spectrum, and validity of the final public conversion spectrum. Fixed-trip
-dummy maps after convergence do not contribute to trajectory validity. A
-future eager adapter must require subsolve validity first; valid `maxiter=0`
+dummy maps after convergence do not contribute to trajectory validity. The
+E4.5a eager policy requires subsolve validity first; valid `maxiter=0`
 remains an accepted one-shot result despite `converged=False`, matching the
 legacy early return before its warning/forced-convergence branch.
 
-## E4.4b Functional Fock representation (done; parallel only)
+## E4.4b Functional Fock representation (done; production-routed by E4.5b)
 
 The functional single-System Fock map consumes an exact `(nao, nao)` matrix
 without value-based `PADNZ` cleanup or packed-batch semantics. It shares
@@ -1253,10 +1256,11 @@ Fock finalization deliberately distinguishes map and public phases:
 That extra spectrum does not increment SCF iterations. All physically active
 raw-map Fermi statuses accumulate in `trajectory_status`; the final spectrum
 has its own status in `final_evaluation`. Fock remains single-System only;
-matrix padding and packed batching belong to E6/E7. No production route uses
-this implementation yet.
+matrix padding and packed batching belong to E6/E7. E4.5b routes eligible
+single-System FULL calculations through this implementation; legacy full SCF
+remains responsible for batch calls and other explicitly unsupported cases.
 
-## E4.5a Dynamic damping and eager compatibility (done; parallel only)
+## E4.5a Dynamic damping and eager compatibility (done; consumed by E4.5b)
 
 The functional Simple and Anderson solvers carry immutable dynamic-damping
 settings and tensor-valued runtime damping. The compatibility threshold remains
@@ -1321,13 +1325,13 @@ tensors are passed through by identity; legacy Python iteration integers are
 normalized at the singlepoint boundary. The inactive eager adapter follows
 the same ordering and is not a replacement for the legacy dispatch function.
 
-The functional adapter is tested directly but is not called by
-`scf.solve`, `singlepoint`, Calculator, or `SelfConsistentFieldFull`.
+The eager adapter is retained for side-by-side compatibility tests. Production
+`scf.solve()` calls only its prepared functional runner and policy helper after
+common preparation has completed.
 
-## E4.5b Production routing (open)
+## E4.5b Production routing (done)
 
-The E4.5b integration contract is to preserve `scf.iterator.solve()` as the
-common preparation and dispatch owner:
+`scf.iterator.solve()` remains the common preparation and dispatch owner:
 
 ```text
 get_refocc()
@@ -1341,31 +1345,40 @@ elif implicit: existing implicit path
 elif experimental: existing experimental path
 ```
 
-The legacy path keeps its forwarded `*args`/`**kwargs`; there is no
-catch-all functional-to-legacy fallback after numerical execution begins.
-Production routing must call the reviewed E4.5a prepared runner only after its
-side-by-side compatibility matrix is complete. Current defaults are
-`MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and `FERMI_ETEMP=300 K`; the static
-resolver now explicitly covers that combination. E4.5b still owns the actual
-production dispatch change and its full public-result parity review.
+The production FULL branch calls the reviewed E4.5a prepared runner for
+eligible single-System calculations. The ordinary defaults are
+`MIXER_BROYDEN`, `SCP_MODE_POTENTIAL`, and `FERMI_ETEMP=300 K`; configured
+Broyden resolves once to functional Anderson and emits the compatibility
+warning once. `scf.solve()` returns the legacy `SCFResult` mapping on legacy
+routes and `FunctionalCoreResult` on the functional route. Core callers branch
+explicitly at their result boundary; functional tensors and solver status pass
+through without conversion to legacy mutable containers or Python scalars.
 
-Before routing, explicitly review the convergence-step mixer side effect:
-canonical functional control deliberately skips a transition after accepting
-a converged raw map, while the legacy loop calls `mixer.iter` before checking
-convergence. This is the intentional E0 solver correction. E4.5b must retain
-and review this difference rather than restoring the legacy dead transition.
+Legacy FULL ownership remains explicit for batches, unsupported interaction
+extensions, negative electronic temperature, negative Fermi `maxiter`,
+missing H0/overlap matrices, and supplied legacy engine overrides
+(`*args`, `fwd_options`, `bck_options`, or `eigen_options`). Those options are
+not dropped or reinterpreted by the functional implementation. Negative outer
+SCF `maxiter` is rejected only when the call is otherwise a functional-route
+candidate. Implicit, experimental, and non-SCF dispatch remain unchanged.
+No catch-all retry occurs after functional numerical execution begins.
 
-E4.5b must preserve eager ordering: first raw-trajectory subsolve failure,
+The accepted convergence-step behavior remains: canonical functional control
+deliberately skips a transition after accepting a converged raw map, while the
+legacy loop calls `mixer.iter` before checking convergence. This is the
+intentional E0 solver correction; the production functional route retains it.
+
+The eager policy preserves ordering: first raw-trajectory subsolve failure,
 then final-public-spectrum failure, then positive-budget outer convergence
 policy. `maxiter=0` remains an accepted one-shot if both subsolve phases are
 valid, including with `force_convergence=True`. Negative Fermi `maxiter` stays
 on legacy until its global configuration policy is deliberately changed;
 negative SCF `maxiter` is intentionally rejected by E0. The production
-`Result.snapshot()` boundary must pass functional `iterations`, `converged`,
-and `residual` tensors directly, while legacy iteration integers may be
-normalized eagerly. The current singlepoint iteration normalization helper
-returns an existing Tensor unchanged and only creates a Tensor for legacy
-integer values. Do not force functional values through legacy
+`Result.snapshot()` boundary passes functional `iterations`, `converged`,
+and `residual` tensors directly, while legacy iteration integers are
+normalized eagerly. The singlepoint iteration normalization helper returns
+an existing Tensor unchanged and only creates a Tensor for legacy integer
+values. Functional values are not forced through legacy
 `SCFResult(iterations: int)`.
 
 Single-System dynamic damping is characterized in E4.5a. Legacy batch-only
@@ -1979,7 +1992,8 @@ Recommended sequence:
 
 ### PR 3: pure H0 construction and immutable IntegralMatrices
 
-- singlepoint still legacy but consumes returned values.
+- at that milestone, singlepoint still used legacy SCF while consuming the
+  returned integral values.
 
 ### PR 4: immutable Result and core singlepoint
 
@@ -2006,9 +2020,9 @@ Recommended sequence:
 - ALPB;
 - fields separately in B7.
 
-### PR E4.1: parallel functional simple solver
+### PR E4.1: functional simple solver (historical package plan)
 
-- raw map and production driver stay unchanged.
+- at that stage, raw map and production driver stay unchanged.
 - characterize forward parity and transform behavior before routing.
 
 ### PR E4.2: functional Anderson state
@@ -2019,9 +2033,11 @@ Recommended sequence:
 ### PR E4.3-E4.6: staged solver completion
 
 - E4.3 finite-temperature occupation/Fermi;
-- E4.4a potential representation (done); E4.4b remaining Fock-mode support;
-- E4.5 eager compatibility adapter and production routing;
-- E4.6 fixed-shape cleanup and legacy loop/cull/restore deletion after parity.
+- E4.4a potential representation (done); E4.4b Fock representation (done);
+- E4.5a dynamic damping and eager compatibility (done); E4.5b production routing
+  (done);
+- E4.6 fixed-shape cleanup and legacy loop/cull/restore deletion after parity
+  (open).
 
 ### PR C5+: Node migration from leaves upward
 
@@ -2158,7 +2174,7 @@ The D4SC closure and ALPB package was validated from task base `170babe22d825a9d
 
 The ALPB fresh-setup and F0 package was validated from task base `cf0c98266d8c12c1fa3d572c7acc8d65fec528ae`. Fresh GeneralizedBorn construction and setup inside a transformed function pass dielectric reverse, JVP, jacfwd, and central finite-difference agreement; a tensor-valued Born-scale configuration also passes fresh-setup JVP. The `bool(alpbet > 0)` setup branch remains unchanged because scalar dielectric differentiation passes; heterogeneous solvent-configuration setup vmap is outside the single-System contract. F0 exercises full GFN1 H2O with D3 enabled, `functional_call`, and fresh System construction on each evaluation for `element.O.arep`, `element.O.gam`, and `repulsion.effective.kexp`. Initial gradients agree with central finite differences, four fixed functional updates monotonically reduce the loss, original selected and unselected ParamModule leaves remain unchanged, and the mixed force/parameter derivative is finite and nonzero. Torch 2.6 exposed `Tensor.tolist()` on a functorch GradTrackingTensor during H0 setup; replacing it with a structural integer-list conversion made F0 pass in all five supported environments. Component and reference baselines pass, parameter-coverage verdicts are unchanged, and the generated finite-difference detail noise was restored. Broad seeds `20261010` and `20261011` had three and one implicit-SCF memory-leak failures respectively; the four distinct exact nodes reproduced when isolated on the task base. Each run also had the established implicit-matrix XPASS. Requested Luna/high review found no blocker or major issue; its minor scalar-state recommendation is covered by an explicit assertion. No references, tolerances, xfails, D3 behavior, B7, E4/E6, Node, GPU, or other component families were changed.
 
-B7 compatibility hardening: exact Calculator field defaults now reject any retained same-label interaction during construction, rather than deferring the ambiguity to evaluation. Custom same-label field subclasses remain ordinary legacy interactions for energy and forces; generic standard-field response methods report that they cannot infer a differentiation variable from an arbitrary extension. On the pre-B7 base, same-label `ElectricField` subclasses supported energy, dipole, and polarizability, while same-label `ElectricFieldGrad` subclasses supported energy, quadrupole, and numerical quadrupole when their perturbation tensors required gradients. The explicit-field architecture intentionally narrows those response APIs to exact/default/explicit standard perturbations; no interaction mutation is restored. Whole-System `vmap` remains deferred to generic SCF occupation/Fermi-search work.
+B7 compatibility hardening: exact Calculator field defaults now reject any retained same-label interaction during construction, rather than deferring the ambiguity to evaluation. Custom same-label field subclasses remain ordinary legacy interactions for energy and forces; generic standard-field response methods report that they cannot infer a differentiation variable from an arbitrary extension. On the pre-B7 base, same-label `ElectricField` subclasses supported energy, dipole, and polarizability, while same-label `ElectricFieldGrad` subclasses supported energy, quadrupole, and numerical quadrupole when their perturbation tensors required gradients. The explicit-field architecture intentionally narrows those response APIs to exact/default/explicit standard perturbations; no interaction mutation is restored. Whole-public-singlepoint `vmap` remains deferred to E6 because eager production policy inspects status for compatibility warnings and errors.
 
 E0's convergence-tolerance contract is now explicit: canonical full/unrolled
 convergence requires both raw-residual x norms to meet `x_atol` and

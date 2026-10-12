@@ -28,6 +28,8 @@ those populations, i.e. the potential vector.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 from tad_mctc import storch
 
@@ -45,6 +47,9 @@ from dxtb.config import ConfigSCF
 from .base import SCFResult
 from .guess import get_guess
 
+if TYPE_CHECKING:
+    from .functional.eager import FunctionalCoreResult
+
 __all__ = ["solve"]
 
 
@@ -61,7 +66,7 @@ def solve(
     refocc: Tensor,
     *args: Any,
     **kwargs: Any,
-) -> SCFResult:
+) -> SCFResult | FunctionalCoreResult:
     """
     Obtain self-consistent solution for a given Hamiltonian.
 
@@ -88,8 +93,8 @@ def solve(
 
     Returns
     -------
-    Tensor
-        Orbital-resolved partial charges vector.
+    SCFResult | FunctionalCoreResult
+        Legacy result mapping or tensor-status functional full-SCF result.
     """
     n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
 
@@ -122,6 +127,43 @@ def solve(
         from .implicit import SelfConsistentFieldImplicit as SCF
     elif config.scf_mode == labels.SCF_MODE_FULL:
         # pylint: disable=import-outside-toplevel
+        from dxtb import OutputHandler
+        from .functional.eager import (
+            apply_functional_full_policy,
+            resolve_full_scf_route,
+            run_prepared_functional_full,
+        )
+
+        legacy_engine_overrides = bool(args) or any(
+            key in kwargs
+            for key in ("fwd_options", "bck_options", "eigen_options")
+        )
+        route = resolve_full_scf_route(
+            config,
+            interactions,
+            ihelp,
+            numbers,
+            integrals,
+            legacy_engine_overrides,
+        )
+        if route.kind == "functional":
+            if route.warning is not None:
+                OutputHandler.warn(route.warning)
+            result = run_prepared_functional_full(
+                numbers,
+                charges,
+                n0,
+                occupation,
+                nab,
+                interactions,
+                cache,
+                ihelp,
+                config,
+                integrals,
+                route,
+            )
+            return apply_functional_full_policy(result, config, route)
+
         from .unrolling import SelfConsistentFieldFull as SCF
     elif config.scf_mode == labels.SCF_MODE_EXPERIMENTAL:
         # pylint: disable=import-outside-toplevel

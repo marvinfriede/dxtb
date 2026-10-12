@@ -125,6 +125,8 @@ def resolve_full_scf_route(
     interactions: InteractionList,
     ihelp: IndexHelper,
     numbers: Tensor | None = None,
+    integrals: IntegralMatrices | None = None,
+    legacy_engine_overrides: bool = False,
 ) -> FullSCFRoute:
     """Resolve full-mode eligibility and compatibility warnings statically."""
     if config.scf_mode != labels.SCF_MODE_FULL:
@@ -139,6 +141,13 @@ def resolve_full_scf_route(
         return FullSCFRoute(
             "legacy", config.scp_mode, config.mixer, reason="batched System"
         )
+    if legacy_engine_overrides:
+        return FullSCFRoute(
+            "legacy",
+            config.scp_mode,
+            config.mixer,
+            reason="legacy SCF engine options were supplied",
+        )
     eligible, names = functional_scf_interactions_eligible(interactions)
     if not eligible:
         return FullSCFRoute(
@@ -147,12 +156,28 @@ def resolve_full_scf_route(
             config.mixer,
             reason=f"unsupported interaction extension(s): {names}",
         )
+    if config.fermi.etemp < 0.0:
+        return FullSCFRoute(
+            "legacy",
+            config.scp_mode,
+            config.mixer,
+            reason="negative electronic temperature retains legacy eager behavior",
+        )
     if config.fermi.maxiter < 0:
         return FullSCFRoute(
             "legacy",
             config.scp_mode,
             config.mixer,
             reason="negative Fermi maxiter retains legacy behavior",
+        )
+    if integrals is not None and (
+        integrals.hcore is None or integrals.overlap is None
+    ):
+        return FullSCFRoute(
+            "legacy",
+            config.scp_mode,
+            config.mixer,
+            reason="missing hcore or overlap integral retains legacy behavior",
         )
     if config.maxiter < 0:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
@@ -267,7 +292,10 @@ def _solve_representation(
     guess: Tensor,
     inputs: SCFInputs,
     config: ConfigSCF,
+    *,
+    eager: bool = True,
 ) -> SCFSolveResult:
+    """Run one representation with eager or transform-fixed control."""
     settings = _solver_settings(config, guess.dtype)
     mode = config.scp_mode
     if mode == labels.SCP_MODE_CHARGE:
@@ -288,8 +316,8 @@ def _solve_representation(
             inputs.charge_layout,
         )
         if isinstance(settings, SCFSolverSettings):
-            return solve_scf_simple(x, inputs, settings)
-        return solve_scf_anderson(x, inputs, settings)
+            return solve_scf_simple(x, inputs, settings, eager=eager)
+        return solve_scf_anderson(x, inputs, settings, eager=eager)
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -306,13 +334,17 @@ def _solve_representation(
     if mode == labels.SCP_MODE_POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
         if isinstance(settings, SCFSolverSettings):
-            return solve_scf_potential_simple(packed, inputs, layout, settings)
-        return solve_scf_potential_anderson(packed, inputs, layout, settings)
+            return solve_scf_potential_simple(
+                packed, inputs, layout, settings, eager=eager
+            )
+        return solve_scf_potential_anderson(
+            packed, inputs, layout, settings, eager=eager
+        )
     if mode == labels.SCP_MODE_FOCK:
         fock = fock_initial_guess(charges, inputs)
         if isinstance(settings, SCFSolverSettings):
-            return solve_scf_fock_simple(fock, inputs, settings)
-        return solve_scf_fock_anderson(fock, inputs, settings)
+            return solve_scf_fock_simple(fock, inputs, settings, eager=eager)
+        return solve_scf_fock_anderson(fock, inputs, settings, eager=eager)
     raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
 
 
@@ -330,15 +362,18 @@ def run_functional_full_eager(
     *args: object,
     **kwargs: object,
 ) -> EagerFullResult:
-    """Run the parallel functional route with legacy eager policy handling.
+    """Run a side-by-side functional or legacy FULL calculation eagerly.
 
-    This adapter is intentionally not called by production dispatch yet.
-    Tensor-status inspection and warning/error behavior live here, outside
-    the fixed-trip numerical solver.
+    Production dispatch uses ``scf.iterator.solve`` for common preparation
+    and its prepared functional runner for eligible FULL routes. This wrapper
+    remains a direct compatibility-test boundary. Tensor-status inspection
+    and warning/error behavior stay outside the fixed-trip numerical solver.
     """
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
-        route = resolve_full_scf_route(config, interactions, ihelp, numbers)
+        route = resolve_full_scf_route(
+            config, interactions, ihelp, numbers, integrals
+        )
         legacy = solve_nonselfconsistent(
             numbers,
             interactions,
@@ -353,7 +388,17 @@ def run_functional_full_eager(
         return EagerFullResult(route, None, legacy)
 
     guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
-    route = resolve_full_scf_route(config, interactions, ihelp, numbers)
+    legacy_engine_overrides = bool(args) or any(
+        key in kwargs for key in ("fwd_options", "bck_options", "eigen_options")
+    )
+    route = resolve_full_scf_route(
+        config,
+        interactions,
+        ihelp,
+        numbers,
+        integrals,
+        legacy_engine_overrides,
+    )
     if route.kind == "legacy":
         if not isinstance(config.scf_mode, int):
             raise ValueError(

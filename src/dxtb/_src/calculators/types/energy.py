@@ -29,7 +29,10 @@ from tad_mctc.io.checks import content_checks, shape_checks
 
 from dxtb import OutputHandler, labels
 from dxtb._src import scf
-from dxtb._src.calculators.singlepoint import _call_tensor
+from dxtb._src.calculators.singlepoint import (
+    _call_tensor,
+    _normalize_scf_output,
+)
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
     ElectricField,
@@ -303,31 +306,32 @@ class EnergyCalculator(BaseCalculator):
             intmats,
             refocc,
         )
+        scf_output = _normalize_scf_output(scf_results, positions)
 
         timer.stop("SCF")
         timer.cuda_sync = old_cuda_sync
         if self.opts.scf.requires_iterations:
             OutputHandler.write_stdout(
-                f"SCF finished in {scf_results['iterations']} iterations.", v=3
+                f"SCF finished in {scf_output.iterations} iterations.", v=3
             )
         else:
             OutputHandler.write_stdout(
                 "Non-self-consistent electronic solve finished.", v=3
             )
 
-        scf_energy = scf_results["energy"] + scf_results["fenergy"]
+        scf_energy = scf_output.energy + scf_output.fenergy
         result = Result.snapshot(
             energy=total_energy + scf_energy,
-            scf=scf_results["energy"],
+            scf=scf_output.energy,
             classical=tuple(classical.items()),
-            fenergy=scf_results["fenergy"],
-            charges=scf_results["charges"],
-            density=scf_results["density"],
-            coefficients=scf_results["coefficients"],
-            emo=scf_results["emo"],
-            occupation=scf_results["occupation"],
-            potential=scf_results["potential"],
-            hamiltonian=scf_results["hamiltonian"],
+            fenergy=scf_output.fenergy,
+            charges=scf_output.charges,
+            density=scf_output.density,
+            coefficients=scf_output.coefficients,
+            emo=scf_output.emo,
+            occupation=scf_output.occupation,
+            potential=scf_output.potential,
+            hamiltonian=scf_output.hamiltonian,
             overlap=intmats.overlap,
             hcore=intmats.hcore,
             dipole_integrals=intmats.dipole,
@@ -337,15 +341,15 @@ class EnergyCalculator(BaseCalculator):
                 if self.integrals.overlap is None
                 else self.integrals.overlap.norm
             ),
-            iterations=torch.tensor(
-                scf_results["iterations"], dtype=torch.int64, device=self.device
-            ),
+            iterations=scf_output.iterations,
+            converged=scf_output.converged,
+            residual=scf_output.residual,
         )
 
         if self.ihelp.batch_mode == 0:
             OutputHandler.write_stdout(
                 "SCF Energy  : %.14f Hartree.",
-                scf_results["energy"].sum(-1),
+                scf_output.energy.sum(-1),
                 v=2,
             )
             OutputHandler.write_stdout(
