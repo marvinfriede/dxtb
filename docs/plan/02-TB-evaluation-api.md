@@ -234,11 +234,16 @@ and energy locally, and does not mutate the component or cache. Those legacy
 setup/cache objects still need B6a migration; their separate forward-mode
 blocker belongs to E1.3.
 
-**B6a-SCF-validation (pending):** the broader retrospective seven-interaction
-A/B/A, gradient, call-data freshness, and setup-snapshot matrix is tracked
-separately in `07-current-state-and-execution-plan.md`. Its incomplete rows do
-not change the already accepted E4core implementation dependency, and the
-matrix must not be described as proven until its focused tests land.
+**B6a-SCF-validation (complete):**
+`test/test_scf/test_functional_map.py::test_b6a_functional_interaction_boundary_is_history_independent`
+provides the focused seven-interaction matrix, including fresh call data,
+repeated calls, A/B/A geometry and field history, fresh-System output/gradient
+parity, and unchanged persistent setup/component state. The exact whitelist
+and absence of outer classical DFT-D3 from functional SCF inputs are asserted.
+Existing family-specific tests supplement that matrix; the evidence and
+validation commands are recorded in `07-current-state-and-execution-plan.md`.
+This does not change E4core's accepted implementation dependency or close
+broader B6a's legacy-shaped DFT-D3 setup/cache migration.
 
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.
@@ -340,7 +345,7 @@ B8b: third-order and mixed-response properties after E3.
 | B5 | Result object and `singlepoint` | B3, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | B6a-SCF-core | Completed self-consistent-input state-removal implementation prerequisite; excludes outer classical DFT-D3 | B5, B4 | done |
-| B6a-SCF-validation | Retrospective seven-interaction execution matrix | B6a-SCF-core | pending |
+| B6a-SCF-validation | Retrospective seven-interaction execution matrix | B6a-SCF-core | done |
 | B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a-SCF-core, E4core, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
 | B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |

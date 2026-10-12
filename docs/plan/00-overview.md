@@ -211,7 +211,7 @@ grads = torch.func.grad(loss)(params)
 | TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after B3b; C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
-| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
+| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6bimpl for mixed-System profiling; D3 after F2d/E6broute | compiled conformer step, mixed-System training, conditional optimisations |
 
 ### Current status
 
@@ -254,7 +254,7 @@ graph LR
   B3a --> B5
   B5 --> B6a & B7
   B5 & B4 --> B6aSCF[B6a-SCF-core: completed SCF-only state-removal subset]
-  B6aSCF --> B6aSCFval[B6a-SCF-validation: expanded interaction matrix pending]
+  B6aSCF --> B6aSCFval[B6a-SCF-validation: expanded interaction matrix complete]
   T0R --> E11[E1.1 RepulsionAG complete]
   B3a --> E12[E1.2 CoulombMatrixAG/ES2 complete]
   T0R --> E13[E1.3 DFT-D3/tad-dftd3 forward-mode blocker]
@@ -278,16 +278,17 @@ graph LR
   E4core & B6bcore & E2core --> TF[private fixed-trip boundary under B1 system.singlepoint]
   TF & C8a --> E6a[E6a conformer vmap]
   B6bcore & E2core & E1 --> E6a
-  E6a & B3b & C8b & E2core & E4core --> E6bimpl[E6b mixed-System implementation]
+  E4core --> E6bcompatpolicy[E6bcompat-policy: retain/retire legacy batch behavior]
+  E6a & B3b & C8b & E2core & E4core & E6bcompatpolicy --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
-  E6bimpl --> E6bcompat[E6b retained-libcint compatibility correctness or explicit API retirement]
+  E6bimpl --> E6bcompat[E6bcompat: validate retained replacements or explicit API retirement]
   T0W3[T0.8 W3 mixed-System baseline]
   T0W2[T0.8 W2 conformer baseline]
   E6a & T0W2 --> E6c1w2[E6c1 W2 conformer performance clearance]
   E6bimpl & T0W3 --> E6c1w3[E6c1 W3 mixed-System performance clearance]
   E6c1w2 & E6c1w3 --> E6c1[E6c1 pre-retirement performance clearance]
   T03 --> E7batch
-  E6bimpl & E6bcompat & E7batch & E6c1 --> E6broute[E6broute: PyTorch production batch route authoritative]
+  E6bimpl & E6bcompatpolicy & E6bcompat & E7batch & E6c1 --> E6broute[E6broute: PyTorch production batch route authoritative]
   E6broute & T0W2 & T0W3 & T08G --> E6c2[E6c2 final W2/W3/GPU performance acceptance]
   E6broute --> E46a[E4.6a batch cull/restore cleanup]
   E46a --> E46b[E4.6b all remaining FULL fallback cleanup]
@@ -319,7 +320,7 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 | Goal | Path |
 | --- | --- |
 | G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
-| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6bimpl → E6c1 W3 clearance + batch-critical E7 + retained-libcint compatibility correctness → E6broute. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
+| G2 | Authoritative PyTorch route. Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6bcompat-policy → E6bimpl → E6c1 W3 clearance + batch-critical E7 + E6bcompat validation → E6broute. E6c2 W2/W3/GPU PyTorch-route sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 

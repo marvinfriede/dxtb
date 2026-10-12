@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,11 +29,19 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.calculators.model import Model
 from dxtb._src.components.base import Component
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.container import Charges
+from dxtb._src.components.interactions.coulomb.multipole import AES2
+from dxtb._src.components.interactions.coulomb.secondorder import ES2
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3
+from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
+from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
 from dxtb._src.components.interactions.field.efield import ElectricField
+from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
@@ -54,6 +62,7 @@ from dxtb._src.scf.functional import (
     unpack_charges,
     unpack_potential,
     validate_functional_scf_interactions,
+    functional_scf_interactions_eligible,
 )
 from dxtb._src.scf.functional.map import _transitional_diagonalize
 from dxtb._src.scf.guess import get_guess
@@ -199,6 +208,111 @@ def _prepare_case(
 
 def _assert_tensor_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=2e-13)
+
+
+def _snapshot_tree(value: object, seen: dict[int, int] | None = None) -> object:
+    """Copy tensor values through a small persistent-state object graph."""
+    if isinstance(value, torch.Tensor):
+        return value.clone()
+    if value is None or isinstance(value, (str, int, float, bool, torch.dtype)):
+        return value
+    if seen is None:
+        seen = {}
+    identity = id(value)
+    if identity in seen:
+        return ("cycle", seen[identity])
+    seen[identity] = len(seen)
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            type(value).__qualname__,
+            tuple(
+                (field.name, _snapshot_tree(getattr(value, field.name), seen))
+                for field in fields(value)
+            ),
+        )
+    if isinstance(value, dict):
+        return tuple(
+            (key, _snapshot_tree(item, seen))
+            for key, item in sorted(
+                value.items(), key=lambda pair: str(pair[0])
+            )
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(_snapshot_tree(item, seen) for item in value)
+    slots: list[str] = []
+    for cls in type(value).__mro__:
+        declared = getattr(cls, "__slots__", ())
+        slots.extend((declared,) if isinstance(declared, str) else declared)
+    if slots:
+        return (
+            type(value).__qualname__,
+            tuple(
+                (name, _snapshot_tree(getattr(value, name), seen))
+                for name in dict.fromkeys(slots)
+                if name not in ("__dict__", "__weakref__")
+                and hasattr(value, name)
+            ),
+        )
+    if hasattr(value, "__dict__"):
+        return (
+            type(value).__qualname__,
+            _snapshot_tree(vars(value), seen),
+        )
+    return value
+
+
+def _assert_snapshot_equal(actual: object, expected: object) -> None:
+    if isinstance(actual, torch.Tensor):
+        assert isinstance(expected, torch.Tensor)
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        return
+    if isinstance(actual, tuple):
+        assert isinstance(expected, tuple)
+        assert len(actual) == len(expected)
+        for current, original in zip(actual, expected):
+            _assert_snapshot_equal(current, original)
+        return
+    assert actual == expected
+
+
+def _tensor_leaves(
+    value: object, seen: set[int] | None = None
+) -> tuple[torch.Tensor, ...]:
+    """Collect tensor values from call-local interaction data."""
+    if isinstance(value, torch.Tensor):
+        return (value,)
+    if seen is None:
+        seen = set()
+    identity = id(value)
+    if identity in seen:
+        return ()
+    seen.add(identity)
+    if is_dataclass(value) and not isinstance(value, type):
+        return tuple(
+            leaf
+            for field in fields(value)
+            for leaf in _tensor_leaves(getattr(value, field.name), seen)
+        )
+    if isinstance(value, dict):
+        return tuple(
+            leaf
+            for item in value.values()
+            for leaf in _tensor_leaves(item, seen)
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(
+            leaf for item in value for leaf in _tensor_leaves(item, seen)
+        )
+    slots: list[str] = []
+    for cls in type(value).__mro__:
+        declared = getattr(cls, "__slots__", ())
+        slots.extend((declared,) if isinstance(declared, str) else declared)
+    return tuple(
+        leaf
+        for name in dict.fromkeys(slots)
+        if name not in ("__dict__", "__weakref__") and hasattr(value, name)
+        for leaf in _tensor_leaves(getattr(value, name), seen)
+    )
 
 
 @pytest.mark.parametrize(
@@ -1121,6 +1235,173 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
 
     with pytest.raises(FrozenInstanceError):
         inputs.n0 = inputs.n0  # type: ignore[misc]
+
+
+def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
+    """All seven functional interactions use fresh data without state mutation."""
+    case = _prepare_case(GFN2_XTB)
+    numbers = case.system.numbers
+    d3_case = _prepare_case(GFN1_XTB)
+    d3_component = next(
+        item
+        for item in d3_case.system.classicals.components
+        if type(item) is DispersionD3
+    )
+    model = Model(
+        par=case.par,
+        config=case.system.config,
+        classical=(d3_component,),
+        interaction=(
+            GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64),
+        ),
+        auto_int_level=False,
+    )
+
+    def make_system():
+        return model.setup(numbers)
+
+    system = make_system()
+    expected_types = {
+        ES2,
+        ES3,
+        AES2,
+        DispersionD4SC,
+        GeneralizedBorn,
+        ElectricField,
+        ElectricFieldGrad,
+    }
+    call_fields = (
+        ElectricField(torch.zeros(3, dtype=torch.float64)),
+        ElectricFieldGrad(torch.zeros((3, 3), dtype=torch.float64)),
+    )
+    interactions = InteractionList(
+        *system.interactions.components, *call_fields
+    )
+    assert {type(item) for item in interactions.components} == expected_types
+    assert functional_scf_interactions_eligible(interactions) == (True, "")
+
+    def persistent_snapshot(current_system):
+        return _snapshot_tree(
+            (
+                current_system.ihelp,
+                current_system.interactions,
+                current_system.classicals,
+                current_system.es2_setup,
+                current_system.es3_setup,
+                current_system.aes2_setup,
+                current_system.d4sc_setup,
+                current_system.generalized_born_setup,
+                current_system.integral_setup,
+                current_system.h0_setup,
+                current_system.classical_cache,
+            )
+        )
+
+    before = persistent_snapshot(system)
+
+    def evaluate(current_system, positions, field, field_grad):
+        positions = positions.clone().requires_grad_(True)
+        field = field.clone().requires_grad_(True)
+        field_grad = field_grad.clone().requires_grad_(True)
+        local_interactions = InteractionList(
+            *current_system.interactions.components,
+            ElectricField(field),
+            ElectricFieldGrad(field_grad),
+        )
+        integrals, _, _ = build_integral_matrices(
+            current_system.integral_setup,
+            current_system.h0_setup,
+            positions,
+            case.charge,
+        )
+        data = _interaction_data(current_system, positions, local_interactions)
+        assert any(
+            type(item) is DispersionD3
+            for item in current_system.classicals.components
+        )
+        assert set(data) == {
+            "ES2",
+            "ES3",
+            "AES2",
+            "DispersionD4SC",
+            "GeneralizedBorn",
+            "ElectricField",
+            "ElectricFieldGrad",
+        }
+        assert "Dispersion" not in data
+        assert "DispersionD3" not in data
+        inputs = setup_scf_inputs(
+            numbers,
+            integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            local_interactions,
+            data,
+            current_system.ihelp,
+            current_system.config.scf,
+        )
+        assert {type(item) for item in inputs.interactions.components} == (
+            expected_types
+        )
+        assert not hasattr(inputs, "classicals")
+        mapped = scf_map(case.x, inputs)
+        value = (
+            mapped.mapped_x.square().sum() + mapped.hamiltonian.square().sum()
+        )
+        gradients = torch.autograd.grad(value, (positions, field, field_grad))
+        assert all(torch.isfinite(gradient).all() for gradient in gradients)
+        return value, gradients, data
+
+    positions_a = case.positions
+    positions_b = positions_a.clone()
+    positions_b[1, 2] += 0.07
+    field_a = torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64)
+    field_b = field_a + torch.tensor([0.0003, 0.0002, -0.0001])
+    field_grad_a = torch.full((3, 3), 0.0001, dtype=torch.float64)
+    field_grad_b = field_grad_a * 1.5
+
+    value_a, grad_a, data_a = evaluate(
+        system, positions_a, field_a, field_grad_a
+    )
+    value_b, _, data_b = evaluate(system, positions_b, field_b, field_grad_b)
+    value_a_again, grad_a_again, data_a_again = evaluate(
+        system, positions_a, field_a, field_grad_a
+    )
+    fresh_system = make_system()
+    value_a_fresh, grad_a_fresh, data_a_fresh = evaluate(
+        fresh_system, positions_a, field_a, field_grad_a
+    )
+
+    torch.testing.assert_close(value_a_again, value_a, rtol=2e-10, atol=2e-12)
+    torch.testing.assert_close(value_a_fresh, value_a, rtol=2e-10, atol=2e-12)
+    for actual, expected, fresh in zip(grad_a_again, grad_a, grad_a_fresh):
+        torch.testing.assert_close(actual, expected, rtol=2e-8, atol=2e-10)
+        torch.testing.assert_close(actual, fresh, rtol=2e-8, atol=2e-10)
+
+    assert data_a is not data_a_again
+    assert data_a is not data_a_fresh
+    for label in data_a:
+        assert data_a[label] is not data_a_again[label]
+        leaves_a = _tensor_leaves(data_a[label])
+        leaves_b = _tensor_leaves(data_b[label])
+        leaves_a_again = _tensor_leaves(data_a_again[label])
+        leaves_a_fresh = _tensor_leaves(data_a_fresh[label])
+        assert leaves_a
+        assert len(leaves_a) == len(leaves_b) == len(leaves_a_again)
+        for first, repeated in zip(leaves_a, leaves_a_again):
+            _assert_tensor_equal(first, repeated)
+        assert len(leaves_a) == len(leaves_a_fresh)
+        if label == "ES3":
+            for first, changed in zip(leaves_a, leaves_b):
+                _assert_tensor_equal(first, changed)
+        else:
+            assert any(
+                not torch.equal(first, changed)
+                for first, changed in zip(leaves_a, leaves_b)
+            ), f"{label} call data did not respond to changed geometry/input"
+
+    _assert_snapshot_equal(persistent_snapshot(system), before)
 
 
 def test_functional_map_has_no_legacy_stateful_hooks() -> None:

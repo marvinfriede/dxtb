@@ -28,6 +28,9 @@
   same function works correctly in eager mode under the required transforms.
 - Compile work stays downstream of E4core and the relevant implementation:
   E6a for conformers, E6bimpl for mixed Systems.
+- Mixed-System eager profiling and architecture measurements may begin after
+  E6bimpl. D3's compiled production training still requires F2d and the
+  authoritative E6broute.
 
 ---
 
