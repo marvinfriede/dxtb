@@ -17,7 +17,7 @@
 
 - Compile the SCF step, not the SCF loop.
 - Compile the outermost transformed function (for example, `compile(jacfwd(jacrev(energy)))`); never rely on `.backward(create_graph=True)` through a compiled region (double backward through compiled code isn't supported, as far as known).
-- Fixed shapes: masking instead of culling (E4); size buckets for mixed
+- Fixed shapes: masking instead of culling (E4core); size buckets for mixed
   compositions (E6b). E6a conformers use one fixed System and W2 positions.
 
 **Gates.**
@@ -26,7 +26,7 @@
   baseline.
 - No compile-specific architectural workaround may be introduced before the
   same function works correctly in eager mode under the required transforms.
-- Compile work stays downstream of E4 and the relevant E6 branch: E6a for
+- Compile work stays downstream of E4core and the relevant E6 branch: E6a for
   conformers, E6b for mixed Systems.
 
 ---
@@ -37,7 +37,7 @@
 
 **Steps.**
 
-1. Compile the pure SCF step (E4) under `vmap` over conformers (E6a), using
+1. Compile the pure SCF step (E4core) under `vmap` over conformers (E6a), using
    the exact B1 `vmap(system.singlepoint)` API and C8a Result pytree output.
 2. Try `mode="reduce-overhead"` (CUDA graphs) and `fullgraph=True`.
 3. Compile the per-call build stages (integrals, H0, Coulomb) as one function per call.
@@ -48,7 +48,7 @@
 conformer composition. If compilation is adopted, D4 decides its public
 exposure/default policy; D1 does not introduce a new conformer entrypoint.
 
-**Needs.** E4, E6a, T0.8 including the GPU baseline (E5 is done for GFN2 on
+**Needs.** E4core, E6a, T0.8 including the GPU baseline (E5 is done for GFN2 on
 GPU). C8b/E6b mixed-System stackability is not required. **Size.** M.
 
 ---
@@ -138,7 +138,7 @@ if** padding waste is shown to dominate.
 
 | ID | Package | Needs | Size |
 | --- | --- | --- | --- |
-| D1 | Compiled SCF step and CUDA graphs for conformers | E4, E6a, T0.8 GPU (E5 done for GFN2) | M |
+| D1 | Compiled SCF step and CUDA graphs for conformers | E4core, E6a, T0.8 GPU (E5 done for GFN2) | M |
 | D2 | Compiled derivative functions | E1, E3, B8 | M |
 | D3 | Compiled mixed-System training loss with buckets | F2d, E6b route, W3/E7 gates | M |
 | D4 | Compile policy and tooling | D1 | S |

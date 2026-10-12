@@ -182,7 +182,7 @@ grads = torch.func.grad(loss)(params)
 | `Component._cache`, `_cachevars`, `cache_is_latest`, `cache_enable`/`disable`, `update`, `reset` | per-call values, `replace()` | B6 |
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
 | Electric field as a mutable component, `update_efield`, `requires_efield*` decorators | fields as inputs | B7 |
-| culling in the functional single-System SCF path | fixed-shape masked loop | E4; legacy batch cull/restore remains until E6b migration and E4.6a cleanup |
+| culling in the functional single-System SCF path | fixed-shape masked loop | E4core; legacy batch cull/restore remains until E6b migration and E4.6a cleanup |
 | per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2 |
 | Calculator mixins (analytical, autograd, numerical) | property functions | B8 |
 | Vendored xitorch implicit SCF | decided in E0 | E3 |
@@ -198,7 +198,7 @@ grads = torch.func.grad(loss)(params)
 | TC Node migration | `03-TC-node-migration.md` | C1/C1b done; C5 after B6b-core structural boundary | B5.6 closes the Result/status schema; C8a proves its pytree independently; C8b supplies mixed-System stackability after B3b; C9 waits for legacy fallback retirement |
 | TE Differentiable core | `04-TE-differentiable-core.md` | E0 after T0.4 | SCF differentiation, custom functions fixed, fixed-shape kernels, `vmap` batching |
 | TF Machine learning | `05-TF-machine-learning.md` | F3 after B6/C1b/E3; F1 (and so F2a–F2e) last, after Tracks B, C, D and E | training workflow, new elements, ML interaction interface |
-| TD Performance | `06-TD-performance.md` | E4/E6a for conformers; E6b for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
+| TD Performance | `06-TD-performance.md` | E4core/E6a for conformers; E6b for mixed Systems | compiled conformer step, mixed-System training, conditional optimisations |
 
 ### Current status
 
@@ -211,6 +211,8 @@ At the review point:
 - B1 is agreed; B2 is implemented; B3a (structural Model/System split) is
   implemented while B3b remains open;
 - B4-B8 remain;
+- E4core (E4.0–E4.5b) is accepted; the E4 umbrella remains partial while
+  E4.6a/E4.6b compatibility cleanup is blocked on its documented owners;
 - Node and ModuleNode already exist upstream;
 - E5 is complete;
 - E2 has a substantially improved starting point;
@@ -233,19 +235,19 @@ graph LR
   B5 --> B6a & B7
   T0R --> E1
   B3a --> E1
-  B6a & B4 --> E4
-  E4 --> B6bcore[B6b-core]
-  E0 & E1 & E4 --> E3
+  B6a & B4 --> E4core[E4core: accepted single-System functional SCF]
+  E4core --> B6bcore[B6b-core]
+  E0 & E1 & E4core --> E3
   B3a & B4 --> E2
   B6bcore --> C5
   C5 --> C6 & C7
-  B5 & E4 --> B56[B5.6 public solver-status schema]
+  B5 & E4core --> B56[B5.6 public solver-status schema]
   B56 --> C8a[C8a Result pytree representation]
   B3b & C5 & C6 & C7 & B2 --> C8b[C8b Model/System stackability]
-  E4 & B6bcore & E2 --> TF[private fixed-trip boundary under B1 system.singlepoint]
+  E4core & B6bcore & E2 --> TF[private fixed-trip boundary under B1 system.singlepoint]
   TF & C8a --> E6a[E6a conformer vmap]
   B6bcore & E2 & E1 --> E6a
-  E6a & B3b & C8b & E2 & E4 --> E6bimpl[E6b mixed-System implementation]
+  E6a & B3b & C8b & E2 & E4core --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
   T0W3[T0.8 W3 mixed-System baseline]
   T0W2[T0.8 W2 conformer baseline]
@@ -267,7 +269,7 @@ graph LR
   F2c --> F2d
   E3 --> F2d --> F2e
   B6bcore & E3 --> F3 --> F4
-  E4 & E6a & T08G --> D1[D1 conformer compile]
+  E4core & E6a & T08G --> D1[D1 conformer compile]
   E3 --> D2
   F2d & E6broute --> D3[D3 mixed-System training compile]
   E6broute & D3 --> D5[D5 concatenated pair batching]
@@ -284,8 +286,8 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 → E1, E4 → E3 → B8b → E8 (B8a after B7) |
-| G2 | Conformers: T0.8 W2 → E4/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4 → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
+| G1 | T0.3/T0.4 → E0 → E1, E4core → E3 → B8b → E8 (B8a after B7) |
+| G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5/B6a → F0 (early invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 
@@ -293,7 +295,11 @@ The open T0.8 GPU baseline gates E6c2 final GPU/G2 performance acceptance,
 not E6a correctness or CPU batch-route retirement. E6c1 clears W2 conformer
 and W3 mixed-System performance separately before the E6b production route
 can retire legacy batch FULL; its clearance may be measured acceptance or an
-explicit architecture-review decision accepting a regression.
+explicit architecture-review decision accepting a regression. Such a waiver
+permits route retirement only; it does not satisfy G2's throughput target.
+E6c2/G2 remains open until the documented throughput target is met or that
+acceptance criterion is explicitly amended. Missing measurements are never
+clearance.
 
 ---
 
@@ -307,7 +313,7 @@ justifies two releases.
 | Milestone | Gate |
 | --- | --- |
 | Structural-core milestone | B2-B8a; immutable Result; no core caches; fields are call inputs; T0.2 reproduced |
-| Transform milestone | E0/E1/E3/E4/C8a/E6a conformer and E6b mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
+| Transform milestone | E0/E1/E3/E4core/C8a/E6a conformer and E6b mixed-System acceptance/E8; known-wrong G1 baseline cases resolved |
 | Pytree milestone | C5-C7, C8a Result pytree, and C8b Model/System stackability; final C9 `TensorLike`/`ModuleLike` purge follows E4.6a/E4.6b legacy retirement |
 | Public restructuring release | Above applicable gates plus ordinary dependency installation, no `mctc_shim`, full CI and migration guide |
 

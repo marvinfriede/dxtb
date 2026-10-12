@@ -19,7 +19,7 @@ setup values. `SCFMapResult` contains at least `mapped_x = G(x)` and the
 physical observables produced by that same evaluation: density, charges,
 potential, Hamiltonian, orbital energies, coefficients, occupations,
 free-energy data, and other observables needed by the result. Exact field and
-class names remain E4 implementation details.
+class names remain E4core implementation details.
 
 The physical fixed-point equation is:
 
@@ -114,8 +114,8 @@ provide the required general `jvp`, `jacfwd`, `vmap` composition, or explicit
 functional parameter-tree semantics.
 
 Treat it as a legacy reverse-autograd optimization only. Do not extend it
-piecemeal before E4 and do not silently change the public default in E0. After
-E4, an implicit strategy must apply the implicit-function theorem to the exact
+piecemeal before E4core and do not silently change the public default in E0.
+After E4core, an implicit strategy must apply the implicit-function theorem to the exact
 same raw physical `scf_map` used by unrolling, using `G(x, p) - x = 0`; it
 must not wrap or differentiate the mixer/solver transition. All
 differentiable quantities are explicit input-tree leaves; no parameter
@@ -238,7 +238,7 @@ therefore belongs to one singlepoint call. Compute its inverse-Cholesky or
 orthogonalization factor once for that call, place it in immutable
 `SCFInputs`, and reuse it in every step. Do not retain it on an SCF engine,
 System, or other persistent object. The current `BaseTSCF._inv_cholesky`
-instance cache is transitional and must disappear in E4.
+instance cache is transitional and must disappear in E4core.
 
 The spectral primitive receives an explicit structural `orbital_mask` derived
 during setup. It must not infer padding from numerical equality such as
@@ -290,7 +290,7 @@ if maxiter > 0:
     converged = ~active
 ```
 
-This sketch describes the eventual E4 structure; its public iteration-count
+This sketch describes the eventual E4core structure; its public iteration-count
 compatibility is specified below. `SCFInputs` contains immutable per-call
 physical/setup inputs. `SCFMapResult` contains `G(x)` and the observables from
 that physical evaluation. `SCFSolverState` owns the current iterate, mixer
@@ -313,10 +313,10 @@ The canonical functional control deliberately uses the post-convergence
 `transition_active = active & ~newly_converged` mask for the mixer transition.
 Current mutable `SelfConsistentFieldFull` instead calls `mixer.iter(q_new, q)`
 before checking `mixer.converged`, so it advances the mixer on a converged raw
-map. E4 removes this dead transition. The selected converged physical map
+map. E4core removes this dead transition. The selected converged physical map
 result is unchanged, but this is not exact legacy side-effect/error parity:
 legacy Anderson may fail while solving a mixer system after the raw residual
-already meets convergence; canonical E4 accepts that map without the physical
+already meets convergence; canonical E4core accepts that map without the physical
 transition. E4.5 must review this deliberate compatibility decision before
 production routing.
 
@@ -333,7 +333,7 @@ must not be defined from `mixed_x - x`, whose value depends on the solver
 settings. In current full mode this is the distinction represented by the
 mixer's stored raw delta `x_new - x_old`.
 
-The canonical E4/full functional convergence test preserves the current
+The canonical E4core/full functional convergence test preserves the current
 full-mode tolerance semantics exactly:
 
 ```text
@@ -349,7 +349,7 @@ There is no third `f_atol` residual or convergence condition. Current
 tolerances and does not consult `f_tol`. `BaseSCF.fwd_options` still maps
 `ConfigSCF.f_atol` to `f_tol` for the transitional implicit/root-solving
 path. That legacy compatibility behavior remains unchanged. When that path is
-rebuilt around E4, the public fate and meaning of `f_atol` must be decided
+rebuilt around E4core, the public fate and meaning of `f_atol` must be decided
 explicitly; it must not silently become a full-mode convergence criterion.
 Other legacy modes retain their existing behavior in this decision package.
 
@@ -377,7 +377,7 @@ then performs up to `maxiter` further map evaluations, stopping early if the
 raw map delta meets convergence. Thus with no early convergence the current
 full-mode reported count is `maxiter + 1`. This compatibility contract is
 characterized by `test/test_scf/test_e0_iteration_compat.py` and is the first
-behavior E4 must preserve. The characterization also records that `mix_guess`
+behavior E4core must preserve. The characterization also records that `mix_guess`
 changes the finite trajectory and returned physical values for positive
 budgets, but not the physical fixed-point equation. On the current deterministic
 CPU GFN1 H2O case with Simple mixing and damping `0.25`, the characterization
@@ -412,12 +412,12 @@ energy `-5.768616757320126`, and an unconverged warning to two evaluations,
 energy `-5.768234535786348`, and no warning. This confirms that the full-mode
 convergence point is controlled by the x tolerances, not by `f_atol`.
 
-Negative `maxiter` is outside the canonical E4 contract and must be rejected
+Negative `maxiter` is outside the canonical E4core contract and must be rejected
 as invalid static configuration when an otherwise functional-eligible,
 single-System full-SCF route is selected. Common `get_refocc` and `get_guess`
 preparation still precede that route decision. Batch, custom-interaction,
 non-full, non-SCF, and negative-Fermi-maxiter legacy-owned routes remain under
-their existing behavior; E4 does not seize ownership of their negative SCF
+their existing behavior; E4core does not seize ownership of their negative SCF
 budgets. This does not preserve accidental legacy behavior for a negative
 budget on the canonical functional route.
 
@@ -430,7 +430,7 @@ that converges records the count at its first converged raw map evaluation; a
 system that exhausts the budget records the number of map evaluations actually
 performed (up to `maxiter + 1`). For `maxiter=0`, the observable compatibility
 requirement is one raw map evaluation and `Result.iterations == 1`; the current
-API has no convergence-status field for this one-shot case. The future E4
+API has no convergence-status field for this one-shot case. The future E4core
 status is explicitly conservative: `converged=False` because no outer
 convergence check was performed, and `residual` contains the raw diagnostic
 `G(guess)-guess` from that initial map. A small diagnostic residual does not
@@ -442,7 +442,7 @@ freeze each system's physical result and status.
 
 Current implicit mode uses a different root solver and reports its own
 function-evaluation count. It remains transitional; do not force its current
-count to match full mode. The common future E4 solver/status contract applies
+count to match full mode. The common future E4core solver/status contract applies
 to the canonical functional solver, while legacy implicit mode keeps its
 existing behavior until separately rebuilt around the common map.
 
@@ -476,34 +476,38 @@ matrix green.
 
 ## 8. Package boundaries and status
 
-**E4 owns** both (A) the pure physical `scf_map(x, inputs) -> SCFMapResult` and
+**E4core owns** both (A) the pure physical `scf_map(x, inputs) -> SCFMapResult` and
 (B) the pure functional solver around that map: immutable `SCFInputs`, explicit
 `SCFSolverState`, functional mixers, a fixed-shape solver loop, fixed-trip
 tensor-masked SCF/Fermi control flow, convergence/status tensors, removal of
 `cull`/`restore` from the canonical functional single-System SCF path, and
-per-call spectral inputs such as the inverse-Cholesky factor. E4 establishes
+per-call spectral inputs such as the inverse-Cholesky factor. E4core establishes
 fixed-shape masked control; it does not require deleting separately isolated
 `cull`/`restore` machinery still owned by the legacy production batch FULL
-adapter. E4 may reuse numerical formulas, but it must not combine the physical
+adapter. E4core may reuse numerical formulas, but it must not combine the physical
 map and solver transition into one opaque state update. This note does not
 declare today's `BaseSCF._Data`, `_MapData`, or `pure.iterations` suitable as
 the final explicit API.
 
-E6b retires the legacy production batch route after its batch-critical padding
-safety gate; E4.6a then removes the now-unowned batch cull/restore machinery.
+E6b retires the legacy production batch route after the batch-critical E7
+padding-safety gate and both E6c1 performance clearances (W2 conformers and
+W3 mixed Systems); the broader E7 audit may continue. An explicit
+architecture-review waiver may allow route retirement after a documented CPU
+regression, but it does not satisfy the final G2 throughput target. E4.6a
+then removes the now-unowned batch cull/restore machinery.
 E4.6b separately deletes the remaining legacy FULL loop only after every
 other compatibility fallback is migrated, rejected, or explicitly retired.
 
-**E3 owns**, after E0 is accepted and E4 supplies the raw physical map,
+**E3 owns**, after E0 is accepted and E4core supplies the raw physical map,
 invariant spectral/density differentiation, the NO2 isolation and fix,
 higher-order SCF derivative validation, unrolled-versus-implicit comparison,
 and any optional transform-compatible implicit strategy. Its implicit path
-consumes `scf_map` (or the corresponding raw-map component of the E4 API),
+consumes `scf_map` (or the corresponding raw-map component of the E4core API),
 never the selected mixer. A required later acceptance test is that the same
 converged physical point reached by Simple, Anderson, and Broyden gives the
 same implicit physical derivative within solver convergence error. If the
-invariant spectral primitive must land before E4 can function, split that work
-into a narrowly approved spectral-prerequisite package; E4 must not improvise
+invariant spectral primitive must land before E4core can function, split that work
+into a narrowly approved spectral-prerequisite package; E4core must not improvise
 its derivative contract.
 
 **E6a owns** conformer mapping over one fixed System using the B1 public
@@ -512,13 +516,13 @@ Result pytree prerequisites exist. **E6b owns** heterogeneous mixed-System
 construction, stacking/vmap composition, and production batch-route
 migration. The B7 field kernels are already vmap-safe; the B7 whole-System
 failure is generic host scalar extraction in the occupation/Fermi search and
-is resolved on the E4 fixed-trip path before E6a. This does not start E4 or
+is resolved on the E4core fixed-trip path before E6a. This does not start E4core or
 E6.
 
 Keep `scf_mode="implicit"` publicly available during transition as a legacy
 ordinary-autograd/reverse-oriented optimization. Do not advertise it as the
 G1 transform path or change its public default in this decision package.
-Replace its internals only after the common E4 map exists. E0 makes no choice
+Replace its internals only after the common E4core map exists. E0 makes no choice
 of a custom eigensolver/autograd primitive; plain PyTorch is preferred, and
 any custom spectral primitive is a separately reviewed design/implementation
 package subject to the complete transform ladder.

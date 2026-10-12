@@ -108,25 +108,25 @@ Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as 
 
 **Steps (assuming E0 chooses torch.func-native implicit differentiation; adjust otherwise).**
 
-1. A fixed-point solve function taking the pure SCF step (E4) and returning the converged state, with a custom autograd function implementing the implicit function theorem: backward solves the adjoint linear system; `jvp` solves the tangent system; vmap rule batches both.
+1. A fixed-point solve function taking the pure SCF step (E4core) and returning the converged state, with a custom autograd function implementing the implicit function theorem: backward solves the adjoint linear system; `jvp` solves the tangent system; vmap rule batches both.
 2. Higher orders: the backward and `jvp` use only differentiable operations, so nesting works; verify orders 2 and 3 against T0.3.
 3. Convergence settings for derivatives (linear-solver tolerance) exposed in configuration.
 4. Remove the vendored xitorch if no longer used.
 
 **Done when.** All T0.3 SCF cells pass at orders 1–3 for GFN1 and GFN2 (with the driver chosen in E0); forward mode works; `vmap` over conformers works.
 
-**Needs.** E0, E1, E4. **Unblocks.** E8, F2d, F3, D2. **Size.** L.
+**Needs.** E0, E1, E4core. **Unblocks.** E8, F2d, F3, D2. **Size.** L.
 
 ---
 
-## E4 Pure SCF step and masked convergence loop
+## E4core Pure SCF step and masked convergence loop
 
-**Note.** The currently named `scf/pure` functions are not the final pure design because `_Data` is mutable. E4 requires functional SCF state and functional mixer state.
+**Note.** The currently named `scf/pure` functions are not the final pure design because `_Data` is mutable. E4core requires functional SCF state and functional mixer state. E4core is the accepted single-System implementation milestone; E4.6a/E4.6b are separate legacy compatibility cleanup packages and are not prerequisites of E4core or its consumers.
 
 **Goal.** The functional single-System SCF iteration is a pure function of its
 state and uses fixed-shape solver control. Legacy production batch culling
 remains isolated until E6b retires that route and E4.6a removes its
-compatibility machinery.
+compatibility machinery after E6c1 W2/W3 and batch-critical E7 clearances.
 
 **Steps.**
 
@@ -138,7 +138,7 @@ compatibility machinery.
 4. Keep the functional core free of cull/restore calls. Do not remove those
    methods from a shared legacy adapter while production batch FULL still uses
    it; that deletion is E4.6a after E6b retires the production batch route
-   and the batch-critical E7 padding gate passes.
+   and the E6c1 W2/W3 plus batch-critical E7 gates pass.
 5. Benchmark fixed-trip masking against eager early-stop and legacy batch
    culling on the relevant T0.8 workloads.
 
@@ -219,7 +219,7 @@ direct System follows the explicit fixed-trip/status-only behavior above.
 
 **Done when.** Results and decision recorded.
 
-**Needs.** E1, E2, E4, B6b-core, C8a Result pytree representation, T0.8,
+**Needs.** E1, E2, E4core, B6b-core, C8a Result pytree representation, T0.8,
 the B5.6 public solver-status schema, and the private fixed-trip boundary
 under the B1 public method. It does not need C5/C8b mixed-System stackability
 or E4.6a. **Size.** M.
@@ -246,7 +246,7 @@ and route activation distinct: implementation can be completed and measured
 first; the route becomes authoritative only after E6c1's W2/W3 clearances and
 the batch-critical E7 gate.
 
-**Needs.** E6a, B3b, E4, C5/C8b, and defined padding. E7 owns padding
+**Needs.** E6a, B3b, E4core, C5/C8b, and defined padding. E7 owns padding
 validation; only its batch-critical subset gates route activation. The broader
 E7 audit may continue afterward.
 **Unblocks.** E4.6a and D3. **Size.** L.
@@ -297,6 +297,11 @@ W3, and E7 clearance, keep the legacy batch route. A broadly unacceptable
 result blocks retirement until explicit review; it cannot silently authorize
 a second permanent batched physics core.
 
+An architecture-review waiver permits route retirement only. It does not
+satisfy G2's conformer or mixed-System throughput target. E6c2/G2 remains open
+until the documented performance target is met or its acceptance criterion is
+explicitly amended; missing measurements are never clearance.
+
 ## E6c2 Final performance acceptance
 
 Record the complete W2 and W3 result, including the C8b training-tree
@@ -336,15 +341,17 @@ acceptance. **Size.** M.
 | E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
 | E2 | Fixed-shape pair kernels (from PairPlan) | T0.2, B3a, B4 | L |
-| E3 | SCF differentiation | E0, E1, E4 | L |
-| E4 | Pure SCF step, masked loop | T0.2, B5, B6a | L |
+| E3 | SCF differentiation | E0, E1, E4core | L |
+| E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
-| B5.6 | Public tensor-valued solver-status Result schema | B5, E4 | S |
+| B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
-| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
-| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4, C5/C8b, defined padding | L |
+| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
+| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding | L |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
 | E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M |
 | E6c2 | Final W2/W3/GPU G2 performance acceptance | E6c1, E6broute, T0.8 GPU | M |
+| E4.6a | Remove legacy batch cull/restore after batch fallback retirement | E6broute, E6c1 W2/W3, batch-critical E7 | M |
+| E4.6b | Delete remaining legacy FULL loop after all fallback owners retire | E4.6a, fallback migrations/policy decisions | M |
 | E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
 | E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |

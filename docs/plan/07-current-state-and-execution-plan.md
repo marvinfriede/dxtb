@@ -37,15 +37,15 @@ Current state:
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6b production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6             | partial                         | The new single-System core-purity milestone is separated from repository-wide legacy compatibility cleanup. B6 overall remains partial while D3 and legacy-only mutable/cull infrastructure remain. |
-| B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4/E6a. |
+| B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | not done                        | C5-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6b prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 D3 forward AD remains blocked upstream. |
-| E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6b. E2 is no longer a blocker for E4. |
+| E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6b. E2 is no longer a blocker for E4core. |
 | E3             | not done                        | Invariant spectral derivatives and NO2 diagnosis/fix remain open.                                   |
-| E4             | partial — E4.0–E4.5b done | Functional charge, potential, and single-System Fock implementations are production-routed for eligible calls. E4.6 cleanup is deferred while production fallback routes still depend on the legacy full engine. |
+| E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6b batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
@@ -526,10 +526,10 @@ status     # SCFStatus | None; B5.6 closes this schema before C8a
 
 `multipoles` is a derived property over `charges`, not a separate Result field
 or duplicated pytree leaf. `hcore` is the canonical Result field; `h0` is not
-used here. `SCFStatus` contains integer-code tensor leaves for the first
-physical-trajectory failure and final-public-spectrum failure. Code values
-are static context (0 none, 1 invalid temperature, 2 too many electrons, 3
-Fermi nonconvergence, 4 post-smearing electron-count failure). Existing
+used here. `SCFStatus.trajectory_failure` and
+`SCFStatus.final_failure` are dynamic integer Tensor leaves whose values vary
+by mapped System/conformer. Only the mapping from values to categories is
+static public API metadata, defined by `SCFFailureCode` in B5.6. Existing
 functional normalization drops this internal status today; B5.6 must carry it
 through the common SCF-output representation and `Result.snapshot()` without
 exposing `SCFSolveResult` itself.
@@ -544,14 +544,17 @@ Use `energy`, not a mixture of `total`, `get_energy` and cache keys, as the cano
 ### B5.6 Public solver-status schema
 
 Before C8a freezes Result's pytree layout, add immutable `SCFStatus | None`
-to the Result value and `Result.snapshot()`. Functional output carries
-tensor-valued `trajectory_failure` and `final_failure` codes; outer convergence
-remains the separate `converged` field. Codes are 0 none, 1 invalid
-temperature, 2 too many electrons, 3 Fermi nonconvergence, and 4
-post-smearing electron-count failure. This preserves the eager policy order:
+to the Result value and `Result.snapshot()`. Functional output carries dynamic
+integer-Tensor `trajectory_failure` and `final_failure` leaves; outer
+convergence remains the separate `converged` field. `SCFFailureCode`, defined
+once in the B5.6 API specification in Track B, is the canonical public
+`IntEnum` mapping. The integer tensors are pytree leaves; only their
+interpretation is static API metadata. Projection from internal categories
+to those public constants must agree exactly. This preserves the eager policy order:
 first failure in physical raw-map trajectory, then final-public-spectrum
 failure, then outer nonconvergence. Legacy routes may use `status=None`.
-Future checks cover zero/finite temperature, each category, trajectory versus
+Future low-level checks cover zero/finite-temperature success and failure,
+each category including invalid-temperature projection, trajectory versus
 final failure, valid subsolves with outer nonconvergence, and `maxiter=0`.
 `_normalize_scf_output()` must retain the projected public status rather than
 discarding it or exposing internal `SCFSolveResult`.
@@ -740,7 +743,7 @@ The dxtb-local custom functions that exist only for first-order speed should be 
 Do this after B5, with E1 landing alongside it.
 
 B6 must be split because the old batched SCF still mutates/culls per-call
-structures. B6a removes persistent component state. E4 provides an immutable
+structures. B6a removes persistent component state. E4core provides an immutable
 fixed-shape single-System solver, but does not delete culling from the legacy
 batch route. B6b-core closes purity for the new core; repository-wide legacy
 compatibility cleanup is a separate, later milestone after fallback migration.
@@ -805,7 +808,7 @@ ComponentList.reset_all
 Calculator.reset
 ```
 
-A temporary per-call SCF data object may still exist until E4, but it must not survive the call or be reused by the next evaluation.
+A temporary per-call SCF data object may still exist until E4core, but it must not survive the call or be reused by the next evaluation.
 
 ## B6a acceptance
 
@@ -862,9 +865,9 @@ generic occupation/Fermi-search host-scalar extraction in
 `wavefunction/filling.py::_read_flags` (`Tensor.item`). A diagnostic-only
 bypass of the earlier charge-spreading conservation check exposed the same
 Fermi-search blocker on both trees; no SCF source was changed. Whole-System
-`vmap` is therefore deferred to transform-compatible SCF work in E4 and
+`vmap` is therefore deferred to transform-compatible SCF work in E4core and
 conformer mapping in E6a, under the E0 design constraints. This does not start
-E4 or E6a.
+E4core or E6a.
 
 ---
 
@@ -883,12 +886,13 @@ Spectral derivatives target gauge-invariant density/occupation quantities;
 Lorentzian eigenvector broadening is not the final derivative definition.
 Finite-temperature degeneracies use the analytic spectral divided-difference
 limit, and a zero-temperature occupied/unoccupied crossing is not assigned an
-artificial derivative. E4 owns both the pure physical map and the functional
-fixed-shape solver around it, including tensor-masked SCF/Fermi control flow
-and per-call spectral inputs. E3 owns invariant spectral differentiation and
-the NO2 diagnosis/fix using the raw E4 map. E6a owns conformer mapping over a
-fixed System; E6b owns mixed-System batching. E0 changes no SCF implementation
-and does not mark E3, E4, E6a, or E6b done.
+artificial derivative. E4core owns both the pure physical map and the
+functional fixed-shape solver around it, including tensor-masked SCF/Fermi
+control flow and per-call spectral inputs. E3 owns invariant spectral
+differentiation and the NO2 diagnosis/fix using the raw E4core map. E6a owns
+conformer mapping over a fixed System; E6b owns mixed-System batching. E0
+changes no SCF implementation and does not mark E3, the E4 umbrella, E6a, or
+E6b done.
 
 ---
 
@@ -943,7 +947,7 @@ inside its Python loop. Keep this compatibility behavior until E6b replaces
 packed Calculator evaluation with externally mapped/stacked single-System
 evaluation. Removing it now would break legacy batching or begin E6b
 prematurely. This cleanup is the only remaining E2 item and does not block
-E4.
+E4core.
 
 ## E2-core fixed transform path — done
 
@@ -980,6 +984,20 @@ This follows P10.
 ---
 
 # 13. E4: replace the current mutable/culling SCF with a functional fixed-shape step
+
+## Canonical E4core milestone and umbrella boundary
+
+`E4core` means completion and acceptance of the canonical single-System
+functional SCF path: a pure physical map and solver, fixed-trip control,
+tensor-valued status, and no core `cull`/`restore`. It comprises E4.0–E4.5b
+and explicitly excludes E4.6a/E4.6b legacy compatibility cleanup. Every
+upstream dependency on the functional SCF means `E4core`, never completion of
+the E4 umbrella.
+
+The E4 umbrella remains partial: E4core is accepted; E4.6a is blocked on E6b
+production batch-route retirement with W2/W3 and batch-critical E7 clearance;
+E4.6b is blocked until every remaining legacy FULL fallback is migrated,
+globally rejected, or explicitly retired.
 
 ## E4.0 — pure raw charge map extracted
 
@@ -1023,8 +1041,9 @@ derivative correction.
 
 The legacy full solver is no longer the ordinary eligible single-System
 production route, but remains an intentional compatibility/fallback engine.
-E4 remains partial while those fallback owners depend on it. E4.6 cleanup is
-sequenced after the remaining batch and compatibility migrations below.
+E4core is accepted; the E4 umbrella remains partial while those fallback
+owners still require `SelfConsistentFieldFull`. E4.6 cleanup is sequenced
+after the remaining batch and compatibility migrations below.
 
 ## E4.1 — functional simple solver (done; production-routed by E4.5b)
 
@@ -1059,8 +1078,8 @@ composition; a real fixed-System charge-guess vmap is also covered.
 At the E4.1 milestone this implementation was an internal parallel path;
 `Calculator`, `System.singlepoint`, `scf.solve`, `SelfConsistentFieldFull`,
 and implicit mode were unchanged. Production FULL routing was integrated later
-by E4.5b. E4 remains partial while E4.6 cleanup is blocked by remaining
-legacy fallback ownership.
+by E4.5b. E4core is accepted; the E4 umbrella remains partial while E4.6
+cleanup is blocked by remaining legacy fallback ownership.
 E3 still owns the transitional spectral
 derivative discrepancy; its test now attributes mode selection to explicit
 eigensolver branches without requiring the discrepancy to remain nonzero.
@@ -1154,7 +1173,7 @@ This intentionally removes one legacy side effect. Current
 `mixer.converged`; thus it advances the mixer on the convergence step. The
 canonical functional solver does not perform that dead transition. The
 parity is not exact: legacy Anderson may fail while solving the mixer system
-for a residual that already satisfies convergence, while canonical E4 accepts
+for a residual that already satisfies convergence, while canonical E4core accepts
 the raw physical result without that transition. E4.5b accepted this deliberate
 solver-bug fix for eligible production FULL routing.
 
@@ -1542,7 +1561,7 @@ An eager-only outer wrapper may eventually stop early if measurement justifies i
 ### Eventual legacy cleanup target
 
 The following are eventual compatibility-cleanup targets, not immediate work
-that follows from E4 single-System routing:
+that follows from E4core single-System routing:
 
 - legacy `IndexHelper.cull/restore` and cache `cull/restore`;
 - legacy `_Data.cull/restore`;
@@ -1554,7 +1573,7 @@ and the batch-critical E7 gate plus E6c1 W2/W3 clearances pass. C5 migrates
 the surviving immutable core structural representation and does not wait for
 deletion of a separate legacy-only adapter.
 
-## E4 acceptance
+## E4core acceptance
 
 For the reference set:
 
@@ -1563,7 +1582,7 @@ For the reference set:
 - same or documented iteration counts;
 - single-system derivatives unchanged;
 - the fixed-trip functional SCF controller composes under `vmap` without
-  cull/data-dependent shape logic. E4 supplies the numerical controller;
+  cull/data-dependent shape logic. E4core supplies the numerical controller;
   E6a plus C8a makes the public `System.singlepoint` result transform-safe
   for the exact B1 conformer call. The eager `Calculator.singlepoint` adapter
   separately owns host-side warning/error policy and early stopping;
@@ -1643,7 +1662,7 @@ E3 starts only after:
 
 - E0 decision approved;
 - E1 transform blockers addressed;
-- E4 pure fixed-point map available.
+- E4core pure fixed-point map available.
 
 E3 work on supported non-D3 single-System paths may proceed from the existing
 functional raw map and solver. It does not wait for E6a, E6b, E4.6, legacy
@@ -1704,7 +1723,7 @@ Reframe Track C as dxtb migration plus external dependency cleanup.
 
 ## C5 core structural data: IndexHelper/Basis Node migration
 
-Start after B6b-core, E2's structural integral plan, and E4's fixed-shape
+Start after B6b-core, E2's structural integral plan, and E4core's fixed-shape
 single-System inputs. Migrate the immutable core structural value established
 at B6b-core into child fields: no `batch_mode`, no cull/restore, and no Python
 per-molecule scalar in context. Per-molecule counts that vary between stacked
@@ -1751,6 +1770,9 @@ Result tree from tensor inputs with `Result.snapshot()`, not
 round-trip, default `out_dims=0`, reconstructed `Result`/nested types, one new
 leading dimension on every tensor leaf, optional static `None` preservation,
 static classical labels with mapped energy leaves, and autograd connectivity.
+Both `SCFStatus` failure-code tensors must be dynamic pytree leaves, acquire
+the mapped leading dimension, reconstruct inside `SCFStatus`, retain integer
+dtype/device, and remain outside static pytree context.
 The exact public B1 `vmap(system.singlepoint, in_dims=(0,))(positions_batch)`
 integration acceptance belongs only to E6a after its fixed-trip controller
 exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
@@ -1887,7 +1909,7 @@ Prerequisites:
 - B5.6 public solver-status schema;
 - C8a Result pytree representation, accepted with its tensor-built Result probe;
 - E2 structural integral plan;
-- E4 fixed-shape SCF;
+- E4core fixed-shape SCF;
 - the transform-safe single-System entrypoint above;
 - transform-critical custom operations solved for the tested method.
 
@@ -1918,13 +1940,17 @@ Tests:
 
 The public `Result.status` is the stable B5.6 `SCFStatus`, not internal
 `SCFSolveResult`: it preserves trajectory and final-spectrum failure codes
-separately while `converged` remains outer convergence only. Test valid
-zero-T and finite-T solves, tensor-detected invalid-temperature status, too
-many electrons, Fermi nonconvergence, electron-count failure,
+separately while `converged` remains outer convergence only. On the currently
+supported public configuration domain, test valid zero-T and finite-T solves,
+too many electrons, Fermi nonconvergence, electron-count failure,
 trajectory-versus-final failure, valid subsolves with outer nonconvergence,
-and `maxiter=0`. A statically invalid configured temperature may still fail
-during preparation; other tensor-detected spectral status is returned without
-eager warning/error interpretation.
+and `maxiter=0`. Tensor-detected spectral status is returned without eager
+warning/error interpretation. B5.6 separately tests projection of a
+tensor-valued invalid-temperature status; E6a does not promise that a
+negative configured temperature returns this status. Negative configured
+temperature and negative Fermi `maxiter` remain legacy-owned pending the
+global E4.6b configuration-policy decision; E6a does not migrate either
+configuration or change Calculator behavior.
 
 ## E6b mixed composition
 
@@ -1933,7 +1959,7 @@ Prerequisites:
 - B6b-core and C5 core structural migration;
 - C8b stackable Model/System values (C8a separately covers Result);
 - defined padding structure and E7-relevant padding safety;
-- E2 structural integral plan and E4 fixed-shape SCF;
+- E2 structural integral plan and E4core fixed-shape SCF;
 - transform-critical custom operations solved for the tested method.
 
 Build Systems independently in setup.
@@ -1988,8 +2014,11 @@ second permanent batched physics core.
 Record complete W2/W3 results, parameter-gradient timing when available, and
 GPU throughput/memory against the deferred T0.8 GPU baseline. E6c2 is final G2
 performance sign-off. The GPU baseline may remain outstanding after CPU E6b
-route retirement because E6c1 already cleared both CPU workloads; without GPU
-measurements, final GPU/G2 performance acceptance remains open.
+route retirement because E6c1 already cleared both CPU workloads. An explicit
+E6c1 architecture-review waiver may permit route retirement despite a CPU
+regression, but it does not satisfy G2's throughput target; E6c2/G2 remains
+open until documented throughput targets are met or the acceptance criterion
+is explicitly amended. Missing measurements are never clearance.
 
 ---
 
@@ -1997,7 +2026,7 @@ measurements, final GPU/G2 performance acceptance remains open.
 
 Do not leave this entirely to the end.
 
-Start adding the audit tests while B4/B6/E4 are being rewritten.
+Start adding the audit tests while B4/B6/E4core are being rewritten.
 
 For every singular or potentially singular operation on padded tensors:
 
@@ -2196,7 +2225,7 @@ Acceptance tests must include:
 
 # 24. D performance track
 
-Do not start compile-oriented restructuring before E4 and its relevant E6
+Do not start compile-oriented restructuring before E4core and its relevant E6
 branch (E6a for conformers, E6b for mixed Systems).
 
 The order is:
@@ -2242,14 +2271,14 @@ Calculator retains eager policy through its separate adapter.
 E4.5b production single-System routing
   ├──> E3 supported non-D3 spectral/SCF work (independent of E6a/E6b/E4.6/Node)
   ├──> B6b-core ──> C5 core structural migration ──> C6/C7 ──> C8b
-  ├──> B5 + E4 ──> B5.6 public solver-status schema ──> C8a Result pytree
+  ├──> B5 + E4core ──> B5.6 public solver-status schema ──> C8a Result pytree
   └──> fixed-trip functional SCF ──> private transform boundary
 
 B1 public system.singlepoint + B6b-core + E2 + private transform boundary
   + B5.6 status schema + C8a Result pytree
   └──> E6a conformer vmap over one fixed System (no C5/C8b or E4.6a)
 
-C5/C6/C7 + B3b + C8b + E2/E4 + defined padding
+C5/C6/C7 + B3b + C8b + E2/E4core + defined padding
   └──> E6b mixed-System construction/stack-vmap implementation
           └──> batch-critical E7 padding-safety gate
 
@@ -2268,13 +2297,13 @@ E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
 B5/B6a ──> F0 training invariant
 B6b-core + C1b + E3 ──> F3/F4
 C8b + stable training core ──> F1/F2
-E4 + E6a + T0.8 GPU ──> D1 conformer compile
+E4core + E6a + T0.8 GPU ──> D1 conformer compile
 F2d + E6b production route ──> D3 mixed-System compile
 E6b production route + D3 ──> D5 pair concatenation (conditional)
 E6b route + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
 ```
 
-Recommended early ordering remains: R0, E0, E1, B4/B5/B6a, B7, E2, and E4
+Recommended early ordering remains: R0, E0, E1, B4/B5/B6a, B7, E2, and E4core
 according to their independent prerequisites. After E4.5b, E3 and B6b-core may
 proceed independently. B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
@@ -2440,7 +2469,7 @@ Before claiming G1/G2 architecture complete:
 - degenerate eigensolver cases correct;
 - NO2 GFN2 third order correct;
 - D3 forward-mode blocker fixed;
-- E4 functional SCF;
+- E4core functional SCF;
 - E3 required derivative modes pass;
 - E6a conformer `vmap` passes;
 - no cross-system derivative blocks.

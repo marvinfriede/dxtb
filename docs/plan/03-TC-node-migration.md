@@ -106,7 +106,7 @@ does not require deleting the legacy adapter.
 
 **Done when.** Both migrated; conversion moves their tensors with the parent's `.to(device)`; T0.2 reproduced.
 
-**Needs.** C1, B3, B6b-core, E2, E4. **Size.** M.
+**Needs.** C1, B3, B6b-core, E2, E4core. **Size.** M.
 
 ---
 
@@ -177,6 +177,10 @@ workaround, or custom `out_dims` is part of C8a acceptance. The exact public
 B1 call is tested only in E6a after both this pytree and the fixed-trip
 controller exist.
 
+Specifically, `trajectory_failure` and `final_failure` are dynamic integer
+Tensor leaves: each gains one leading mapped dimension, reconstructs in
+`SCFStatus`, preserves dtype/device, and is not stored in pytree context.
+
 **Needs.** B5, B5.6, C1. **Unblocks.** E6a. **Size.** M.
 
 ## C8b Model/System stackability
@@ -240,7 +244,7 @@ owners must first be retired or migrated under E4.6a/E4.6b.
 | C2 | tad-mctc classes | C1 | S |
 | C3 | tad-multicharge | C1 | S |
 | C4 | tad-dftd3, tad-dftd4 | C1, C3 | M |
-| C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4 | M |
+| C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4core | M |
 | C6 | Core components and lists | C5, B6b-core | L |
 | C7 | Integrals, Hamiltonian, driver | C5, B4, B6b-core | M |
 | C8a | Result pytree representation | B5, B5.6, C1 | M |

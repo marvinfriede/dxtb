@@ -168,7 +168,7 @@ the complete F1/F2 workflow.
 
 **Done when.** The example term passes all tests and trains in a short example script.
 
-**Needs.** B6 (per-call interaction data), C1b, E3 (consistent SCF derivatives), E4 (pure step). **Unblocks.** F4. **Size.** L.
+**Needs.** B6 (per-call interaction data), C1b, E3 (consistent SCF derivatives), E4core (pure step). **Unblocks.** F4. **Size.** L.
 
 ---
 
@@ -184,7 +184,7 @@ the complete F1/F2 workflow.
 
 **Done when.** A density-matrix example term converges, has consistent forces, and trains.
 
-**Needs.** F3, E4. **Size.** L. **Start only if** F3 results show the need.
+**Needs.** F3, E4core. **Size.** L. **Start only if** F3 results show the need.
 
 ---
 
@@ -199,5 +199,5 @@ the complete F1/F2 workflow.
 | F2c | Train only new elements | B3, C1 | M |
 | F2d | Training workflow | F2b, F2c, E3, B8 | L |
 | F2e | Validation | F2d | M |
-| F3 | ML interaction interface | B6, C1b, E3, E4 | L |
-| F4 | Density-matrix ML term (conditional) | F3, E4 | L |
+| F3 | ML interaction interface | B6, C1b, E3, E4core | L |
+| F4 | Density-matrix ML term (conditional) | F3, E4core | L |
