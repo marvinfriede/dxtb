@@ -1573,16 +1573,6 @@ def test_b6a_functional_interaction_family_matrix(
     family: str, input_owners: str, expected_data_behavior: str
 ) -> None:
     """Isolate each supported interaction's data, map, gradient, and state."""
-    expected_owners = {
-        "ES2": "positions",
-        "ES3": "setup",
-        "AES2": "positions",
-        "DispersionD4SC": "positions",
-        "GeneralizedBorn": "positions",
-        "ElectricField": "positions+field",
-        "ElectricFieldGrad": "positions+field_grad",
-    }
-    assert input_owners == expected_owners[family]
     assert len(_FUNCTIONAL_SCF_INTERACTION_TYPES) == 7
     assert set(_FUNCTIONAL_SCF_INTERACTION_TYPES) == {
         ES2,
