@@ -251,7 +251,8 @@ graph LR
   T04[T0.4 transform baseline] --> E30
   T03 & T04 --> E0[E0 SCF differentiation decision]
   E0 & E11 & E12 & E4core & T02 & T03 & T04 --> E30
-  E30 & E1 & E4core --> E3[E3 complete SCF differentiation]
+  E30 & E0 & E4core & E11 & E12 --> E31[E3.1 SCF differentiation implementation]
+  E31 & E1 & E2 --> E3[E3 complete end-to-end differentiation]
   B3a & B4 --> E2
   B6bcore --> C5
   C5 --> C6 & C7
@@ -300,7 +301,7 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 supported non-DFT-D3 preflight → full E3 after full E1 → B8b → E8 (B8a after B7) |
+| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 after full E1/E2 (including E1.3 for outer DFT-D3) → B8b → E8 (B8a after B7) |
 | G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |

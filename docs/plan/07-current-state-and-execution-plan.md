@@ -45,8 +45,9 @@ Current state:
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — core prerequisite done | Single-System setup owns a structural `PairPlan`; fixed-shape overlap/dipole/quadrupole builders consume it. Only the packed legacy driver's per-entry setup loop remains, deferred to E6b. E2 is no longer a blocker for E4core. |
-| E3.0            | open; ready next                | Non-DFT-D3 spectral derivative / NO2 preflight can start with E4core and the completed E1.1/E1.2 subset; it does not wait for full E1. |
-| E3             | not done                        | Full GFN1/GFN2 SCF differentiation still requires full E1 plus the E3.0 diagnosis and implementation. |
+| E3.0            | open; ready next                | Diagnosis-only preflight must first reproduce both GFN2/NO2 known-wrong endpoints under exact T0.2 settings; it needs only E4core and completed E1.1/E1.2 subset, not E1.3. |
+| E3.1            | not started                     | SCF differentiation implementation/fixes follow E3.0 and do not require outer classical DFT-D3. |
+| E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1, full E1 (including E1.3 where DFT-D3 is active), E2, and E4core. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6b batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a conforms to B1's public `vmap(system.singlepoint)` contract and requires the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support; E6b mixed-System route activation requires C8b, batch-critical E7, and E6c1 W2/W3 clearance. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
@@ -768,8 +769,32 @@ legacy-shaped setup/cache objects still violate the broader B6a setup/value
 target and remain there for later migration. The forward-mode failure is a
 separate E1.3 tad-dftd3 custom-operation blocker. Classical DFT-D3 energy is
 added outside `SCFInputs`/the self-consistent map, so it is not an E4core
-SCF-state prerequisite. E3.0 excludes DFT-D3 rather than treating its
-unrelated outer-energy transform as a prerequisite.
+SCF-state prerequisite. Thus the current outer `System.singlepoint()` path
+operationally reads the stored DFT-D3 component/cache, but the SCF inputs and
+fixed-point map do not own or consume it. E3.0 excludes DFT-D3 rather than
+treating its unrelated outer-energy transform as a prerequisite.
+
+### B6a-SCF executable acceptance record
+
+The completed B6a-SCF designation is valid only with executable evidence for
+this bounded acceptance inventory: exact built-in functional SCF interaction
+types `ES2`, `ES3`, `AES2`, `D4SC`, `GeneralizedBorn`, `ElectricField`, and
+`ElectricFieldGrad`. For every exact production type, tests must establish
+that the persistent System/setup object contains no per-call geometry result
+that is overwritten between evaluations. Verify that `_interaction_data()`
+creates a fresh call-local data value on each evaluation; evaluate geometries
+A/B/A and compare the last A values and gradients with a freshly constructed
+A System; and snapshot the relevant System setup/component fields before and
+after the sequence to prove they are unchanged. Verify that an unsupported
+custom interaction cannot enter the functional route and follows the existing
+legacy fallback/rejection contract. Finally, assert that outer classical
+DFT-D3 is absent from `SCFInputs`. If an item lacks executable evidence, reopen
+this bounded prerequisite rather than treating the retrospective audit alone
+as acceptance.
+
+This bounded acceptance does not replace B6b-core's stronger immutable
+container/purity work, nor does it close broader B6a's legacy-shaped DFT-D3
+setup/cache migration.
 
 ## B6a.1 Classical components
 
@@ -912,9 +937,10 @@ Finite-temperature degeneracies use the analytic spectral divided-difference
 limit, and a zero-temperature occupied/unoccupied crossing is not assigned an
 artificial derivative. E4core owns both the pure physical map and the
 functional fixed-shape solver around it, including tensor-masked SCF/Fermi
-control flow and per-call spectral inputs. E3.0 owns the NO2/spectral
-preflight; full E3 owns invariant spectral differentiation using the raw
-E4core map, except for any narrowly isolated primitive fix accepted by E3.0.
+control flow and per-call spectral inputs. Diagnosis-only E3.0 reproduces and
+localizes both NO2 endpoints; E3.1 owns mathematical fixes and invariant
+spectral/SCF differentiation using the raw E4core map. No such fix is part of
+E3.0.
 E6a owns
 conformer mapping over a fixed System; E6b owns mixed-System batching. E0
 changes no SCF implementation and does not mark E3, the E4 umbrella, E6a, or
@@ -1062,10 +1088,11 @@ JVP/jacfwd are finite but their numerical derivatives differ from reverse
 mode by about `1.205e-6` for an isolated Hamiltonian-to-density spectral
 projection under that legacy mode selection. The discrepancy reproduces
 inside the transitional eigensolver without map or interaction plumbing; it
-is the already-defined spectral contract issue. E3.0 owns its preflight and
-layer diagnosis; any narrowly isolated spectral primitive fix may land there
-only under E3.0's acceptance rule, while broader derivative work remains full
-E3.
+is an existing spectral-contract characterization, not by itself proof of the
+NO2 diagnosis. E3.0 records this and the exact two NO2 endpoints without
+implementation changes. E3.1 owns any fix under E0's already-decided
+contract; a new custom primitive requires a separately reviewed upstream
+design package.
 
 The legacy full solver is no longer the ordinary eligible single-System
 production route, but remains an intentional compatibility/fallback engine.
@@ -1108,9 +1135,11 @@ At the E4.1 milestone this implementation was an internal parallel path;
 and implicit mode were unchanged. Production FULL routing was integrated later
 by E4.5b. E4core is accepted; the E4 umbrella remains partial while E4.6
 cleanup is blocked by remaining legacy fallback ownership.
-E3.0 owns preflight of the transitional spectral derivative discrepancy; its
-test now attributes mode selection to explicit
-eigensolver branches without requiring the discrepancy to remain nonzero.
+E3.0 is diagnosis-only: it must first reproduce both T0.2 GFN2/NO2
+`hyperpolarizability` and `pol_deriv` known-wrong endpoints with the historical
+Anderson setup before tracing either failure through lower layers. The
+isolated H2O mode-selection discrepancy remains supporting characterization
+and cannot substitute for those endpoint reproductions.
 
 This is the most important structural package after state removal.
 
@@ -1688,19 +1717,24 @@ fallbacks are migrated, globally rejected, or explicitly retired.
 
 ---
 
-# 15. E3.0 preflight and full E3 differentiation
+# 15. E3.0 diagnosis, E3.1 implementation, and full E3 acceptance
 
-The next runnable package is E3.0, specified in
-[`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#e30-spectral-derivative--no2-preflight-and-invariant-eigensolver-audit).
+The next runnable package is diagnosis-only E3.0, specified in
+[`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#e30-diagnosis-only-spectral-derivative--no2-preflight).
 It audits the open-shell GFN2 NO2 spectral/Fermi derivative path on supported
-non-DFT-D3 single-System calculations. Its prerequisites are E0, accepted
-E4core, the T0.2/T0.3/T0.4 baseline cases, and the completed E1.1/E1.2
-primitives used by that path; it does not wait for E1.3 or full E1. E3.0 is
+non-DFT-D3 single-System calculations. It first reproduces both GFN2/NO2
+`KNOWN_WRONG` endpoints under exact T0.2 reference settings, then isolates the
+first failing layer. Its prerequisites are E0, accepted E4core, T0.2/T0.3/T0.4
+baseline cases, and completed E1.1/E1.2 primitives used by that path; it does
+not wait for E1.3 or full E1. E3.0 makes no mathematical/spectral change and is
 independent of E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
 
-Full E3 implementation and GFN1/GFN2 transform acceptance requires E3.0, E0,
-full E1 (including E1.3 DFT-D3/tad-dftd3 forward-mode support), and E4core.
-The DFT-D3 blocker is separate from the E3.0 non-DFT-D3 preflight.
+E3.1 implements SCF differentiation after E3.0 using the SCF-relevant E1.1/E1.2
+subset; outer classical DFT-D3 does not block that algorithm. Full E3
+end-to-end GFN1/GFN2 acceptance additionally requires full E1 (including E1.3
+DFT-D3/tad-dftd3 forward-mode support) and E2. The DFT-D3 blocker is separate
+from E3.0/E3.1's SCF-map work but remains a full end-to-end acceptance blocker
+where that outer term is active.
 
 Do not build higher-order implicit differentiation around today's mutable `_Data` closure.
 
@@ -2304,7 +2338,7 @@ Calculator retains eager policy through its separate adapter.
 
 ```text
 E4.5b production single-System routing
-  ├──> E3.0 non-DFT-D3 spectral/NO2 preflight (independent of E6a/E6b/E4.6/Node)
+  ├──> E3.0 exact NO2 diagnosis-only preflight ──> E3.1 SCF differentiation implementation
   ├──> B6b-core ──> C5 core structural migration ──> C6/C7 ──> C8b
   ├──> B5 + E4core ──> B5.6 public solver-status schema ──> C8a Result pytree
   └──> fixed-trip functional SCF ──> private transform boundary
@@ -2328,7 +2362,8 @@ remaining compatibility fallback migrations/retirements
 
 C2-C4 + C8a/C8b + E4.6a + E4.6b ──> C9 final TensorLike/ModuleLike purge
 
-E3.0 ──> full E3 only after full E1, including E1.3 DFT-D3/tad-dftd3
+E3.0 ──> E3.1 on SCF-relevant E1.1/E1.2 subset
+E3.1 + full E1 (including E1.3 DFT-D3/tad-dftd3) + E2 ──> full E3 acceptance
 full E3 + B8a/B7 ──> B8b/E8 ──> G1 gate
 B5 ──> F0 bounded training/state-history invariant
 B6b-core + C1b + full E3 ──> F3/F4
@@ -2341,18 +2376,22 @@ E6b route + W2/W3 + GPU baseline ──> E6c2 final G2 performance acceptance
 
 Recommended early ordering remains: R0, E0, the E1.1/E1.2 supported subset,
 B4/B5/B6a-SCF, B7, E2, and E4core according to their prerequisites. After
-E4.5b, E3.0 and B6b-core may proceed independently; full E3 waits for full E1.
+E4.5b, diagnosis-only E3.0 and B6b-core may proceed independently; E3.1 may
+implement SCF differentiation after E3.0 without E1.3, while full end-to-end
+E3 acceptance waits for full E1.
 B5.6 closes public solver-status fields before C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
 finally tested. B3b/C5/C6/C7/C8b unblock E6b. E6a does not wait for C5/C8b or
 E4.6a.
 
-The recommended next implementation package is **E3.0 — spectral derivative /
-NO2 preflight and invariant eigensolver audit** on the already functional
-single-System path. It is a source/test audit and focused preflight, not the
-full E3 eigensolver/SCF-differentiation implementation. It does not wait for
-the cleanup or batching branches above.
+The recommended next runtime package is **E3.0 — diagnosis-only spectral
+derivative / NO2 preflight** on the already functional single-System path. It
+must reproduce both GFN2/NO2 known-wrong endpoints using exact T0.2 settings,
+then localize each failure; it makes no mathematical/spectral implementation
+change. E3.1 owns subsequent SCF differentiation implementation and can
+proceed without outer DFT-D3/E1.3. Full E3 acceptance still waits for full E1
+and E2. E3.0 does not wait for the cleanup or batching branches above.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 

@@ -108,60 +108,116 @@ Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as 
 
 E3 has a runnable preflight milestone and a separate full-completion gate.
 
-### E3.0 Spectral derivative / NO2 preflight and invariant eigensolver audit
+### E3.0 Diagnosis-only spectral derivative / NO2 preflight
 
-**Scope.** Audit the spectral/Fermi derivative seam and isolate the open-shell
-GFN2 NO2 third-order failure before starting the full E3 strategy. Inspect
-`src/dxtb/_src/scf/functional/map.py` (`_transitional_diagonalize`,
-`evaluate_hamiltonian`), `src/dxtb/_src/wavefunction/filling.py`
-(`get_fermi_occupation_core`, density/occupation response and entropy), the
-`storch.eighb` generalized eigensolver path, and these tests:
-`test/test_scf/test_functional_map.py`,
+**Scope.** Reproduce the two user-visible open-shell GFN2 NO2 failures and
+isolate their first failing layer before implementation. This package is
+diagnosis-only: it may add focused characterization/regression tests and
+record evidence, but it makes no mathematical, spectral, or eigensolver
+implementation change. Inspect `src/dxtb/_src/scf/functional/map.py`
+(`_transitional_diagonalize`, `evaluate_hamiltonian`),
+`src/dxtb/_src/wavefunction/filling.py` (`get_fermi_occupation_core`,
+density/occupation response and entropy), the `storch.eighb` generalized
+eigensolver path, and these tests: `test/test_scf/test_functional_map.py`,
 `test/test_scf/test_fermi_derivatives.py`,
 `test/test_wavefunction/test_functional_filling.py`,
 `test/test_wavefunction/test_fermi_derivatives.py`,
 `test/test_wavefunction/test_filling.py`,
-`test/test_baseline/components.py`,
-`test/test_baseline/test_derivatives.py`, and
-`test/test_baseline/test_reference.py`. Do not include DFT-D3/tad-dftd3
+`test/test_baseline/components.py`, `test/test_baseline/test_derivatives.py`,
+and `test/test_baseline/test_reference.py`. Do not include DFT-D3/tad-dftd3
 dispersion in this preflight.
 
-Use the repository's `test/molecules.py::samples["NO2"]` geometry unchanged,
-GFN2 with the existing open-shell `spin=1` setup recorded in
-`test/test_baseline/molecules.py::SYSTEMS["NO2"]`, and the T0.2/T0.3 baseline
-property configuration. For the functional production-path comparison, record
-the explicit setup as FULL SCF, potential representation, non-strict configured
-Broyden (effective Anderson), and 300 K; retain the T0.3 driver/mode cell
-settings for the isolated comparisons. Add a zero-T spectral/filling case where
-the occupations are defined. Retain a GFN1 comparison around the same converged
-state. First test Fermi/occupation response with frozen NO2-representative
-electron counts, spin channels, temperatures, and orbital-energy spectra;
-then test the common spectral-density primitive with frozen Hamiltonian and
-overlap; then one pure SCF map at a fixed converged input; only then compare
-the full fixed point. Include zero-T and finite-T cases where defined,
-exact/near degeneracies, and gauge-invariant density, occupation, and energy
-outputs. Test reverse and forward first derivatives plus nested second and
-third derivatives on the affected smooth paths, and compare against central
-finite differences over a double-precision step sweep from `1e-2` through
-`1e-5`, recording the stable region and truncation/roundoff behavior.
+#### E3.0 acceptance: reproduce both historical NO2 failures first
 
-E3.0 is complete when it records the first layer that fails, distinguishes
-Fermi, eigensolver, density, pure-map, and full-fixed-point causes, and gives
-a reproducible diagnosis. A narrowly isolated spectral/eigensolver fix may
-land in E3.0 only when a regression identifies that primitive as the cause;
-full SCF implicit/unrolled differentiation remains E3 work. Do not change the
-`KNOWN_WRONG` NO2 entry, references, or tolerances in E3.0. If a fix makes the
-stored result agree with nested derivatives and a stable finite-difference
-region, record that evidence and leave marker/reference maintenance to an
-explicit follow-up.
+Use `test/molecules.py::samples["NO2"]` geometry unchanged and the existing
+open-shell `spin=1` setup in `test/test_baseline/molecules.py::SYSTEMS["NO2"]`.
+First reproduce both exact entries in `KNOWN_WRONG[("NO2", "gfn2")]`,
+individually: (1) `hyperpolarizability`; and (2) `pol_deriv` (polarizability
+derivative). Do not diagnose a lower layer until both user-visible failures are
+reproduced. If they fail at different layers, report the two diagnoses
+separately.
 
-**Needs.** E0, E4core, T0.2/T0.3/T0.4 baselines, and the completed E1.1/E1.2
-primitives used by the selected non-DFT-D3 path. It does not require E1.3 or
-full E1 completion. The overview DAG names this milestone E3.0 and makes each
-completed prerequisite explicit. **Unblocks.** Full E3 diagnosis/implementation.
+For these historical reproductions, use the exact T0.2 setup in
+`test/test_baseline/matrix.py`: `scf_mode="full"`, `mixer="anderson"`,
+`maxiter=300`, `f_atol=1e-10`, `x_atol=1e-10`, default potential
+representation, and the stored 300 K configuration. Keep the T0.2 reference
+driver and derivative-path cell being reproduced. For each observable record
+the current nested-autograd value, stored dxtb reference, dxtb central
+finite-difference result, tblite reference/finite-difference result, maximum
+absolute and relative disagreements for autograd-versus-stored-dxtb,
+autograd-versus-dxtb-finite-difference, and dxtb-finite-difference-versus-
+tblite, plus driver, SCF settings, and actual derivative composition.
+
+Separately exercise the current functional production route as Case B: FULL,
+potential representation, configured non-strict Broyden, effective Anderson,
+300 K. Compare Case A and Case B at converged electronic energy, charges,
+orbital energies, occupation, density, Hamiltonian, and both relevant field
+derivatives (`hyperpolarizability` and `pol_deriv`). Investigate differences
+that could explain either failure; do not infer equivalence from the configured
+Broyden fallback alone.
+
+Only after both endpoints reproduce, descend through the diagnosis ladder:
+field-response endpoint; Fermi/occupation response with frozen
+NO2-representative electron counts, spin channels, temperatures, and orbital
+spectra; spectral-density construction with frozen Hamiltonian and overlap;
+one raw SCF map at a fixed converged input; and finally the complete fixed
+point. Include zero-temperature cases where occupations are defined,
+finite-temperature response, exact/near degeneracies, and gauge-invariant
+density, occupation, and energy outputs. Test reverse and forward first
+derivatives plus nested second and third derivatives on affected smooth paths.
+Compare against central finite differences over a double-precision step sweep
+from `1e-2` through `1e-5`, recording stable regions and truncation/roundoff
+behavior. T0.3 supplies derivative methodology/tolerances and matrix evidence;
+the stored NO2 reference belongs to T0.2, while T0.4 supplies
+component/eigensolver characterization.
+
+For every GFN1 comparison intended to be independent of E1.3, construct the
+System using the supported dispersion exclusion (`exclude=("disp",)` or its
+exact current Config API equivalent) and assert that no DFT-D3 component is
+present. Do not invoke DFT-D3 and merely omit its energy from differentiation.
+An end-to-end GFN1 case that includes DFT-D3 is explicitly expected-blocked by
+E1.3 and is not an E3.0 success criterion.
+
+E3.0 is complete only when both exact NO2 endpoints reproduce and the first
+failing layer of each is recorded with the evidence above. E3.0 cannot land a
+mathematical/spectral fix. It must not introduce a new custom
+spectral/autograd primitive, broadening formula, degeneracy convention, or
+eigensolver derivative policy. If diagnosis identifies a need for a new
+invariant derivative primitive in `tad_mctc.storch.eighb`, stop at the
+reproducible diagnosis and create a separately reviewed upstream design and
+implementation package. That package must specify and test exact/near
+degeneracy, zero/finite temperature, reverse orders 1–3, JVP, jacfwd, and vmap
+before dxtb consumes the pinned dependency.
+
+**Needs.** E0, E4core, T0.2/T0.3/T0.4 baselines, and completed E1.1/E1.2
+primitives used by the selected non-DFT-D3 path. E3.0 does not require E1.3
+or full E1. **Unblocks.** E3.1 SCF differentiation implementation.
 **Size.** M.
 
-### Full E3 implementation and acceptance
+### E3.1 SCF differentiation implementation
+
+**Scope.** Implement the E0-selected SCF differentiation strategy on supported
+single-System paths after E3.0 isolates the NO2 failures. E3.1 owns
+mathematical fixes to the SCF/spectral path, focused regressions, independent
+derivative/finite-difference validation, and any required upstream dependency
+work under a separately reviewed contract. It excludes outer classical
+DFT-D3: SCF differentiation can proceed without E1.3 because DFT-D3 is not
+part of the self-consistent map.
+
+If a fix makes either T0.2 NO2 known-wrong observable agree with its
+independent reference under the existing tolerance, update that exact stored
+reference and remove or narrow its exact `KNOWN_WRONG` entry in the same merge
+as the numerical fix. Never weaken the strict sentinel, leave a known-correct
+observable marked wrong, or alter references/tolerances merely to make CI
+pass. Atomic marker/reference maintenance requires nested autograd, supported
+forward-mode, a stable central finite-difference step sweep, tblite/tolerance
+agreement, and no regressions in unaffected driver/method cases.
+
+**Needs.** E3.0, E0, E4core, and the SCF-relevant completed transform
+primitives (E1.1/E1.2); no outer DFT-D3 dependency. **Unblocks.** Full E3
+end-to-end acceptance after full E1 is complete. **Size.** L.
+
+### Full E3 end-to-end acceptance
 
 **Goal.** Implement the strategy chosen in E0, so SCF results are differentiable to third order, in forward mode and under `vmap`.
 
@@ -174,7 +230,9 @@ completed prerequisite explicit. **Unblocks.** Full E3 diagnosis/implementation.
 
 **Done when.** All T0.3 SCF cells pass at orders 1–3 for GFN1 and GFN2 (with the driver chosen in E0); forward mode works; `vmap` over conformers works.
 
-**Needs.** E3.0, E0, full E1 (including E1.3), and E4core. **Unblocks.** E8,
+**Needs.** E3.1, E0, full E1 (including E1.3), E2, and E4core. Full E3
+cannot be marked complete until the supported end-to-end GFN1/GFN2 transform
+contract, including outer DFT-D3 where applicable, passes. **Unblocks.** E8,
 F2d, F3, D2. **Size.** L.
 
 ---
@@ -403,8 +461,9 @@ acceptance. **Size.** M.
 | E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
 | E2 | Fixed-shape pair kernels (from PairPlan) | T0.2, B3a, B4 | L |
-| E3.0 | Spectral derivative / NO2 preflight and invariant eigensolver audit | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
-| E3 | Full SCF differentiation and GFN1/GFN2 transform acceptance | E3.0, E0, full E1, E4core | L |
+| E3.0 | Diagnosis-only spectral derivative / NO2 preflight | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
+| E3.1 | SCF differentiation implementation and fixes | E3.0, E0, E4core, SCF-relevant E1.1/E1.2 | L |
+| E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1, E0, full E1, E2, E4core | L |
 | E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
