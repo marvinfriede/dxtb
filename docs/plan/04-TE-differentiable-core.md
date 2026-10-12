@@ -7,7 +7,7 @@
 - Remaining custom autograd functions: `CoulombMatrixAG` and optional `RepulsionAG`; none has a `jvp` rule.
 - SCF: default mode unrolls all iterations (`SCF_MODE_FULL`); implicit modes use a vendored copy of xitorch (`scf/implicit/base.py`).
 - GFN2 multipole integrals exist in PyTorch (E5, done).
-- The PyTorch overlap uses the PairPlan builder (E2).
+- The PyTorch overlap uses the PairPlan builder (E2-core).
 - The legacy production batch FULL solver culls converged systems in place (`IndexHelper.cull`/`restore`, cache `cull`/`restore`); the new functional single-System path is separately fixed-shape.
 
 ---
@@ -78,29 +78,37 @@ full E3, E6a, E8, and D2 still require full E1. **Size.** M.
 
 ---
 
-## E2 Fixed-shape pair kernels
+## E2-core Fixed-shape single-System pair kernels
 
 **Goal.** Integral and Hamiltonian pair computations with shapes fixed by the composition, no per-pair Python loops, and no geometry-dependent grouping.
 
 **Starting point.** The current PairPlan/pair-builder implementation.
 
-**Scope.**
-
-```text
-move PairPlan to setup;
-make the driver single-system;
-remove per-entry batch construction;
-keep transform-critical pair shapes static;
-only change grouping/packing further if profiling justifies it.
-```
+**Scope.** The completed E2-core milestone is the fixed-shape single-System
+integral path: setup owns a structural PairPlan; pure overlap/dipole/
+quadrupole builders consume it; core evaluation has no position-dependent
+pair count or dynamic screening; parameter-connected setup tensors remain
+connected. The packed legacy driver's per-entry setup loop is not part of
+E2-core and remains E2-legacy until E6broute retires that execution path.
 
 Apply the distance cutoff as a multiplicative mask (double-`where`, P8), not as a shape decision; replace any remaining in-place `fill_diagonal_` with a pure operation.
 
 **Tests.** T0.2 overlap and H0 values reproduced; T0.4 checks at orders 1–3; `vmap` over positions with no fallbacks; profile against T0.8 W1 and W2.
 
-**Done when.** No Python loop over pairs; no data-dependent operation in the per-call overlap path; reference reproduced.
+**Done when.** PairPlan ownership and fixed-shape behavior are established for
+single-System use, reference values and derivatives are reproduced, and
+parameter gradients remain connected. Packed legacy-driver cleanup is tracked
+separately as E2-legacy.
 
-**Needs.** T0.2, B3a, B4. **Unblocks.** E6a, D1. **Size.** L.
+**Needs.** T0.2, B3a, B4. **Unblocks.** E6a, E3, D1. **Size.** L.
+
+### E2-legacy packed-driver cleanup
+
+The legacy packed Calculator path still performs per-entry setup in its
+driver loop. Keep this compatibility behavior until E6broute makes the
+mixed-System route authoritative. **Needs.** E6broute. This is the remaining
+item under the partial E2 umbrella; no single-System transform consumer waits
+for it.
 
 ---
 
@@ -132,21 +140,30 @@ dispersion in this preflight.
 Use `test/molecules.py::samples["NO2"]` geometry unchanged and the existing
 open-shell `spin=1` setup in `test/test_baseline/molecules.py::SYSTEMS["NO2"]`.
 First reproduce both exact entries in `KNOWN_WRONG[("NO2", "gfn2")]`,
-individually: (1) `hyperpolarizability`; and (2) `pol_deriv` (polarizability
-derivative). Do not diagnose a lower layer until both user-visible failures are
-reproduced. If they fail at different layers, report the two diagnoses
-separately.
+individually, for every driver covered by that method-wide marker:
+`pytorch` and `libcint` where available. The four cases are GFN2/PyTorch
+hyperpolarizability, GFN2/libcint hyperpolarizability, GFN2/PyTorch
+`pol_deriv`, and GFN2/libcint `pol_deriv`. Do not diagnose a lower layer
+until all available cases reproduce. If drivers or quantities fail at
+different layers, report each separately.
 
-For these historical reproductions, use the exact T0.2 setup in
-`test/test_baseline/matrix.py`: `scf_mode="full"`, `mixer="anderson"`,
-`maxiter=300`, `f_atol=1e-10`, `x_atol=1e-10`, default potential
-representation, and the stored 300 K configuration. Keep the T0.2 reference
-driver and derivative-path cell being reproduced. For each observable record
+For these historical reproductions, reuse the T0.2 calculation path in
+`test/test_baseline/compute.py::SCF_OPTIONS` and
+`test/test_baseline/test_reference.py::test_reference`, including the ordinary
+`compute(...)` helper and its `third` group. Its exact settings are
+`scf_mode="full"`, `mixer="anderson"`, `maxiter=300`, `f_atol=1e-10`,
+`x_atol=1e-10`, `verbosity=0`, default potential representation, and stored
+300 K configuration. Keep the reference driver's `pytorch` or `libcint`
+selection. `test/test_baseline/matrix.py` is the separate T0.3
+derivative-methodology/status matrix, not the T0.2 reference configuration.
+For each observable and driver record
 the current nested-autograd value, stored dxtb reference, dxtb central
 finite-difference result, tblite reference/finite-difference result, maximum
 absolute and relative disagreements for autograd-versus-stored-dxtb,
 autograd-versus-dxtb-finite-difference, and dxtb-finite-difference-versus-
-tblite, plus driver, SCF settings, and actual derivative composition.
+tblite, plus driver, SCF settings, and actual derivative composition. Reuse
+the T0.2 reference helper for historical reproduction; use T0.3 separately
+for derivative-path sweeps.
 
 Separately exercise the current functional production route as Case B: FULL,
 potential representation, configured non-strict Broyden, effective Anderson,
@@ -196,41 +213,90 @@ or full E1. **Unblocks.** E3.1 SCF differentiation implementation.
 
 ### E3.1 SCF differentiation implementation
 
-**Scope.** Implement the E0-selected SCF differentiation strategy on supported
-single-System paths after E3.0 isolates the NO2 failures. E3.1 owns
-mathematical fixes to the SCF/spectral path, focused regressions, independent
-derivative/finite-difference validation, and any required upstream dependency
-work under a separately reviewed contract. It excludes outer classical
-DFT-D3: SCF differentiation can proceed without E1.3 because DFT-D3 is not
-part of the self-consistent map.
+**Scope and implementation contract.** Implement the E0-selected SCF
+differentiation strategy on supported single-System paths after E3.0 isolates
+the NO2 failures. The differentiated physical equation is the raw-map
+residual `F(x, p) = G(x, p) - x = 0`; mixer history, dynamic damping, and
+solver bookkeeping are not part of that implicit equation. The finite
+functional unrolled composition of the E4core raw map and solver transitions
+is the reference differentiation path.
 
-If a fix makes either T0.2 NO2 known-wrong observable agree with its
-independent reference under the existing tolerance, update that exact stored
-reference and remove or narrow its exact `KNOWN_WRONG` entry in the same merge
-as the numerical fix. Never weaken the strict sentinel, leave a known-correct
-observable marked wrong, or alter references/tolerances merely to make CI
-pass. Atomic marker/reference maintenance requires nested autograd, supported
-forward-mode, a stable central finite-difference step sweep, tblite/tolerance
-agreement, and no regressions in unaffected driver/method cases.
+E3.1 owns the concrete implementation:
 
-**Needs.** E3.0, E0, E4core, and the SCF-relevant completed transform
-primitives (E1.1/E1.2); no outer DFT-D3 dependency. **Unblocks.** Full E3
+1. Build and retain the differentiable unrolled reference from the shared
+   E4core physical map, without legacy mutable solver state in its graph.
+2. Implement the derivative strategy authorized by E0. If E0 selects
+   implicit differentiation, define the fixed-point primal, adjoint backward
+   solve, tangent/JVP solve, and transform rules against `G(x,p)-x=0`; do not
+   make mixer history the fixed-point definition. If E0 selects unrolled
+   differentiation, ordinary differentiable composition is the implementation
+   and no implicit custom function is added.
+3. Keep backward and JVP operations differentiable for required nested
+   composition and validate higher orders.
+4. Define derivative convergence tolerances/configuration only as authorized
+   by E0, and apply E0's explicit policy to nonconverged implicit primals.
+5. Fix spectral/Fermi defects demonstrated by E3.0 under E0's decided
+   numerical contract. A new custom spectral primitive still requires a
+   separately reviewed upstream mathematical/design package.
+6. Add focused tests for raw-map derivatives, finite unrolled derivatives,
+   implemented adjoint/JVP solves, higher-order composition, and
+   unrolled/implicit agreement where both strategies remain. Compare with
+   double-precision central finite differences over the T0.3 step sweep
+   (`1e-2` through `1e-5`) and record the stable region and roundoff behavior.
+7. Remove vendored xitorch only if E3.1 proves it has no remaining consumer
+   and the replacement passes compatibility/derivative tests; otherwise
+   defer deletion until its final consumer is retired.
+
+E3.1 excludes outer classical DFT-D3: SCF differentiation can proceed without
+E1.3 because DFT-D3 is not part of the self-consistent map.
+
+If a fix makes a T0.2 NO2 observable agree with its independent reference,
+validate it for both PyTorch and libcint before removing that quantity from
+the current `(system, method)` marker. A driver-specific fix keeps the
+broader marker until both covered drivers are correct, unless a separately
+reviewed schema change adds driver granularity while preserving the strict
+unexpected-fix sentinel. Reference maintenance is atomic over every affected
+`(method, driver, system, quantity)` and every affected stored file (the
+`gfn2-pytorch/NO2.npz` and `gfn2-libcint/NO2.npz` files when both change).
+Enumerate affected files; recompute through the ordinary reference-generation
+path; confirm only expected quantities change; compare each corrected value
+with tblite and dxtb finite differences; preserve unaffected quantities; and
+update the marker only when its entire current scope is correct. Never patch
+NPZ values manually or weaken the strict sentinel. Required evidence is
+nested autograd, supported forward-mode, a stable central finite-difference
+sweep, tblite/tolerance agreement, and no unaffected driver/method regressions.
+
+Any T0.2 NO2 reference/marker change follows the driver-complete atomic rule
+above.
+
+**Needs.** E3.0, E0, E4core, E2-core, and the SCF-relevant completed
+transform primitives (E1.1/E1.2); no outer DFT-D3 dependency. **Unblocks.** Full E3
 end-to-end acceptance after full E1 is complete. **Size.** L.
 
 ### Full E3 end-to-end acceptance
 
-**Goal.** Implement the strategy chosen in E0, so SCF results are differentiable to third order, in forward mode and under `vmap`.
+**Goal.** Acceptance-only validation of E3.1 in the complete supported
+end-to-end model. Full E3 does not introduce a second implementation.
 
-**Steps (assuming E0 chooses torch.func-native implicit differentiation; adjust otherwise).**
+**Steps.**
 
-1. A fixed-point solve function taking the pure SCF step (E4core) and returning the converged state, with a custom autograd function implementing the implicit function theorem: backward solves the adjoint linear system; `jvp` solves the tangent system; vmap rule batches both.
-2. Higher orders: the backward and `jvp` use only differentiable operations, so nesting works; verify orders 2 and 3 against T0.3.
-3. Convergence settings for derivatives (linear-solver tolerance) exposed in configuration.
-4. Remove the vendored xitorch if no longer used.
+1. Validate complete GFN1 and GFN2 paths on the T0.2 reference set using the
+   integral drivers selected by E0.
+2. Validate DFT-D3-enabled GFN1 after E1.3; until then, that end-to-end row is
+   blocked rather than approximated by silently omitting the classical term.
+3. Check reverse orders 1–3, JVP, `jacfwd`, and conformer `vmap` under the
+   finalized API, including parameter, geometry, field, and mixed derivatives
+   required by T0.3.
+4. Where both strategies remain, compare unrolled and implicit physical
+   derivatives at the same converged root within solver convergence error.
+5. Confirm the selected integral-driver contract and no regression in
+   unaffected methods, drivers, or derivative quantities.
 
-**Done when.** All T0.3 SCF cells pass at orders 1–3 for GFN1 and GFN2 (with the driver chosen in E0); forward mode works; `vmap` over conformers works.
+**Done when.** The supported complete GFN1/GFN2 end-to-end transform contract
+passes T0.3 tolerances for the driver/method scope selected by E0; the
+DFT-D3-enabled GFN1 row waits for E1.3.
 
-**Needs.** E3.1, E0, full E1 (including E1.3), E2, and E4core. Full E3
+**Needs.** E3.1, E0, full E1 (including E1.3), E2-core, and E4core. Full E3
 cannot be marked complete until the supported end-to-end GFN1/GFN2 transform
 contract, including outer DFT-D3 where applicable, passes. **Unblocks.** E8,
 F2d, F3, D2. **Size.** L.
@@ -264,7 +330,7 @@ compatibility machinery after E6c1 W2/W3 and batch-critical E7 clearances.
 T0.2, and its fixed-trip solver passes transform checks. This does not require
 repository-wide culling deletion or migration of legacy production batches.
 
-**Needs.** T0.2, B5, B6a-SCF. **Unblocks.** E3.0, E6a after its transform-safe
+**Needs.** T0.2, B5, B6a-SCF-core. **Unblocks.** E3.0, E6a after its transform-safe
 entrypoint, B6b-core, C5, D1, F4. **Size.** L.
 
 ---
@@ -337,7 +403,7 @@ direct System follows the explicit fixed-trip/status-only behavior above.
 
 **Done when.** Results and decision recorded.
 
-**Needs.** E1, E2, E4core, B6b-core, C8a Result pytree representation, T0.8,
+**Needs.** E1, E2-core, E4core, B6b-core, C8a Result pytree representation, T0.8,
 the B5.6 public solver-status schema, and the private fixed-trip boundary
 under the B1 public method. It does not need C5/C8b mixed-System stackability
 or E4.6a. **Size.** M.
@@ -450,7 +516,7 @@ acceptance. **Size.** M.
 
 **Done when.** All within T0.3 tolerances; results added to the reference data.
 
-**Needs.** E1, E2, E3, B8. **Size.** M.
+**Needs.** E1, E2-core, E3, B8. **Size.** M.
 
 ---
 
@@ -460,20 +526,21 @@ acceptance. **Size.** M.
 | --- | --- | --- | --- |
 | E0 | Decision note: SCF differentiation (E0a/E0b/E0c) | T0.3, T0.4 | M |
 | E1 | Custom autograd functions | T0.4 | M |
-| E2 | Fixed-shape pair kernels (from PairPlan) | T0.2, B3a, B4 | L |
+| E2-core | Fixed-shape single-System PairPlan/integral path | T0.2, B3a, B4 | L |
+| E2-legacy | Retire packed legacy driver's per-entry setup loop | E6broute | S |
 | E3.0 | Diagnosis-only spectral derivative / NO2 preflight | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
-| E3.1 | SCF differentiation implementation and fixes | E3.0, E0, E4core, SCF-relevant E1.1/E1.2 | L |
-| E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1, E0, full E1, E2, E4core | L |
-| E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF | L |
+| E3.1 | SCF differentiation implementation and fixes | E3.0, E0, E4core, E2-core, SCF-relevant E1.1/E1.2 | L |
+| E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1, E0, full E1, E2-core, E4core | L |
+| E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF-core | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
 | C8a | Result pytree output via tensor-built probe | B5, B5.6, C1 | M |
-| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
-| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding | L; unblocks E6c1 W3 and batch-critical E7 validation |
+| E6a | B1 conformer `vmap(system.singlepoint)` over one fixed System | E1, E2-core, E4core, B6b-core, B5.6, C8a, T0.8, private fixed-trip boundary | M |
+| E6bimpl | Mixed-System construction, stack/vmap, correctness | E6a, B3b, E4core, C5/C8b, defined padding, E2-core | L; unblocks E6c1 W3 and batch-critical E7 validation |
 | E6c1 | Pre-retirement W2 conformer and W3 mixed-System performance gates | E6a/W2, E6bimpl/W3 | M |
 | E6broute | Authoritative mixed-System production route; retire legacy batch FULL | E6bimpl, E6c1 W2/W3 clearances, batch-critical E7 gate | M; unblocks E4.6a and Track D3 |
 | E6c2 | Final W2/W3/GPU G2 performance acceptance | E6c1, E6broute, T0.8 GPU | M |
 | E4.6a | Remove legacy batch cull/restore after batch fallback retirement | E6broute, E6c1 W2/W3, batch-critical E7 | M |
 | E4.6b | Delete remaining legacy FULL loop after all fallback owners retire | E4.6a, fallback migrations/policy decisions | M |
 | E7 | Padding-safety validation; batch-critical subset gates E6b production routing | T0.3 | M |
-| E8 | Third-order acceptance | E1, E2, E3, B8a, B8b | M |
+| E8 | Third-order acceptance | E1, E2-core, E3, B8a, B8b | M |

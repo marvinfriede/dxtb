@@ -94,7 +94,7 @@ use Calculator.
 - Gradients flow from energies to every parameter leaf the method uses and match finite differences, `refocc` included (T0.9 table, T0.12).
 - T0.2 reference reproduced.
 
-**Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2 (index lists in setup). **Size.** L.
+**Needs.** B1, B2, T0.12. **Unblocks.** B5, C5, E2-core (index lists in setup). **Size.** L.
 
 **Status: partial.**
 
@@ -142,7 +142,7 @@ B3a record: `dxtb.calculators.Model` (parameters, configuration, additional comp
 
 **Done when.** No integral or Hamiltonian object is mutated after construction; T0.2 reference reproduced.
 
-**Needs.** B1. **Unblocks.** B5, C7, E2. **Size.** L (can be split per integral type: overlap, dipole, quadrupole, H0).
+**Needs.** B1. **Unblocks.** B5, C7, E2-core. **Size.** L (can be split per integral type: overlap, dipole, quadrupole, H0).
 
 ---
 
@@ -223,7 +223,7 @@ negative-temperature policy remains deferred and is not decided by E6a.
 **B6a:** remove all state persistent across calls. Temporary per-call SCF data
 may still be mutable because the old batched SCF culls it.
 
-**B6a-SCF (complete):** the bounded state-removal subset required by the
+**B6a-SCF-core (complete implementation prerequisite):** the bounded state-removal subset required by the
 canonical functional SCF inputs and raw map. It covers self-consistent
 interaction/setup data used by `SCFInputs`; it excludes classical terms added
 outside the SCF result. E4core depends on this completed subset, not on the
@@ -234,6 +234,12 @@ and energy locally, and does not mutate the component or cache. Those legacy
 setup/cache objects still need B6a migration; their separate forward-mode
 blocker belongs to E1.3.
 
+**B6a-SCF-validation (pending):** the broader retrospective seven-interaction
+A/B/A, gradient, call-data freshness, and setup-snapshot matrix is tracked
+separately in `07-current-state-and-execution-plan.md`. Its incomplete rows do
+not change the already accepted E4core implementation dependency, and the
+matrix must not be described as proven until its focused tests land.
+
 **B6b-core:** after the E4core functional single-System path lands, close core
 state purity and establish immutable structural/interaction input values.
 This does not delete cull/restore from the separate legacy batch adapter.
@@ -243,8 +249,9 @@ E6b owns production batch routing and the batch-critical E7 padding gate
 passes. E4.6b removes the remaining legacy FULL loop only after every fallback
 is migrated, globally rejected, or retired.
 
-Dependencies: B6a needs B5 and B4; B6a-SCF is its completed SCF-only subset;
-B6b-core follows B6a-SCF, E4core, and E4.5b; C5
+Dependencies: B6a needs B5 and B4; B6a-SCF-core is the completed SCF-only
+implementation prerequisite; B6b-core follows B6a-SCF-core, E4core, and
+E4.5b; C5
 Node-migrates the immutable structural boundary established by B6b-core.
 
 **Goal.** Geometry-dependent intermediates are computed inside each call; no component or driver keeps state between calls.
@@ -263,7 +270,7 @@ Node-migrates the immutable structural boundary established by B6b-core.
 - The T0.5 test 1 scenario is impossible by construction (call history no longer matters).
 - T0.2 reference reproduced, including Hessians and IR/Raman without manual resets.
 
-**Needs.** B5, B4. **Unblocks.** C6, C7, E4core through B6a-SCF, F3. **Size.** L (can be split: interactions, classicals, driver).
+**Needs.** B5, B4. **Unblocks.** C6, C7, E4core through B6a-SCF-core, F3. **Size.** L (can be split: interactions, classicals, driver).
 
 ---
 
@@ -332,8 +339,9 @@ B8b: third-order and mixed-response properties after E3.
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3, B4 | M |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
-| B6a-SCF | Completed self-consistent-input state-removal subset; excludes outer classical DFT-D3 | B5, B4 | done |
-| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a-SCF, E4core, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
+| B6a-SCF-core | Completed self-consistent-input state-removal implementation prerequisite; excludes outer classical DFT-D3 | B5, B4 | done |
+| B6a-SCF-validation | Retrospective seven-interaction execution matrix | B6a-SCF-core | pending |
+| B6 | Per-call geometry data; remove core caches and mutation (B6b-core: B6a-SCF-core, E4core, E4.5b; legacy purge: E4.6a/E4.6b) | B5, B4 | L |
 | B7 | Fields as inputs | B5 | M |
 | B8 | Property functions (B8a: B7; B8b: E3) | B7 (TE for order 3) | L |
 | B9 | ASE adapter (optional) | B8 | S |

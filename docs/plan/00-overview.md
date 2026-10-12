@@ -183,7 +183,7 @@ grads = torch.func.grad(loss)(params)
 | `IntDriver.is_latest`, `_positions`, stored setup state | setup returns a value | B6 |
 | Electric field as a mutable component, `update_efield`, `requires_efield*` decorators | fields as inputs | B7 |
 | culling in the functional single-System SCF path | fixed-shape masked loop | E4core; legacy batch cull/restore remains until E6b migration and E4.6a cleanup |
-| per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2 |
+| per-entry batch construction in the integral drivers, geometry-dependent pair shapes | PairPlan in setup, single-system driver | E2-core; packed legacy loop remains E2-legacy until E6broute |
 | Calculator mixins (analytical, autograd, numerical) | property functions | B8 |
 | Vendored xitorch implicit SCF | decided in E0 | E3 |
 
@@ -211,17 +211,18 @@ At the review point:
 - B1 is agreed; B2 is implemented; B3a (structural Model/System split) is
   implemented while B3b remains open;
 - B3b remains open. B4 and B5 are complete for the single-System core; B6 is
-  partial (`B6a-SCF` is complete, while broader B6a/B6b-core and legacy purge
+  partial (`B6a-SCF-core` is the completed E4core prerequisite, its expanded
+  validation matrix is pending, and broader B6a/B6b-core plus legacy purge
   work remain); B7 is done; B8 remains open;
 - E1 is partial: E1.1/E1.2 are done and E1.3 `tad-dftd3` forward-mode support
-  remains blocked upstream. E2 is partial with its single-System core complete
-  and packed legacy-driver cleanup deferred to E6b. E4core is accepted while
+  remains blocked upstream. E2 is partial with E2-core complete and packed
+  E2-legacy cleanup deferred to E6broute. E4core is accepted while
   the E4 umbrella remains partial;
 - E4core (E4.0–E4.5b) is accepted; the E4 umbrella remains partial while
   E4.6a/E4.6b compatibility cleanup is blocked on its documented owners;
 - Node and ModuleNode already exist upstream;
 - E5 is complete;
-- E2 has a substantially improved starting point;
+- E2-core is complete; the E2 umbrella remains partial until E2-legacy retires;
 - E0 remains a hard design gate for G1.
 
 ---
@@ -239,7 +240,8 @@ graph LR
   B4 --> B5
   B3a --> B5
   B5 --> B6a & B7
-  B5 & B4 --> B6aSCF[B6a-SCF: complete SCF-only state-removal subset]
+  B5 & B4 --> B6aSCF[B6a-SCF-core: completed SCF-only state-removal subset]
+  B6aSCF --> B6aSCFval[B6a-SCF-validation: expanded interaction matrix pending]
   T0R --> E11[E1.1 RepulsionAG complete]
   B3a --> E12[E1.2 CoulombMatrixAG/ES2 complete]
   T0R --> E13[E1.3 DFT-D3/tad-dftd3 forward-mode blocker]
@@ -251,18 +253,19 @@ graph LR
   T04[T0.4 transform baseline] --> E30
   T03 & T04 --> E0[E0 SCF differentiation decision]
   E0 & E11 & E12 & E4core & T02 & T03 & T04 --> E30
-  E30 & E0 & E4core & E11 & E12 --> E31[E3.1 SCF differentiation implementation]
-  E31 & E1 & E2 --> E3[E3 complete end-to-end differentiation]
-  B3a & B4 --> E2
+  E30 & E0 & E4core & E2core & E11 & E12 --> E31[E3.1 SCF differentiation implementation]
+  E31 & E1 & E2core --> E3[E3 complete end-to-end differentiation]
+  B3a & B4 --> E2core[E2-core: fixed-shape single-System integrals]
+  E6broute --> E2legacy[E2-legacy packed-driver loop retired]
   B6bcore --> C5
   C5 --> C6 & C7
   B5 & E4core --> B56[B5.6 public solver-status schema]
   B56 --> C8a[C8a Result pytree representation]
   B3b & C5 & C6 & C7 & B2 --> C8b[C8b Model/System stackability]
-  E4core & B6bcore & E2 --> TF[private fixed-trip boundary under B1 system.singlepoint]
+  E4core & B6bcore & E2core --> TF[private fixed-trip boundary under B1 system.singlepoint]
   TF & C8a --> E6a[E6a conformer vmap]
-  B6bcore & E2 & E1 --> E6a
-  E6a & B3b & C8b & E2 & E4core --> E6bimpl[E6b mixed-System implementation]
+  B6bcore & E2core & E1 --> E6a
+  E6a & B3b & C8b & E2core & E4core --> E6bimpl[E6b mixed-System implementation]
   E6bimpl --> E7batch[E7 batch-critical padding gate]
   T0W3[T0.8 W3 mixed-System baseline]
   T0W2[T0.8 W2 conformer baseline]
@@ -301,8 +304,8 @@ conformer API implementation boundary, see `07-current-state-and-execution-plan.
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 after full E1/E2 (including E1.3 for outer DFT-D3) → B8b → E8 (B8a after B7) |
-| G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
+| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1 SCF differentiation implementation → full E3 after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 (B8a after B7) |
+| G2 | Conformers: T0.8 W2 → E4core/B5.6/C8a/E2-core → E6a exact B1 `system.singlepoint` vmap → E6c1 W2 clearance. Mixed Systems: B3b/C5/C8b/E2-core/E4core → E6b implementation → E6c1 W3 clearance + batch-critical E7 → E6b route. E6c2 W2/W3/GPU sign-off closes final G2 performance acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant) → … Tracks B, C, D, E … → F1 → F2a–F2c → F2d → F2e (full workflow last by decision) |
 | G4 | T0.12 → B6 → F3 (needs E3 for consistent derivatives; C1b is already available) |
 

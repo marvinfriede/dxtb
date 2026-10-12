@@ -106,7 +106,7 @@ does not require deleting the legacy adapter.
 
 **Done when.** Both migrated; conversion moves their tensors with the parent's `.to(device)`; T0.2 reproduced.
 
-**Needs.** C1, B3, B6b-core, E2, E4core. **Size.** M.
+**Needs.** C1, B3, B6b-core, E2-core, E4core. **Size.** M.
 
 ---
 
@@ -244,7 +244,7 @@ owners must first be retired or migrated under E4.6a/E4.6b.
 | C2 | tad-mctc classes | C1 | S |
 | C3 | tad-multicharge | C1 | S |
 | C4 | tad-dftd3, tad-dftd4 | C1, C3 | M |
-| C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2, E4core | M |
+| C5 | Core structural value for `IndexHelper`/`Basis` | C1, B3a, B6b-core, E2-core, E4core | M |
 | C6 | Core components and lists | C5, B6b-core | L |
 | C7 | Integrals, Hamiltonian, driver | C5, B4, B6b-core | M |
 | C8a | Result pytree representation | B5, B5.6, C1 | M |

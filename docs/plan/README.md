@@ -33,7 +33,8 @@ In particular:
 - B3 is partial rather than complete;
 - tad-mctc's Node/ModuleNode infrastructure is already available;
 - E5 (PyTorch multipole integrals) is complete;
-- E2 starts from the newer PairPlan/pair-builder implementation;
+- E2-core uses the newer PairPlan/pair-builder implementation; packed legacy
+  cleanup is tracked separately as E2-legacy;
 - T0.8 has a CPU baseline but still lacks the planned GPU baseline.
 
 The code references in the plan point to commit `46af7bc`. `main` has moved

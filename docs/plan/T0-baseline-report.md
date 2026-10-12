@@ -425,7 +425,7 @@ every test of a layer without editing the test files.
 | `cache` | 119 | B5, B6 (result object, no component caches) |
 | `batch_mode` | 1592 | E4, E6 (masked SCF loop, `vmap` batching) |
 | `efield` | 769 | B7 (fields as inputs) |
-| `integrals` | 1291 | E2, E5 (fixed-shape kernels), C5 |
+| `integrals` | 1291 | E2-core (single-System fixed-shape kernels), E5, C5 |
 | `scf` | 2754 | E3, E4 (SCF differentiation, masked loop) |
 | `param` | 264 | F1, C5 (parameter storage, nodes) |
 | `physics_values` | 1610 | kept; migrate to the T0.2 utility where possible |
@@ -562,7 +562,7 @@ this branch) some starting points have moved:
 | --- | --- | --- |
 | E5 PyTorch multipole integrals | missing; GFN2 needs libcint | **done** (#270): dipole and quadrupole integrals in the PyTorch driver; GFN2 runs without libcint and passes every T0.4 check (third order, forward mode, `vmap`) |
 | E1 custom autograd functions | `RepulsionAG`, `CoulombMatrixAG`, `OverlapAG`, `EFunction` | `OverlapAG` and `EFunction` are gone (#268/#270). Remaining in dxtb: `RepulsionAG` (opt-in, unbounded recursion for parameters), `CoulombMatrixAG`. Also without `jvp`/vmap rule and on the default path: `storch.eighb` (tad-mctc), the C6 model of tad-dftd3, the libcint integrals (tad-libcint). The implicit mode no longer uses the xitorch `RootFinder` (#272, `scf/implicit/fixed_point.py`), but no transform runs through it either |
-| E2 fixed-shape pair kernels | per-pair Python loop, geometry-dependent `unique_shell_pairs` | pair builder (`impls/pairs.py`) groups by ordered unique-shell-pair class, built from the index helper; Python loop over classes, not pairs; distance screening exists but is opt-in and refuses to run under `torch.compile`. Still to do for E2: setup in B3, scatter per class, the H0 build, the per-entry loop over batch members in `driver.py` |
+| E2 historical baseline snapshot | per-pair Python loop, geometry-dependent `unique_shell_pairs` | At this report's baseline, the pair builder grouped by ordered unique-shell-pair class and the report listed setup, scatter, H0, and packed per-entry work as open. Current ownership is split in the execution plan: the single-System fixed-shape path is E2-core; the packed legacy-driver loop is E2-legacy and waits for E6broute. |
 | TB table, component caches | keyed on values | additionally check gradient-tracking state (T0.5 stopgap; B6 deletes it) |
 | TE starting point, eigensolver | not covered | broadened `eighb` wrong at degeneracies (order >= 2) and biased at small gaps (T0.4); the unrolled SCF now computes `L^-1` of the overlap once and passes it to `eighb` (`l_inv`, tad-mctc 0.9.1); the implicit SCF modes still use the xitorch `lsymeig` |
 | B2 configuration | mutable | unchanged |
