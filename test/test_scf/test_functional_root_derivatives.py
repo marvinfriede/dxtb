@@ -1,0 +1,1031 @@
+# This file is part of dxtb.
+#
+# SPDX-Identifier: Apache-2.0
+# Copyright (C) 2026 Grimme Group
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Reference checks for derivatives of the physical functional SCF root."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from types import SimpleNamespace
+
+import pytest
+import torch
+from tad_mctc import storch
+from torch.func import jacrev, jvp
+
+from dxtb import Calculator, GFN1_XTB, GFN2_XTB, labels
+from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.components.interactions import InteractionList
+from dxtb._src.components.interactions.field.efield import ElectricField
+from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.scf.functional import (
+    SCFCharges,
+    fock_initial_guess,
+    fock_map,
+    pack_charges,
+    potential_initial_guess,
+    potential_map,
+    scf_map,
+    setup_scf_inputs,
+)
+from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional.anderson import (
+    _solve_map_anderson,
+    setup_anderson_solver_settings,
+)
+from dxtb._src.scf.functional.solver import (
+    _project_potential_padding,
+    _solve_map,
+    finalize_scf,
+    finalize_scf_fock,
+    finalize_scf_potential,
+    setup_simple_solver_settings,
+)
+from dxtb._src.scf.guess import get_guess
+from dxtb._src.scf.iterator import get_refocc
+from dxtb._src.typing import Tensor
+
+from ..test_baseline.molecules import SYSTEMS
+from ..test_baseline.test_e30_diagnostics import (
+    _calculator,
+    _fresh_physical_fd,
+    _functional_solve_at,
+    _mixed_response,
+    _third_response,
+    _trajectory_energy_at,
+)
+from ..test_baseline.tolerances import TBLITE
+from ..utils import get_param_module
+from .samples import samples
+
+_DD = {"device": torch.device("cpu"), "dtype": torch.float64}
+_FIELD_AXIS = torch.tensor([0.0, 1.0, 0.0], **_DD)
+
+
+@dataclass(frozen=True)
+class _RootRecord:
+    root: Tensor
+    residual: Tensor
+    map_count: int
+    converged: bool
+    electronic_energy: Tensor
+    finalized_energy: Tensor
+    outcome: object
+
+
+def _force_lorentzian(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use one explicit spectral derivative branch in all transform probes."""
+
+    def diagonalize(hamiltonian: Tensor, inputs):
+        return storch.eighb(
+            a=hamiltonian,
+            b=None,
+            l_inv=inputs.inverse_cholesky,
+            is_posdef=True,
+            factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
+            broadening_method="lorn",
+        )
+
+    monkeypatch.setattr(
+        functional_map, "_transitional_diagonalize", diagonalize
+    )
+
+
+def _case(
+    sample_name: str,
+    *,
+    method: int = GFN1_XTB,
+    representation: int = labels.SCP_MODE_POTENTIAL,
+    mixer: int = labels.MIXER_ANDERSON,
+    tolerance: float = 1.0e-12,
+    maxiter: int = 300,
+    temperature: float = 0.0,
+    field: Tensor | None = None,
+):
+    source = SYSTEMS.get(sample_name)
+    if source is None:
+        source = samples[sample_name]
+        numbers = source["numbers"].to(device="cpu")
+        positions = source["positions"].to(device="cpu", dtype=torch.float64)
+        charge = torch.as_tensor(source.get("charge", 0.0), **_DD).reshape(-1)
+        spin = torch.as_tensor(source.get("spin", 0.0), **_DD).reshape(-1)
+    else:
+        numbers = source.numbers.to(device="cpu")
+        positions = source.positions.to(device="cpu", dtype=torch.float64)
+        charge = source.charge.to(device="cpu", dtype=torch.float64).reshape(-1)
+        spin = (
+            torch.zeros_like(charge)
+            if source.spin is None
+            else source.spin.to(device="cpu", dtype=torch.float64).reshape(-1)
+        )
+    options = {
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": representation,
+        "mixer": mixer,
+        "maxiter": maxiter,
+        "x_atol": tolerance,
+        "x_atol_max": tolerance,
+        "fermi_etemp": temperature,
+        "verbosity": 0,
+        "int_level": (
+            labels.INTLEVEL_DIPOLE
+            if field is not None
+            else labels.INTLEVEL_QUADRUPOLE
+        ),
+    }
+    if field is None:
+        field = torch.zeros(3, **_DD)
+    parameter = "gfn1" if method == GFN1_XTB else "gfn2"
+    calculator = Calculator(
+        numbers,
+        get_param_module(parameter, device="cpu", dtype=torch.float64),
+        device="cpu",
+        dtype=torch.float64,
+        opts=options,
+    )
+    system = calculator.model.setup(numbers, dd=calculator.dd)
+    integrals, refocc, _ = build_integral_matrices(
+        system.integral_setup, system.h0_setup, positions, charge
+    )
+    n0, occupation, nel = get_refocc(refocc, charge, spin, system.ihelp)
+    interactions = InteractionList(
+        *system.interactions.components,
+        ElectricField(field),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    interaction_data = _interaction_data(system, positions, interactions)
+    inputs = setup_scf_inputs(
+        numbers,
+        integrals,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        interaction_data,
+        system.ihelp,
+        system.config.scf,
+    )
+    initial_charges = get_guess(
+        numbers,
+        positions,
+        charge,
+        system.ihelp,
+        system.config.scf.guess,
+    )
+    return SimpleNamespace(
+        system=system,
+        calculator=calculator,
+        numbers=numbers,
+        positions=positions,
+        charge=charge,
+        spin=spin,
+        integrals=integrals,
+        n0=n0,
+        occupation=occupation,
+        nel=nel,
+        interactions=interactions,
+        interaction_data=interaction_data,
+        inputs=inputs,
+        initial_charges=initial_charges,
+    )
+
+
+def _inputs_at_field(case, field_parameter: Tensor):
+    field = field_parameter * _FIELD_AXIS
+    interactions = InteractionList(
+        *case.system.interactions.components,
+        ElectricField(field),
+        device=case.positions.device,
+        dtype=case.positions.dtype,
+    )
+    interaction_data = _interaction_data(
+        case.system, case.positions, interactions
+    )
+    return replace(
+        case.inputs,
+        interactions=interactions,
+        interaction_data=interaction_data,
+    )
+
+
+def _initial_state(case, inputs) -> tuple[Tensor, object | None]:
+    layout = inputs.charge_layout
+    initial = SCFCharges(
+        mono=case.initial_charges,
+        dipole=(
+            None
+            if layout.dipole_shape is None
+            else case.initial_charges.new_zeros(layout.dipole_shape)
+        ),
+        quad=(
+            None
+            if layout.quadrupole_shape is None
+            else case.initial_charges.new_zeros(layout.quadrupole_shape)
+        ),
+    )
+    representation = case.system.config.scf.scp_mode
+    if representation == labels.SCP_MODE_CHARGE:
+        return pack_charges(initial, layout), None
+    if representation == labels.SCP_MODE_POTENTIAL:
+        return potential_initial_guess(initial, inputs)
+    if representation == labels.SCP_MODE_FOCK:
+        return fock_initial_guess(initial, inputs), None
+    raise ValueError(f"Unknown SCF representation: {representation}")
+
+
+def _map_fn(case, inputs, layout):
+    representation = case.system.config.scf.scp_mode
+    if representation == labels.SCP_MODE_CHARGE:
+        return lambda x: scf_map(x, inputs)
+    if representation == labels.SCP_MODE_POTENTIAL:
+        assert layout is not None
+        return lambda x: potential_map(x, inputs, layout)
+    if representation == labels.SCP_MODE_FOCK:
+        return lambda x: fock_map(x, inputs)
+    raise ValueError(f"Unknown SCF representation: {representation}")
+
+
+def _run_root(
+    case,
+    inputs,
+    *,
+    tolerance: float,
+    maxiter: int,
+    eager: bool,
+    mixer: int | None = None,
+) -> _RootRecord:
+    config = replace(
+        case.system.config.scf,
+        mixer=case.system.config.scf.mixer if mixer is None else mixer,
+        maxiter=maxiter,
+        x_atol=tolerance,
+        x_atol_max=tolerance,
+    )
+    initial, layout = _initial_state(case, inputs)
+    map_fn = _map_fn(case, inputs, layout)
+    projection = (
+        (lambda value: _project_potential_padding(value, layout))
+        if config.scp_mode == labels.SCP_MODE_POTENTIAL
+        else None
+    )
+    if config.mixer == labels.MIXER_ANDERSON:
+        settings = setup_anderson_solver_settings(config, initial.dtype)
+        outcome = _solve_map_anderson(
+            initial,
+            settings,
+            map_fn,
+            state_projection=projection,
+            eager=eager,
+        )
+    elif config.mixer == labels.MIXER_LINEAR:
+        settings = setup_simple_solver_settings(config, initial.dtype)
+        outcome = _solve_map(
+            initial,
+            settings,
+            map_fn,
+            state_projection=projection,
+            eager=eager,
+        )
+    else:
+        raise ValueError(f"Unsupported reference mixer: {config.mixer}")
+
+    if config.scp_mode == labels.SCP_MODE_CHARGE:
+        finalized = finalize_scf(
+            outcome.map_result,
+            inputs,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            outcome.damping_state,
+        )
+    elif config.scp_mode == labels.SCP_MODE_POTENTIAL:
+        assert layout is not None
+        finalized = finalize_scf_potential(
+            outcome.map_result,
+            inputs,
+            layout,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            outcome.damping_state,
+        )
+    else:
+        finalized = finalize_scf_fock(
+            outcome.map_result,
+            inputs,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            outcome.damping_state,
+        )
+    root = outcome.map_result.mapped_x
+    raw_residual = map_fn(root).mapped_x - root
+    return _RootRecord(
+        root=root,
+        residual=raw_residual,
+        map_count=int(outcome.iterations.detach()),
+        converged=bool(outcome.converged.detach()),
+        electronic_energy=finalized.energy.sum(),
+        finalized_energy=(finalized.energy + finalized.fenergy).sum(),
+        outcome=outcome,
+    )
+
+
+def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
+    """Charge, potential and Fock residuals are their raw physical maps."""
+    for representation in (
+        labels.SCP_MODE_CHARGE,
+        labels.SCP_MODE_POTENTIAL,
+        labels.SCP_MODE_FOCK,
+    ):
+        case = _case("H2", representation=representation)
+        initial, layout = _initial_state(case, case.inputs)
+        mapped = _map_fn(case, case.inputs, layout)(initial)
+        residual = mapped.mapped_x - initial
+        assert residual.shape == initial.shape
+        assert torch.isfinite(residual).all()
+        assert set(mapped.__dataclass_fields__) == {
+            "mapped_x",
+            "spectral",
+            "driving_potential",
+        }
+        assert not hasattr(mapped, "mixer_state")
+        assert not hasattr(mapped, "iterations")
+
+
+def test_nonconverged_root_reference_is_not_presented_as_a_root() -> None:
+    """A one-map result is explicitly rejected as a converged-root record."""
+    case = _case("H2O", maxiter=1, tolerance=1.0e-14)
+    record = _run_root(
+        case,
+        case.inputs,
+        tolerance=1.0e-14,
+        maxiter=1,
+        eager=True,
+    )
+    assert not record.converged
+    assert 1 <= record.map_count <= 2
+    with pytest.raises(RuntimeError, match="physical-root derivative"):
+        _require_converged(record)
+
+
+def test_maxiter_zero_remains_separate_from_root_differentiation() -> None:
+    """The legacy one-shot result is never presented as a physical root."""
+    case = _case("H2O", maxiter=0, tolerance=1.0e-14)
+    record = _run_root(
+        case,
+        case.inputs,
+        tolerance=1.0e-14,
+        maxiter=0,
+        eager=True,
+    )
+    assert not record.converged
+    assert record.map_count == 1
+    with pytest.raises(RuntimeError, match="physical-root derivative"):
+        _require_converged(record)
+
+
+def _require_converged(record: _RootRecord) -> None:
+    if not record.converged:
+        raise RuntimeError("Cannot report a physical-root derivative")
+
+
+def _no2_response_energy(tolerance: float, maxiter: int = 40):
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+
+    def energy(field: Tensor, displacement: Tensor):
+        return _trajectory_energy_at(
+            calculator,
+            field,
+            displacement,
+            eager=False,
+            maxiter=maxiter,
+            stage="finalized",
+            tolerance=tolerance,
+        )
+
+    return energy
+
+
+def _no2_pol_orders(tolerance: float) -> tuple[float, float, float]:
+    energy_fn = _no2_response_energy(tolerance)
+    field = torch.zeros((), **_DD, requires_grad=True)
+    geometry = torch.zeros((), **_DD, requires_grad=True)
+    energy, _ = energy_fn(field, geometry)
+    first = torch.autograd.grad(energy, field, create_graph=True)[0]
+    second = torch.autograd.grad(first, field, create_graph=True)[0]
+    mixed = torch.autograd.grad(-second, geometry)[0]
+    return float(first.detach()), float(second.detach()), float(mixed.detach())
+
+
+def _fresh_root_energy(
+    sample_name: str,
+    parameter: float,
+    *,
+    method: int,
+    temperature: float,
+    tolerance: float,
+) -> float:
+    field = parameter * _FIELD_AXIS
+    case = _case(
+        sample_name,
+        method=method,
+        representation=labels.SCP_MODE_CHARGE,
+        mixer=labels.MIXER_ANDERSON,
+        tolerance=tolerance,
+        maxiter=300,
+        temperature=temperature,
+        field=field,
+    )
+    record = _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=300,
+        eager=True,
+    )
+    assert record.converged
+    return float(record.finalized_energy.detach())
+
+
+def _no2_root_record(tolerance: float) -> _RootRecord:
+    case = _case(
+        "NO2",
+        method=GFN2_XTB,
+        representation=labels.SCP_MODE_POTENTIAL,
+        mixer=labels.MIXER_ANDERSON,
+        tolerance=tolerance,
+        maxiter=300,
+        temperature=300.0,
+        field=torch.zeros(3, **_DD),
+    )
+    return _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=300,
+        eager=True,
+    )
+
+
+def test_no2_hyperpolarizability_tight_root_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tight functional roots recover the independent physical beta FD."""
+    _force_lorentzian(monkeypatch)
+    tolerances = (1.0e-10, 1.0e-11, 1.0e-12, 1.0e-13, 1.0e-14)
+    records = []
+    for tolerance in tolerances:
+        root = _no2_root_record(tolerance)
+        assert root.converged
+        assert root.map_count < 300
+        residual = float(root.residual.abs().max())
+        assert residual < max(10.0 * tolerance, 5.0e-14)
+        response = _third_response(
+            _no2_response_energy(tolerance),
+            (1.0e-4, 5.0e-5, 2.0e-5),
+        )
+        records.append(
+            {
+                "tolerance": tolerance,
+                "root": root.root.detach(),
+                "raw_residual_max": residual,
+                "map_count": root.map_count,
+                "converged": root.converged,
+                "electronic_energy": float(root.electronic_energy.detach()),
+                "finalized_energy": float(root.finalized_energy.detach()),
+                "first": response["reverse_first"],
+                "second": response["reverse_second"],
+                "third": response["reverse_third"],
+            }
+        )
+    energy_changes = [
+        abs(
+            records[index]["finalized_energy"]
+            - records[index + 1]["finalized_energy"]
+        )
+        for index in range(len(records) - 1)
+    ]
+    derivative_changes = {
+        order: [
+            abs(records[index][order] - records[index + 1][order])
+            for index in range(len(records) - 1)
+        ]
+        for order in ("first", "second", "third")
+    }
+    assert all(torch.isfinite(torch.tensor(value)) for value in energy_changes)
+    assert derivative_changes["first"][-1] < 1.0e-8
+    assert derivative_changes["second"][-1] < 1.0e-6
+    assert derivative_changes["third"][-1] < 1.0e-3
+    physical_steps = (2.0e-3, 1.0e-3, 5.0e-4)
+    physical_fd = [
+        _fresh_physical_fd("hyperpolarizability", step)
+        for step in physical_steps
+    ]
+    physical_spread = max(physical_fd) - min(physical_fd)
+    physical_target = float(sorted(physical_fd)[len(physical_fd) // 2])
+    assert physical_spread < 5.0e-4
+    physical_bound = max(4.0 * physical_spread, 1.0e-3)
+    assert abs(records[0]["third"] - physical_target) > 1.0
+    for record in records[2:]:
+        assert abs(record["third"] - physical_target) < physical_bound
+    assert (
+        abs(physical_target - (-3.35277)) < TBLITE["hyperpolarizability"].atol
+    )
+    print(
+        {
+            "no2_hyperpolarizability_root_reference": records,
+            "energy_changes_to_next_tighter_root": energy_changes,
+            "derivative_changes_to_next_tighter_root": derivative_changes,
+            "direct_energy_fd_steps": physical_steps,
+            "direct_energy_fd_values": physical_fd,
+            "physical_fd_target": physical_target,
+            "physical_fd_bound": physical_bound,
+        }
+    )
+
+
+def test_no2_pol_deriv_tight_root_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tight functional roots recover the independent mixed-response FD."""
+    _force_lorentzian(monkeypatch)
+    tolerances = (1.0e-10, 1.0e-12, 1.0e-13)
+    records = []
+    for tolerance in tolerances:
+        root = _no2_root_record(tolerance)
+        assert root.converged
+        assert root.map_count < 300
+        response = _mixed_response(
+            _no2_response_energy(tolerance),
+            (1.0e-4, 5.0e-5, 2.0e-5),
+        )
+        first, second, third = _no2_pol_orders(tolerance)
+        mixed_response = float(response["nested_mixed_third"])
+        assert abs(third - mixed_response) < 1.0e-3
+        records.append(
+            {
+                "tolerance": tolerance,
+                "raw_residual_max": float(root.residual.abs().max()),
+                "map_count": root.map_count,
+                "converged": root.converged,
+                "electronic_energy": float(root.electronic_energy.detach()),
+                "finalized_energy": float(root.finalized_energy.detach()),
+                "first": first,
+                "second": second,
+                "third": mixed_response,
+            }
+        )
+    energy_changes = [
+        abs(
+            records[index]["finalized_energy"]
+            - records[index + 1]["finalized_energy"]
+        )
+        for index in range(len(records) - 1)
+    ]
+    derivative_changes = {
+        order: [
+            abs(records[index][order] - records[index + 1][order])
+            for index in range(len(records) - 1)
+        ]
+        for order in ("first", "second", "third")
+    }
+    assert all(torch.isfinite(torch.tensor(value)) for value in energy_changes)
+    assert all(
+        torch.isfinite(torch.tensor(value))
+        for changes in derivative_changes.values()
+        for value in changes
+    )
+    physical_steps = (2.0e-3, 1.0e-3, 5.0e-4)
+    physical_fd = [
+        _fresh_physical_fd("pol_deriv", step) for step in physical_steps
+    ]
+    physical_spread = max(physical_fd) - min(physical_fd)
+    physical_target = float(sorted(physical_fd)[len(physical_fd) // 2])
+    assert physical_spread < 1.0e-3
+    physical_bound = max(4.0 * physical_spread, 1.0e-3)
+    assert abs(records[0]["third"] - physical_target) > 0.1
+    for record in records[1:]:
+        assert abs(record["third"] - physical_target) < physical_bound
+    assert abs(physical_target - 0.7977) < TBLITE["pol_deriv"].atol
+    print(
+        {
+            "no2_pol_deriv_root_reference": records,
+            "energy_changes_to_next_tighter_root": energy_changes,
+            "derivative_changes_to_next_tighter_root": derivative_changes,
+            "direct_energy_fd_steps": physical_steps,
+            "direct_energy_fd_values": physical_fd,
+            "physical_fd_target": physical_target,
+            "physical_fd_bound": physical_bound,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("representation", "expected_map"),
+    (
+        (labels.SCP_MODE_CHARGE, "charge"),
+        (labels.SCP_MODE_POTENTIAL, "potential"),
+        (labels.SCP_MODE_FOCK, "fock"),
+    ),
+)
+def test_fixed_point_map_representation_contract(
+    representation: int, expected_map: str
+) -> None:
+    """The configured root variable chooses its existing raw map."""
+    case = _case("H2", representation=representation)
+    initial, layout = _initial_state(case, case.inputs)
+    map_fn = _map_fn(case, case.inputs, layout)
+    expected = {
+        "charge": scf_map,
+        "potential": potential_map,
+        "fock": fock_map,
+    }[expected_map]
+    if representation == labels.SCP_MODE_POTENTIAL:
+        expected_result = expected(initial, case.inputs, layout)
+    else:
+        expected_result = expected(initial, case.inputs)
+    actual = map_fn(initial)
+    torch.testing.assert_close(actual.mapped_x, expected_result.mapped_x)
+    assert type(actual.driving_potential) is type(
+        expected_result.driving_potential
+    )
+
+
+def test_simple_and_anderson_reach_the_same_h2_root_and_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tight physical-root energy derivatives do not depend on the mixer."""
+    _force_lorentzian(monkeypatch)
+    tolerance = 1.0e-12
+    records = {}
+    for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
+        case = _case("H2", mixer=mixer, tolerance=tolerance, maxiter=300)
+        inputs = _inputs_at_field(case, torch.zeros((), **_DD))
+        record = _run_root(
+            case,
+            inputs,
+            tolerance=tolerance,
+            maxiter=300,
+            eager=True,
+            mixer=mixer,
+        )
+        assert record.converged
+        assert float(record.residual.abs().max()) < 1.0e-10
+        records[mixer] = record
+    torch.testing.assert_close(
+        records[labels.MIXER_LINEAR].root,
+        records[labels.MIXER_ANDERSON].root,
+        rtol=0.0,
+        atol=2.0e-9,
+    )
+    torch.testing.assert_close(
+        records[labels.MIXER_LINEAR].finalized_energy,
+        records[labels.MIXER_ANDERSON].finalized_energy,
+        rtol=0.0,
+        atol=2.0e-11,
+    )
+    for name in ("density", "occupation", "emo"):
+        torch.testing.assert_close(
+            getattr(
+                records[labels.MIXER_LINEAR].outcome.map_result.spectral, name
+            ),
+            getattr(
+                records[labels.MIXER_ANDERSON].outcome.map_result.spectral,
+                name,
+            ),
+            rtol=0.0,
+            atol=2.0e-9,
+        )
+
+    derivatives = []
+    for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
+        case = _case("H2", mixer=mixer, tolerance=tolerance, maxiter=300)
+
+        def energy(parameter: Tensor) -> Tensor:
+            inputs = _inputs_at_field(case, parameter)
+            record = _run_root(
+                case,
+                inputs,
+                tolerance=tolerance,
+                maxiter=300,
+                eager=True,
+                mixer=mixer,
+            )
+            assert record.converged
+            return record.finalized_energy
+
+        parameter = torch.zeros((), **_DD, requires_grad=True)
+        value = energy(parameter)
+        first = torch.autograd.grad(value, parameter, create_graph=True)[0]
+        second = torch.autograd.grad(first, parameter)[0]
+        derivatives.append(torch.stack((first, second)))
+    torch.testing.assert_close(
+        derivatives[0], derivatives[1], rtol=1.0e-5, atol=2.0e-7
+    )
+    print(
+        {
+            "system": "H2/GFN1",
+            "root_tolerance": tolerance,
+            "simple_maps": records[labels.MIXER_LINEAR].map_count,
+            "anderson_maps": records[labels.MIXER_ANDERSON].map_count,
+            "simple_residual": float(
+                records[labels.MIXER_LINEAR].residual.abs().max()
+            ),
+            "anderson_residual": float(
+                records[labels.MIXER_ANDERSON].residual.abs().max()
+            ),
+            "simple_first_second": derivatives[0].detach().tolist(),
+            "anderson_first_second": derivatives[1].detach().tolist(),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "temperature",
+    (
+        pytest.param(0.0, id="zero-temperature"),
+        pytest.param(300.0, id="finite-temperature"),
+    ),
+)
+def test_h2_smooth_root_response_converges_with_explicit_tolerance(
+    temperature: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closed-shell responses stabilize with root accuracy at each temperature."""
+    _force_lorentzian(monkeypatch)
+    tolerances = (1.0e-10, 1.0e-12, 1.0e-13)
+    records = []
+    for tolerance in tolerances:
+        case = _case(
+            "H2",
+            representation=labels.SCP_MODE_CHARGE,
+            tolerance=tolerance,
+            temperature=temperature,
+            field=torch.zeros(3, **_DD),
+        )
+        zero = torch.zeros((), **_DD)
+        root = _run_root(
+            case,
+            _inputs_at_field(case, zero),
+            tolerance=tolerance,
+            maxiter=300,
+            eager=True,
+        )
+        assert root.converged
+        assert float(root.residual.abs().max()) < max(10 * tolerance, 1e-13)
+
+        parameter = torch.zeros((), **_DD, requires_grad=True)
+        inputs = _inputs_at_field(case, parameter)
+        solved = _run_root(
+            case,
+            inputs,
+            tolerance=tolerance,
+            maxiter=300,
+            eager=True,
+        )
+        assert solved.converged
+        first = torch.autograd.grad(
+            solved.finalized_energy, parameter, create_graph=True
+        )[0]
+        second = torch.autograd.grad(first, parameter)[0]
+        records.append(
+            {
+                "tolerance": tolerance,
+                "root_residual_max": float(root.residual.abs().max()),
+                "map_count": root.map_count,
+                "electronic_energy": float(root.electronic_energy.detach()),
+                "finalized_energy": float(root.finalized_energy.detach()),
+                "first": float(first.detach()),
+                "second": float(second.detach()),
+            }
+        )
+
+    energy_changes = [
+        abs(
+            records[index]["finalized_energy"]
+            - records[index + 1]["finalized_energy"]
+        )
+        for index in range(len(records) - 1)
+    ]
+    derivative_changes = {
+        order: [
+            abs(records[index][order] - records[index + 1][order])
+            for index in range(len(records) - 1)
+        ]
+        for order in ("first", "second")
+    }
+    assert all(torch.isfinite(torch.tensor(value)) for value in energy_changes)
+    assert all(
+        torch.isfinite(torch.tensor(value))
+        for changes in derivative_changes.values()
+        for value in changes
+    )
+
+    step = 1.0e-3
+    direct_energy = lambda parameter: _fresh_root_energy(
+        "H2",
+        parameter,
+        method=GFN1_XTB,
+        temperature=temperature,
+        tolerance=1.0e-13,
+    )
+    plus, center, minus = (
+        direct_energy(step),
+        direct_energy(0.0),
+        direct_energy(-step),
+    )
+    direct_first = (plus - minus) / (2.0 * step)
+    direct_second = (plus - 2.0 * center + minus) / step**2
+    assert abs(records[-1]["first"] - direct_first) < 2.0e-6
+    assert abs(records[-1]["second"] - direct_second) < 5.0e-4
+    assert abs(records[-1]["first"] - records[-2]["first"]) < 1.0e-8
+    assert abs(records[-1]["second"] - records[-2]["second"]) < 1.0e-4
+    print(
+        {
+            "smooth_h2_root_tolerance_sweep": records,
+            "energy_changes_to_next_tighter_root": energy_changes,
+            "derivative_changes_to_next_tighter_root": derivative_changes,
+            "direct_energy_fd_step": step,
+            "direct_energy_fd_first": direct_first,
+            "direct_energy_fd_second": direct_second,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("sample_name", "method", "temperature"),
+    (
+        pytest.param("H2", GFN1_XTB, 0.0, id="smooth-closed-shell"),
+        pytest.param("H2", GFN1_XTB, 300.0, id="finite-temperature"),
+        pytest.param("NO2", GFN2_XTB, 300.0, id="open-shell-no2"),
+    ),
+)
+def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
+    sample_name: str,
+    method: int,
+    temperature: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dense test-only F Jacobian reproduces the field tangent response."""
+    _force_lorentzian(monkeypatch)
+    tolerance = 1.0e-12
+    case = _case(
+        sample_name,
+        method=method,
+        representation=labels.SCP_MODE_CHARGE,
+        tolerance=tolerance,
+        temperature=temperature,
+        field=torch.zeros(3, **_DD),
+    )
+    assert not any(
+        type(item).__name__ == "DispersionD3"
+        for item in case.inputs.interactions.components
+    )
+    root_record = _run_root(
+        case,
+        _inputs_at_field(case, torch.zeros((), **_DD)),
+        tolerance=tolerance,
+        maxiter=300,
+        eager=True,
+    )
+    assert root_record.converged
+    assert float(root_record.residual.abs().max()) < 2.0e-11
+    root = root_record.root.detach()
+
+    def mapped(state: Tensor, parameter: Tensor) -> Tensor:
+        return scf_map(state, _inputs_at_field(case, parameter)).mapped_x
+
+    origin = torch.zeros((), **_DD)
+    state_jacobian = jacrev(lambda state: mapped(state, origin))(root)
+    parameter_tangent = jvp(
+        lambda parameter: mapped(root, parameter),
+        (origin,),
+        (torch.ones_like(origin),),
+    )[1]
+    tangent_matrix = torch.eye(root.numel(), **_DD) - state_jacobian.reshape(
+        root.numel(), root.numel()
+    )
+    tangent = torch.linalg.solve(
+        tangent_matrix,
+        parameter_tangent.reshape(-1),
+    ).reshape_as(root)
+    torch.testing.assert_close(
+        tangent_matrix @ tangent.reshape(-1),
+        parameter_tangent.reshape(-1),
+        rtol=1.0e-10,
+        atol=1.0e-11,
+    )
+
+    def energy_at_state(state: Tensor, parameter: Tensor) -> Tensor:
+        inputs = _inputs_at_field(case, parameter)
+        map_result = scf_map(state, inputs)
+        zero = state.new_zeros(())
+        yes = torch.ones((), dtype=torch.bool, device=state.device)
+        finalized = finalize_scf(map_result, inputs, zero, yes, zero, None)
+        return (finalized.energy + finalized.fenergy).sum()
+
+    state_for_grad = root.detach().requires_grad_(True)
+    parameter_for_grad = origin.detach().requires_grad_(True)
+    energy = energy_at_state(state_for_grad, parameter_for_grad)
+    state_gradient, explicit_gradient = torch.autograd.grad(
+        energy, (state_for_grad, parameter_for_grad)
+    )
+    jacobian_response = explicit_gradient + (state_gradient * tangent).sum()
+
+    def unrolled_energy(parameter: Tensor) -> Tensor:
+        inputs = _inputs_at_field(case, parameter)
+        initial, _ = _initial_state(case, inputs)
+        config = replace(
+            case.system.config.scf,
+            maxiter=45,
+            x_atol=tolerance,
+            x_atol_max=tolerance,
+        )
+        settings = setup_anderson_solver_settings(config, initial.dtype)
+        outcome = _solve_map_anderson(
+            initial,
+            settings,
+            lambda state: scf_map(state, inputs),
+            eager=False,
+        )
+        assert bool(outcome.converged.detach())
+        zero = initial.new_zeros(())
+        yes = torch.ones((), dtype=torch.bool, device=initial.device)
+        finalized = finalize_scf(
+            outcome.map_result,
+            inputs,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            outcome.damping_state,
+        )
+        return (finalized.energy + finalized.fenergy).sum()
+
+    unrolled_parameter = origin.detach().requires_grad_(True)
+    unrolled_value = unrolled_energy(unrolled_parameter)
+    unrolled_derivative = torch.autograd.grad(
+        unrolled_value, unrolled_parameter
+    )[0]
+    torch.testing.assert_close(
+        jacobian_response, unrolled_derivative, rtol=2.0e-4, atol=2.0e-6
+    )
+
+    step = 5.0e-4
+    finite_difference = (
+        _fresh_root_energy(
+            sample_name,
+            step,
+            method=method,
+            temperature=temperature,
+            tolerance=tolerance,
+        )
+        - _fresh_root_energy(
+            sample_name,
+            -step,
+            method=method,
+            temperature=temperature,
+            tolerance=tolerance,
+        )
+    ) / (2.0 * step)
+    assert torch.isfinite(jacobian_response)
+    torch.testing.assert_close(
+        jacobian_response.detach(),
+        torch.tensor(finite_difference, **_DD),
+        rtol=5.0e-4,
+        atol=2.0e-5,
+    )
+    torch.testing.assert_close(
+        unrolled_derivative.detach(),
+        torch.tensor(finite_difference, **_DD),
+        rtol=5.0e-4,
+        atol=2.0e-5,
+    )
+    print(
+        {
+            "system": sample_name,
+            "temperature_K": temperature,
+            "root_residual_max": float(root_record.residual.abs().max()),
+            "root_maps": root_record.map_count,
+            "jacobian_first": float(jacobian_response.detach()),
+            "unrolled_first": float(unrolled_derivative.detach()),
+            "fresh_direct_energy_fd_first": finite_difference,
+        }
+    )
