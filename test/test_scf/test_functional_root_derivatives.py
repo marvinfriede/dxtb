@@ -488,6 +488,193 @@ def test_solver_outcome_retains_the_convergence_tested_input(
     assert record.last_map_result.mapped_x.shape == record.root.shape
 
 
+@pytest.mark.parametrize(
+    "mixer",
+    (
+        pytest.param(labels.MIXER_LINEAR, id="simple"),
+        pytest.param(labels.MIXER_ANDERSON, id="anderson"),
+    ),
+)
+@pytest.mark.parametrize(
+    "representation",
+    (
+        pytest.param(labels.SCP_MODE_CHARGE, id="charge"),
+        pytest.param(labels.SCP_MODE_POTENTIAL, id="potential"),
+    ),
+)
+def test_fixed_trip_outcome_retains_accepted_map_input(
+    mixer: int, representation: int
+) -> None:
+    """Masked fixed-trip maps cannot replace the accepted root/result pair."""
+    tolerance = 1.0e-10
+    case = _case(
+        "H2",
+        representation=representation,
+        mixer=mixer,
+        tolerance=tolerance,
+        maxiter=45,
+    )
+    short = _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=35,
+        eager=False,
+        mixer=mixer,
+    )
+    long = _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=45,
+        eager=False,
+        mixer=mixer,
+    )
+
+    assert short.converged and long.converged
+    assert short.map_count < short.solver_map_evaluations
+    assert long.map_count < long.solver_map_evaluations
+    # Solver initialization evaluates the raw map once before fixed trips.
+    assert short.solver_map_evaluations == 36
+    assert long.solver_map_evaluations == 46
+    assert short.diagnostic_map_evaluations == 0
+    assert long.diagnostic_map_evaluations == 0
+    torch.testing.assert_close(short.root, long.root, rtol=0, atol=0)
+    torch.testing.assert_close(
+        short.outcome.map_result.mapped_x,
+        long.outcome.map_result.mapped_x,
+        rtol=0,
+        atol=0,
+    )
+    for name in ("hamiltonian", "density", "orbital_energy"):
+        torch.testing.assert_close(
+            getattr(short.outcome.map_result, name),
+            getattr(long.outcome.map_result, name),
+            rtol=0,
+            atol=0,
+        )
+    for name in ("emo", "occupation", "orbital_energy"):
+        torch.testing.assert_close(
+            getattr(short.outcome.map_result.spectral, name),
+            getattr(long.outcome.map_result.spectral, name),
+            rtol=0,
+            atol=0,
+        )
+    torch.testing.assert_close(short.residual, long.residual, rtol=0, atol=0)
+    torch.testing.assert_close(
+        short.reported_residual, long.reported_residual, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        short.outcome.iterations, long.outcome.iterations, rtol=0, atol=0
+    )
+
+    _, layout = _initial_state(case, case.inputs)
+    expected = _map_fn(case, case.inputs, layout)(long.root)
+    torch.testing.assert_close(
+        long.outcome.map_result.mapped_x, expected.mapped_x, rtol=0, atol=0
+    )
+    for name in ("hamiltonian", "density", "orbital_energy"):
+        torch.testing.assert_close(
+            getattr(long.outcome.map_result, name),
+            getattr(expected, name),
+            rtol=0,
+            atol=0,
+        )
+    for name in ("emo", "occupation", "orbital_energy"):
+        torch.testing.assert_close(
+            getattr(long.outcome.map_result.spectral, name),
+            getattr(expected.spectral, name),
+            rtol=0,
+            atol=0,
+        )
+    torch.testing.assert_close(
+        long.residual,
+        long.outcome.map_result.mapped_x - long.root,
+        rtol=0,
+        atol=0,
+    )
+    residual_norms = torch.stack(
+        (
+            torch.linalg.vector_norm(long.residual),
+            long.residual.abs().amax(),
+        )
+    )
+    torch.testing.assert_close(
+        long.reported_residual, residual_norms, rtol=0, atol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "mixer",
+    (
+        pytest.param(labels.MIXER_LINEAR, id="simple"),
+        pytest.param(labels.MIXER_ANDERSON, id="anderson"),
+    ),
+)
+@pytest.mark.parametrize(
+    "representation",
+    (
+        pytest.param(labels.SCP_MODE_CHARGE, id="charge"),
+        pytest.param(labels.SCP_MODE_POTENTIAL, id="potential"),
+    ),
+)
+def test_fixed_trip_exhaustion_retains_last_selected_map_input(
+    mixer: int, representation: int
+) -> None:
+    """An exhausted fixed-trip solve reports its last selected map pair."""
+    tolerance = 1.0e-14
+    case = _case(
+        "H2O",
+        representation=representation,
+        mixer=mixer,
+        tolerance=tolerance,
+        maxiter=1,
+    )
+    record = _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=1,
+        eager=False,
+        mixer=mixer,
+    )
+
+    assert not record.converged
+    # Initialization plus the one requested fixed trip.
+    assert record.map_count == 2
+    assert record.solver_map_evaluations == 2
+    assert record.diagnostic_map_evaluations == 0
+    torch.testing.assert_close(
+        record.root, record.last_map_input, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        record.outcome.map_result.mapped_x,
+        record.last_map_result.mapped_x,
+        rtol=0,
+        atol=0,
+    )
+    _, layout = _initial_state(case, case.inputs)
+    expected = _map_fn(case, case.inputs, layout)(record.root)
+    torch.testing.assert_close(
+        record.outcome.map_result.mapped_x, expected.mapped_x, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        record.residual,
+        record.outcome.map_result.mapped_x - record.root,
+        rtol=0,
+        atol=0,
+    )
+    residual_norms = torch.stack(
+        (
+            torch.linalg.vector_norm(record.residual),
+            record.residual.abs().amax(),
+        )
+    )
+    torch.testing.assert_close(
+        record.reported_residual, residual_norms, rtol=0, atol=0
+    )
+
+
 def test_nonconverged_root_reference_is_not_presented_as_a_root() -> None:
     """A one-map result is explicitly rejected as a converged-root record."""
     case = _case("H2O", maxiter=1, tolerance=1.0e-14)
@@ -539,15 +726,8 @@ def _request_root_derivative(converged: Tensor, derivative_request):
     return derivative_request()
 
 
-@pytest.mark.parametrize(
-    "transform",
-    ("reverse", "jvp", "jacfwd", "nested", "vmap"),
-)
-def test_nonconverged_root_preflight_rejects_every_transform_request(
-    transform: str,
-) -> None:
-    """Every transform uses explicit convergence preflight, including vmap."""
-    del transform  # Each transform shares the same pre-transform root gate.
+def test_host_preflight_rejects_nonconverged_root_status() -> None:
+    """The reference host gate rejects invalid status before its callback."""
     entered_transform = False
 
     def derivative_request() -> str:

@@ -327,6 +327,8 @@ E3.1b owns the concrete implementation:
    composition and validate higher orders.
 4. Define derivative convergence tolerances/configuration only as authorized
    by E0, and apply E0's explicit policy to nonconverged implicit primals.
+   The transform-safe fail-closed enforcement boundary must be specified and
+   tested; the E3.1a host-preflight characterization is not transform proof.
 5. Integrate the E3.1s-accepted invariant spectral/density semantics so the
    root and finalization paths share one derivative definition. Spectral
    mathematics and the upstream primitive remain owned by E3.1s; do not add a
