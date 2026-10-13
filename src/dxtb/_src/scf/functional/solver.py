@@ -350,8 +350,13 @@ def functional_converged_and_valid(result: SCFSolveResult) -> Tensor:
 
 @dataclass(frozen=True, eq=False)
 class _SolverOutcome:
-    """Transform-friendly outcome before interaction finalization."""
+    """Transform-friendly outcome before interaction finalization.
 
+    ``root_x`` is the input paired with ``map_result`` when the convergence
+    residual was tested; it is distinct from ``map_result.mapped_x``.
+    """
+
+    root_x: Tensor
     map_result: SCFMapResult
     iterations: Tensor
     converged: Tensor
@@ -362,9 +367,14 @@ class _SolverOutcome:
 
 @dataclass(frozen=True, eq=False)
 class _SolverControlState:
-    """Shared immutable state advanced by fixed-trip and eager controllers."""
+    """Shared immutable state advanced by fixed-trip and eager controllers.
+
+    ``map_input_x`` pairs with the selected ``map_result`` and advances only
+    when an active physical map evaluation is selected.
+    """
 
     current_x: Tensor
+    map_input_x: Tensor
     mixer_state: object | None
     damping_state: DampingState
     map_result: SCFMapResult
@@ -708,6 +718,7 @@ def _initialize_solver_control(
             current_x = state_projection(current_x)
     return _SolverControlState(
         current_x=current_x,
+        map_input_x=guess,
         mixer_state=mixer_state,
         damping_state=damping,
         map_result=initial,
@@ -767,6 +778,9 @@ def _solver_control_step(
     current_x = _select_tensor(transition_active, mixed_x, state.current_x)
     return _SolverControlState(
         current_x=current_x,
+        map_input_x=_select_tensor(
+            state.active, state.current_x, state.map_input_x
+        ),
         mixer_state=mixer_state,
         damping_state=damping,
         map_result=map_result,
@@ -782,6 +796,7 @@ def _solver_outcome(
 ) -> _SolverOutcome:
     """Materialize solver status from shared controller state."""
     return _SolverOutcome(
+        root_x=state.map_input_x,
         map_result=state.map_result,
         iterations=state.iterations,
         converged=converged,

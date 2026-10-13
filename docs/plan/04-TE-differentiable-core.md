@@ -298,20 +298,22 @@ before dxtb consumes the pinned dependency.
 
 **Needs.** E0, E4core, T0.2/T0.3/T0.4 baselines, and completed E1.1/E1.2
 primitives used by the selected non-DFT-D3 path. E3.0 does not require E1.3
-or full E1. **Unblocks.** E3.1 SCF differentiation implementation.
+or full E1. **Unblocks.** E3.1a root strategy/reference gate (complete).
 **Size.** M.
 
-### E3.1 SCF differentiation implementation
+### E3.1b Transform-compatible implicit SCF-root implementation
 
-**Scope and implementation contract.** Implement the E0-selected SCF
-differentiation strategy on supported single-System paths after E3.0 isolates
-the NO2 failures. The differentiated physical equation is the raw-map
-residual `F(x, p) = G(x, p) - x = 0`; mixer history, dynamic damping, and
-solver bookkeeping are not part of that implicit equation. The finite
-functional unrolled composition of the E4core raw map and solver transitions
-is the reference differentiation path.
+**Scope and implementation contract.** This package follows the completed
+E3.1a root strategy/reference gate and the E3.1s upstream invariant
+spectral/density prerequisite. E3.1s owns the spectral mathematics and its
+transform acceptance; E3.1b consumes that accepted primitive and implements
+the SCF-root derivative on supported single-System paths. The differentiated
+physical equation is the raw-map residual `F(x, p) = G(x, p) - x = 0`; mixer
+history, dynamic damping, and solver bookkeeping are not part of that
+implicit equation. The finite functional unrolled composition of the E4core
+raw map and solver transitions remains the reference differentiation path.
 
-E3.1 owns the concrete implementation:
+E3.1b owns the concrete implementation:
 
 1. Build and retain the differentiable unrolled reference from the shared
    E4core physical map, without legacy mutable solver state in its graph.
@@ -325,32 +327,35 @@ E3.1 owns the concrete implementation:
    composition and validate higher orders.
 4. Define derivative convergence tolerances/configuration only as authorized
    by E0, and apply E0's explicit policy to nonconverged implicit primals.
-5. Fix spectral/Fermi defects demonstrated by E3.0 under E0's decided
-   numerical contract. A new custom spectral primitive still requires a
-   separately reviewed upstream mathematical/design package.
+5. Integrate the E3.1s-accepted invariant spectral/density semantics so the
+   root and finalization paths share one derivative definition. Spectral
+   mathematics and the upstream primitive remain owned by E3.1s; do not add a
+   dxtb-local eigensolver derivative or tune Lorentzian broadening here.
 6. Add focused tests for raw-map derivatives, finite unrolled derivatives,
    implemented adjoint/JVP solves, higher-order composition, and
    unrolled/implicit agreement where both strategies remain. Compare with
    double-precision central finite differences over the T0.3 step sweep
    (`1e-2` through `1e-5`) and record the stable region and roundoff behavior.
-7. Remove vendored xitorch only if E3.1 proves it has no remaining consumer
+7. Remove vendored xitorch only if E3.1b proves it has no remaining consumer
    and the replacement passes compatibility/derivative tests; otherwise
    defer deletion until its final consumer is retired.
 
-E3.1 uses the canonical PyTorch transform driver. It excludes outer classical
+E3.1b uses the canonical PyTorch transform driver. It excludes outer classical
 DFT-D3: SCF differentiation can proceed without E1.3 because DFT-D3 is not
 part of the self-consistent map. Existing libcint eager/reference behavior
 remains covered separately within its supported scope.
 
-**E3.1 spectral handoff.** E3.0 confirms a separate transform-contract defect
+**E3.1s prerequisite.** E3.0 confirms a separate transform-contract defect
 in `_transitional_diagonalize`: the current `requires_grad` selector sends
 reverse-mode spectral evaluation through `broadening_method="lorn"`, while
 the functional JVP path uses `None`. The E3.0 frozen-state physical-forward
 FD probes do not identify that split as the historical NO2 endpoint cause,
-but the split violates E0's common derivative-semantics requirement. E3.1
-must remove the `requires_grad`-dependent branch and establish one invariant
-spectral/density derivative contract shared by reverse and forward transforms.
-This is separate from E3.0's finite-root diagnosis.
+but the split violates E0's common derivative-semantics requirement. E3.1s
+must establish one invariant spectral/density derivative contract shared by
+reverse and forward transforms, then remove the `requires_grad`-dependent
+branch when dxtb consumes the accepted upstream primitive. This is separate
+from E3.0's finite-root diagnosis. E3.1b cannot claim transform acceptance
+before E3.1s is complete.
 
 There are two legal paths for a T0.2 NO2 fix. If the fix is common to both
 drivers, validate PyTorch and libcint, regenerate both affected stored
@@ -387,13 +392,13 @@ sweep, tblite/tolerance agreement, and no unaffected driver/method regressions.
 Any T0.2 NO2 reference/marker change follows the driver-complete atomic rule
 above.
 
-**Needs.** E3.0, E0, E4core, E2-core, and the SCF-relevant completed
+**Needs.** E3.1a, E3.1s, E0, E4core, E2-core, and the SCF-relevant completed
 transform primitives (E1.1/E1.2); no outer DFT-D3 dependency. **Unblocks.** Full E3
 end-to-end acceptance after full E1 is complete. **Size.** L.
 
 ### Full E3 end-to-end acceptance
 
-**Goal.** Acceptance-only validation of E3.1 in the complete supported
+**Goal.** Acceptance-only validation of E3.1b in the complete supported
 end-to-end model. Full E3 does not introduce a second implementation.
 
 **Steps.**
@@ -420,7 +425,7 @@ passes T0.3 tolerances on the canonical PyTorch transform driver, with
 libcint eager/reference regressions retained where supported; the
 DFT-D3-enabled GFN1 row waits for E1.3.
 
-**Needs.** E3.1, E0, full E1 (including E1.3), E2-core, and E4core. Full E3
+**Needs.** E3.1b, E0, full E1 (including E1.3), E2-core, and E4core. Full E3
 cannot be marked complete until the supported end-to-end GFN1/GFN2 transform
 contract on PyTorch, including outer DFT-D3 where applicable, passes and
 libcint eager/reference regressions remain covered where supported. **Unblocks.** E8,
@@ -718,8 +723,10 @@ Libcint remains subject to its separate eager/reference regression contract.
 | E2-core | Fixed-shape single-System PairPlan/integral path | T0.2, B3a, B4 | L |
 | E2-legacy | Retire packed legacy driver's per-entry setup loop | E6broute | S |
 | E3.0 | Diagnosis-only spectral derivative / NO2 preflight | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
-| E3.1 | SCF differentiation implementation and fixes | E3.0, E0, E4core, E2-core, SCF-relevant E1.1/E1.2 | L |
-| E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1, E0, full E1, E2-core, E4core | L |
+| E3.1a | Physical-root strategy/reference gate (complete) | E3.0, E0, E4core, E2-core | M |
+| E3.1s | Upstream invariant spectral/density prerequisite | E3.1a, E0 | L |
+| E3.1b | Transform-compatible implicit SCF-root implementation | E3.1a, E3.1s, E0, E4core, E2-core, SCF-relevant E1.1/E1.2 | L |
+| E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1b, E0, full E1, E2-core, E4core | L |
 | E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF-core | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
 | B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
