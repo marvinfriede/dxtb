@@ -283,8 +283,10 @@ present. Do not invoke DFT-D3 and merely omit its energy from differentiation.
 An end-to-end GFN1 case that includes DFT-D3 is explicitly expected-blocked by
 E1.3 and is not an E3.0 success criterion.
 
-E3.0 is complete only when both exact NO2 endpoints reproduce and the first
-failing layer of each is recorded with the evidence above. E3.0 cannot land a
+**Status: complete.** Both exact NO2 endpoints reproduce for PyTorch and
+libcint. The diagnosis records the first failing layer as the complete
+finite-tolerance fixed-point response / finite-root trajectory. E3.0 did not
+identify an individual Anderson operation as the onset and did not land a
 mathematical/spectral fix. It must not introduce a new custom
 spectral/autograd primitive, broadening formula, degeneracy convention, or
 eigensolver derivative policy. If diagnosis identifies a need for a new

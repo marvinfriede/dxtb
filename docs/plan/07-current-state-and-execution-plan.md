@@ -51,8 +51,8 @@ Current state:
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
-| E3.0            | open; ready next                | Diagnosis-only preflight must first reproduce both GFN2/NO2 known-wrong endpoints under exact T0.2 settings; it needs only E4core and completed E1.1/E1.2 subset, not E1.3. |
-| E3.1            | not started                     | Owns SCF differentiation implementation/fixes after E3.0; uses E2-core and SCF-relevant E1.1/E1.2, not outer classical DFT-D3. |
+| E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. |
+| E3.1            | not started; next package       | Owns SCF differentiation implementation/fixes after E3.0; uses E2-core and SCF-relevant E1.1/E1.2, not outer classical DFT-D3. |
 | E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires B6b-core, full E1 term support, E2-core, the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, defined padding, and that policy. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
@@ -1881,17 +1881,16 @@ fallbacks are migrated, globally rejected, or explicitly retired.
 
 # 15. E3.0 diagnosis, E3.1 implementation, and full E3 acceptance
 
-The next runnable package is diagnosis-only E3.0, specified in
-[`04-TE-differentiable-core.md`](04-TE-differentiable-core.md#e30-diagnosis-only-spectral-derivative--no2-preflight).
-It audits the open-shell GFN2 NO2 spectral/Fermi derivative path on supported
-non-DFT-D3 single-System calculations. It first reproduces both GFN2/NO2
-`KNOWN_WRONG` endpoints for PyTorch and libcint under exact T0.2 reference
-settings, then isolates the first failing layer. Its prerequisites are E0,
-accepted E4core, T0.2/T0.3/T0.4 baseline cases, and completed E1.1/E1.2
-primitives used by that path; it does not wait for E1.3 or full E1. All four
-endpoint cases are required by the current baseline marker independently of
-the transform-driver policy. E3.0 makes no mathematical/spectral change and
-is independent of E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
+E3.0 is complete as a diagnosis-only package, with evidence recorded in
+[`E3.0-NO2-diagnosis.md`](../E3.0-NO2-diagnosis.md). It reproduces both
+GFN2/NO2 `KNOWN_WRONG` endpoints for PyTorch and libcint under exact T0.2
+reference settings. The first failing layer is the complete finite-tolerance
+fixed-point response / finite-root trajectory: tightening the root tolerance
+and increasing the effective trajectory move both responses toward the stable
+physical finite-difference and tblite values, while no isolated Fermi,
+frozen spectral, sampled raw-map, or Anderson sub-operation is identified as
+the onset. No mathematical or spectral fix was made. E3.0 remains independent
+of E1.3, E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
 
 E3.1 implements SCF differentiation after E3.0 using the SCF-relevant E1.1/E1.2
 subset on the canonical PyTorch transform driver; outer classical DFT-D3 does
@@ -2848,7 +2847,12 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-**Immediate runtime package: E3.0 diagnosis-only spectral/NO2 preflight.**
+**Next runtime package: E3.1 SCF differentiation implementation (not started).**
+
+E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
+the historical failure at the complete finite-tolerance fixed-point response /
+finite-root trajectory boundary; it does not assign the cause to an individual
+Anderson operation.
 
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.

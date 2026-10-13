@@ -244,8 +244,9 @@ At the review point:
 - E5 is complete;
 - E2-core is complete; the E2 umbrella remains partial until E2-legacy retires;
 - E0 is complete and its SCF differentiation decision is fixed; that contract
-  remains authoritative for downstream G1 work. E3.0 is the next open
-  spectral/NO2 diagnosis and preflight package.
+  remains authoritative for downstream G1 work. E3.0 diagnosis is complete;
+  E3.1 SCF differentiation implementation is the next package and has not
+  started.
 
 ---
 
