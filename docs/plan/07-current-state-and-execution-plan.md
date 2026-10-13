@@ -215,7 +215,8 @@ Do not pretend the temporary combination is a releasable dependency set.
 A suitable short-term arrangement is:
 
 1. keep tad-dftd3/tad-dftd4 out of `install_requires` while their dependency pins conflict;
-2. make tox explicitly install them with `pip install --no-deps` before running tests;
+2. make tox and the pinned Track-0 baseline CI explicitly install them with
+   `pip install --no-deps` before running tests;
 3. add a clean-environment import smoke test;
 4. add a release check that fails while `_src/mctc_shim.py` exists.
 
@@ -264,6 +265,17 @@ git diff -- test/test_baseline/status/param_coverage.json
 For structural packages that can affect derivatives, also run the derivative baseline subset appropriate to the changed code.
 
 A package is not "done" merely because adapted tests pass locally in one focused file.
+
+R0 validation on Python 3.14/Torch 2.14.1 reported 4,715 passed, 31 skipped,
+70 XFAIL, 1 XPASS, and two reproducible legacy xitorch memory-leak failures:
+`test/test_a_memory_leak/test_scf.py::test_xitorch[True-False-dtype0]` and
+`test/test_a_memory_leak/test_scf.py::test_xitorch_pure[False-False-dtype0]`.
+The broad run is not fully green and is not evidence of new B2/B3 stability;
+their existing statuses and B3 closure criteria are unchanged. The
+parameter-coverage generator found no verdict changes, and its generated JSON
+was restored to its pre-run workspace contents. The canonical Torch 2.14.0
+baseline environment has not been run in this local validation; the 2.14.1
+results are secondary evidence only.
 
 ## R0.4 Add architectural guard tests early
 
