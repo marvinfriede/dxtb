@@ -33,3 +33,17 @@ To test specific environments, use the `-e` flag.
 .. code-block:: shell
 
      tox -e py310-torch2141
+
+Development dependency setup
+----------------------------
+
+The restructuring branch currently pins ``tad-mctc==0.9.1`` and
+``tad-multicharge==0.7.0``. The compatible ``tad-dftd3`` and ``tad-dftd4``
+releases are installed by tox with ``pip install --no-deps`` because their
+published dependency pins conflict with that ``tad-mctc`` version. Tox then
+smoke-imports dxtb and both dispersion packages before running tests. This is
+an isolated development/test setup, not a supported ordinary-install or
+release dependency set. Do not publish while an ordinary installation still
+depends on this external no-deps workaround; restore normal runtime
+dependencies and remove ``mctc_shim.py``, ``ncoord/legacy.py`` and the
+workaround after compatible upstream releases are available.
