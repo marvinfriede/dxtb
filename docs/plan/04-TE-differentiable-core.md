@@ -342,6 +342,16 @@ DFT-D3: SCF differentiation can proceed without E1.3 because DFT-D3 is not
 part of the self-consistent map. Existing libcint eager/reference behavior
 remains covered separately within its supported scope.
 
+**E3.1 spectral handoff.** E3.0 confirms a separate transform-contract defect
+in `_transitional_diagonalize`: the current `requires_grad` selector sends
+reverse-mode spectral evaluation through `broadening_method="lorn"`, while
+the functional JVP path uses `None`. The E3.0 frozen-state physical-forward
+FD probes do not identify that split as the historical NO2 endpoint cause,
+but the split violates E0's common derivative-semantics requirement. E3.1
+must remove the `requires_grad`-dependent branch and establish one invariant
+spectral/density derivative contract shared by reverse and forward transforms.
+This is separate from E3.0's finite-root diagnosis.
+
 There are two legal paths for a T0.2 NO2 fix. If the fix is common to both
 drivers, validate PyTorch and libcint, regenerate both affected stored
 references, remove the quantity from the method-wide marker, and land code,

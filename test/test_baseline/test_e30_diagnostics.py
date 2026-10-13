@@ -111,8 +111,6 @@ def _fd_window(steps: tuple[float, ...], values: list[float]):
         return None
     candidates = []
     for start in range(len(values) - 2):
-        if start == 0:
-            continue
         window = values[start : start + 3]
         if not np.isfinite(window).all():
             continue
@@ -124,9 +122,10 @@ def _fd_window(steps: tuple[float, ...], values: list[float]):
             continue
         if differences[1] > 1.5 * max(differences[0], 1.0e-15):
             continue
-        previous_delta = abs(values[start] - values[start - 1])
-        if previous_delta + 1.0e-15 < 0.5 * max(differences):
-            continue
+        if start > 0:
+            previous_delta = abs(values[start] - values[start - 1])
+            if previous_delta + 1.0e-15 < 0.5 * max(differences):
+                continue
         roundoff = False
         if start + 3 < len(values):
             smaller_delta = abs(values[start + 3] - values[start + 2])
@@ -225,6 +224,41 @@ def _pol_fd(calculator, step: float) -> float:
     return -(field_second(positions_plus) - field_second(positions_minus)) / (
         2.0 * step
     )
+
+
+def _fresh_physical_fd(quantity: str, step: float) -> float:
+    """Evaluate an independent direct-energy FD with a fresh Calculator per point."""
+    system = SYSTEMS["NO2"]
+    field_axis = torch.zeros(3, **_DD)
+    field_axis[1] = 1.0
+
+    def energy(positions: Tensor, field: Tensor) -> float:
+        calculator = _calculator(system, "gfn2", "pytorch")
+        return _energy(calculator, positions, field)
+
+    if quantity == "hyperpolarizability":
+        points = [
+            energy(system.positions, offset * step * field_axis)
+            for offset in (-2.0, -1.0, 1.0, 2.0)
+        ]
+        return -(points[3] - 2.0 * points[2] + 2.0 * points[1] - points[0]) / (
+            2.0 * step**3
+        )
+
+    if quantity == "pol_deriv":
+        field_zero = torch.zeros(3, **_DD)
+        alpha = []
+        for sign in (-1.0, 1.0):
+            positions = system.positions.clone()
+            positions[0, 1] += sign * step
+            values = [
+                energy(positions, offset * step * field_axis)
+                for offset in (1.0, 0.0, -1.0)
+            ]
+            alpha.append(-(values[0] - 2.0 * values[1] + values[2]) / step**2)
+        return (alpha[1] - alpha[0]) / (2.0 * step)
+
+    raise ValueError(f"Unknown physical finite-difference quantity: {quantity}")
 
 
 @pytest.mark.parametrize("driver", DRIVERS)
@@ -682,10 +716,51 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
     system = SYSTEMS["NO2"]
     field = torch.zeros(3, **_DD, requires_grad=derivative_enabled)
     calculator = _calculator(system, "gfn2", "pytorch")
-    model_system, inputs, layout, guess, _ = _prepare_functional_at(
+    model_system, inputs, layout, packed_guess, _ = _prepare_functional_at(
         calculator, system.positions, field
     )
-    potential = unpack_potential(guess, layout)
+    raw_charge_guess = get_guess(
+        model_system.numbers,
+        system.positions,
+        torch.atleast_1d(system.charge),
+        model_system.ihelp,
+        calculator.opts.scf.guess,
+    )
+    charge_layout = inputs.charge_layout
+    initial_charges = SCFCharges(
+        mono=raw_charge_guess,
+        dipole=(
+            None
+            if charge_layout.dipole_shape is None
+            else raw_charge_guess.new_zeros(charge_layout.dipole_shape)
+        ),
+        quad=(
+            None
+            if charge_layout.quadrupole_shape is None
+            else raw_charge_guess.new_zeros(charge_layout.quadrupole_shape)
+        ),
+    )
+    initial_potential = potential_from_charges(initial_charges, inputs)
+    initial_contributions = {
+        interaction.label: interaction.get_potential(
+            inputs.interaction_data[interaction.label],
+            Charges(
+                mono=initial_charges.mono,
+                dipole=initial_charges.dipole,
+                quad=initial_charges.quad,
+            ),
+            inputs.ihelp,
+        )
+        for interaction in inputs.interactions.components
+    }
+    rebuilt_packed, rebuilt_layout = potential_initial_guess(
+        initial_charges, inputs
+    )
+    assert rebuilt_layout.mono_shape == layout.mono_shape
+    assert rebuilt_layout.dipole_shape == layout.dipole_shape
+    assert rebuilt_layout.quadrupole_shape == layout.quadrupole_shape
+    torch.testing.assert_close(packed_guess, rebuilt_packed, atol=0.0, rtol=0.0)
+    potential = unpack_potential(packed_guess, layout)
     integrals = inputs.integrals
     hamiltonian = potential_to_hamiltonian(
         integrals.hcore,
@@ -709,15 +784,13 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
         contribution_values[interaction.label] = contribution
     mapped_potential = potential_from_charges(spectral.charges, inputs)
     mapped_x = pack_potential(mapped_potential, layout)
-    reference_map = potential_map(guess, inputs, layout)
+    reference_map = potential_map(packed_guess, inputs, layout)
     torch.testing.assert_close(
         mapped_x, reference_map.mapped_x, atol=0.0, rtol=0.0
     )
 
     values: dict[str, Tensor] = {
         "numbers": model_system.numbers,
-        "guess": guess,
-        "initial_packed_potential": guess,
         "n0": inputs.n0,
         "occupation_input": inputs.occupation,
         "nel": inputs.nel,
@@ -737,6 +810,13 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
         "mapped_quad": mapped_potential.quad,
         "mapped_x": mapped_x,
     }
+    _tensor_leaves(raw_charge_guess, "raw_charge_guess", values)
+    _tensor_leaves(initial_charges, "initial_charges", values)
+    _tensor_leaves(
+        initial_contributions, "initial_potential_contributions", values
+    )
+    _tensor_leaves(initial_potential, "initial_potential", values)
+    _tensor_leaves(packed_guess, "initial_packed_potential", values)
     for name in ("dipole", "quadrupole"):
         tensor = getattr(integrals, name)
         if tensor is not None:
@@ -2363,9 +2443,37 @@ def test_no2_pol_deriv_tighter_tolerance_response() -> None:
     ]
     assert gaps[0] > 0.1
     assert gaps[1] < 1.0e-3
+    physical_steps = (2.0e-3, 1.0e-3, 5.0e-4, 2.0e-4, 1.0e-4)
+    physical_values = [
+        _fresh_physical_fd("pol_deriv", step) for step in physical_steps
+    ]
+    physical_plateau = physical_values[:3]
+    physical_spread = max(physical_plateau) - min(physical_plateau)
+    assert physical_spread < 1.0e-3, physical_values
+    physical_target = float(np.median(physical_plateau))
+    physical_bound = max(4.0 * physical_spread, 1.0e-3)
+    physical_gaps = [
+        abs(float(row["nested_mixed_third"]) - physical_target)
+        for row in records
+    ]
+    assert physical_gaps[0] > 0.1
+    assert physical_gaps[1] < physical_bound
     for row, gap in zip(records, gaps):
         row["absolute_gap"] = gap
-    print({"pol_deriv_tolerance_sweep": records})
+    for row, gap in zip(records, physical_gaps):
+        row["independent_physical_fd_gap"] = gap
+    print(
+        {
+            "pol_deriv_tolerance_sweep": records,
+            "independent_physical_fd": {
+                "steps": physical_steps,
+                "values": physical_values,
+                "stable_physical_plateau": physical_plateau,
+                "target": physical_target,
+                "comparison_bound": physical_bound,
+            },
+        }
+    )
 
 
 def test_no2_anderson_transition_conditioning() -> None:
@@ -2962,6 +3070,174 @@ def test_no2_spectral_branch_control(monkeypatch) -> None:
     print({"explicit_spectral_branch_controls": branch_records})
 
 
+def test_no2_lorentzian_raw_map_derivative_matches_physical_forward(
+    monkeypatch,
+) -> None:
+    """Compare Lorentzian raw-map derivatives to ordinary physical FDs."""
+    system = SYSTEMS["NO2"]
+    calculator = _calculator(system, "gfn2", "pytorch")
+    trace: list[dict[str, object]] = []
+    outcome, inputs, layout, _ = _functional_solve_at(
+        calculator,
+        system.positions,
+        torch.zeros(3, **_DD),
+        eager=True,
+        map_trace=trace,
+    )
+    smallest_index = min(
+        range(len(trace)),
+        key=lambda index: trace[index]["minimum_occupied_pair_gap"],
+    )
+    final_index = len(trace) - 1
+    selected_states = {
+        "smallest-gap intermediate": potential_map(
+            trace[smallest_index]["input_state_tensor"], inputs, layout
+        ).hamiltonian.detach(),
+        "selected final map": outcome.map_result.hamiltonian.detach(),
+    }
+    for hamiltonian in selected_states.values():
+        assert hamiltonian.shape == outcome.map_result.hamiltonian.shape
+    density_probe = torch.linspace(
+        -0.9, 1.2, outcome.map_result.spectral.density.numel(), **_DD
+    ).reshape_as(outcome.map_result.spectral.density)
+    direction = torch.linspace(
+        -1.0, 1.0, outcome.map_result.hamiltonian.numel(), **_DD
+    ).reshape_as(outcome.map_result.hamiltonian)
+    direction = 0.5 * (direction + direction.mT)
+    steps = (
+        1.0e-3,
+        5.0e-4,
+        2.0e-4,
+        1.0e-4,
+        5.0e-5,
+        2.0e-5,
+        1.0e-5,
+        5.0e-6,
+        2.0e-6,
+        1.0e-6,
+    )
+    original_eighb = storch.eighb
+
+    def scalar(
+        parameter: Tensor,
+        hamiltonian: Tensor,
+        branch: str,
+        output: str,
+    ) -> Tensor:
+        broadening = {"ordinary": None, "lorentzian": "lorn"}[branch]
+
+        def forced_eighb(*args, **kwargs):
+            kwargs["broadening_method"] = broadening
+            return original_eighb(*args, **kwargs)
+
+        with monkeypatch.context() as context:
+            context.setattr(storch, "eighb", forced_eighb)
+            spectrum = evaluate_hamiltonian(
+                hamiltonian + parameter * direction, inputs
+            )
+            if output == "band_energy":
+                return (spectrum.emo * spectrum.occupation.sum(-2)).sum()
+            if output == "density":
+                return (spectrum.density * density_probe).sum()
+            raise ValueError(f"Unknown spectral output: {output}")
+
+    records: dict[str, object] = {}
+    for state_name, hamiltonian in selected_states.items():
+        state_records = {}
+        for output in ("density", "band_energy"):
+            branch_records = {}
+            for branch in ("ordinary", "lorentzian"):
+                parameter = torch.zeros((), **_DD, requires_grad=True)
+                with monkeypatch.context() as context:
+
+                    def forced_eighb(*args, **kwargs):
+                        kwargs["broadening_method"] = (
+                            None if branch == "ordinary" else "lorn"
+                        )
+                        return original_eighb(*args, **kwargs)
+
+                    context.setattr(storch, "eighb", forced_eighb)
+                    value = scalar(parameter, hamiltonian, branch, output)
+                    reverse = torch.autograd.grad(value, parameter)[0]
+                jvp = torch.func.jvp(
+                    lambda item: scalar(item, hamiltonian, branch, output),
+                    (torch.zeros((), **_DD),),
+                    (torch.ones((), **_DD),),
+                )[1]
+                branch_records[branch] = {
+                    "reverse": float(reverse.detach()),
+                    "jvp": float(jvp.detach()),
+                }
+
+            physical_fd = []
+            for step in steps:
+                plus = scalar(
+                    torch.tensor(step, **_DD),
+                    hamiltonian,
+                    "ordinary",
+                    output,
+                )
+                minus = scalar(
+                    torch.tensor(-step, **_DD),
+                    hamiltonian,
+                    "ordinary",
+                    output,
+                )
+                physical_fd.append(
+                    float(((plus - minus) / (2.0 * step)).detach())
+                )
+            window = _fd_window(steps, physical_fd)
+            assert window is not None, (
+                state_name,
+                output,
+                "ordinary physical forward FD has no stable step window",
+                physical_fd,
+                branch_records,
+            )
+            physical_center = float(np.median(window["values"]))
+            error_bound = max(
+                8.0 * float(window["spread"]),
+                1.0e-6 * abs(physical_center),
+                1.0e-8,
+            )
+            assert (
+                abs(branch_records["ordinary"]["reverse"] - physical_center)
+                <= error_bound
+            )
+            assert (
+                abs(branch_records["ordinary"]["jvp"] - physical_center)
+                <= error_bound
+            )
+            assert abs(
+                branch_records["lorentzian"]["reverse"]
+                - branch_records["lorentzian"]["jvp"]
+            ) <= max(
+                1.0e-8, 1.0e-5 * abs(branch_records["lorentzian"]["reverse"])
+            )
+            lorentzian_gap = abs(
+                branch_records["lorentzian"]["reverse"] - physical_center
+            )
+            assert lorentzian_gap <= error_bound, (
+                state_name,
+                output,
+                "Lorentzian reverse derivative differs from ordinary physical FD",
+                lorentzian_gap,
+                error_bound,
+                branch_records,
+                window,
+            )
+            state_records[output] = {
+                "branches": branch_records,
+                "ordinary_physical_fd": physical_fd,
+                "stable_window": window,
+                "physical_center": physical_center,
+                "error_bound": error_bound,
+                "lorentzian_vs_physical_gap": lorentzian_gap,
+            }
+        records[state_name] = state_records
+    print({"lorentzian_vs_physical_forward": records})
+
+
 def test_no2_subprocess_trajectory_reproducibility() -> None:
     """Separate clean trace repeats from explicit history perturbation."""
     script = textwrap.dedent("""
@@ -2972,8 +3248,8 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
             torch.set_num_threads(1)
             torch.set_num_interop_threads(1)
         from test.test_baseline.test_e30_diagnostics import (
-            _DD, _calculator, _fixed_n_anderson_at, _hyperpolarizability,
-            _map1_stage_tensors,
+            _DD, _calculator, _fixed_n_anderson_at, _functional_solve_at,
+            _hyperpolarizability, _map1_stage_tensors, _selected_map_energy,
         )
         from test.test_baseline.molecules import SYSTEMS
         mode = sys.argv[2]
@@ -2985,17 +3261,39 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
                 calc, system.positions, torch.zeros(3, **_DD), 20,
                 trajectory_trace=rows,
             )
-            return rows
+            converged, inputs, _, _ = _functional_solve_at(
+                _calculator(system, "gfn2", "pytorch"),
+                system.positions,
+                torch.zeros(3, **_DD),
+                eager=True,
+            )
+            spectral = converged.map_result.spectral
+            physical = {
+                "energy": _selected_map_energy(converged, inputs).detach(),
+                "hamiltonian": spectral.hamiltonian.detach(),
+                "density": spectral.density.detach(),
+                "orbital_energies": spectral.emo.detach(),
+                "occupation": spectral.occupation.detach(),
+                "charges": spectral.charges.mono.detach(),
+            }
+            return rows, physical
         if mode in ("clean", "history"):
-            traces = [trace()]
+            first_trace, first_physical = trace()
+            traces = [first_trace]
+            physical_records = [first_physical]
             if mode == "history":
                 other = SYSTEMS["H2O"]
                 _calculator(other, "gfn1", "pytorch").singlepoint(
                     other.positions.clone(), other.charge, other.spin,
                 )
-                traces.append(trace())
+                next_trace, next_physical = trace()
+                traces.append(next_trace)
+                physical_records.append(next_physical)
             else:
-                traces.extend((trace(), trace()))
+                for _ in range(2):
+                    next_trace, next_physical = trace()
+                    traces.append(next_trace)
+                    physical_records.append(next_physical)
             compare = list(zip(*traces)) if len(traces) == 3 else zip(traces[0], traces[1])
             def leaves(value, prefix=""):
                 if isinstance(value, torch.Tensor):
@@ -3014,7 +3312,13 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
                         max_delta = max(max_delta, delta)
                         if first is None and delta != 0.0:
                             first = {"map": map_index, "stage": key, "max_abs": delta}
-            print(json.dumps({"mode": mode, "threads": torch.get_num_threads(), "interop": torch.get_num_interop_threads(), "first_difference": first, "max_delta": max_delta}))
+            physical_max_delta = {}
+            for key, expected in physical_records[0].items():
+                physical_max_delta[key] = max(
+                    float((expected - item[key]).abs().max())
+                    for item in physical_records[1:]
+                )
+            print(json.dumps({"mode": mode, "threads": torch.get_num_threads(), "interop": torch.get_num_interop_threads(), "first_difference": first, "max_delta": max_delta, "physical_max_delta": physical_max_delta}))
         elif mode == "endpoint":
             values = []
             for _ in range(3):
@@ -3035,8 +3339,12 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
                     for name in names
                 }
                 stage_order = (
-                    "numbers", "hcore", "overlap", "inverse_cholesky",
-                    "interaction_data", "guess", "initial_packed_potential",
+                    "numbers", "hcore", "overlap", "dipole_integrals",
+                    "quadrupole_integrals", "inverse_cholesky", "n0",
+                    "occupation_input", "nel", "interaction_data",
+                    "raw_charge_guess", "initial_charges",
+                    "initial_potential_contributions", "initial_potential",
+                    "initial_packed_potential",
                     "hamiltonian", "orbital_energies", "coefficients",
                     "occupation", "density", "orbital_charges",
                     "atomic_dipoles", "atomic_quadrupoles",
@@ -3066,21 +3374,63 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
     ):
         completed = subprocess.run(
             [sys.executable, "-c", script, runtime, mode],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=900,
             env=env,
         )
+        assert completed.returncode == 0, completed.stderr
         records[f"{runtime}_{mode}"] = json.loads(
             completed.stdout.strip().splitlines()[-1]
         )
     assert records["single-thread_clean"]["threads"] == 1
     assert records["single-thread_clean"]["interop"] == 1
     assert records["single-thread_map1"]["stage_max_deltas"]
-    assert np.isfinite(
-        records["single-thread_endpoint"]["endpoint_AAA_unrelated_A"]
-    ).all()
+    pre_initial_prefixes = (
+        "numbers",
+        "hcore",
+        "overlap",
+        "dipole_integrals",
+        "quadrupole_integrals",
+        "inverse_cholesky",
+        "n0",
+        "occupation_input",
+        "nel",
+        "interaction_data",
+    )
+    initial_prefixes = (
+        "raw_charge_guess",
+        "initial_charges",
+        "initial_potential_contributions",
+        "initial_potential",
+        "initial_packed_potential",
+    )
+    for record in records["single-thread_map1"]["stage_max_deltas"].values():
+        deltas = record["tensor_max_abs_deltas"]
+        assert (
+            max(
+                delta
+                for name, delta in deltas.items()
+                if name.startswith(pre_initial_prefixes)
+            )
+            == 0.0
+        )
+        first_name = record["first_differing_tensor"]
+        assert first_name is not None
+        assert first_name.startswith(initial_prefixes)
+        assert deltas[first_name] < 1.0e-14
+    for record in (
+        records["single-thread_clean"],
+        records["normal_clean"],
+        records["single-thread_history"],
+    ):
+        assert max(record["physical_max_delta"].values()) < 1.0e-10
+    endpoint_values = records["single-thread_endpoint"][
+        "endpoint_AAA_unrelated_A"
+    ]
+    assert np.isfinite(endpoint_values).all()
+    assert max(endpoint_values) - min(endpoint_values) > 1.0e-5
     print({"subprocess_reproducibility": records})
 
 
@@ -3400,6 +3750,33 @@ def test_no2_solver_tolerance_sweep(tolerance: float) -> None:
         assert abs(nested_third - fd_third) > 1.0
     else:
         assert abs(nested_third - fd_third) < 1.0e-3
+    if tolerance in (1.0e-10, 1.0e-12, 1.0e-13):
+        physical_steps = (2.0e-3, 1.0e-3, 5.0e-4, 2.0e-4, 1.0e-4)
+        physical_values = [
+            _fresh_physical_fd("hyperpolarizability", step)
+            for step in physical_steps
+        ]
+        physical_plateau = physical_values[:3]
+        physical_spread = max(physical_plateau) - min(physical_plateau)
+        assert physical_spread < 5.0e-4, physical_values
+        physical_target = float(np.median(physical_plateau))
+        physical_bound = max(4.0 * physical_spread, 1.0e-3)
+        physical_gap = abs(nested_third - physical_target)
+        if tolerance == 1.0e-10:
+            assert physical_gap > 1.0
+        else:
+            assert physical_gap < physical_bound
+        print(
+            {
+                "tolerance": tolerance,
+                "direct_energy_fd_steps": physical_steps,
+                "direct_energy_fd_values": physical_values,
+                "direct_energy_fd_stable_plateau": physical_plateau,
+                "direct_energy_fd_target": physical_target,
+                "nested_vs_independent_physical_gap": physical_gap,
+                "comparison_bound": physical_bound,
+            }
+        )
     if tolerance in (1.0e-10, 1.0e-12):
         middle_step = response["fd_of_second_sweep"][1]
         assert (
