@@ -39,6 +39,7 @@ from dxtb._src.scf.functional.data import (
     unpack_potential,
 )
 from dxtb._src.scf.functional.anderson import (
+    anderson_mix,
     _solve_map_anderson,
     setup_anderson_solver_settings,
 )
@@ -63,7 +64,13 @@ from dxtb._src.scf.utils import get_density
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction.filling import get_fermi_occupation_core
 
-from .compute import DRIVERS, _calculator
+from .compute import (
+    DRIVERS,
+    _calculator,
+    _hyperpolarizability,
+    _pol_deriv,
+    compute,
+)
 from .compute import SCF_OPTIONS
 from .molecules import SYSTEMS
 from .refdata import REFERENCE_DIR, load_reference
@@ -154,35 +161,28 @@ def test_no2_gfn2_third_order_fd_diagnostic(
 ) -> None:
     """Record nested, stored, dxtb-FD, and tblite endpoint comparisons."""
     system = SYSTEMS["NO2"]
-    calculator = _calculator(system, "gfn2", driver)
     reference, _, _ = load_reference(
         REFERENCE_DIR / "tblite" / "gfn2" / "NO2.npz"
     )
     stored, _, _ = load_reference(REFERENCE_DIR / f"gfn2-{driver}" / "NO2.npz")
-    base_result = calculator.singlepoint(
-        system.positions,
+    if quantity == "hyperpolarizability":
+        nested = _hyperpolarizability(system, "gfn2", driver)[quantity][index]
+    else:
+        nested = _pol_deriv(system, "gfn2", driver)[quantity][index]
+    base_calculator = _calculator(system, "gfn2", driver)
+    base_result = base_calculator.singlepoint(
+        system.positions.clone(),
         system.charge,
         system.spin,
         field=torch.zeros(3, **_DD),
     )
-    field = torch.zeros(3, **_DD, requires_grad=True)
-    if quantity == "hyperpolarizability":
-        nested = calculator.hyperpolarizability(
-            system.positions, system.charge, system.spin, field=field
-        )[index]
-    else:
-        nested = calculator.pol_deriv(
-            system.positions.clone().requires_grad_(),
-            system.charge,
-            system.spin,
-            field=field,
-        )[index]
     system_field = torch.zeros(3, **_DD)
     field_axis = torch.zeros(3, **_DD)
     field_axis[1] = 1.0
 
     def evaluate(positions: Tensor, field_value: Tensor) -> tuple[float, int]:
-        result = calculator.singlepoint(
+        point_calculator = _calculator(system, "gfn2", driver)
+        result = point_calculator.singlepoint(
             positions, system.charge, system.spin, field=field_value
         )
         return float(result.energy.sum().detach()), int(result.iterations)
@@ -466,8 +466,51 @@ def _functional_solve_at(
     *,
     eager: bool,
     maxiter: int | None = None,
+    tolerance: float | None = None,
+    map_trace: list[dict[str, object]] | None = None,
 ):
     """Return trajectory outcome and finalization from one prepared solve."""
+    model_system, inputs, layout, packed, settings = _prepare_functional_at(
+        calculator, positions, field, maxiter=maxiter, tolerance=tolerance
+    )
+
+    def map_fn(value: Tensor):
+        result = potential_map(value, inputs, layout)
+        if map_trace is not None:
+            map_trace.append(_map_trace_record(value, result, len(map_trace)))
+        return result
+
+    outcome = _solve_map_anderson(
+        packed,
+        settings,
+        map_fn,
+        state_projection=lambda value: _project_potential_padding(
+            value, layout
+        ),
+        eager=eager,
+    )
+    finalized = finalize_scf_potential(
+        outcome.map_result,
+        inputs,
+        layout,
+        outcome.iterations,
+        outcome.converged,
+        outcome.residual,
+        outcome.trajectory_status,
+        outcome.damping_state,
+    )
+    return outcome, inputs, layout, finalized
+
+
+def _prepare_functional_at(
+    calculator: Calculator,
+    positions: Tensor,
+    field: Tensor,
+    *,
+    maxiter: int | None = None,
+    tolerance: float | None = None,
+):
+    """Prepare the exact functional potential map without running SCF."""
     model_system = calculator.system
     charge = torch.atleast_1d(SYSTEMS["NO2"].charge)
     spin = torch.atleast_1d(SYSTEMS["NO2"].spin)
@@ -496,6 +539,8 @@ def _functional_solve_at(
     config = replace(calculator.opts.scf, mixer=route.effective_mixer)
     if maxiter is not None:
         config = replace(config, maxiter=maxiter)
+    if tolerance is not None:
+        config = replace(config, x_atol=tolerance, x_atol_max=tolerance)
     inputs = setup_scf_inputs(
         model_system.numbers,
         matrices,
@@ -529,26 +574,367 @@ def _functional_solve_at(
     )
     packed, layout = potential_initial_guess(initial, inputs)
     settings = setup_anderson_solver_settings(config, positions.dtype)
-    outcome = _solve_map_anderson(
-        packed,
-        settings,
-        lambda value: potential_map(value, inputs, layout),
-        state_projection=lambda value: _project_potential_padding(
-            value, layout
+    return model_system, inputs, layout, packed, settings
+
+
+def _map_trace_record(value: Tensor, result, index: int) -> dict[str, object]:
+    """Capture gauge-invariant spectrum and raw residual for one map call."""
+    energies = result.spectral.emo.detach()
+    occupations = result.spectral.occupation.detach()
+    pair_gaps = (energies[..., 1:] - energies[..., :-1]).abs()
+    occupied_pair_gaps = []
+    occupied_pair_records = []
+    frontier_gaps = []
+    for channel in range(occupations.shape[-2]):
+        channel_gaps = (energies[1:] - energies[:-1]).abs()
+        occupied_pairs = (occupations[channel, 1:] > 0.5) & (
+            occupations[channel, :-1] > 0.5
+        )
+        if occupied_pairs.any():
+            masked_gaps = channel_gaps.masked_fill(~occupied_pairs, torch.inf)
+            pair_index = int(masked_gaps.argmin())
+            gap = float(masked_gaps.min())
+            occupied_pair_gaps.append(gap)
+            occupied_pair_records.append((channel, pair_index, gap))
+        occupied_energies = energies[occupations[channel] > 1.0e-8]
+        virtual_energies = energies[occupations[channel] < 1.0 - 1.0e-8]
+        if occupied_energies.numel() and virtual_energies.numel():
+            frontier_gaps.append(
+                float(
+                    (occupied_energies[:, None] - virtual_energies[None, :])
+                    .abs()
+                    .min()
+                )
+            )
+    fractional = (occupations - occupations.round()).abs().max()
+    return {
+        "index": index,
+        "input_state_tensor": value.detach(),
+        "residual_l2": float(
+            torch.linalg.vector_norm(result.mapped_x.detach() - value.detach())
         ),
+        "minimum_adjacent_gap": float(pair_gaps.min()),
+        "minimum_occupied_pair": min(
+            occupied_pair_records, key=lambda row: row[2]
+        ),
+        "minimum_occupied_pair_gap": min(occupied_pair_gaps),
+        "minimum_frontier_gap": min(frontier_gaps) if frontier_gaps else None,
+        "orbital_energies": energies.cpu().tolist(),
+        "occupations": occupations.cpu().tolist(),
+        "max_fractional_occupation": float(fractional),
+        "fermi_changes_materially": bool(fractional > 1.0e-8),
+    }
+
+
+def _fixed_n_anderson_at(
+    calculator: Calculator,
+    positions: Tensor,
+    field: Tensor,
+    n_maps: int,
+    *,
+    mixing: bool = True,
+    map_trace: list[dict[str, object]] | None = None,
+):
+    """Compose a fixed number of maps, optionally with Anderson mixing."""
+    _, inputs, layout, guess, settings = _prepare_functional_at(
+        calculator, positions, field
+    )
+    if settings.dynamic_damping.enabled:
+        raise AssertionError(
+            "NO2 fixed-N probe expects static Anderson damping"
+        )
+
+    def map_fn(value: Tensor):
+        result = potential_map(value, inputs, layout)
+        if map_trace is not None:
+            map_trace.append(_map_trace_record(value, result, len(map_trace)))
+        return result
+
+    selected = map_fn(guess)
+    current = guess
+    mixer_state = None
+    if mixing and settings.mix_guess:
+        current, mixer_state = anderson_mix(
+            current,
+            selected.mapped_x,
+            mixer_state,
+            settings,
+            step=1,
+            damp=settings.damp,
+        )
+    else:
+        current = selected.mapped_x
+
+    for map_index in range(1, n_maps):
+        selected = map_fn(current)
+        if mixing:
+            step = map_index + (1 if settings.mix_guess else 0)
+            current, mixer_state = anderson_mix(
+                current,
+                selected.mapped_x,
+                mixer_state,
+                settings,
+                step=step,
+                transition_active=torch.ones(
+                    (), dtype=torch.bool, device=current.device
+                ),
+                damp=settings.damp,
+            )
+        else:
+            current = selected.mapped_x
+    return selected, inputs
+
+
+def _energy_from_map_result(map_result, inputs) -> Tensor:
+    """Scalar physical energy from one raw map evaluation."""
+    return _spectral_energy(map_result.spectral, inputs)
+
+
+def _third_response(
+    energy_fn,
+    step: float | tuple[float, ...],
+    *,
+    check_jvp: bool = False,
+    convention: float = -1.0,
+) -> dict[str, object]:
+    """Compare nested response with a central FD of the second derivative."""
+    center = torch.zeros((), **_DD, requires_grad=True)
+    energy, iterations = energy_fn(center, torch.zeros((), **_DD))
+    first = (
+        torch.autograd.grad(energy, center, create_graph=True)[0]
+        if energy.requires_grad
+        else torch.zeros_like(center)
+    )
+    second = (
+        torch.autograd.grad(first, center, create_graph=True)[0]
+        if first.requires_grad
+        else torch.zeros_like(first)
+    )
+    third = (
+        torch.autograd.grad(second, center)[0]
+        if second.requires_grad
+        else torch.zeros_like(second)
+    )
+    jvp = None
+    if check_jvp:
+        jvp = torch.func.jvp(
+            lambda x: energy_fn(x, torch.zeros((), **_DD))[0],
+            (torch.zeros((), **_DD),),
+            (torch.ones((), **_DD),),
+        )[1]
+
+    def derivatives_at(field_value: float) -> tuple[float, float, float, int]:
+        field = torch.tensor(field_value, **_DD, requires_grad=True)
+        value, count = energy_fn(field, torch.zeros((), **_DD))
+        first_local = (
+            torch.autograd.grad(value, field, create_graph=True)[0]
+            if value.requires_grad
+            else torch.zeros_like(field)
+        )
+        second_local = (
+            torch.autograd.grad(first_local, field)[0]
+            if first_local.requires_grad
+            else torch.zeros_like(first_local)
+        )
+        return (
+            float(value.detach()),
+            float(first_local.detach()),
+            float(second_local.detach()),
+            int(count),
+        )
+
+    steps = (step,) if isinstance(step, float) else step
+    fd_sweep = []
+    for step_value in steps:
+        plus = derivatives_at(step_value)
+        minus = derivatives_at(-step_value)
+        fd_sweep.append(
+            {
+                "step": step_value,
+                "fd_first": (plus[0] - minus[0]) / (2.0 * step_value),
+                "fd_second": (plus[1] - minus[1]) / (2.0 * step_value),
+                "fd_of_second": convention
+                * (plus[2] - minus[2])
+                / (2.0 * step_value),
+                "iterations_plus": plus[3],
+                "iterations_minus": minus[3],
+            }
+        )
+    result: dict[str, object] = {
+        "iterations_center": int(iterations),
+        "reverse_first": float(first.detach()),
+        "reverse_second": float(second.detach()),
+        "reverse_third": convention * float(third.detach()),
+        "fd_of_second_sweep": fd_sweep,
+    }
+    if jvp is not None:
+        result["jvp_first"] = float(jvp)
+        result["jvp_vs_reverse_first_abs"] = abs(
+            float(jvp) - float(first.detach())
+        )
+    return result
+
+
+def _mixed_response(energy_fn, step: float) -> dict[str, float | int]:
+    """Compare mixed nested response with an FD of field polarizability."""
+    geometry = torch.zeros((), **_DD, requires_grad=True)
+    field = torch.zeros((), **_DD, requires_grad=True)
+    energy, center_iterations = energy_fn(field, geometry)
+    first_field_result = torch.autograd.grad(
+        energy, field, create_graph=True, allow_unused=True
+    )[0]
+    first_field = (
+        first_field_result
+        if first_field_result is not None
+        else torch.zeros_like(field)
+    )
+    second_field = (
+        torch.autograd.grad(first_field, field, create_graph=True)[0]
+        if first_field.requires_grad
+        else torch.zeros_like(first_field)
+    )
+    alpha = -second_field
+    mixed_result = (
+        torch.autograd.grad(alpha, geometry, allow_unused=True)[0]
+        if alpha.requires_grad
+        else None
+    )
+    mixed = (
+        mixed_result if mixed_result is not None else torch.zeros_like(alpha)
+    )
+
+    def alpha_at(displacement: float) -> tuple[float, int]:
+        field_value = torch.zeros((), **_DD, requires_grad=True)
+        geom_value = torch.tensor(displacement, **_DD)
+        value, iterations = energy_fn(field_value, geom_value)
+        first_result = (
+            torch.autograd.grad(
+                value, field_value, create_graph=True, allow_unused=True
+            )[0]
+            if value.requires_grad
+            else None
+        )
+        first = (
+            first_result
+            if first_result is not None
+            else torch.zeros_like(field_value)
+        )
+        second = (
+            torch.autograd.grad(first, field_value)[0]
+            if first.requires_grad
+            else torch.zeros_like(first)
+        )
+        return -float(second.detach()), int(iterations)
+
+    plus, plus_iterations = alpha_at(step)
+    minus, minus_iterations = alpha_at(-step)
+    return {
+        "iterations_center": int(center_iterations),
+        "iterations_plus": plus_iterations,
+        "iterations_minus": minus_iterations,
+        "nested_mixed_third": float(mixed.detach()),
+        "fd_of_field_second": (plus - minus) / (2.0 * step),
+    }
+
+
+def _trajectory_energy_at(
+    calculator: Calculator,
+    field_value: Tensor,
+    displacement: Tensor,
+    *,
+    eager: bool,
+    maxiter: int | None,
+    stage: str,
+    tolerance: float | None = None,
+    solver_record: dict[str, object] | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Return one solver/finalization energy for physical field/geometry."""
+    positions = SYSTEMS["NO2"].positions.clone()
+    positions[0, 1] = positions[0, 1] + displacement
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+    outcome, inputs, _, finalized = _functional_solve_at(
+        calculator,
+        positions,
+        field_value * axis,
         eager=eager,
+        maxiter=maxiter,
+        tolerance=tolerance,
     )
-    finalized = finalize_scf_potential(
-        outcome.map_result,
-        inputs,
-        layout,
-        outcome.iterations,
-        outcome.converged,
-        outcome.residual,
-        outcome.trajectory_status,
-        outcome.damping_state,
+    if solver_record is not None:
+        solver_record.update(
+            {
+                "iterations": int(outcome.iterations),
+                "converged": bool(outcome.converged),
+                "residual_max_abs": float(
+                    outcome.residual.detach().abs().max()
+                ),
+            }
+        )
+    if stage == "solver":
+        energy = _selected_map_energy(outcome, inputs)
+    elif stage == "finalized":
+        energy = (finalized.energy + finalized.fenergy).sum()
+    else:
+        raise ValueError(f"Unknown diagnostic stage: {stage}")
+    return energy, outcome.iterations
+
+
+def _raw_map_energy_at_state(
+    calculator: Calculator,
+    state: Tensor,
+    field_value: Tensor,
+    displacement: Tensor,
+) -> tuple[Tensor, int]:
+    """Evaluate one physical raw map with the SCF input state held fixed."""
+    positions = SYSTEMS["NO2"].positions.clone()
+    positions[0, 1] = positions[0, 1] + displacement
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+    _, inputs, layout, _, _ = _prepare_functional_at(
+        calculator, positions, field_value * axis
     )
-    return outcome, inputs, layout, finalized
+    mapped = potential_map(state, inputs, layout)
+    return _energy_from_map_result(mapped, inputs), 1
+
+
+def _raw_map_density_probe_at_state(
+    calculator: Calculator,
+    state: Tensor,
+    field_value: Tensor,
+    displacement: Tensor,
+    probe: Tensor,
+) -> tuple[Tensor, int]:
+    """Project gauge-invariant density from one fixed-state physical map."""
+    positions = SYSTEMS["NO2"].positions.clone()
+    positions[0, 1] = positions[0, 1] + displacement
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+    _, inputs, layout, _, _ = _prepare_functional_at(
+        calculator, positions, field_value * axis
+    )
+    mapped = potential_map(state, inputs, layout)
+    return (mapped.spectral.density * probe).sum(), 1
+
+
+def _two_map_density_probe_at_state(
+    calculator: Calculator,
+    state: Tensor,
+    field_value: Tensor,
+    displacement: Tensor,
+    probe: Tensor,
+) -> tuple[Tensor, int]:
+    """Project density after two raw maps from one trajectory state."""
+    positions = SYSTEMS["NO2"].positions.clone()
+    positions[0, 1] = positions[0, 1] + displacement
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+    _, inputs, layout, _, _ = _prepare_functional_at(
+        calculator, positions, field_value * axis
+    )
+    first = potential_map(state, inputs, layout)
+    second = potential_map(first.mapped_x, inputs, layout)
+    return (second.spectral.density * probe).sum(), 2
 
 
 def _selected_map_energy(outcome, inputs) -> Tensor:
@@ -968,294 +1354,514 @@ def test_no2_gfn2_raw_potential_map_third_order_matches_fd(
     )
 
 
-def test_no2_gfn2_solver_finalization_and_property_boundaries() -> None:
-    """Separate solver, finalization and mixed property-response boundaries."""
+@pytest.mark.parametrize("n_maps", (18, 20, 22, 24))
+def test_no2_fixed_n_anderson_derivative_matches_fixed_n_fd(
+    n_maps: int,
+) -> None:
+    """Compare AD and derivative-level FD for an exact fixed-N map function."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
-    positions = SYSTEMS["NO2"].positions
-    field_axis = torch.zeros(3, **_DD)
-    field_axis[1] = 1.0
 
-    def solve_pair(
-        parameter: Tensor,
-        displacement: Tensor,
-        eager: bool,
-        maxiter: int | None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        displaced_positions = positions.clone()
-        displaced_positions[0, 1] = displaced_positions[0, 1] + displacement
-        outcome, inputs, _, finalized = _functional_solve_at(
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        positions = SYSTEMS["NO2"].positions.clone()
+        positions[0, 1] = positions[0, 1] + displacement
+        axis = torch.zeros(3, **_DD)
+        axis[1] = 1.0
+        map_result, inputs = _fixed_n_anderson_at(
             calculator,
-            displaced_positions,
-            parameter * field_axis,
+            positions,
+            field_value * axis,
+            n_maps,
+        )
+        return _energy_from_map_result(map_result, inputs), n_maps
+
+    result = _third_response(
+        energy_fn, (1.0e-4, 5.0e-5, 2.0e-5), check_jvp=True
+    )
+    assert result["iterations_center"] == n_maps
+    assert all(
+        row["iterations_plus"] == row["iterations_minus"] == n_maps
+        for row in result["fd_of_second_sweep"]
+    )
+    fd_values = [
+        float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]
+    ]
+    assert max(fd_values) - min(fd_values) < 5.0e-4
+    derivative_gap = abs(
+        float(result["reverse_third"]) - float(np.median(fd_values))
+    )
+    expected_gap_floor = {18: 100.0, 20: 1.0, 22: 0.01, 24: 0.0}[n_maps]
+    assert derivative_gap > expected_gap_floor
+    if n_maps == 24:
+        assert derivative_gap < 1.0e-3
+    print({"fixed_n_maps": n_maps, **result})
+
+
+def test_no2_fixed_n_raw_map_composition_vs_fd() -> None:
+    """Separate raw-map composition from Anderson mixing at fixed map count."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        positions = SYSTEMS["NO2"].positions.clone()
+        positions[0, 1] += displacement
+        map_result, inputs = _fixed_n_anderson_at(
+            calculator,
+            positions,
+            field_value * axis,
+            20,
+            mixing=False,
+        )
+        return _energy_from_map_result(map_result, inputs), 20
+
+    result = _third_response(energy_fn, (1.0e-4, 5.0e-5, 2.0e-5))
+    fd_values = [
+        float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]
+    ]
+    assert all(np.isfinite(value) for value in fd_values)
+    assert max(fd_values) - min(fd_values) > 1.0e6
+    print({"fixed_n_maps": 20, "mixing": False, **result})
+
+
+def test_no2_fixed_n_prefix_derivative_localization() -> None:
+    """Locate the first fixed-count Anderson prefix with a third-order gap."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+    records = []
+    for n_maps in range(1, 25):
+
+        def energy_fn(field_value: Tensor, displacement: Tensor):
+            positions = SYSTEMS["NO2"].positions.clone()
+            positions[0, 1] += displacement
+            map_result, inputs = _fixed_n_anderson_at(
+                calculator,
+                positions,
+                field_value * axis,
+                n_maps,
+            )
+            return _energy_from_map_result(map_result, inputs), n_maps
+
+        response = _third_response(energy_fn, 5.0e-5)
+        fd = float(response["fd_of_second_sweep"][0]["fd_of_second"])
+        records.append(
+            {
+                "map_prefix": n_maps,
+                "nested_third": float(response["reverse_third"]),
+                "fd_of_second": fd,
+                "absolute_gap": abs(float(response["reverse_third"]) - fd),
+            }
+        )
+    assert all(np.isfinite(row["absolute_gap"]) for row in records)
+    assert max(row["absolute_gap"] for row in records[:8]) < 0.1
+    assert records[8]["absolute_gap"] > 1.0e3
+    assert records[-1]["absolute_gap"] < 1.0e-3
+    print({"fixed_n_prefixes": records})
+
+
+def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
+    """Inspect every center map and probe its smallest-gap neighborhood."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    trace: list[dict[str, object]] = []
+    outcome, inputs, layout, _ = _functional_solve_at(
+        calculator,
+        SYSTEMS["NO2"].positions,
+        torch.zeros(3, **_DD),
+        eager=True,
+        map_trace=trace,
+    )
+    assert len(trace) == int(outcome.iterations)
+    gap_indices = [
+        index
+        for index, record in enumerate(trace)
+        if record["minimum_frontier_gap"] is not None
+    ]
+    smallest = min(
+        gap_indices,
+        key=lambda index: trace[index]["minimum_occupied_pair_gap"],
+    )
+    selected_indices = sorted(
+        {
+            max(0, smallest - 1),
+            max(0, smallest - 2),
+            smallest,
+            min(len(trace) - 1, smallest + 1),
+            len(trace) - 1,
+        }
+    )
+
+    local_results = []
+    states = []
+    density_probe = torch.linspace(
+        -0.9,
+        1.2,
+        outcome.map_result.spectral.density.numel(),
+        **_DD,
+    ).reshape_as(outcome.map_result.spectral.density)
+    for index in selected_indices:
+        record = trace[index]
+        state = record["input_state_tensor"]
+        states.append(state)
+
+        def field_energy(field_value: Tensor, displacement: Tensor):
+            return _raw_map_energy_at_state(
+                calculator, state, field_value, displacement
+            )
+
+        response = _third_response(field_energy, (1.0e-4, 5.0e-5, 2.0e-5))
+
+        def density_energy(field_value: Tensor, displacement: Tensor):
+            return _two_map_density_probe_at_state(
+                calculator, state, field_value, displacement, density_probe
+            )
+
+        density_response = _third_response(
+            density_energy,
+            (1.0e-4, 5.0e-5, 2.0e-5),
+            convention=1.0,
+        )
+
+        def geometry_density(displacement: Tensor, _field_value: Tensor):
+            return _raw_map_density_probe_at_state(
+                calculator,
+                state,
+                torch.zeros((), **_DD),
+                displacement,
+                density_probe,
+            )
+
+        geometry_response = _third_response(
+            geometry_density,
+            (1.0e-4, 5.0e-5, 2.0e-5),
+            convention=1.0,
+        )
+        geometry_density_response = _third_response(
+            lambda displacement, _field: _two_map_density_probe_at_state(
+                calculator,
+                state,
+                torch.zeros((), **_DD),
+                displacement,
+                density_probe,
+            ),
+            (1.0e-4, 5.0e-5, 2.0e-5),
+            convention=1.0,
+        )
+        local_results.append(
+            {
+                "iteration": index,
+                "residual_l2": record["residual_l2"],
+                "minimum_adjacent_gap": record["minimum_adjacent_gap"],
+                "minimum_occupied_pair": record["minimum_occupied_pair"],
+                "minimum_occupied_pair_gap": record[
+                    "minimum_occupied_pair_gap"
+                ],
+                "minimum_frontier_gap": record["minimum_frontier_gap"],
+                "max_fractional_occupation": record[
+                    "max_fractional_occupation"
+                ],
+                "fermi_changes_materially": record["fermi_changes_materially"],
+                "orbital_energies": record["orbital_energies"],
+                "occupations": record["occupations"],
+                "field_raw_map_response": response,
+                "geometry_raw_map_density_response": geometry_response,
+                "field_two_map_density_response": density_response,
+                "geometry_two_map_density_response": geometry_density_response,
+                "mixed_raw_map_density_response": (
+                    _mixed_response(density_energy, 5.0e-5)
+                    if index == smallest
+                    else None
+                ),
+            }
+        )
+
+    for local in local_results:
+        for name, tolerance in (
+            ("field_raw_map_response", 1.0e-3),
+            ("geometry_raw_map_density_response", 1.0e-3),
+            ("field_two_map_density_response", 1.0e-1),
+            ("geometry_two_map_density_response", 1.0e-2),
+        ):
+            probe = local[name]
+            fd_values = [
+                float(row["fd_of_second"])
+                for row in probe["fd_of_second_sweep"]
+            ]
+            assert max(fd_values) - min(fd_values) < tolerance
+            assert (
+                abs(float(probe["reverse_third"]) - float(np.median(fd_values)))
+                < tolerance
+            )
+
+    # Compare the ordinary forward and derivative-enabled (Lorentzian)
+    # spectral branches at the smallest-gap map, using gauge-invariant values.
+    index = smallest
+    map_result = potential_map(
+        states[selected_indices.index(index)], inputs, layout
+    )
+    hamiltonian = map_result.spectral.hamiltonian.detach()
+    ordinary = evaluate_hamiltonian(hamiltonian, inputs)
+    lorentzian = evaluate_hamiltonian(
+        hamiltonian.clone().requires_grad_(True), inputs
+    )
+    branch_difference = {
+        name: float(
+            (getattr(ordinary, name) - getattr(lorentzian, name).detach())
+            .abs()
+            .max()
+        )
+        for name in ("density", "emo", "occupation")
+    }
+    branch_difference["ordinary_path"] = "broadening_method=None"
+    branch_difference["derivative_path"] = "broadening_method=lorn"
+    assert (
+        max(
+            branch_difference[name] for name in ("density", "emo", "occupation")
+        )
+        < 1.0e-12
+    )
+    print(
+        {
+            "map_count": len(trace),
+            "selected_indices": selected_indices,
+            "smallest_gap_index": smallest,
+            "trajectory": [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "input_state_tensor"
+                }
+                for item in trace
+            ],
+            "local_raw_maps": local_results,
+            "forward_vs_lorentzian_values": branch_difference,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "tolerance", (1.0e-8, 1.0e-10, 1.0e-12, 1.0e-13, 1.0e-14)
+)
+def test_no2_solver_tolerance_sweep(tolerance: float) -> None:
+    """Record response sensitivity to the paired SCF residual tolerances."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    center_record: dict[str, object] = {}
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        return _trajectory_energy_at(
+            calculator,
+            field_value,
+            displacement,
+            eager=False,
+            maxiter=None,
+            stage="solver",
+            tolerance=tolerance,
+            solver_record=(
+                center_record
+                if float(field_value.detach()) == 0.0
+                and float(displacement.detach()) == 0.0
+                else None
+            ),
+        )
+
+    response = _third_response(energy_fn, (1.0e-4, 5.0e-5, 2.0e-5))
+    assert all(
+        np.isfinite(value)
+        for value in (
+            response["reverse_first"],
+            response["reverse_second"],
+            response["reverse_third"],
+        )
+    )
+    nested_third = float(response["reverse_third"])
+    fd_third_values = [
+        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
+    ]
+    fd_third = float(np.median(fd_third_values))
+    assert max(fd_third_values) - min(fd_third_values) < 5.0e-4
+    expected_iterations = {
+        1.0e-8: 17,
+        1.0e-10: 20,
+        1.0e-12: 24,
+        1.0e-13: 25,
+    }
+    if tolerance == 1.0e-14:
+        assert 28 <= center_record["iterations"] <= 40
+    else:
+        assert center_record["iterations"] == expected_iterations[tolerance]
+    if tolerance == 1.0e-8:
+        assert abs(nested_third - fd_third) > 1.0e3
+    elif tolerance == 1.0e-10:
+        assert abs(nested_third - fd_third) > 1.0
+    else:
+        assert abs(nested_third - fd_third) < 1.0e-3
+    if tolerance in (1.0e-10, 1.0e-12):
+        middle_step = response["fd_of_second_sweep"][1]
+        assert (
+            middle_step["iterations_plus"]
+            == middle_step["iterations_minus"]
+            == response["iterations_center"]
+        )
+    print(
+        {
+            "x_atol_and_x_atol_max": tolerance,
+            "center_iterations": center_record["iterations"],
+            "center_converged": center_record["converged"],
+            "center_residual_max_abs": center_record["residual_max_abs"],
+            **response,
+        }
+    )
+
+
+@pytest.mark.parametrize("eager", (True, False), ids=("eager", "fixed-trip"))
+@pytest.mark.parametrize("stage", ("solver", "finalized"))
+def test_no2_gfn2_solver_hyper_boundary(eager: bool, stage: str) -> None:
+    """Compare one solver stage's hyper-response on a fixed local branch."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    maxiter = None if eager else 40
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        return _trajectory_energy_at(
+            calculator,
+            field_value,
+            displacement,
+            eager=eager,
+            maxiter=maxiter,
+            stage=stage,
+        )
+
+    result = _third_response(energy_fn, 5.0e-5, check_jvp=not eager)
+    assert result["iterations_center"] == 20
+    assert all(
+        row["iterations_plus"] == row["iterations_minus"] == 20
+        for row in result["fd_of_second_sweep"]
+    )
+    fd = result["fd_of_second_sweep"][0]
+    assert abs(float(result["reverse_first"]) - float(fd["fd_first"])) < 1.0e-4
+    assert (
+        abs(float(result["reverse_second"]) - float(fd["fd_second"])) < 2.0e-3
+    )
+    assert abs(float(result["reverse_third"]) - float(fd["fd_of_second"])) > 1.0
+    print(
+        {
+            "control": "eager" if eager else "fixed-trip",
+            "stage": stage,
+            **result,
+        }
+    )
+
+
+@pytest.mark.parametrize("eager", (True, False), ids=("eager", "fixed-trip"))
+@pytest.mark.parametrize("stage", ("solver", "finalized"))
+def test_no2_gfn2_solver_mixed_boundary(eager: bool, stage: str) -> None:
+    """Compare mixed response by differencing field polarizability locally."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    maxiter = None if eager else 40
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        return _trajectory_energy_at(
+            calculator,
+            field_value,
+            displacement,
+            eager=eager,
+            maxiter=maxiter,
+            stage=stage,
+        )
+
+    result = _mixed_response(energy_fn, 5.0e-5)
+    assert (
+        result["iterations_center"]
+        == result["iterations_plus"]
+        == result["iterations_minus"]
+        == 20
+    )
+    assert (
+        abs(
+            float(result["nested_mixed_third"])
+            - float(result["fd_of_field_second"])
+        )
+        > 0.1
+    )
+    print(
+        {
+            "control": "eager" if eager else "fixed-trip",
+            "stage": stage,
+            **result,
+        }
+    )
+
+
+def test_no2_eager_fixed_trip_center_parity() -> None:
+    """Assert eager and transform-fixed controllers agree at the center."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    records = {}
+    for eager, maxiter in ((True, None), (False, 40)):
+        result, inputs, _, finalized = _functional_solve_at(
+            calculator,
+            SYSTEMS["NO2"].positions,
+            torch.zeros(3, **_DD),
             eager=eager,
             maxiter=maxiter,
         )
-        return (
-            _selected_map_energy(outcome, inputs),
-            (finalized.energy + finalized.fenergy).sum(),
-            outcome.iterations,
+        records["eager" if eager else "fixed-trip"] = {
+            "iterations": int(result.iterations),
+            "converged": bool(result.converged),
+            "solver_energy": float(_selected_map_energy(result, inputs)),
+            "finalized_energy": float(
+                (finalized.energy + finalized.fenergy).sum()
+            ),
+            "map_result": result.map_result,
+        }
+    eager = records["eager"]
+    fixed = records["fixed-trip"]
+    assert eager["iterations"] == fixed["iterations"] == 20
+    assert eager["converged"] and fixed["converged"]
+    for name in ("solver_energy", "finalized_energy"):
+        assert abs(eager[name] - fixed[name]) < 1.0e-12
+    left = eager["map_result"]
+    right = fixed["map_result"]
+    for name in ("mapped_x", "hamiltonian", "density", "emo", "occupation"):
+        assert torch.allclose(
+            getattr(left, name),
+            getattr(right, name),
+            atol=1.0e-12,
+            rtol=1.0e-12,
+        ), name
+    print(
+        {
+            key: {k: v for k, v in value.items() if k != "map_result"}
+            for key, value in records.items()
+        }
+    )
+
+
+def test_no2_fixed_trip_cap_matches_300_center() -> None:
+    """Keep the bounded diagnostic cap equivalent to the baseline at center."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    results = []
+    for maxiter in (None, 40):
+        outcome, inputs, _, finalized = _functional_solve_at(
+            calculator,
+            SYSTEMS["NO2"].positions,
+            torch.zeros(3, **_DD),
+            eager=False,
+            maxiter=maxiter,
         )
-
-    evidence: dict[str, object] = {}
-    for eager in (True, False):
-        control = "eager" if eager else "fixed-trip"
-        # The fixed-trip comparison caps the static loop at 40 only after
-        # checking every stencil point converges earlier. The exact 300-trip
-        # baseline is compared with this selected outcome at the center below.
-        maxiter = 40 if not eager else None
-        stage_evidence: dict[str, dict[str, object]] = {}
-        for stage in ("solver", "finalized"):
-            field_index = 0 if stage == "solver" else 1
-
-            def energy_fn(parameter: Tensor, displacement: Tensor) -> Tensor:
-                return solve_pair(parameter, displacement, eager, maxiter)[
-                    field_index
-                ]
-
-            automatic = -float(
-                _third_derivative(
-                    lambda parameter: energy_fn(
-                        parameter, torch.zeros((), **_DD)
-                    )
-                ).detach()
-            )
-            scalar = torch.zeros((), **_DD, requires_grad=True)
-            value = energy_fn(scalar, torch.zeros((), **_DD))
-            first = torch.autograd.grad(value, scalar, create_graph=True)[0]
-            second = torch.autograd.grad(first, scalar, create_graph=True)[0]
-            reverse_first = float(first.detach())
-            reverse_second = float(second.detach())
-            jvp = float(
-                torch.func.jvp(
-                    lambda parameter: energy_fn(
-                        parameter, torch.zeros((), **_DD)
-                    ),
-                    (torch.zeros((), **_DD),),
-                    (torch.ones((), **_DD),),
-                )[1]
-            )
-            pol_geometry = torch.zeros((), **_DD, requires_grad=True)
-
-            def field_second(displacement: Tensor) -> Tensor:
-                field_value = torch.zeros((), **_DD, requires_grad=True)
-                energy = energy_fn(field_value, displacement)
-                first_field = torch.autograd.grad(
-                    energy, field_value, create_graph=True
-                )[0]
-                second_field = torch.autograd.grad(
-                    first_field, field_value, create_graph=True
-                )[0]
-                return -second_field
-
-            alpha = field_second(pol_geometry)
-            mixed_reverse = float(
-                torch.autograd.grad(alpha, pol_geometry)[0].detach()
-            )
-            mixed_jvp = float(
-                torch.func.jvp(
-                    field_second,
-                    (torch.zeros((), **_DD),),
-                    (torch.ones((), **_DD),),
-                )[1]
-            )
-            stage_evidence[stage] = {
-                "hyper_autograd_third": automatic,
-                "reverse_first": reverse_first,
-                "jvp_first": jvp,
-                "reverse_second": reverse_second,
-                "pol_autograd_mixed_third": mixed_reverse,
-                "pol_jvp_mixed_third": mixed_jvp,
-            }
-        # Finite differences reuse each solver outcome for both the selected
-        # raw-map energy and the potential-mode finalized energy.
-        for step in _DIAGNOSTIC_STEPS:
-            pairs = [
-                solve_pair(
-                    torch.tensor(offset * step, **_DD),
-                    torch.zeros((), **_DD),
-                    eager,
-                    maxiter,
-                )
-                for offset in (-2.0, -1.0, 0.0, 1.0, 2.0)
-            ]
-            for stage, index in (("solver", 0), ("finalized", 1)):
-                points = [(pair[index], pair[2]) for pair in pairs]
-                fd = -(
-                    points[4][0]
-                    - 2.0 * points[3][0]
-                    + 2.0 * points[1][0]
-                    - points[0][0]
-                ) / (2.0 * step**3)
-                row = {
-                    "step": step,
-                    "fd": float(fd),
-                    "fd_first": float(
-                        (points[3][0] - points[1][0]) / (2.0 * step)
-                    ),
-                    "fd_second": float(
-                        (points[3][0] - 2.0 * points[2][0] + points[1][0])
-                        / step**2
-                    ),
-                    "iterations_at_-2h_-h_0_h_2h": [
-                        int(item[1]) for item in points
-                    ],
-                }
-                stage_evidence[stage].setdefault("hyper_sweep", []).append(row)
-            if not eager:
-                assert all(int(pair[2]) < maxiter for pair in pairs)
-
-        for step in _DIAGNOSTIC_STEPS:
-            geometry_field_pairs = []
-            for geometry_offset in (-1.0, 1.0):
-                geometry_field_pairs.append(
-                    [
-                        solve_pair(
-                            torch.tensor(field_offset * step, **_DD),
-                            torch.tensor(geometry_offset * step, **_DD),
-                            eager,
-                            maxiter,
-                        )
-                        for field_offset in (1.0, 0.0, -1.0)
-                    ]
-                )
-            for stage, index in (("solver", 0), ("finalized", 1)):
-                alpha_values = [
-                    -(row[0][index] - 2.0 * row[1][index] + row[2][index])
-                    / step**2
-                    for row in geometry_field_pairs
-                ]
-                mixed_fd = (alpha_values[1] - alpha_values[0]) / (2.0 * step)
-                stage_evidence[stage].setdefault("pol_sweep", []).append(
-                    {
-                        "step": step,
-                        "fd": float(mixed_fd),
-                        "iterations_at_Rminus_(Fplus,F0,Fminus)": [
-                            int(item[2]) for item in geometry_field_pairs[0]
-                        ],
-                        "iterations_at_Rplus_(Fplus,F0,Fminus)": [
-                            int(item[2]) for item in geometry_field_pairs[1]
-                        ],
-                    }
-                )
-            if not eager:
-                assert all(
-                    int(item[2]) < maxiter
-                    for row in geometry_field_pairs
-                    for item in row
-                )
-        evidence.update(
-            {
-                f"{control}-{stage}": record
-                for stage, record in stage_evidence.items()
-            }
-        )
-        for record in stage_evidence.values():
-            hyper_sweep = record.get("hyper_sweep", [])
-            pol_sweep = record.get("pol_sweep", [])
-            hyper_plateau = hyper_sweep[2:6]
-            pol_plateau = pol_sweep[2:6]
-            hyper_fd = float(np.median([row["fd"] for row in hyper_plateau]))
-            pol_fd = float(np.median([row["fd"] for row in pol_plateau]))
-            record["hyper_stable_fd"] = hyper_fd
-            record["hyper_nested_vs_fd_abs"] = abs(
-                record["hyper_autograd_third"] - hyper_fd
-            )
-            record["hyper_jvp_vs_reverse_abs"] = abs(
-                record["jvp_first"] - record["reverse_first"]
-            )
-            record["hyper_reverse_first_vs_fd_abs"] = abs(
-                record["reverse_first"]
-                - float(np.median([row["fd_first"] for row in hyper_plateau]))
-            )
-            record["hyper_reverse_second_vs_fd_abs"] = abs(
-                record["reverse_second"]
-                - float(np.median([row["fd_second"] for row in hyper_plateau]))
-            )
-            record["pol_stable_fd"] = pol_fd
-            record["pol_nested_vs_fd_abs"] = abs(
-                record["pol_autograd_mixed_third"] - pol_fd
-            )
-            record["pol_jvp_vs_reverse_abs"] = abs(
-                record["pol_jvp_mixed_third"]
-                - record["pol_autograd_mixed_third"]
-            )
-        if not eager:
-            full_result, _, _, full_finalized = _functional_solve_at(
-                calculator,
-                positions,
-                torch.zeros(3, **_DD),
-                eager=False,
-                maxiter=None,
-            )
-            capped_result, _, _, capped_finalized = _functional_solve_at(
-                calculator,
-                positions,
-                torch.zeros(3, **_DD),
-                eager=False,
-                maxiter=40,
-            )
-            assert int(full_result.iterations) == int(capped_result.iterations)
-            assert torch.equal(full_result.converged, capped_result.converged)
-            assert torch.allclose(
-                full_result.map_result.mapped_x,
-                capped_result.map_result.mapped_x,
-                atol=1.0e-12,
-                rtol=1.0e-12,
-            )
-            full_map = full_result.map_result
-            capped_map = capped_result.map_result
-            for name in (
-                "hamiltonian",
-                "density",
-                "emo",
-                "occupation",
-                "orbital_energy",
-            ):
-                assert torch.allclose(
-                    getattr(full_map, name),
-                    getattr(capped_map, name),
-                    atol=1.0e-12,
-                    rtol=1.0e-12,
-                ), name
-            for name in ("mono", "dipole", "quad"):
-                full_charge = getattr(full_map.charges, name)
-                capped_charge = getattr(capped_map.charges, name)
-                if full_charge is None or capped_charge is None:
-                    assert full_charge is capped_charge, name
-                else:
-                    assert torch.allclose(
-                        full_charge,
-                        capped_charge,
-                        atol=1.0e-12,
-                        rtol=1.0e-12,
-                    ), f"charges.{name}"
-            assert full_map.driving_potential is not None
-            assert capped_map.driving_potential is not None
-            for name in ("mono", "dipole", "quad"):
-                full_potential = getattr(full_map.driving_potential, name)
-                capped_potential = getattr(capped_map.driving_potential, name)
-                if full_potential is None or capped_potential is None:
-                    assert full_potential is capped_potential, name
-                else:
-                    assert torch.allclose(
-                        full_potential,
-                        capped_potential,
-                        atol=1.0e-12,
-                        rtol=1.0e-12,
-                    ), f"driving_potential.{name}"
-            assert torch.allclose(
-                full_finalized.energy + full_finalized.fenergy,
-                capped_finalized.energy + capped_finalized.fenergy,
-                atol=1.0e-12,
-                rtol=1.0e-12,
-            )
-
-    # Save full machine-readable evidence in pytest output for the diagnosis
-    # record; this test intentionally does not assert an assumed failing layer.
-    import json
-
-    print(json.dumps(evidence, indent=2))
-    assert len(evidence) == 4
+        results.append((outcome, inputs, finalized))
+    full, capped = results
+    assert int(full[0].iterations) == int(capped[0].iterations) == 20
+    assert torch.equal(full[0].converged, capped[0].converged)
+    assert torch.allclose(
+        full[0].map_result.mapped_x,
+        capped[0].map_result.mapped_x,
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+    assert torch.allclose(
+        (full[2].energy + full[2].fenergy).sum(),
+        (capped[2].energy + capped[2].fenergy).sum(),
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
 
 
 def test_no2_gfn2_case_a_and_production_route_agree() -> None:
@@ -1265,19 +1871,26 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
         **SCF_OPTIONS,
         "int_driver": "pytorch",
         "batch_mode": reference_system.batch_mode,
-        "int_level": 3,
     }
-    case_a = Calculator(
-        reference_system.numbers,
-        GFN2_XTB,
-        opts=options,
-        device=torch.device("cpu"),
-        dtype=torch.float64,
+    positions = reference_system.positions.clone()
+    field = torch.zeros(3, **_DD)
+    # Case A is the ordinary T0.2 path, including one fresh Calculator per
+    # quantity. Keep its returned endpoints as the comparison source rather
+    # than evaluating the derivatives again on a reused object.
+    case_a_t02 = compute(reference_system, "gfn2", "pytorch", ("third",))
+    hyper_a = float(case_a_t02["hyperpolarizability"][_HYPER_INDEX])
+    pol_a = float(case_a_t02["pol_deriv"][_POL_INDEX])
+    case_a = _calculator(reference_system, "gfn2", "pytorch")
+    result_a = case_a.singlepoint(
+        positions.clone(), reference_system.charge, reference_system.spin, field
     )
+    # Case B changes only mixer/strict routing after historical Case A is done.
+    field_b = torch.zeros(3, **_DD, requires_grad=True)
     case_b = Calculator(
         reference_system.numbers,
         GFN2_XTB,
         opts={**options, "mixer": "broyden", "strict": False},
+        interaction=[ElectricField(field_b)],
         device=torch.device("cpu"),
         dtype=torch.float64,
     )
@@ -1290,13 +1903,8 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
     )
     assert route_b.kind == "functional"
     assert route_b.effective_mixer == case_a.opts.scf.mixer
-    positions = reference_system.positions
-    field = torch.zeros(3, **_DD)
-    result_a = case_a.system.singlepoint(
-        positions, reference_system.charge, reference_system.spin, field
-    )
     result_b = case_b.system.singlepoint(
-        positions, reference_system.charge, reference_system.spin, field
+        positions.clone(), reference_system.charge, reference_system.spin, field
     )
     for name in (
         "energy",
@@ -1324,43 +1932,51 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
                     left, right, atol=1.0e-12, rtol=1.0e-12
                 ), f"{owner_name}.{field_name}"
 
-    # Compare the endpoint derivatives without relying on eigenvector gauge.
-    field_a = torch.zeros(3, **_DD, requires_grad=True)
-    field_b = torch.zeros(3, **_DD, requires_grad=True)
-    hyper_a = case_a.hyperpolarizability(
-        positions, reference_system.charge, reference_system.spin, field=field_a
+    # Compare route B endpoints with fresh calculators, without gauge-sensitive
+    # coefficient comparisons.
+    hyper_b_field = torch.zeros(3, **_DD, requires_grad=True)
+    hyper_b_calculator = Calculator(
+        reference_system.numbers,
+        GFN2_XTB,
+        opts={**options, "mixer": "broyden", "strict": False},
+        interaction=[ElectricField(hyper_b_field)],
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    pol_b_field = torch.zeros(3, **_DD, requires_grad=True)
+    pol_b_calculator = Calculator(
+        reference_system.numbers,
+        GFN2_XTB,
+        opts={**options, "mixer": "broyden", "strict": False},
+        interaction=[ElectricField(pol_b_field)],
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    hyper_b = hyper_b_calculator.hyperpolarizability(
+        positions.clone(), reference_system.charge, reference_system.spin
     )[_HYPER_INDEX]
-    hyper_b = case_b.hyperpolarizability(
-        positions, reference_system.charge, reference_system.spin, field=field_b
-    )[_HYPER_INDEX]
-    pos_a = positions.clone().requires_grad_()
-    pos_b = positions.clone().requires_grad_()
-    pol_a = case_a.pol_deriv(
-        pos_a, reference_system.charge, reference_system.spin, field=field_a
+    pos_b = reference_system.positions.clone().requires_grad_()
+    pol_b = pol_b_calculator.pol_deriv(
+        pos_b, reference_system.charge, reference_system.spin
     )[_POL_INDEX]
-    pol_b = case_b.pol_deriv(
-        pos_b, reference_system.charge, reference_system.spin, field=field_b
-    )[_POL_INDEX]
-    assert torch.isfinite(hyper_a) and torch.isfinite(hyper_b)
-    assert torch.isfinite(pol_a) and torch.isfinite(pol_b)
-    hyper_delta = float((hyper_a - hyper_b).detach())
-    pol_delta = float((pol_a - pol_b).detach())
+    assert np.isfinite(hyper_a) and torch.isfinite(hyper_b)
+    assert np.isfinite(pol_a) and torch.isfinite(pol_b)
+    hyper_delta = float(hyper_a - hyper_b.detach())
+    pol_delta = float(pol_a - pol_b.detach())
     assert abs(hyper_delta) < 5.0e-4 * max(
-        abs(float(hyper_a.detach())), abs(float(hyper_b.detach()))
+        abs(hyper_a), abs(float(hyper_b.detach()))
     )
-    assert abs(pol_delta) < 5.0e-4 * max(
-        abs(float(pol_a.detach())), abs(float(pol_b.detach()))
-    )
+    assert abs(pol_delta) < 5.0e-4 * max(abs(pol_a), abs(float(pol_b.detach())))
     print(
         {
             "case_a_iterations": int(result_a.iterations),
             "case_b_iterations": int(result_b.iterations),
             "case_a_energy": float(result_a.energy.sum()),
             "case_b_energy": float(result_b.energy.sum()),
-            "case_a_hyperpolarizability": float(hyper_a.detach()),
+            "case_a_hyperpolarizability": hyper_a,
             "case_b_hyperpolarizability": float(hyper_b.detach()),
             "hyperpolarizability_delta": hyper_delta,
-            "case_a_pol_deriv": float(pol_a.detach()),
+            "case_a_pol_deriv": pol_a,
             "case_b_pol_deriv": float(pol_b.detach()),
             "pol_deriv_delta": pol_delta,
         }
