@@ -23,6 +23,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 import torch
+from tad_mctc import storch
 
 from dxtb import Calculator, GFN1_XTB, GFN2_XTB
 from dxtb._src.calculators.singlepoint import _interaction_data
@@ -39,6 +40,7 @@ from dxtb._src.scf.functional.data import (
     unpack_potential,
 )
 from dxtb._src.scf.functional.anderson import (
+    AndersonState,
     anderson_mix,
     _solve_map_anderson,
     setup_anderson_solver_settings,
@@ -637,7 +639,9 @@ def _fixed_n_anderson_at(
     map_trace: list[dict[str, object]] | None = None,
     boundary_record: dict[str, object] | None = None,
     anderson_trace: list[dict[str, object]] | None = None,
+    trajectory_trace: list[dict[str, object]] | None = None,
     simple_damping: float | None = None,
+    boundary_map: int = 8,
 ):
     """Compose fixed-N maps, optionally retaining a chosen solver boundary."""
     _, inputs, layout, guess, settings = _prepare_functional_at(
@@ -645,6 +649,7 @@ def _fixed_n_anderson_at(
     )
     if boundary_record is not None:
         boundary_record["inputs"] = inputs
+        boundary_record["settings"] = settings
     if settings.dynamic_damping.enabled:
         raise AssertionError(
             "NO2 fixed-N probe expects static Anderson damping"
@@ -656,7 +661,29 @@ def _fixed_n_anderson_at(
             map_trace.append(_map_trace_record(value, result, len(map_trace)))
         return result
 
+    def trace_map(index: int, value: Tensor, result) -> None:
+        if trajectory_trace is None:
+            return
+        record = _map_trace_record(value, result, index - 1)
+        trajectory_trace.append(
+            {
+                "map": index,
+                "input": value.detach().clone(),
+                "mapped_x": result.mapped_x.detach().clone(),
+                "raw": (result.mapped_x - value).detach().clone(),
+                "hamiltonian": result.hamiltonian.detach().clone(),
+                "density": result.density.detach().clone(),
+                "emo": result.emo.detach().clone(),
+                "coefficients": result.spectral.coefficients.detach().clone(),
+                "occupation": result.spectral.occupation.detach().clone(),
+                "overlap": inputs.integrals.overlap.detach().clone(),
+                "inverse_cholesky": inputs.inverse_cholesky.detach().clone(),
+                "minimum_occupied_pair": record["minimum_occupied_pair"],
+            }
+        )
+
     selected = map_fn(guess)
+    trace_map(1, guess, selected)
     current = guess
     mixer_state = None
     if simple_damping is not None:
@@ -674,19 +701,24 @@ def _fixed_n_anderson_at(
         current = selected.mapped_x
 
     for map_index in range(1, n_maps):
+        input_value = current
         selected = map_fn(current)
+        trace_map(map_index + 1, input_value, selected)
         if simple_damping is not None:
             before = current
             current = simple_mix(current, selected.mapped_x, simple_damping)
-            if boundary_record is not None and map_index == 7:
+            if boundary_record is not None and map_index == boundary_map - 1:
                 boundary_record.update(
-                    map8_input=before,
-                    map8_result=selected,
-                    map8_state_before_transition=before,
-                    map8_state_after_transition=current,
+                    transition_map_index=boundary_map,
+                    transition_map_input=before,
+                    transition_map_result=selected,
+                    transition_state_before=before,
+                    transition_state_after=current,
+                    transition_stages=None,
+                    following_map_result=None,
                 )
-            if boundary_record is not None and map_index == 8:
-                boundary_record.update(map9_result=selected)
+            if boundary_record is not None and map_index == boundary_map:
+                boundary_record.update(following_map_result=selected)
         elif mixing:
             step = map_index + (1 if settings.mix_guess else 0)
             if anderson_trace is not None and step > settings.generations:
@@ -753,20 +785,155 @@ def _fixed_n_anderson_at(
                 ),
                 damp=settings.damp,
             )
-            if boundary_record is not None and map_index == 7:
-                boundary_record.update(
-                    map8_input=before,
-                    map8_result=selected,
-                    map8_mixer_state_before=state_before,
-                    map8_mixer_state_after=mixer_state,
-                    map8_state_before_transition=before,
-                    map8_state_after_transition=current,
+            if trajectory_trace is not None:
+                stages = _anderson_transition_stages(
+                    before,
+                    selected.mapped_x,
+                    state_before,
+                    settings,
+                    step,
                 )
-            if boundary_record is not None and map_index == 8:
-                boundary_record.update(map9_result=selected)
+                trajectory_trace[-1]["anderson"] = {
+                    name: value.detach().clone()
+                    for name, value in stages.items()
+                    if isinstance(value, Tensor)
+                }
+                trajectory_trace[-1]["next_current"] = current.detach().clone()
+                trajectory_trace[-1][
+                    "next_x_hist"
+                ] = mixer_state.x_hist.detach().clone()
+                trajectory_trace[-1][
+                    "next_f_hist"
+                ] = mixer_state.f_hist.detach().clone()
+            if boundary_record is not None and map_index == boundary_map - 1:
+                stages = _anderson_transition_stages(
+                    before,
+                    selected.mapped_x,
+                    state_before,
+                    settings,
+                    step,
+                )
+                assert torch.allclose(
+                    stages["mixed"].reshape_as(current),
+                    current,
+                    atol=1.0e-12,
+                    rtol=1.0e-12,
+                )
+                assert torch.allclose(
+                    stages["next_x_hist"],
+                    mixer_state.x_hist,
+                    atol=1.0e-12,
+                    rtol=1.0e-12,
+                )
+                assert torch.allclose(
+                    stages["next_f_hist"],
+                    mixer_state.f_hist,
+                    atol=1.0e-12,
+                    rtol=1.0e-12,
+                )
+                boundary_record.update(
+                    transition_map_index=boundary_map,
+                    transition_map_input=before,
+                    transition_map_result=selected,
+                    transition_mixer_state_before=state_before,
+                    transition_mixer_state_after=mixer_state,
+                    transition_state_before=before,
+                    transition_state_after=current,
+                    transition_stages=stages,
+                )
+                if boundary_map == 8:
+                    boundary_record.update(
+                        map8_input=before,
+                        map8_result=selected,
+                        map8_mixer_state_before=state_before,
+                        map8_mixer_state_after=mixer_state,
+                        map8_state_before_transition=before,
+                        map8_state_after_transition=current,
+                        map8_transition_stages=stages,
+                    )
+            if boundary_record is not None and map_index == boundary_map:
+                boundary_record.update(following_map_result=selected)
+                if boundary_map == 8:
+                    boundary_record.update(map9_result=selected)
         else:
             current = selected.mapped_x
     return selected, inputs
+
+
+def _anderson_transition_stages(
+    old: Tensor,
+    mapped: Tensor,
+    state: AndersonState | None,
+    settings,
+    step: int,
+) -> dict[str, Tensor]:
+    """Expose differentiable intermediates of the existing Anderson formula."""
+    flat_old = old.reshape(-1)
+    flat_mapped = mapped.reshape(-1)
+    if state is None:
+        x_hist = torch.cat(
+            (
+                flat_old.unsqueeze(0),
+                flat_old.new_zeros((settings.generations, flat_old.numel())),
+            ),
+            dim=0,
+        )
+        f_hist = flat_old.new_zeros(
+            (settings.generations + 1, flat_old.numel())
+        )
+        previous = AndersonState(x_hist=x_hist, f_hist=f_hist)
+    else:
+        previous = state
+    raw = flat_mapped - flat_old
+    f_current = torch.cat((raw.unsqueeze(0), previous.f_hist[1:]), dim=0)
+    x_current = torch.cat((flat_old.unsqueeze(0), previous.x_hist[1:]), dim=0)
+    if not (
+        step > settings.generations or (step > 1 and not settings.soft_start)
+    ):
+        mixed = x_current[0] + f_current[0] * settings.damp_init
+        rolled_x = torch.roll(x_current, 1, 0)
+        return {
+            "raw": raw,
+            "f_current": f_current,
+            "x_current": x_current,
+            "mixed": mixed,
+            "next_x_hist": torch.cat((mixed.unsqueeze(0), rolled_x[1:]), dim=0),
+            "next_f_hist": torch.roll(f_current, 1, 0),
+        }
+    n = min(step - 1, settings.generations)
+    df = f_current[0] - f_current[1 : n + 1]
+    a = torch.einsum("iv,jv->ij", df, df)
+    b = torch.einsum("hv,v->h", df, f_current[0])
+    if settings.diagonal_offset is not None:
+        eye = torch.eye(a.shape[-1], device=a.device, dtype=a.dtype)
+        one = a.new_tensor(1.0)
+        scale = torch.where(eye != 0, eye + settings.diagonal_offset**2, one)
+        a = a * scale
+    theta = torch.linalg.solve(a, b.unsqueeze(-1)).squeeze(-1)
+    x_bar_raw = torch.einsum(
+        "h,hv->v", theta, x_current[1 : n + 1] - x_current[0]
+    )
+    f_bar_raw = torch.einsum("h,hv->v", theta, -df)
+    x_bar = x_bar_raw + x_current[0]
+    f_bar = f_bar_raw + f_current[0]
+    mixed = x_bar + settings.damp * f_bar
+    rolled_x = torch.roll(x_current, 1, 0)
+    return {
+        "raw": raw,
+        "f_current": f_current,
+        "x_current": x_current,
+        "df": df,
+        "A": a,
+        "b": b,
+        "theta": theta,
+        "x_bar_raw": x_bar_raw,
+        "f_bar_raw": f_bar_raw,
+        "x_bar": x_bar,
+        "f_bar": f_bar,
+        "mixed": mixed,
+        "next_x_hist": torch.cat((mixed.unsqueeze(0), rolled_x[1:]), dim=0),
+        "next_f_hist": torch.roll(f_current, 1, 0),
+    }
 
 
 def _energy_from_map_result(map_result, inputs) -> Tensor:
@@ -859,7 +1026,9 @@ def _third_response(
     return result
 
 
-def _mixed_response(energy_fn, step: float) -> dict[str, float | int]:
+def _mixed_response(
+    energy_fn, step: float | tuple[float, ...]
+) -> dict[str, object]:
     """Compare mixed nested response with an FD of field polarizability."""
     geometry = torch.zeros((), **_DD, requires_grad=True)
     field = torch.zeros((), **_DD, requires_grad=True)
@@ -910,14 +1079,26 @@ def _mixed_response(energy_fn, step: float) -> dict[str, float | int]:
         )
         return -float(second.detach()), int(iterations)
 
-    plus, plus_iterations = alpha_at(step)
-    minus, minus_iterations = alpha_at(-step)
+    steps = (step,) if isinstance(step, float) else step
+    fd_sweep = []
+    for step_value in steps:
+        plus, plus_iterations = alpha_at(step_value)
+        minus, minus_iterations = alpha_at(-step_value)
+        fd_sweep.append(
+            {
+                "step": step_value,
+                "fd_of_field_second": (plus - minus) / (2.0 * step_value),
+                "iterations_plus": plus_iterations,
+                "iterations_minus": minus_iterations,
+            }
+        )
     return {
         "iterations_center": int(center_iterations),
-        "iterations_plus": plus_iterations,
-        "iterations_minus": minus_iterations,
+        "iterations_plus": fd_sweep[0]["iterations_plus"],
+        "iterations_minus": fd_sweep[0]["iterations_minus"],
         "nested_mixed_third": float(mixed.detach()),
-        "fd_of_field_second": (plus - minus) / (2.0 * step),
+        "fd_of_field_second": fd_sweep[0]["fd_of_field_second"],
+        "fd_sweep": fd_sweep,
     }
 
 
@@ -1513,12 +1694,12 @@ def test_no2_fixed_n_simple_mixing_composition_vs_fd() -> None:
 
 
 def test_no2_fixed_n_prefix_derivative_localization() -> None:
-    """Locate the first fixed-count Anderson prefix with a third-order gap."""
+    """Check small-step consistency at the map-eight/nine boundary."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
     axis = torch.zeros(3, **_DD)
     axis[1] = 1.0
     records = []
-    for n_maps in range(1, 25):
+    for n_maps in (8, 9):
 
         def energy_fn(field_value: Tensor, displacement: Tensor):
             positions = SYSTEMS["NO2"].positions.clone()
@@ -1531,21 +1712,118 @@ def test_no2_fixed_n_prefix_derivative_localization() -> None:
             )
             return _energy_from_map_result(map_result, inputs), n_maps
 
-        response = _third_response(energy_fn, 5.0e-5)
-        fd = float(response["fd_of_second_sweep"][0]["fd_of_second"])
+        response = _third_response(
+            energy_fn, (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7)
+        )
+        fd_values = [
+            float(row["fd_of_second"])
+            for row in response["fd_of_second_sweep"][-3:]
+        ]
+        nested = float(response["reverse_third"])
+        plateau_spread = max(fd_values) - min(fd_values)
+        distance = max(min(fd_values) - nested, nested - max(fd_values), 0.0)
         records.append(
             {
                 "map_prefix": n_maps,
-                "nested_third": float(response["reverse_third"]),
-                "fd_of_second": fd,
-                "absolute_gap": abs(float(response["reverse_third"]) - fd),
+                "nested_third": nested,
+                "fd_plateau": fd_values,
+                "plateau_spread": plateau_spread,
+                "distance_outside_plateau": distance,
             }
         )
-    assert all(np.isfinite(row["absolute_gap"]) for row in records)
-    assert max(row["absolute_gap"] for row in records[:8]) < 0.1
-    assert records[8]["absolute_gap"] > 1.0e3
-    assert records[-1]["absolute_gap"] < 1.0e-3
+    assert all(np.isfinite(row["distance_outside_plateau"]) for row in records)
+    assert all(
+        row["distance_outside_plateau"] <= row["plateau_spread"]
+        for row in records
+    )
     print({"fixed_n_prefixes": records})
+
+
+@pytest.mark.parametrize("n_maps", range(9, 21))
+def test_no2_later_fixed_n_prefix_derivative_consistency(n_maps: int) -> None:
+    """Find where longer Anderson prefixes lose derivative-level consistency."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        positions = SYSTEMS["NO2"].positions.clone()
+        positions[0, 1] += displacement
+        result, inputs = _fixed_n_anderson_at(
+            calculator, positions, field_value * axis, n_maps
+        )
+        return _energy_from_map_result(result, inputs), n_maps
+
+    response = _third_response(
+        energy_fn,
+        (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7),
+        check_jvp=True,
+    )
+    fd_values = [
+        float(row["fd_of_second"])
+        for row in response["fd_of_second_sweep"][-3:]
+    ]
+    nested = float(response["reverse_third"])
+    spread = max(fd_values) - min(fd_values)
+    distance = max(min(fd_values) - nested, nested - max(fd_values), 0.0)
+    assert all(
+        row["iterations_plus"] == row["iterations_minus"] == n_maps
+        for row in response["fd_of_second_sweep"]
+    )
+    assert response["jvp_vs_reverse_first_abs"] < 1.0e-5 * max(
+        1.0, abs(float(response["reverse_first"]))
+    )
+    print(
+        {
+            "fixed_n": n_maps,
+            "hyper_derivative_level_fd_plateau": fd_values,
+            "plateau_spread": spread,
+            "nested_third": nested,
+            "distance_outside_plateau": distance,
+            "consistent_with_plateau_bound": distance <= spread,
+            **response,
+        }
+    )
+
+
+def test_no2_fixed_n20_pol_deriv_level_consistency() -> None:
+    """Check mixed-response consistency for the historical map count."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        positions = SYSTEMS["NO2"].positions.clone()
+        positions[0, 1] += displacement
+        result, inputs = _fixed_n_anderson_at(
+            calculator, positions, field_value * axis, 20
+        )
+        return _energy_from_map_result(result, inputs), 20
+
+    response = _mixed_response(
+        energy_fn, (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7)
+    )
+    fd_values = [
+        float(row["fd_of_field_second"]) for row in response["fd_sweep"][-3:]
+    ]
+    nested = float(response["nested_mixed_third"])
+    spread = max(fd_values) - min(fd_values)
+    distance = max(min(fd_values) - nested, nested - max(fd_values), 0.0)
+    assert all(
+        row["iterations_plus"] == row["iterations_minus"] == 20
+        for row in response["fd_sweep"]
+    )
+    assert distance <= spread
+    print(
+        {
+            "fixed_n": 20,
+            "pol_deriv_level_fd_plateau": fd_values,
+            "plateau_spread": spread,
+            "nested_mixed_third": nested,
+            "distance_outside_plateau": distance,
+            **response,
+        }
+    )
 
 
 def _prefix_boundary_energy(
@@ -1553,8 +1831,9 @@ def _prefix_boundary_energy(
     field_value: Tensor,
     displacement: Tensor,
     boundary: str,
+    transition_map: int = 8,
 ) -> tuple[Tensor, int]:
-    """Evaluate one scalar at map 8, its mixed state, or map 9."""
+    """Evaluate a transition boundary or the physical map immediately after."""
     positions = SYSTEMS["NO2"].positions.clone()
     positions[0, 1] += displacement
     axis = torch.zeros(3, **_DD)
@@ -1564,37 +1843,69 @@ def _prefix_boundary_energy(
         calculator,
         positions,
         field_value * axis,
-        9,
+        transition_map + 1,
         boundary_record=record,
+        boundary_map=transition_map,
     )
-    if boundary == "map8":
-        result = record["map8_result"]
+    if boundary == f"map{transition_map}":
+        result = record["transition_map_result"]
         inputs = record["inputs"]
-        return _energy_from_map_result(result, inputs), 9
-    if boundary == "mixed-state":
-        value = record["map8_state_after_transition"]
-        mixer_state = record["map8_mixer_state_after"]
-        parts = (value, mixer_state.x_hist, mixer_state.f_hist)
-        projection = value.new_zeros(())
-        for index, part in enumerate(parts):
-            weights = torch.linspace(
-                -1.0 + 0.1 * index,
-                1.0 + 0.1 * index,
-                part.numel(),
-                **_DD,
-            ).reshape_as(part)
-            projection = projection + (part * weights).sum()
-        return projection, 9
-    if boundary == "map9":
-        result = record["map9_result"]
+        return _energy_from_map_result(result, inputs), transition_map + 1
+    transition = record["transition_stages"]
+    transition_outputs = {
+        "current": record["transition_state_after"],
+        "x_hist": record["transition_mixer_state_after"].x_hist,
+        "f_hist": record["transition_mixer_state_after"].f_hist,
+    }
+    if boundary in transition_outputs:
+        value = transition_outputs[boundary]
+        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(
+            value
+        )
+        return (
+            weights * value
+        ).sum() / value.numel() ** 0.5, transition_map + 1
+    if boundary in transition:
+        value = transition[boundary]
+        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(
+            value
+        )
+        return (
+            weights * value
+        ).sum() / value.numel() ** 0.5, transition_map + 1
+    if boundary == f"map{transition_map + 1}":
+        result = record["following_map_result"]
         inputs = record["inputs"]
-        return _energy_from_map_result(result, inputs), 9
+        return _energy_from_map_result(result, inputs), transition_map + 1
     raise ValueError(f"Unknown prefix boundary: {boundary}")
 
 
-@pytest.mark.parametrize("boundary", ("map8", "mixed-state", "map9"))
+@pytest.mark.parametrize(
+    "boundary",
+    (
+        "map8",
+        "current",
+        "x_hist",
+        "f_hist",
+        "raw",
+        "f_current",
+        "x_current",
+        "df",
+        "A",
+        "b",
+        "theta",
+        "x_bar_raw",
+        "f_bar_raw",
+        "x_bar",
+        "f_bar",
+        "mixed",
+        "next_x_hist",
+        "next_f_hist",
+        "map9",
+    ),
+)
 def test_no2_prefix8_transition_map9_localization(boundary: str) -> None:
-    """Separate map 8, its Anderson transition, and physical map 9."""
+    """Probe map 8, each transition output and physical map 9 separately."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
 
     def energy_fn(field_value: Tensor, displacement: Tensor):
@@ -1602,19 +1913,131 @@ def test_no2_prefix8_transition_map9_localization(boundary: str) -> None:
             calculator, field_value, displacement, boundary
         )
 
-    response = _third_response(energy_fn, 5.0e-5, check_jvp=True)
-    fd = float(response["fd_of_second_sweep"][0]["fd_of_second"])
-    gap = abs(float(response["reverse_third"]) - fd)
     if boundary == "map8":
-        assert gap < 0.1
-    elif boundary == "mixed-state":
-        assert gap > 1.0e6
+        steps = (1.0e-4, 5.0e-5, 2.0e-5, 1.0e-5, 5.0e-6, 2.0e-6)
+    elif boundary == "current":
+        steps = (
+            1.0e-4,
+            5.0e-5,
+            2.0e-5,
+            1.0e-5,
+            5.0e-6,
+            2.0e-6,
+            1.0e-6,
+            5.0e-7,
+            2.0e-7,
+        )
     else:
-        assert gap > 1.0
-    print({"prefix_boundary": boundary, "gap": gap, **response})
+        steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7, 2.0e-7)
+    response = _third_response(energy_fn, steps, check_jvp=True)
+    assert response["jvp_vs_reverse_first_abs"] < 1.0e-5 * max(
+        1.0, abs(float(response["reverse_first"]))
+    )
+    fd_values = [
+        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
+    ]
+    plateau = fd_values[-3:]
+    plateau_center = float(np.median(plateau))
+    plateau_spread = max(plateau) - min(plateau)
+    nested = float(response["reverse_third"])
+    gap = abs(nested - plateau_center)
+    distance_outside_plateau = max(
+        min(plateau) - nested, nested - max(plateau), 0.0
+    )
+    assert np.isfinite(plateau_center)
+    assert np.isfinite(plateau_spread)
+    assert np.isfinite(gap)
+    assert distance_outside_plateau <= plateau_spread
+    print(
+        {
+            "prefix_boundary": boundary,
+            "fd_plateau": plateau,
+            "plateau_spread": plateau_spread,
+            "nested_vs_fd_plateau": gap,
+            "distance_outside_fd_plateau": distance_outside_plateau,
+            **response,
+        }
+    )
 
 
-@pytest.mark.parametrize("boundary", ("map8", "mixed-state", "map9"))
+@pytest.mark.parametrize(
+    "boundary",
+    (
+        "map10",
+        "raw",
+        "f_current",
+        "x_current",
+        "df",
+        "A",
+        "b",
+        "theta",
+        "x_bar_raw",
+        "f_bar_raw",
+        "x_bar",
+        "f_bar",
+        "current",
+        "mixed",
+        "next_x_hist",
+        "next_f_hist",
+        "map11",
+    ),
+)
+def test_no2_prefix10_transition_map11_characterization(boundary: str) -> None:
+    """Inspect the accelerated transition before the first unstable prefix."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+
+    def energy_fn(field_value: Tensor, displacement: Tensor):
+        return _prefix_boundary_energy(
+            calculator,
+            field_value,
+            displacement,
+            boundary,
+            transition_map=10,
+        )
+
+    response = _third_response(
+        energy_fn,
+        (1.0e-6, 5.0e-7, 2.0e-7, 1.0e-7, 5.0e-8, 2.0e-8),
+        check_jvp=True,
+    )
+    fd_values = [
+        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
+    ]
+    plateau = fd_values[-3:]
+    plateau_spread = max(plateau) - min(plateau)
+    nested = float(response["reverse_third"])
+    distance_outside_plateau = max(
+        min(plateau) - nested, nested - max(plateau), 0.0
+    )
+    assert np.isfinite(float(response["reverse_third"]))
+    assert all(np.isfinite(value) for value in fd_values)
+    assert distance_outside_plateau <= plateau_spread
+    relative_jvp_gap = float(response["jvp_vs_reverse_first_abs"]) / max(
+        1.0, abs(float(response["reverse_first"]))
+    )
+    preceding_operations = {"raw", "f_current", "x_current", "df", "A", "b"}
+    if boundary in preceding_operations:
+        assert relative_jvp_gap < 1.0e-6
+    if boundary == "theta":
+        assert 1.0e-6 < relative_jvp_gap < 1.0e-4
+    print(
+        {
+            "transition_after_map": 10,
+            "prefix11_boundary": boundary,
+            "nested_third": response["reverse_third"],
+            "fd_sweep": fd_values,
+            "fd_spread": plateau_spread,
+            "distance_outside_fd_plateau": distance_outside_plateau,
+            "jvp_reverse_first_abs": response["jvp_vs_reverse_first_abs"],
+            "jvp_reverse_first_relative_gap": relative_jvp_gap,
+            **response,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "boundary", ("map8", "current", "x_hist", "f_hist", "map9")
+)
 def test_no2_pol_deriv_prefix8_transition_map9(boundary: str) -> None:
     """Apply the same prefix boundary split to the mixed response."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
@@ -1624,17 +2047,31 @@ def test_no2_pol_deriv_prefix8_transition_map9(boundary: str) -> None:
             calculator, field_value, displacement, boundary
         )
 
-    response = _mixed_response(energy_fn, 5.0e-5)
-    gap = abs(
-        float(response["nested_mixed_third"])
-        - float(response["fd_of_field_second"])
+    response = _mixed_response(
+        energy_fn,
+        (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7, 2.0e-7),
+    )
+    sweep = response["fd_sweep"]
+    plateau = [float(row["fd_of_field_second"]) for row in sweep[-3:]]
+    plateau_center = float(np.median(plateau))
+    plateau_spread = max(plateau) - min(plateau)
+    nested = float(response["nested_mixed_third"])
+    gap = abs(nested - plateau_center)
+    distance_outside_plateau = max(
+        min(plateau) - nested, nested - max(plateau), 0.0
     )
     assert np.isfinite(gap)
-    if boundary == "map8":
-        assert gap < 0.1
-    else:
-        assert gap > 0.1
-    print({"pol_deriv_prefix_boundary": boundary, "gap": gap, **response})
+    assert distance_outside_plateau <= plateau_spread
+    print(
+        {
+            "pol_deriv_prefix_boundary": boundary,
+            "fd_plateau": plateau,
+            "plateau_spread": plateau_spread,
+            "nested_vs_fd_plateau": gap,
+            "distance_outside_fd_plateau": distance_outside_plateau,
+            **response,
+        }
+    )
 
 
 def test_no2_map9_actual_state_tangent_and_spectral_derivative() -> None:
@@ -1770,6 +2207,15 @@ def test_no2_pol_deriv_fixed_n_anderson_response(n_maps: int) -> None:
     response = _mixed_response(energy_fn, 5.0e-5)
     assert response["iterations_center"] == n_maps
     assert response["iterations_plus"] == response["iterations_minus"] == n_maps
+    gap = abs(
+        float(response["nested_mixed_third"])
+        - float(response["fd_of_field_second"])
+    )
+    if n_maps == 20:
+        assert gap > 0.1
+    else:
+        assert gap < 1.0e-3
+    response["absolute_gap"] = gap
     print({"pol_deriv_fixed_n_maps": n_maps, **response})
 
 
@@ -1803,6 +2249,14 @@ def test_no2_pol_deriv_tighter_tolerance_response() -> None:
         records[1]["iterations_plus"],
         records[1]["iterations_minus"],
     ) == (24, 23, 23)
+    gaps = [
+        abs(float(row["nested_mixed_third"]) - float(row["fd_of_field_second"]))
+        for row in records
+    ]
+    assert gaps[0] > 0.1
+    assert gaps[1] < 1.0e-3
+    for row, gap in zip(records, gaps):
+        row["absolute_gap"] = gap
     print({"pol_deriv_tolerance_sweep": records})
 
 
@@ -1943,6 +2397,400 @@ def test_no2_fresh_calculator_reproducibility(observable: str) -> None:
             "unrelated_result": result_summary(unrelated),
             "result_after": result_summary(result_after),
             "result_before_after_max_abs_delta": state_deltas,
+        }
+    )
+
+
+def test_no2_fresh_calculator_forward_trajectory_and_gauge() -> None:
+    """Compare hidden center trajectories, solve tensors and spectral gauge."""
+    system = SYSTEMS["NO2"]
+    traces: list[list[dict[str, object]]] = []
+    endpoint_values = []
+    for repeat in range(3):
+        endpoint_values.append(
+            float(
+                _hyperpolarizability(system, "gfn2", "pytorch")[
+                    "hyperpolarizability"
+                ][_HYPER_INDEX].detach()
+            )
+        )
+        calculator = _calculator(system, "gfn2", "pytorch")
+        trace: list[dict[str, object]] = []
+        _fixed_n_anderson_at(
+            calculator,
+            system.positions,
+            torch.zeros(3, **_DD),
+            20,
+            trajectory_trace=trace,
+        )
+        traces.append(trace)
+        if repeat == 1:
+            unrelated = _calculator(SYSTEMS["H2O"], "gfn1", "pytorch")
+            unrelated.singlepoint(
+                SYSTEMS["H2O"].positions.clone(),
+                SYSTEMS["H2O"].charge,
+                SYSTEMS["H2O"].spin,
+            )
+
+    def leaves(row: dict[str, object]):
+        for key, value in row.items():
+            if isinstance(value, Tensor):
+                yield key, value
+            elif isinstance(value, dict):
+                for child_key, child in value.items():
+                    if isinstance(child, Tensor):
+                        yield f"{key}.{child_key}", child
+
+    first_forward_difference = None
+    first_bitwise_difference = None
+    first_physical_difference = None
+    largest_physical_difference = None
+    max_forward_delta = 0.0
+    max_physical_delta = 0.0
+    for map_index, rows in enumerate(zip(*traces), start=1):
+        first = dict(leaves(rows[0]))
+        for repeat, row in enumerate(rows[1:], start=1):
+            for name, value in leaves(row):
+                delta = float((first[name] - value).abs().max())
+                if (
+                    not torch.equal(first[name], value)
+                    and first_bitwise_difference is None
+                ):
+                    first_bitwise_difference = {
+                        "map": map_index,
+                        "operation": name,
+                        "repeat": repeat,
+                        "max_abs": delta,
+                    }
+                max_forward_delta = max(max_forward_delta, delta)
+                if delta > 1.0e-12 and first_forward_difference is None:
+                    first_forward_difference = {
+                        "map": map_index,
+                        "operation": name,
+                        "repeat": repeat,
+                        "max_abs": delta,
+                    }
+                if "coefficients" not in name:
+                    max_physical_delta = max(max_physical_delta, delta)
+                    if (
+                        largest_physical_difference is None
+                        or delta > largest_physical_difference["max_abs"]
+                    ):
+                        largest_physical_difference = {
+                            "map": map_index,
+                            "operation": name,
+                            "repeat": repeat,
+                            "max_abs": delta,
+                        }
+                    if delta > 1.0e-12 and first_physical_difference is None:
+                        first_physical_difference = {
+                            "map": map_index,
+                            "operation": name,
+                            "repeat": repeat,
+                            "max_abs": delta,
+                        }
+
+    gauge_records = []
+    for map_index, (left, right) in enumerate(zip(traces[0], traces[1]), 1):
+        channel, orbital, _ = left["minimum_occupied_pair"]
+        coeff0 = left["coefficients"]
+        coeff1 = right["coefficients"]
+        if coeff0.ndim == 2:
+            c0 = coeff0[:, orbital : orbital + 2]
+            c1 = coeff1[:, orbital : orbital + 2]
+        else:
+            c0 = coeff0[channel, :, orbital : orbital + 2]
+            c1 = coeff1[channel, :, orbital : orbital + 2]
+        overlap = left["overlap"]
+        principal_cosines = torch.linalg.svdvals(c0.mT @ overlap @ c1)
+        principal_angles = torch.acos(principal_cosines.clamp(-1.0, 1.0))
+        gauge_records.append(
+            {
+                "map": map_index,
+                "pair": (channel, orbital),
+                "coefficient_max_abs": float(
+                    (left["coefficients"] - right["coefficients"]).abs().max()
+                ),
+                "occupied_pair_principal_angles": principal_angles.tolist(),
+                "density_max_abs": float(
+                    (left["density"] - right["density"]).abs().max()
+                ),
+                "hamiltonian_max_abs": float(
+                    (left["hamiltonian"] - right["hamiltonian"]).abs().max()
+                ),
+                "energy_max_abs": float(
+                    (left["emo"] - right["emo"]).abs().max()
+                ),
+            }
+        )
+
+    spectral_thirds = []
+    for row in (trace[1] for trace in traces):
+        h0 = row["hamiltonian"]
+        l_inv = row["inverse_cholesky"]
+        occupation = row["occupation"]
+        density_probe = torch.linspace(
+            -0.8, 1.1, row["density"].numel(), **_DD
+        ).reshape_as(row["density"])
+        direction = torch.linspace(-1.0, 1.0, h0.numel(), **_DD).reshape_as(h0)
+        direction = 0.5 * (direction + direction.mT)
+
+        def spectral_scalar(parameter: Tensor) -> Tensor:
+            hamiltonian = h0 + parameter * direction
+            _, coefficients = storch.eighb(
+                a=hamiltonian,
+                b=None,
+                l_inv=l_inv,
+                is_posdef=True,
+                factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
+                broadening_method=(
+                    "lorn" if hamiltonian.requires_grad else None
+                ),
+            )
+            density = get_density(coefficients, occupation)
+            return (density * density_probe).sum()
+
+        parameter = torch.zeros((), **_DD, requires_grad=True)
+        first_derivative = torch.autograd.grad(
+            spectral_scalar(parameter), parameter, create_graph=True
+        )[0]
+        second_derivative = torch.autograd.grad(
+            first_derivative, parameter, create_graph=True
+        )[0]
+        third_derivative = torch.autograd.grad(second_derivative, parameter)[0]
+        spectral_thirds.append(float(third_derivative.detach()))
+
+    deterministic = torch.are_deterministic_algorithms_enabled()
+    deterministic_record: dict[str, object]
+    try:
+        torch.use_deterministic_algorithms(True)
+        det_calc = _calculator(system, "gfn2", "pytorch")
+        det_trace: list[dict[str, object]] = []
+        _fixed_n_anderson_at(
+            det_calc,
+            system.positions,
+            torch.zeros(3, **_DD),
+            20,
+            trajectory_trace=det_trace,
+        )
+        deterministic_record = {
+            "supported": True,
+            "max_map20_state_delta": float(
+                (traces[0][-1]["next_current"] - det_trace[-1]["next_current"])
+                .abs()
+                .max()
+            ),
+        }
+    except RuntimeError as exc:
+        deterministic_record = {"supported": False, "error": str(exc)}
+    finally:
+        torch.use_deterministic_algorithms(deterministic)
+
+    assert len({len(trace) for trace in traces}) == 1
+    assert max_forward_delta >= 0.0
+    assert all(np.isfinite(row["coefficient_max_abs"]) for row in gauge_records)
+    assert all(
+        max(row["occupied_pair_principal_angles"]) < 1.0e-6
+        and row["density_max_abs"] < 1.0e-10
+        and row["hamiltonian_max_abs"] < 1.0e-10
+        and row["energy_max_abs"] < 1.0e-10
+        for row in gauge_records
+    )
+    if deterministic_record["supported"]:
+        assert deterministic_record["max_map20_state_delta"] < 1.0e-10
+    print(
+        {
+            "torch_threads": torch.get_num_threads(),
+            "torch_interop_threads": torch.get_num_interop_threads(),
+            "fresh_endpoint_AAA": endpoint_values,
+            "fresh_endpoint_spread": max(endpoint_values)
+            - min(endpoint_values),
+            "same_input_forward_first_divergence": first_forward_difference,
+            "same_input_forward_first_bitwise_difference": first_bitwise_difference,
+            "same_input_forward_max_abs_delta": max_forward_delta,
+            "first_gauge_invariant_forward_difference": first_physical_difference,
+            "largest_gauge_invariant_forward_difference": largest_physical_difference,
+            "gauge_invariant_forward_max_abs_delta": max_physical_delta,
+            "first_vs_second_spectral_gauge_by_map": gauge_records,
+            "map2_frozen_spectral_thirds_by_trajectory": spectral_thirds,
+            "map2_frozen_spectral_third_spread": max(spectral_thirds)
+            - min(spectral_thirds),
+            "deterministic_algorithms_probe": deterministic_record,
+        }
+    )
+
+
+def test_no2_frozen_spectral_derivative_reproducibility() -> None:
+    """Repeat one frozen suspicious H/S spectral derivative in one process."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    boundary_record: dict[str, object] = {}
+    trajectory: list[dict[str, object]] = []
+    _fixed_n_anderson_at(
+        calculator,
+        SYSTEMS["NO2"].positions,
+        torch.zeros(3, **_DD),
+        7,
+        trajectory_trace=trajectory,
+        boundary_record=boundary_record,
+    )
+    # Map 7 is where repeated center trajectories first show an occupied-pair
+    # coefficient gauge flip while their physical spectral outputs agree.
+    result = trajectory[6]
+    inputs = boundary_record["inputs"]
+    h0 = result["hamiltonian"].detach().clone()
+    s0 = inputs.integrals.overlap.detach().clone()
+    l_inv = inputs.inverse_cholesky.detach().clone()
+    occupation = result["occupation"].detach()
+    direction = torch.linspace(-1.0, 1.0, h0.numel(), **_DD).reshape_as(h0)
+    direction = 0.5 * (direction + direction.mT)
+    density_probe = torch.linspace(
+        -0.8, 1.1, result["density"].numel(), **_DD
+    ).reshape_as(result["density"])
+
+    def spectral_scalar(parameter: Tensor) -> Tensor:
+        hamiltonian = h0 + parameter * direction
+        broadening = "lorn" if hamiltonian.requires_grad else None
+        emo, coefficients = storch.eighb(
+            a=hamiltonian,
+            b=None,
+            l_inv=l_inv,
+            is_posdef=True,
+            factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
+            broadening_method=broadening,
+        )
+        density = get_density(coefficients, occupation)
+        return (density * density_probe).sum() + (density * hamiltonian).sum()
+
+    def derivatives() -> dict[str, float]:
+        parameter = torch.zeros((), **_DD, requires_grad=True)
+        value = spectral_scalar(parameter)
+        first = torch.autograd.grad(value, parameter, create_graph=True)[0]
+        second = torch.autograd.grad(first, parameter, create_graph=True)[0]
+        third = torch.autograd.grad(second, parameter)[0]
+        jvp = torch.func.jvp(
+            spectral_scalar,
+            (torch.zeros((), **_DD),),
+            (torch.ones((), **_DD),),
+        )[1]
+        return {
+            "value": float(value.detach()),
+            "reverse_first": float(first.detach()),
+            "jvp_first": float(jvp.detach()),
+            "reverse_second": float(second.detach()),
+            "reverse_third": float(third.detach()),
+        }
+
+    before = [derivatives() for _ in range(3)]
+    unrelated_h = h0 + 0.05 * torch.eye(
+        h0.shape[-1], dtype=h0.dtype, device=h0.device
+    )
+    storch.eighb(
+        a=unrelated_h,
+        b=None,
+        l_inv=l_inv,
+        is_posdef=True,
+        factor=torch.finfo(h0.dtype).eps ** 0.5,
+        broadening_method=None,
+    )
+    after = derivatives()
+    deltas = {
+        key: max(abs(row[key] - before[0][key]) for row in (*before[1:], after))
+        for key in before[0]
+    }
+    assert torch.equal(h0, result["hamiltonian"].detach())
+    assert torch.equal(s0, inputs.integrals.overlap.detach())
+    assert max(deltas.values()) < 1.0e-10
+    print(
+        {
+            "frozen_hs_exact": True,
+            "frozen_map": result["map"],
+            "h_norm": float(torch.linalg.vector_norm(h0)),
+            "s_norm": float(torch.linalg.vector_norm(s0)),
+            "same_process_spectral_repeats": before,
+            "after_unrelated_eigensolve": after,
+            "max_abs_derivative_deltas": deltas,
+            "torch_threads": torch.get_num_threads(),
+            "torch_interop_threads": torch.get_num_interop_threads(),
+        }
+    )
+
+
+def test_no2_frozen_anderson_transition_derivative_reproducibility() -> None:
+    """Repeat the map-8 mixer solve on fixed incoming values/tangents."""
+    calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
+    axis = torch.zeros(3, **_DD)
+    axis[1] = 1.0
+
+    def incoming(field: Tensor):
+        record: dict[str, object] = {}
+        _fixed_n_anderson_at(
+            calculator,
+            SYSTEMS["NO2"].positions,
+            field * axis,
+            8,
+            boundary_record=record,
+        )
+        state = record["map8_mixer_state_before"]
+        return (
+            record["map8_state_before_transition"],
+            record["map8_result"].mapped_x,
+            state.x_hist,
+            state.f_hist,
+        )
+
+    zero = torch.zeros((), **_DD)
+    values, tangents = torch.func.jvp(
+        incoming, (zero,), (torch.ones_like(zero),)
+    )
+    center_record: dict[str, object] = {}
+    _fixed_n_anderson_at(
+        calculator,
+        SYSTEMS["NO2"].positions,
+        torch.zeros(3, **_DD),
+        8,
+        boundary_record=center_record,
+    )
+    settings = center_record["settings"]
+
+    def transition_projection(name: str):
+        def evaluate(field: Tensor, _geometry: Tensor):
+            perturbed = [
+                value + field * tangent
+                for value, tangent in zip(values, tangents)
+            ]
+            old, mapped, x_hist, f_hist = perturbed
+            state = AndersonState(x_hist=x_hist, f_hist=f_hist)
+            stages = _anderson_transition_stages(
+                old, mapped, state, settings, step=8
+            )
+            value = stages[name]
+            weights = torch.linspace(
+                -1.0, 1.0, value.numel(), **_DD
+            ).reshape_as(value)
+            return (weights * value).sum() / value.numel() ** 0.5, 8
+
+        return evaluate
+
+    records = {}
+    for stage in ("theta", "mixed"):
+        fn = transition_projection(stage)
+        first = _third_response(fn, (1.0e-5, 2.0e-6, 5.0e-7), check_jvp=True)
+        torch.linalg.solve(
+            torch.tensor([[2.0, 0.1], [0.1, 1.0]], **_DD),
+            torch.ones(2, **_DD),
+        )
+        second = _third_response(fn, (1.0e-5, 2.0e-6, 5.0e-7), check_jvp=True)
+        assert abs(first["reverse_third"] - second["reverse_third"]) < 1.0e-10
+        records[stage] = {"first": first, "after_unrelated_solve": second}
+    print(
+        {
+            "frozen_incoming_old_mapped_xhist_fhist": True,
+            "field_tangent_norms": [
+                float(torch.linalg.vector_norm(value)) for value in tangents
+            ],
+            "frozen_transition_derivatives": records,
+            "torch_threads": torch.get_num_threads(),
+            "torch_interop_threads": torch.get_num_interop_threads(),
         }
     )
 
