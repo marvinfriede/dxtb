@@ -18,9 +18,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 
 from dxtb._src.typing import Tensor
+
+if TYPE_CHECKING:
+    from dxtb._src.wavefunction.filling import _FermiCoreState
 
 __all__ = ["aufbau_density_matrix", "fermi_density_matrix"]
 
@@ -47,25 +52,41 @@ def _prepare_matrix(
         l_inv = torch.where(pair, l_inv, torch.zeros_like(l_inv))
         matrix = l_inv @ matrix @ l_inv.transpose(-2, -1)
 
-    row_sum = matrix.abs().sum(-1)
+    count = active.sum(-1).clamp_min(1).to(matrix.dtype)
+    center = matrix.diagonal(dim1=-2, dim2=-1).sum(-1) / count
+    eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
+    centered = matrix - center[..., None, None] * eye
+    row_sum = centered.abs().sum(-1)
     bound = torch.where(active, row_sum, 0.0).amax(-1)
-    sentinel = bound.detach() + 1.0
+    sentinel = center.detach() + bound.detach() + 1.0
     diagonal = torch.where(active, 0.0, sentinel.unsqueeze(-1))
     spectral = matrix + torch.diag_embed(diagonal)
     return matrix, spectral, active
 
 
 def _matrix_fermi(
-    matrix: Tensor, mu: Tensor, kt: Tensor, active: Tensor
+    matrix: Tensor,
+    shift: Tensor,
+    kt: Tensor,
+    active: Tensor,
+    *,
+    wide_range: bool,
 ) -> Tensor:
     """Evaluate the symmetric matrix Fermi function with fixed scaling."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
-    exponent = (matrix - mu[..., None, None] * eye) / kt
-    scaled = exponent / 2048.0
+    exponent = (matrix - shift[..., None, None] * eye) / kt
+    # The existing ten-step path is accurate for float64 xTB ranges. In
+    # float32, sub-microhartree temperatures can make its initial exponential
+    # overflow, so use the smaller argument and twenty fixed tanh doublings.
+    # The dtype choice is static configuration; both branches evaluate the
+    # same matrix function without tensor-dependent host control.
+    scale = 2_097_152.0 if wide_range else 2048.0
+    steps = 20 if wide_range else 10
+    scaled = exponent / scale
     exp_scaled = torch.matrix_exp(2.0 * scaled)
     tangent = torch.linalg.solve(exp_scaled + eye, exp_scaled - eye)
-    for _ in range(10):
+    for _ in range(steps):
         tangent = (
             2.0 * tangent @ torch.linalg.solve(eye + tangent @ tangent, eye)
         )
@@ -142,21 +163,13 @@ def fermi_density_matrix(
     hamiltonian: Tensor,
     nel: Tensor,
     kt: Tensor,
-    chemical_potential: Tensor,
+    state: _FermiCoreState,
     *,
     l_inv: Tensor | None = None,
     mask: Tensor | None = None,
     diff_steps: int = 2,
-    gap: Tensor | None = None,
-    below: Tensor | None = None,
 ) -> Tensor:
-    """Build a fixed-count invariant matrix Fermi density from the shared root.
-
-    ``chemical_potential`` is the detached, polished root returned by dxtb's
-    authoritative Fermi search. This function does not search for another
-    chemical potential; fixed Newton corrections only attach the configured
-    derivative response to that primal state.
-    """
+    """Build an invariant Fermi density from dxtb's shared primal state."""
     work_dtype = (
         torch.float64
         if hamiltonian.dtype != torch.float64
@@ -164,7 +177,12 @@ def fermi_density_matrix(
     )
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    h, spectral, active = _prepare_matrix(h, li, mask)
+    structural_mask = state.orbital_mask
+    if structural_mask is not None and structural_mask.ndim == h.ndim:
+        structural_mask = structural_mask.select(-2, 0)
+    if structural_mask is None:
+        structural_mask = mask
+    h, spectral, active = _prepare_matrix(h, li, structural_mask)
 
     h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
     spectral = spectral.unsqueeze(-3).expand_as(h)
@@ -173,50 +191,64 @@ def fermi_density_matrix(
         li = li.unsqueeze(-3).expand_as(h)
         pair = active.unsqueeze(-1) & active.unsqueeze(-2)
         li = torch.where(pair, li, torch.zeros_like(li))
-    nel = nel.to(device=h.device, dtype=h.dtype)
     kt = kt.to(device=h.device, dtype=h.dtype)
-    mu = chemical_potential.to(device=h.device, dtype=h.dtype)
-    if mu.shape[-1:] == (1,):
-        mu = mu.squeeze(-1)
-
-    count_active = active.sum(-1).to(h.dtype)
-    empty = nel <= 0.0
-    full = nel >= count_active
-    gap_mask = (
-        torch.zeros_like(nel, dtype=torch.bool)
-        if gap is None
-        else gap.to(device=h.device, dtype=torch.bool)
-    )
-    if gap_mask.shape[-1:] == (1,):
-        gap_mask = gap_mask.squeeze(-1)
-    valid = ~(empty | full | gap_mask)
+    kt_pos = state.kt_positive.to(device=h.device)
+    safe_kt = torch.where(kt_pos, kt, torch.ones_like(kt))
+    ref = state.chemical_potential_ref.to(device=h.device, dtype=h.dtype)
+    offset = state.chemical_potential_offset.to(device=h.device, dtype=h.dtype)
+    ref = ref.squeeze(-1)
+    offset = offset.squeeze(-1)
+    channel_shape = (*nel.shape, 1, 1)
+    eye = torch.eye(h.shape[-1], dtype=h.dtype, device=h.device)
+    relative = spectral - ref.reshape(channel_shape) * eye
+    relative = relative - offset.reshape(channel_shape) * eye
+    target = nel.to(device=h.device, dtype=h.dtype)
+    empty = state.empty.to(device=h.device)
+    full = state.full.to(device=h.device)
+    too_many = state.too_many.to(device=h.device)
+    active_channel = state.active.to(device=h.device)
+    gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
+    below = state.below.to(device=h.device, dtype=torch.bool)
+    diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
+    shift = torch.zeros_like(target)
     for _ in range(diff_steps):
-        density = _matrix_fermi(spectral, mu, kt, active)
+        density = _matrix_fermi(
+            relative,
+            shift,
+            safe_kt,
+            active,
+            wide_range=hamiltonian.dtype != torch.float64,
+        )
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
         slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
             -1
-        ) / kt
+        ) / safe_kt
         safe_slope = torch.where(
             slope.abs() > torch.finfo(h.dtype).tiny, slope, 1.0
         )
-        correction = torch.where(valid, (nel - count) / safe_slope, 0.0)
-        mu = mu + correction
+        correction = torch.where(diff_mask, (target - count) / safe_slope, 0.0)
+        shift = shift + correction
 
-    density = _matrix_fermi(spectral, mu, kt, active)
-    eye = torch.eye(h.shape[-1], dtype=h.dtype, device=h.device).expand(h.shape)
-    eye = eye * active.unsqueeze(-1).to(h.dtype)
+    density = _matrix_fermi(
+        relative,
+        shift,
+        safe_kt,
+        active,
+        wide_range=hamiltonian.dtype != torch.float64,
+    )
+    eye_channel = eye * active.unsqueeze(-1).to(h.dtype)
     density = torch.where(empty[..., None, None], 0.0, density)
-    density = torch.where(full[..., None, None], eye, density)
-    if gap is not None and below is not None:
-        response = _gap_electron_response(
-            h,
-            spectral,
-            active,
-            below.to(device=h.device, dtype=torch.bool),
-            gap.to(device=h.device, dtype=torch.bool),
-            kt,
-        )
-        density = density + (nel - nel.detach())[..., None, None] * response
+    density = torch.where(too_many[..., None, None], 0.0, density)
+    density = torch.where(full[..., None, None], eye_channel, density)
+    response = _gap_electron_response(
+        h,
+        spectral,
+        active,
+        state.below.to(device=h.device, dtype=torch.bool),
+        gap_mask,
+        safe_kt,
+    )
+    density = density + (target - target.detach())[..., None, None] * response
     if li is not None:
         density = li.transpose(-2, -1) @ density @ li
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -238,23 +270,29 @@ def _projector(
     hi_idx = rank.clamp(0, n - 1)
     e_lo = evals.gather(-1, lo_idx.unsqueeze(-1)).squeeze(-1)
     e_hi = evals.gather(-1, hi_idx.unsqueeze(-1)).squeeze(-1)
-    scale = torch.linalg.matrix_norm(matrix.detach(), ord="fro", dim=(-2, -1))
-    scale = scale.clamp_min(torch.finfo(matrix.dtype).tiny)
-    e_lo = torch.where(rank == 0, evals[..., 0] - scale, e_lo)
+    e_first = evals[..., 0]
     e_last = evals.gather(
         -1, (active_count - 1).clamp_min(0).unsqueeze(-1)
     ).squeeze(-1)
-    e_hi = torch.where(rank == active_count, e_last + scale, e_hi)
+    span = (e_last - e_first).abs().clamp_min(torch.finfo(matrix.dtype).tiny)
+    e_lo = torch.where(rank == 0, e_first - span, e_lo)
+    e_hi = torch.where(rank == 0, e_first, e_hi)
+    e_lo = torch.where(rank == active_count, e_last, e_lo)
+    e_hi = torch.where(rank == active_count, e_last + span, e_hi)
     mu = (0.5 * (e_lo + e_hi)).detach()
 
-    pad = torch.where(active, 0.0, (e_hi + scale).unsqueeze(-1))
+    scale = torch.maximum(
+        (evals - mu.unsqueeze(-1)).abs().masked_fill(~active, 0.0).amax(-1),
+        span * 0.5,
+    ).clamp_min(torch.finfo(matrix.dtype).tiny)
+    pad = torch.where(active, 0.0, (mu + 2.0 * scale).unsqueeze(-1))
     h = matrix + torch.diag_embed(pad)
     eye = torch.eye(n, dtype=matrix.dtype, device=matrix.device).expand(h.shape)
     x = (h - mu[..., None, None] * eye) / scale[..., None, None]
     # Newton-Schulz sign iteration. The fixed iteration count avoids
     # data-dependent control flow, and the differentiable operations are
     # matrix functions.
-    for _ in range(8):
+    for _ in range(12):
         inverse = torch.linalg.solve(x, eye)
         x_norm = torch.linalg.matrix_norm(x, ord="fro", dim=(-2, -1))
         inverse_norm = torch.linalg.matrix_norm(
@@ -302,9 +340,16 @@ def aufbau_density_matrix(
         pair = active.unsqueeze(-1) & active.unsqueeze(-2)
         li = torch.where(pair, li, torch.zeros_like(li))
     active_count = active.sum(-1)
-    rank = nel.detach().floor().to(torch.long).clamp_min(0)
+    count = active_count.to(dtype=h.dtype)
+    electron_count = nel.to(dtype=h.dtype, device=h.device)
+    effective_nel = torch.where(
+        electron_count < 0.0,
+        0.0,
+        torch.where(electron_count >= count, count, electron_count),
+    )
+    rank = effective_nel.detach().floor().to(torch.long)
     rank = torch.minimum(rank, active_count)
-    fraction = nel.to(dtype=h.dtype, device=h.device) - rank.to(h.dtype)
+    fraction = effective_nel - rank.to(h.dtype)
     next_rank = torch.minimum(rank + 1, active_count)
     occupied = _projector(h, spectral, active, rank)
     frontier = _projector(h, spectral, active, next_rank)

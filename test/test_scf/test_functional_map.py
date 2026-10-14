@@ -932,15 +932,15 @@ def test_physical_scf_outputs_do_not_depend_on_reporting_coefficients(
 
 
 @pytest.mark.parametrize(
-    "sample_name, synthetic_gap",
+    "sample_name, synthetic_gap, fractional_count",
     [
-        pytest.param("H2O", None, id="ordinary-molecule"),
-        pytest.param("LiH", 1.0e-5, id="small-gap"),
-        pytest.param("H2O", 0.0, id="finite-temperature-degeneracy"),
+        pytest.param("H2O", None, False, id="ordinary-molecule"),
+        pytest.param("LiH", 1.0e-5, True, id="asymmetric-fractional-small-gap"),
+        pytest.param("H2O", 0.0, False, id="finite-temperature-degeneracy"),
     ],
 )
 def test_atomic_partition_preserves_legacy_coefficient_response(
-    sample_name: str, synthetic_gap: float | None
+    sample_name: str, synthetic_gap: float | None, fractional_count: bool
 ) -> None:
     """Atomic entropy keeps its prior coefficient derivative during E3.1s-a."""
     case = _prepare_case(
@@ -953,6 +953,9 @@ def test_atomic_partition_preserves_legacy_coefficient_response(
         },
     )
     inputs = case.inputs
+    if fractional_count:
+        increment = inputs.nel.new_tensor([0.25, 0.1])
+        inputs = replace(inputs, nel=inputs.nel + increment)
     settings = inputs.fermi_settings
     assert settings is not None
     h0 = inputs.integrals.hcore
@@ -960,8 +963,8 @@ def test_atomic_partition_preserves_legacy_coefficient_response(
         n = h0.shape[-1]
         levels = torch.linspace(-0.4, 0.4, n, dtype=h0.dtype)
         frontier = min(max(int(inputs.nel[0].item()), 1), n - 1)
-        levels[frontier - 1] = -synthetic_gap / 2.0
-        levels[frontier] = synthetic_gap / 2.0
+        levels[frontier - 1] = -synthetic_gap / 4.0
+        levels[frontier] = 3.0 * synthetic_gap / 4.0
         h0 = torch.diag(levels)
     direction = torch.zeros_like(h0)
     frontier = min(max(int(inputs.nel[0].item()), 1), h0.shape[-1] - 1)
@@ -974,13 +977,17 @@ def test_atomic_partition_preserves_legacy_coefficient_response(
 
     def pre_package(parameter: torch.Tensor) -> torch.Tensor:
         hamiltonian = h0 + parameter * direction
+        old_branch = (
+            hamiltonian.requires_grad is not False
+            or inputs.inverse_cholesky.requires_grad is not False
+        )
         emo, coefficients = storch.eighb(
             a=hamiltonian,
             b=None,
             l_inv=inputs.inverse_cholesky,
             is_posdef=True,
             factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-            broadening_method="lorn",
+            broadening_method="lorn" if old_branch else None,
         )
         channel_energies = emo.unsqueeze(-2).expand(
             *inputs.nel.shape, emo.shape[-1]

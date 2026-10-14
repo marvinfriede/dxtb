@@ -87,9 +87,16 @@ class _FermiCoreState:
     """Private shared primal state for functional Fermi consumers."""
 
     result: FermiOccupationResult
-    chemical_potential: Tensor
+    chemical_potential_ref: Tensor
+    chemical_potential_offset: Tensor
     gap: Tensor
     below: Tensor
+    active: Tensor
+    full: Tensor
+    empty: Tensor
+    too_many: Tensor
+    kt_positive: Tensor
+    orbital_mask: Tensor | None
 
 
 _pytree.register_pytree_node(
@@ -921,8 +928,19 @@ def _get_fermi_occupation_core_state(
         electron_count_ok=electron_count_ok,
     )
     result = FermiOccupationResult(occupation=occupation, status=status)
-    chemical_potential = (ref + offset).detach()
-    return _FermiCoreState(result, chemical_potential, gap.squeeze(-1), below)
+    return _FermiCoreState(
+        result=result,
+        chemical_potential_ref=ref.detach(),
+        chemical_potential_offset=offset.detach(),
+        gap=gap.squeeze(-1),
+        below=below,
+        active=active.squeeze(-1),
+        full=full.squeeze(-1),
+        empty=(~occupied).squeeze(-1),
+        too_many=too_many.squeeze(-1),
+        kt_positive=kt_pos,
+        orbital_mask=valid,
+    )
 
 
 def get_fermi_occupation_core(

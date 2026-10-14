@@ -125,13 +125,17 @@ def _transitional_diagonalize(
         inputs.fermi_settings is not None
         and inputs.fermi_settings.partition == labels.FERMI_PARTITION_ATOMIC
     )
+    legacy_coefficient_branch = atomic_entropy and (
+        hamiltonian.requires_grad is not False
+        or inputs.inverse_cholesky.requires_grad is not False
+    )
     return storch.eighb(
         a=hamiltonian,
         b=None,
         l_inv=inputs.inverse_cholesky,
         is_posdef=True,
         factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-        broadening_method="lorn" if atomic_entropy else None,
+        broadening_method="lorn" if legacy_coefficient_branch else None,
     )
 
 
@@ -201,12 +205,10 @@ def evaluate_hamiltonian(
             hamiltonian,
             inputs.nel,
             settings.kt,
-            fermi_state.chemical_potential,
+            fermi_state,
             l_inv=inputs.inverse_cholesky,
             mask=inputs.orbital_mask,
             diff_steps=filling._diff_steps(settings.diff_order),
-            gap=fermi_state.gap,
-            below=fermi_state.below,
         )
     charges, orbital_energy = _density_to_charges(density, inputs)
     return SCFSpectralResult(

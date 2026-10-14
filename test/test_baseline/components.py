@@ -608,12 +608,10 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
                     h,
                     channel_electrons,
                     kt,
-                    state.chemical_potential,
+                    state,
                     l_inv=l_inv,
                     mask=torch.ones(n, dtype=torch.bool),
                     diff_steps=wavefunction_filling._diff_steps(3),
-                    gap=state.gap,
-                    below=state.below,
                 )
 
         return f, _leaf(h0)

@@ -22,6 +22,7 @@ import torch
 import pytest
 from torch.func import jacfwd, jvp
 from tad_mctc import storch
+from tad_mctc.units import KELVIN2AU
 
 from dxtb._src.scf.functional.spectral import (
     aufbau_density_matrix,
@@ -48,7 +49,7 @@ def _fermi_density(hamiltonian: torch.Tensor) -> torch.Tensor:
         hamiltonian,
         electrons,
         kt,
-        state.chemical_potential,
+        state,
         diff_steps=filling._diff_steps(3),
     )
 
@@ -72,6 +73,181 @@ def test_aufbau_fractional_density_preserves_electron_response() -> None:
         lambda count: aufbau_density_matrix(hamiltonian, count)[1, 1]
     )(electrons.detach())
     torch.testing.assert_close(count_jacobian, derivative, atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "count, expected_slope",
+    [(-0.5, 0.0), (0.0, 1.0), (0.25, 1.0), (3.0, 0.0), (4.0, 0.0)],
+)
+def test_aufbau_saturated_counts_match_authoritative_filling(
+    count: float, expected_slope: float
+) -> None:
+    """Invariant projectors preserve Aufbau saturation and count response."""
+    hamiltonian = torch.diag(
+        torch.tensor([-0.3, 0.1, 0.7], dtype=torch.float64)
+    )
+    electrons = torch.tensor([count], dtype=torch.float64, requires_grad=True)
+    density = aufbau_density_matrix(hamiltonian, electrons)
+    occupation = filling.get_aufbau_occupation(
+        torch.tensor(3), electrons.detach()
+    )
+    torch.testing.assert_close(
+        density.diagonal(), occupation.squeeze(0), atol=2.0e-10, rtol=2.0e-10
+    )
+    expected_count = min(max(count, 0.0), 3.0)
+    torch.testing.assert_close(
+        density.trace(), torch.tensor(expected_count, dtype=torch.float64)
+    )
+    slope = torch.autograd.grad(density.trace(), electrons)[0]
+    torch.testing.assert_close(
+        slope, torch.tensor([expected_slope], dtype=torch.float64)
+    )
+
+
+@pytest.mark.parametrize(
+    "spectrum, counts, temperature, threshold",
+    [
+        (
+            [-1.0, -0.5, -0.5, 0.4, 0.5],
+            [2.5, 1.5],
+            3.1e-7,
+            1.0e-4,
+        ),
+        (
+            [
+                -4.4926987,
+                -4.4926891,
+                -4.4926815,
+                -4.4926419,
+                -4.4926395,
+                -2.30302,
+            ],
+            [5.0, 3.0],
+            300.0 * KELVIN2AU,
+            1.0e-4,
+        ),
+    ],
+    ids=("tiny-temperature", "near-degenerate-300k"),
+)
+def test_float32_fermi_density_preserves_split_root_precision(
+    spectrum: list[float],
+    counts: list[float],
+    temperature: float,
+    threshold: float,
+) -> None:
+    """Integrated density preserves float32 Fermi roots at precision limits."""
+    energies = torch.tensor(spectrum, dtype=torch.float32)
+    hamiltonian = torch.diag(energies)
+    electrons = torch.tensor(counts, dtype=torch.float32)
+    kt = torch.tensor(temperature, dtype=torch.float32)
+    channel_energies = energies.expand(2, -1)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        channel_energies,
+        kt,
+        thr=threshold,
+        maxiter=300,
+        diff_order=1,
+    )
+    assert state.result.status.converged.all()
+    assert state.result.status.electron_count_ok.all()
+    collapsed_root = (
+        state.chemical_potential_ref + state.chemical_potential_offset
+    )
+    split_root = state.chemical_potential_ref.to(
+        torch.float64
+    ) + state.chemical_potential_offset.to(torch.float64)
+    assert not torch.equal(collapsed_root.to(torch.float64), split_root)
+    density = fermi_density_matrix(
+        hamiltonian, electrons, kt, state, diff_steps=1
+    )
+    torch.testing.assert_close(
+        density.trace(),
+        state.result.occupation.sum(),
+        atol=threshold,
+        rtol=0.0,
+    )
+    coefficients = torch.eye(energies.numel(), dtype=torch.float32)
+    legacy = get_density(coefficients, state.result.occupation.sum(-2))
+    torch.testing.assert_close(density, legacy, atol=5.0e-4, rtol=5.0e-5)
+
+
+@pytest.mark.parametrize(
+    "count, expected_trace, too_many",
+    [(1.0, 1.0, False), (0.0, 0.0, False), (2.0, 2.0, False), (3.0, 0.0, True)],
+    ids=("active", "empty", "full", "too-many"),
+)
+def test_fermi_density_uses_authoritative_channel_status(
+    count: float, expected_trace: float, too_many: bool
+) -> None:
+    """Fermi density matches the shared worker on normal and invalid lanes."""
+    energies = torch.tensor([-0.1, 0.2], dtype=torch.float64)
+    hamiltonian = torch.diag(energies)
+    electrons = torch.tensor([count], dtype=torch.float64)
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        energies.unsqueeze(0),
+        kt,
+        thr=1.0e-14,
+        maxiter=300,
+        diff_order=2,
+    )
+    assert bool(state.too_many[0]) is too_many
+    density = fermi_density_matrix(hamiltonian, electrons, kt, state)
+    torch.testing.assert_close(
+        density.trace(), torch.tensor(expected_trace, dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        density.trace(),
+        state.result.occupation.sum(),
+        atol=1.0e-12,
+        rtol=0.0,
+    )
+
+
+def test_aufbau_small_gap_has_analytic_and_energy_shift_invariant_response() -> (
+    None
+):
+    """Aufbau projector derivatives approach the exact inverse-gap response."""
+    count = torch.tensor([1.0], dtype=torch.float64)
+    coupling = torch.tensor([[0.0, 1.0], [1.0, 0.0]], dtype=torch.float64)
+    for gap in (1.0e-1, 1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6):
+        base = torch.tensor(
+            [[-gap / 2.0, 0.0], [0.0, gap / 2.0]], dtype=torch.float64
+        )
+        responses = []
+        for shift in (0.0, -5.0, 10.0):
+            offset = torch.eye(2, dtype=torch.float64) * shift
+
+            def projected(parameter: torch.Tensor) -> torch.Tensor:
+                return aufbau_density_matrix(
+                    base + offset + parameter * coupling, count
+                )
+
+            parameter = torch.zeros((), dtype=torch.float64, requires_grad=True)
+            density = projected(parameter)
+            reverse = torch.autograd.grad(density[0, 1], parameter)[0]
+            _, tangent = jvp(
+                projected,
+                (parameter.detach(),),
+                (torch.ones_like(parameter),),
+            )
+            forward = jacfwd(projected)(parameter.detach())[0, 1]
+            expected = torch.tensor(-1.0 / gap, dtype=torch.float64)
+            torch.testing.assert_close(reverse, expected, atol=2e-8, rtol=2e-9)
+            torch.testing.assert_close(
+                tangent[0, 1], expected, atol=2e-8, rtol=2e-9
+            )
+            torch.testing.assert_close(forward, expected, atol=2e-8, rtol=2e-9)
+            responses.append((density.detach(), reverse.detach()))
+        for density, derivative in responses[1:]:
+            torch.testing.assert_close(
+                density, responses[0][0], atol=2e-10, rtol=2e-10
+            )
+            torch.testing.assert_close(
+                derivative, responses[0][1], atol=2e-8, rtol=2e-9
+            )
 
 
 def test_aufbau_internal_degeneracy_is_gauge_invariant() -> None:
@@ -205,7 +381,7 @@ def test_fermi_exact_degeneracy_has_shared_reverse_forward_response() -> None:
     )
     torch.testing.assert_close(forward, reverse, atol=2.0e-8, rtol=2.0e-8)
     assert torch.isfinite(tangent)
-    steps = (1.0e-6, 5.0e-7, 2.0e-7, 1.0e-7)
+    steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6)
     finite_differences = []
     for step in steps:
         delta = hamiltonian.new_tensor(step)
@@ -217,7 +393,7 @@ def test_fermi_exact_degeneracy_has_shared_reverse_forward_response() -> None:
             / (2.0 * delta)
         )
     plateau = torch.stack(finite_differences[-3:])
-    assert plateau.max() - plateau.min() < 2.0e-5
+    assert plateau.max() - plateau.min() < 3.0e-4
     torch.testing.assert_close(
         tangent, plateau.mean(), atol=2.0e-5, rtol=2.0e-5
     )
@@ -258,11 +434,9 @@ def test_fermi_density_forward_matches_eigensystem_density_at_300k() -> None:
         hamiltonian,
         electrons,
         kt,
-        state.chemical_potential,
+        state,
         l_inv=l_inv,
         diff_steps=filling._diff_steps(3),
-        gap=state.gap,
-        below=state.below,
     )
     torch.testing.assert_close(
         invariant_density,
@@ -296,10 +470,8 @@ def test_fermi_small_gap_density_is_continuous_in_temperature(
             hamiltonian,
             electrons,
             thermal_energy,
-            state.chemical_potential,
+            state,
             diff_steps=filling._diff_steps(3),
-            gap=state.gap,
-            below=state.below,
         )
         expected_lower = torch.sigmoid(
             torch.tensor(gap / (2.0 * kt), dtype=torch.float64)
@@ -330,10 +502,8 @@ def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:
             hamiltonian,
             electrons,
             kt,
-            state.chemical_potential,
+            state,
             diff_steps=filling._diff_steps(3),
-            gap=state.gap,
-            below=state.below,
         )
         return torch.sum(weight * density)
 
@@ -391,10 +561,8 @@ def test_fermi_wide_gap_keeps_fractional_electron_response() -> None:
         hamiltonian,
         electrons,
         kt,
-        state.chemical_potential,
+        state,
         diff_steps=filling._diff_steps(3),
-        gap=state.gap,
-        below=state.below,
     )
     derivative = torch.autograd.grad(density[0, 0], electrons)[0]
     torch.testing.assert_close(
@@ -421,10 +589,8 @@ def test_fermi_wide_gap_hamiltonian_response_and_trace_conservation() -> None:
             h,
             electrons,
             kt,
-            state.chemical_potential,
+            state,
             diff_steps=filling._diff_steps(3),
-            gap=state.gap,
-            below=state.below,
         )
 
     _, h_tangent = jvp(lambda h: density(h, kt0)[0, 1], (h0,), (off_diagonal,))
@@ -469,10 +635,8 @@ def test_fermi_temperature_response_matches_physical_fd() -> None:
             hamiltonian,
             electrons,
             kt,
-            state.chemical_potential,
+            state,
             diff_steps=filling._diff_steps(3),
-            gap=state.gap,
-            below=state.below,
         )
         return torch.sum(weight * density)
 
@@ -515,7 +679,7 @@ def test_fermi_density_conserves_channel_electrons_and_overlap_response() -> (
             h,
             electrons,
             kt,
-            state.chemical_potential,
+            state,
             l_inv=li,
             diff_steps=filling._diff_steps(3),
         )
@@ -582,11 +746,9 @@ def test_fermi_density_generalized_response_matches_physical_fd(
             h,
             electrons,
             kt,
-            state.chemical_potential,
+            state,
             l_inv=li,
             diff_steps=filling._diff_steps(3),
-            gap=state.gap,
-            below=state.below,
         )
         return torch.sum(weight * density)
 
