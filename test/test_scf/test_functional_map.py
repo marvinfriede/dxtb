@@ -2139,7 +2139,14 @@ def test_b6a_functional_interaction_family_matrix(
 
 def test_functional_map_has_no_legacy_stateful_hooks() -> None:
     root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
-    source = "\n".join(path.read_text() for path in root.glob("*.py"))
+    # E3.1b's isolated implicit-root primitive is the sole custom transform
+    # boundary. Keep this architectural guard focused on the raw-map and
+    # solver implementation, which must remain ordinary functional code.
+    source = "\n".join(
+        path.read_text()
+        for path in root.glob("*.py")
+        if path.name != "implicit.py"
+    )
     for forbidden in (
         "_Data",
         ".cull(",

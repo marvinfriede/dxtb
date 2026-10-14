@@ -286,10 +286,16 @@ class ConfigSCF:
 
     .. warning::
 
-        The implicit mode (``"implicit"``) gives correct derivatives with
-        ``torch.autograd``, but does not work with ``torch.func`` transforms
-        (``jacrev``, ``jacfwd``, ``vmap``); use the default (``"full"``) for
-        those. See :ref:`help_known_issues`.
+        Eligible single-System implicit calculations use the functional
+        physical-root derivative with ordinary eager execution and
+        ``torch.autograd``. Its private prepared-root response supports
+        ``torch.func`` reverse/JVP transforms, ``jacfwd`` and ``vmap`` after
+        eager root preparation. Wrapping public ``System.singlepoint`` calls
+        in a transform remains outside this mode and is owned by E6a. Legacy
+        fallbacks remain for batches, unsupported interactions and legacy
+        solver overrides. The default/Broyden mixer also remains legacy-owned;
+        select Simple or Anderson for the functional physical-root route. See
+        :ref:`help_known_issues` for the compatibility limits.
     """
 
     scp_mode: int = defaults.SCP_MODE
@@ -383,7 +389,9 @@ class ConfigSCF:
             damp_soft_start=damp_soft_start,
             damp_generations=damp_generations,
             damp_diagonal_offset=damp_diagonal_offset,
-            scf_mode=_label(scf_mode, "scf_mode", _SCF_MODE, "Unknown SCF mode"),
+            scf_mode=_label(
+                scf_mode, "scf_mode", _SCF_MODE, "Unknown SCF mode"
+            ),
             scp_mode=_label(
                 scp_mode,
                 "scp_mode",

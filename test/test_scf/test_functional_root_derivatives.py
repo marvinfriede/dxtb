@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
@@ -154,7 +155,10 @@ def _case(
     }
     if field is None:
         field = torch.zeros(3, **_DD)
-    parameter = "gfn1" if method == GFN1_XTB else "gfn2"
+    # The public parameter constants are lazy loaders. Their ``__eq__``
+    # compares loaded values, so two not-yet-loaded loaders compare equal.
+    # Use identity to preserve the requested model before either is loaded.
+    parameter = "gfn1" if method is GFN1_XTB else "gfn2"
     calculator = Calculator(
         numbers,
         get_param_module(parameter, device="cpu", dtype=torch.float64),
@@ -751,7 +755,9 @@ def test_host_preflight_rejects_nonconverged_root_status() -> None:
     assert entered_transform
 
 
-def _no2_response_energy(tolerance: float, maxiter: int = 40):
+def _no2_response_energy(
+    tolerance: float, maxiter: int = 40
+) -> Callable[[Tensor, Tensor], tuple[Tensor, Tensor]]:
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
 
     def energy(field: Tensor, displacement: Tensor):
@@ -768,8 +774,12 @@ def _no2_response_energy(tolerance: float, maxiter: int = 40):
     return energy
 
 
-def _no2_pol_orders(tolerance: float) -> tuple[float, float, float]:
-    energy_fn = _no2_response_energy(tolerance)
+def _no2_pol_orders(
+    tolerance: float,
+    energy_fn: Callable[[Tensor, Tensor], tuple[Tensor, Tensor]] | None = None,
+) -> tuple[float, float, float]:
+    if energy_fn is None:
+        energy_fn = _no2_response_energy(tolerance)
     field = torch.zeros((), **_DD, requires_grad=True)
     geometry = torch.zeros((), **_DD, requires_grad=True)
     energy, _ = energy_fn(field, geometry)
@@ -920,11 +930,12 @@ def test_no2_pol_deriv_tight_root_reference(
         root = _no2_root_record(tolerance)
         assert root.converged
         assert root.map_count < 300
+        energy_fn = _no2_response_energy(tolerance)
         response = _mixed_response(
-            _no2_response_energy(tolerance),
+            energy_fn,
             (1.0e-4, 5.0e-5, 2.0e-5),
         )
-        first, second, third = _no2_pol_orders(tolerance)
+        first, second, third = _no2_pol_orders(tolerance, energy_fn)
         mixed_response = float(response["nested_mixed_third"])
         assert abs(third - mixed_response) < 1.0e-3
         records.append(

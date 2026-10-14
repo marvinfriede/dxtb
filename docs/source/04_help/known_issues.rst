@@ -38,22 +38,25 @@ HOMO-LUMO gap is very small (about 1.5% at a gap of 1e-3 Hartree).
 displacement of 0.01 bohr already gives correct derivatives).
 
 
-The implicit SCF mode does not work with ``torch.func`` transforms
--------------------------------------------------------------------
+Implicit SCF uses a prepared physical-root boundary
+--------------------------------------------------
 
-With ``scf_mode="implicit"``, the SCF is differentiated with the implicit
-function theorem (fixed-point solver). Derivatives with ``torch.autograd``
-are correct up to third order (Hessian, polarizability, dipole derivatives,
-hyperpolarizability). In dxtb 0.4.0, second and higher derivatives were
-wrong with the implicit modes, and ``scf_mode="nonpure"`` existed; that mode
-was removed.
+Eligible single-System ``scf_mode="implicit"`` calculations use the
+functional physical-root derivative in eager calls and support ordinary
+``torch.autograd``. Primal root acquisition and convergence validation happen
+eagerly. The private prepared-root response supports ``torch.func``
+reverse/JVP transforms, ``jacfwd`` and ``vmap`` after that preparation.
+Wrapping public ``System.singlepoint`` or ``Calculator`` calls in a transform
+remains E6a scope; use ``scf_mode="full"`` for those public transform
+workflows until E6a lands. Batches, unsupported interactions and legacy solver
+overrides still use the legacy compatibility implementation. The default
+Broyden mixer also remains on the legacy implicit engine; explicitly select
+Simple or Anderson to use the functional physical-root route. Any functional
+implicit route rejects a nonconverged primal with ``SCFConvergenceError``
+regardless of ``force_convergence`` or ``strict``.
 
-Transforms of ``torch.func`` (``jacrev``, ``jacfwd``, ``vmap``, ...) fail
-with the implicit mode, e.g., ``You are attempting to call
-Tensor.requires_grad_() ... inside of a function being transformed``. This
-includes the ``functorch`` and ``forward`` paths of the calculator.
-
-**Workaround:** use the default ``scf_mode="full"`` with transforms.
+In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
+modes, and ``scf_mode="nonpure"`` existed; that mode was removed.
 
 
 Derivative with respect to ``refocc`` (fixed)

@@ -67,8 +67,28 @@ from .anderson import (
     solve_scf_anderson,
     solve_scf_fock_anderson,
     solve_scf_potential_anderson,
+    _solve_map_anderson,
 )
-from .map import fock_initial_guess, potential_initial_guess
+from .map import (
+    evaluate_hamiltonian,
+    evaluate_potential,
+    fock_initial_guess,
+    fock_map,
+    potential_initial_guess,
+    potential_map,
+    scf_map,
+    unpack_potential,
+)
+from .implicit import _SCFMapTensorTree, _prepare_scf_root
+from .solver import (
+    _solve_map,
+    finalize_scf,
+    finalize_scf_fock,
+    finalize_scf_potential,
+    fermi_failure_code,
+    fermi_status_ok,
+    _project_potential_padding,
+)
 
 __all__ = [
     "FullSCFRoute",
@@ -78,6 +98,7 @@ __all__ = [
     "apply_functional_full_policy",
     "functional_core_result",
     "run_functional_full_eager",
+    "run_prepared_functional_implicit",
 ]
 
 
@@ -488,3 +509,159 @@ def run_prepared_functional_full(
         effective_config,
     )
     return _solve_representation(guess, inputs, effective_config)
+
+
+def run_prepared_functional_implicit(
+    numbers: Tensor,
+    guess: Tensor,
+    n0: Tensor,
+    occupation: Tensor,
+    nel: Tensor,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+) -> SCFSolveResult:
+    """Acquire a functional primal root, attach its raw-map IFT, then finalize.
+
+    This entry point is intentionally single-System and eager. It rejects an
+    invalid primal before calling the transform-capable root attachment.
+    """
+    if config.maxiter == 0:
+        raise SCFConvergenceError(
+            "Implicit physical-root differentiation requires maxiter > 0."
+        )
+    inputs = setup_scf_inputs(
+        numbers,
+        integrals,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        cache,
+        ihelp,
+        config,
+    )
+    settings = _solver_settings(config, guess.dtype)
+    charges = SCFCharges(
+        mono=guess,
+        dipole=(
+            None
+            if inputs.charge_layout.dipole_shape is None
+            else guess.new_zeros(inputs.charge_layout.dipole_shape)
+        ),
+        quad=(
+            None
+            if inputs.charge_layout.quadrupole_shape is None
+            else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
+        ),
+    )
+    representation = config.scp_mode
+    if representation == labels.SCP_MODE_CHARGE:
+        state = pack_charges(charges, inputs.charge_layout)
+        layout = None
+        map_fn = lambda x: scf_map(x, inputs)
+    elif representation == labels.SCP_MODE_POTENTIAL:
+        state, layout = potential_initial_guess(charges, inputs)
+        map_fn = lambda x: potential_map(x, inputs, layout)
+    elif representation == labels.SCP_MODE_FOCK:
+        state = fock_initial_guess(charges, inputs)
+        layout = None
+        map_fn = lambda x: fock_map(x, inputs)
+    else:
+        raise ValueError(
+            f"Unknown convergence target (SCP mode) '{representation}'."
+        )
+
+    if isinstance(settings, SCFSolverSettings):
+        outcome = _solve_map(
+            state,
+            settings,
+            map_fn,
+            state_projection=(
+                None
+                if layout is None
+                else lambda value: _project_potential_padding(value, layout)
+            ),
+            eager=True,
+        )
+    else:
+        outcome = _solve_map_anderson(
+            state,
+            settings,
+            map_fn,
+            state_projection=(
+                None
+                if layout is None
+                else lambda value: _project_potential_padding(value, layout)
+            ),
+            eager=True,
+        )
+
+    # Check the selected raw result and the representation's final spectrum
+    # before any transform sees this root. The accepted solver input remains
+    # outcome.root_x; the paired map result is not promoted to the root.
+    if representation == labels.SCP_MODE_CHARGE:
+        final_status = outcome.map_result.fermi_status
+    elif representation == labels.SCP_MODE_POTENTIAL:
+        assert layout is not None
+        final_state = unpack_potential(outcome.map_result.mapped_x, layout)
+        final_status = evaluate_potential(final_state, inputs).fermi_status
+    else:
+        final_status = evaluate_hamiltonian(
+            outcome.map_result.mapped_x, inputs
+        ).fermi_status
+
+    # Preserve the established eager Fermi failure mapping before rejecting
+    # any remaining outer-root nonconvergence in the prepared-root boundary.
+    if outcome.trajectory_status is not None:
+        _raise_failure_code(outcome.trajectory_status.first_failure)
+    _raise_failure_code(
+        fermi_failure_code(final_status, like=outcome.converged)
+    )
+
+    adapter, parameters = _SCFMapTensorTree.prepare(
+        inputs, representation, layout
+    )
+    prepared = _prepare_scf_root(
+        outcome,
+        maxiter=config.maxiter,
+        final_valid=fermi_status_ok(final_status, like=outcome.converged),
+        raw_map=adapter,
+        parameters=parameters,
+    )
+    attached_root = prepared.attach()
+    attached_map_result = adapter.evaluate(attached_root, *parameters)
+
+    if representation == labels.SCP_MODE_CHARGE:
+        return finalize_scf(
+            attached_map_result,
+            inputs,
+            prepared.iterations,
+            prepared.converged,
+            prepared.residual,
+            prepared.trajectory_status,
+            prepared.damping_state,
+        )
+    if representation == labels.SCP_MODE_POTENTIAL:
+        assert layout is not None
+        return finalize_scf_potential(
+            attached_map_result,
+            inputs,
+            layout,
+            prepared.iterations,
+            prepared.converged,
+            prepared.residual,
+            prepared.trajectory_status,
+            prepared.damping_state,
+        )
+    return finalize_scf_fock(
+        attached_map_result,
+        inputs,
+        prepared.iterations,
+        prepared.converged,
+        prepared.residual,
+        prepared.trajectory_status,
+        prepared.damping_state,
+    )

@@ -53,6 +53,39 @@ if TYPE_CHECKING:
 __all__ = ["solve"]
 
 
+def _use_functional_implicit_route(
+    config: ConfigSCF,
+    interactions: InteractionList,
+    ihelp: IndexHelper,
+    numbers: Tensor,
+    integrals: IntegralMatrices,
+    *,
+    legacy_engine_overrides: bool,
+) -> bool:
+    """Resolve the opt-in implicit implementation without changing FULL.
+
+    The legacy implicit engine historically owns Broyden/default-mixer calls
+    and ignores ``ConfigSCF.mixer``. Keep those calls on that compatibility
+    route. Only explicit Simple and Anderson settings select the new
+    functional physical-root implementation.
+    """
+    from .functional.data import functional_scf_interactions_eligible
+
+    eligible, _ = functional_scf_interactions_eligible(interactions)
+    return (
+        not legacy_engine_overrides
+        and eligible
+        and ihelp.batch_mode == 0
+        and numbers.ndim == 1
+        and config.fermi.etemp >= 0.0
+        and config.fermi.maxiter >= 0
+        and config.maxiter >= 0
+        and integrals.hcore is not None
+        and integrals.overlap is not None
+        and config.mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON)
+    )
+
+
 def solve(
     numbers: Tensor,
     positions: Tensor,
@@ -123,6 +156,35 @@ def solve(
         )
 
     if config.scf_mode == labels.SCF_MODE_IMPLICIT:
+        # The transform-compatible route has an explicit eligibility gate.
+        # Unsupported legacy options, extensions and batches retain their
+        # established xitorch compatibility implementation.
+        functional_implicit = _use_functional_implicit_route(
+            config,
+            interactions,
+            ihelp,
+            numbers,
+            integrals,
+            legacy_engine_overrides=bool(args) or bool(kwargs),
+        )
+        if functional_implicit:
+            from .functional.eager import functional_core_result
+            from .functional.eager import run_prepared_functional_implicit
+
+            result = run_prepared_functional_implicit(
+                numbers,
+                charges,
+                n0,
+                occupation,
+                nab,
+                interactions,
+                cache,
+                ihelp,
+                config,
+                integrals,
+            )
+            return functional_core_result(result)
+
         # pylint: disable=import-outside-toplevel
         from .implicit import SelfConsistentFieldImplicit as SCF
     elif config.scf_mode == labels.SCF_MODE_FULL:

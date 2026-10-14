@@ -2863,18 +2863,17 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-**Next package: E3.1s-a dxtb-local invariant spectral-density core.**
+**Next package: complete E3.1b transform-compatible implicit physical-root implementation.**
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
 the historical failure at the complete finite-tolerance fixed-point response /
 finite-root trajectory boundary; it does not assign the cause to an individual
-Anderson operation. E3.1a's corrected physical-root reference gate is
-complete: tight functional unrolling and the explicit first-order Jacobian
-reference agree with independent physical finite differences across charge,
-potential, and Fock maps, including NO2 potential mode. The selected E3.1b
-implicit-root implementation must wait for E3.1s dxtb-local invariant
-spectral/density acceptance; no transform-complete dxtb implementation may
-precede that prerequisite.
+Anderson operation. E3.1a's corrected physical-root reference gate and
+E3.1s's dxtb-local invariant density/free-energy contract are complete.
+E3.1b is now the active implementation candidate: it attaches derivatives to
+the convergence-tested functional `root_x`, uses only the configured raw map
+in the root equation, and keeps representation-specific finalization outside
+the implicit primitive. Whole-System transforms remain E6a scope.
 
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
