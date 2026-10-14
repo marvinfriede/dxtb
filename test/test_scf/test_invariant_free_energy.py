@@ -399,7 +399,7 @@ def test_invalid_fermi_channels_do_not_produce_valid_entropy_matrices() -> None:
     hamiltonian = torch.diag(torch.tensor([-0.2, 0.1], dtype=dtype))
     kt = torch.tensor(2.0e-2, dtype=dtype)
     mask = torch.ones(2, dtype=torch.bool)
-    too_many_nel = torch.tensor([3.0, 0.0], dtype=dtype)
+    too_many_nel = torch.tensor([3.0], dtype=dtype)
     too_many = _fermi_state(hamiltonian, too_many_nel, kt, mask)
     assert too_many.result.status.too_many_electrons.any()
     too_many_matrix = fermi_free_energy_matrix(
@@ -407,9 +407,9 @@ def test_invalid_fermi_channels_do_not_produce_valid_entropy_matrices() -> None:
     )
     assert torch.equal(too_many_matrix, torch.zeros_like(too_many_matrix))
 
-    energies = hamiltonian.diagonal().expand(2, -1)
+    energies = hamiltonian.diagonal().expand(1, -1)
     unconverged = filling._get_fermi_occupation_core_state(
-        torch.tensor([0.5, 0.0], dtype=dtype),
+        torch.tensor([0.5], dtype=dtype),
         energies,
         kt,
         mask=mask.expand_as(energies),
@@ -420,12 +420,94 @@ def test_invalid_fermi_channels_do_not_produce_valid_entropy_matrices() -> None:
     assert not unconverged.result.status.converged.all()
     invalid_matrix = fermi_free_energy_matrix(
         hamiltonian,
-        torch.tensor([0.5, 0.0], dtype=dtype),
+        torch.tensor([0.5], dtype=dtype),
         kt,
         unconverged,
         mask=mask,
     )
     assert torch.equal(invalid_matrix, torch.zeros_like(invalid_matrix))
+
+
+@pytest.mark.parametrize("electrons", [0.0, 2.0])
+def test_fermi_saturated_channels_preserve_entropy_floor(
+    electrons: float,
+) -> None:
+    """Valid saturated channels retain the legacy finite-temperature floor."""
+    dtype = torch.float64
+    hamiltonian = torch.diag(torch.tensor([2.0, 3.0], dtype=dtype))
+    nel = torch.tensor([electrons], dtype=dtype)
+    kt = torch.tensor(2.0e-2, dtype=dtype)
+    state = _fermi_state(hamiltonian, nel, kt)
+    assert state.result.status.converged.all()
+    matrix = fermi_free_energy_matrix(hamiltonian, nel, kt, state)
+    legacy = filling.get_fermi_entropy_finite(
+        state.result.occupation, torch.linalg.eigvalsh(hamiltonian), kt
+    ).sum()
+    torch.testing.assert_close(
+        matrix.trace(), legacy, atol=1.0e-16, rtol=1.0e-12
+    )
+
+    parameter = torch.zeros((), dtype=dtype, requires_grad=True)
+    direction = torch.eye(2, dtype=dtype)
+
+    def response(p: torch.Tensor) -> torch.Tensor:
+        return fermi_free_energy_matrix(
+            hamiltonian + p * direction, nel, kt, state
+        ).trace()
+
+    derivative = torch.autograd.grad(
+        response(parameter), parameter, create_graph=True
+    )[0]
+    _, tangent = jvp(
+        response, (parameter.detach(),), (torch.ones_like(parameter),)
+    )
+    forward = jacfwd(response)(parameter.detach())
+    torch.testing.assert_close(derivative, torch.zeros_like(derivative))
+    torch.testing.assert_close(tangent, torch.zeros_like(tangent))
+    torch.testing.assert_close(forward, torch.zeros_like(forward))
+
+    thermal = torch.tensor(2.0e-2, dtype=dtype, requires_grad=True)
+    thermal_value = fermi_free_energy_matrix(
+        hamiltonian, nel, thermal, state
+    ).trace()
+    thermal_derivative = torch.autograd.grad(thermal_value, thermal)[0]
+    floor_slope = (
+        2
+        * torch.finfo(dtype).eps
+        * torch.log(torch.tensor(torch.finfo(dtype).eps, dtype=dtype))
+    )
+    torch.testing.assert_close(thermal_derivative, floor_slope)
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "fermi_etemp": 300.0,
+            "fermi_partition": labels.FERMI_PARTITION_EQUAL,
+        },
+    )
+    inputs = case.inputs
+    electrons_empty = torch.zeros_like(inputs.nel)
+    state_empty = _fermi_state(
+        inputs.inverse_cholesky
+        @ inputs.integrals.hcore
+        @ inputs.inverse_cholesky.mT,
+        electrons_empty,
+        inputs.fermi_settings.kt,
+        inputs.orbital_mask,
+    )
+    empty_matrix = fermi_free_energy_matrix(
+        inputs.integrals.hcore,
+        electrons_empty,
+        inputs.fermi_settings.kt,
+        state_empty,
+        l_inv=inputs.inverse_cholesky,
+        mask=inputs.orbital_mask,
+    )
+    equal_total = torch.trace(inputs.integrals.overlap @ empty_matrix)
+    atomic_total = mulliken.get_atomic_populations(
+        inputs.integrals.overlap, empty_matrix, inputs.ihelp
+    ).sum()
+    torch.testing.assert_close(equal_total, atomic_total)
 
 
 @pytest.mark.parametrize(
@@ -535,6 +617,68 @@ def test_low_temperature_partition_matches_legacy_forward_value(
         )
     new_value = free_energy_from_spectral(spectral, case.inputs)
     torch.testing.assert_close(new_value, expected, atol=2.0e-14, rtol=2.0e-9)
+
+
+@pytest.mark.parametrize(
+    ("energies", "electrons"),
+    (
+        ([1.0], 0.0),
+        ([1.0], 1.0),
+        ([-4.0], 0.0),
+        ([-4.0], 1.0),
+        ([2.0, 3.0, 5.0], 0.0),
+        ([2.0, 3.0, 5.0], 3.0),
+    ),
+)
+def test_low_temperature_saturated_free_energy_matches_legacy(
+    energies: list[float], electrons: float
+) -> None:
+    """Empty/full Aufbau entropy is finite and independent of H."""
+    dtype = torch.float64
+    hamiltonian = torch.diag(torch.tensor(energies, dtype=dtype))
+    nel = torch.tensor([electrons], dtype=dtype)
+    kt = torch.tensor(1.0e-7, dtype=dtype)
+
+    def observable(matrix: torch.Tensor) -> torch.Tensor:
+        return aufbau_free_energy_matrix(matrix, nel, kt).trace()
+
+    actual = observable(hamiltonian)
+    occupation = filling.get_aufbau_occupation(torch.tensor(len(energies)), nel)
+    expected = filling.get_fermi_entropy_low_temperature(occupation, kt).sum()
+    torch.testing.assert_close(actual, expected, atol=1.0e-18, rtol=1.0e-12)
+
+    parameter = torch.zeros((), dtype=dtype, requires_grad=True)
+    direction = torch.ones_like(hamiltonian)
+    value = observable(hamiltonian + parameter * direction)
+    derivative = torch.autograd.grad(value, parameter, create_graph=True)[0]
+    _, tangent = jvp(
+        lambda p: observable(hamiltonian + p * direction),
+        (parameter.detach(),),
+        (torch.ones_like(parameter),),
+    )
+    forward = jacfwd(lambda p: observable(hamiltonian + p * direction))(
+        parameter.detach()
+    )
+    torch.testing.assert_close(derivative, torch.zeros_like(derivative))
+    torch.testing.assert_close(tangent, torch.zeros_like(tangent))
+    torch.testing.assert_close(forward, torch.zeros_like(forward))
+
+
+@pytest.mark.parametrize("origin", [2.0, -4.0])
+@pytest.mark.parametrize("electrons", [0.0, 3.0])
+def test_low_temperature_degenerate_boundary_rank_is_exact(
+    origin: float, electrons: float
+) -> None:
+    """Boundary projectors of a constant spectrum avoid sign solves."""
+    dtype = torch.float64
+    hamiltonian = origin * torch.eye(3, dtype=dtype)
+    matrix = aufbau_free_energy_matrix(
+        hamiltonian,
+        torch.tensor([electrons], dtype=dtype),
+        torch.tensor(1.0e-7, dtype=dtype),
+    )
+    assert torch.isfinite(matrix).all()
+    assert torch.isfinite(matrix.trace())
 
 
 def test_aufbau_free_energy_matrix_vmap_respects_lane_masks() -> None:

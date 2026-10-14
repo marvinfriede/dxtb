@@ -830,6 +830,7 @@ def _no2_root_record(tolerance: float) -> _RootRecord:
     )
 
 
+@pytest.mark.slow
 def test_no2_hyperpolarizability_tight_root_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -907,6 +908,7 @@ def test_no2_hyperpolarizability_tight_root_reference(
     )
 
 
+@pytest.mark.slow
 def test_no2_pol_deriv_tight_root_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1250,6 +1252,7 @@ def test_h2_smooth_root_response_converges_with_explicit_tolerance(
             GFN2_XTB,
             300.0,
             labels.SCP_MODE_POTENTIAL,
+            marks=pytest.mark.slow,
             id="no2-potential",
         ),
     ),

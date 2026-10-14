@@ -388,9 +388,6 @@ def fermi_free_energy_matrix(
         & ~status.invalid_temperature.to(device=h.device)
         & ~status.too_many_electrons.to(device=h.device)
     )
-    q = torch.where(
-        (~valid_channel | empty | full | too_many)[..., None, None], 0.0, q
-    )
     entropy_floor = torch.finfo(hamiltonian.dtype).eps
     floor_weight = (
         safe_kt
@@ -399,6 +396,9 @@ def fermi_free_energy_matrix(
             torch.tensor(entropy_floor, dtype=work_dtype, device=h.device)
         )
     )
+    q = torch.where((~valid_channel | too_many)[..., None, None], 0.0, q)
+    saturated = valid_channel & (empty | full)
+    q = torch.where(saturated[..., None, None], floor_weight * identity, q)
     gap_value = q - q.detach() + floor_weight * identity
     valid_gap = gap_mask & valid_channel & ~empty & ~full & ~too_many
     q = torch.where(valid_gap[..., None, None], gap_value, q)
@@ -436,7 +436,12 @@ def aufbau_free_energy_matrix(
     fraction = effective - rank
 
     lower = _projector(h, spectral, active, rank)
-    upper = _projector(h, spectral, active, rank + 1)
+    upper_rank = torch.where(
+        fraction > 0.0,
+        torch.minimum(rank + 1, count.to(torch.long)),
+        rank,
+    )
+    upper = _projector(h, spectral, active, upper_rank)
     frontier = torch.where(
         (rank < count)[..., None, None], upper - lower, torch.zeros_like(h)
     )
