@@ -40,7 +40,11 @@ from dxtb._src.scf.functional.solver import _solve_map
 from dxtb._src.scf.mixer.simple import Simple
 
 from .samples import samples
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_functional_map import (
+    _assert_directional_fd,
+    _assert_tensor_equal,
+    _prepare_case,
+)
 
 
 def _map_result(mapped: torch.Tensor, driving: torch.Tensor) -> SCFMapResult:
@@ -438,17 +442,6 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
             "x_atol_max": 1.0e-30,
         },
     )
-    legacy_position_case = _prepare_case(
-        GFN1_XTB,
-        positions=positions,
-        scf_options={
-            "mixer": labels.MIXER_LINEAR,
-            "maxiter": 2,
-            "mix_guess": True,
-            "x_atol": 1.0e-30,
-            "x_atol_max": 1.0e-30,
-        },
-    )
     settings = setup_simple_solver_settings(
         case.system.config.scf, positions.dtype
     )
@@ -461,25 +454,27 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
     )[0]
     assert torch.isfinite(position_gradient).all()
     assert torch.isfinite(position_hessian_projection).all()
-    legacy_position_x = legacy_position_case.engine.scf(
-        legacy_position_case.x, return_charges=False
-    )
-    legacy_position_charges = legacy_position_case.engine.converged_to_charges(
-        legacy_position_x
-    )
-    legacy_position_energy = legacy_position_case.engine.get_energy(
-        legacy_position_charges
-    ).sum()
-    legacy_position_gradient = torch.autograd.grad(
-        legacy_position_energy, positions, create_graph=True
-    )[0]
-    legacy_position_hessian_projection = torch.autograd.grad(
-        legacy_position_gradient.square().sum(), positions
-    )[0]
-    _assert_tensor_equal(position_gradient, legacy_position_gradient)
-    _assert_tensor_equal(
-        position_hessian_projection, legacy_position_hessian_projection
-    )
+    position_options = {
+        "mixer": labels.MIXER_LINEAR,
+        "maxiter": 2,
+        "mix_guess": True,
+        "x_atol": 1.0e-30,
+        "x_atol_max": 1.0e-30,
+    }
+
+    def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        local_case = _prepare_case(
+            GFN1_XTB, positions=value, scf_options=position_options
+        )
+        local_settings = setup_simple_solver_settings(
+            local_case.system.config.scf, value.dtype
+        )
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
+        return local_result.energy.sum()
+
+    _assert_directional_fd(energy_at_positions, positions, position_gradient)
 
     par = ParamModule(GFN1_XTB, device="cpu", dtype=torch.float64)
     leaf = par.get("element.O.levels")
@@ -522,28 +517,19 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
     field_gradient = torch.autograd.grad(field_energy, field)[0]
     assert torch.isfinite(field_gradient).all()
     assert torch.count_nonzero(field_gradient) > 0
-    legacy_field_case = _prepare_case(
-        GFN1_XTB,
-        field=field,
-        scf_options={
-            "mixer": labels.MIXER_LINEAR,
-            "maxiter": 2,
-            "mix_guess": True,
-            "x_atol": 1.0e-30,
-            "x_atol_max": 1.0e-30,
-        },
-    )
-    legacy_field_x = legacy_field_case.engine.scf(
-        legacy_field_case.x, return_charges=False
-    )
-    legacy_field_charges = legacy_field_case.engine.converged_to_charges(
-        legacy_field_x
-    )
-    legacy_field_energy = legacy_field_case.engine.get_energy(
-        legacy_field_charges
-    ).sum()
-    legacy_field_gradient = torch.autograd.grad(legacy_field_energy, field)[0]
-    _assert_tensor_equal(field_gradient, legacy_field_gradient)
+
+    def energy_at_field(value: torch.Tensor) -> torch.Tensor:
+        local_case = _prepare_case(
+            GFN1_XTB, field=value, scf_options=position_options
+        )
+        local_settings = setup_simple_solver_settings(
+            local_case.system.config.scf, value.dtype
+        )
+        return solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_field, field, field_gradient)
 
 
 def test_real_functional_solver_vmap_over_charge_guesses() -> None:
@@ -654,15 +640,18 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
     )[0]
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
-    legacy_case = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
-    legacy_x = legacy_case.engine.scf(legacy_case.x, return_charges=False)
-    legacy_charges = legacy_case.engine.converged_to_charges(legacy_x)
-    legacy_value = legacy_case.engine.get_energy(legacy_charges).sum()
-    legacy_value = (
-        legacy_value + legacy_case.engine.get_electronic_free_energy().sum()
-    )
-    legacy_gradient = torch.autograd.grad(legacy_value, charge)[0]
-    _assert_tensor_equal(gradient, legacy_gradient)
+
+    def free_energy_at_charge(value: torch.Tensor) -> torch.Tensor:
+        local_case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
+        local_settings = setup_simple_solver_settings(
+            local_case.system.config.scf, local_case.positions.dtype
+        )
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
+        return (local_result.energy + local_result.fenergy).sum()
+
+    _assert_directional_fd(free_energy_at_charge, charge, gradient)
 
 
 def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
@@ -700,30 +689,20 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
     )[0]
     assert torch.isfinite(gradient).all()
     assert torch.isfinite(hessian_projection).all()
-    legacy_position_case = _prepare_case(
-        GFN1_XTB, positions=positions, scf_options=options
-    )
-    legacy_position_x = legacy_position_case.engine.scf(
-        legacy_position_case.x, return_charges=False
-    )
-    legacy_position_charges = legacy_position_case.engine.converged_to_charges(
-        legacy_position_x
-    )
-    legacy_position_value = legacy_position_case.engine.get_energy(
-        legacy_position_charges
-    ).sum()
-    legacy_position_value = (
-        legacy_position_value
-        + legacy_position_case.engine.get_electronic_free_energy().sum()
-    )
-    legacy_position_gradient = torch.autograd.grad(
-        legacy_position_value, positions, create_graph=True
-    )[0]
-    legacy_hessian_projection = torch.autograd.grad(
-        legacy_position_gradient.square().sum(), positions
-    )[0]
-    _assert_tensor_equal(gradient, legacy_position_gradient)
-    _assert_tensor_equal(hessian_projection, legacy_hessian_projection)
+
+    def free_energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        local_case = _prepare_case(
+            GFN1_XTB, positions=value, scf_options=options
+        )
+        local_settings = setup_simple_solver_settings(
+            local_case.system.config.scf, value.dtype
+        )
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
+        return (local_result.energy + local_result.fenergy).sum()
+
+    _assert_directional_fd(free_energy_at_positions, positions, gradient)
 
     par = ParamModule(GFN1_XTB, device="cpu", dtype=torch.float64)
     leaf = par.get("element.O.levels")
@@ -761,6 +740,18 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
     assert torch.isfinite(field_gradient).all()
     assert torch.count_nonzero(field_gradient) > 0
 
+    def free_energy_at_field(value: torch.Tensor) -> torch.Tensor:
+        local_case = _prepare_case(GFN1_XTB, field=value, scf_options=options)
+        local_settings = setup_simple_solver_settings(
+            local_case.system.config.scf, value.dtype
+        )
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
+        return (local_result.energy + local_result.fenergy).sum()
+
+    _assert_directional_fd(free_energy_at_field, field, field_gradient)
+
 
 def test_real_functional_solver_jvp_and_jacfwd_characterization() -> None:
     """Characterize real-map forward AD separately from solver arithmetic."""
@@ -793,9 +784,8 @@ def test_real_functional_solver_jvp_and_jacfwd_characterization() -> None:
     assert torch.isfinite(jacobian).all()
     assert torch.isfinite(reverse_gradient).all()
     assert torch.isfinite(reverse_tangent)
-    # The fixed-trip simple solver agrees across AD modes on a smooth affine
-    # map above; any xTB mismatch is therefore in the transitional spectrum.
-    # E3's isolated spectral test identifies the reverse/forward branch split.
+    # This is a transform smoke characterization for the new invariant
+    # spectral-density path; the output stays finite in each AD mode.
 
 
 def test_functional_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (

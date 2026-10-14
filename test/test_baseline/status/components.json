@@ -234,16 +234,16 @@
   "peak_rss_mb": 676.7
  },
  "eigensolver.degenerate_aufbau:order2": {
-  "status": "fail",
-  "seconds": 0.27391219199853367,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 678.2
+  "status": "pass",
+  "seconds": 1.8951808321289718,
+  "message": "",
+  "peak_rss_mb": 361.5
  },
  "eigensolver.degenerate_aufbau:order3": {
-  "status": "fail",
-  "seconds": 0.5403891400001157,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 678.4
+  "status": "pass",
+  "seconds": 6.146234741900116,
+  "message": "",
+  "peak_rss_mb": 368.9
  },
  "eigensolver.degenerate_aufbau:vmap": {
   "status": "pass",
@@ -270,52 +270,52 @@
   "peak_rss_mb": 679.5
  },
  "eigensolver.degenerate_fermi:order2": {
-  "status": "fail",
-  "seconds": 0.7662078840003232,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 680.5
+  "status": "pass",
+  "seconds": 8.61391816008836,
+  "message": "",
+  "peak_rss_mb": 368.5
  },
  "eigensolver.degenerate_fermi:order3": {
-  "status": "fail",
-  "seconds": 1.170002464999925,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 681.6
+  "status": "pass",
+  "seconds": 16.4654871749226,
+  "message": "",
+  "peak_rss_mb": 379.5
  },
  "eigensolver.degenerate_fermi:vmap": {
-  "status": "error",
-  "seconds": 0.010682618998544058,
-  "message": "RuntimeError: vmap: It looks like you're calling .item() on a Tensor. We don't support vmap over calling .item() on a Tensor, please try to rewrite what you're doing with other operations. If error is occurring somewhere inside PyTorch internals, please file a bug report. [dxtb/_src/wavefunction/filling.py:116]",
-  "peak_rss_mb": 679.6
+  "status": "pass",
+  "seconds": 0.2146974999923259,
+  "message": "",
+  "peak_rss_mb": 363.5
  },
  "eigensolver.small_gap_aufbau:forward": {
-  "status": "fail",
-  "seconds": 0.2433878400006506,
-  "message": "GradcheckError: Jacobian computed with forward mode mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 700.0
+  "status": "pass",
+  "seconds": 0.9495355659164488,
+  "message": "",
+  "peak_rss_mb": 364.1
  },
  "eigensolver.small_gap_aufbau:jvp": {
-  "status": "fail",
-  "seconds": 0.14133381400097278,
-  "message": "AssertionError: jvp differs from finite differences by 1.85e+01",
-  "peak_rss_mb": 694.6
+  "status": "pass",
+  "seconds": 0.11861664103344083,
+  "message": "",
+  "peak_rss_mb": 366.3
  },
  "eigensolver.small_gap_aufbau:order1": {
-  "status": "fail",
-  "seconds": 0.05767967800056795,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 677.3
+  "status": "pass",
+  "seconds": 0.4459477378986776,
+  "message": "",
+  "peak_rss_mb": 360.8
  },
  "eigensolver.small_gap_aufbau:order2": {
-  "status": "fail",
-  "seconds": 0.26906033200066304,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 677.8
+  "status": "pass",
+  "seconds": 1.9065185019280761,
+  "message": "",
+  "peak_rss_mb": 361.9
  },
  "eigensolver.small_gap_aufbau:order3": {
-  "status": "fail",
-  "seconds": 0.5288714260004781,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 678.3
+  "status": "pass",
+  "seconds": 6.070136243943125,
+  "message": "",
+  "peak_rss_mb": 370.1
  },
  "eigensolver.small_gap_aufbau:vmap": {
   "status": "pass",
@@ -324,40 +324,40 @@
   "peak_rss_mb": 675.2
  },
  "eigensolver.small_gap_fermi:forward": {
-  "status": "fail",
-  "seconds": 0.4410623720013973,
-  "message": "GradcheckError: Jacobian computed with forward mode mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 703.7
+  "status": "pass",
+  "seconds": 5.797042987076566,
+  "message": "",
+  "peak_rss_mb": 368.9
  },
  "eigensolver.small_gap_fermi:jvp": {
-  "status": "fail",
-  "seconds": 0.18087836500126286,
-  "message": "AssertionError: jvp differs from finite differences by 4.75e+00",
-  "peak_rss_mb": 694.8
+  "status": "pass",
+  "seconds": 0.36398883420042694,
+  "message": "",
+  "peak_rss_mb": 369.5
  },
  "eigensolver.small_gap_fermi:order1": {
-  "status": "fail",
-  "seconds": 0.21080026100025862,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 680.0
+  "status": "pass",
+  "seconds": 3.287513084942475,
+  "message": "",
+  "peak_rss_mb": 365.3
  },
  "eigensolver.small_gap_fermi:order2": {
-  "status": "fail",
-  "seconds": 0.5841471780004213,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 680.9
+  "status": "pass",
+  "seconds": 8.688903348054737,
+  "message": "",
+  "peak_rss_mb": 367.4
  },
  "eigensolver.small_gap_fermi:order3": {
-  "status": "fail",
-  "seconds": 1.2143038120011624,
-  "message": "GradcheckError: Jacobian mismatch for output 0 with respect to input 0,",
-  "peak_rss_mb": 681.8
+  "status": "pass",
+  "seconds": 16.47217190801166,
+  "message": "",
+  "peak_rss_mb": 381.9
  },
  "eigensolver.small_gap_fermi:vmap": {
-  "status": "error",
-  "seconds": 0.012330576000749716,
-  "message": "RuntimeError: vmap: It looks like you're calling .item() on a Tensor. We don't support vmap over calling .item() on a Tensor, please try to rewrite what you're doing with other operations. If error is occurring somewhere inside PyTorch internals, please file a bug report. [dxtb/_src/wavefunction/filling.py:116]",
-  "peak_rss_mb": 679.2
+  "status": "pass",
+  "seconds": 0.21349116088822484,
+  "message": "",
+  "peak_rss_mb": 363.7
  },
  "es2.charges:forward": {
   "status": "pass",

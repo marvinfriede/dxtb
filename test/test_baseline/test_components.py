@@ -60,7 +60,14 @@ def _param(target: str, check: str):
 )
 def test_component(target: str, check: str) -> None:
     key = f"{target}:{check}"
-    if STATUS.get(key, {}).get("status", "pass") != "pass":
+    # Higher-order matrix-function checks are sensitive to severe
+    # oversubscription when xdist launches the full component matrix. Keep
+    # the canonical eigensolver targets in the same isolated single-thread
+    # execution used when recovering other recorded component failures.
+    if (
+        target.startswith("eigensolver.")
+        or STATUS.get(key, {}).get("status", "pass") != "pass"
+    ):
         # may crash or exhaust memory: run with limits in a fresh process
         result = run_isolated("components", key)
         assert result["status"] == "pass", result["message"]

@@ -22,12 +22,11 @@ import torch
 from tad_mctc import storch
 from tad_mctc.math import einsum
 
-from dxtb import IndexHelper
+from dxtb import IndexHelper, labels
 from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.typing import Tensor
 
 from ...wavefunction import filling
-from ..utils import get_density
 from .data import (
     PotentialLayout,
     SCFCharges,
@@ -41,6 +40,7 @@ from .data import (
     unpack_charges,
     unpack_potential,
 )
+from .spectral import aufbau_density_matrix, fermi_density_matrix
 
 __all__ = [
     "evaluate_hamiltonian",
@@ -115,25 +115,23 @@ def potential_from_charges(
 def _transitional_diagonalize(
     hamiltonian: Tensor, inputs: SCFInputs
 ) -> tuple[Tensor, Tensor]:
-    """Use current full-mode eigensolver semantics pending E3.
-
-    The ``requires_grad`` selection intentionally mirrors the current full
-    solver only for raw-map forward equivalence. It is transitional and must
-    be replaced by the common derivative contract owned by E3.
-    """
-    if hamiltonian.requires_grad is False and (
-        inputs.inverse_cholesky.requires_grad is False
-    ):
-        broadening_method = None
-    else:
-        broadening_method = "lorn"
+    """Return ordinary eigensystem values for reporting and filling only."""
+    # Atomic entropy partitioning still uses a coefficient-weighted matrix.
+    # Preserve its established derivative rule until E3.1s-b migrates that
+    # matrix too. This is selected by the physical partition configuration,
+    # never by the active AD mode. Physical SCF density uses the invariant
+    # matrix path below in either case.
+    atomic_entropy = (
+        inputs.fermi_settings is not None
+        and inputs.fermi_settings.partition == labels.FERMI_PARTITION_ATOMIC
+    )
     return storch.eighb(
         a=hamiltonian,
         b=None,
         l_inv=inputs.inverse_cholesky,
         is_posdef=True,
         factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-        broadening_method=broadening_method,
+        broadening_method="lorn" if atomic_entropy else None,
     )
 
 
@@ -173,6 +171,12 @@ def evaluate_hamiltonian(
     fermi_status = None
     if inputs.fermi_settings is None or not inputs.fermi_settings.smear:
         occupation = inputs.occupation
+        density = aufbau_density_matrix(
+            hamiltonian,
+            inputs.nel,
+            l_inv=inputs.inverse_cholesky,
+            mask=inputs.orbital_mask,
+        )
     else:
         settings = inputs.fermi_settings
         channel_energies = emo.unsqueeze(-2).expand(
@@ -181,7 +185,7 @@ def evaluate_hamiltonian(
         channel_mask = inputs.orbital_mask.unsqueeze(-2).expand_as(
             channel_energies
         )
-        fermi_result = filling.get_fermi_occupation_core(
+        fermi_state = filling._get_fermi_occupation_core_state(
             inputs.nel,
             channel_energies,
             settings.kt,
@@ -190,9 +194,20 @@ def evaluate_hamiltonian(
             maxiter=settings.maxiter,
             diff_order=settings.diff_order,
         )
+        fermi_result = fermi_state.result
         occupation = fermi_result.occupation
         fermi_status = fermi_result.status
-    density = get_density(coefficients, occupation.sum(-2))
+        density = fermi_density_matrix(
+            hamiltonian,
+            inputs.nel,
+            settings.kt,
+            fermi_state.chemical_potential,
+            l_inv=inputs.inverse_cholesky,
+            mask=inputs.orbital_mask,
+            diff_steps=filling._diff_steps(settings.diff_order),
+            gap=fermi_state.gap,
+            below=fermi_state.below,
+        )
     charges, orbital_energy = _density_to_charges(density, inputs)
     return SCFSpectralResult(
         hamiltonian=hamiltonian,

@@ -21,9 +21,11 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 import torch
+import dxtb._src.scf.functional.map as functional_map
 from tad_mctc import storch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
@@ -68,11 +70,15 @@ from dxtb._src.scf.functional import (
     functional_scf_interactions_eligible,
 )
 from dxtb._src.scf.functional.map import _transitional_diagonalize
+from dxtb._src.scf.functional.map import evaluate_hamiltonian
+from dxtb._src.scf.functional.solver import free_energy_from_spectral
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 from dxtb._src.scf.utils import get_density
+from dxtb._src.wavefunction import filling
 
+from ..molecules import mols
 from ..utils import get_param_module
 from .samples import samples
 
@@ -91,7 +97,9 @@ def _prepare_case(
     scf_options: dict[str, object] | None = None,
     setup_functional: bool = True,
 ) -> SimpleNamespace:
-    sample = samples[sample_name]
+    sample = (
+        samples[sample_name] if sample_name in samples else mols[sample_name]
+    )
     numbers = sample["numbers"].to(device="cpu")
     if positions is None:
         positions = sample["positions"].to(device="cpu", dtype=dtype).clone()
@@ -211,6 +219,53 @@ def _prepare_case(
 
 def _assert_tensor_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=2e-13)
+
+
+def _assert_directional_fd(
+    function: Callable[[torch.Tensor], torch.Tensor],
+    point: torch.Tensor,
+    gradient: torch.Tensor,
+    direction: torch.Tensor | None = None,
+    one_sided: int | None = None,
+) -> None:
+    """Check one response direction against a detected central-FD window."""
+    if direction is None:
+        direction = gradient.detach()
+    direction = direction / torch.linalg.vector_norm(direction)
+    automatic = torch.sum(gradient.detach() * direction)
+    steps = (1.0e-3, 5.0e-4, 2.0e-4, 1.0e-4, 5.0e-5)
+    finite_differences = []
+    for step in steps:
+        delta = point.new_tensor(step)
+        if one_sided is None:
+            difference = function(
+                point.detach() + delta * direction
+            ) - function(point.detach() - delta * direction)
+            denominator = 2.0 * delta
+        else:
+            assert one_sided in (-1, 1)
+            difference = function(
+                point.detach() + one_sided * delta * direction
+            ) - function(point.detach())
+            denominator = one_sided * delta
+        finite_differences.append(difference / denominator)
+    windows = [
+        torch.stack(finite_differences[index : index + 3])
+        for index in range(len(finite_differences) - 2)
+    ]
+    plateau = min(
+        windows, key=lambda values: float(values.max() - values.min())
+    )
+    center = plateau.median()
+    spread = plateau.max() - plateau.min()
+    assert torch.isfinite(plateau).all()
+    assert spread < 5.0e-5 * max(1.0, float(center.abs()))
+    assert torch.isclose(
+        automatic,
+        center,
+        rtol=5.0e-6,
+        atol=max(8.0 * float(spread), 2.0e-7),
+    ), (automatic, center, spread, finite_differences)
 
 
 def _snapshot_tree(value: object, seen: dict[int, int] | None = None) -> object:
@@ -605,6 +660,7 @@ def test_gfn2_h2o_multipole_raw_map_matches_full_engine() -> None:
             "LiH", GFN1_XTB, 0.5, 0.0, 5000.0, id="small-gap-fractional"
         ),
         pytest.param("H2O", GFN2_XTB, 0.0, 0.0, 300.0, id="gfn2-multipoles"),
+        pytest.param("NO2", GFN2_XTB, 0.0, 1.0, 300.0, id="gfn2-no2-doublet"),
     ],
 )
 def test_finite_temperature_raw_map_matches_full_engine(
@@ -624,6 +680,360 @@ def test_finite_temperature_raw_map_matches_full_engine(
     )
     assert case.inputs.fermi_settings is not None
     _compare_raw_map(case, case.x)
+
+
+def test_integrated_fermi_evaluation_uses_one_authoritative_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One evaluation shares configured Fermi primal state and status."""
+    case = _prepare_case(
+        GFN2_XTB,
+        sample_name="NO2",
+        spin=1.0,
+        scf_options={
+            "fermi_etemp": 300.0,
+            "fermi_maxiter": 37,
+            "fermi_diff_order": 3,
+            "fermi_thresh": 2.0e-12,
+        },
+    )
+    settings = case.inputs.fermi_settings
+    assert settings is not None
+    original = filling._get_fermi_occupation_core_state
+    calls: list[tuple[tuple[object, ...], dict[str, object], object]] = []
+
+    def record(*args: object, **kwargs: object):
+        state = original(*args, **kwargs)
+        calls.append((args, kwargs, state))
+        return state
+
+    monkeypatch.setattr(filling, "_get_fermi_occupation_core_state", record)
+    spectral = evaluate_hamiltonian(case.inputs.integrals.hcore, case.inputs)
+
+    assert len(calls) == 1
+    args, kwargs, state = calls[0]
+    assert args[0] is case.inputs.nel
+    assert args[1].shape[-2:] == (2, case.inputs.orbital_mask.shape[-1])
+    assert args[2] is settings.kt
+    assert kwargs["mask"].shape == (
+        *case.inputs.nel.shape,
+        *case.inputs.orbital_mask.shape,
+    )
+    assert torch.equal(
+        kwargs["mask"], case.inputs.orbital_mask.expand_as(kwargs["mask"])
+    )
+    assert kwargs["thr"] is settings.threshold
+    assert kwargs["maxiter"] == settings.maxiter == 37
+    assert kwargs["diff_order"] == settings.diff_order == 3
+    assert spectral.fermi_status is state.result.status
+    torch.testing.assert_close(
+        spectral.occupation.sum(-1), case.inputs.nel, atol=1.0e-4, rtol=0.0
+    )
+    assert torch.isfinite(spectral.density).all()
+
+
+def test_no2_integrated_fermi_channels_share_density_response() -> None:
+    """NO2 alpha/beta filling and invariant density retain channel semantics."""
+    case = _prepare_case(
+        GFN2_XTB,
+        sample_name="NO2",
+        spin=1.0,
+        scf_options={"fermi_etemp": 300.0, "fermi_diff_order": 3},
+    )
+    inputs = case.inputs
+    assert inputs.fermi_settings is not None
+    h0 = inputs.integrals.hcore
+    direction = torch.zeros_like(h0)
+    direction[0, 1] = direction[1, 0] = 0.2
+    weight = torch.zeros_like(h0)
+    weight[0, 1] = weight[1, 0] = 0.5
+
+    def scalar(parameter: torch.Tensor) -> torch.Tensor:
+        result = evaluate_hamiltonian(h0 + parameter * direction, inputs)
+        assert result.fermi_status is not None
+        torch.testing.assert_close(
+            result.occupation.sum(-1), inputs.nel, atol=1.0e-4, rtol=0.0
+        )
+        return torch.sum(weight * result.density)
+
+    parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
+    primal = evaluate_hamiltonian(h0, inputs)
+    assert primal.fermi_status is not None
+    assert primal.occupation.shape[-2] == 2
+    assert torch.allclose(
+        primal.occupation.sum(-1), inputs.nel, atol=1.0e-4, rtol=0.0
+    )
+    reverse = torch.autograd.grad(scalar(parameter), parameter)[0]
+    _, tangent = jvp(
+        scalar, (parameter.detach(),), (torch.ones_like(parameter),)
+    )
+    forward = jacfwd(scalar)(parameter.detach())
+    torch.testing.assert_close(reverse, tangent, atol=1.0e-7, rtol=1.0e-7)
+    torch.testing.assert_close(reverse, forward, atol=1.0e-7, rtol=1.0e-7)
+
+
+def test_integrated_fermi_exact_degeneracy_is_rotation_invariant() -> None:
+    """The full filling-to-density path is smooth at finite-T degeneracy."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"fermi_etemp": 300.0, "fermi_diff_order": 3},
+    )
+    n = case.inputs.integrals.hcore.shape[-1]
+    identity = torch.eye(n, dtype=case.positions.dtype)
+    inputs = replace(
+        case.inputs,
+        inverse_cholesky=identity,
+        integrals=replace(case.inputs.integrals, overlap=identity),
+    )
+    h0 = torch.zeros_like(inputs.integrals.hcore)
+    direction = torch.zeros_like(h0)
+    direction[0, 0] = 1.0
+    direction[1, 1] = -1.0
+    direction[0, 1] = direction[1, 0] = 0.2
+    weight = torch.zeros_like(h0)
+    weight[0, 0] = 0.3
+    weight[1, 1] = -0.1
+    weight[0, 1] = weight[1, 0] = 0.4
+
+    def density(matrix: torch.Tensor) -> torch.Tensor:
+        spectral = evaluate_hamiltonian(matrix, inputs)
+        assert spectral.fermi_status is not None
+        torch.testing.assert_close(
+            spectral.occupation.sum(-1), inputs.nel, atol=1e-4, rtol=0.0
+        )
+        torch.testing.assert_close(
+            torch.sum(spectral.density * inputs.integrals.overlap.mT),
+            inputs.nel.sum(),
+            atol=2e-10,
+            rtol=0.0,
+        )
+        return spectral.density
+
+    parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
+    response = lambda value: torch.sum(weight * density(h0 + value * direction))
+    reverse = torch.autograd.grad(response(parameter), parameter)[0]
+    _, tangent = jvp(
+        response, (parameter.detach(),), (torch.ones_like(parameter),)
+    )
+    forward = jacfwd(response)(parameter.detach())
+    torch.testing.assert_close(reverse, tangent, atol=2e-8, rtol=2e-8)
+    torch.testing.assert_close(reverse, forward, atol=2e-8, rtol=2e-8)
+    step = h0.new_tensor(1.0e-7)
+    finite_difference = (response(step) - response(-step)) / (2.0 * step)
+    torch.testing.assert_close(reverse, finite_difference, atol=2e-5, rtol=2e-5)
+
+    angle = h0.new_tensor(0.71)
+    rotation = torch.eye(n, dtype=h0.dtype)
+    rotation[:2, :2] = torch.stack(
+        (
+            torch.stack((torch.cos(angle), -torch.sin(angle))),
+            torch.stack((torch.sin(angle), torch.cos(angle))),
+        )
+    )
+    rotated_direction = rotation @ direction @ rotation.mT
+    rotated_weight = rotation @ weight @ rotation.mT
+
+    def rotated_density_response(value: torch.Tensor) -> torch.Tensor:
+        result = evaluate_hamiltonian(
+            rotation @ (h0 + value * direction) @ rotation.mT, inputs
+        )
+        return torch.sum(rotated_weight * result.density)
+
+    rotated_parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
+    rotated_first = torch.autograd.grad(
+        rotated_density_response(rotated_parameter), rotated_parameter
+    )[0]
+    torch.testing.assert_close(rotated_first, reverse, atol=2e-8, rtol=2e-8)
+
+
+def test_integrated_fractional_aufbau_response_matches_legacy_density() -> None:
+    """Production evaluation preserves fractional-channel density response."""
+    case = _prepare_case(GFN1_XTB, charge=-0.25)
+    inputs = case.inputs
+    h0 = inputs.integrals.hcore
+    direction = torch.diag(
+        torch.linspace(-0.1, 0.1, h0.shape[-1], dtype=h0.dtype)
+    )
+    parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
+
+    def density(value: torch.Tensor) -> torch.Tensor:
+        return evaluate_hamiltonian(h0 + value * direction, inputs).density
+
+    spectral = evaluate_hamiltonian(h0, inputs)
+    legacy = get_density(spectral.coefficients, inputs.occupation.sum(-2))
+    torch.testing.assert_close(
+        spectral.density, legacy, atol=2.0e-10, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        torch.sum(spectral.density * inputs.integrals.overlap.mT),
+        inputs.nel.sum(),
+        atol=2.0e-10,
+        rtol=2.0e-10,
+    )
+    reverse = torch.autograd.grad(
+        torch.sum(density(parameter) ** 2), parameter
+    )[0]
+    _, tangent = jvp(
+        lambda value: torch.sum(density(value) ** 2),
+        (parameter.detach(),),
+        (torch.ones_like(parameter),),
+    )
+    forward = jacfwd(lambda value: torch.sum(density(value) ** 2))(
+        parameter.detach()
+    )
+    torch.testing.assert_close(reverse, tangent, atol=2.0e-8, rtol=2.0e-8)
+    torch.testing.assert_close(reverse, forward, atol=2.0e-8, rtol=2.0e-8)
+
+
+def test_physical_scf_outputs_do_not_depend_on_reporting_coefficients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detaching reporting coefficients leaves physical map responses intact."""
+    case = _prepare_case(
+        GFN1_XTB, scf_options={"fermi_etemp": 300.0, "fermi_diff_order": 3}
+    )
+    original = functional_map._transitional_diagonalize
+    direction = torch.zeros_like(case.inputs.integrals.hcore)
+    direction[0, 1] = direction[1, 0] = 0.15
+    parameter = torch.zeros((), dtype=direction.dtype, requires_grad=True)
+
+    def run(detach_coefficients: bool) -> tuple[torch.Tensor, torch.Tensor]:
+        def diagonalize(hamiltonian: torch.Tensor, inputs: object):
+            energies, coefficients = original(hamiltonian, inputs)
+            if detach_coefficients:
+                coefficients = coefficients.detach()
+            return energies, coefficients
+
+        monkeypatch.setattr(
+            functional_map, "_transitional_diagonalize", diagonalize
+        )
+        integrals = replace(
+            case.inputs.integrals,
+            hcore=case.inputs.integrals.hcore + parameter * direction,
+        )
+        inputs = replace(case.inputs, integrals=integrals)
+        result = scf_map(case.x, inputs)
+        spectral = result.spectral
+        value = (
+            torch.sum(spectral.density**2)
+            + torch.sum(spectral.charges.mono**2)
+            + torch.sum(result.mapped_x**2)
+            + spectral.orbital_energy.sum()
+        )
+        derivative = torch.autograd.grad(value, parameter)[0]
+        return value.detach(), derivative.detach()
+
+    connected = run(False)
+    detached = run(True)
+    torch.testing.assert_close(
+        connected[0], detached[0], atol=2e-10, rtol=2e-10
+    )
+    torch.testing.assert_close(connected[1], detached[1], atol=2e-8, rtol=2e-8)
+
+
+@pytest.mark.parametrize(
+    "sample_name, synthetic_gap",
+    [
+        pytest.param("H2O", None, id="ordinary-molecule"),
+        pytest.param("LiH", 1.0e-5, id="small-gap"),
+        pytest.param("H2O", 0.0, id="finite-temperature-degeneracy"),
+    ],
+)
+def test_atomic_partition_preserves_legacy_coefficient_response(
+    sample_name: str, synthetic_gap: float | None
+) -> None:
+    """Atomic entropy keeps its prior coefficient derivative during E3.1s-a."""
+    case = _prepare_case(
+        GFN1_XTB,
+        sample_name=sample_name,
+        scf_options={
+            "fermi_etemp": 300.0,
+            "fermi_partition": labels.FERMI_PARTITION_ATOMIC,
+            "fermi_diff_order": 3,
+        },
+    )
+    inputs = case.inputs
+    settings = inputs.fermi_settings
+    assert settings is not None
+    h0 = inputs.integrals.hcore
+    if synthetic_gap is not None:
+        n = h0.shape[-1]
+        levels = torch.linspace(-0.4, 0.4, n, dtype=h0.dtype)
+        frontier = min(max(int(inputs.nel[0].item()), 1), n - 1)
+        levels[frontier - 1] = -synthetic_gap / 2.0
+        levels[frontier] = synthetic_gap / 2.0
+        h0 = torch.diag(levels)
+    direction = torch.zeros_like(h0)
+    frontier = min(max(int(inputs.nel[0].item()), 1), h0.shape[-1] - 1)
+    direction[frontier - 1, frontier] = 0.3
+    direction[frontier, frontier - 1] = 0.3
+
+    def candidate(parameter: torch.Tensor) -> torch.Tensor:
+        spectral = evaluate_hamiltonian(h0 + parameter * direction, inputs)
+        return free_energy_from_spectral(spectral, inputs).sum()
+
+    def pre_package(parameter: torch.Tensor) -> torch.Tensor:
+        hamiltonian = h0 + parameter * direction
+        emo, coefficients = storch.eighb(
+            a=hamiltonian,
+            b=None,
+            l_inv=inputs.inverse_cholesky,
+            is_posdef=True,
+            factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
+            broadening_method="lorn",
+        )
+        channel_energies = emo.unsqueeze(-2).expand(
+            *inputs.nel.shape, emo.shape[-1]
+        )
+        state = filling._get_fermi_occupation_core_state(
+            inputs.nel,
+            channel_energies,
+            settings.kt,
+            mask=inputs.orbital_mask.unsqueeze(-2).expand_as(channel_energies),
+            thr=settings.threshold,
+            maxiter=settings.maxiter,
+            diff_order=settings.diff_order,
+        )
+        baseline_spectral = SimpleNamespace(
+            emo=emo,
+            coefficients=coefficients,
+            occupation=state.result.occupation,
+        )
+        return free_energy_from_spectral(baseline_spectral, inputs).sum()
+
+    parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
+    candidate_value = candidate(parameter)
+    baseline_value = pre_package(parameter)
+    candidate_first = torch.autograd.grad(
+        candidate_value, parameter, create_graph=True
+    )[0]
+    baseline_first = torch.autograd.grad(
+        baseline_value, parameter, create_graph=True
+    )[0]
+    candidate_second = torch.autograd.grad(candidate_first, parameter)[0]
+    baseline_second = torch.autograd.grad(baseline_first, parameter)[0]
+    _, candidate_jvp = jvp(
+        candidate,
+        (parameter.detach(),),
+        (torch.ones_like(parameter),),
+    )
+    _, baseline_jvp = jvp(
+        pre_package,
+        (parameter.detach(),),
+        (torch.ones_like(parameter),),
+    )
+    torch.testing.assert_close(
+        candidate_value, baseline_value, atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        candidate_first, baseline_first, atol=2e-8, rtol=2e-8
+    )
+    torch.testing.assert_close(
+        candidate_jvp, baseline_jvp, atol=2e-8, rtol=2e-8
+    )
+    torch.testing.assert_close(
+        candidate_second, baseline_second, atol=2e-6, rtol=2e-6
+    )
 
 
 def test_map_uses_input_potential_and_output_charge_potential_is_distinct() -> (
@@ -1177,66 +1587,34 @@ def test_map_position_derivatives_and_iterate_vmap() -> None:
     _assert_tensor_equal(mapped, looped)
 
 
-def test_transitional_spectral_derivative_branch_attribution() -> None:
+def test_forward_eigensystem_uses_one_fixed_derivative_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forward eigensystem reporting no longer selects semantics from AD mode."""
     case = _prepare_case(GFN1_XTB)
     hamiltonian = scf_map(case.x, case.inputs).hamiltonian.detach()
-    probe = torch.arange(
-        hamiltonian.numel(), dtype=hamiltonian.dtype
-    ).reshape_as(hamiltonian)
-    probe = probe / hamiltonian.numel()
-    direction = torch.arange(
-        hamiltonian.numel(), dtype=hamiltonian.dtype
-    ).reshape_as(hamiltonian)
-    direction = (direction + direction.mT) / hamiltonian.numel()
-    occupation = case.inputs.occupation.sum(-2)
+    direction = torch.ones_like(hamiltonian)
+    original = storch.eighb
+    observed: list[str | None] = []
 
-    def spectral_projection(
-        h: torch.Tensor, broadening_method: str | None = "transitional"
-    ) -> torch.Tensor:
-        if broadening_method == "transitional":
-            _, coefficients = _transitional_diagonalize(h, case.inputs)
-        else:
-            _, coefficients = storch.eighb(
-                a=h,
-                b=None,
-                l_inv=case.inputs.inverse_cholesky,
-                is_posdef=True,
-                factor=torch.finfo(h.dtype).eps ** 0.5,
-                broadening_method=broadening_method,
-            )
-        density = get_density(coefficients, occupation)
-        return torch.sum(probe * density)
+    def record(*args, **kwargs):
+        observed.append(kwargs.get("broadening_method"))
+        return original(*args, **kwargs)
 
-    _, tangent = jvp(spectral_projection, (hamiltonian,), (direction,))
-    _, explicit_forward_tangent = jvp(
-        lambda h: spectral_projection(h, None),
+    monkeypatch.setattr(storch, "eighb", record)
+    _transitional_diagonalize(hamiltonian, case.inputs)
+    reverse_leaf = hamiltonian.clone().requires_grad_(True)
+    energy, _ = _transitional_diagonalize(reverse_leaf, case.inputs)
+    torch.autograd.grad(energy.sum(), reverse_leaf)
+    jvp(
+        lambda value: _transitional_diagonalize(value, case.inputs)[0].sum(),
         (hamiltonian,),
         (direction,),
     )
-    h_leaf = hamiltonian.clone().requires_grad_(True)
-    reverse_value = spectral_projection(h_leaf)
-    (reverse_gradient,) = torch.autograd.grad(reverse_value, h_leaf)
-    reverse_tangent = torch.sum(reverse_gradient * direction)
-    forward_jacobian = jacfwd(spectral_projection)(hamiltonian)
-    jacfwd_tangent = torch.sum(forward_jacobian * direction)
-
-    h_lorn = hamiltonian.clone().requires_grad_(True)
-    explicit_reverse_value = spectral_projection(h_lorn, "lorn")
-    (explicit_reverse_gradient,) = torch.autograd.grad(
-        explicit_reverse_value, h_lorn
-    )
-    explicit_reverse_tangent = torch.sum(explicit_reverse_gradient * direction)
-    explicit_jacobian = jacfwd(lambda h: spectral_projection(h, None))(
+    jacfwd(lambda value: _transitional_diagonalize(value, case.inputs)[0])(
         hamiltonian
     )
-    explicit_jacfwd_tangent = torch.sum(explicit_jacobian * direction)
-
-    # Reverse-mode selection is explicitly Lorentzian; forward-mode selection
-    # is explicitly unbroadened. This attributes the known discrepancy to the
-    # transitional spectral mode selection without requiring it to persist.
-    _assert_tensor_equal(reverse_tangent, explicit_reverse_tangent)
-    _assert_tensor_equal(tangent, explicit_forward_tangent)
-    _assert_tensor_equal(jacfwd_tangent, explicit_jacfwd_tangent)
+    assert observed == [None, None, None, None]
 
 
 def test_map_parameter_graph_reaches_param_module() -> None:

@@ -51,7 +51,11 @@ from dxtb._src.scf.functional import (
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
 
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_functional_map import (
+    _assert_directional_fd,
+    _assert_tensor_equal,
+    _prepare_case,
+)
 
 
 def _initial_guess(case: SimpleNamespace) -> tuple[torch.Tensor, object]:
@@ -553,21 +557,18 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     )[0]
     assert torch.isfinite(gradient).all()
     assert torch.isfinite(hessian_projection).all()
-    legacy = _prepare_case(
-        GFN1_XTB,
-        positions=positions,
-        scf_options=options,
-        setup_functional=False,
-    )
-    legacy_result = legacy.engine(legacy.initial_charges)
-    legacy_gradient = torch.autograd.grad(
-        legacy_result["energy"].sum(), positions, create_graph=True
-    )[0]
-    legacy_hessian = torch.autograd.grad(
-        legacy_gradient.square().sum(), positions
-    )[0]
-    _assert_tensor_equal(gradient, legacy_gradient)
-    _assert_tensor_equal(hessian_projection, legacy_hessian)
+
+    def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
+        initial, initial_layout = _initial_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, value.dtype
+        )
+        return solve_scf_potential_simple(
+            initial, case.inputs, initial_layout, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_positions, positions, gradient)
 
     par = ParamModule(GFN1_XTB, device="cpu", dtype=torch.float64)
     leaf = par.get("element.O.levels")
@@ -590,23 +591,6 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     parameter_gradient = torch.autograd.grad(parameter_total, leaf)[0]
     assert torch.isfinite(parameter_gradient).all()
     assert torch.count_nonzero(parameter_gradient) > 0
-    legacy_parameter = _prepare_case(
-        GFN1_XTB,
-        par=par,
-        scf_options=finite_options,
-        setup_functional=False,
-    )
-    legacy_parameter_result = legacy_parameter.engine(
-        legacy_parameter.initial_charges
-    )
-    legacy_parameter_gradient = torch.autograd.grad(
-        (
-            legacy_parameter_result["energy"]
-            + legacy_parameter_result["fenergy"]
-        ).sum(),
-        leaf,
-    )[0]
-    _assert_tensor_equal(parameter_gradient, legacy_parameter_gradient)
 
     field = torch.tensor(
         [0.001, -0.0007, 0.0004], dtype=torch.float64, requires_grad=True
@@ -625,18 +609,19 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     field_gradient = torch.autograd.grad(field_total, field)[0]
     assert torch.isfinite(field_gradient).all()
     assert torch.count_nonzero(field_gradient) > 0
-    legacy_field = _prepare_case(
-        GFN1_XTB,
-        field=field,
-        scf_options=finite_options,
-        setup_functional=False,
-    )
-    legacy_field_result = legacy_field.engine(legacy_field.initial_charges)
-    legacy_field_gradient = torch.autograd.grad(
-        (legacy_field_result["energy"] + legacy_field_result["fenergy"]).sum(),
-        field,
-    )[0]
-    _assert_tensor_equal(field_gradient, legacy_field_gradient)
+
+    def total_at_field(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, field=value, scf_options=finite_options)
+        initial, initial_layout = _initial_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, value.dtype
+        )
+        result = solve_scf_potential_simple(
+            initial, case.inputs, initial_layout, local_settings
+        )
+        return (result.energy + result.fenergy).sum()
+
+    _assert_directional_fd(total_at_field, field, field_gradient)
 
 
 @pytest.mark.parametrize(
@@ -672,17 +657,24 @@ def test_potential_fractional_charge_gradient_at_finite_temperature(
         (total.energy + total.fenergy).sum(), charge
     )[0]
 
-    legacy = _prepare_case(
-        GFN1_XTB,
-        charge=charge,
-        scf_options=options,
-        setup_functional=False,
+    def total_at_charge(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
+        initial, initial_layout = _initial_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, torch.float64
+        )
+        result = solve_scf_potential_simple(
+            initial, case.inputs, initial_layout, local_settings
+        )
+        return (result.energy + result.fenergy).sum()
+
+    _assert_directional_fd(
+        total_at_charge,
+        charge,
+        functional_gradient,
+        direction=torch.ones_like(charge),
+        one_sided=-1,
     )
-    legacy_result = legacy.engine(legacy.initial_charges)
-    legacy_gradient = torch.autograd.grad(
-        (legacy_result["energy"] + legacy_result["fenergy"]).sum(), charge
-    )[0]
-    _assert_tensor_equal(functional_gradient, legacy_gradient)
 
 
 def test_potential_map_reverse_jvp_and_jacfwd() -> None:

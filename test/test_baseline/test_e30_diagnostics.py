@@ -2620,6 +2620,11 @@ def test_no2_fresh_calculator_reproducibility(observable: str) -> None:
 def test_no2_fresh_calculator_forward_trajectory_and_gauge() -> None:
     """Compare clean same-process fixed-map trajectories and spectral gauge."""
     system = SYSTEMS["NO2"]
+    _, inputs, _, _, _ = _prepare_functional_at(
+        _calculator(system, "gfn2", "pytorch"),
+        system.positions,
+        torch.zeros(3, **_DD),
+    )
     traces: list[list[dict[str, object]]] = []
     for _ in range(3):
         calculator = _calculator(system, "gfn2", "pytorch")
@@ -2728,8 +2733,6 @@ def test_no2_fresh_calculator_forward_trajectory_and_gauge() -> None:
     spectral_thirds = []
     for row in (trace[1] for trace in traces):
         h0 = row["hamiltonian"]
-        l_inv = row["inverse_cholesky"]
-        occupation = row["occupation"]
         density_probe = torch.linspace(
             -0.8, 1.1, row["density"].numel(), **_DD
         ).reshape_as(row["density"])
@@ -2738,18 +2741,8 @@ def test_no2_fresh_calculator_forward_trajectory_and_gauge() -> None:
 
         def spectral_scalar(parameter: Tensor) -> Tensor:
             hamiltonian = h0 + parameter * direction
-            _, coefficients = storch.eighb(
-                a=hamiltonian,
-                b=None,
-                l_inv=l_inv,
-                is_posdef=True,
-                factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-                broadening_method=(
-                    "lorn" if hamiltonian.requires_grad else None
-                ),
-            )
-            density = get_density(coefficients, occupation)
-            return (density * density_probe).sum()
+            spectral = evaluate_hamiltonian(hamiltonian, inputs)
+            return (spectral.density * density_probe).sum()
 
         parameter = torch.zeros((), **_DD, requires_grad=True)
         first_derivative = torch.autograd.grad(
@@ -2838,9 +2831,6 @@ def test_no2_frozen_spectral_derivative_reproducibility() -> None:
     result = trajectory[6]
     inputs = boundary_record["inputs"]
     h0 = result["hamiltonian"].detach().clone()
-    s0 = inputs.integrals.overlap.detach().clone()
-    l_inv = inputs.inverse_cholesky.detach().clone()
-    occupation = result["occupation"].detach()
     direction = torch.linspace(-1.0, 1.0, h0.numel(), **_DD).reshape_as(h0)
     direction = 0.5 * (direction + direction.mT)
     density_probe = torch.linspace(
@@ -2849,16 +2839,8 @@ def test_no2_frozen_spectral_derivative_reproducibility() -> None:
 
     def spectral_scalar(parameter: Tensor) -> Tensor:
         hamiltonian = h0 + parameter * direction
-        broadening = "lorn" if hamiltonian.requires_grad else None
-        emo, coefficients = storch.eighb(
-            a=hamiltonian,
-            b=None,
-            l_inv=l_inv,
-            is_posdef=True,
-            factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-            broadening_method=broadening,
-        )
-        density = get_density(coefficients, occupation)
+        spectral = evaluate_hamiltonian(hamiltonian, inputs)
+        density = spectral.density
         return (density * density_probe).sum() + (density * hamiltonian).sum()
 
     def derivatives() -> dict[str, float]:
@@ -2916,7 +2898,7 @@ def test_no2_frozen_spectral_derivative_reproducibility() -> None:
 
 
 def test_no2_spectral_branch_control(monkeypatch) -> None:
-    """Compare explicitly selected spectral derivative branches and routes."""
+    """Keep the physical eigensystem branch fixed across transform routes."""
     system = SYSTEMS["NO2"]
     calculator = _calculator(system, "gfn2", "pytorch")
     trajectory: list[dict[str, object]] = []
@@ -3038,7 +3020,7 @@ def test_no2_spectral_branch_control(monkeypatch) -> None:
     ):
         observed.clear()
         endpoint(system, "gfn2", "pytorch")
-        assert {row[0] for row in observed} == {"lorn"}
+        assert {row[0] for row in observed} == {None}
         branch_records[label] = sorted(set(observed))
 
     observed.clear()
@@ -3049,7 +3031,7 @@ def test_no2_spectral_branch_control(monkeypatch) -> None:
         calculator, system.positions, reverse_field * field_axis
     )
     raw = potential_map(initial, raw_inputs, raw_layout)
-    assert {row[0] for row in observed} == {"lorn"}
+    assert {row[0] for row in observed} == {None}
     branch_records["functional_reverse_raw_map"] = sorted(set(observed))
 
     observed.clear()
@@ -3067,13 +3049,16 @@ def test_no2_spectral_branch_control(monkeypatch) -> None:
     )
     assert {row[0] for row in observed} == {None}
     branch_records["functional_jvp_raw_map"] = sorted(set(observed))
+    assert {row[0] for row in branch_records["functional_reverse_raw_map"]} == {
+        row[0] for row in branch_records["functional_jvp_raw_map"]
+    }
     print({"explicit_spectral_branch_controls": branch_records})
 
 
-def test_no2_lorentzian_raw_map_derivative_matches_physical_forward(
+def test_no2_invariant_raw_map_derivative_matches_physical_forward(
     monkeypatch,
 ) -> None:
-    """Compare Lorentzian raw-map derivatives to ordinary physical FDs."""
+    """Compare invariant raw-map derivatives to ordinary physical FDs."""
     system = SYSTEMS["NO2"]
     calculator = _calculator(system, "gfn2", "pytorch")
     trace: list[dict[str, object]] = []
@@ -3651,27 +3636,30 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
                 < tolerance
             )
 
-    # Compare the ordinary forward and derivative-enabled (Lorentzian)
-    # spectral branches at the smallest-gap map, using gauge-invariant values.
+    # Compare no-grad and derivative-enabled physical density evaluation at
+    # the smallest-gap map, using gauge-invariant values.
     index = smallest
     map_result = potential_map(
         states[selected_indices.index(index)], inputs, layout
     )
     hamiltonian = map_result.spectral.hamiltonian.detach()
     ordinary = evaluate_hamiltonian(hamiltonian, inputs)
-    lorentzian = evaluate_hamiltonian(
+    derivative_enabled = evaluate_hamiltonian(
         hamiltonian.clone().requires_grad_(True), inputs
     )
     branch_difference = {
         name: float(
-            (getattr(ordinary, name) - getattr(lorentzian, name).detach())
+            (
+                getattr(ordinary, name)
+                - getattr(derivative_enabled, name).detach()
+            )
             .abs()
             .max()
         )
         for name in ("density", "emo", "occupation")
     }
-    branch_difference["ordinary_path"] = "broadening_method=None"
-    branch_difference["derivative_path"] = "broadening_method=lorn"
+    branch_difference["ordinary_path"] = "fixed ordinary eigensystem"
+    branch_difference["derivative_path"] = "fixed ordinary eigensystem"
     assert (
         max(
             branch_difference[name] for name in ("density", "emo", "occupation")
@@ -3692,7 +3680,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
                 for item in trace
             ],
             "local_raw_maps": local_results,
-            "forward_vs_lorentzian_values": branch_difference,
+            "ordinary_forward_vs_derivative_enabled_values": branch_difference,
         }
     )
 

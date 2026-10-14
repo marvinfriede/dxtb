@@ -82,6 +82,16 @@ class FermiOccupationResult:
     status: FermiStatus
 
 
+@dataclass(frozen=True, eq=False)
+class _FermiCoreState:
+    """Private shared primal state for functional Fermi consumers."""
+
+    result: FermiOccupationResult
+    chemical_potential: Tensor
+    gap: Tensor
+    below: Tensor
+
+
 _pytree.register_pytree_node(
     FermiStatus,
     lambda status: (
@@ -797,7 +807,7 @@ def get_fermi_occupation(
     return torch.where(full, full_occ, torch.where(active, fermi, 0.0))
 
 
-def get_fermi_occupation_core(
+def _get_fermi_occupation_core_state(
     nel: Tensor,
     emo: Tensor,
     kt: Tensor,
@@ -805,7 +815,7 @@ def get_fermi_occupation_core(
     thr: Tensor | float | int | None = None,
     maxiter: int = 200,
     diff_order: int | None = None,
-) -> FermiOccupationResult:
+) -> _FermiCoreState:
     """Evaluate Fermi occupations with fixed-trip tensor-only control flow.
 
     Unlike :func:`get_fermi_occupation`, this function never reads tensor
@@ -910,7 +920,30 @@ def get_fermi_occupation_core(
         too_many_electrons=too_many.squeeze(-1),
         electron_count_ok=electron_count_ok,
     )
-    return FermiOccupationResult(occupation=occupation, status=status)
+    result = FermiOccupationResult(occupation=occupation, status=status)
+    chemical_potential = (ref + offset).detach()
+    return _FermiCoreState(result, chemical_potential, gap.squeeze(-1), below)
+
+
+def get_fermi_occupation_core(
+    nel: Tensor,
+    emo: Tensor,
+    kt: Tensor,
+    mask: Tensor | None = None,
+    thr: Tensor | float | int | None = None,
+    maxiter: int = 200,
+    diff_order: int | None = None,
+) -> FermiOccupationResult:
+    """Evaluate fixed-trip Fermi filling and return its existing public result."""
+    return _get_fermi_occupation_core_state(
+        nel,
+        emo,
+        kt,
+        mask=mask,
+        thr=thr,
+        maxiter=maxiter,
+        diff_order=diff_order,
+    ).result
 
 
 def _fermi_energy_search_fixed(

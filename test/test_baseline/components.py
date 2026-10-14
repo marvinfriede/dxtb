@@ -538,9 +538,10 @@ def _basis_exponent() -> Target:
 def _eigensolver(spectrum: str, filling: str) -> Target:
     """
     Density matrix of a generalized eigenproblem through the solver of the
-    unrolled SCF (``storch.eighb``, Lorentzian broadening with factor
-    ``sqrt(eps)``), as a function of the Hamiltonian matrix. Two electrons
-    pairs in five orbitals:
+    private invariant dxtb spectral-density primitive, as a function of the
+    Hamiltonian matrix. The ordinary ``storch.eighb`` call supplies forward
+    eigenvalues only for the authoritative Fermi solve. Two spin channels in
+    five orbitals:
 
     - ``degenerate``: exactly degenerate pair within the occupied orbitals
       (``-0.5, -0.5``), gap 0.8 Eh; the density is well defined.
@@ -554,7 +555,11 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
         # pylint: disable=import-outside-toplevel
         from tad_mctc import storch
 
-        from dxtb._src.wavefunction.filling import get_fermi_occupation
+        from dxtb._src.scf.functional.spectral import (
+            aufbau_density_matrix,
+            fermi_density_matrix,
+        )
+        from dxtb._src.wavefunction import filling as wavefunction_filling
 
         n = 5
         gen = torch.Generator().manual_seed(9)
@@ -567,23 +572,49 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
             nocc = 3
         h0 = q @ torch.diag(evals) @ q.T
         s = torch.eye(n, **DD) + 0.05 * (q[:, :1] @ q[:, :1].T)
+        l_inv = storch.inv_cholesky_factor(s, is_posdef=True)
+        channel_electrons = torch.tensor([nocc, nocc], **DD)
 
         def f(h: Tensor) -> Tensor:
             h = 0.5 * (h + h.T)
-            e, c = storch.eighb(
+            e, _ = storch.eighb(
                 a=h,
                 b=s,
                 is_posdef=True,
                 factor=torch.finfo(h.dtype).eps ** 0.5,
-                broadening_method="lorn",
+                broadening_method=None,
             )
             if filling == "aufbau":
-                occ = torch.tensor([2.0] * nocc + [0.0] * (n - nocc), **DD)
+                return aufbau_density_matrix(
+                    h,
+                    channel_electrons,
+                    l_inv=l_inv,
+                    mask=torch.ones(n, dtype=torch.bool),
+                )
             else:
                 kt = torch.tensor(9.5e-4, **DD)
-                nel = torch.tensor(float(nocc), **DD)
-                occ = 2 * get_fermi_occupation(nel, e, kt)
-            return (c * occ) @ c.T
+                channel_energies = e.unsqueeze(-2).expand(2, -1)
+                mask = torch.ones((2, n), dtype=torch.bool)
+                state = wavefunction_filling._get_fermi_occupation_core_state(
+                    channel_electrons,
+                    channel_energies,
+                    kt,
+                    mask=mask,
+                    thr=1.0e-14,
+                    maxiter=200,
+                    diff_order=3,
+                )
+                return fermi_density_matrix(
+                    h,
+                    channel_electrons,
+                    kt,
+                    state.chemical_potential,
+                    l_inv=l_inv,
+                    mask=torch.ones(n, dtype=torch.bool),
+                    diff_steps=wavefunction_filling._diff_steps(3),
+                    gap=state.gap,
+                    below=state.below,
+                )
 
         return f, _leaf(h0)
 
@@ -640,7 +671,7 @@ def _projected_grad(f: Callable[[Tensor], Tensor], x: Tensor) -> Callable:
     return g
 
 
-def _jvp(f: Callable[[Tensor], Tensor], x: Tensor) -> None:
+def _jvp(f: Callable[[Tensor], Tensor], x: Tensor, eps: float) -> None:
     # pylint: disable=import-outside-toplevel
     from torch.func import jvp
 
@@ -648,7 +679,7 @@ def _jvp(f: Callable[[Tensor], Tensor], x: Tensor) -> None:
     v = torch.randn(x.shape, generator=gen, **DD)
     x0 = x.detach()
     _, tangent = jvp(f, (x0,), (v,))
-    h = 1e-6
+    h = eps
     fd = (f(x0 + h * v) - f(x0 - h * v)) / (2 * h)
     err = (tangent - fd.detach()).abs().max().item()
     scale = max(1.0, fd.abs().max().item())
@@ -684,19 +715,22 @@ def _vmap(f: Callable[[Tensor], Tensor], x: Tensor) -> None:
         raise AssertionError(f"vmap differs from a loop by {err:.2e}")
 
 
-def _run(check: str, f: Callable[[Tensor], Tensor], x: Tensor) -> None:
+def _run(
+    check: str, f: Callable[[Tensor], Tensor], x: Tensor, eps: float
+) -> None:
     gc = torch.autograd.gradcheck
     ggc = torch.autograd.gradgradcheck
     if check == "order1":
-        assert gc(f, (x,), atol=1e-6, rtol=1e-5)
+        assert gc(f, (x,), eps=eps, atol=1e-6, rtol=1e-5)
     elif check == "order2":
-        assert ggc(f, (x,), atol=1e-6, rtol=1e-5)
+        assert ggc(f, (x,), eps=eps, atol=1e-6, rtol=1e-5)
     elif check == "order3":
-        assert ggc(_projected_grad(f, x), (x,), atol=1e-6, rtol=1e-5)
+        assert ggc(_projected_grad(f, x), (x,), eps=eps, atol=1e-6, rtol=1e-5)
     elif check == "forward":
         assert gc(
             f,
             (x,),
+            eps=eps,
             atol=1e-6,
             rtol=1e-5,
             check_forward_ad=True,
@@ -705,7 +739,7 @@ def _run(check: str, f: Callable[[Tensor], Tensor], x: Tensor) -> None:
             check_batched_grad=False,
         )
     elif check == "jvp":
-        _jvp(f, x)
+        _jvp(f, x, eps)
     elif check == "vmap":
         _vmap(f, x)
     else:
@@ -717,7 +751,10 @@ def run_check(target: str, check: str) -> ComponentResult:
     start = time.perf_counter()
     try:
         f, x = TARGETS[target]()
-        _run(check, f, x)
+        # The zero-temperature Aufbau target has a narrow local regime at its
+        # 1e-3 Eh gap; use the FD step established by its stable sweep.
+        eps = 1.0e-7 if target == "eigensolver.small_gap_aufbau" else 1.0e-6
+        _run(check, f, x, eps)
     except Exception as e:  # pylint: disable=broad-except
         tb = traceback.extract_tb(e.__traceback__)
         where = ""

@@ -50,7 +50,11 @@ from dxtb._src.scf.functional import (
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional import validate_fock_state
 
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_functional_map import (
+    _assert_directional_fd,
+    _assert_tensor_equal,
+    _prepare_case,
+)
 
 
 def _fock_guess(case: SimpleNamespace) -> torch.Tensor:
@@ -557,8 +561,8 @@ def test_fock_gfn2_multipole_solver_matches_legacy() -> None:
     assert result.final_potential.quad is not None
 
 
-def test_fock_position_derivatives_match_legacy() -> None:
-    """Fock Simple preserves first and second position derivatives."""
+def test_fock_position_derivatives_match_physical_fd() -> None:
+    """Fock density response matches physical finite differences."""
     options: dict[str, object] = {
         "scp_mode": labels.SCP_MODE_FOCK,
         "mixer": labels.MIXER_LINEAR,
@@ -584,19 +588,17 @@ def test_fock_position_derivatives_match_legacy() -> None:
     assert torch.isfinite(grad).all()
     assert torch.isfinite(hess).all()
 
-    legacy = _prepare_case(
-        GFN1_XTB,
-        positions=positions,
-        scf_options=options,
-        setup_functional=False,
-    )
-    legacy_energy = legacy.engine(legacy.initial_charges)["energy"].sum()
-    legacy_grad = torch.autograd.grad(
-        legacy_energy, positions, create_graph=True
-    )[0]
-    legacy_hess = torch.autograd.grad(legacy_grad.square().sum(), positions)[0]
-    _assert_tensor_equal(grad, legacy_grad)
-    _assert_tensor_equal(hess, legacy_hess)
+    def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
+        initial = _fock_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, value.dtype
+        )
+        return solve_scf_fock_simple(
+            initial, case.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_positions, positions, grad)
 
 
 def test_fock_parameter_and_field_gradients() -> None:
@@ -635,23 +637,20 @@ def test_fock_parameter_and_field_gradients() -> None:
     )[0]
     assert torch.isfinite(field_grad).all()
     assert torch.count_nonzero(field_grad) > 0
-    legacy_field_case = _prepare_case(
-        GFN1_XTB,
-        field=field,
-        scf_options=options,
-        setup_functional=False,
-    )
-    legacy_field_result = legacy_field_case.engine(
-        legacy_field_case.initial_charges
-    )
-    legacy_field_grad = torch.autograd.grad(
-        (legacy_field_result["energy"] + legacy_field_result["fenergy"]).sum(),
-        field,
-    )[0]
-    _assert_tensor_equal(field_grad, legacy_field_grad)
+
+    def total_at_field(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, field=value, scf_options=options)
+        initial = _fock_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, value.dtype
+        )
+        result = solve_scf_fock_simple(initial, case.inputs, local_settings)
+        return (result.energy + result.fenergy).sum()
+
+    _assert_directional_fd(total_at_field, field, field_grad)
 
 
-def test_fock_fractional_charge_gradient_matches_legacy() -> None:
+def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
     """Finite-temperature Fock finalization preserves charge/electron AD."""
     charge = torch.tensor([0.25], dtype=torch.float64, requires_grad=True)
     options: dict[str, object] = {
@@ -670,19 +669,19 @@ def test_fock_fractional_charge_gradient_matches_legacy() -> None:
         (result.energy + result.fenergy).sum(), charge
     )[0]
 
-    legacy = _prepare_case(
-        GFN1_XTB,
-        charge=charge,
-        scf_options=options,
-        setup_functional=False,
-    )
-    legacy_result = legacy.engine(legacy.initial_charges)
-    expected = torch.autograd.grad(
-        (legacy_result["energy"] + legacy_result["fenergy"]).sum(), charge
-    )[0]
     assert torch.isfinite(actual).all()
     assert torch.count_nonzero(actual) > 0
-    _assert_tensor_equal(actual, expected)
+
+    def total_at_charge(value: torch.Tensor) -> torch.Tensor:
+        case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
+        initial = _fock_guess(case)
+        local_settings = setup_simple_solver_settings(
+            case.system.config.scf, initial.dtype
+        )
+        result = solve_scf_fock_simple(initial, case.inputs, local_settings)
+        return (result.energy + result.fenergy).sum()
+
+    _assert_directional_fd(total_at_charge, charge, actual)
 
 
 def test_fock_map_reverse_jvp_jacfwd_are_finite() -> None:

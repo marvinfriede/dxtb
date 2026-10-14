@@ -304,7 +304,7 @@ or full E1. **Unblocks.** E3.1a root strategy/reference gate (complete).
 ### E3.1b Transform-compatible implicit SCF-root implementation
 
 **Scope and implementation contract.** This package follows the completed
-E3.1a root strategy/reference gate and the E3.1s upstream invariant
+E3.1a root strategy/reference gate and the E3.1s dxtb-local invariant
 spectral/density prerequisite. E3.1s owns the spectral mathematics and its
 transform acceptance; E3.1b consumes that accepted primitive and implements
 the SCF-root derivative on supported single-System paths. The differentiated
@@ -331,8 +331,8 @@ E3.1b owns the concrete implementation:
    tested; the E3.1a host-preflight characterization is not transform proof.
 5. Integrate the E3.1s-accepted invariant spectral/density semantics so the
    root and finalization paths share one derivative definition. Spectral
-   mathematics and the upstream primitive remain owned by E3.1s; do not add a
-   dxtb-local eigensolver derivative or tune Lorentzian broadening here.
+   mathematics and the dxtb-local primitive remain owned by E3.1s; do not add
+   an implicit-root primitive or tune Lorentzian broadening here.
 6. Add focused tests for raw-map derivatives, finite unrolled derivatives,
    implemented adjoint/JVP solves, higher-order composition, and
    unrolled/implicit agreement where both strategies remain. Compare with
@@ -355,7 +355,7 @@ FD probes do not identify that split as the historical NO2 endpoint cause,
 but the split violates E0's common derivative-semantics requirement. E3.1s
 must establish one invariant spectral/density derivative contract shared by
 reverse and forward transforms, then remove the `requires_grad`-dependent
-branch when dxtb consumes the accepted upstream primitive. This is separate
+branch when dxtb consumes the accepted dxtb-local primitive. This is separate
 from E3.0's finite-root diagnosis. E3.1b cannot claim transform acceptance
 before E3.1s is complete.
 
@@ -726,8 +726,9 @@ Libcint remains subject to its separate eager/reference regression contract.
 | E2-legacy | Retire packed legacy driver's per-entry setup loop | E6broute | S |
 | E3.0 | Diagnosis-only spectral derivative / NO2 preflight | E0, E4core, T0.2/T0.3/T0.4, E1.1/E1.2 supported subset | M |
 | E3.1a | Physical-root strategy/reference gate (complete) | E3.0, E0, E4core, E2-core | M |
-| E3.1s | Upstream invariant spectral/density prerequisite | E3.1a, E0 | L |
-| E3.1b | Transform-compatible implicit SCF-root implementation | E3.1a, E3.1s, E0, E4core, E2-core, SCF-relevant E1.1/E1.2 | L |
+| E3.1s-a | Dxtb-local invariant SCF density core | E3.1a, E0 | M |
+| E3.1s-b | Invariant entropy/free-energy spectral matrix | E3.1s-a, E0 | M |
+| E3.1b | Transform-compatible implicit SCF-root implementation | E3.1a, E3.1s-a, E3.1s-b, E0, E4core, E2-core, SCF-relevant E1.1/E1.2 | L |
 | E3 | Full end-to-end SCF differentiation acceptance, including DFT-D3 where applicable | E3.1b, E0, full E1, E2-core, E4core | L |
 | E4core | Pure single-System SCF path, fixed-trip control and tensor status | T0.2, B5, B6a-SCF-core | L |
 | E5 | PyTorch multipole integrals (done, #270) | - | - |
