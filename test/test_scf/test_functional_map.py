@@ -932,115 +932,63 @@ def test_physical_scf_outputs_do_not_depend_on_reporting_coefficients(
 
 
 @pytest.mark.parametrize(
-    "sample_name, synthetic_gap, fractional_count",
-    [
-        pytest.param("H2O", None, False, id="ordinary-molecule"),
-        pytest.param("LiH", 1.0e-5, True, id="asymmetric-fractional-small-gap"),
-        pytest.param("H2O", 0.0, False, id="finite-temperature-degeneracy"),
-    ],
+    "partition",
+    [labels.FERMI_PARTITION_EQUAL, labels.FERMI_PARTITION_ATOMIC],
 )
-def test_atomic_partition_preserves_legacy_coefficient_response(
-    sample_name: str, synthetic_gap: float | None, fractional_count: bool
+def test_free_energy_does_not_depend_on_reporting_coefficients(
+    partition: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Atomic entropy keeps its prior coefficient derivative during E3.1s-a."""
+    """Free-energy value and derivatives are owned by the invariant matrix."""
     case = _prepare_case(
         GFN1_XTB,
-        sample_name=sample_name,
         scf_options={
             "fermi_etemp": 300.0,
-            "fermi_partition": labels.FERMI_PARTITION_ATOMIC,
+            "fermi_partition": partition,
             "fermi_diff_order": 3,
         },
     )
-    inputs = case.inputs
-    if fractional_count:
-        increment = inputs.nel.new_tensor([0.25, 0.1])
-        inputs = replace(inputs, nel=inputs.nel + increment)
-    settings = inputs.fermi_settings
-    assert settings is not None
-    h0 = inputs.integrals.hcore
-    if synthetic_gap is not None:
-        n = h0.shape[-1]
-        levels = torch.linspace(-0.4, 0.4, n, dtype=h0.dtype)
-        frontier = min(max(int(inputs.nel[0].item()), 1), n - 1)
-        levels[frontier - 1] = -synthetic_gap / 4.0
-        levels[frontier] = 3.0 * synthetic_gap / 4.0
-        h0 = torch.diag(levels)
+    original = functional_map._transitional_diagonalize
+    h0 = case.inputs.integrals.hcore
     direction = torch.zeros_like(h0)
-    frontier = min(max(int(inputs.nel[0].item()), 1), h0.shape[-1] - 1)
-    direction[frontier - 1, frontier] = 0.3
-    direction[frontier, frontier - 1] = 0.3
+    direction[0, 1] = direction[1, 0] = 0.15
 
-    def candidate(parameter: torch.Tensor) -> torch.Tensor:
-        spectral = evaluate_hamiltonian(h0 + parameter * direction, inputs)
+    def evaluate(parameter: torch.Tensor, detach: bool) -> torch.Tensor:
+        def diagonalize(hamiltonian: torch.Tensor, inputs: object):
+            energies, coefficients = original(hamiltonian, inputs)
+            return energies, coefficients.detach() if detach else coefficients
+
+        monkeypatch.setattr(
+            functional_map, "_transitional_diagonalize", diagonalize
+        )
+        integral = replace(
+            case.inputs.integrals, hcore=h0 + parameter * direction
+        )
+        inputs = replace(case.inputs, integrals=integral)
+        spectral = evaluate_hamiltonian(integral.hcore, inputs)
         return free_energy_from_spectral(spectral, inputs).sum()
 
-    def pre_package(parameter: torch.Tensor) -> torch.Tensor:
-        hamiltonian = h0 + parameter * direction
-        old_branch = (
-            hamiltonian.requires_grad is not False
-            or inputs.inverse_cholesky.requires_grad is not False
-        )
-        emo, coefficients = storch.eighb(
-            a=hamiltonian,
-            b=None,
-            l_inv=inputs.inverse_cholesky,
-            is_posdef=True,
-            factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-            broadening_method="lorn" if old_branch else None,
-        )
-        channel_energies = emo.unsqueeze(-2).expand(
-            *inputs.nel.shape, emo.shape[-1]
-        )
-        state = filling._get_fermi_occupation_core_state(
-            inputs.nel,
-            channel_energies,
-            settings.kt,
-            mask=inputs.orbital_mask.unsqueeze(-2).expand_as(channel_energies),
-            thr=settings.threshold,
-            maxiter=settings.maxiter,
-            diff_order=settings.diff_order,
-        )
-        baseline_spectral = SimpleNamespace(
-            emo=emo,
-            coefficients=coefficients,
-            occupation=state.result.occupation,
-        )
-        return free_energy_from_spectral(baseline_spectral, inputs).sum()
-
     parameter = torch.zeros((), dtype=h0.dtype, requires_grad=True)
-    candidate_value = candidate(parameter)
-    baseline_value = pre_package(parameter)
-    candidate_first = torch.autograd.grad(
-        candidate_value, parameter, create_graph=True
-    )[0]
-    baseline_first = torch.autograd.grad(
-        baseline_value, parameter, create_graph=True
-    )[0]
-    candidate_second = torch.autograd.grad(candidate_first, parameter)[0]
-    baseline_second = torch.autograd.grad(baseline_first, parameter)[0]
-    _, candidate_jvp = jvp(
-        candidate,
+    value = evaluate(parameter, False)
+    first = torch.autograd.grad(value, parameter, create_graph=True)[0]
+    second = torch.autograd.grad(first, parameter, create_graph=True)[0]
+    third = torch.autograd.grad(second, parameter)[0]
+    reverse = torch.autograd.grad(evaluate(parameter, False), parameter)[0]
+    detached_parameter = parameter.detach().requires_grad_()
+    detached_value = evaluate(detached_parameter, True)
+    detached_first = torch.autograd.grad(detached_value, detached_parameter)[0]
+    _, tangent = jvp(
+        lambda p: evaluate(p, True),
         (parameter.detach(),),
         (torch.ones_like(parameter),),
     )
-    _, baseline_jvp = jvp(
-        pre_package,
-        (parameter.detach(),),
-        (torch.ones_like(parameter),),
-    )
+    forward = jacfwd(lambda p: evaluate(p, True))(parameter.detach())
+    assert torch.isfinite(torch.stack([first, second, third])).all()
+    torch.testing.assert_close(value.detach(), detached_value.detach())
     torch.testing.assert_close(
-        candidate_value, baseline_value, atol=1e-12, rtol=1e-12
+        first.detach(), detached_first, atol=2e-8, rtol=2e-8
     )
-    torch.testing.assert_close(
-        candidate_first, baseline_first, atol=2e-8, rtol=2e-8
-    )
-    torch.testing.assert_close(
-        candidate_jvp, baseline_jvp, atol=2e-8, rtol=2e-8
-    )
-    torch.testing.assert_close(
-        candidate_second, baseline_second, atol=2e-6, rtol=2e-6
-    )
+    torch.testing.assert_close(reverse, tangent, atol=2e-8, rtol=2e-8)
+    torch.testing.assert_close(reverse, forward, atol=2e-8, rtol=2e-8)
 
 
 def test_map_uses_input_potential_and_output_charge_potential_is_distinct() -> (

@@ -245,9 +245,9 @@ At the review point:
 - E2-core is complete; the E2 umbrella remains partial until E2-legacy retires;
 - E0 is complete and its SCF differentiation decision is fixed; that contract
   remains authoritative for downstream G1 work. E3.0 diagnosis is complete;
-  E3.1a root strategy/reference is complete; E3.1s is the next upstream
-  invariant spectral/density prerequisite, and E3.1b implicit-root
-  implementation waits for E3.1s acceptance.
+  E3.1a root strategy/reference and the dxtb-local E3.1s invariant
+  spectral/free-energy work are complete; E3.1b implicit-root implementation
+  is next.
 
 ---
 
@@ -279,7 +279,7 @@ graph LR
   T03 & T04 --> E0[E0 SCF differentiation decision]
   E0 & E11 & E12 & E4core & T02 & T03 & T04 --> E30
   E30 & E0 & E4core & E2core & E11 & E12 --> E31a[E3.1a root strategy/reference complete]
-  E31a --> E31s[E3.1s upstream invariant spectral prerequisite]
+  E31a --> E31s[E3.1s dxtb-local invariant spectral prerequisite]
   E31s --> E31b[E3.1b implicit-root implementation]
   E31b & E1 & E2core --> E3[E3 complete end-to-end differentiation]
   B3a & B4 --> E2core[E2-core: fixed-shape single-System integrals]
@@ -338,7 +338,7 @@ B1 conformer API implementation boundary, see
 
 | Goal | Path |
 | --- | --- |
-| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1a root strategy/reference → E3.1s upstream invariant spectral acceptance → E3.1b implicit-root implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
+| G1 | T0.3/T0.4 → E0 + E4core + E1.1/E1.2 → E3.0 diagnosis-only non-DFT-D3 preflight → E3.1a root strategy/reference → E3.1s dxtb-local invariant spectral/free-energy acceptance → E3.1b implicit-root implementation → full E3 on canonical PyTorch transform driver after full E1/E2-core (including E1.3 for outer DFT-D3) → B8b → E8 on the same driver scope (B8a after B7); libcint eager/reference regressions remain separate and enforced |
 | G2 | Authoritative PyTorch route. Conformers: B6b-core + full E1 term support + E2-core + E4core/private fixed-trip boundary + B5.6 + C8a → E6a exact B1 `system.singlepoint` vmap → E6c1 W2. Mixed Systems: E6bcompat-policy can run early; E6a + final B3b (including broader B6a built-in DFT-D3 setup and final generic built-in cache removal) + C5/C6/C7/C8b + E2-core + E4core + policy → E6bimpl → E6bcompat + batch-critical E7 + E6c1 W3 → E6broute. E6c2 records final W2/W3/GPU PyTorch-route acceptance. |
 | G3 | T0.9 → T0.12 → B3a → B5 → F0 (early bounded invariant). Late path: B8b + C9 + E8 + D1 + D2 → F1 → F2a → F2b → F2c → F2d → F2e; F2d + E6broute → Track D3. |
 | G4 | T0.12 → B6b-core + C1b + full E3 + E4core + E6a → F3 → F4 if justified. |

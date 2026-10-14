@@ -116,26 +116,13 @@ def _transitional_diagonalize(
     hamiltonian: Tensor, inputs: SCFInputs
 ) -> tuple[Tensor, Tensor]:
     """Return ordinary eigensystem values for reporting and filling only."""
-    # Atomic entropy partitioning still uses a coefficient-weighted matrix.
-    # Preserve its established derivative rule until E3.1s-b migrates that
-    # matrix too. This is selected by the physical partition configuration,
-    # never by the active AD mode. Physical SCF density uses the invariant
-    # matrix path below in either case.
-    atomic_entropy = (
-        inputs.fermi_settings is not None
-        and inputs.fermi_settings.partition == labels.FERMI_PARTITION_ATOMIC
-    )
-    legacy_coefficient_branch = atomic_entropy and (
-        hamiltonian.requires_grad is not False
-        or inputs.inverse_cholesky.requires_grad is not False
-    )
     return storch.eighb(
         a=hamiltonian,
         b=None,
         l_inv=inputs.inverse_cholesky,
         is_posdef=True,
         factor=torch.finfo(hamiltonian.dtype).eps ** 0.5,
-        broadening_method="lorn" if legacy_coefficient_branch else None,
+        broadening_method=None,
     )
 
 
@@ -173,6 +160,7 @@ def evaluate_hamiltonian(
     """Evaluate spectrum, occupation, density and charges for a Hamiltonian."""
     emo, coefficients = _transitional_diagonalize(hamiltonian, inputs)
     fermi_status = None
+    fermi_state = None
     if inputs.fermi_settings is None or not inputs.fermi_settings.smear:
         occupation = inputs.occupation
         density = aufbau_density_matrix(
@@ -220,6 +208,7 @@ def evaluate_hamiltonian(
         charges=charges,
         orbital_energy=orbital_energy,
         fermi_status=fermi_status,
+        _fermi_state=fermi_state,
     )
 
 

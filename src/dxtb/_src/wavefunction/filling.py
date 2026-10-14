@@ -118,6 +118,26 @@ _pytree.register_pytree_node(
     lambda result: ([result.occupation, result.status], None),
     lambda values, _: FermiOccupationResult(*values),
 )
+_pytree.register_pytree_node(
+    _FermiCoreState,
+    lambda state: (
+        [
+            state.result,
+            state.chemical_potential_ref,
+            state.chemical_potential_offset,
+            state.gap,
+            state.below,
+            state.active,
+            state.full,
+            state.empty,
+            state.too_many,
+            state.kt_positive,
+            state.orbital_mask,
+        ],
+        None,
+    ),
+    lambda values, _: _FermiCoreState(*values),
+)
 
 
 # Number of iterations of the Fermi energy search between host

@@ -21,13 +21,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+import numpy as np
 
 from dxtb._src.typing import Tensor
 
 if TYPE_CHECKING:
     from dxtb._src.wavefunction.filling import _FermiCoreState
 
-__all__ = ["aufbau_density_matrix", "fermi_density_matrix"]
+__all__ = [
+    "aufbau_density_matrix",
+    "aufbau_free_energy_matrix",
+    "fermi_density_matrix",
+    "fermi_free_energy_matrix",
+]
+
+_GL_NODES_NP, _GL_WEIGHTS_NP = np.polynomial.legendre.leggauss(512)
+_GL_NODES_NP = 0.5 * (_GL_NODES_NP + 1.0)
+_GL_WEIGHTS_NP = 0.5 * _GL_WEIGHTS_NP
 
 
 def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
@@ -256,6 +266,200 @@ def fermi_density_matrix(
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     density = torch.where(pair, density, torch.zeros_like(density))
     return density.sum(-3).to(dtype=hamiltonian.dtype)
+
+
+def _binary_entropy_matrix(
+    x: Tensor, occupation: Tensor, active: Tensor
+) -> Tensor:
+    """Evaluate binary entropy as a fixed quadrature of matrix tanh."""
+    identity = torch.diag_embed(active.to(x.dtype))
+    tanh_endpoint = identity - 2.0 * occupation
+    nodes = torch.as_tensor(_GL_NODES_NP, dtype=x.dtype, device=x.device)
+    weights = torch.as_tensor(_GL_WEIGHTS_NP, dtype=x.dtype, device=x.device)
+    scaled = nodes.reshape(-1, 1, 1, 1) * x.unsqueeze(0)
+    active_q = active.unsqueeze(0).expand_as(scaled[..., 0, :])
+    kt_one = x.new_ones(())
+    low = torch.ones((), dtype=torch.bool, device=x.device)
+    thermal = _matrix_fermi(
+        scaled, torch.zeros_like(nodes).reshape(-1, 1), kt_one, active_q, low
+    )
+    tanh_nodes = identity.unsqueeze(0) - 2.0 * thermal
+    integral = (weights.reshape(-1, 1, 1, 1) * tanh_nodes).sum(0)
+    pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    entropy = 0.5 * (x @ (tanh_endpoint - integral)) - np.log(2.0) * identity
+    entropy = 0.5 * (entropy + entropy.transpose(-2, -1))
+    return torch.where(pair, entropy, torch.zeros_like(entropy))
+
+
+def fermi_free_energy_matrix(
+    hamiltonian: Tensor,
+    nel: Tensor,
+    kt: Tensor,
+    state: _FermiCoreState,
+    *,
+    l_inv: Tensor | None = None,
+    mask: Tensor | None = None,
+    diff_steps: int = 2,
+) -> Tensor:
+    """Build the invariant finite-temperature free-energy spectral matrix."""
+    work_dtype = torch.float64
+    h = hamiltonian.to(dtype=work_dtype)
+    li = None if l_inv is None else l_inv.to(dtype=work_dtype)
+    structural_mask = state.orbital_mask
+    if structural_mask is not None and structural_mask.ndim == h.ndim:
+        structural_mask = structural_mask.select(-2, 0)
+    if structural_mask is None:
+        structural_mask = mask
+    h, spectral, active = _prepare_matrix(h, li, structural_mask)
+
+    h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
+    spectral = spectral.unsqueeze(-3).expand_as(h)
+    active = active.unsqueeze(-2).expand(*nel.shape, active.shape[-1])
+    if li is not None:
+        li = li.unsqueeze(-3).expand_as(h)
+        pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+        li = torch.where(pair, li, torch.zeros_like(li))
+
+    kt = kt.to(device=h.device, dtype=work_dtype)
+    kt_positive = state.kt_positive.to(device=h.device)
+    safe_kt = torch.where(kt_positive, kt, torch.ones_like(kt))
+    ref = state.chemical_potential_ref.to(device=h.device, dtype=work_dtype)
+    offset = state.chemical_potential_offset.to(
+        device=h.device, dtype=work_dtype
+    )
+    ref, offset = ref.squeeze(-1), offset.squeeze(-1)
+    channel_shape = (*nel.shape, 1, 1)
+    eye = torch.eye(h.shape[-1], dtype=work_dtype, device=h.device)
+    relative = spectral - ref.reshape(channel_shape) * eye
+    relative = relative - offset.reshape(channel_shape) * eye
+    target = nel.to(device=h.device, dtype=work_dtype)
+    empty = state.empty.to(device=h.device)
+    full = state.full.to(device=h.device)
+    too_many = state.too_many.to(device=h.device)
+    active_channel = state.active.to(device=h.device)
+    gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
+    below = state.below.to(device=h.device, dtype=torch.bool)
+    low_temperature = kt < 5.0e-4
+
+    diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
+    shift = torch.zeros_like(target)
+    for _ in range(diff_steps):
+        density = _matrix_fermi(
+            relative, shift, safe_kt, active, low_temperature
+        )
+        count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
+        slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
+            -1
+        ) / safe_kt
+        safe_slope = torch.where(
+            slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+        )
+        correction = torch.where(diff_mask, (target - count) / safe_slope, 0.0)
+        shift = shift + correction
+
+    x = (relative - shift[..., None, None] * eye) / safe_kt
+    pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    x = torch.where(pair, x, torch.zeros_like(x))
+    occupation = _matrix_fermi(
+        relative, shift, safe_kt, active, low_temperature
+    )
+    entropy = _binary_entropy_matrix(x, occupation, active)
+    q = safe_kt * entropy
+    identity = torch.diag_embed(active.to(work_dtype))
+    spectral_bound = x.abs().sum(-1).masked_fill(~active, 0.0).amax(-1)
+    resolved_gap_tail = gap_mask & (spectral_bound > 1.0e4)
+    q = torch.where(resolved_gap_tail[..., None, None], 0.0, q)
+    # The Fermi occupation helper retains a linear electron-count response in
+    # wide gaps where the thermal tails are below the derivative floor. Apply
+    # the corresponding (mu - epsilon) weighted response to this matrix too.
+    gap_response = _gap_electron_response(
+        h, spectral, active, below, gap_mask, safe_kt
+    )
+    mu_gap = ref + offset + shift
+    relative_mu = (mu_gap[..., None, None] * identity - spectral) / safe_kt
+    count_delta = target - target.detach()
+    q = q + safe_kt * count_delta[..., None, None] * (
+        relative_mu @ gap_response
+    )
+    status = state.result.status
+    valid_channel = (
+        status.converged.to(device=h.device)
+        & status.electron_count_ok.to(device=h.device)
+        & ~status.invalid_temperature.to(device=h.device)
+        & ~status.too_many_electrons.to(device=h.device)
+    )
+    q = torch.where(
+        (~valid_channel | empty | full | too_many)[..., None, None], 0.0, q
+    )
+    entropy_floor = torch.finfo(hamiltonian.dtype).eps
+    floor_weight = (
+        safe_kt
+        * entropy_floor
+        * torch.log(
+            torch.tensor(entropy_floor, dtype=work_dtype, device=h.device)
+        )
+    )
+    gap_value = q - q.detach() + floor_weight * identity
+    valid_gap = gap_mask & valid_channel & ~empty & ~full & ~too_many
+    q = torch.where(valid_gap[..., None, None], gap_value, q)
+    if li is not None:
+        q = li.transpose(-2, -1) @ q @ li
+    pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    q = torch.where(pair, q, torch.zeros_like(q))
+    return q.sum(-3).to(dtype=hamiltonian.dtype)
+
+
+def aufbau_free_energy_matrix(
+    hamiltonian: Tensor,
+    nel: Tensor,
+    kt: Tensor,
+    *,
+    l_inv: Tensor | None = None,
+    mask: Tensor | None = None,
+) -> Tensor:
+    """Build the low-temperature clamped Aufbau free-energy matrix."""
+    work_dtype = torch.float64
+    h = hamiltonian.to(dtype=work_dtype)
+    li = None if l_inv is None else l_inv.to(dtype=work_dtype)
+    h, spectral, active = _prepare_matrix(h, li, mask)
+    n = h.shape[-1]
+    h = h.unsqueeze(-3).expand(*nel.shape, n, n)
+    spectral = spectral.unsqueeze(-3).expand_as(h)
+    active = active.unsqueeze(-2).expand(*nel.shape, n)
+    if li is not None:
+        li = li.unsqueeze(-3).expand_as(h)
+    eye = torch.eye(n, dtype=work_dtype, device=h.device)
+    active_projector = torch.diag_embed(active.to(work_dtype))
+    count = active.sum(-1).to(work_dtype)
+    effective = torch.minimum(nel.to(work_dtype).clamp_min(0.0), count)
+    rank = effective.detach().floor().to(torch.long)
+    fraction = effective - rank
+
+    lower = _projector(h, spectral, active, rank)
+    upper = _projector(h, spectral, active, rank + 1)
+    frontier = torch.where(
+        (rank < count)[..., None, None], upper - lower, torch.zeros_like(h)
+    )
+    eps = torch.finfo(hamiltonian.dtype).eps
+    base_weight = (
+        kt.to(device=h.device, dtype=work_dtype)
+        * eps
+        * torch.log(torch.tensor(eps, dtype=work_dtype, device=h.device))
+    )
+    occ = fraction.clamp(min=eps)
+    hole = (1.0 - fraction).clamp(min=eps)
+    frontier_weight = kt.to(device=h.device, dtype=work_dtype) * (
+        occ * torch.log(occ) + hole * torch.log(hole)
+    )
+    q = (
+        base_weight * active_projector
+        + (frontier_weight - base_weight)[..., None, None] * frontier
+    )
+    if li is not None:
+        q = li.transpose(-2, -1) @ q @ li
+    pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    q = torch.where(pair, q, torch.zeros_like(q))
+    return q.sum(-3).to(dtype=hamiltonian.dtype)
 
 
 def _projector(

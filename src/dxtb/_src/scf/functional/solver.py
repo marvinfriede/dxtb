@@ -31,7 +31,11 @@ from dxtb._src.components.interactions.container import Charges
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling, mulliken
-from dxtb._src.wavefunction.filling import FermiStatus
+from dxtb._src.wavefunction.filling import (
+    FermiOccupationResult,
+    FermiStatus,
+    _FermiCoreState,
+)
 
 from .data import (
     PotentialLayout,
@@ -51,6 +55,7 @@ from .map import (
     potential_map,
     scf_map,
 )
+from .spectral import aufbau_free_energy_matrix, fermi_free_energy_matrix
 
 __all__ = [
     "DynamicDampingSettings",
@@ -472,6 +477,74 @@ def _select_map_result(
             raise ValueError("SCF map result structures must match.")
         return _select_tensor(mask, new_value, old_value)
 
+    def select_fermi_state(
+        new_state: _FermiCoreState | None,
+        old_state: _FermiCoreState | None,
+    ) -> _FermiCoreState | None:
+        if new_state is None and old_state is None:
+            return None
+        if new_state is None or old_state is None:
+            raise ValueError("SCF map result structures must match.")
+        new_result, old_result = new_state.result, old_state.result
+        return _FermiCoreState(
+            result=FermiOccupationResult(
+                occupation=_select_tensor(
+                    mask, new_result.occupation, old_result.occupation
+                ),
+                status=FermiStatus(
+                    converged=_select_tensor(
+                        mask,
+                        new_result.status.converged,
+                        old_result.status.converged,
+                    ),
+                    residual=_select_tensor(
+                        mask,
+                        new_result.status.residual,
+                        old_result.status.residual,
+                    ),
+                    invalid_temperature=_select_tensor(
+                        mask,
+                        new_result.status.invalid_temperature,
+                        old_result.status.invalid_temperature,
+                    ),
+                    too_many_electrons=_select_tensor(
+                        mask,
+                        new_result.status.too_many_electrons,
+                        old_result.status.too_many_electrons,
+                    ),
+                    electron_count_ok=_select_tensor(
+                        mask,
+                        new_result.status.electron_count_ok,
+                        old_result.status.electron_count_ok,
+                    ),
+                ),
+            ),
+            chemical_potential_ref=_select_tensor(
+                mask,
+                new_state.chemical_potential_ref,
+                old_state.chemical_potential_ref,
+            ),
+            chemical_potential_offset=_select_tensor(
+                mask,
+                new_state.chemical_potential_offset,
+                old_state.chemical_potential_offset,
+            ),
+            gap=_select_tensor(mask, new_state.gap, old_state.gap),
+            below=_select_tensor(mask, new_state.below, old_state.below),
+            active=_select_tensor(mask, new_state.active, old_state.active),
+            full=_select_tensor(mask, new_state.full, old_state.full),
+            empty=_select_tensor(mask, new_state.empty, old_state.empty),
+            too_many=_select_tensor(
+                mask, new_state.too_many, old_state.too_many
+            ),
+            kt_positive=_select_tensor(
+                mask, new_state.kt_positive, old_state.kt_positive
+            ),
+            orbital_mask=select_optional(
+                new_state.orbital_mask, old_state.orbital_mask
+            ),
+        )
+
     if new.fermi_status is None and old.fermi_status is None:
         fermi_status = None
     elif new.fermi_status is None or old.fermi_status is None:
@@ -530,6 +603,9 @@ def _select_map_result(
             mask, new.spectral.orbital_energy, old.spectral.orbital_energy
         ),
         fermi_status=fermi_status,
+        _fermi_state=select_fermi_state(
+            new.spectral._fermi_state, old.spectral._fermi_state
+        ),
     )
     if new.driving_potential is None and old.driving_potential is None:
         driving_potential = None
@@ -873,30 +949,41 @@ def free_energy_from_spectral(
         return inputs.integrals.hcore.new_zeros(inputs.numbers.shape)
     settings = inputs.fermi_settings
     if settings.smear:
-        entropy = filling.get_fermi_entropy_finite(
-            spectral.occupation,
-            spectral.emo,
+        if spectral._fermi_state is None:
+            raise RuntimeError(
+                "A smeared spectral result must retain its authoritative "
+                "Fermi state for free-energy evaluation."
+            )
+        entropy_matrix = fermi_free_energy_matrix(
+            spectral.hamiltonian,
+            inputs.nel,
             settings.kt,
-            inputs.orbital_mask,
+            spectral._fermi_state,
+            l_inv=inputs.inverse_cholesky,
+            mask=inputs.orbital_mask,
+            diff_steps=filling._diff_steps(settings.diff_order),
         )
     else:
-        entropy = filling.get_fermi_entropy_low_temperature(
-            spectral.occupation, settings.kt
+        entropy_matrix = aufbau_free_energy_matrix(
+            spectral.hamiltonian,
+            inputs.nel,
+            settings.kt,
+            l_inv=inputs.inverse_cholesky,
+            mask=inputs.orbital_mask,
         )
     if settings.partition == labels.FERMI_PARTITION_EQUAL:
         real = real_atoms(inputs.numbers)
         count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        equal = entropy.sum(-1, keepdim=True) / count
+        total = torch.diagonal(
+            inputs.integrals.overlap @ entropy_matrix,
+            dim1=-2,
+            dim2=-1,
+        ).sum(-1, keepdim=True)
+        equal = total / count
         return torch.where(real, equal.expand_as(real), 0.0)
     if settings.partition == labels.FERMI_PARTITION_ATOMIC:
-        entropy_density = einsum(
-            "...ik,...k,...jk->...ij",
-            spectral.coefficients,
-            entropy,
-            spectral.coefficients,
-        )
         return mulliken.get_atomic_populations(
-            inputs.integrals.overlap, entropy_density, inputs.ihelp
+            inputs.integrals.overlap, entropy_matrix, inputs.ihelp
         )
     raise ValueError(
         f"Unknown Fermi free-energy partition {settings.partition}."

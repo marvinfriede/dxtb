@@ -52,7 +52,7 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. |
-| E3.1            | E3.1a and E3.1s-a complete; E3.1s-b next | E3.1s-a migrates physical SCF density to the dxtb-local invariant spectral matrix. E3.1s-b closes the remaining atomic entropy/free-energy spectral matrix before E3.1s and then E3.1b can complete. The corrected root reference uses the convergence-tested map input and representation-aware dense IFT responses, including NO2 potential mode. |
+| E3.1            | E3.1a and E3.1s complete; E3.1b next | E3.1s integrates invariant physical density and equal/atomic free-energy responses using one authoritative filling state. E3.1b implements physical-root differentiation from the convergence-tested map input and representation-aware finalization, including NO2 potential mode. |
 | E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1b after E3.1s, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires B6b-core, full E1 term support, E2-core, the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, defined padding, and that policy. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
@@ -1904,10 +1904,9 @@ frozen spectral, sampled raw-map, or Anderson sub-operation is identified as
 the onset. No mathematical or spectral fix was made. E3.0 remains independent
 of E1.3, E6a/E6b, E4.6, legacy batch cleanup, and Node migration.
 
-E3.1a's physical-root strategy/reference gate is complete. E3.1s-a and
-E3.1s-b must first establish the dxtb-local invariant spectral/density and
-entropy contract; E3.1b then
-implements SCF root differentiation using the SCF-relevant E1.1/E1.2 subset on
+E3.1a's physical-root strategy/reference gate and E3.1s's dxtb-local invariant
+density/free-energy contract are complete. E3.1b now implements SCF root
+differentiation using the SCF-relevant E1.1/E1.2 subset on
 the canonical PyTorch transform driver. Outer classical DFT-D3 does not block
 that algorithm. Full E3 end-to-end GFN1/GFN2 transform acceptance uses
 PyTorch and additionally requires full E1 (including E1.3
@@ -2580,7 +2579,7 @@ T0.3/T0.4 + E0 + E4core + E1.1/E1.2 ──> E3.0 diagnosis-only preflight
 E3.0 ──> E3.1a physical-root strategy/reference gate (complete)
 E3.1a ──> E3.1s-a dxtb-local invariant SCF density core
 E3.1s-a ──> E3.1s-b invariant entropy/free-energy spectral matrix
-E3.1s-a + E3.1s-b ──> E3.1b transform-compatible implicit-root implementation
+E3.1s (E3.1s-a + E3.1s-b, complete) ──> E3.1b transform-compatible implicit-root implementation
 E3.1b + full E1/E1.3 + E2-core + E4core ──> full E3 acceptance
 
 B3a ──> B5; B4 ──> B5
@@ -2628,14 +2627,15 @@ private transform boundary unblock E6a, where the exact B1 public call is
 finally tested. E6a + final B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not
 wait for B3b, C5/C8b, or E4.6a.
 
-The next runtime package is **E3.1s-b — invariant entropy/free-energy
-spectral closure**. E3.1a and E3.1s-a are complete. E3.1s-a migrates physical
-SCF density to one invariant matrix-function derivative path. The supported
-atomic entropy partition still uses coefficient-weighted entropy and is
-assigned to E3.1s-b. E3.1b remains blocked until E3.1s-b is accepted. The
-E3.1b SCF-root work can proceed without outer DFT-D3/E1.3, while full E3
-acceptance still waits for full E1 and E2-core. This E3.1 order does not wait
-for E2-legacy cleanup or batching branches above.
+The next runtime package is **E3.1b — transform-compatible implicit
+physical-root implementation**. E3.1a and E3.1s are complete: functional
+SCF density and equal/atomic free-energy partitions now use invariant
+spectral-matrix responses, with one authoritative Fermi state. E3.1b uses the
+convergence-tested physical root and keeps representation-specific
+finalization outside the root derivative. It can proceed without outer
+DFT-D3/E1.3, while full E3 acceptance still waits for full E1 and E2-core.
+This E3.1 order does not wait for E2-legacy cleanup or batching branches
+above.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 

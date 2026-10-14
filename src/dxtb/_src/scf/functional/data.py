@@ -34,7 +34,7 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
-from dxtb._src.wavefunction.filling import FermiStatus
+from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
 __all__ = [
@@ -227,6 +227,7 @@ class SCFSpectralResult:
     charges: SCFCharges
     orbital_energy: Tensor
     fermi_status: FermiStatus | None = None
+    _fermi_state: _FermiCoreState | None = None
 
 
 def _single_system_layout(
