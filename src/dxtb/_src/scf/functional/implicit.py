@@ -36,6 +36,8 @@ __all__ = ["LinearSolveResult", "implicit_root", "solve_linear"]
 
 RawMap = Callable[..., Tensor]
 
+_LINEAR_SOLVE_EPS_MULTIPLIER = 10.0
+
 
 @dataclass(frozen=True, eq=False)
 class LinearSolveResult:
@@ -87,7 +89,14 @@ def solve_linear(
     alpha_previous = torch.ones_like(rho_previous)
     omega_previous = torch.ones_like(rho_previous)
     rhs_norm = torch.linalg.vector_norm(rhs)
-    target = atol + rtol * rhs_norm
+    # A requested tolerance below roundoff can reject a useful low-precision
+    # solution. Keep the float64 threshold unchanged while imposing a modest
+    # dtype-relative floor for lower-precision solves.
+    effective_rtol = max(
+        rtol,
+        _LINEAR_SOLVE_EPS_MULTIPLIER * torch.finfo(rhs.dtype).eps,
+    )
+    target = atol + effective_rtol * rhs_norm
     active = torch.linalg.vector_norm(residual) > target
     iterations = torch.zeros((), dtype=torch.int64, device=rhs.device)
 

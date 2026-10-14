@@ -52,8 +52,8 @@ Current state:
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. |
-| E3.1            | E3.1a and E3.1s complete; E3.1b next | E3.1s integrates invariant physical density and equal/atomic free-energy responses using one authoritative filling state. E3.1b implements physical-root differentiation from the convergence-tested map input and representation-aware finalization, including NO2 potential mode. |
-| E3             | not done                        | Full end-to-end GFN1/GFN2 transform acceptance requires E3.1b after E3.1s, full E1 (including E1.3 where DFT-D3 is active), E2-core, and E4core. |
+| E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
+| E3             | acceptance blocked by E1.3      | E3.1b is complete. Full end-to-end GFN1/GFN2 transform acceptance remains blocked on full E1, including E1.3 DFT-D3/tad-dftd3 forward-mode support where that outer term is active; E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires B6b-core, full E1 term support, E2-core, the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, defined padding, and that policy. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
@@ -2863,17 +2863,25 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-**Next package: complete E3.1b transform-compatible implicit physical-root implementation.**
+E3.1b transform-compatible implicit physical-root implementation is complete.
+Full E3 is acceptance-only and remains blocked where its DFT-D3-enabled GFN1
+row depends on E1.3; do not approximate that row by omitting DFT-D3. Run only
+currently unblocked full-E3 acceptance rows as useful, then continue with the
+next genuinely unblocked dependency-ordered package.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
 the historical failure at the complete finite-tolerance fixed-point response /
 finite-root trajectory boundary; it does not assign the cause to an individual
 Anderson operation. E3.1a's corrected physical-root reference gate and
 E3.1s's dxtb-local invariant density/free-energy contract are complete.
-E3.1b is now the active implementation candidate: it attaches derivatives to
-the convergence-tested functional `root_x`, uses only the configured raw map
-in the root equation, and keeps representation-specific finalization outside
-the implicit primitive. Whole-System transforms remain E6a scope.
+E3.1b is complete: it attaches derivatives to the convergence-tested
+functional `root_x`, uses only the configured raw map in the root equation,
+and keeps representation-specific finalization outside the implicit
+primitive. Its linear-solve convergence threshold is dtype-aware; float64
+retains the existing criterion and float32 uses a ten-epsilon relative floor.
+The measured NO2 third-order implicit path is slower and uses more peak memory
+than tight unrolling, so performance remains a separately measured debt.
+Whole-System transforms remain E6a scope.
 
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.

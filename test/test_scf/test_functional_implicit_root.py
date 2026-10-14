@@ -176,10 +176,38 @@ def test_matrix_free_linear_solve_matches_dense_nonsymmetric_system() -> None:
     assert transpose_result.residual < 1.0e-10
 
 
-def test_unconverged_linear_solve_is_explicit_and_never_used_as_a_derivative() -> (
-    None
-):
-    rhs = torch.tensor([1.0], dtype=torch.float64)
+def test_matrix_free_linear_solve_matches_float32_dense_reference() -> None:
+    """Check dtype-aware convergence against a nonsymmetric dense solve."""
+    matrix = torch.tensor(
+        [
+            [2.0, 0.7, -0.1, 0.2],
+            [-0.2, 1.4, 0.3, -0.1],
+            [0.4, 0.1, 1.8, 0.2],
+            [0.05, -0.3, 0.15, 1.6],
+        ],
+        dtype=torch.float32,
+    )
+    rhs = torch.tensor([1.0, -0.3, 0.8, 0.2], dtype=torch.float32)
+    result = solve_linear(lambda value: matrix @ value, rhs, maxiter=16)
+    expected = torch.linalg.solve(matrix, rhs)
+
+    assert bool(result.converged)
+    assert torch.isfinite(result.solution).all()
+    assert torch.isfinite(result.residual)
+    torch.testing.assert_close(
+        result.solution, expected, atol=2.0e-5, rtol=2.0e-5
+    )
+    assert result.residual <= 10.0 * torch.finfo(
+        torch.float32
+    ).eps * torch.linalg.vector_norm(rhs)
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_unconverged_linear_solve_is_explicit_and_never_used_as_a_derivative(
+    dtype: torch.dtype,
+) -> None:
+    """Reject singular systems and preserve their NaN derivative signal."""
+    rhs = torch.tensor([1.0], dtype=dtype)
     failed = solve_linear(lambda value: torch.zeros_like(value), rhs, maxiter=2)
     assert not bool(failed.converged)
     assert failed.residual > 0.9
@@ -187,8 +215,8 @@ def test_unconverged_linear_solve_is_explicit_and_never_used_as_a_derivative() -
     def singular_map(x: torch.Tensor, parameter: torch.Tensor) -> torch.Tensor:
         return x + parameter
 
-    root = torch.zeros((), dtype=torch.float64)
-    parameter = torch.zeros((), dtype=torch.float64, requires_grad=True)
+    root = torch.zeros((), dtype=dtype)
+    parameter = torch.zeros((), dtype=dtype, requires_grad=True)
     attached = implicit_root(root, parameter, raw_map=singular_map)
 
     reverse = torch.autograd.grad(attached, parameter)[0]
@@ -204,6 +232,34 @@ def test_unconverged_linear_solve_is_explicit_and_never_used_as_a_derivative() -
         (torch.ones_like(parameter),),
     )
     assert not bool(torch.isfinite(tangent))
+
+
+def test_float32_scalar_implicit_root_reverse_jvp_and_jacfwd() -> None:
+    """Check float32 implicit transforms against the analytic tangent."""
+    a = torch.tensor(0.31, dtype=torch.float32)
+    b = torch.tensor(0.27, dtype=torch.float32, requires_grad=True)
+    root = _scalar_primal(a, b)
+    attached = implicit_root(root, a, b, raw_map=_scalar_map)
+    derivative = torch.autograd.grad(attached, b)[0]
+    slope = 1.0 - attached.square()
+    expected = slope / (1.0 - a * slope)
+    _, tangent = torch.func.jvp(
+        lambda value: _scalar_attached_float32(a, value),
+        (b.detach(),),
+        (torch.ones_like(b),),
+    )
+    jacobian = torch.func.jacfwd(
+        lambda value: _scalar_attached_float32(a, value)
+    )(b.detach())
+
+    for actual in (derivative, tangent, jacobian):
+        assert torch.isfinite(actual)
+        torch.testing.assert_close(actual, expected, atol=2.0e-5, rtol=2.0e-5)
+
+
+def _scalar_attached_float32(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    root = _scalar_primal(a, b)
+    return implicit_root(root, a, b, raw_map=_scalar_map)
 
 
 def test_linear_solve_failure_signal_is_vmap_compatible() -> None:
@@ -812,6 +868,62 @@ def test_public_singlepoint_routes_eligible_implicit_mode() -> None:
         geometry_gradient[0, 0], geometry_fd, atol=2.0e-5, rtol=3.0e-4
     )
     torch.testing.assert_close(mixed, mixed_fd, atol=5.0e-4, rtol=2.0e-3)
+
+
+def test_public_functional_implicit_h2_float32_response() -> None:
+    """Check a public float32 implicit response against functional unrolling."""
+    from dataclasses import replace
+
+    from test.test_scf.test_functional_root_derivatives import _case
+
+    from dxtb import GFN1_XTB, labels
+
+    tolerance = 1.0e-5
+    case = _case(
+        "H2",
+        method=GFN1_XTB,
+        representation=labels.SCP_MODE_CHARGE,
+        tolerance=tolerance,
+        temperature=0.0,
+        field=torch.tensor([0.0, 1.0e-2, 0.0], dtype=torch.float32),
+        dtype=torch.float32,
+    )
+
+    def energy_and_response(mode: int) -> tuple[torch.Tensor, torch.Tensor]:
+        scf = replace(
+            case.system.config.scf,
+            scf_mode=mode,
+            mixer=labels.MIXER_ANDERSON,
+            maxiter=100,
+            x_atol=tolerance,
+            x_atol_max=tolerance,
+        )
+        system = replace(
+            case.system,
+            config=replace(case.system.config, scf=scf),
+        )
+        field = torch.tensor(
+            [0.0, 1.0e-2, 0.0], dtype=torch.float32, requires_grad=True
+        )
+        result = system.singlepoint(case.positions, field=field)
+        assert result.converged is not None and bool(result.converged)
+        response = torch.autograd.grad(result.energy.sum(), field)[0][1]
+        assert torch.isfinite(result.energy).all()
+        assert torch.isfinite(response)
+        return result.energy, response
+
+    implicit_energy, implicit_response = energy_and_response(
+        labels.SCF_MODE_IMPLICIT
+    )
+    unrolled_energy, unrolled_response = energy_and_response(
+        labels.SCF_MODE_FULL
+    )
+    torch.testing.assert_close(
+        implicit_energy, unrolled_energy, atol=2.0e-5, rtol=2.0e-5
+    )
+    torch.testing.assert_close(
+        implicit_response, unrolled_response, atol=2.0e-4, rtol=2.0e-3
+    )
 
 
 def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(

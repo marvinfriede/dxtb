@@ -121,22 +121,24 @@ def _case(
     maxiter: int = 300,
     temperature: float = 0.0,
     field: Tensor | None = None,
+    dtype: torch.dtype = torch.float64,
 ):
+    dd = {"device": torch.device("cpu"), "dtype": dtype}
     source = SYSTEMS.get(sample_name)
     if source is None:
         source = samples[sample_name]
         numbers = source["numbers"].to(device="cpu")
-        positions = source["positions"].to(device="cpu", dtype=torch.float64)
-        charge = torch.as_tensor(source.get("charge", 0.0), **_DD).reshape(-1)
-        spin = torch.as_tensor(source.get("spin", 0.0), **_DD).reshape(-1)
+        positions = source["positions"].to(device="cpu", dtype=dtype)
+        charge = torch.as_tensor(source.get("charge", 0.0), **dd).reshape(-1)
+        spin = torch.as_tensor(source.get("spin", 0.0), **dd).reshape(-1)
     else:
         numbers = source.numbers.to(device="cpu")
-        positions = source.positions.to(device="cpu", dtype=torch.float64)
-        charge = source.charge.to(device="cpu", dtype=torch.float64).reshape(-1)
+        positions = source.positions.to(device="cpu", dtype=dtype)
+        charge = source.charge.to(device="cpu", dtype=dtype).reshape(-1)
         spin = (
             torch.zeros_like(charge)
             if source.spin is None
-            else source.spin.to(device="cpu", dtype=torch.float64).reshape(-1)
+            else source.spin.to(device="cpu", dtype=dtype).reshape(-1)
         )
     options = {
         "scf_mode": labels.SCF_MODE_FULL,
@@ -154,16 +156,16 @@ def _case(
         ),
     }
     if field is None:
-        field = torch.zeros(3, **_DD)
+        field = torch.zeros(3, **dd)
     # The public parameter constants are lazy loaders. Their ``__eq__``
     # compares loaded values, so two not-yet-loaded loaders compare equal.
     # Use identity to preserve the requested model before either is loaded.
     parameter = "gfn1" if method is GFN1_XTB else "gfn2"
     calculator = Calculator(
         numbers,
-        get_param_module(parameter, device="cpu", dtype=torch.float64),
+        get_param_module(parameter, device="cpu", dtype=dtype),
         device="cpu",
-        dtype=torch.float64,
+        dtype=dtype,
         opts=options,
     )
     system = calculator.model.setup(numbers, dd=calculator.dd)
