@@ -76,6 +76,8 @@ def run_isolated(kind: str, key: str, timeout: float = TIMEOUT) -> dict:
     recursion running out of memory) or a timeout is an ``error``.
     """
     env = dict(os.environ, OMP_NUM_THREADS="1")
+    if kind == "components" and key.startswith("eigensolver."):
+        env.update(MKL_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
     gb = MEMORY_GB if kind == "matrix" else COMPONENT_MEMORY_GB
     cmd = [sys.executable, "-m", "test.test_baseline.status", "one", kind, key]
     start = time.perf_counter()
@@ -118,6 +120,8 @@ def _one(kind: str, key: str) -> None:  # pragma: no cover (child)
     import torch
 
     torch.set_num_threads(1)
+    if kind == "components" and key.startswith("eigensolver."):
+        torch.set_num_interop_threads(1)
     if kind == "matrix":
         from .matrix import CELLS, run_cell
 

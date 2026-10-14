@@ -25,6 +25,7 @@ from tad_mctc import storch
 from tad_mctc.units import KELVIN2AU
 
 from dxtb._src.scf.functional.spectral import (
+    _projector,
     aufbau_density_matrix,
     fermi_density_matrix,
 )
@@ -101,6 +102,126 @@ def test_aufbau_saturated_counts_match_authoritative_filling(
     slope = torch.autograd.grad(density.trace(), electrons)[0]
     torch.testing.assert_close(
         slope, torch.tensor([expected_slope], dtype=torch.float64)
+    )
+
+
+@pytest.mark.parametrize("energy", [1.0, -4.0])
+@pytest.mark.parametrize(
+    "count, expected_density, expected_slope",
+    [(-0.5, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 1.0, 0.0), (1.5, 1.0, 0.0)],
+)
+def test_aufbau_one_orbital_boundary_ranks(
+    energy: float, count: float, expected_density: float, expected_slope: float
+) -> None:
+    """Empty and full one-orbital projectors avoid singular sign solves."""
+    hamiltonian = torch.tensor([[energy]], dtype=torch.float64)
+    electrons = torch.tensor([count], dtype=torch.float64, requires_grad=True)
+    density = aufbau_density_matrix(hamiltonian, electrons)
+    torch.testing.assert_close(
+        density,
+        torch.tensor([[expected_density]], dtype=torch.float64),
+        atol=1.0e-14,
+        rtol=0.0,
+    )
+    reverse = torch.autograd.grad(density.sum(), electrons)[0]
+    torch.testing.assert_close(
+        reverse,
+        torch.tensor([expected_slope], dtype=torch.float64),
+        atol=1.0e-14,
+        rtol=0.0,
+    )
+    tangent = jvp(
+        lambda x: aufbau_density_matrix(hamiltonian, x).sum(),
+        (electrons.detach(),),
+        (torch.ones_like(electrons),),
+    )[1]
+    forward = jacfwd(lambda x: aufbau_density_matrix(hamiltonian, x).sum())(
+        electrons.detach()
+    )
+    torch.testing.assert_close(
+        tangent, reverse.squeeze(0), atol=1.0e-14, rtol=0.0
+    )
+    torch.testing.assert_close(
+        forward.squeeze(0), reverse.squeeze(0), atol=1.0e-14, rtol=0.0
+    )
+
+
+@pytest.mark.parametrize("rank", [0, 3])
+@pytest.mark.parametrize("energy", [1.0, -4.0, 7.5])
+def test_aufbau_degenerate_boundary_projectors_are_constant(
+    energy: float, rank: int
+) -> None:
+    """Boundary projectors on cI are finite and independent of energy origin."""
+    hamiltonian = torch.eye(3, dtype=torch.float64) * energy
+    active = torch.ones(3, dtype=torch.bool)
+    projector = _projector(hamiltonian, hamiltonian, active, torch.tensor(rank))
+    expected = (
+        torch.eye(3, dtype=torch.float64)
+        if rank == 3
+        else torch.zeros_like(hamiltonian)
+    )
+    torch.testing.assert_close(projector, expected, atol=1.0e-14, rtol=0.0)
+    direction = torch.tensor(
+        [[0.3, 0.1, 0.2], [0.1, -0.2, 0.0], [0.2, 0.0, 0.4]],
+        dtype=torch.float64,
+    )
+
+    def evaluate(parameter: torch.Tensor) -> torch.Tensor:
+        perturbed = hamiltonian + parameter * direction
+        return _projector(perturbed, perturbed, active, torch.tensor(rank))
+
+    parameter = torch.zeros((), dtype=torch.float64, requires_grad=True)
+    derivative = torch.autograd.grad(evaluate(parameter).sum(), parameter)[0]
+    tangent = jvp(
+        evaluate, (parameter.detach(),), (torch.ones_like(parameter),)
+    )[1]
+    jacobian = jacfwd(evaluate)(parameter.detach())
+    torch.testing.assert_close(derivative, torch.zeros_like(derivative))
+    torch.testing.assert_close(tangent, torch.zeros_like(tangent))
+    torch.testing.assert_close(jacobian, torch.zeros_like(jacobian))
+
+
+def test_fermi_float64_near_cutoff_is_finite_and_projector_limited() -> None:
+    """The supported low-smearing cutoff remains stable over a 2 Eh gap."""
+    energies = torch.tensor([-1.0, 1.0], dtype=torch.float64)
+    electrons = torch.tensor([1.0, 0.0], dtype=torch.float64)
+    kt = torch.tensor(3.1e-7, dtype=torch.float64)
+
+    def density(hamiltonian: torch.Tensor) -> torch.Tensor:
+        channel_energies = torch.linalg.eigvalsh(hamiltonian).expand(2, -1)
+        state = filling._get_fermi_occupation_core_state(
+            electrons,
+            channel_energies,
+            kt,
+            thr=1.0e-10,
+            maxiter=300,
+            diff_order=2,
+        )
+        assert state.result.status.converged.all()
+        return fermi_density_matrix(
+            hamiltonian, electrons, kt, state, diff_steps=2
+        )
+
+    coupling = torch.tensor([[0.0, 1.0], [1.0, 0.0]], dtype=torch.float64)
+
+    def evaluate(parameter: torch.Tensor) -> torch.Tensor:
+        return density(torch.diag(energies) + parameter * coupling)
+
+    parameter = torch.zeros((), dtype=torch.float64, requires_grad=True)
+    value = evaluate(parameter)
+    reverse = torch.autograd.grad(value[0, 1], parameter)[0]
+    _, tangent_density = jvp(
+        evaluate, (parameter.detach(),), (torch.ones_like(parameter),)
+    )
+    expected = torch.tensor(-0.5, dtype=torch.float64)
+    for item in (value, value.trace(), reverse, tangent_density):
+        assert torch.isfinite(item).all()
+    torch.testing.assert_close(
+        value.trace(), torch.tensor(1.0, dtype=torch.float64)
+    )
+    torch.testing.assert_close(reverse, expected, atol=2.0e-6, rtol=2.0e-6)
+    torch.testing.assert_close(
+        tangent_density[0, 1], expected, atol=2.0e-6, rtol=2.0e-6
     )
 
 

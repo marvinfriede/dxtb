@@ -60,10 +60,10 @@ def _param(target: str, check: str):
 )
 def test_component(target: str, check: str) -> None:
     key = f"{target}:{check}"
-    # Higher-order matrix-function checks are sensitive to severe
-    # oversubscription when xdist launches the full component matrix. Keep
-    # the canonical eigensolver targets in the same isolated single-thread
-    # execution used when recovering other recorded component failures.
+    # Run canonical eigensolver cells in fresh subprocesses with intra-op,
+    # inter-op, and BLAS thread pools constrained to one. The small-gap
+    # order-3 finite-difference checker also uses a fixed cotangent so its
+    # numerical probe is reproducible across isolated processes.
     if (
         target.startswith("eigensolver.")
         or STATUS.get(key, {}).get("status", "pass") != "pass"

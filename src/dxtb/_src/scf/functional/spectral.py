@@ -69,27 +69,28 @@ def _matrix_fermi(
     shift: Tensor,
     kt: Tensor,
     active: Tensor,
-    *,
-    wide_range: bool,
+    low_temperature: Tensor,
 ) -> Tensor:
     """Evaluate the symmetric matrix Fermi function with fixed scaling."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     exponent = (matrix - shift[..., None, None] * eye) / kt
-    # The existing ten-step path is accurate for float64 xTB ranges. In
-    # float32, sub-microhartree temperatures can make its initial exponential
-    # overflow, so use the smaller argument and twenty fixed tanh doublings.
-    # The dtype choice is static configuration; both branches evaluate the
-    # same matrix function without tensor-dependent host control.
-    scale = 2_097_152.0 if wide_range else 2048.0
-    steps = 20 if wide_range else 10
-    scaled = exponent / scale
+    # For relative spectral distances up to 200 Eh, the ordinary-temperature
+    # branch (kt >= 5e-4 Eh) keeps the initial matrix_exp argument below 391.
+    # At lower smearing, use scale 2**22 and 21 doublings; with the supported
+    # kt floor of 3e-7 Eh this also keeps the argument below 318. Both branches
+    # evaluate the same matrix function, selected by a tensor mask and fixed
+    # trip arithmetic without host control.
+    scale = torch.where(low_temperature, 4_194_304.0, 2048.0)
+    scaled = exponent / scale[..., None, None]
     exp_scaled = torch.matrix_exp(2.0 * scaled)
     tangent = torch.linalg.solve(exp_scaled + eye, exp_scaled - eye)
-    for _ in range(steps):
-        tangent = (
+    for index in range(21):
+        doubled = (
             2.0 * tangent @ torch.linalg.solve(eye + tangent @ tangent, eye)
         )
+        update = low_temperature | (index < 10)
+        tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
     density = 0.5 * (density + density.transpose(-2, -1))
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -209,6 +210,7 @@ def fermi_density_matrix(
     active_channel = state.active.to(device=h.device)
     gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
     below = state.below.to(device=h.device, dtype=torch.bool)
+    low_temperature = kt < 5.0e-4
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
@@ -217,7 +219,7 @@ def fermi_density_matrix(
             shift,
             safe_kt,
             active,
-            wide_range=hamiltonian.dtype != torch.float64,
+            low_temperature,
         )
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
         slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
@@ -234,7 +236,7 @@ def fermi_density_matrix(
         shift,
         safe_kt,
         active,
-        wide_range=hamiltonian.dtype != torch.float64,
+        low_temperature,
     )
     eye_channel = eye * active.unsqueeze(-1).to(h.dtype)
     density = torch.where(empty[..., None, None], 0.0, density)
@@ -289,19 +291,24 @@ def _projector(
     h = matrix + torch.diag_embed(pad)
     eye = torch.eye(n, dtype=matrix.dtype, device=matrix.device).expand(h.shape)
     x = (h - mu[..., None, None] * eye) / scale[..., None, None]
+    zero_rank = rank == 0
+    full_rank = rank == active_count
+    boundary_rank = zero_rank | full_rank
+    gap = (e_hi - e_lo).abs()
+    safe_gap = torch.where(boundary_rank, torch.ones_like(gap), gap)
+    preconditioner = torch.sqrt(2.0 * scale / safe_gap)
+    x = x * preconditioner[..., None, None]
+    crossing = (~boundary_rank) & (gap == 0.0)
+    x = torch.where(crossing[..., None, None], torch.zeros_like(x), x)
+    x = torch.where(zero_rank[..., None, None], eye, x)
+    x = torch.where(full_rank[..., None, None], -eye, x)
     # Newton-Schulz sign iteration. The fixed iteration count avoids
-    # data-dependent control flow, and the differentiable operations are
-    # matrix functions.
-    for _ in range(12):
+    # data-dependent control flow. The detached spectral-gap preconditioner
+    # balances the smallest and largest magnitudes before the iteration,
+    # keeping both the matrix solves and their higher derivatives well scaled.
+    for _ in range(14):
         inverse = torch.linalg.solve(x, eye)
-        x_norm = torch.linalg.matrix_norm(x, ord="fro", dim=(-2, -1))
-        inverse_norm = torch.linalg.matrix_norm(
-            inverse, ord="fro", dim=(-2, -1)
-        )
-        gamma = torch.sqrt(
-            inverse_norm / x_norm.clamp_min(torch.finfo(x.dtype).tiny)
-        )[..., None, None]
-        x = 0.5 * (gamma * x + inverse / gamma)
+        x = 0.5 * (x + inverse)
     result = 0.5 * (eye - x)
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     return torch.where(pair, result, torch.zeros_like(result))
