@@ -121,6 +121,11 @@ dataclasses and cache/component routes remain available. C6 remains partial;
 other component families and the complete interaction collection are separate
 migrations.
 
+Static averaging-callable context does not expose arbitrary tensor-valued
+state held by custom callables as dynamic Node leaves. The built-in averaging
+functions do not rely on such hidden state; consider separate C6.1 hardening
+only if a supported custom-callable use case demonstrates a concrete issue.
+
 **Preconditions.** Core component/setup values satisfy B6b-core. Separately
 isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
