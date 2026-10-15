@@ -178,7 +178,7 @@ def test_scalar_and_tensor_born_settings_keep_their_layout() -> None:
     scale = torch.tensor(1.1, **DD, requires_grad=True)
     offset = torch.tensor(0.1, **DD, requires_grad=True)
     descreening = torch.tensor([0.8, 0.8], **DD, requires_grad=True)
-    legacy, _, _ = _setup(born_scale=scale, born_offset=offset)
+    legacy, _, component = _setup(born_scale=scale, born_offset=offset)
     legacy = replace(legacy, descreening=descreening)
     core = core_generalized_born_setup(legacy)
     leaves, spec = pytree.tree_flatten(core)
@@ -190,8 +190,22 @@ def test_scalar_and_tensor_born_settings_keep_their_layout() -> None:
 
     numbers, positions = _geometry()
     charges = torch.tensor([0.2, -0.2], **DD)
+    legacy_data = build_generalized_born_data(legacy, positions)
+    core_data = build_generalized_born_data(core, positions)
+    torch.testing.assert_close(core_data.mat, legacy_data.mat)
+    torch.testing.assert_close(
+        component.get_monopole_atom_potential(core_data, charges),
+        component.get_monopole_atom_potential(legacy_data, charges),
+    )
+    legacy_energy = _energy(legacy, positions, charges)
     energy = _energy(core, positions, charges)
+    torch.testing.assert_close(energy, legacy_energy)
+    legacy_gradients = torch.autograd.grad(
+        legacy_energy, (scale, offset, descreening)
+    )
     gradients = torch.autograd.grad(energy, (scale, offset, descreening))
+    for gradient, legacy_gradient in zip(gradients, legacy_gradients):
+        torch.testing.assert_close(gradient, legacy_gradient)
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
     assert all(torch.count_nonzero(gradient) for gradient in gradients)
 
@@ -229,6 +243,110 @@ def test_mixed_dtype_tensor_born_settings_remain_supported() -> None:
     converted = core.to(dtype=torch.float64)
     for name in ("born_scale", "born_offset", "descreening"):
         assert getattr(converted, name).dtype is torch.float64
+
+
+@pytest.mark.parametrize(
+    ("born_scale", "born_offset"),
+    [
+        (torch.tensor(1.1, dtype=torch.float32), 0.0),
+        (1.0, torch.tensor(0.1, dtype=torch.float64)),
+        (
+            torch.tensor(1.1, dtype=torch.float32),
+            torch.tensor(0.1, dtype=torch.float64),
+        ),
+    ],
+    ids=("scale-only", "offset-only", "both"),
+)
+def test_cpu_tensor_born_scalars_move_to_core_setup_device(
+    born_scale: Tensor | float,
+    born_offset: Tensor | float,
+) -> None:
+    """Only CPU 0-D Born settings normalize to the main setup device."""
+    numbers, _ = _geometry()
+    component = GeneralizedBorn(numbers, 78.9, **DD)
+    legacy = setup_generalized_born(component, numbers)
+    if isinstance(born_scale, Tensor):
+        born_scale = born_scale.clone().requires_grad_()
+    if isinstance(born_offset, Tensor):
+        born_offset = born_offset.clone().requires_grad_()
+    meta_fields = {
+        name: getattr(legacy, name).to(device="meta")
+        for name in ("numbers", "alpbet", "keps", "rvdw", "cutoff", "obc")
+    }
+    legacy = replace(
+        legacy,
+        **meta_fields,
+        born_scale=born_scale,
+        born_offset=born_offset,
+    )
+
+    core = core_generalized_born_setup(legacy)
+    assert core.keps.device.type == "meta"
+    for name, source in (
+        ("born_scale", born_scale),
+        ("born_offset", born_offset),
+    ):
+        result = getattr(core, name)
+        if isinstance(source, Tensor):
+            assert result is not source
+            assert isinstance(result, Tensor)
+            assert result.device.type == "meta"
+            assert result.dtype == source.dtype
+            assert result.shape == torch.Size([])
+            assert result.requires_grad is source.requires_grad
+            assert source.device.type == "cpu"
+            assert any(leaf is result for leaf in pytree.tree_leaves(core))
+        else:
+            assert result is source
+
+    leaves, spec = pytree.tree_flatten(core)
+    rebuilt = pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is GeneralizedBornCoreSetup
+    for name in ("born_scale", "born_offset"):
+        value = getattr(rebuilt, name)
+        assert type(value) is type(getattr(core, name))
+        if isinstance(value, Tensor):
+            assert value.device.type == "meta"
+            assert value.dtype == getattr(core, name).dtype
+            assert value.shape == torch.Size([])
+    assert rebuilt.kernel == core.kernel
+    assert (
+        rebuilt.apply_alpb_shape_correction is core.apply_alpb_shape_correction
+    )
+
+
+def test_foreign_device_born_vectors_and_descreening_are_rejected() -> None:
+    """Foreign-device arrays are not swept into the scalar exception."""
+    numbers, _ = _geometry()
+    component = GeneralizedBorn(numbers, 78.9, **DD)
+    legacy = setup_generalized_born(component, numbers)
+    meta_fields = {
+        name: getattr(legacy, name).to(device="meta")
+        for name in ("numbers", "alpbet", "keps", "rvdw", "cutoff", "obc")
+    }
+    base = replace(legacy, **meta_fields)
+
+    with pytest.raises(RuntimeError, match="different devices"):
+        core_generalized_born_setup(
+            replace(base, born_scale=torch.ones((2,), dtype=torch.float64))
+        )
+
+    with pytest.raises(RuntimeError, match="different devices"):
+        core_generalized_born_setup(
+            replace(base, descreening=torch.full((2,), 0.8))
+        )
+
+
+def test_cpu_zero_dimensional_scalar_arithmetic_device_semantics() -> None:
+    """PyTorch allows CPU 0-D scalars with meta tensors, but not vectors."""
+    target = torch.ones(2, device="meta")
+    scalar = torch.tensor(1.1, device="cpu")
+    result = target * scalar
+    assert result.device.type == "meta"
+    assert result.shape == target.shape
+
+    with pytest.raises(RuntimeError, match="expected device meta"):
+        target * torch.ones(2, device="cpu")
 
 
 def test_dtype_device_and_noop_conversion() -> None:

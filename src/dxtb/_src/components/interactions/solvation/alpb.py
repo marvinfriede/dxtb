@@ -274,19 +274,34 @@ def core_generalized_born_setup(
     setup: GeneralizedBornSetup,
 ) -> GeneralizedBornCoreSetup:
     """Convert a compatibility setup to the immutable core value."""
+    device = setup.keps.device
     return GeneralizedBornCoreSetup(
         numbers=setup.numbers,
         kernel=setup.kernel,
         alpbet=setup.alpbet,
         keps=setup.keps,
         rvdw=setup.rvdw,
-        born_scale=setup.born_scale,
-        born_offset=setup.born_offset,
+        born_scale=_normalize_core_born_scalar(setup.born_scale, device),
+        born_offset=_normalize_core_born_scalar(setup.born_offset, device),
         cutoff=setup.cutoff,
         descreening=setup.descreening,
         obc=setup.obc,
         apply_alpb_shape_correction=setup.apply_alpb_shape_correction,
     )
+
+
+def _normalize_core_born_scalar(
+    value: Tensor | float | int, device: torch.device
+) -> Tensor | float | int:
+    """Move only supported CPU tensor scalars to the core setup device."""
+    if (
+        isinstance(value, Tensor)
+        and value.ndim == 0
+        and value.device.type == "cpu"
+        and device.type != "cpu"
+    ):
+        return value.to(device=device)
+    return value
 
 
 def setup_generalized_born(
