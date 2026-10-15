@@ -132,6 +132,13 @@ tensors retain identity; foreign-device arrays and `descreening` retain the
 upstream shared-device validation behavior. This does not establish general
 mixed-device Node support.
 
+C6.4 is complete: eligible single-System D4SC setup is stored as a
+`D4SCCoreSetup` Node. Ordered parameter names and recursive model-extra
+container metadata remain static, while tensor-valued parameters and model
+state remain dynamic children. The legacy `D4SCSetup`, component, cache, and
+functional-interaction preparation routes remain available and unchanged.
+Broader C6 remains partial; C7 remains independently unblocked.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

@@ -31,10 +31,12 @@ from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.dispersion.d4sc import (
+    D4SCCoreSetup,
     D4SCSetup,
     DispersionD4SC,
     DispersionD4SCCache,
     build_d4sc_data,
+    core_d4sc_setup,
     new_d4sc,
     setup_d4sc,
 )
@@ -142,12 +144,12 @@ def test_setup_is_frozen_and_contains_only_static_data() -> None:
     system = _model(par, exclude=("es2", "es3", "aes2")).setup(numbers)
     setup = system.d4sc_setup
 
-    assert isinstance(setup, D4SCSetup)
+    assert isinstance(setup, D4SCCoreSetup)
     assert system.d4sc_interaction is not None
     assert setup is not None
     assert {field.name for field in fields(setup)} == {
         "numbers",
-        "parameters",
+        "parameter_entries",
         "rcov",
         "r4r2",
         "cn_cutoff",
@@ -159,10 +161,15 @@ def test_setup_is_frozen_and_contains_only_static_data() -> None:
         "model_wf",
         "model_ref_charges",
         "model_rc6",
-        "model_extra",
+        "model_extra_entries",
     }
     assert isinstance(setup.parameters, tuple)
     assert all(isinstance(entry, tuple) for entry in setup.parameters)
+    assert isinstance(setup_d4sc(system.d4sc_interaction, numbers), D4SCSetup)
+    assert isinstance(
+        core_d4sc_setup(setup_d4sc(system.d4sc_interaction, numbers)),
+        D4SCCoreSetup,
+    )
     assert not any(
         isinstance(
             getattr(setup, field.name),

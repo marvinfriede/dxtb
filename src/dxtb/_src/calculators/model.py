@@ -86,8 +86,9 @@ from dxtb._src.components.interactions.coulomb import (
     setup_es3,
 )
 from dxtb._src.components.interactions.dispersion import (
-    D4SCSetup,
+    D4SCCoreSetup,
     DispersionD4SC,
+    core_d4sc_setup,
     new_d4sc,
     setup_d4sc,
 )
@@ -166,7 +167,7 @@ class System:
     aes2_interaction: AES2 | None
     """Exact AES2 interaction associated with :attr:`aes2_setup`."""
 
-    d4sc_setup: D4SCSetup | None
+    d4sc_setup: D4SCCoreSetup | None
     """Numbers/parameter setup for the exact migrated D4SC term."""
 
     d4sc_interaction: DispersionD4SC | None
@@ -441,7 +442,7 @@ class Model:
             else None
         )
         d4sc_setup = (
-            setup_d4sc(d4sc_interaction, numbers)
+            core_d4sc_setup(setup_d4sc(d4sc_interaction, numbers))
             if d4sc_interaction is not None and batch_mode == 0
             else None
         )

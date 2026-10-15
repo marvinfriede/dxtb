@@ -32,6 +32,7 @@ import torch
 from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import (
     DD,
     CountingFunction,
@@ -50,11 +51,13 @@ from dxtb._src.utils.tensors import normalize_device
 from ..base import Interaction, InteractionCache
 
 __all__ = [
+    "D4SCCoreSetup",
     "D4SCSetup",
     "DispersionD4SC",
     "DispersionD4SCCache",
     "LABEL_DISPERSIOND4SC",
     "build_d4sc_data",
+    "core_d4sc_setup",
     "new_d4sc",
     "setup_d4sc",
 ]
@@ -96,6 +99,180 @@ class _StaticMapping:
 @dataclass(frozen=True, eq=False)
 class _StaticList:
     items: tuple[Any, ...]
+
+
+class _D4SCValue(Node):
+    """Typed recursive value used for mixed static and tensor model state."""
+
+    kind: str = context()
+    metadata: Any = context()
+    tensor_value: Tensor | None = child(keep_dtype=True)
+    items: tuple[_D4SCValue, ...] = child(keep_dtype=True)
+
+    def _convert_child(
+        self,
+        name: str,
+        value: Any,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None,
+    ) -> Any:
+        if name == "tensor_value" and isinstance(value, Tensor):
+            target_dtype = dtype if value.is_floating_point() else None
+            return value.to(device=device, dtype=target_dtype)
+        if name == "items":
+            converted = tuple(
+                item.to(device=device, dtype=dtype) for item in value
+            )
+            if all(new is old for old, new in zip(value, converted)):
+                return value
+            return converted
+        return super()._convert_child(name, value, device, dtype)
+
+    @classmethod
+    def encode(cls, value: Any) -> _D4SCValue:
+        """Encode one already-snapshotted value without copying tensors."""
+        if isinstance(value, Tensor):
+            return cls(
+                kind="tensor", metadata=None, tensor_value=value, items=()
+            )
+        if isinstance(value, _StaticMapping):
+            items = tuple(
+                child
+                for key, item in value.items
+                for child in (cls.encode(key), cls.encode(item))
+            )
+            return cls(
+                kind="mapping", metadata=None, tensor_value=None, items=items
+            )
+        if isinstance(value, _StaticList):
+            return cls(
+                kind="list",
+                metadata=None,
+                tensor_value=None,
+                items=tuple(cls.encode(item) for item in value.items),
+            )
+        if isinstance(value, tuple):
+            return cls(
+                kind="tuple",
+                metadata=None,
+                tensor_value=None,
+                items=tuple(cls.encode(item) for item in value),
+            )
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return cls(
+                kind="scalar", metadata=value, tensor_value=None, items=()
+            )
+        raise TypeError(
+            "Custom D4Model state must contain only tensors and immutable "
+            f"scalar values; received {type(value).__name__}."
+        )
+
+    def decode(self) -> Any:
+        """Reconstruct the immutable setup representation."""
+        if self.kind == "tensor":
+            return self.tensor_value
+        if self.kind == "scalar":
+            return self.metadata
+        if self.kind == "tuple":
+            return tuple(item.decode() for item in self.items)
+        if self.kind == "list":
+            return _StaticList(tuple(item.decode() for item in self.items))
+        if self.kind == "mapping":
+            return _StaticMapping(
+                tuple(
+                    (self.items[index].decode(), self.items[index + 1].decode())
+                    for index in range(0, len(self.items), 2)
+                )
+            )
+        raise TypeError(f"Unsupported D4SC value kind: {self.kind!r}.")
+
+
+class _D4SCNamedValue(Node):
+    """One ordered named D4SC parameter or model-state value."""
+
+    name: str = context()
+    value: _D4SCValue = child()
+
+
+class D4SCCoreSetup(Node):
+    """Immutable Node values used by single-System D4SC evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    parameter_entries: tuple[_D4SCNamedValue, ...] = child(keep_dtype=True)
+    rcov: Tensor = child()
+    r4r2: Tensor = child()
+    cn_cutoff: Tensor = child()
+    pair_weight: Tensor = child()
+    counting_function: CountingFunction = context()
+    model_type: type[d4.model.D4Model] = context()
+    model_ga: float = context()
+    model_gc: float = context()
+    model_wf: Tensor = child()
+    model_ref_charges: str = context()
+    model_rc6: Tensor = child()
+    model_extra_entries: tuple[_D4SCNamedValue, ...] = child(keep_dtype=True)
+
+    def _convert_child(
+        self,
+        name: str,
+        value: Any,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None,
+    ) -> Any:
+        if name in ("parameter_entries", "model_extra_entries"):
+            converted = tuple(
+                entry.to(device=device, dtype=dtype) for entry in value
+            )
+            if all(new is old for old, new in zip(value, converted)):
+                return value
+            return converted
+        return super()._convert_child(name, value, device, dtype)
+
+    @property
+    def parameters(self) -> tuple[tuple[str, Any], ...]:
+        """Return the ordered compatibility view of parameter values."""
+        return tuple(
+            (entry.name, entry.value.decode())
+            for entry in self.parameter_entries
+        )
+
+    @property
+    def model_extra(self) -> tuple[tuple[str, Any], ...]:
+        """Return the ordered immutable compatibility view of model state."""
+        return tuple(
+            (entry.name, entry.value.decode())
+            for entry in self.model_extra_entries
+        )
+
+    def as_param(self) -> d4.Param:
+        """Materialize the parameter mapping expected by tad-dftd4."""
+        return d4.Param(**dict(self.parameters))
+
+
+def core_d4sc_setup(setup: D4SCSetup) -> D4SCCoreSetup:
+    """Convert the compatibility setup to immutable typed Node values."""
+    return D4SCCoreSetup(
+        numbers=setup.numbers,
+        parameter_entries=tuple(
+            _D4SCNamedValue(name=name, value=_D4SCValue.encode(value))
+            for name, value in setup.parameters
+        ),
+        rcov=setup.rcov,
+        r4r2=setup.r4r2,
+        cn_cutoff=setup.cn_cutoff,
+        pair_weight=setup.pair_weight,
+        counting_function=setup.counting_function,
+        model_type=setup.model_type,
+        model_ga=setup.model_ga,
+        model_gc=setup.model_gc,
+        model_wf=setup.model_wf,
+        model_ref_charges=setup.model_ref_charges,
+        model_rc6=setup.model_rc6,
+        model_extra_entries=tuple(
+            _D4SCNamedValue(name=name, value=_D4SCValue.encode(value))
+            for name, value in setup.model_extra
+        ),
+    )
 
 
 def _clone_static(value: Any) -> Any:
@@ -176,7 +353,9 @@ def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
     )
 
 
-def _build_d4sc_model(setup: D4SCSetup) -> d4.model.D4Model:
+def _build_d4sc_model(
+    setup: D4SCSetup | D4SCCoreSetup,
+) -> d4.model.D4Model:
     """Construct a model object owned by one call-data value."""
     try:
         model = setup.model_type(
@@ -213,7 +392,9 @@ def _restore_static(value: Any) -> Any:
     return value
 
 
-def build_d4sc_data(setup: D4SCSetup, positions: Tensor) -> DispersionD4SCCache:
+def build_d4sc_data(
+    setup: D4SCSetup | D4SCCoreSetup, positions: Tensor
+) -> DispersionD4SCCache:
     """Build fresh geometry-dependent D4SC data for one evaluation."""
     numbers = setup.numbers
     cn = coordination_number(
