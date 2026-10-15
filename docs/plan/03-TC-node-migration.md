@@ -139,6 +139,12 @@ state remain dynamic children. The legacy `D4SCSetup`, component, cache, and
 functional-interaction preparation routes remain available and unchanged.
 Broader C6 remains partial; C7 remains independently unblocked.
 
+C6.4a is complete: single-System functional FULL and implicit D4SC preparation
+now derive model configuration from the same System-owned setup snapshot used
+to build call-local dispersion data. Direct compatibility callers still
+capture setup from their supplied component, and solver override routing is
+unchanged.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

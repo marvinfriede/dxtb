@@ -48,6 +48,7 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
 from dxtb._src.components.interactions.dispersion.d4sc import build_d4sc_data
+from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
     ElectricField,
@@ -141,6 +142,14 @@ def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     )
 
 
+class _SystemInteractionData(InteractionListCache):
+    """Call-local interaction caches with their captured D4SC authority."""
+
+    def __init__(self, d4sc_setup: D4SCCoreSetup | None) -> None:
+        super().__init__()
+        self.d4sc_setup = d4sc_setup
+
+
 def _interaction_data(
     system: System, positions: Tensor, interactions=None
 ) -> InteractionListCache:
@@ -150,7 +159,7 @@ def _interaction_data(
     interactions keep their current cache APIs until their B6a packages, but
     returned data is local to this call.
     """
-    data = InteractionListCache()
+    data = _SystemInteractionData(system.d4sc_setup)
     interactions = system.interactions if interactions is None else interactions
     for interaction in interactions.components:
         if type(interaction) is ElectricField:

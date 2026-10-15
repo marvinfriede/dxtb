@@ -281,7 +281,10 @@ def setup_scf_inputs(
     from .interactions import prepare_functional_interactions
 
     core_interactions = prepare_functional_interactions(
-        interactions, interaction_data, numbers
+        interactions,
+        interaction_data,
+        numbers,
+        d4sc_setup=getattr(interaction_data, "d4sc_setup", None),
     )
     kt_value = config.fermi.etemp * KELVIN2AU
     if kt_value == 0.0:

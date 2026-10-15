@@ -29,8 +29,10 @@ from dxtb._src.components.interactions.coulomb.multipole import AES2
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
 from dxtb._src.components.interactions.dispersion.d4sc import (
+    D4SCCoreSetup,
     DispersionD4SC,
     D4SCSetup,
+    _d4sc_setup_view,
     _build_d4sc_model,
     setup_d4sc,
 )
@@ -51,8 +53,15 @@ def prepare_functional_interactions(
     interactions: InteractionList,
     interaction_data: InteractionListCache,
     numbers: Tensor,
+    *,
+    d4sc_setup: D4SCCoreSetup | None = None,
 ) -> FunctionalInteractionSet:
-    """Convert supported legacy components/caches to frozen core entries."""
+    """Convert supported components/caches to frozen core entries.
+
+    ``d4sc_setup`` is supplied by the single-System call-data boundary so
+    its functional reference weights use the same setup snapshot as the
+    geometry-dependent D4SC cache. Direct compatibility callers may omit it.
+    """
     entries: list[FunctionalInteractionEntry] = []
     for component in interactions.components:
         cache = interaction_data[component.label]
@@ -90,11 +99,16 @@ def prepare_functional_interactions(
                 )
             )
         elif kind is DispersionD4SC:
+            setup = (
+                _d4sc_setup_view(d4sc_setup)
+                if d4sc_setup is not None
+                else setup_d4sc(component, numbers)
+            )
             entries.append(
                 FunctionalInteractionEntry(
                     "d4sc",
                     (("cn", cache.cn), ("dispmat", cache.dispmat)),
-                    (("setup", setup_d4sc(component, numbers)),),
+                    (("setup", setup),),
                 )
             )
         elif kind is GeneralizedBorn:

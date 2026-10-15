@@ -275,6 +275,26 @@ def core_d4sc_setup(setup: D4SCSetup) -> D4SCCoreSetup:
     )
 
 
+def _d4sc_setup_view(setup: D4SCCoreSetup) -> D4SCSetup:
+    """Build a zero-copy compatibility view of a captured core setup."""
+    return D4SCSetup(
+        numbers=setup.numbers,
+        parameters=setup.parameters,
+        rcov=setup.rcov,
+        r4r2=setup.r4r2,
+        cn_cutoff=setup.cn_cutoff,
+        pair_weight=setup.pair_weight,
+        counting_function=setup.counting_function,
+        model_type=setup.model_type,
+        model_ga=setup.model_ga,
+        model_gc=setup.model_gc,
+        model_wf=setup.model_wf,
+        model_ref_charges=setup.model_ref_charges,
+        model_rc6=setup.model_rc6,
+        model_extra=setup.model_extra,
+    )
+
+
 def _clone_static(value: Any) -> Any:
     """Clone tensor-valued static model data without cutting its graph."""
     if isinstance(value, Tensor):
