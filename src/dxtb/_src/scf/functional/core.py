@@ -21,16 +21,17 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
 
+from tad_mctc.tree import Node, child
+
 from dxtb._src.typing import Tensor
 from dxtb._src.utils import wrap_gather, wrap_scatter_reduce
 
 
-@dataclass(frozen=True, eq=False)
-class CoreIndexData:
+class CoreIndexData(Node):
     """Minimal immutable mappings needed by a single-System SCF map."""
 
-    shells_to_atom: Tensor
-    orbitals_to_shell: Tensor
+    shells_to_atom: Tensor = child(keep_dtype=True)
+    orbitals_to_shell: Tensor = child(keep_dtype=True)
 
     def reduce_orbital_to_shell(
         self,

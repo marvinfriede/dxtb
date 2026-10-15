@@ -47,7 +47,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | not done                        | C5-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6bimpl prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
+| C5-C9          | C5 active; later work not done | C5 migrates the frozen `CoreIndexData` value to tad-mctc `Node`; C6-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6bimpl prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2632,8 +2632,8 @@ are complete; full E3 end-to-end acceptance remains blocked by E1.3 for the
 DFT-D3-enabled GFN1 row. B6b-core removes mutable legacy index and interaction
 containers from the functional SCF core while preserving their legacy
 consumers; it does not include classical DFT-D3 setup/cache migration or
-repository-wide compatibility cleanup. C5's core structural-data migration is
-now unblocked.
+repository-wide compatibility cleanup. C5 — migrating `CoreIndexData` to
+tad-mctc `Node` — is now active.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 
