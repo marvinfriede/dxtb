@@ -43,7 +43,7 @@ Current state:
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
 | B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for built-in DFT-D3 setup and final generic stored built-in classical-cache removal. |
-| B6             | partial                         | B6a-SCF-core and B6a-SCF-validation are complete. Broader B6a remains open for built-in DFT-D3 explicit setup and final generic stored built-in classical-cache removal; B6b-core and the separately owned legacy compatibility purge remain open. |
+| B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, and B6b-core are complete. Broader B6a remains open for built-in DFT-D3 explicit setup and final generic stored built-in classical-cache removal; the separately owned legacy compatibility purge remains open. B6b-core unblocks C5's structural-data migration. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -2627,15 +2627,13 @@ private transform boundary unblock E6a, where the exact B1 public call is
 finally tested. E6a + final B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not
 wait for B3b, C5/C8b, or E4.6a.
 
-The next runtime package is **E3.1b — transform-compatible implicit
-physical-root implementation**. E3.1a and E3.1s are complete: functional
-SCF density and equal/atomic free-energy partitions now use invariant
-spectral-matrix responses, with one authoritative Fermi state. E3.1b uses the
-convergence-tested physical root and keeps representation-specific
-finalization outside the root derivative. It can proceed without outer
-DFT-D3/E1.3, while full E3 acceptance still waits for full E1 and E2-core.
-This E3.1 order does not wait for E2-legacy cleanup or batching branches
-above.
+B6b-core — new single-System core purity — is complete. E3.1a, E3.1s and E3.1b
+are complete; full E3 end-to-end acceptance remains blocked by E1.3 for the
+DFT-D3-enabled GFN1 row. B6b-core removes mutable legacy index and interaction
+containers from the functional SCF core while preserving their legacy
+consumers; it does not include classical DFT-D3 setup/cache migration or
+repository-wide compatibility cleanup. C5's core structural-data migration is
+now unblocked.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 

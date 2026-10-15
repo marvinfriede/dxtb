@@ -717,7 +717,7 @@ def test_potential_to_hamiltonian_transform_ladder_is_consistent() -> None:
             case.integrals.overlap,
             case.integrals.dipole,
             case.integrals.quadrupole,
-            case.inputs.ihelp,
+            case.inputs.index,
             SCFPotential(mono=mono),
         )
         return hamiltonian.square().sum()

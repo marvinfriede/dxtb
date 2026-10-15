@@ -720,7 +720,7 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
             case.inputs.integrals.overlap,
             case.inputs.integrals.dipole,
             case.inputs.integrals.quadrupole,
-            case.inputs.ihelp,
+            case.inputs.index,
             potential,
         )
         return (hamiltonian * weights).sum()

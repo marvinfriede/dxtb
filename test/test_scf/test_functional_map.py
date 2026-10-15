@@ -48,6 +48,7 @@ from dxtb._src.components.interactions.list import (
     InteractionListCache,
     _FUNCTIONAL_SCF_INTERACTION_TYPES,
 )
+from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
@@ -62,16 +63,29 @@ from dxtb._src.scf.functional import (
     potential_layout,
     pack_charges,
     potential_from_charges,
+    potential_initial_guess,
     scf_map,
+    fock_initial_guess,
+    fock_map,
     setup_scf_inputs,
+    interaction_energy_from_charges,
     unpack_charges,
     unpack_potential,
     validate_functional_scf_interactions,
     functional_scf_interactions_eligible,
 )
+from dxtb._src.scf.functional.core import (
+    CoreIndexData,
+    FunctionalInteractionSet,
+    tensor_leaves,
+)
 from dxtb._src.scf.functional.map import _transitional_diagonalize
 from dxtb._src.scf.functional.map import evaluate_hamiltonian
-from dxtb._src.scf.functional.solver import free_energy_from_spectral
+from dxtb._src.scf.functional.solver import (
+    SCFSolverSettings,
+    free_energy_from_spectral,
+    solve_scf_simple,
+)
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.unrolling import SelfConsistentFieldFull
@@ -1608,8 +1622,39 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
     integral_values = tuple(
         None if value is None else value.clone() for value in integrals
     )
-    interactions = tuple(inputs.interactions.components)
-    cache_entries = tuple(inputs.interaction_data.items())
+    legacy_interactions = case.interactions
+    legacy_components = tuple(legacy_interactions.components)
+    cache_entries = tuple(case.interaction_data.items())
+    legacy_setup_snapshot = _snapshot_tree(
+        (
+            legacy_interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            inputs.integrals,
+        )
+    )
+    inputs = setup_scf_inputs(
+        case.system.numbers,
+        case.integrals,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+    )
+    _assert_snapshot_equal(
+        _snapshot_tree(
+            (
+                legacy_interactions,
+                case.interaction_data,
+                case.system.ihelp,
+                case.integrals,
+            )
+        ),
+        legacy_setup_snapshot,
+    )
     cache_tensors = {
         key: {
             name: value.clone()
@@ -1634,7 +1679,8 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
             nested_model_values[name] = getattr(model, name)
     assert {"numbers", "wf", "rc6"} <= nested_model_tensors.keys()
     index_state = {
-        name: getattr(inputs.ihelp, name) for name in inputs.ihelp.__slots__
+        name: getattr(case.system.ihelp, name)
+        for name in case.system.ihelp.__slots__
     }
     index_tensors = {
         name: value.clone()
@@ -1647,8 +1693,38 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
 
     monkeypatch.setattr(Component, "update", forbidden)
     monkeypatch.setattr(Component, "reset", forbidden)
+    monkeypatch.setattr(Interaction, "update", forbidden)
+    monkeypatch.setattr(Interaction, "reset", forbidden)
+    monkeypatch.setattr(InteractionList, "update", forbidden)
+    monkeypatch.setattr(InteractionList, "reset", forbidden)
+    monkeypatch.setattr(InteractionList, "reset_all", forbidden)
     monkeypatch.setattr(InteractionListCache, "cull", forbidden)
     monkeypatch.setattr(InteractionListCache, "restore", forbidden)
+    for value in (
+        case.system.ihelp,
+        legacy_interactions,
+        case.interaction_data,
+        *legacy_components,
+        *(cache for _, cache in cache_entries),
+    ):
+        for name in ("update", "reset", "reset_all", "cull", "restore"):
+            if hasattr(type(value), name):
+                monkeypatch.setattr(type(value), name, forbidden)
+
+    assert isinstance(inputs.index, CoreIndexData)
+    assert isinstance(inputs.interactions, FunctionalInteractionSet)
+    assert not hasattr(inputs, "ihelp")
+    assert not hasattr(inputs, "interaction_data")
+    assert not hasattr(inputs.interactions, "components")
+    assert not hasattr(inputs.interactions, "update")
+    assert not hasattr(inputs.interactions, "reset")
+    assert "IndexHelper" not in repr(inputs.__dataclass_fields__["index"].type)
+    assert "InteractionList" not in repr(
+        inputs.__dataclass_fields__["interactions"].type
+    )
+    core_tensor_values = tuple(
+        (path, value.clone()) for path, value in tensor_leaves(inputs)
+    )
 
     first = scf_map(case.x, inputs)
     second = scf_map(case.x, inputs)
@@ -1683,30 +1759,141 @@ def test_map_inputs_are_not_mutated_and_values_are_frozen(
         if expected is not None:
             assert actual is not None
             _assert_tensor_equal(actual, expected)
-    assert tuple(inputs.interactions.components) == interactions
-    assert tuple(key for key, _ in inputs.interaction_data.items()) == tuple(
+    assert tuple(case.interactions.components) == legacy_components
+    assert tuple(key for key, _ in case.interaction_data.items()) == tuple(
         key for key, _ in cache_entries
     )
     assert all(
-        inputs.interaction_data[key] is value for key, value in cache_entries
+        case.interaction_data[key] is value for key, value in cache_entries
     )
     for key, cache in cache_entries:
         for name, expected in cache_tensors[key].items():
             _assert_tensor_equal(getattr(cache, name), expected)
-    d4_model = inputs.interaction_data["DispersionD4SC"].model
+    d4_model = case.interaction_data["DispersionD4SC"].model
     for name, expected in nested_model_tensors.items():
         _assert_tensor_equal(getattr(d4_model, name), expected)
     for name, expected in nested_model_values.items():
         assert getattr(d4_model, name) == expected
     for name, before in index_state.items():
-        after = getattr(inputs.ihelp, name)
+        after = getattr(case.system.ihelp, name)
         if name in index_tensors:
             _assert_tensor_equal(after, index_tensors[name])
         else:
             assert after is before or after == before
 
+    for path, expected in core_tensor_values:
+        actual = dict(tensor_leaves(inputs))[path]
+        _assert_tensor_equal(actual, expected)
+
+    assert all(
+        actual is original
+        for actual, original in zip(
+            legacy_components, case.interactions.components
+        )
+    )
+    _assert_snapshot_equal(
+        _snapshot_tree(
+            (
+                legacy_interactions,
+                case.interaction_data,
+                case.system.ihelp,
+                inputs.integrals,
+            )
+        ),
+        legacy_setup_snapshot,
+    )
+
     with pytest.raises(FrozenInstanceError):
         inputs.n0 = inputs.n0  # type: ignore[misc]
+
+
+def test_functional_core_has_no_legacy_mutation_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All raw representations run without receiving legacy containers."""
+    case = _prepare_case(
+        GFN2_XTB,
+        field=torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64),
+        scf_options={"fermi_etemp": 300.0},
+    )
+    inputs = case.inputs
+    assert isinstance(inputs.index, CoreIndexData)
+    assert isinstance(inputs.interactions, FunctionalInteractionSet)
+    assert {field.name for field in fields(type(inputs))}.isdisjoint(
+        {"ihelp", "interaction_data"}
+    )
+    assert all(
+        type(value).__name__
+        not in {"IndexHelper", "InteractionList", "InteractionListCache"}
+        for value in (inputs.index, inputs.interactions)
+    )
+
+    def reject_legacy_owner(value: object) -> None:
+        if isinstance(
+            value,
+            (
+                IndexHelper,
+                Component,
+                Interaction,
+                InteractionList,
+                InteractionListCache,
+            ),
+        ):
+            raise AssertionError(
+                f"Legacy mutable owner retained in core input: {type(value)}"
+            )
+        if is_dataclass(value) and not isinstance(value, type):
+            for field in fields(value):
+                reject_legacy_owner(getattr(value, field.name))
+        elif isinstance(value, tuple):
+            for item in value:
+                reject_legacy_owner(item)
+
+    reject_legacy_owner(inputs)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("A functional raw map reached a legacy mutator.")
+
+    for cls, names in (
+        (IndexHelper, ("cull", "restore")),
+        (Component, ("update", "reset")),
+        (Interaction, ("update", "reset")),
+        (InteractionList, ("update", "reset", "reset_all")),
+        (InteractionListCache, ("cull", "restore")),
+    ):
+        for name in names:
+            monkeypatch.setattr(cls, name, forbidden)
+
+    initial = evaluate_hamiltonian(inputs.integrals.hcore, inputs).charges
+    charge_first = scf_map(case.x, inputs)
+    charge_again = scf_map(case.x, inputs)
+    _assert_tensor_equal(charge_first.mapped_x, charge_again.mapped_x)
+
+    potential_x, layout = potential_initial_guess(initial, inputs)
+    potential_first = potential_map(potential_x, inputs, layout)
+    potential_again = potential_map(potential_x, inputs, layout)
+    _assert_tensor_equal(potential_first.mapped_x, potential_again.mapped_x)
+
+    fock_x = fock_initial_guess(initial, inputs)
+    fock_first = fock_map(fock_x, inputs)
+    fock_again = fock_map(fock_x, inputs)
+    _assert_tensor_equal(fock_first.mapped_x, fock_again.mapped_x)
+
+    assert charge_first.fermi_status is not None
+    assert potential_first.fermi_status is not None
+    assert fock_first.fermi_status is not None
+    solved = solve_scf_simple(
+        case.x,
+        inputs,
+        SCFSolverSettings(
+            maxiter=1,
+            mix_guess=True,
+            damp=0.4,
+            x_atol=1.0e-8,
+            x_atol_max=1.0e-8,
+        ),
+    )
+    assert torch.isfinite(solved.energy).all()
 
 
 def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
@@ -1813,9 +2000,15 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
             current_system.ihelp,
             current_system.config.scf,
         )
-        assert {type(item) for item in inputs.interactions.components} == (
-            expected_types
-        )
+        assert {item.kind for item in inputs.interactions.entries} == {
+            "es2",
+            "es3",
+            "aes2",
+            "d4sc",
+            "generalized_born",
+            "electric_field",
+            "electric_field_grad",
+        }
         assert not hasattr(inputs, "classicals")
         mapped = scf_map(case.x, inputs)
         value = (
@@ -1874,6 +2067,96 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
             ), f"{label} call data did not respond to changed geometry/input"
 
     _assert_snapshot_equal(persistent_snapshot(system), before)
+
+
+def test_functional_interaction_aggregates_match_legacy() -> None:
+    """Pure interaction dispatch preserves legacy potential and energy."""
+    case = _prepare_case(GFN2_XTB)
+    numbers = case.system.numbers
+    d3_case = _prepare_case(GFN1_XTB)
+    d3_component = next(
+        item
+        for item in d3_case.system.classicals.components
+        if type(item) is DispersionD3
+    )
+    model = Model(
+        par=case.par,
+        config=case.system.config,
+        classical=(d3_component,),
+        interaction=(
+            GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64),
+        ),
+        auto_int_level=False,
+    )
+    system = model.setup(numbers)
+    field = ElectricField(
+        torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64)
+    )
+    field_grad = ElectricFieldGrad(
+        torch.full((3, 3), 0.0001, dtype=torch.float64)
+    )
+    all_interactions = InteractionList(
+        *system.interactions.components, field, field_grad
+    )
+    integrals, _, _ = build_integral_matrices(
+        system.integral_setup,
+        system.h0_setup,
+        case.positions,
+        case.charge,
+    )
+    nat = numbers.numel()
+    nmo = case.n0.numel()
+    core_charges = SCFCharges(
+        mono=torch.linspace(-0.17, 0.23, nmo, dtype=torch.float64),
+        dipole=torch.linspace(
+            -0.08, 0.11, nat * 3, dtype=torch.float64
+        ).reshape(nat, 3),
+        quad=torch.linspace(-0.05, 0.07, nat * 6, dtype=torch.float64).reshape(
+            nat, 6
+        ),
+    )
+    legacy_charges = Charges(
+        mono=core_charges.mono,
+        dipole=core_charges.dipole,
+        quad=core_charges.quad,
+    )
+
+    def compare(interactions: InteractionList) -> None:
+        data = _interaction_data(system, case.positions, interactions)
+        inputs = setup_scf_inputs(
+            numbers,
+            integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            interactions,
+            data,
+            system.ihelp,
+            system.config.scf,
+        )
+        old_potential = interactions.get_potential(
+            data, legacy_charges, system.ihelp
+        )
+        new_potential = potential_from_charges(core_charges, inputs)
+        for name in ("mono", "dipole", "quad"):
+            old = getattr(old_potential, name)
+            new = getattr(new_potential, name)
+            assert (old is None) == (new is None), name
+            if old is not None:
+                assert new is not None
+                torch.testing.assert_close(new, old, rtol=2e-12, atol=2e-13)
+
+        old_energy = interactions.get_energy(legacy_charges, data, system.ihelp)
+        new_energy = interaction_energy_from_charges(core_charges, inputs)
+        torch.testing.assert_close(
+            new_energy, old_energy, rtol=2e-12, atol=2e-13
+        )
+
+    # The singleton rows make each migrated formula independently visible;
+    # the aggregate row also protects composition and optional multipoles.
+    for interaction in all_interactions.components:
+        compare(InteractionList(interaction))
+    compare(all_interactions)
 
 
 _B6A_FAMILY_ROWS = (
@@ -1997,8 +2280,17 @@ def test_b6a_functional_interaction_family_matrix(
             current_system.config.scf,
         )
         assert functional_scf_interactions_eligible(interactions) == (True, "")
-        assert {type(item) for item in inputs.interactions.components} == {
-            interaction_type
+        expected_kind = {
+            ES2: "es2",
+            ES3: "es3",
+            AES2: "aes2",
+            DispersionD4SC: "d4sc",
+            GeneralizedBorn: "generalized_born",
+            ElectricField: "electric_field",
+            ElectricFieldGrad: "electric_field_grad",
+        }[interaction_type]
+        assert {item.kind for item in inputs.interactions.entries} == {
+            expected_kind
         }
         assert any(
             type(item) is DispersionD3

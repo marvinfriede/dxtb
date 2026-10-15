@@ -227,10 +227,16 @@ def _inputs_at_field(case, field_parameter: Tensor):
     interaction_data = _interaction_data(
         case.system, case.positions, interactions
     )
-    return replace(
-        case.inputs,
-        interactions=interactions,
-        interaction_data=interaction_data,
+    return setup_scf_inputs(
+        case.numbers,
+        case.integrals,
+        case.n0,
+        case.occupation,
+        case.nel,
+        interactions,
+        interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
     )
 
 
@@ -1288,10 +1294,9 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
         temperature=temperature,
         field=torch.zeros(3, **_DD),
     )
-    assert not any(
-        type(item).__name__ == "DispersionD3"
-        for item in case.inputs.interactions.components
-    )
+    assert "dispersion_d3" not in {
+        item.kind for item in case.inputs.interactions.entries
+    }
     root_record = _run_root(
         case,
         _inputs_at_field(case, torch.zeros((), **_DD)),

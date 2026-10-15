@@ -376,7 +376,7 @@ def test_fermi_partitions_share_matrix_trace_and_authoritative_state(
         spectral.coefficients,
     )
     old_atomic = mulliken.get_atomic_populations(
-        case.inputs.integrals.overlap, old_matrix, case.inputs.ihelp
+        case.inputs.integrals.overlap, old_matrix, case.inputs.index
     ).sum()
 
     assert calls == 1
@@ -505,7 +505,7 @@ def test_fermi_saturated_channels_preserve_entropy_floor(
     )
     equal_total = torch.trace(inputs.integrals.overlap @ empty_matrix)
     atomic_total = mulliken.get_atomic_populations(
-        inputs.integrals.overlap, empty_matrix, inputs.ihelp
+        inputs.integrals.overlap, empty_matrix, inputs.index
     ).sum()
     torch.testing.assert_close(equal_total, atomic_total)
 
@@ -566,7 +566,7 @@ def test_no2_open_shell_free_energy_uses_channelwise_root(
             spectral.coefficients,
         )
         old_value = mulliken.get_atomic_populations(
-            inputs.integrals.overlap, old_matrix, inputs.ihelp
+            inputs.integrals.overlap, old_matrix, inputs.index
         ).sum()
     new_value = free_energy_from_spectral(spectral, inputs).sum()
     torch.testing.assert_close(new_value, old_value, atol=2.0e-12, rtol=2.0e-9)
@@ -613,7 +613,7 @@ def test_low_temperature_partition_matches_legacy_forward_value(
             spectral.coefficients,
         )
         expected = mulliken.get_atomic_populations(
-            case.inputs.integrals.overlap, legacy, case.inputs.ihelp
+            case.inputs.integrals.overlap, legacy, case.inputs.index
         )
     new_value = free_energy_from_spectral(spectral, case.inputs)
     torch.testing.assert_close(new_value, expected, atol=2.0e-14, rtol=2.0e-9)

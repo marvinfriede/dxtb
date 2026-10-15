@@ -45,6 +45,10 @@ from dxtb._src.scf.functional.data import (
     setup_scf_inputs,
     unpack_potential,
 )
+from dxtb._src.scf.functional.core import FunctionalInteractionSet
+from dxtb._src.scf.functional.interactions import (
+    potential_from_charges as _core_potential_from_charges,
+)
 from dxtb._src.scf.functional.anderson import (
     AndersonState,
     anderson_mix,
@@ -742,16 +746,12 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
     )
     initial_potential = potential_from_charges(initial_charges, inputs)
     initial_contributions = {
-        interaction.label: interaction.get_potential(
-            inputs.interaction_data[interaction.label],
-            Charges(
-                mono=initial_charges.mono,
-                dipole=initial_charges.dipole,
-                quad=initial_charges.quad,
-            ),
-            inputs.ihelp,
+        entry.kind: _core_potential_from_charges(
+            initial_charges,
+            FunctionalInteractionSet((entry,)),
+            inputs.index,
         )
-        for interaction in inputs.interactions.components
+        for entry in inputs.interactions.entries
     }
     rebuilt_packed, rebuilt_layout = potential_initial_guess(
         initial_charges, inputs
@@ -767,21 +767,18 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
         integrals.overlap,
         integrals.dipole,
         integrals.quadrupole,
-        inputs.ihelp,
+        inputs.index,
         potential,
     )
     spectral = evaluate_hamiltonian(hamiltonian, inputs)
-    charges = Charges(
-        mono=spectral.charges.mono,
-        dipole=spectral.charges.dipole,
-        quad=spectral.charges.quad,
-    )
     contribution_values = {}
-    for interaction in inputs.interactions.components:
-        contribution = interaction.get_potential(
-            inputs.interaction_data[interaction.label], charges, inputs.ihelp
+    for entry in inputs.interactions.entries:
+        contribution = _core_potential_from_charges(
+            spectral.charges,
+            FunctionalInteractionSet((entry,)),
+            inputs.index,
         )
-        contribution_values[interaction.label] = contribution
+        contribution_values[entry.kind] = contribution
     mapped_potential = potential_from_charges(spectral.charges, inputs)
     mapped_x = pack_potential(mapped_potential, layout)
     reference_map = potential_map(packed_guess, inputs, layout)
@@ -821,7 +818,7 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
         tensor = getattr(integrals, name)
         if tensor is not None:
             values[f"{name}_integrals"] = tensor
-    _tensor_leaves(inputs.interaction_data, "interaction_data", values)
+    _tensor_leaves(inputs.interactions, "interactions", values)
     _tensor_leaves(contribution_values, "interaction_potential", values)
     return {name: tensor.detach().clone() for name, tensor in values.items()}
 
@@ -1455,7 +1452,7 @@ def _selected_map_energy(outcome, inputs) -> Tensor:
 
 def _spectral_energy(spectral, inputs) -> Tensor:
     """Evaluate the physical energy of one gauge-invariant spectrum."""
-    h0 = inputs.ihelp.reduce_orbital_to_atom(spectral.orbital_energy)
+    h0 = inputs.index.reduce_orbital_to_atom(spectral.orbital_energy)
     return (
         h0
         + interaction_energy_from_charges(spectral.charges, inputs)
@@ -1507,8 +1504,16 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
             dtype=positions.dtype,
         )
         data = _interaction_data(model_system, positions, interactions)
-        call_inputs = replace(
-            inputs, interactions=interactions, interaction_data=data
+        call_inputs = setup_scf_inputs(
+            model_system.numbers,
+            matrices,
+            inputs.n0,
+            inputs.occupation,
+            inputs.nel,
+            interactions,
+            data,
+            model_system.ihelp,
+            calculator.opts.scf,
         )
         driving = potential_from_charges(
             unpack_potential(state, layout), call_inputs
@@ -1736,12 +1741,19 @@ def test_no2_gfn1_gfn2_term_activation_at_same_gfn2_state() -> None:
         device=torch.device("cpu"),
         dtype=torch.float64,
     )
-    gfn1_inputs = replace(
-        inputs,
-        interactions=gfn1_interactions,
-        interaction_data=_interaction_data(
-            gfn1_system, SYSTEMS["NO2"].positions, gfn1_interactions
-        ),
+    gfn1_data = _interaction_data(
+        gfn1_system, SYSTEMS["NO2"].positions, gfn1_interactions
+    )
+    gfn1_inputs = setup_scf_inputs(
+        inputs.numbers,
+        inputs.integrals,
+        inputs.n0,
+        inputs.occupation,
+        inputs.nel,
+        gfn1_interactions,
+        gfn1_data,
+        gfn1_system.ihelp,
+        gfn1_system.config.scf,
     )
 
     # Both term sets use the same GFN2 hcore, integrals, and converged SCF
@@ -3326,7 +3338,7 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
                 stage_order = (
                     "numbers", "hcore", "overlap", "dipole_integrals",
                     "quadrupole_integrals", "inverse_cholesky", "n0",
-                    "occupation_input", "nel", "interaction_data",
+                    "occupation_input", "nel", "interactions",
                     "raw_charge_guess", "initial_charges",
                     "initial_potential_contributions", "initial_potential",
                     "initial_packed_potential",
@@ -3382,7 +3394,7 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
         "n0",
         "occupation_input",
         "nel",
-        "interaction_data",
+        "interactions",
     )
     initial_prefixes = (
         "raw_charge_guess",

@@ -1318,14 +1318,14 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
     adapter, parameters = _SCFMapTensorTree.prepare(
         case.inputs, labels.SCP_MODE_POTENTIAL, layout
     )
-    field_cache_index = next(
+    field_entry_index = next(
         index
-        for index, (cache_type, _) in enumerate(adapter.cache_fields)
-        if cache_type.__name__ == "ElectricFieldCache"
+        for index, entry in enumerate(case.inputs.interactions.entries)
+        if entry.kind == "electric_field"
     )
-    field_prefix = f"cache.{field_cache_index}"
-    vat_index = adapter.parameter_paths.index(f"{field_prefix}.vat")
-    vdp_index = adapter.parameter_paths.index(f"{field_prefix}.vdp")
+    field_prefix = f"interactions.entries[{field_entry_index}].data"
+    vat_index = adapter.parameter_paths.index(f"{field_prefix}[0][1]")
+    vdp_index = adapter.parameter_paths.index(f"{field_prefix}[1][1]")
     vat_direction = case.positions[:, 1]
     vdp_direction = torch.zeros_like(parameters[vdp_index])
     vdp_direction[:, 1] = 1.0

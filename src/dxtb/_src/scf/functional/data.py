@@ -37,6 +37,8 @@ from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
+from .core import CoreIndexData, FunctionalInteractionSet
+
 __all__ = [
     "ChargeLayout",
     "FermiSettings",
@@ -135,23 +137,21 @@ class SCFPotential:
 
 @dataclass(frozen=True, eq=False)
 class SCFInputs:
-    """Fixed, singlepoint-local physical inputs to ``scf_map``.
+    """Immutable tensor and structural inputs to the single-System core.
 
-    The dataclass is frozen. Some structural children (IndexHelper, the
-    interaction list and call-local interaction data) remain legacy mutable
-    types during this transition. The map promises not to mutate them.
+    Legacy setup/component containers are converted once at the setup
+    boundary. No IndexHelper, mutable interaction list, or cache is retained.
     Solver and convergence configuration is validated during setup and is not
     retained here.
     """
 
     numbers: Tensor
-    ihelp: IndexHelper
+    index: CoreIndexData
     integrals: IntegralMatrices
     n0: Tensor
     nel: Tensor
     occupation: Tensor
-    interactions: InteractionList
-    interaction_data: InteractionListCache
+    interactions: FunctionalInteractionSet
     charge_layout: ChargeLayout
     inverse_cholesky: Tensor
     orbital_mask: Tensor
@@ -259,7 +259,7 @@ def setup_scf_inputs(
     ihelp: IndexHelper,
     config: ConfigSCF,
 ) -> SCFInputs:
-    """Build one immutable-ish input value for a single-System raw map."""
+    """Build immutable core values from one legacy single-System setup."""
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
     if config.fermi.maxiter < 0:
@@ -278,6 +278,11 @@ def setup_scf_inputs(
     from tad_mctc import storch
 
     inverse_cholesky = storch.inv_cholesky_factor(overlap, is_posdef=True)
+    from .interactions import prepare_functional_interactions
+
+    core_interactions = prepare_functional_interactions(
+        interactions, interaction_data, numbers
+    )
     kt_value = config.fermi.etemp * KELVIN2AU
     if kt_value == 0.0:
         fermi_settings = None
@@ -304,13 +309,17 @@ def setup_scf_inputs(
 
     return SCFInputs(
         numbers=numbers,
-        ihelp=ihelp,
+        index=CoreIndexData(
+            # These are integer structural maps. Own their storage so a later
+            # legacy IndexHelper operation cannot alter prepared core inputs.
+            shells_to_atom=ihelp.shells_to_atom.clone(),
+            orbitals_to_shell=ihelp.orbitals_to_shell.clone(),
+        ),
         integrals=integrals,
         n0=n0,
         nel=nel,
         occupation=occupation,
-        interactions=interactions,
-        interaction_data=interaction_data,
+        interactions=core_interactions,
         charge_layout=_single_system_layout(numbers, integrals),
         inverse_cholesky=inverse_cholesky,
         orbital_mask=orbital_mask,

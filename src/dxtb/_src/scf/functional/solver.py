@@ -27,10 +27,9 @@ from tad_mctc.batch import real_atoms
 from tad_mctc.math import einsum
 
 from dxtb._src.calculators.config.scf import ConfigSCF
-from dxtb._src.components.interactions.container import Charges
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
-from dxtb._src.wavefunction import filling, mulliken
+from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import (
     FermiOccupationResult,
     FermiStatus,
@@ -46,6 +45,9 @@ from .data import (
     SCFSpectralResult,
     pack_potential,
     unpack_potential,
+)
+from .interactions import (
+    interaction_energy_from_charges as _core_interaction_energy,
 )
 from .map import (
     evaluate_hamiltonian,
@@ -886,12 +888,7 @@ def interaction_energy_from_charges(
     charges: SCFCharges, inputs: SCFInputs
 ) -> Tensor:
     """Return atom-resolved interaction energy for explicit final charges."""
-    local_charges = Charges(
-        mono=charges.mono, dipole=charges.dipole, quad=charges.quad
-    )
-    return inputs.interactions.get_energy(
-        local_charges, inputs.interaction_data, inputs.ihelp
-    )
+    return _core_interaction_energy(charges, inputs.interactions, inputs.index)
 
 
 def finalize_scf(
@@ -910,7 +907,7 @@ def finalize_scf(
         quad=map_result.charges.quad,
     )
     final_potential = potential_from_charges(final_charges, inputs)
-    h0_energy = inputs.ihelp.reduce_orbital_to_atom(map_result.orbital_energy)
+    h0_energy = inputs.index.reduce_orbital_to_atom(map_result.orbital_energy)
     energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
     fenergy = free_energy_from_spectral(map_result.spectral, inputs)
     return SCFSolveResult(
@@ -982,9 +979,10 @@ def free_energy_from_spectral(
         equal = total / count
         return torch.where(real, equal.expand_as(real), 0.0)
     if settings.partition == labels.FERMI_PARTITION_ATOMIC:
-        return mulliken.get_atomic_populations(
-            inputs.integrals.overlap, entropy_matrix, inputs.ihelp
+        orbital_populations = torch.diagonal(
+            entropy_matrix @ inputs.integrals.overlap, dim1=-2, dim2=-1
         )
+        return inputs.index.reduce_orbital_to_atom(orbital_populations)
     raise ValueError(
         f"Unknown Fermi free-energy partition {settings.partition}."
     )
@@ -1005,7 +1003,7 @@ def finalize_scf_potential(
     final_evaluation = evaluate_potential(final_potential_state, inputs)
     final_charges = final_evaluation.charges
     final_potential = potential_from_charges(final_charges, inputs)
-    h0_energy = inputs.ihelp.reduce_orbital_to_atom(
+    h0_energy = inputs.index.reduce_orbital_to_atom(
         final_evaluation.orbital_energy
     )
     energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)
@@ -1051,7 +1049,7 @@ def finalize_scf_fock(
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
     final_charges = final_evaluation.charges
     final_potential = potential_from_charges(final_charges, inputs)
-    h0_energy = inputs.ihelp.reduce_orbital_to_atom(
+    h0_energy = inputs.index.reduce_orbital_to_atom(
         final_evaluation.orbital_energy
     )
     energy = h0_energy + interaction_energy_from_charges(final_charges, inputs)

@@ -22,8 +22,7 @@ import torch
 from tad_mctc import storch
 from tad_mctc.math import einsum
 
-from dxtb import IndexHelper, labels
-from dxtb._src.components.interactions.container import Charges, Potential
+from dxtb import labels
 from dxtb._src.typing import Tensor
 
 from ...wavefunction import filling
@@ -40,6 +39,8 @@ from .data import (
     unpack_charges,
     unpack_potential,
 )
+from .core import CoreIndexData
+from .interactions import potential_from_charges as _core_potential_from_charges
 from .spectral import aufbau_density_matrix, fermi_density_matrix
 
 __all__ = [
@@ -61,7 +62,7 @@ def potential_to_hamiltonian(
     overlap: Tensor,
     dipole_integrals: Tensor | None,
     quadrupole_integrals: Tensor | None,
-    ihelp: IndexHelper,
+    index: CoreIndexData,
     potential: SCFPotential,
 ) -> Tensor:
     """Return the Hamiltonian assembled from explicit integral values."""
@@ -73,7 +74,7 @@ def potential_to_hamiltonian(
     def add_multipole(
         current: Tensor, integrals: Tensor, value: Tensor
     ) -> Tensor:
-        spread = ihelp.spread_atom_to_orbital(value, dim=-2, extra=True)
+        spread = index.spread_atom_to_orbital(value, dim=-2, extra=True)
         contribution = 0.5 * einsum("...kij,...jk->...ij", integrals, spread)
         return current - (contribution + contribution.mT)
 
@@ -88,28 +89,13 @@ def potential_to_hamiltonian(
     return hamiltonian
 
 
-def _legacy_charges(charges: SCFCharges) -> Charges:
-    """Make the short-lived mutable adapter required by interactions."""
-    return Charges(mono=charges.mono, dipole=charges.dipole, quad=charges.quad)
-
-
-def _legacy_potential(potential: Potential) -> SCFPotential:
-    """Capture a local interaction potential in an immutable value."""
-    return SCFPotential(
-        mono=potential.mono,
-        dipole=potential.dipole,
-        quad=potential.quad,
-    )
-
-
 def potential_from_charges(
     charges: SCFCharges, inputs: SCFInputs
 ) -> SCFPotential:
     """Evaluate a fresh potential value from arbitrary explicit charges."""
-    local = inputs.interactions.get_potential(
-        inputs.interaction_data, _legacy_charges(charges), inputs.ihelp
+    return _core_potential_from_charges(
+        charges, inputs.interactions, inputs.index
     )
-    return _legacy_potential(local)
 
 
 def _transitional_diagonalize(
@@ -137,7 +123,7 @@ def _density_to_charges(
 
     dipole = None
     if integrals.dipole is not None:
-        dipole = inputs.ihelp.reduce_orbital_to_atom(
+        dipole = inputs.index.reduce_orbital_to_atom(
             -einsum("...ik,...mki->...im", density, integrals.dipole),
             extra=True,
             dim=-2,
@@ -145,7 +131,7 @@ def _density_to_charges(
 
     quad = None
     if integrals.quadrupole is not None:
-        quad = inputs.ihelp.reduce_orbital_to_atom(
+        quad = inputs.index.reduce_orbital_to_atom(
             -einsum("...ik,...mki->...im", density, integrals.quadrupole),
             extra=True,
             dim=-2,
@@ -222,7 +208,7 @@ def evaluate_potential(
         integrals.overlap,
         integrals.dipole,
         integrals.quadrupole,
-        inputs.ihelp,
+        inputs.index,
         potential,
     )
     return evaluate_hamiltonian(hamiltonian, inputs)
@@ -289,7 +275,7 @@ def fock_initial_guess(charges: SCFCharges, inputs: SCFInputs) -> Tensor:
         integrals.overlap,
         integrals.dipole,
         integrals.quadrupole,
-        inputs.ihelp,
+        inputs.index,
         potential,
     )
 
@@ -305,7 +291,7 @@ def fock_map(hamiltonian: Tensor, inputs: SCFInputs) -> SCFMapResult:
         integrals.overlap,
         integrals.dipole,
         integrals.quadrupole,
-        inputs.ihelp,
+        inputs.index,
         mapped_potential,
     )
     return _map_result(mapped_hamiltonian, spectral)

@@ -24,13 +24,14 @@ the raw physical map. Primal convergence checks belong before this boundary.
 from __future__ import annotations
 
 from collections.abc import Callable
-from copy import copy
 from dataclasses import dataclass, replace
 
 import torch
 
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
+
+from .core import replace_tensor_leaves, tensor_leaves
 
 __all__ = ["LinearSolveResult", "implicit_root", "solve_linear"]
 
@@ -294,16 +295,16 @@ class _SCFMapTensorTree:
     """Explicit floating tensor adapter for the existing E4core raw map.
 
     Structural objects and integer/bool masks remain static. Every floating
-    tensor stored directly on ``SCFInputs``, its integral/Fermi records, or a
-    functional interaction cache becomes an explicit custom-function input.
-    Cache class/field schemas are resolved once when the adapter is prepared.
+    tensor stored directly on ``SCFInputs``, its integral/Fermi records, or the
+    immutable functional interaction tree becomes an explicit custom-function
+    input. The interaction tree paths are resolved once when prepared.
     """
 
     template: object
     representation: int
     potential_layout: object | None
     input_fields: tuple[str, ...]
-    cache_fields: tuple[tuple[object, tuple[str, ...]], ...]
+    interaction_tensor_paths: tuple[str, ...]
     parameter_paths: tuple[str, ...]
 
     @classmethod
@@ -351,23 +352,21 @@ class _SCFMapTensorTree:
             )
             names.extend(f"fermi_settings.{name}" for name in fermi_fields)
 
-        cache_fields: list[tuple[object, tuple[str, ...]]] = []
-        for index, cache in enumerate(inputs.interaction_data.values()):
-            fields = tuple(
-                name
-                for name in _public_slot_names(type(cache))
-                if isinstance(getattr(cache, name, None), torch.Tensor)
-                and getattr(cache, name).is_floating_point()
-            )
-            cache_fields.append((type(cache), fields))
-            names.extend(f"cache.{index}.{name}" for name in fields)
+        interaction_tensor_paths = tuple(
+            path
+            for path, value in tensor_leaves(inputs.interactions)
+            if value.is_floating_point()
+        )
+        names.extend(
+            f"interactions.{path}" for path in interaction_tensor_paths
+        )
 
         adapter = cls(
             template=inputs,
             representation=representation,
             potential_layout=potential_layout,
             input_fields=input_fields,
-            cache_fields=tuple(cache_fields),
+            interaction_tensor_paths=interaction_tensor_paths,
             parameter_paths=tuple(names),
         )
         return adapter, adapter.flatten()
@@ -387,11 +386,11 @@ class _SCFMapTensorTree:
                     and value.is_floating_point()
                 ):
                     values.append(value)
-        for cache, (_, fields) in zip(
-            inputs.interaction_data.values(), self.cache_fields
-        ):
-            values.extend(getattr(cache, name) for name in fields)
-        # Functional interaction caches may contain expanded views (for
+        interaction_leaves = dict(tensor_leaves(inputs.interactions))
+        values.extend(
+            interaction_leaves[path] for path in self.interaction_tensor_paths
+        )
+        # Functional interaction data may contain expanded views (for
         # example a field broadcast over atoms). Explicit transform leaves
         # must have non-overlapping storage for forward-AD dual attachment.
         return tuple(value.contiguous().clone() for value in values)
@@ -436,22 +435,19 @@ class _SCFMapTensorTree:
                     cursor += 1
             fermi_settings = replace(fermi_settings, **fermi_changes)
 
-        interaction_data = copy(self.template.interaction_data)
-        for index, (key, cache) in enumerate(
-            self.template.interaction_data.items()
-        ):
-            cache_copy = copy(cache)
-            # Cache keys and field schemas are static for this prepared root.
-            _, fields = self.cache_fields[index]
-            for name in fields:
-                setattr(cache_copy, name, parameters[cursor])
-                cursor += 1
-            interaction_data[key] = cache_copy
+        interaction_changes = {
+            path: parameters[cursor + index]
+            for index, path in enumerate(self.interaction_tensor_paths)
+        }
+        cursor += len(self.interaction_tensor_paths)
+        interactions = replace_tensor_leaves(
+            self.template.interactions, interaction_changes
+        )
 
         inputs = replace(
             self.template,
             integrals=integrals,
-            interaction_data=interaction_data,
+            interactions=interactions,
             fermi_settings=fermi_settings,
             **changes,
         )
@@ -473,14 +469,3 @@ class _SCFMapTensorTree:
 
     def __call__(self, x: Tensor, *parameters: Tensor) -> Tensor:
         return self.evaluate(x, *parameters).mapped_x
-
-
-def _public_slot_names(cls: type) -> tuple[str, ...]:
-    """Return declared public cache slots in stable base-to-derived order."""
-    names: list[str] = []
-    for parent in reversed(cls.__mro__):
-        slots = vars(parent).get("__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        names.extend(name for name in slots if not name.startswith("_"))
-    return tuple(dict.fromkeys(names))
