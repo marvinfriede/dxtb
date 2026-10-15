@@ -114,6 +114,12 @@ does not require deleting the legacy adapter.
 
 **Goal.** Migrate all classical and interaction components and their list containers.
 
+**Progress.** C6.1 is complete: the single-System ES2/ES3 setup values are
+stored as `ES2CoreSetup` and `ES3CoreSetup` tad-mctc Nodes. Legacy setup
+dataclasses and cache/component routes remain available. C6 remains partial;
+other component families and the complete interaction collection are separate
+migrations.
+
 **Preconditions.** Core component/setup values satisfy B6b-core. Separately
 isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 

@@ -71,6 +71,7 @@ from dataclasses import dataclass
 
 import torch
 from tad_mctc.exceptions import DeviceError
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
@@ -87,7 +88,15 @@ from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
 
-__all__ = ["ES3", "ES3Setup", "LABEL_ES3", "new_es3", "setup_es3"]
+__all__ = [
+    "ES3",
+    "ES3CoreSetup",
+    "ES3Setup",
+    "LABEL_ES3",
+    "core_es3_setup",
+    "new_es3",
+    "setup_es3",
+]
 
 
 LABEL_ES3 = "ES3"
@@ -100,6 +109,21 @@ class ES3Setup:
 
     hubbard_derivs: Tensor
     shell_resolved: bool
+
+
+class ES3CoreSetup(Node):
+    """Immutable Node values used by single-System ES3 evaluation."""
+
+    hubbard_derivs: Tensor = child()
+    shell_resolved: bool = context()
+
+
+def core_es3_setup(setup: ES3Setup) -> ES3CoreSetup:
+    """Convert a compatibility setup to immutable core value fields."""
+    return ES3CoreSetup(
+        hubbard_derivs=setup.hubbard_derivs,
+        shell_resolved=setup.shell_resolved,
+    )
 
 
 class ES3Cache(InteractionCache, TensorLike):

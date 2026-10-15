@@ -71,10 +71,12 @@ from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
     AES2,
     ES2,
+    ES2CoreSetup,
     ES3,
+    ES3CoreSetup,
     AES2Setup,
-    ES2Setup,
-    ES3Setup,
+    core_es2_setup,
+    core_es3_setup,
     new_aes2,
     new_es2,
     new_es3,
@@ -144,13 +146,13 @@ class System:
     interactions: InteractionList
     """Self-consistent contributions with their parameters gathered."""
 
-    es2_setup: ES2Setup | None
+    es2_setup: ES2CoreSetup | None
     """Numbers-only setup for pure single-system ES2 matrix construction."""
 
     es2_interaction: ES2 | None
     """Exact interaction associated with :attr:`es2_setup`, if any."""
 
-    es3_setup: ES3Setup | None
+    es3_setup: ES3CoreSetup | None
     """Numbers-only parameter data for per-call ES3 interaction data."""
 
     es3_interaction: ES3 | None
@@ -406,23 +408,27 @@ class Model:
             None,
         )
         es2_setup = (
-            setup_es2(
-                numbers,
-                es2_interaction.hubbard,
-                ihelp,
-                lhubbard=es2_interaction.lhubbard,
-                gexp=es2_interaction.gexp,
-                average=es2_interaction.average,
-                shell_resolved=es2_interaction.shell_resolved,
+            core_es2_setup(
+                setup_es2(
+                    numbers,
+                    es2_interaction.hubbard,
+                    ihelp,
+                    lhubbard=es2_interaction.lhubbard,
+                    gexp=es2_interaction.gexp,
+                    average=es2_interaction.average,
+                    shell_resolved=es2_interaction.shell_resolved,
+                )
             )
             if es2_interaction is not None and batch_mode == 0
             else None
         )
         es3_setup = (
-            setup_es3(
-                es3_interaction.hubbard_derivs,
-                ihelp,
-                shell_scale=es3_interaction.shell_scale,
+            core_es3_setup(
+                setup_es3(
+                    es3_interaction.hubbard_derivs,
+                    ihelp,
+                    shell_scale=es3_interaction.shell_scale,
+                )
             )
             if es3_interaction is not None and batch_mode == 0
             else None

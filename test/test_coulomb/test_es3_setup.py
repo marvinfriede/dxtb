@@ -29,6 +29,7 @@ from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.components.interactions.coulomb.thirdorder import (
     ES3,
     ES3Cache,
+    ES3CoreSetup,
     ES3Setup,
     setup_es3,
 )
@@ -66,7 +67,7 @@ def test_es3_setup_and_get_cache_are_call_local() -> None:
     par = ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.float64)
     system = Model(par=par).setup(numbers)
 
-    assert isinstance(system.es3_setup, ES3Setup)
+    assert isinstance(system.es3_setup, ES3CoreSetup)
     assert system.es3_interaction is not None
     assert {field.name for field in fields(system.es3_setup)} == {
         "hubbard_derivs",

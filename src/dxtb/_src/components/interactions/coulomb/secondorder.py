@@ -69,6 +69,7 @@ from tad_mctc import storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.constants import xtb
@@ -91,9 +92,11 @@ from .average import AveragingFunction, averaging_function, harmonic_average
 
 __all__ = [
     "ES2",
+    "ES2CoreSetup",
     "ES2Setup",
     "LABEL_ES2",
     "build_es2_coulomb",
+    "core_es2_setup",
     "new_es2",
     "setup_es2",
 ]
@@ -117,6 +120,67 @@ class ES2Setup:
     gexp: Tensor
     average: AveragingFunction
     shell_resolved: bool
+
+
+@dataclass(frozen=True, eq=False)
+class _UnhashableAveragingContext:
+    """Hashable identity context for a user callable lacking ``__hash__``."""
+
+    function: AveragingFunction
+
+    def __hash__(self) -> int:
+        return id(self.function)
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _UnhashableAveragingContext)
+            and self.function is other.function
+        )
+
+
+class ES2CoreSetup(Node):
+    """Immutable Node values used by single-System ES2 evaluation."""
+
+    atom_pair_mask: Tensor = child(keep_dtype=True)
+    atom_mask: Tensor = child(keep_dtype=True)
+    atom_hubbard: Tensor | None = child()
+    shell_pair_mask: Tensor | None = child(keep_dtype=True)
+    shell_mask: Tensor | None = child(keep_dtype=True)
+    shell_hubbard: Tensor | None = child()
+    shells_to_atom: Tensor | None = child(keep_dtype=True)
+    gexp: Tensor = child()
+    average_context: Any = context()
+    shell_resolved: bool = context()
+
+    @property
+    def average(self) -> AveragingFunction:
+        """Return the original averaging callable from static context."""
+        context_value = self.average_context
+        if isinstance(context_value, _UnhashableAveragingContext):
+            return context_value.function
+        return context_value
+
+
+def core_es2_setup(setup: ES2Setup) -> ES2CoreSetup:
+    """Convert a compatibility setup to immutable core value fields."""
+    average_context = setup.average
+    try:
+        hash(average_context)
+    except TypeError:
+        average_context = _UnhashableAveragingContext(average_context)
+
+    return ES2CoreSetup(
+        atom_pair_mask=setup.atom_pair_mask,
+        atom_mask=setup.atom_mask,
+        atom_hubbard=setup.atom_hubbard,
+        shell_pair_mask=setup.shell_pair_mask,
+        shell_mask=setup.shell_mask,
+        shell_hubbard=setup.shell_hubbard,
+        shells_to_atom=setup.shells_to_atom,
+        gexp=setup.gexp,
+        average_context=average_context,
+        shell_resolved=setup.shell_resolved,
+    )
 
 
 class ES2Cache(InteractionCache, TensorLike):
@@ -655,7 +719,9 @@ def setup_es2(
     )
 
 
-def build_es2_coulomb(setup: ES2Setup, positions: Tensor) -> Tensor:
+def build_es2_coulomb(
+    setup: ES2Setup | ES2CoreSetup, positions: Tensor
+) -> Tensor:
     """Build the atom- or shell-resolved ES2 matrix for current positions."""
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
     eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
