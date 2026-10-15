@@ -65,6 +65,7 @@ from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import VDW_D3
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
@@ -92,9 +93,11 @@ DEFAULT_BORN_OFFSET = 0.0
 
 __all__ = [
     "GeneralizedBorn",
+    "GeneralizedBornCoreSetup",
     "GeneralizedBornSetup",
     "LABEL_GENERALIZED_BORN",
     "build_generalized_born_data",
+    "core_generalized_born_setup",
     "new_solvation",
     "setup_generalized_born",
 ]
@@ -235,6 +238,57 @@ class GeneralizedBornSetup:
     apply_alpb_shape_correction: bool
 
 
+class GeneralizedBornCoreSetup(Node):
+    """Immutable Node values used by single-System GeneralizedBorn evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    kernel: str = context()
+    alpbet: Tensor = child()
+    keps: Tensor = child()
+    rvdw: Tensor = child()
+    # These values may be caller tensors whose floating dtype differs from
+    # the model setup tensors; preserve them as supplied at construction.
+    born_scale: Tensor | float | int = child(keep_dtype=True)
+    born_offset: Tensor | float | int = child(keep_dtype=True)
+    cutoff: Tensor = child()
+    descreening: Tensor | float | int = child(keep_dtype=True)
+    obc: Tensor = child()
+    apply_alpb_shape_correction: bool = context()
+
+    def _convert_child(
+        self,
+        name: str,
+        value: Any,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None,
+    ) -> Any:
+        if name in ("born_scale", "born_offset", "descreening") and isinstance(
+            value, Tensor
+        ):
+            target_dtype = dtype if value.is_floating_point() else None
+            return value.to(device=device, dtype=target_dtype)
+        return super()._convert_child(name, value, device, dtype)
+
+
+def core_generalized_born_setup(
+    setup: GeneralizedBornSetup,
+) -> GeneralizedBornCoreSetup:
+    """Convert a compatibility setup to the immutable core value."""
+    return GeneralizedBornCoreSetup(
+        numbers=setup.numbers,
+        kernel=setup.kernel,
+        alpbet=setup.alpbet,
+        keps=setup.keps,
+        rvdw=setup.rvdw,
+        born_scale=setup.born_scale,
+        born_offset=setup.born_offset,
+        cutoff=setup.cutoff,
+        descreening=setup.descreening,
+        obc=setup.obc,
+        apply_alpb_shape_correction=setup.apply_alpb_shape_correction,
+    )
+
+
 def setup_generalized_born(
     component: GeneralizedBorn, numbers: Tensor
 ) -> GeneralizedBornSetup:
@@ -264,7 +318,7 @@ def setup_generalized_born(
 
 
 def build_generalized_born_data(
-    setup: GeneralizedBornSetup, positions: Tensor
+    setup: GeneralizedBornSetup | GeneralizedBornCoreSetup, positions: Tensor
 ) -> GeneralizedBornCache:
     """Build fresh geometry-dependent data for one solvation evaluation."""
     born = get_born_radii(

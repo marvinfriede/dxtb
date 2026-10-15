@@ -95,7 +95,8 @@ from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
-    GeneralizedBornSetup,
+    GeneralizedBornCoreSetup,
+    core_generalized_born_setup,
     setup_generalized_born,
 )
 from dxtb._src.constants import defaults
@@ -171,7 +172,7 @@ class System:
     d4sc_interaction: DispersionD4SC | None
     """Exact D4SC interaction associated with :attr:`d4sc_setup`."""
 
-    generalized_born_setup: GeneralizedBornSetup | None
+    generalized_born_setup: GeneralizedBornCoreSetup | None
     """Explicit setup for one exact GeneralizedBorn interaction."""
 
     generalized_born_interaction: GeneralizedBorn | None
@@ -445,7 +446,9 @@ class Model:
             else None
         )
         generalized_born_setup = (
-            setup_generalized_born(generalized_born_interaction, numbers)
+            core_generalized_born_setup(
+                setup_generalized_born(generalized_born_interaction, numbers)
+            )
             if generalized_born_interaction is not None and batch_mode == 0
             else None
         )

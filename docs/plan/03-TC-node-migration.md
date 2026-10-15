@@ -121,6 +121,11 @@ dataclasses and cache/component routes remain available. C6 remains partial;
 other component families and the complete interaction collection are separate
 migrations.
 
+C6.3 is complete: the eligible single-System GeneralizedBorn setup is stored
+as `GeneralizedBornCoreSetup`; the legacy `GeneralizedBornSetup`, component,
+and cache APIs remain available. This migrates only the immutable setup value
+and does not complete broader C6.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening
