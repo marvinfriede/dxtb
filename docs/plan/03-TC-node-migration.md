@@ -139,6 +139,8 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 ## C8a Result pytree representation
 
+**Status: complete.**
+
 **Goal.** Make the immutable public `Result` returned by
 `System.singlepoint()` a valid `torch.func` pytree before E6a. This package is
 independent of C5/C6/C7 and does not add mixed-System stackability.

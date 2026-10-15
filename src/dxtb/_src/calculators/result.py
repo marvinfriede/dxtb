@@ -23,8 +23,10 @@ Immutable values produced by a single-point calculation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Protocol
+
+from torch.utils import _pytree
 
 from dxtb import OutputHandler
 from dxtb._src.integral.container import IntegralMatrices
@@ -259,3 +261,105 @@ class Result:
             v=v,
             precision=precision,
         )
+
+
+def _flatten_optional_dataclass(
+    value: object,
+) -> tuple[list[object], tuple[str, ...]]:
+    """Flatten declared, present fields of one immutable result value."""
+    active_names = tuple(
+        field.name
+        for field in fields(value)
+        if getattr(value, field.name) is not None
+    )
+    return [getattr(value, name) for name in active_names], active_names
+
+
+def _flatten_optional_dataclass_with_keys(
+    value: object,
+) -> tuple[list[tuple[_pytree.KeyEntry, object]], tuple[str, ...]]:
+    """Flatten present fields with stable dataclass field paths."""
+    children, active_names = _flatten_optional_dataclass(value)
+    return [
+        (_pytree.GetAttrKey(name), child)
+        for name, child in zip(active_names, children)
+    ], active_names
+
+
+def _unflatten_optional_dataclass(
+    cls: type,
+    children: object,
+    active_names: tuple[str, ...],
+) -> object:
+    """Rebuild an immutable result value without inspecting its leaves."""
+    values = {field.name: None for field in fields(cls)}
+    values.update(zip(active_names, children))  # type: ignore[arg-type]
+    return cls(**values)
+
+
+for _result_value_type in (ChargeResult, PotentialResult, Multipoles):
+    _pytree.register_pytree_node(
+        _result_value_type,
+        _flatten_optional_dataclass,
+        lambda children, context, cls=_result_value_type: (
+            _unflatten_optional_dataclass(cls, children, context)
+        ),
+        flatten_with_keys_fn=_flatten_optional_dataclass_with_keys,
+    )
+
+
+def _flatten_result(
+    result: Result,
+) -> tuple[list[object], tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Flatten Result tensors, keeping classical labels in static context."""
+    active_names: list[str] = []
+    children: list[object] = []
+    labels = tuple(label for label, _ in result.classical)
+    for field in fields(Result):
+        value = getattr(result, field.name)
+        if value is None:
+            continue
+        active_names.append(field.name)
+        children.append(
+            tuple(energy for _, energy in result.classical)
+            if field.name == "classical"
+            else value
+        )
+    return children, (tuple(active_names), labels)
+
+
+def _flatten_result_with_keys(
+    result: Result,
+) -> tuple[
+    list[tuple[_pytree.KeyEntry, object]],
+    tuple[tuple[str, ...], tuple[str, ...]],
+]:
+    """Flatten Result fields with deterministic attribute paths."""
+    children, context = _flatten_result(result)
+    active_names, _ = context
+    return [
+        (_pytree.GetAttrKey(name), child)
+        for name, child in zip(active_names, children)
+    ], context
+
+
+def _unflatten_result(
+    children: object,
+    context: tuple[tuple[str, ...], tuple[str, ...]],
+) -> Result:
+    """Rebuild Result fields and ordered classical label/energy pairs."""
+    active_names, labels = context
+    values: dict[str, object] = {field.name: None for field in fields(Result)}
+    for name, child in zip(active_names, children):  # type: ignore[arg-type]
+        values[name] = (
+            tuple(zip(labels, child)) if name == "classical" else child
+        )
+    return Result(**values)  # type: ignore[arg-type]
+
+
+_pytree.register_pytree_node(
+    Result,
+    _flatten_result,
+    _unflatten_result,
+    flatten_with_keys_fn=_flatten_result_with_keys,
+)

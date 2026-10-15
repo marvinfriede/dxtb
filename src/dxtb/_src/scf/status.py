@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
+from torch.utils import _pytree
+
 from dxtb._src.typing import Tensor
 
 __all__ = ["SCFFailureCode", "SCFStatus"]
@@ -42,3 +44,28 @@ class SCFStatus:
 
     trajectory_failure: Tensor
     final_failure: Tensor
+
+
+def _flatten_scf_status(
+    status: SCFStatus,
+) -> tuple[list[Tensor], None]:
+    """Flatten the dynamic integer status tensors in field order."""
+    return [status.trajectory_failure, status.final_failure], None
+
+
+def _flatten_scf_status_with_keys(
+    status: SCFStatus,
+) -> tuple[list[tuple[_pytree.KeyEntry, Tensor]], None]:
+    """Flatten status tensors with stable attribute paths."""
+    return [
+        (_pytree.GetAttrKey("trajectory_failure"), status.trajectory_failure),
+        (_pytree.GetAttrKey("final_failure"), status.final_failure),
+    ], None
+
+
+_pytree.register_pytree_node(
+    SCFStatus,
+    _flatten_scf_status,
+    lambda children, _: SCFStatus(*children),
+    flatten_with_keys_fn=_flatten_scf_status_with_keys,
+)
