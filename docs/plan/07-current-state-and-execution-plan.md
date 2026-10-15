@@ -48,7 +48,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C8a/C6.1 complete; later work not done | C5 migrated `CoreIndexData`; C8a registered the public Result tree; C6.1 migrated single-System ES2/ES3 setup values to Nodes. C6 remains partial and C7 remains independently unblocked. C8b remains blocked by final B3b, remaining C6/C7 work, and B2; C9 is deferred until E4.6a/E4.6b legacy-owner retirement. |
+| C5-C9          | C5/C8a/C6.1/C6.2 complete; later work not done | C5 migrated `CoreIndexData`; C8a registered the public Result tree; C6.1 migrated single-System ES2/ES3 setup values and C6.2 migrated the AES2 setup to Nodes. Legacy setup/cache routes remain available. C6 remains partial and C7 remains independently unblocked. C8b remains blocked by final B3b, remaining C6/C7 work, and B2; C9 is deferred until E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2872,9 +2872,10 @@ Success means measured speed/memory improves without creating a second semantics
 # 30. Immediate next action
 
 The next independent structural packages are the remaining C6 family slices
-and C7. C8a — complete public Result pytree representation — is complete and
-its E6a output-container prerequisite is satisfied. E6a still requires its
-other listed prerequisites.
+and C7. C6.1 ES2/ES3 setup Node migration and C6.2 AES2 setup Node migration
+are complete; broader C6 remains partial. C8a — complete public Result pytree
+representation — is complete and its E6a output-container prerequisite is
+satisfied. E6a still requires its other listed prerequisites.
 E3.1b transform-compatible implicit physical-root implementation is complete.
 Full E3 is acceptance-only and remains blocked where its DFT-D3-enabled GFN1
 row depends on E1.3; do not approximate that row by omitting DFT-D3. B5.6 —

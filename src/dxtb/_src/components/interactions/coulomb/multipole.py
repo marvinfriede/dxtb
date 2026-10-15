@@ -31,6 +31,7 @@ from tad_mctc import storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
@@ -49,9 +50,11 @@ from ..base import Interaction, InteractionCache
 
 __all__ = [
     "AES2",
+    "AES2CoreSetup",
     "AES2Setup",
     "LABEL_AES2",
     "build_aes2_data",
+    "core_aes2_setup",
     "new_aes2",
     "setup_aes2",
 ]
@@ -78,6 +81,39 @@ class AES2Setup:
     pair_mask: Tensor
 
 
+class AES2CoreSetup(Node):
+    """Immutable Node values used by single-System AES2 evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    dmp3: Tensor = child()
+    dmp5: Tensor = child()
+    shift: Tensor = child()
+    kexp: Tensor = child()
+    rmax: Tensor = child()
+    dkernel: Tensor = child()
+    qkernel: Tensor = child()
+    rad: Tensor = child()
+    vcn: Tensor = child()
+    pair_mask: Tensor = child(keep_dtype=True)
+
+
+def core_aes2_setup(setup: AES2Setup) -> AES2CoreSetup:
+    """Convert the compatibility setup to immutable core tensor values."""
+    return AES2CoreSetup(
+        numbers=setup.numbers,
+        dmp3=setup.dmp3,
+        dmp5=setup.dmp5,
+        shift=setup.shift,
+        kexp=setup.kexp,
+        rmax=setup.rmax,
+        dkernel=setup.dkernel,
+        qkernel=setup.qkernel,
+        rad=setup.rad,
+        vcn=setup.vcn,
+        pair_mask=setup.pair_mask,
+    )
+
+
 def setup_aes2(aes2: AES2, numbers: Tensor, ihelp: IndexHelper) -> AES2Setup:
     """Resolve AES2 parameters and structural masks to atom resolution."""
     return AES2Setup(
@@ -95,7 +131,9 @@ def setup_aes2(aes2: AES2, numbers: Tensor, ihelp: IndexHelper) -> AES2Setup:
     )
 
 
-def build_aes2_data(setup: AES2Setup, positions: Tensor) -> AES2Cache:
+def build_aes2_data(
+    setup: AES2Setup | AES2CoreSetup, positions: Tensor
+) -> AES2Cache:
     """Build fresh geometry-dependent AES2 data from setup and positions."""
     if positions.shape[-2:] != (setup.numbers.shape[-1], 3):
         raise ValueError("positions must have shape (..., nat, 3).")

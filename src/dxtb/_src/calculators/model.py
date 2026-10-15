@@ -70,11 +70,12 @@ from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
     AES2,
+    AES2CoreSetup,
     ES2,
     ES2CoreSetup,
     ES3,
     ES3CoreSetup,
-    AES2Setup,
+    core_aes2_setup,
     core_es2_setup,
     core_es3_setup,
     new_aes2,
@@ -158,7 +159,7 @@ class System:
     es3_interaction: ES3 | None
     """Exact interaction associated with :attr:`es3_setup`, if any."""
 
-    aes2_setup: AES2Setup | None
+    aes2_setup: AES2CoreSetup | None
     """Numbers/parameter setup for per-call AES2 geometry data."""
 
     aes2_interaction: AES2 | None
@@ -434,7 +435,7 @@ class Model:
             else None
         )
         aes2_setup = (
-            setup_aes2(aes2_interaction, numbers, ihelp)
+            core_aes2_setup(setup_aes2(aes2_interaction, numbers, ihelp))
             if aes2_interaction is not None and batch_mode == 0
             else None
         )
