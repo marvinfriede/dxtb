@@ -41,13 +41,14 @@ Current state:
 | B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. Remaining work includes masks/index mappings, transform-critical gathers, `batch_mode`/`dd`, and broader B6a's built-in DFT-D3 setup/cache migration and removal of the final generic stored built-in `ClassicalListCache` boundary. Final B3b closure waits for that existing broader B6a work; B6b-core and E3.0 do not. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
+| B5.6           | done                            | Public tensor-valued `SCFStatus` schema is complete and verified across the five approved Torch environments; C8a Result pytree migration is unblocked. |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
 | B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for built-in DFT-D3 setup and final generic stored built-in classical-cache removal. |
-| B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, and B6b-core are complete. Broader B6a remains open for built-in DFT-D3 explicit setup and final generic stored built-in classical-cache removal; the separately owned legacy compatibility purge remains open. B6b-core unblocks C5's structural-data migration. |
+| B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, and B6b-core are complete. Broader B6a remains open for built-in DFT-D3 explicit setup and final generic stored built-in classical-cache removal; the separately owned legacy compatibility purge remains open. C5 is complete and unblocks C6/C7. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5 active; later work not done | C5 migrates the frozen `CoreIndexData` value to tad-mctc `Node`; C6-C7 core migration remains; C8a Result pytree support is a separate E6a prerequisite, C8b Model/System stackability is an E6bimpl prerequisite, and C9 waits for E4.6a/E4.6b legacy-owner retirement. |
+| C5-C9          | C5 complete; later work not done | C5 migrated the frozen `CoreIndexData` value to tad-mctc `Node`; C6/C7 are unblocked. C8a is unblocked by B5.6. C8b remains blocked by final B3b, C5-C7, and B2; C9 is deferred until E4.6a/E4.6b legacy-owner retirement. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2621,19 +2622,21 @@ B4/B5/B6a-SCF-core, B7, E2-core, and E4core according to their prerequisites. Af
 E4.5b, diagnosis-only E3.0 and B6b-core may proceed independently; E3.1 may
 implement SCF differentiation after E3.0 without E1.3, while full end-to-end
 E3 acceptance waits for full E1.
-B5.6 closes public solver-status fields before C8a;
+B5.6 has closed the public solver-status fields, unblocking C8a;
 C8a's tensor-built Result probe is independent of SCF control. C8a plus the
 private transform boundary unblock E6a, where the exact B1 public call is
 finally tested. E6a + final B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not
 wait for B3b, C5/C8b, or E4.6a.
 
-B6b-core — new single-System core purity — is complete. E3.1a, E3.1s and E3.1b
-are complete; full E3 end-to-end acceptance remains blocked by E1.3 for the
-DFT-D3-enabled GFN1 row. B6b-core removes mutable legacy index and interaction
-containers from the functional SCF core while preserving their legacy
-consumers; it does not include classical DFT-D3 setup/cache migration or
-repository-wide compatibility cleanup. C5 — migrating `CoreIndexData` to
-tad-mctc `Node` — is now active.
+B5.6 is complete and verified; C8a is unblocked. B6b-core and C5 are
+complete. E3.1a, E3.1s and E3.1b are complete; full E3
+end-to-end acceptance remains blocked by E1.3 for the DFT-D3-enabled GFN1 row.
+B6b-core removes mutable legacy index and interaction containers from the
+functional SCF core while preserving their legacy consumers; it does not
+include classical DFT-D3 setup/cache migration or repository-wide compatibility
+cleanup. C5 migrated `CoreIndexData` to tad-mctc `Node`; B5.6 completed the
+public tensor-valued SCF solver-status schema. C8a is now unblocked, as are
+C6/C7 through C5.
 
 Parallelism is encouraged only where packages touch distinct concerns.
 
@@ -2863,9 +2866,10 @@ Success means measured speed/memory improves without creating a second semantics
 
 E3.1b transform-compatible implicit physical-root implementation is complete.
 Full E3 is acceptance-only and remains blocked where its DFT-D3-enabled GFN1
-row depends on E1.3; do not approximate that row by omitting DFT-D3. Run only
-currently unblocked full-E3 acceptance rows as useful, then continue with the
-next genuinely unblocked dependency-ordered package.
+row depends on E1.3; do not approximate that row by omitting DFT-D3. B5.6 —
+public tensor-valued SCF solver-status schema — is complete and verified.
+C8a is unblocked, as are C6/C7 through C5. C8b remains blocked by final B3b, C5-C7,
+and B2; C9 is deferred until legacy-owner retirement through E4.6a/E4.6b.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
 the historical failure at the complete finite-tolerance fixed-point response /
@@ -2884,9 +2888,9 @@ Whole-System transforms remain E6a scope.
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
-Still separately open: E1.3; B6b-core; B3b; B5.6/C8a; C5-C8b; E6 batch
-migration; broader B6a DFT-D3 explicit setup and final generic stored built-in
-cache removal.
+Still separately open: E1.3; B3b; C8a; C6-C8b; E6 batch migration;
+broader B6a DFT-D3 explicit setup and final generic stored built-in cache
+removal. B6b-core and C5 are complete; C9 remains deferred.
 
 ## Historical package records
 

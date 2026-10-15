@@ -28,6 +28,7 @@ from tad_mctc.math import einsum
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
+from dxtb._src.scf.status import SCFFailureCode
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import (
@@ -191,11 +192,11 @@ class SCFTrajectoryStatus:
     first_failure: Tensor
 
 
-FERMI_FAILURE_NONE = 0
-FERMI_FAILURE_INVALID_TEMPERATURE = 1
-FERMI_FAILURE_TOO_MANY_ELECTRONS = 2
-FERMI_FAILURE_NONCONVERGENCE = 3
-FERMI_FAILURE_ELECTRON_COUNT = 4
+FERMI_FAILURE_NONE = int(SCFFailureCode.NONE)
+FERMI_FAILURE_INVALID_TEMPERATURE = int(SCFFailureCode.INVALID_TEMPERATURE)
+FERMI_FAILURE_TOO_MANY_ELECTRONS = int(SCFFailureCode.TOO_MANY_ELECTRONS)
+FERMI_FAILURE_NONCONVERGENCE = int(SCFFailureCode.FERMI_NONCONVERGENCE)
+FERMI_FAILURE_ELECTRON_COUNT = int(SCFFailureCode.ELECTRON_COUNT)
 
 
 def fermi_failure_code(status: FermiStatus | None, *, like: Tensor) -> Tensor:

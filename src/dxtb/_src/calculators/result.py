@@ -28,6 +28,7 @@ from typing import Protocol
 
 from dxtb import OutputHandler
 from dxtb._src.integral.container import IntegralMatrices
+from dxtb._src.scf.status import SCFStatus
 from dxtb._src.typing import Tensor
 
 __all__ = ["ChargeResult", "Multipoles", "PotentialResult", "Result"]
@@ -89,12 +90,12 @@ class Multipoles:
 class Result:
     """Immutable structure for single-system or legacy-batch outputs.
 
-    Functional full-SCF routes provide convergence and residual tensors;
-    legacy fallback routes may leave those fields ``None``. Fields are never
-    rebound by evaluation, and later evaluations do not mutate a prior Result.
-    Tensor values remain ordinary PyTorch tensors, so callers can still mutate
-    them in place. Charge and potential outputs use plain immutable values
-    whose tensors remain graph-connected.
+    Functional full-SCF routes provide convergence, residual and solver-status
+    tensors; legacy fallback routes may leave those fields ``None``. Fields are
+    never rebound by evaluation, and later evaluations do not mutate a prior
+    Result. Tensor values remain ordinary PyTorch tensors, so callers can still
+    mutate them in place. Charge and potential outputs use plain immutable
+    values whose tensors remain graph-connected.
     """
 
     energy: Tensor
@@ -116,6 +117,7 @@ class Result:
     overlap_norm: Tensor | None = None
     converged: Tensor | None = None
     residual: Tensor | None = None
+    status: SCFStatus | None = None
 
     @classmethod
     def snapshot(
@@ -140,6 +142,7 @@ class Result:
         overlap_norm: Tensor | None = None,
         converged: Tensor | None = None,
         residual: Tensor | None = None,
+        status: SCFStatus | None = None,
     ) -> Result:
         """Construct the core Result from call-local evaluation outputs.
 
@@ -186,6 +189,7 @@ class Result:
             overlap_norm=overlap_norm,
             converged=converged,
             residual=residual,
+            status=status,
         )
 
     @property

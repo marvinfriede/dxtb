@@ -40,6 +40,7 @@ from dxtb._src.calculators.config import Config
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import singlepoint
+from dxtb._src.scf.status import SCFStatus
 
 
 def _assert_result_values_equal(left: Result, right: Result) -> None:
@@ -89,6 +90,15 @@ def _assert_result_values_equal(left: Result, right: Result) -> None:
     ):
         torch.testing.assert_close(left_value, right_value)
     assert torch.equal(left.iterations, right.iterations)
+    if left.status is None or right.status is None:
+        assert left.status is right.status
+    else:
+        torch.testing.assert_close(
+            left.status.trajectory_failure, right.status.trajectory_failure
+        )
+        torch.testing.assert_close(
+            left.status.final_failure, right.status.final_failure
+        )
 
 
 def test_core_singlepoint_without_calculator_is_history_independent() -> None:
@@ -181,6 +191,8 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
     with pytest.raises(FrozenInstanceError):
         first.energy = second.energy  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
+        first.status = None  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
         first.charges.mono = second.charges.mono  # type: ignore[union-attr,misc]
     with pytest.raises(FrozenInstanceError):
         first.potential.mono = second.potential.mono  # type: ignore[union-attr,misc]
@@ -211,6 +223,7 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
         "iterations",
         "converged",
         "residual",
+        "status",
     }
     assert not isinstance(first.charges, Charges)
     assert not isinstance(first.potential, Potential)
@@ -271,6 +284,85 @@ def test_default_full_singlepoint_uses_functional_route(
     assert result.iterations is functional.iterations
     assert result.converged is functional.converged
     assert result.residual is functional.residual
+    assert result.status is not None
+    assert result.status.trajectory_failure.dtype == torch.int64
+    assert result.status.final_failure.dtype == torch.int64
+    solve_result = functional.solve_result
+    assert solve_result.trajectory_status is not None
+    assert (
+        result.status.trajectory_failure
+        is solve_result.trajectory_status.first_failure
+    )
+    assert result.status.final_failure.item() == 0
+
+
+def test_result_snapshot_preserves_optional_status_and_tensor_identity() -> (
+    None
+):
+    """Snapshot forwards status without changing graph-connected tensors."""
+    from dxtb import SCFFailureCode
+
+    energy = torch.tensor(1.0, requires_grad=True)
+    code = torch.tensor(int(SCFFailureCode.NONE), dtype=torch.int64)
+    status = SCFStatus(code, code)
+    result = Result.snapshot(
+        energy=energy,
+        scf=energy,
+        classical=(),
+        fenergy=energy,
+        iterations=torch.tensor(0, dtype=torch.int64),
+        status=status,
+    )
+    assert result.status is status
+    assert result.energy is energy
+    assert result.scf is energy
+    assert result.fenergy is energy
+    assert result.status is not None
+    assert result.status.trajectory_failure is code
+    assert (
+        Result.snapshot(
+            energy=energy,
+            scf=energy,
+            classical=(),
+            fenergy=energy,
+            iterations=torch.tensor(0, dtype=torch.int64),
+        ).status
+        is None
+    )
+    assert torch.autograd.grad(result.energy, energy)[0].item() == 1.0
+
+
+def test_zero_temperature_functional_result_has_success_status() -> None:
+    """Functional zero-temperature calls expose integer zero status codes."""
+    from dxtb import SCFFailureCode
+
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB,
+        fermi_etemp=0.0,
+        maxiter=0,
+        force_convergence=True,
+    )
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=positions.dtype), config=config
+    ).setup(torch.tensor([1, 1]))
+    result = system.singlepoint(positions)
+    assert result.status is not None
+    assert result.status.trajectory_failure.item() == int(SCFFailureCode.NONE)
+    assert result.status.final_failure.item() == int(SCFFailureCode.NONE)
+    for code in (
+        result.status.trajectory_failure,
+        result.status.final_failure,
+    ):
+        assert code.dtype == torch.int64
+        assert code.device == positions.device
+    assert result.iterations.dtype == torch.int64
+    assert result.converged is not None
+    assert result.residual is not None
+    assert result.iterations.item() == 1
+    assert not result.converged.item()
 
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
@@ -330,6 +422,15 @@ def test_production_converged_route_executes_only_physical_maps(
     )
     assert production_result.converged is not None
     assert production_result.converged.item()
+    assert production_result.status is not None
+    for code in (
+        production_result.status.trajectory_failure,
+        production_result.status.final_failure,
+    ):
+        assert code.dtype == torch.int64
+        assert code.device == production_case.positions.device
+        assert code.shape == torch.Size([])
+        assert code.item() == 0
     assert production_result.iterations.item() == legacy_raw_maps
     assert functional_counts["raw_maps"] == production_result.iterations.item()
     assert functional_counts["spectra"] == functional_counts["raw_maps"] + 1
@@ -381,6 +482,11 @@ def test_production_singlepoint_matches_legacy_full(
     expected = legacy_case.engine(legacy_case.initial_charges.clone())
     actual = singlepoint(production_case.system, production_case.positions)
     assert not isinstance(expected, FunctionalCoreResult)
+    assert actual.status is not None
+    assert actual.status.trajectory_failure.dtype == torch.int64
+    assert actual.status.final_failure.dtype == torch.int64
+    assert torch.count_nonzero(actual.status.trajectory_failure) == 0
+    assert torch.count_nonzero(actual.status.final_failure) == 0
     for name in (
         "density",
         "coefficients",
@@ -430,6 +536,7 @@ def test_production_maxiter_zero_is_valid_one_shot(
     representation: int, mixer: int, force_convergence: bool
 ) -> None:
     """The production boundary preserves maxiter=0 for every representation."""
+    from dxtb import SCFFailureCode
     from test.test_scf.test_functional_map import _prepare_case
 
     case = _prepare_case(
@@ -449,6 +556,13 @@ def test_production_maxiter_zero_is_valid_one_shot(
     assert actual.iterations.item() == 1
     assert actual.converged is not None and not actual.converged
     assert actual.residual is not None
+    assert actual.status is not None
+    assert actual.status.trajectory_failure.dtype == torch.int64
+    assert actual.status.final_failure.dtype == torch.int64
+    assert actual.status.trajectory_failure.device == actual.scf.device
+    assert actual.status.final_failure.device == actual.scf.device
+    assert actual.status.trajectory_failure.item() == int(SCFFailureCode.NONE)
+    assert actual.status.final_failure.item() == int(SCFFailureCode.NONE)
     assert OutputHandler.warnings == []
     torch.testing.assert_close(actual.scf, expected["energy"])
     torch.testing.assert_close(actual.fenergy, expected["fenergy"])
@@ -534,6 +648,7 @@ def test_production_negative_temperature_preserves_legacy_results(
     torch.testing.assert_close(actual.hamiltonian, expected["hamiltonian"])
     assert actual.converged is None
     assert actual.residual is None
+    assert actual.status is None
 
 
 @pytest.mark.parametrize(
@@ -804,6 +919,7 @@ def test_core_singlepoint_early_exclusion_returns_complete_result(
     assert result.iterations.shape == torch.Size([])
     assert result.iterations.device == positions.device
     assert result.iterations.item() == 0
+    assert result.status is None
 
 
 def test_core_singlepoint_validates_dtype_without_integral_setup() -> None:
@@ -991,6 +1107,11 @@ def test_core_singlepoint_tensor_charge_gradient_is_preserved() -> None:
     system = model.setup(torch.tensor([1, 1]))
     charge = torch.tensor(0.1, dtype=positions.dtype, requires_grad=True)
     result = singlepoint(system, positions, chrg=charge)
+    from dxtb import SCFFailureCode
+
+    assert result.status is not None
+    assert result.status.trajectory_failure.item() == int(SCFFailureCode.NONE)
+    assert result.status.final_failure.item() == int(SCFFailureCode.NONE)
     (gradient,) = torch.autograd.grad(result.energy.sum(), charge)
     assert torch.isfinite(gradient)
     assert gradient.abs() > 0

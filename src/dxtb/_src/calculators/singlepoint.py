@@ -67,6 +67,7 @@ from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
+from dxtb._src.scf.status import SCFStatus
 
 __all__ = ["singlepoint"]
 
@@ -94,11 +95,13 @@ class _SCFOutput:
     iterations: Tensor
     converged: Tensor | None
     residual: Tensor | None
+    status: SCFStatus | None
 
 
 def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     """Read SCF outputs once without copying functional tensors."""
     from dxtb._src.scf.functional.eager import FunctionalCoreResult
+    from dxtb._src.scf.functional.eager import public_scf_status
 
     if isinstance(result, FunctionalCoreResult):
         return _SCFOutput(
@@ -114,6 +117,11 @@ def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
             iterations=_iteration_tensor(result.iterations, like),
             converged=result.converged,
             residual=result.residual,
+            status=public_scf_status(
+                result.solve_result.trajectory_status,
+                result.solve_result.final_evaluation.fermi_status,
+                like=result.converged,
+            ),
         )
 
     return _SCFOutput(
@@ -129,6 +137,7 @@ def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
         iterations=_iteration_tensor(result["iterations"], like),
         converged=None,
         residual=None,
+        status=None,
     )
 
 
@@ -504,4 +513,5 @@ def singlepoint(
         iterations=scf_output.iterations,
         converged=scf_output.converged,
         residual=scf_output.residual,
+        status=scf_output.status,
     )

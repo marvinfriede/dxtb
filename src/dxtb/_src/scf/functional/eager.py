@@ -33,11 +33,13 @@ from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.nonselfconsistent import solve_nonselfconsistent
+from dxtb._src.scf.status import SCFStatus
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
     SCFConvergenceWarning,
 )
+from dxtb._src.wavefunction.filling import FermiStatus
 
 from .data import (
     PotentialLayout,
@@ -56,6 +58,7 @@ from .solver import (
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
     SCFSolveResult,
     SCFSolverSettings,
+    SCFTrajectoryStatus,
     setup_simple_solver_settings,
     solve_scf_fock_simple,
     solve_scf_potential_simple,
@@ -236,6 +239,29 @@ def functional_core_result(result: SCFSolveResult) -> FunctionalCoreResult:
         converged=result.converged,
         residual=result.residual,
         solve_result=result,
+    )
+
+
+def public_scf_status(
+    trajectory_status: SCFTrajectoryStatus | None,
+    final_fermi_status: FermiStatus | None,
+    *,
+    like: Tensor,
+) -> SCFStatus:
+    """Project internal trajectory and final-spectrum failures publicly."""
+    trajectory_failure = (
+        torch.zeros_like(like, dtype=torch.int64)
+        if trajectory_status is None
+        else trajectory_status.first_failure
+    )
+    final_failure = (
+        torch.zeros_like(like, dtype=torch.int64)
+        if final_fermi_status is None
+        else fermi_failure_code(final_fermi_status, like=like)
+    )
+    return SCFStatus(
+        trajectory_failure=trajectory_failure,
+        final_failure=final_failure,
     )
 
 

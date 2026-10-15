@@ -199,6 +199,9 @@ called by the new System.
 
 ### B5.6 Close the public solver-status Result schema
 
+**Status: complete and verified.** `Result.status` exposes the immutable
+public `SCFStatus` representation, and C8a is unblocked.
+
 Before C8a registers the Result pytree, add the agreed immutable
 `SCFStatus | None` field to Result and `Result.snapshot()`. Its functional
 value contains dynamic integer-tensor leaves `trajectory_failure` and
@@ -404,7 +407,7 @@ DFT-D3 is active). **Size.** L.
 | B3b | Remaining setup/per-call structural separation, including broader B6a built-in DFT-D3 setup and final generic stored built-in ClassicalListCache removal | B3a, B4/E1 and broader B6a DFT-D3 work as applicable | open |
 | B4 | Pure integral builders | B1 | L |
 | B5 | Result object and `singlepoint` | B3a, B4 | M |
-| B5.6 | Public tensor-valued solver-status Result schema | B5, E4core | S |
+| B5.6 | Public tensor-valued solver-status Result schema (complete) | B5, E4core | done |
 | B6a-SCF-core | SCF-only state-removal prerequisite for E4core | B5, B4 | done |
 | B6a-SCF-validation | Retrospective seven-family validation | B6a-SCF-core | done |
 | B6a (broader) | Built-in DFT-D3 explicit setup and final generic stored built-in ClassicalListCache removal | B4/B6a-SCF-core | partial |
