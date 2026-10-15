@@ -145,6 +145,11 @@ to build call-local dispersion data. Direct compatibility callers still
 capture setup from their supplied component, and solver override routing is
 unchanged.
 
+C6.4b is complete: `_interaction_data()` attaches the System-owned D4SC setup
+only when the resolved interaction list contains that exact component object.
+Alternate exact D4SC components retain component-based compatibility setup,
+and selections without D4SC carry no D4SC authority. Broader C6 remains partial.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

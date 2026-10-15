@@ -159,8 +159,13 @@ def _interaction_data(
     interactions keep their current cache APIs until their B6a packages, but
     returned data is local to this call.
     """
-    data = _SystemInteractionData(system.d4sc_setup)
     interactions = system.interactions if interactions is None else interactions
+    owns_selected_d4sc = system.d4sc_interaction is not None and any(
+        interaction is system.d4sc_interaction
+        for interaction in interactions.components
+    )
+    authoritative_d4sc_setup = system.d4sc_setup if owns_selected_d4sc else None
+    data = _SystemInteractionData(authoritative_d4sc_setup)
     for interaction in interactions.components:
         if type(interaction) is ElectricField:
             data[interaction.label] = build_electric_field_data(

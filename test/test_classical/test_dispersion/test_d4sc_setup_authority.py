@@ -18,11 +18,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import tad_dftd4 as d4
+import pytest
 import torch
 
 from dxtb import GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
+import dxtb._src.calculators.singlepoint as singlepoint_module
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
@@ -31,6 +35,7 @@ from dxtb._src.components.interactions.dispersion.d4sc import (
     _StaticMapping,
     new_d4sc,
 )
+from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
@@ -59,7 +64,10 @@ def _sample() -> tuple[Tensor, Tensor]:
 
 
 def _system_with_custom_model(
-    numbers: Tensor, *, scf_mode: int = labels.SCF_MODE_FULL
+    numbers: Tensor,
+    *,
+    scf_mode: int = labels.SCF_MODE_FULL,
+    int_level: int | None = None,
 ) -> tuple[Model, DispersionD4SC, Tensor]:
     par = ParamModule(GFN2_XTB, **DD)
     interaction = new_d4sc(numbers, par, **DD)
@@ -88,11 +96,14 @@ def _system_with_custom_model(
     model.extra_state = {"weights": [scale, (scale * 0.5, "custom")]}
     interaction.model = model
 
-    config = Config.create(
-        exclude=("es2", "es3", "aes2", "d4sc"),
-        scf_mode=scf_mode,
-        mixer=labels.MIXER_ANDERSON,
-    )
+    config_options: dict[str, Any] = {
+        "exclude": ("es2", "es3", "aes2", "d4sc"),
+        "scf_mode": scf_mode,
+        "mixer": labels.MIXER_ANDERSON,
+    }
+    if int_level is not None:
+        config_options["int_level"] = int_level
+    config = Config.create(**config_options)
     calculator = Model(
         par=par,
         config=config,
@@ -102,8 +113,11 @@ def _system_with_custom_model(
     return calculator, interaction, scale
 
 
-def _functional_entry(system, positions: Tensor):
-    cache = _interaction_data(system, positions)
+def _functional_entry(
+    system, positions: Tensor, interactions: InteractionList | None = None
+):
+    selected = system.interactions if interactions is None else interactions
+    cache = _interaction_data(system, positions, interactions=selected)
     charge = positions.new_zeros((1,))
     spin = positions.new_zeros((1,))
     integrals, refocc, _ = build_integral_matrices(
@@ -119,7 +133,7 @@ def _functional_entry(system, positions: Tensor):
         n0,
         occupation,
         nel,
-        system.interactions,
+        selected,
         cache,
         system.ihelp,
         system.config.scf,
@@ -322,3 +336,150 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     after = system.singlepoint(positions.detach())
     torch.testing.assert_close(after.energy, before.energy.detach())
     torch.testing.assert_close(after.charges.mono, before.charges.mono.detach())
+
+
+def test_alternate_d4sc_uses_its_own_setup_authority() -> None:
+    """An alternate selected D4SC cannot inherit the System's setup."""
+    numbers, positions = _sample()
+    calculator, component_a, _ = _system_with_custom_model(numbers)
+    system = calculator.setup(numbers)
+    assert system.d4sc_interaction is component_a
+    assert type(system.d4sc_setup) is D4SCCoreSetup
+
+    component_b = new_d4sc(numbers, ParamModule(GFN2_XTB, **DD), **DD)
+    assert component_b is not None
+    component_b.model.wf = component_b.model.wf + 0.4
+    selected = InteractionList(component_b)
+
+    data = _interaction_data(system, positions, interactions=selected)
+    cache = data[component_b.label]
+    torch.testing.assert_close(cache.model.wf, component_b.model.wf)
+    assert data.d4sc_setup is None
+
+    selected_data, selected_entry = _functional_entry(
+        system, positions, interactions=selected
+    )
+    assert selected_data.d4sc_setup is None
+    selected_cache = selected_data[component_b.label]
+    selected_model_setup = selected_entry.option("setup")
+    torch.testing.assert_close(
+        selected_model_setup.model_wf, component_b.model.wf
+    )
+
+    atomic_charges = torch.tensor([0.13, -0.13], **DD)
+    functional_energy, functional_potential = _functional_energy_potential(
+        selected_entry, atomic_charges
+    )
+    legacy_energy = component_b.get_monopole_atom_energy(
+        selected_cache, atomic_charges
+    ).sum()
+    legacy_potential = component_b.get_monopole_atom_potential(
+        selected_cache, atomic_charges
+    )
+    torch.testing.assert_close(functional_energy, legacy_energy)
+    torch.testing.assert_close(functional_potential, legacy_potential)
+
+    no_d4_data = _interaction_data(
+        system, positions, interactions=InteractionList()
+    )
+    assert no_d4_data.d4sc_setup is None
+
+    no_d4_calculator = Model(
+        par=ParamModule(GFN2_XTB, **DD),
+        config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
+        auto_int_level=False,
+    )
+    no_d4_system = no_d4_calculator.setup(numbers)
+    assert no_d4_system.d4sc_interaction is None
+    external_d4_data = _interaction_data(
+        no_d4_system, positions, interactions=selected
+    )
+    assert external_d4_data.d4sc_setup is None
+
+
+def test_per_call_field_preserves_d4sc_setup_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """singlepoint field additions keep the selected System D4SC setup."""
+    numbers, positions = _sample()
+    calculator, _, _ = _system_with_custom_model(
+        numbers, int_level=labels.INTLEVEL_DIPOLE
+    )
+    system = calculator.setup(numbers)
+    observed: list[object] = []
+    original = singlepoint_module._interaction_data
+
+    def capture_authority(system, positions, interactions=None):
+        data = original(system, positions, interactions=interactions)
+        observed.append(data.d4sc_setup)
+        return data
+
+    monkeypatch.setattr(
+        singlepoint_module, "_interaction_data", capture_authority
+    )
+    system.singlepoint(positions, field=torch.tensor([0.01, 0.0, 0.0], **DD))
+    assert len(observed) == 1
+    assert observed[0] is system.d4sc_setup
+
+
+def test_independent_systems_keep_d4sc_setup_authority() -> None:
+    """Same-label D4SC components retain per-System setup provenance."""
+    numbers, positions = _sample()
+    calculator_a, component_a, _ = _system_with_custom_model(numbers)
+    system_a = calculator_a.setup(numbers)
+
+    component_b = new_d4sc(numbers, ParamModule(GFN2_XTB, **DD), **DD)
+    assert component_b is not None
+    component_b.model.wf = component_b.model.wf + 0.4
+    calculator_b = Model(
+        par=ParamModule(GFN2_XTB, **DD),
+        config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
+        interaction=(component_b,),
+        auto_int_level=False,
+    )
+    system_b = calculator_b.setup(numbers)
+
+    assert system_a.d4sc_interaction is component_a
+    assert system_b.d4sc_interaction is component_b
+    assert system_a.d4sc_setup is not system_b.d4sc_setup
+    _, entry_b = _functional_entry(system_b, positions)
+    _, entry_a = _functional_entry(system_a, positions)
+    torch.testing.assert_close(
+        entry_b.option("setup").model_wf, component_b.model.wf
+    )
+    torch.testing.assert_close(
+        entry_a.option("setup").model_wf, system_a.d4sc_setup.model_wf
+    )
+    _, entry_b_again = _functional_entry(system_b, positions)
+    torch.testing.assert_close(
+        entry_b_again.option("setup").model_wf,
+        entry_b.option("setup").model_wf,
+    )
+
+
+def test_custom_d4sc_subclass_does_not_inherit_system_authority() -> None:
+    """A custom D4SC subclass keeps its legacy cache route."""
+    numbers, positions = _sample()
+    calculator, _, _ = _system_with_custom_model(numbers)
+    system = calculator.setup(numbers)
+    exact = new_d4sc(numbers, ParamModule(GFN2_XTB, **DD), **DD)
+    assert exact is not None
+
+    class CustomD4SC(DispersionD4SC):
+        pass
+
+    custom = CustomD4SC(
+        param=exact.param,
+        model=exact.model,
+        rcov=exact.rcov,
+        r4r2=exact.r4r2,
+        cutoff=exact.cutoff,
+        counting_function=exact.counting_function,
+        damping_function=exact.damping_function,
+        device=DEVICE,
+        dtype=torch.double,
+    )
+    selected = InteractionList(custom)
+    data = _interaction_data(system, positions, interactions=selected)
+    assert data.d4sc_setup is None
+    assert data[custom.label].model is not custom.model
