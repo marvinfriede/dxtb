@@ -27,7 +27,12 @@ from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import GFN0_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
-from dxtb._src.components.classicals import IES, IESSetup, new_ies
+from dxtb._src.components.classicals import (
+    IES,
+    IESCoreSetup,
+    IESSetup,
+    new_ies,
+)
 from dxtb._src.components.classicals.ies import ies_energy
 from dxtb.config import Config
 
@@ -63,7 +68,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     system = _model(_module()).setup(numbers)
     setup = system.ies_setup
 
-    assert isinstance(setup, IESSetup)
+    assert type(setup) is IESCoreSetup
     assert system.ies_classical is not None
     assert system.classical_cache["IES"] is setup
     assert {field.name for field in fields(setup)} == {
@@ -81,8 +86,12 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
         isinstance(getattr(setup, field.name), (ParamModule, Model, IES))
         for field in fields(setup)
     )
-    assert system.ies_classical.get_cache(numbers) is not setup
-    assert system.ies_classical.get_cache(numbers) is not setup
+    legacy1 = system.ies_classical.get_cache(numbers)
+    legacy2 = system.ies_classical.get_cache(numbers)
+    assert type(legacy1) is IESSetup
+    assert type(legacy2) is IESSetup
+    assert legacy1 is not legacy2
+    assert setup.eeq is not legacy1.eeq
     assert system.ies_classical.cache is None
     assert system.ies_classical._cachevars is None
     with pytest.raises(FrozenInstanceError):
@@ -307,7 +316,9 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
         classical=(custom,),
     ).setup(numbers)
     assert system.ies_classical is custom
-    assert system.ies_setup is not None
+    assert type(system.ies_setup) is IESCoreSetup
+    assert system.classical_cache["IES"] is system.ies_setup
+    torch.testing.assert_close(system.ies_setup.cutoff, custom.cutoff)
     energy = _energy(system, positions)
     assert not torch.isclose(
         energy,
@@ -371,6 +382,7 @@ def test_ies_subclass_refreshes_legacy_cache_and_reset() -> None:
         dtype=torch.double,
         auto_int_level=False,
     )
+    assert calc.system.ies_setup is None
     first = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
     calc.classicals.update("IES", scale=torch.tensor(2.0, **DD))
     updated = dict(calc.system.singlepoint(positions).classical)["IES"].sum()

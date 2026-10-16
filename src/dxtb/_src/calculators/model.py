@@ -55,6 +55,7 @@ from dxtb._src.components.classicals import (
     DispersionD4Setup,
     Halogen,
     HalogenSetup,
+    IESCoreSetup,
     IESSetup,
     Repulsion,
     RepulsionCoreSetup,
@@ -62,6 +63,7 @@ from dxtb._src.components.classicals import (
     ShortRangeBond,
     ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
+    core_ies_setup,
     core_repulsion_setup,
     core_srb_setup,
     new_dispersion,
@@ -210,7 +212,7 @@ class System:
     d4_classical: DispersionD4 | None
     """Exact classical D4 associated with :attr:`d4_setup`."""
 
-    ies_setup: IESSetup | None
+    ies_setup: IESCoreSetup | IESSetup | None
     """Numbers/parameter setup for the exact migrated IES term."""
 
     ies_classical: IES | None
@@ -543,6 +545,10 @@ class Model:
             if ies_classical is not None
             else None
         )
+        if ies_classical is not None and batch_mode == 0:
+            assert isinstance(ies_setup, IESSetup)
+            ies_setup = core_ies_setup(ies_setup)
+            classical_cache[ies_classical.label] = ies_setup
         halogen_classical = next(
             (c for c in classicals.components if type(c) is Halogen), None
         )

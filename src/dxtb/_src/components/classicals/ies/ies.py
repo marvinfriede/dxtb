@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
+from tad_mctc.tree import Node, child
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
@@ -39,7 +40,15 @@ from dxtb._src.utils.tensors import structure_charge
 
 from ..base import Classical
 
-__all__ = ["IES", "IESSetup", "LABEL_IES", "ies_energy", "setup_ies"]
+__all__ = [
+    "IES",
+    "IESCoreSetup",
+    "IESSetup",
+    "LABEL_IES",
+    "core_ies_setup",
+    "ies_energy",
+    "setup_ies",
+]
 
 
 LABEL_IES = "IES"
@@ -52,7 +61,8 @@ class IESSetup:
 
     ``EEQModel`` is an immutable tad-multicharge Node. Its ``solve`` method
     constructs all geometry-dependent values locally and does not update the
-    model, so it is safe as static System setup.
+    model. This dataclass remains the compatibility representation for direct
+    and packed legacy callers.
     """
 
     numbers: Tensor
@@ -61,6 +71,29 @@ class IESSetup:
     cutoff: Tensor
     cn_max: Tensor
     cn_kcn: Tensor
+
+
+class IESCoreSetup(Node):
+    """Immutable tensor setup for single-System IES evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    eeq: EEQModel = child()
+    rcov: Tensor = child()
+    cutoff: Tensor = child()
+    cn_max: Tensor = child()
+    cn_kcn: Tensor = child()
+
+
+def core_ies_setup(setup: IESSetup) -> IESCoreSetup:
+    """Convert a legacy IES setup to its immutable core Node."""
+    return IESCoreSetup(
+        numbers=setup.numbers,
+        eeq=setup.eeq,
+        rcov=setup.rcov,
+        cutoff=setup.cutoff,
+        cn_max=setup.cn_max,
+        cn_kcn=setup.cn_kcn,
+    )
 
 
 def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
@@ -83,7 +116,7 @@ def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
 
 
 def ies_energy(
-    setup: IESSetup,
+    setup: IESSetup | IESCoreSetup,
     positions: Tensor,
     charge: Tensor | float | int,
 ) -> Tensor:
@@ -204,7 +237,7 @@ class IES(Classical):
     def get_energy(
         self,
         positions: Tensor,
-        cache: IESSetup,
+        cache: IESSetup | IESCoreSetup,
         charge: Tensor | float | int | None = None,
         **_: Any,
     ) -> Tensor:
@@ -215,7 +248,7 @@ class IES(Classical):
         ----------
         positions : Tensor
             Atomic positions of the system (shape: ``(natom, 3)``).
-        cache : IESSetup
+        cache : IESSetup | IESCoreSetup
             Frozen coordinate-independent data for the EEQ solve.
         charge : Tensor | float | int | None
             Total molecular charge. If None, the energy is not computed.
@@ -225,8 +258,11 @@ class IES(Classical):
         Tensor
             Isotropic electrostatics energy of the system (shape: ``()``).
         """
-        if not isinstance(cache, IESSetup):
-            raise TypeError(f"Setup in {self.label} is not of type 'IESSetup'.")
+        if not isinstance(cache, (IESSetup, IESCoreSetup)):
+            raise TypeError(
+                f"Setup in {self.label} is not of type 'IESSetup' or "
+                "'IESCoreSetup'."
+            )
         if charge is None:
             raise ValueError("Total molecular charge is required for IES.")
         return ies_energy(cache, positions, charge)

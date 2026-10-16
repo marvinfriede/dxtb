@@ -190,6 +190,19 @@ gradcheck observation remains under tracking; the C6.7 canonical selection
 passed, which does not resolve the earlier intermittent observation. Broader
 C6 remains partial.
 
+C6.8 is complete: eligible exact single-System IES setup values are stored as
+an `IESCoreSetup` Node, and the System's `ies_setup` and classical-cache entry
+refer to that same Node. The nested `EEQModel` remains a dynamic Node child;
+its `chi`, `kcn`, `eta`, and `rad` tensors are visible pytree leaves and retain
+their setup-time parameter graph. Direct `setup_ies()`/`get_cache()` and packed
+batch paths continue using `IESSetup`, and both setup forms share the existing
+IES energy builder. The IES Node tests passed in the five approved CPU
+environments. Broader C6 remains partial. The C6.4c NO2 worker-mode NaN, the
+intermittent E0 small-gap gradcheck observation, and the ten inherited GFN1
+density-parity failures remain unresolved. The C6.7 broad-suite report of 138
+passes and 38 failures remains not fully classified because the complete
+failure list was unavailable. Full E3 remains blocked by E1.3.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening
