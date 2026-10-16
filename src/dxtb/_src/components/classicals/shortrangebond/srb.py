@@ -31,6 +31,7 @@ from tad_mctc import storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import en as element_en
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.ncoord import coordination_number
@@ -41,7 +42,9 @@ from ..base import Classical, ComponentCache
 __all__ = [
     "LABEL_SRB",
     "ShortRangeBond",
+    "ShortRangeBondCoreSetup",
     "ShortRangeBondSetup",
+    "core_srb_setup",
     "setup_srb",
     "short_range_bond_energy",
 ]
@@ -71,6 +74,51 @@ class ShortRangeBondSetup:
     cn_cutoff: Tensor
     cn_max: Tensor
     cn_kcn: Tensor
+
+
+class ShortRangeBondCoreSetup(Node):
+    """Immutable tensor setup for single-System SRB evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    r0: Tensor = child()
+    cnfak: Tensor = child()
+    en: Tensor = child()
+    pauling: Tensor = child()
+    rcov: Tensor = child()
+    counting_function: CountingFunction = context()
+    shift: Tensor = child()
+    prefactor: Tensor = child()
+    steepness: Tensor = child()
+    enscale: Tensor = child()
+    enpoly: Tensor = child()
+    pair_cutoff2: Tensor = child()
+    cn_cutoff: Tensor = child()
+    cn_max: Tensor = child()
+    cn_kcn: Tensor = child()
+
+
+def core_srb_setup(
+    setup: ShortRangeBondSetup,
+) -> ShortRangeBondCoreSetup:
+    """Convert a compatibility setup to the identity-preserving core Node."""
+    return ShortRangeBondCoreSetup(
+        numbers=setup.numbers,
+        r0=setup.r0,
+        cnfak=setup.cnfak,
+        en=setup.en,
+        pauling=setup.pauling,
+        rcov=setup.rcov,
+        counting_function=setup.counting_function,
+        shift=setup.shift,
+        prefactor=setup.prefactor,
+        steepness=setup.steepness,
+        enscale=setup.enscale,
+        enpoly=setup.enpoly,
+        pair_cutoff2=setup.pair_cutoff2,
+        cn_cutoff=setup.cn_cutoff,
+        cn_max=setup.cn_max,
+        cn_kcn=setup.cn_kcn,
+    )
 
 
 def setup_srb(
@@ -104,7 +152,7 @@ def setup_srb(
 
 
 def short_range_bond_energy(
-    setup: ShortRangeBondSetup, positions: Tensor
+    setup: ShortRangeBondSetup | ShortRangeBondCoreSetup, positions: Tensor
 ) -> Tensor:
     """Evaluate the atom-partitioned SRB energy from setup and positions."""
     cn = coordination_number(
@@ -232,7 +280,9 @@ class ShortRangeBond(Classical):
         self, positions: Tensor, cache: ComponentCache, **_: Any
     ) -> Tensor:
         """Return the symmetrically half-partitioned atomwise SRB energy."""
-        if not isinstance(cache, ShortRangeBondSetup):
+        if not isinstance(
+            cache, (ShortRangeBondSetup, ShortRangeBondCoreSetup)
+        ):
             raise TypeError(
                 f"Data in {self.label} is not of type 'ShortRangeBondSetup'."
             )

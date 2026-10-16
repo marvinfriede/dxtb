@@ -60,8 +60,10 @@ from dxtb._src.components.classicals import (
     RepulsionCoreSetup,
     RepulsionSetup,
     ShortRangeBond,
+    ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
     core_repulsion_setup,
+    core_srb_setup,
     new_dispersion,
     new_halogen,
     new_ies,
@@ -196,7 +198,7 @@ class System:
     repulsion_classical: Repulsion | None
     """Exact migrated Repulsion associated with :attr:`repulsion_setup`."""
 
-    srb_setup: ShortRangeBondSetup | None
+    srb_setup: ShortRangeBondCoreSetup | ShortRangeBondSetup | None
     """Numbers-only setup associated with the exact migrated SRB term."""
 
     srb_classical: ShortRangeBond | None
@@ -520,6 +522,10 @@ class Model:
             if srb_classical is not None
             else None
         )
+        if srb_classical is not None and batch_mode == 0:
+            assert isinstance(srb_setup, ShortRangeBondSetup)
+            srb_setup = core_srb_setup(srb_setup)
+            classical_cache[srb_classical.label] = srb_setup
         d4_classical = next(
             (c for c in classicals.components if type(c) is DispersionD4),
             None,

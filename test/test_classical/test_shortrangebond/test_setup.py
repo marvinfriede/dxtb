@@ -30,6 +30,7 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     LABEL_SRB,
     ShortRangeBond,
+    ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
     new_srb,
     short_range_bond_energy,
@@ -63,7 +64,7 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     system = model.setup(numbers)
     setup = system.srb_setup
 
-    assert isinstance(setup, ShortRangeBondSetup)
+    assert isinstance(setup, ShortRangeBondCoreSetup)
     assert set(field.name for field in fields(setup)) == {
         "numbers",
         "r0",

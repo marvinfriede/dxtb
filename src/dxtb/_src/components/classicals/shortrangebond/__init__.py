@@ -25,7 +25,9 @@ from .factory import new_srb
 from .srb import (
     LABEL_SRB,
     ShortRangeBond,
+    ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
+    core_srb_setup,
     setup_srb,
     short_range_bond_energy,
 )
@@ -33,7 +35,9 @@ from .srb import (
 __all__ = [
     "LABEL_SRB",
     "ShortRangeBond",
+    "ShortRangeBondCoreSetup",
     "ShortRangeBondSetup",
+    "core_srb_setup",
     "new_srb",
     "setup_srb",
     "short_range_bond_energy",

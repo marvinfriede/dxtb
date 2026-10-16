@@ -180,6 +180,16 @@ preserves tensor identity, the Boolean pair mask, parameter gradients, and the
 existing cutoff isolation clone. Broader C6 remains partial; B7 remains
 complete, and the unresolved C6.4c NO2 worker-mode diagnosis is not changed.
 
+C6.7 is complete: eligible exact single-System ShortRangeBond setup values are
+stored as a `ShortRangeBondCoreSetup` Node, aliased by the System classical
+cache entry. The legacy `ShortRangeBondSetup`, direct component/cache APIs, and
+packed batches remain supported. Conversion preserves the setup tensors and
+counting-function identity without another clone; the legacy and core setups
+use the same SRB builder. The existing intermittent small-gap order-2 E0
+gradcheck observation remains under tracking; the C6.7 canonical selection
+passed, which does not resolve the earlier intermittent observation. Broader
+C6 remains partial.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening
