@@ -150,6 +150,20 @@ only when the resolved interaction list contains that exact component object.
 Alternate exact D4SC components retain component-based compatibility setup,
 and selections without D4SC carry no D4SC authority. Broader C6 remains partial.
 
+C6.4c investigated the reported NO2 third-derivative worker-mode NaN using
+matched base/candidate runs. The exact test passed in the controlled serial,
+one-worker, two-worker, logical-worker, larger randomized-selection, and
+insertion-order diagnostic runs. No candidate-specific cause was established;
+the original worker-only discrepancy remains unresolved pending its exact
+failing invocation and stage-level output. The original failure was not fixed,
+and its first non-finite derivative remains unknown. No source or test change
+was made. The set-based component ordering observed during diagnosis is a
+separate C6 follow-up: the roadmap requires component lists to preserve order,
+but the NO2 NaN was not reproduced with or without temporary order control and
+ordering is not established as its cause. C6.4b remains accepted on source and
+functional validation; broader C6 remains partial and full E3 remains blocked
+by E1.3.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening
