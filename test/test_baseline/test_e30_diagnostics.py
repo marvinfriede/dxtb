@@ -18,12 +18,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -37,15 +37,6 @@ from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.data import (
-    SCFCharges,
-    SCFPotential,
-    pack_potential,
-    potential_layout,
-    setup_scf_inputs,
-    unpack_potential,
-)
-from dxtb._src.scf.functional.core import FunctionalInteractionSet
 from dxtb._src.scf.functional.interactions import (
     potential_from_charges as _core_potential_from_charges,
 )
@@ -55,7 +46,6 @@ from dxtb._src.scf.functional.anderson import (
     _solve_map_anderson,
     setup_anderson_solver_settings,
 )
-from dxtb._src.scf.functional.eager import resolve_full_scf_route
 from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
     evaluate_hamiltonian,
@@ -64,6 +54,16 @@ from dxtb._src.scf.functional.map import (
     potential_map,
     potential_to_hamiltonian,
 )
+from dxtb._src.scf.functional.core import FunctionalInteractionSet
+from dxtb._src.scf.functional.data import (
+    SCFCharges,
+    SCFPotential,
+    pack_potential,
+    potential_layout,
+    setup_scf_inputs,
+    unpack_potential,
+)
+from dxtb._src.scf.functional.eager import resolve_full_scf_route
 from dxtb._src.scf.functional.solver import (
     _project_potential_padding,
     finalize_scf_potential,
@@ -1495,6 +1495,51 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
     ).reshape_as(selected.density)
     fixed_occupation = selected.occupation.sum(-2).detach()
 
+    interactions = InteractionList(
+        *model_system.interactions.components,
+        ElectricField(field0),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    route = resolve_full_scf_route(
+        model_system.config.scf,
+        interactions,
+        model_system.ihelp,
+        model_system.numbers,
+        matrices,
+    )
+    assert route.kind == "functional"
+    effective_config = replace(
+        model_system.config.scf,
+        mixer=route.effective_mixer,
+    )
+
+    # SCFInputs intentionally does not retain ConfigSCF. Check that deriving
+    # its Fermi settings from the System config reproduces the prepared input.
+    initial_data = _interaction_data(model_system, positions, interactions)
+    derived_inputs = setup_scf_inputs(
+        model_system.numbers,
+        matrices,
+        inputs.n0,
+        inputs.occupation,
+        inputs.nel,
+        interactions,
+        initial_data,
+        model_system.ihelp,
+        effective_config,
+    )
+    assert inputs.fermi_settings is not None
+    assert derived_inputs.fermi_settings is not None
+    for name in ("kt", "threshold"):
+        assert torch.equal(
+            getattr(inputs.fermi_settings, name),
+            getattr(derived_inputs.fermi_settings, name),
+        )
+    for name in ("smear", "maxiter", "diff_order", "partition"):
+        assert getattr(inputs.fermi_settings, name) == getattr(
+            derived_inputs.fermi_settings, name
+        )
+
     def density_probe(parameter: Tensor) -> Tensor:
         field = field0 + parameter * axis
         interactions = InteractionList(
@@ -1513,7 +1558,7 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
             interactions,
             data,
             model_system.ihelp,
-            calculator.opts.scf,
+            effective_config,
         )
         driving = potential_from_charges(
             unpack_potential(state, layout), call_inputs
