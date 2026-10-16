@@ -57,9 +57,11 @@ from dxtb._src.components.classicals import (
     HalogenSetup,
     IESSetup,
     Repulsion,
+    RepulsionCoreSetup,
     RepulsionSetup,
     ShortRangeBond,
     ShortRangeBondSetup,
+    core_repulsion_setup,
     new_dispersion,
     new_halogen,
     new_ies,
@@ -70,10 +72,10 @@ from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
     AES2,
-    AES2CoreSetup,
     ES2,
-    ES2CoreSetup,
     ES3,
+    AES2CoreSetup,
+    ES2CoreSetup,
     ES3CoreSetup,
     core_aes2_setup,
     core_es2_setup,
@@ -188,7 +190,7 @@ class System:
     classical_cache: ClassicalListCache
     """Legacy numbers-only data for unmigrated classical contributions."""
 
-    repulsion_setup: RepulsionSetup | None
+    repulsion_setup: RepulsionCoreSetup | RepulsionSetup | None
     """Numbers-only setup associated with the exact migrated Repulsion."""
 
     repulsion_classical: Repulsion | None
@@ -505,6 +507,10 @@ class Model:
             if repulsion_classical is not None
             else None
         )
+        if repulsion_classical is not None and batch_mode == 0:
+            assert isinstance(repulsion_setup, RepulsionSetup)
+            repulsion_setup = core_repulsion_setup(repulsion_setup)
+            classical_cache[repulsion_classical.label] = repulsion_setup
         srb_classical = next(
             (c for c in classicals.components if type(c) is ShortRangeBond),
             None,

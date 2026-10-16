@@ -172,6 +172,14 @@ correction is independent C6 work; it did not reproduce or establish a cause
 for the unresolved NO2 worker-mode NaN. B7 field values remain per-evaluation
 inputs, with no persistent field setup Nodes added. Broader C6 remains partial.
 
+C6.6 is complete: eligible exact single-System Repulsion setup values are
+stored as a `RepulsionCoreSetup` Node. The System's classical cache entry and
+`repulsion_setup` refer to that same Node, while direct component/cache APIs
+and packed legacy batches continue using `RepulsionSetup`. The setup conversion
+preserves tensor identity, the Boolean pair mask, parameter gradients, and the
+existing cutoff isolation clone. Broader C6 remains partial; B7 remains
+complete, and the unresolved C6.4c NO2 worker-mode diagnosis is not changed.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

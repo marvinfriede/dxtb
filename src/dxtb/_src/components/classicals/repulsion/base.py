@@ -62,6 +62,7 @@ import torch
 from tad_mctc import storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor
+from tad_mctc.tree import Node, child
 
 from dxtb import IndexHelper
 from dxtb._src.constants import xtb
@@ -71,7 +72,9 @@ from ..base import Classical
 
 __all__ = [
     "BaseRepulsion",
+    "RepulsionCoreSetup",
     "RepulsionSetup",
+    "core_repulsion_setup",
     "repulsion_energy",
     "setup_repulsion",
 ]
@@ -98,6 +101,27 @@ class RepulsionSetup:
 
     cutoff: Tensor
     """Real-space cutoff captured at setup."""
+
+
+class RepulsionCoreSetup(Node):
+    """Immutable tensor values for single-System repulsion evaluation."""
+
+    arep: Tensor = child()
+    zeff: Tensor = child()
+    kexp: Tensor = child()
+    mask: Tensor = child(keep_dtype=True)
+    cutoff: Tensor = child()
+
+
+def core_repulsion_setup(setup: RepulsionSetup) -> RepulsionCoreSetup:
+    """Convert legacy setup values without copying their tensors."""
+    return RepulsionCoreSetup(
+        arep=setup.arep,
+        zeff=setup.zeff,
+        kexp=setup.kexp,
+        mask=setup.mask,
+        cutoff=setup.cutoff,
+    )
 
 
 def setup_repulsion(
@@ -258,7 +282,10 @@ class BaseRepulsion(Classical):
 
     @abstractmethod
     def get_energy(
-        self, positions: Tensor, cache: RepulsionSetup, **kwargs: Any
+        self,
+        positions: Tensor,
+        cache: RepulsionSetup | RepulsionCoreSetup,
+        **kwargs: Any,
     ) -> Tensor:
         """
         Get repulsion energy.

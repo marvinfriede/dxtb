@@ -27,6 +27,7 @@ from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     Repulsion,
+    RepulsionCoreSetup,
     RepulsionSetup,
     new_repulsion,
 )
@@ -46,7 +47,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
     ).setup(numbers)
 
     assert system.repulsion_classical is not None
-    assert isinstance(system.repulsion_setup, RepulsionSetup)
+    assert type(system.repulsion_setup) is RepulsionCoreSetup
     assert system.classical_cache["Repulsion"] is system.repulsion_setup
     assert {field.name for field in fields(system.repulsion_setup)} == {
         "arep",

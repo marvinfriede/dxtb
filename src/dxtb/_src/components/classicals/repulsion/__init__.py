@@ -59,7 +59,12 @@ Example
     print(energy.sum(-1))
 """
 
-from .base import RepulsionSetup, setup_repulsion
+from .base import (
+    RepulsionCoreSetup,
+    RepulsionSetup,
+    core_repulsion_setup,
+    setup_repulsion,
+)
 from .factory import new_repulsion
 from .rep import LABEL_REPULSION, Repulsion
 
@@ -67,6 +72,8 @@ __all__ = [
     "LABEL_REPULSION",
     "new_repulsion",
     "Repulsion",
+    "RepulsionCoreSetup",
     "RepulsionSetup",
+    "core_repulsion_setup",
     "setup_repulsion",
 ]

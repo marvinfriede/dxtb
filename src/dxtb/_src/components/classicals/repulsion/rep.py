@@ -36,6 +36,7 @@ from dxtb._src.typing import Any, Tensor, override
 
 from .base import (
     BaseRepulsion,
+    RepulsionCoreSetup,
     RepulsionSetup,
     repulsion_energy,
 )
@@ -56,7 +57,10 @@ class Repulsion(BaseRepulsion):
 
     @override
     def get_energy(
-        self, positions: Tensor, cache: RepulsionSetup, **kwargs: Any
+        self,
+        positions: Tensor,
+        cache: RepulsionSetup | RepulsionCoreSetup,
+        **kwargs: Any,
     ) -> Tensor:
         """
         Get repulsion energy.
