@@ -203,6 +203,24 @@ density-parity failures remain unresolved. The C6.7 broad-suite report of 138
 passes and 38 failures remains not fully classified because the complete
 failure list was unavailable. Full E3 remains blocked by E1.3.
 
+C6.9 is complete: eligible exact single-System Halogen setup values are held
+by `HalogenCoreSetup`, with all ten setup tensors retained as dynamic leaves.
+The integer atomic numbers and five Boolean masks preserve their dtypes during
+floating-point conversion. Conversion reuses the legacy setup tensors, and
+the System's classical-cache entry aliases its core setup. Direct and packed
+legacy paths still use `HalogenSetup`; custom subclasses remain on their
+legacy route. The installed tad-multicharge 0.7.0 review confirmed that
+`EEQModel` exposes its four parameter tensors and nested coordination-model
+tensors through its Node tree; no C6.8 correction was indicated. All ten
+historical NO2/GFN2 reference rows were validated across low-order,
+second-order, and third-order selections: 8 passed and 2 expected XFAIL. The
+third-order pair required a separate 495-second two-worker run. Broader C6
+remains partial. The NO2 worker-mode NaN, intermittent E0 gradcheck, ten GFN1
+density-parity failures, and unclassified C6.7 broad-suite failures remain
+separate unresolved issues. C7 remains independently unblocked, C8b remains
+blocked by its prerequisites, C9 is deferred, and full E3 remains blocked by
+E1.3. The next family slice is C6.10 classical D4 setup migration.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

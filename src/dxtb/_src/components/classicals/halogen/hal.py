@@ -23,14 +23,22 @@ from dataclasses import dataclass
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data.radii import ATOMIC_RADII
+from tad_mctc.tree import Node, child
 from tad_mctc.typing import Any, Tensor, override
 
 from dxtb import IndexHelper
 from dxtb._src.constants import xtb
 
-from ..base import Classical, ComponentCache
+from ..base import Classical
 
-__all__ = ["Halogen", "HalogenSetup", "LABEL_HALOGEN", "halogen_energy"]
+__all__ = [
+    "Halogen",
+    "HalogenCoreSetup",
+    "HalogenSetup",
+    "LABEL_HALOGEN",
+    "core_halogen_setup",
+    "halogen_energy",
+]
 
 
 LABEL_HALOGEN = "Halogen"
@@ -51,6 +59,37 @@ class HalogenSetup:
     valid_atom_mask: Tensor
     pair_type_mask: Tensor
     neighbor_type_mask: Tensor
+
+
+class HalogenCoreSetup(Node):
+    """Immutable tensor setup for single-System halogen evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    xbond: Tensor = child()
+    atomic_radii: Tensor = child()
+    damp: Tensor = child()
+    cutoff: Tensor = child()
+    halogen_mask: Tensor = child(keep_dtype=True)
+    base_mask: Tensor = child(keep_dtype=True)
+    valid_atom_mask: Tensor = child(keep_dtype=True)
+    pair_type_mask: Tensor = child(keep_dtype=True)
+    neighbor_type_mask: Tensor = child(keep_dtype=True)
+
+
+def core_halogen_setup(setup: HalogenSetup) -> HalogenCoreSetup:
+    """Convert a legacy halogen setup to its immutable core Node."""
+    return HalogenCoreSetup(
+        numbers=setup.numbers,
+        xbond=setup.xbond,
+        atomic_radii=setup.atomic_radii,
+        damp=setup.damp,
+        cutoff=setup.cutoff,
+        halogen_mask=setup.halogen_mask,
+        base_mask=setup.base_mask,
+        valid_atom_mask=setup.valid_atom_mask,
+        pair_type_mask=setup.pair_type_mask,
+        neighbor_type_mask=setup.neighbor_type_mask,
+    )
 
 
 def setup_halogen(
@@ -83,7 +122,9 @@ def setup_halogen(
     )
 
 
-def halogen_energy(setup: HalogenSetup, positions: Tensor) -> Tensor:
+def halogen_energy(
+    setup: HalogenSetup | HalogenCoreSetup, positions: Tensor
+) -> Tensor:
     """Evaluate atom-resolved halogen bonding with fixed-size tensor masks."""
     if setup.numbers.ndim != 1:
         raise ValueError("halogen_energy accepts one System at a time.")
@@ -176,13 +217,23 @@ class Halogen(Classical):
 
     @override
     def get_energy(
-        self, positions: Tensor, cache: ComponentCache, **_: Any
+        self,
+        positions: Tensor,
+        cache: HalogenSetup | HalogenCoreSetup,
+        **_: Any,
     ) -> Tensor:
         """Evaluate through setup; the legacy batch adapter loops structures."""
-        if not isinstance(cache, HalogenSetup):
+        if not isinstance(cache, (HalogenSetup, HalogenCoreSetup)):
             raise TypeError(
-                f"Setup in {self.label} is not of type 'HalogenSetup'."
+                f"Setup in {self.label} is not of type 'HalogenSetup' or "
+                "'HalogenCoreSetup'."
             )
+        if isinstance(cache, HalogenCoreSetup):
+            if cache.numbers.ndim != 1:
+                raise ValueError(
+                    "HalogenCoreSetup accepts one System at a time."
+                )
+            return halogen_energy(cache, positions)
         if cache.numbers.ndim > 1:
             return pack(
                 [

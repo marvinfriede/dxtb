@@ -28,6 +28,7 @@ from dxtb import GFN1_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     Halogen,
+    HalogenCoreSetup,
     HalogenSetup,
     halogen_energy,
     new_halogen,
@@ -82,7 +83,7 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     system = _model(get_param_module("gfn1", **DD)).setup(numbers)
     setup = system.halogen_setup
 
-    assert isinstance(setup, HalogenSetup)
+    assert type(setup) is HalogenCoreSetup
     assert system.halogen_classical is not None
     assert {field.name for field in fields(setup)} == {
         "numbers",
@@ -119,6 +120,8 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
 
     first = system.halogen_classical.get_cache(numbers, system.ihelp)
     second = system.halogen_classical.get_cache(numbers, system.ihelp)
+    assert type(first) is HalogenSetup
+    assert type(second) is HalogenSetup
     assert first is not second
     assert system.halogen_classical.cache is None
     assert system.halogen_classical._cachevars is None
@@ -172,7 +175,12 @@ def test_setup_honors_component_species_lists_and_freezes_them() -> None:
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
         classical=(custom,),
     ).setup(numbers)
-    assert custom_system.halogen_setup is not None
+    assert type(custom_system.halogen_setup) is HalogenCoreSetup
+    assert (
+        custom_system.classical_cache["Halogen"] is custom_system.halogen_setup
+    )
+    assert custom_system.halogen_setup.damp is not custom.damp
+    assert custom_system.halogen_setup.cutoff is not custom.cutoff
 
     default_energy = _classical_energy(custom_system, positions)
     assert not torch.isclose(default_energy, torch.zeros_like(default_energy))
@@ -533,7 +541,10 @@ def test_exact_user_halogen_replaces_excluded_builtin() -> None:
     ).setup(numbers)
     default_system = _model(par).setup(numbers)
     assert custom_system.halogen_classical is custom
-    assert custom_system.halogen_setup is not None
+    assert type(custom_system.halogen_setup) is HalogenCoreSetup
+    assert (
+        custom_system.classical_cache["Halogen"] is custom_system.halogen_setup
+    )
     assert not torch.isclose(
         _classical_energy(custom_system, positions),
         _classical_energy(default_system, positions),
@@ -582,6 +593,7 @@ def test_halogen_subclass_refreshes_call_data_and_stays_mutable() -> None:
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
         classical=(extension,),
     ).setup(numbers)
+    assert system.halogen_setup is None
 
     first = _classical_energy(system, positions)
     system.classicals.update("Halogen", scale=torch.tensor(2.0, **DD))

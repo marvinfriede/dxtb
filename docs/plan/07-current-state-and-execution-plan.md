@@ -2891,16 +2891,24 @@ The next independent structural packages are the remaining C6 family slices
 and C7. C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
 scalar hardening, C6.4 D4SC, C6.4a setup-authority hardening, C6.4b
 interaction-identity hardening, C6.5 deterministic component-list ordering,
-C6.6 Repulsion, C6.7 ShortRangeBond, and C6.8 IES setup Node migrations are
-complete. C6.4c's matched NO2
-worker-mode diagnosis did not reproduce the reported third-derivative NaN; its
-cause remains unresolved and the instability
-is not fixed. The C6.5 insertion-order correction is a separately established
-structural requirement and is not established as the NaN's cause. C6.6 retains
-legacy Repulsion setup/cache behavior for direct and packed-batch use. See the
+C6.6 Repulsion, C6.7 ShortRangeBond, C6.8 IES, and C6.9 Halogen setup Node
+migrations are complete. The ten historical NO2/GFN2 reference rows were
+validated across low-order, second-order, and third-order selections: 8 passed
+and 2 expected XFAIL; the third-order pair required a separate 495-second
+two-worker run. C6.4c's matched NO2 worker-mode diagnosis did not
+reproduce the reported third-derivative NaN; its cause remains unresolved and
+the instability is not fixed. The C6.5 insertion-order correction is a
+separately established structural requirement and is not established as the
+NaN's cause. C6.6 retains legacy Repulsion setup/cache behavior for direct and
+packed-batch use. C6.9 retains direct and packed Halogen compatibility caches,
+and aliases the exact System-owned core setup through the classical cache. A
+read-only review of installed tad-multicharge 0.7.0 confirmed nested EEQModel
+parameter and coordination-model tensor leaves; no C6.8 defect was found. The
+C6.7 broad-suite failures remain incompletely classified, and the E0
+intermittent gradcheck, ten GFN1 density-parity failures, and original NO2
+worker issue remain unresolved. See the
 [diagnostic note](C6.4c-NO2-worker-investigation.md). Broader C6 remains
-partial; the next family-level package can address the remaining classical
-setup families (C6.9 Halogen).
+partial; the next family-level package can address C6.10 classical D4.
 C8a — complete
 public Result pytree representation — is complete and its E6a output-container
 prerequisite is satisfied. E6a still requires its other listed prerequisites.
