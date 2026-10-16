@@ -164,6 +164,14 @@ ordering is not established as its cause. C6.4b remains accepted on source and
 functional validation; broader C6 remains partial and full E3 remains blocked
 by E1.3.
 
+C6.5 is complete: the shared `ComponentList` retains constructor order while
+deduplicating by the existing Python hash/equality contract and retaining the
+first occurrence. Classical and interaction lists, `ComponentList.type()`,
+and functional interaction entries inherit that order. The insertion-order
+correction is independent C6 work; it did not reproduce or establish a cause
+for the unresolved NO2 worker-mode NaN. B7 field values remain per-evaluation
+inputs, with no persistent field setup Nodes added. Broader C6 remains partial.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

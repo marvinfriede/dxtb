@@ -138,11 +138,14 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
 
         Note
         ----
-        Duplicate components will be removed automatically.
+        Duplicate hash/equality-equivalent components are removed
+        automatically, retaining the first occurrence and input order.
         """
         # FIXME: I doubt that moving a list of classes works in TensorLike...
         super().__init__(device, dtype)
-        self.components = list({c for c in components if c is not None})
+        self.components = list(
+            dict.fromkeys(c for c in components if c is not None)
+        )
 
     def update(self, name: str, **kwargs: Any) -> C:
         """
@@ -256,6 +259,8 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
 
     @override
     def type(self, dtype: torch.dtype) -> Self:
-        self.components = list({c.type(dtype) for c in self.components})
+        self.components = list(
+            dict.fromkeys(c.type(dtype) for c in self.components)
+        )
         self.override_dtype(dtype)
         return self
