@@ -418,6 +418,221 @@ def test_h0_model_setup_owns_node_and_legacy_calculator_still_works(
     _assert_close(result.energy, legacy_result.energy)
 
 
+@pytest.mark.parametrize("method", ["gfn1", "gfn2"])
+def test_legacy_h0_adapter_isolated_from_system_node(method: str) -> None:
+    """The retained legacy H0 view cannot mutate the System-owned Node."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    calc = Calculator(
+        numbers,
+        _METHODS[method],
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+    )
+    core = calc.system.h0_setup
+    adapter = calc.integrals.hcore.setup
+    assert type(core) is H0SetupNode
+    assert type(adapter) is H0Setup
+
+    for name in (
+        "numbers",
+        "unique",
+        "hscale",
+        "kcn",
+        "kpair",
+        "refocc",
+        "selfenergy",
+        "shpoly",
+        "valence",
+        "en",
+        "enscale",
+        "rad",
+    ):
+        core_value = getattr(core, name)
+        adapter_value = getattr(adapter, name)
+        assert adapter_value is not core_value, name
+        assert torch.equal(adapter_value, core_value), name
+
+    overlap = _eye(calc.ihelp.nao, positions)
+    initial_h0, initial_refocc = build_hcore(core, positions, overlap)
+    for name in ("hscale", "selfenergy", "refocc"):
+        core_value = getattr(core, name)
+        adapter_value = getattr(adapter, name)
+        before = core_value.clone()
+        adapter_before = adapter_value.clone()
+        with torch.no_grad():
+            adapter_value.add_(0.25)
+        assert torch.equal(core_value, before), name
+        # The Calculator-owned legacy Hamiltonian uses its own captured view.
+        assert not torch.equal(adapter_value, adapter_before), name
+        with torch.no_grad():
+            adapter_value.copy_(adapter_before)
+        assert torch.equal(core_value, before), name
+
+    # Selfenergy changes diagonal and off-diagonal raw H0 deterministically.
+    initial_raw, _ = build_hcore_raw(core, positions)
+    adapter_selfenergy = adapter.selfenergy
+    adapter_selfenergy_before = adapter_selfenergy.clone()
+    with torch.no_grad():
+        adapter_selfenergy.add_(0.5)
+    core_raw, _ = build_hcore_raw(core, positions)
+    adapter_raw, _ = build_hcore_raw(adapter, positions)
+    _assert_close(core_raw, initial_raw)
+    assert not torch.allclose(adapter_raw, initial_raw)
+    with torch.no_grad():
+        adapter_selfenergy.copy_(adapter_selfenergy_before)
+
+    final_h0, final_refocc = build_hcore(core, positions, overlap)
+    _assert_close(final_h0, initial_h0)
+    _assert_close(final_refocc, initial_refocc)
+
+    # The opposite mutation direction is isolated too.
+    core_before = core.hscale.clone()
+    adapter_before = adapter.hscale.clone()
+    with torch.no_grad():
+        core.hscale.add_(0.1)
+    assert torch.equal(adapter.hscale, adapter_before)
+    with torch.no_grad():
+        core.hscale.copy_(core_before)
+
+
+def test_gfn0_legacy_h0_adapter_owns_separate_eeq_model() -> None:
+    """Calculator-local GFN0 EEQ tensors do not alias the core Node."""
+    sample = samples["H2O"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    calc = Calculator(
+        sample["numbers"],
+        GFN0_XTB,
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+    )
+    core = calc.system.h0_setup
+    adapter = calc.integrals.hcore.setup
+    assert type(core) is H0SetupNode
+    assert type(adapter) is H0Setup
+    assert core.eeq_model is not None and adapter.eeq_model is not None
+    assert adapter.eeq_model is not core.eeq_model
+    for name in (
+        "kq",
+        "kqat",
+        "h0rad",
+        "kdiff",
+        "enshell",
+        "enscale4",
+        "cn_radii",
+        "cn_cutoff",
+        "cn_max",
+        "cn_kcn",
+    ):
+        node_tensor = getattr(core, name)
+        adapter_tensor = getattr(adapter, name)
+        assert node_tensor is not None and adapter_tensor is not None
+        assert adapter_tensor is not node_tensor
+        assert torch.equal(adapter_tensor, node_tensor)
+    for name in ("chi", "kcn", "eta", "rad"):
+        node_tensor = getattr(core.eeq_model, name)
+        adapter_tensor = getattr(adapter.eeq_model, name)
+        assert adapter_tensor is not node_tensor
+        assert torch.equal(adapter_tensor, node_tensor)
+
+    node_chi = core.eeq_model.chi.clone()
+    adapter_chi = adapter.eeq_model.chi.clone()
+    with torch.no_grad():
+        adapter.eeq_model.chi.add_(0.5)
+    assert torch.equal(core.eeq_model.chi, node_chi)
+    assert not torch.equal(adapter.eeq_model.chi, adapter_chi)
+
+
+@pytest.mark.parametrize(
+    "method, parameter_name",
+    [
+        ("gfn0", "parameter_tree.element.H.eeq_chi.param"),
+        ("gfn1", "parameter_tree.element.H.levels.param"),
+        ("gfn2", "parameter_tree.element.H.levels.param"),
+    ],
+)
+def test_h0_adapter_clones_preserve_parameter_and_mixed_gradients(
+    method: str, parameter_name: str
+) -> None:
+    """Node and isolated Calculator adapter retain the original graph edges."""
+    sample = samples["H2O"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    par = ParamModule(
+        _METHODS[method].model_copy(deep=True), dtype=positions.dtype
+    )
+    parameter = dict(par.named_parameters())[parameter_name]
+    parameter.requires_grad_(True)
+    calc = Calculator(
+        numbers,
+        par,
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+    )
+    core = calc.system.h0_setup
+    adapter = calc.integrals.hcore.setup
+    assert isinstance(core, H0SetupNode)
+    assert isinstance(adapter, H0Setup)
+    overlap = _eye(calc.ihelp.nao, positions)
+    charge = torch.tensor(0.2, dtype=positions.dtype)
+    charge_arg = charge if method == "gfn0" else None
+    x_core = positions.clone().requires_grad_(True)
+    x_adapter = positions.clone().requires_grad_(True)
+
+    def energy(setup, geometry):
+        hcore, refocc = build_hcore(setup, geometry, overlap, charge=charge_arg)
+        return hcore.square().sum() + refocc.square().sum()
+
+    e_core = energy(core, x_core)
+    e_adapter = energy(adapter, x_adapter)
+    grad_core = torch.autograd.grad(
+        e_core, parameter, create_graph=True, retain_graph=True
+    )[0]
+    grad_adapter = torch.autograd.grad(
+        e_adapter, parameter, create_graph=True, retain_graph=True
+    )[0]
+    assert torch.isfinite(grad_core).all()
+    _assert_close(grad_core, grad_adapter)
+
+    position_grad_core = torch.autograd.grad(
+        e_core, x_core, create_graph=True, retain_graph=True
+    )[0]
+    position_grad_adapter = torch.autograd.grad(
+        e_adapter, x_adapter, create_graph=True, retain_graph=True
+    )[0]
+    _assert_close(position_grad_core, position_grad_adapter)
+    mixed_core = torch.autograd.grad(
+        position_grad_core.sum(), parameter, retain_graph=True
+    )[0]
+    mixed_adapter = torch.autograd.grad(position_grad_adapter.sum(), parameter)[
+        0
+    ]
+    assert torch.isfinite(mixed_core).all()
+    _assert_close(mixed_core, mixed_adapter)
+
+
+def test_calculator_type_keeps_h0_adapter_ownership_and_dtype() -> None:
+    """Calculator.type converts both independently owned H0 representations."""
+    calc = Calculator(
+        samples["H2"]["numbers"],
+        GFN1_XTB,
+        dtype=torch.float64,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+    )
+    calc.type(torch.float32)
+    core = calc.system.h0_setup
+    adapter = calc.integrals.hcore.setup
+    assert isinstance(core, H0SetupNode)
+    assert isinstance(adapter, H0Setup)
+    assert core.hscale.dtype == torch.float32
+    assert adapter.hscale.dtype == torch.float32
+    assert adapter.hscale is not core.hscale
+    assert torch.equal(adapter.hscale, core.hscale)
+    assert adapter.numbers.dtype == core.numbers.dtype
+    assert adapter.valence.dtype == core.valence.dtype
+
+
 def test_model_setup_captures_h0_once_and_packed_route_stays_legacy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
