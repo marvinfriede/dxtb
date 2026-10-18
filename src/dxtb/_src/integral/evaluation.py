@@ -29,9 +29,11 @@ from dxtb._src.integral.base import normalize_integral_matrix
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
+    LibcintIntegralSetupNode,
     build_dipole_libcint,
     build_overlap_libcint,
     build_quadrupole_libcint,
+    core_libcint_setup,
     setup_libcint,
 )
 from dxtb._src.integral.driver.pytorch.multipole import (
@@ -73,7 +75,7 @@ class IntegralSetup:
     driver_type: int
     intlevel: int
     pytorch: PytorchIntegralSetup | PytorchIntegralSetupNode | None = None
-    libcint: LibcintIntegralSetup | None = None
+    libcint: LibcintIntegralSetup | LibcintIntegralSetupNode | None = None
 
     def to(
         self,
@@ -86,18 +88,21 @@ class IntegralSetup:
         )
         libcint = None
         if self.libcint is not None:
-            libcint_device = (
-                torch.device("cpu") if self.libcint.force_cpu else device
-            )
-            libcint = replace(
-                self.libcint,
-                numbers=self.libcint.numbers.to(device=libcint_device),
-                ihelp=self.libcint.ihelp.to(device=libcint_device),
-                basis_setups=tuple(
-                    basis.to(device=libcint_device, dtype=dtype)
-                    for basis in self.libcint.basis_setups
-                ),
-            )
+            if isinstance(self.libcint, LibcintIntegralSetupNode):
+                libcint = self.libcint.to(device=device, dtype=dtype)
+            else:
+                libcint_device = (
+                    torch.device("cpu") if self.libcint.force_cpu else device
+                )
+                libcint = replace(
+                    self.libcint,
+                    numbers=self.libcint.numbers.to(device=libcint_device),
+                    ihelp=self.libcint.ihelp.to(device=libcint_device),
+                    basis_setups=tuple(
+                        basis.to(device=libcint_device, dtype=dtype)
+                        for basis in self.libcint.basis_setups
+                    ),
+                )
         return replace(self, pytorch=pytorch, libcint=libcint)
 
 
@@ -169,6 +174,12 @@ def setup_integral_evaluation(
         basis_setups=tuple(basis_setups),
         force_cpu=force_cpu_for_libcint,
     )
+    if ihelp.batch_mode == 0:
+        return IntegralSetup(
+            driver_type=driver_type,
+            intlevel=intlevel,
+            libcint=core_libcint_setup(libcint_setup),
+        )
     return IntegralSetup(
         driver_type=driver_type,
         intlevel=intlevel,

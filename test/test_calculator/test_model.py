@@ -672,6 +672,10 @@ def test_system_integral_setup_is_narrow(driver: str) -> None:
     from dxtb._src.integral.base import BaseIntegral
     from dxtb._src.integral.container import Integrals
     from dxtb._src.integral.driver import DriverManager
+    from dxtb._src.integral.driver.libcint import (
+        LibcintBasisNode,
+        LibcintIntegralSetupNode,
+    )
     from dxtb._src.integral.evaluation import IntegralSetup
     from dxtb._src.param import ParamModule
     from dxtb._src.xtb.base import BaseHamiltonian
@@ -693,6 +697,14 @@ def test_system_integral_setup_is_narrow(driver: str) -> None:
     assert not isinstance(setup.pytorch, legacy_types)
     assert not isinstance(setup.libcint, legacy_types)
     if setup.libcint is not None:
+        if isinstance(setup.libcint, LibcintIntegralSetupNode):
+            for basis_setup in setup.libcint.basis_setups:
+                assert isinstance(basis_setup, LibcintBasisNode)
+                assert not hasattr(basis_setup, "ihelp")
+                assert not hasattr(basis_setup, "par")
+                assert not hasattr(basis_setup, "basis")
+                assert not hasattr(basis_setup, "driver")
+            return
         for basis_setup in setup.libcint.basis_setups:
             assert isinstance(basis_setup, BasisSetup)
             assert not hasattr(basis_setup, "par")

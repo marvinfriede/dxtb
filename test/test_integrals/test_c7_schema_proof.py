@@ -27,7 +27,9 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetup
+from dxtb._src.integral.driver.libcint.driver import (
+    LibcintIntegralSetupNode,
+)
 from dxtb._src.integral.driver.pytorch.impls.kernels import get_kernel
 from dxtb._src.integral.driver.pytorch.impls.pairs import (
     PairClassNode,
@@ -48,84 +50,17 @@ from dxtb._src.xtb.h0 import H0SetupNode
 from .samples import samples
 
 
-class _LibcintBasisNode(Node):
-    """Tensor data needed to construct geometry-local libcint atom bases."""
-
-    numbers: Tensor = child(keep_dtype=True)
-    unique: Tensor = child(keep_dtype=True)
-    ngauss: Tensor = child(keep_dtype=True)
-    pqn: Tensor = child(keep_dtype=True)
-    slater: Tensor = child()
-    valence: Tensor = child(keep_dtype=True)
-    shells_per_atom: Tensor = child(keep_dtype=True)
-    shells_to_ushell: Tensor = child(keep_dtype=True)
-    angular: Tensor = child(keep_dtype=True)
-    ushells_per_unique: Tensor = child(keep_dtype=True)
-    unique_angular: Tensor = child(keep_dtype=True)
-
-
-class _LibcintSetupNode(Node):
-    """Test-local structural setup; wrappers remain call-local."""
-
-    numbers: Tensor = child(keep_dtype=True)
-    basis_setups: tuple[_LibcintBasisNode, ...] = child()
-    force_cpu: bool = context()
-
-    def _convert_child(
-        self,
-        name: str,
-        value: object,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> object:
-        if self.force_cpu:
-            target = torch.device("cpu")
-            if name == "numbers" and isinstance(value, Tensor):
-                return value.to(device=target)
-            if name == "basis_setups":
-                return tuple(
-                    item.to(device=target, dtype=dtype) for item in value
-                )
-        return super()._convert_child(name, value, device, dtype)
-
-
 class _IntegralSetupNode(Node):
     """Backend selection and one optional backend subtree."""
 
     driver_type: int = context()
     intlevel: int = context()
     pytorch: PytorchIntegralSetupNode | None = child()
-    libcint: _LibcintSetupNode | None = child()
+    libcint: LibcintIntegralSetupNode | None = child()
 
 
 def _pytorch_node(setup) -> PytorchIntegralSetupNode:
     return core_pytorch_integral_setup(setup)
-
-
-def _libcint_node(setup: LibcintIntegralSetup) -> _LibcintSetupNode:
-    basis_nodes = []
-    for basis in setup.basis_setups:
-        ihelp = basis.ihelp
-        basis_nodes.append(
-            _LibcintBasisNode(
-                numbers=basis.numbers,
-                unique=basis.unique,
-                ngauss=basis.ngauss,
-                pqn=basis.pqn,
-                slater=basis.slater,
-                valence=basis.valence,
-                shells_per_atom=ihelp.shells_per_atom,
-                shells_to_ushell=ihelp.shells_to_ushell,
-                angular=ihelp.angular,
-                ushells_per_unique=ihelp.ushells_per_unique,
-                unique_angular=ihelp.unique_angular,
-            )
-        )
-    return _LibcintSetupNode(
-        numbers=setup.numbers,
-        basis_setups=tuple(basis_nodes),
-        force_cpu=setup.force_cpu,
-    )
 
 
 def _tensor_leaves(value: object) -> tuple[Tensor, ...]:
@@ -392,7 +327,8 @@ def test_libcint_node_schema_keeps_wrappers_call_local() -> None:
     source = calc.system.integral_setup.libcint
     assert source is not None
     assert not hasattr(source, "drivers")
-    proposed = _libcint_node(source)
+    assert type(source) is LibcintIntegralSetupNode
+    proposed = source
     integral_node = _IntegralSetupNode(
         driver_type=calc.system.integral_setup.driver_type,
         intlevel=calc.system.integral_setup.intlevel,
@@ -405,12 +341,11 @@ def test_libcint_node_schema_keeps_wrappers_call_local() -> None:
     assert integral_rebuilt.libcint is not None
     leaves, spec = tree_flatten(proposed)
     rebuilt = tree_unflatten(leaves, spec)
-    assert type(rebuilt) is _LibcintSetupNode
+    assert type(rebuilt) is LibcintIntegralSetupNode
     assert rebuilt.force_cpu is source.force_cpu
     assert all(not hasattr(basis, "par") for basis in rebuilt.basis_setups)
-    assert all(
-        not hasattr(basis, "create_libcint") for basis in rebuilt.basis_setups
-    )
+    assert all(not hasattr(basis, "ihelp") for basis in rebuilt.basis_setups)
+    assert not hasattr(rebuilt, "ihelp")
     assert all(leaf.device.type == "cpu" for leaf in _tensor_leaves(rebuilt))
     converted = proposed.to(device="meta", dtype=torch.float32)
     assert converted.numbers.device.type == "cpu"

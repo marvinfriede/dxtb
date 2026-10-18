@@ -50,6 +50,8 @@ from dxtb._src.components.interactions.list import (
 )
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults
+from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.libcint import LibcintIntegralSetupNode
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
@@ -2156,6 +2158,36 @@ def test_h0_node_tensors_are_in_persistent_snapshots() -> None:
     assert system.h0_setup is not None
     before = _persistent_identity_snapshot(system)
     tensor = system.h0_setup.hscale
+    original = tensor.clone()
+    try:
+        with torch.no_grad():
+            tensor.view(-1)[0].add_(1.0)
+        with pytest.raises(AssertionError):
+            _assert_persistent_identity_unchanged(system, before)
+    finally:
+        with torch.no_grad():
+            tensor.copy_(original)
+    _assert_persistent_identity_unchanged(system, before)
+
+
+@pytest.mark.skipif(not has_libcint, reason="libcint not available")
+def test_libcint_node_tensors_are_in_persistent_snapshots() -> None:
+    """The persistent-state snapshot observes captured libcint basis data."""
+    sample = samples["H2O"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    calc = Calculator(
+        sample["numbers"],
+        GFN2_XTB,
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_LIBCINT},
+    )
+    system = calc.system
+    assert system.integral_setup is not None
+    setup = system.integral_setup.libcint
+    assert setup is not None
+    assert type(setup) is LibcintIntegralSetupNode
+    before = _persistent_identity_snapshot(system)
+    tensor = setup.basis_setups[0].slater
     original = tensor.clone()
     try:
         with torch.no_grad():

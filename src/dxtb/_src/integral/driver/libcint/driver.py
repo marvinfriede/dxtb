@@ -25,25 +25,36 @@ Calculation and modification of multipole integrals.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 from tad_mctc.batch import deflate
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis, BasisSetup
+from dxtb._src.basis.ortho import orthogonalize
+from dxtb._src.basis.slater import slater_to_gauss
 from dxtb._src.param import ParamModule
+from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.utils import is_basis_list
 
 from ...base import IntDriver
 from .base import LibcintImplementation
 
+if TYPE_CHECKING:
+    from dxtb._src.exlibs import libcint
+
 __all__ = [
     "BaseIntDriverLibcint",
     "IntDriverLibcint",
     "LibcintCallData",
+    "LibcintBasisNode",
+    "LibcintIntegralSetupNode",
     "LibcintIntegralSetup",
     "LegacyLibcintSetup",
+    "core_libcint_setup",
     "setup_libcint",
     "setup_libcint_legacy",
 ]
@@ -57,6 +68,143 @@ class LibcintIntegralSetup:
     ihelp: IndexHelper
     basis_setups: tuple[BasisSetup, ...]
     force_cpu: bool
+
+
+class LibcintBasisNode(Node):
+    """Captured basis and shell-order data for pure libcint evaluation."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    unique: Tensor = child(keep_dtype=True)
+    ngauss: Tensor = child(keep_dtype=True)
+    pqn: Tensor = child(keep_dtype=True)
+    slater: Tensor = child()
+    valence: Tensor = child(keep_dtype=True)
+    shells_per_atom: Tensor = child(keep_dtype=True)
+    shells_to_ushell: Tensor = child(keep_dtype=True)
+    angular: Tensor = child(keep_dtype=True)
+    ushells_per_unique: Tensor = child(keep_dtype=True)
+    unique_angular: Tensor = child(keep_dtype=True)
+
+    def create_libcint_cgtos(
+        self,
+    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        """Construct differentiable CGTO values from captured Slater data."""
+        alphas: list[Tensor] = []
+        coeffs: list[Tensor] = []
+        shell = 0
+
+        for unique_index in range(self.unique.size(0)):
+            shell_count = self.ushells_per_unique[unique_index]
+            if shell_count == 0:
+                zero = torch.tensor(
+                    0.0, dtype=self.slater.dtype, device=self.slater.device
+                )
+                alphas.append(zero)
+                coeffs.append(zero)
+                shell += 1
+                continue
+
+            for _ in range(shell_count):
+                alpha, coeff = slater_to_gauss(
+                    self.ngauss[shell],
+                    self.pqn[shell],
+                    self.unique_angular[shell],
+                    self.slater[shell],
+                )
+                if self.valence[shell].item() is False:
+                    alpha, coeff = orthogonalize(
+                        (alphas[shell - 1], alpha),
+                        (coeffs[shell - 1], coeff),
+                    )
+                alphas.append(alpha)
+                coeffs.append(coeff)
+                shell += 1
+        return tuple(alphas), tuple(coeffs)
+
+    def create_libcint(self, positions: Tensor) -> list[libcint.AtomCGTOBasis]:
+        """Create ordered, geometry-local atom basis wrappers."""
+        from dxtb._src.exlibs import libcint
+
+        alphas, coeffs = self.create_libcint_cgtos()
+        atom_basis: list[libcint.AtomCGTOBasis] = []
+        shell = 0
+        for atom, number in enumerate(self.numbers):
+            bases = []
+            for _ in range(self.shells_per_atom[atom]):
+                index = self.shells_to_ushell[shell]
+                bases.append(
+                    libcint.CGTOBasis(
+                        angmom=int(self.angular[shell]),
+                        alphas=alphas[index],
+                        coeffs=coeffs[index],
+                        normalized=True,
+                    )
+                )
+                shell += 1
+            atom_basis.append(
+                libcint.AtomCGTOBasis(
+                    atomz=number, bases=bases, pos=positions[atom, :]
+                )
+            )
+        return atom_basis
+
+
+class LibcintIntegralSetupNode(Node):
+    """Transform-visible setup for an exact single-System libcint path."""
+
+    numbers: Tensor = child(keep_dtype=True)
+    basis_setups: tuple[LibcintBasisNode, ...] = child()
+    index: CoreIndexData = child()
+    force_cpu: bool = context()
+
+    def _convert_child(
+        self,
+        name: str,
+        value: object,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None,
+    ) -> object:
+        if self.force_cpu:
+            device = torch.device("cpu")
+        return super()._convert_child(name, value, device, dtype)
+
+
+def core_libcint_setup(
+    setup: LibcintIntegralSetup,
+) -> LibcintIntegralSetupNode:
+    """Snapshot a single-system legacy setup as structural Node data."""
+    if setup.ihelp.batch_mode != 0 or len(setup.basis_setups) != 1:
+        raise ValueError("Core libcint setup requires one single System.")
+
+    basis = setup.basis_setups[0]
+    ihelp = basis.ihelp
+
+    def snapshot(value: Tensor) -> Tensor:
+        return value.clone()
+
+    return LibcintIntegralSetupNode(
+        numbers=snapshot(setup.numbers),
+        basis_setups=(
+            LibcintBasisNode(
+                numbers=snapshot(basis.numbers),
+                unique=snapshot(basis.unique),
+                ngauss=snapshot(basis.ngauss),
+                pqn=snapshot(basis.pqn),
+                slater=snapshot(basis.slater),
+                valence=snapshot(basis.valence),
+                shells_per_atom=snapshot(ihelp.shells_per_atom),
+                shells_to_ushell=snapshot(ihelp.shells_to_ushell),
+                angular=snapshot(ihelp.angular),
+                ushells_per_unique=snapshot(ihelp.ushells_per_unique),
+                unique_angular=snapshot(ihelp.unique_angular),
+            ),
+        ),
+        index=CoreIndexData(
+            shells_to_atom=snapshot(ihelp.shells_to_atom),
+            orbitals_to_shell=snapshot(ihelp.orbitals_to_shell),
+        ),
+        force_cpu=setup.force_cpu,
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -74,16 +222,16 @@ class LibcintCallData:
     """Call-local libcint wrappers for one set of positions."""
 
     drivers: tuple[Any, ...]
-    ihelp: IndexHelper
+    ihelp: IndexHelper | CoreIndexData
 
     @property
     def batch_mode(self) -> int:
         """Batch mode of the structural index helper."""
-        return self.ihelp.batch_mode
+        return getattr(self.ihelp, "batch_mode", 0)
 
 
 def setup_libcint(
-    setup: LibcintIntegralSetup,
+    setup: LibcintIntegralSetup | LibcintIntegralSetupNode,
     positions: Tensor,
     *,
     mask: Tensor | None = None,
@@ -93,6 +241,16 @@ def setup_libcint(
 
     if setup.force_cpu and positions.device.type != "cpu":
         positions = positions.to(device=torch.device("cpu"))
+
+    if isinstance(setup, LibcintIntegralSetupNode):
+        if len(setup.basis_setups) != 1:
+            raise RuntimeError("Single-system setup needs one basis value.")
+        basis = setup.basis_setups[0]
+        atom_basis = basis.create_libcint(positions)
+        return LibcintCallData(
+            drivers=(libcint.LibcintWrapper(atom_basis),),
+            ihelp=setup.index,
+        )
 
     if setup.ihelp.batch_mode == 0:
         if len(setup.basis_setups) != 1:
