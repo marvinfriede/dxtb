@@ -289,6 +289,15 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 ## C7 Integrals, Hamiltonian and driver
 
+**Status: C7.0 schema preflight complete; production migration remains open.**
+The executable proof and ownership inventory are recorded in
+[`C7.0 integral Node schema`](C7.0-integral-node-schema.md). The selected
+PairPlan Node schema drives the existing overlap kernel with parity, and the
+schema probes cover optional backend identity, dtype/device conversion,
+stacking, pytree reconstruction, H0 descriptors, and nested EEQ visibility.
+The accepted-base baseline also has a reproducible GFN2 LiH exponent-gradient
+failure; it is recorded separately and no production physics was changed.
+
 **Goal.** Migrate the integral description objects, the Hamiltonian and the driver.
 
 **Preconditions.** Builders are pure and objects hold no matrices (B4); driver setup returns a value (B6a/B6b-core).
@@ -296,6 +305,12 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 **Done when.** No `TensorLike` subclass among them; T0.2 reproduced.
 
 **Needs.** C5, B4, B6b-core. **Size.** M.
+
+**Proposed packages.** C7.1 PyTorch setup/PairPlan Nodes; C7.2 H0 setup and
+Hamiltonian structural Nodes; C7.3 libcint setup/adapter Nodes; C7.4
+IntegralMatrices output integration only if direct transform-return support
+requires it. Legacy Calculator drivers remain until their separately accepted
+compatibility retirement.
 
 ---
 
