@@ -221,6 +221,25 @@ separate unresolved issues. C7 remains independently unblocked, C8b remains
 blocked by its prerequisites, C9 is deferred, and full E3 remains blocked by
 E1.3. The next family slice is C6.10 classical D4 setup migration.
 
+C6.10 is complete: eligible exact single-System classical D4 setup values are
+held by `DispersionD4CoreSetup`. Ordered sparse parameters, model tensor
+tables, all four cutoff tensors, and optional compatibility charges remain
+dynamic pytree leaves; immutable scalar configuration and the built-in
+counting/damping strategies remain static descriptors. Each evaluation builds
+fresh external model, cutoff, and damping objects from the captured Node.
+Direct legacy setup/cache APIs, custom model and damping extensions, and
+packed-batch routes remain legacy-owned. The System classical-cache entry
+aliases its authoritative D4 Node. Broader C6 remains partial; DFT-D3 and
+other legacy component/cache owners remain. The ten inherited GFN1
+density-parity failures, intermittent E0 small-gap gradcheck, original C6.4c
+NO2 worker-mode NaN, and incompletely classified C6.7 broad-suite failures
+remain unresolved and were not addressed here. The classical D4 suite passed
+109 tests, and the focused core Node suite passed 9 tests in each of the five
+approved CPU environments. The C6.10 E0 selection first had the tracked
+`eigensolver.small_gap_aufbau:order2` failure (23/24); a repeat passed 24/24.
+The exact base passed 24/24, and isolated reruns passed on base and candidate.
+The intermittent observation remains tracked rather than resolved.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

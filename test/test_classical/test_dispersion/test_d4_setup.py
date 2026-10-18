@@ -27,7 +27,11 @@ import torch
 
 from dxtb import GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
-from dxtb._src.components.classicals import DispersionD4, DispersionD4Setup
+from dxtb._src.components.classicals import (
+    DispersionD4,
+    DispersionD4CoreSetup,
+    DispersionD4Setup,
+)
 from dxtb._src.components.classicals.dispersion.d4 import (
     dispersion_d4_energy,
 )
@@ -71,33 +75,36 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     system = _system(_parameters(self_consistent=False)).setup(numbers)
     setup = system.d4_setup
 
-    assert isinstance(setup, DispersionD4Setup)
+    assert type(setup) is DispersionD4CoreSetup
     assert system.d4_classical is not None
     assert system.classical_cache["DispersionD4"] is setup
     assert {field.name for field in fields(setup)} == {
         "numbers",
-        "parameters",
-        "model",
+        "parameter_entries",
+        "model_numbers",
+        "model_ga",
+        "model_gc",
+        "model_wf",
+        "model_ref_charges",
+        "model_rc6",
         "rcov",
         "r4r2",
         "cutoff",
         "counting_function",
-        "damping_function",
+        "damping_type",
         "ref_charges",
         "compatibility_q",
     }
     assert isinstance(setup.parameters, tuple)
     assert all(isinstance(entry, tuple) for entry in setup.parameters)
-    forbidden = (Param, ParamModule, Model, DispersionD4)
+    forbidden = (Param, ParamModule, Model, DispersionD4, d4.model.D4Model)
     assert all(
         not isinstance(value, forbidden)
         for field in fields(setup)
         for value in (getattr(setup, field.name),)
     )
-    assert all(
-        not isinstance(value, forbidden) for _, value in setup.parameters
-    )
-    assert not isinstance(setup.model, DispersionD4)
+    assert not isinstance(setup.cutoff, d4.Cutoff)
+    assert setup.damping_type is d4.damping.RationalDamping
     assert setup.compatibility_q is None
     assert not any("positions" in field.name for field in fields(setup))
     assert not any("energy" in field.name for field in fields(setup))
@@ -107,7 +114,11 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
 
     first = system.d4_classical.get_cache(numbers)
     second = system.d4_classical.get_cache(numbers)
+    assert type(first) is DispersionD4Setup
+    assert type(second) is DispersionD4Setup
     assert first is not second
+    direct_classical_cache = system.classicals.get_cache(numbers, system.ihelp)
+    assert type(direct_classical_cache["DispersionD4"]) is DispersionD4Setup
     assert system.d4_classical.cache is None
     assert system.d4_classical._cachevars is None
     system.d4_classical.cache_disable()
@@ -206,9 +217,9 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
     system = _system(_parameters(self_consistent=False)).setup(numbers)
     setup = system.d4_setup
     assert setup is not None
-    before_numbers = setup.model.numbers.clone()
-    before_wf = setup.model.wf.clone()
-    before_rc6 = setup.model.rc6.clone()
+    before_numbers = setup.model_numbers.clone()
+    before_wf = setup.model_wf.clone()
+    before_rc6 = setup.model_rc6.clone()
     before_cutoff = tuple(
         getattr(setup.cutoff, name).clone()
         for name in ("disp2", "disp3", "cn", "cn_eeq")
@@ -228,9 +239,9 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
     a2 = dispersion_d4_energy(setup, positions.clone(), 0.0)
 
     torch.testing.assert_close(a1, a2)
-    torch.testing.assert_close(setup.model.numbers, before_numbers)
-    torch.testing.assert_close(setup.model.wf, before_wf)
-    torch.testing.assert_close(setup.model.rc6, before_rc6)
+    torch.testing.assert_close(setup.model_numbers, before_numbers)
+    torch.testing.assert_close(setup.model_wf, before_wf)
+    torch.testing.assert_close(setup.model_rc6, before_rc6)
     for name, value in zip(("disp2", "disp3", "cn", "cn_eeq"), before_cutoff):
         torch.testing.assert_close(getattr(setup.cutoff, name), value)
     for (name, value), (expected_name, expected) in zip(
