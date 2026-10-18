@@ -24,6 +24,7 @@ Single-system evaluation from explicit System and call inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
@@ -31,6 +32,10 @@ from dxtb import labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
+from dxtb._src.components.classicals.dispersion.d3 import (
+    DispersionD3,
+    dispersion_d3_energy,
+)
 from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
     dispersion_d4_energy,
@@ -47,8 +52,10 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
     build_es2_coulomb,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
-from dxtb._src.components.interactions.dispersion.d4sc import build_d4sc_data
-from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
+from dxtb._src.components.interactions.dispersion.d4sc import (
+    D4SCCoreSetup,
+    build_d4sc_data,
+)
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
     ElectricField,
@@ -66,9 +73,9 @@ from dxtb._src.components.interactions.solvation.alpb import (
 )
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
-from dxtb._src.scf.status import SCFStatus
 
 __all__ = ["singlepoint"]
 
@@ -101,8 +108,10 @@ class _SCFOutput:
 
 def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     """Read SCF outputs once without copying functional tensors."""
-    from dxtb._src.scf.functional.eager import FunctionalCoreResult
-    from dxtb._src.scf.functional.eager import public_scf_status
+    from dxtb._src.scf.functional.eager import (
+        FunctionalCoreResult,
+        public_scf_status,
+    )
 
     if isinstance(result, FunctionalCoreResult):
         return _SCFOutput(
@@ -363,7 +372,19 @@ def singlepoint(
         classical = {}
         for component in system.classicals.components:
             timer.start(component.label, parent_uid="Classicals")
-            if component is system.d4_classical:
+            d3_setup = next(
+                (
+                    setup
+                    for d3_component, setup in system.d3_setups
+                    if component is d3_component
+                ),
+                None,
+            )
+            if type(component) is DispersionD3 and d3_setup is not None:
+                classical[component.label] = dispersion_d3_energy(
+                    d3_setup, positions
+                )
+            elif component is system.d4_classical:
                 if system.d4_setup is None:
                     raise RuntimeError("Single-system D4 setup is missing.")
                 classical[component.label] = dispersion_d4_energy(

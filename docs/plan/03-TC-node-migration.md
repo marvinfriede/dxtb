@@ -248,6 +248,18 @@ DFT-D3 migration is outside this package. See
 [`C6.11 acceptance inventory`](C6.11-C6-acceptance-inventory.md). Broader C6
 remains partial.
 
+B6a-D3.1 is complete: exact single-System DFT-D3 setup values are captured in
+`DispersionD3CoreSetup` and evaluated by the pure
+`dispersion_d3_energy()` path. Direct component/cache APIs, custom subclasses,
+and packed routes remain legacy-compatible. `ClassicalList` now rejects
+distinct components sharing the canonical `DispersionD3` label while keeping
+same-object first-occurrence deduplication and distinct custom labels. The
+legacy distinction between numbers used to gather setup arrays and numbers
+used by D3 evaluation is represented explicitly. This does not remove the
+generic `ClassicalListCache` construction/storage boundary; broader B6a and
+B3b remain partial. E1.3 tad-dftd3 forward-AD support remains blocked
+upstream.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening

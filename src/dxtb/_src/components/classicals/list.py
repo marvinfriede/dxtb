@@ -38,6 +38,7 @@ from dxtb._src.typing import (
 from ..list import ComponentList, ComponentListCache
 from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
+from .dispersion.d3 import LABEL_DISPERSIOND3
 from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
 from .halogen import LABEL_HALOGEN, Halogen
 from .ies import IES, LABEL_IES
@@ -71,6 +72,7 @@ class ClassicalList(ComponentList[Classical]):
         for label in (
             LABEL_REPULSION,
             LABEL_SRB,
+            LABEL_DISPERSIOND3,
             LABEL_DISPERSIOND4,
             LABEL_IES,
             LABEL_HALOGEN,
@@ -84,6 +86,7 @@ class ClassicalList(ComponentList[Classical]):
                 duplicate_name = {
                     LABEL_REPULSION: "repulsion",
                     LABEL_SRB: LABEL_SRB,
+                    LABEL_DISPERSIOND3: LABEL_DISPERSIOND3,
                     LABEL_DISPERSIOND4: LABEL_DISPERSIOND4,
                     LABEL_IES: LABEL_IES,
                     LABEL_HALOGEN: LABEL_HALOGEN,

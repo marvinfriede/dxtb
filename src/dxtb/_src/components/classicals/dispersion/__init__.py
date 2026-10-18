@@ -18,7 +18,14 @@
 Dispersion models in the extended tight-binding model.
 """
 
-from .d3 import DispersionD3
+from .d3 import (
+    LABEL_DISPERSIOND3,
+    DispersionD3,
+    DispersionD3Cache,
+    DispersionD3CoreSetup,
+    core_dispersion_d3_setup,
+    dispersion_d3_energy,
+)
 from .d4 import (
     DispersionD4,
     DispersionD4CoreSetup,

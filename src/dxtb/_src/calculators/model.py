@@ -51,6 +51,9 @@ from dxtb._src.components.classicals import (
     IES,
     Classical,
     ClassicalList,
+    DispersionD3,
+    DispersionD3Cache,
+    DispersionD3CoreSetup,
     DispersionD4,
     DispersionD4CoreSetup,
     DispersionD4Setup,
@@ -65,6 +68,7 @@ from dxtb._src.components.classicals import (
     ShortRangeBond,
     ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
+    core_dispersion_d3_setup,
     core_dispersion_d4_setup,
     core_halogen_setup,
     core_ies_setup,
@@ -231,6 +235,9 @@ class System:
     dd: DD
     """Device and data type of the tensors of the system."""
 
+    d3_setups: tuple[tuple[DispersionD3, DispersionD3CoreSetup], ...] = ()
+    """Captured setup for each exact single-System classical D3 component."""
+
     def singlepoint(
         self,
         positions: Tensor,
@@ -243,6 +250,11 @@ class System:
         from dxtb._src.calculators.singlepoint import singlepoint
 
         return singlepoint(self, positions, chrg, spin, field, field_grad)
+
+    @property
+    def d3_setup(self) -> DispersionD3CoreSetup | None:
+        """Return the sole exact D3 setup when the System has one."""
+        return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -507,6 +519,22 @@ class Model:
 
         # the data that does not depend on the geometry
         classical_cache = classicals.get_cache(numbers, ihelp)
+        d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
+        if batch_mode == 0:
+            for d3_classical in (
+                c for c in classicals.components if type(c) is DispersionD3
+            ):
+                legacy_setup = classical_cache[d3_classical.label]
+                assert isinstance(legacy_setup, DispersionD3Cache)
+                d3_setup = core_dispersion_d3_setup(
+                    legacy_setup,
+                    numbers,
+                    d3_classical.numbers,
+                    d3_classical.param,
+                    snapshot=True,
+                )
+                d3_setups.append((d3_classical, d3_setup))
+                classical_cache[d3_classical.label] = d3_setup
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
         )
@@ -620,6 +648,7 @@ class Model:
             ies_classical=ies_classical,
             halogen_setup=halogen_setup,
             halogen_classical=halogen_classical,
+            d3_setups=tuple(d3_setups),
             es2_setup=es2_setup,
             es2_interaction=es2_interaction,
             es3_setup=es3_setup,
