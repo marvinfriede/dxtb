@@ -31,14 +31,23 @@ from .overlap import (
     setup_overlap,
 )
 from .quadrupole import QuadrupolePytorch
-from .setup import PytorchIntegralSetup, setup_integrals
+from .setup import (
+    PytorchIntegralSetup,
+    PytorchIntegralSetupNode,
+    core_pytorch_integral_setup,
+    setup_integrals,
+    setup_integrals_core,
+)
 
 __all__ = [
     "OverlapPytorch",
     "PytorchOverlapSetup",
     "PytorchIntegralSetup",
+    "PytorchIntegralSetupNode",
+    "core_pytorch_integral_setup",
     "setup_overlap",
     "setup_integrals",
+    "setup_integrals_core",
     "build_overlap",
     "build_dipole",
     "build_quadrupole",

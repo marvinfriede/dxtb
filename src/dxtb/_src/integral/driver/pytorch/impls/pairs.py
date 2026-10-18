@@ -43,6 +43,7 @@ from typing import Sequence
 
 import numpy as np
 import torch
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Tensor
@@ -58,6 +59,8 @@ from .trafo import TRAFO
 __all__ = [
     "assemble_matrix",
     "PairPlan",
+    "PairClassNode",
+    "PairPlanNode",
     "prepare",
     "select_pairs",
 ]
@@ -87,6 +90,28 @@ class _Class:
     def __init__(self, ub, uk, lb, lk, ib, jk, idx, weight):
         self.ub, self.uk, self.lb, self.lk = ub, uk, lb, lk
         self.ib, self.jk, self.idx, self.weight = ib, jk, idx, weight
+
+
+class PairClassNode(Node):
+    """Immutable structural tensors for one ordered shell-pair class."""
+
+    ub: int = context()
+    uk: int = context()
+    lb: int = context()
+    lk: int = context()
+    ib: Tensor = child(keep_dtype=True)
+    jk: Tensor = child(keep_dtype=True)
+    idx: Tensor = child(keep_dtype=True)
+    weight: Tensor = child()
+
+
+class PairPlanNode(Node):
+    """Transform-visible, ordered structural data for pair assembly."""
+
+    nao: int = context()
+    unique_angular: tuple[int, ...] = context()
+    atom: Tensor = child(keep_dtype=True)
+    classes: tuple[PairClassNode, ...] = child()
 
 
 class PairPlan:
@@ -164,10 +189,18 @@ def prepare(ihelp: IndexHelper, dev: torch.device) -> PairPlan:
 
 
 def _resolve_plan(
-    ihelp: IndexHelper, dev: torch.device, plan: PairPlan | None
-) -> PairPlan:
+    ihelp: IndexHelper | None,
+    dev: torch.device,
+    plan: PairPlan | PairPlanNode | None,
+) -> PairPlan | PairPlanNode:
     if plan is not None:
         return plan
+
+    if ihelp is None:
+        raise ValueError(
+            "A prepared pair plan or an IndexHelper is required to assemble "
+            "integrals."
+        )
 
     if torch.compiler.is_compiling():
         raise RuntimeError(
@@ -227,7 +260,7 @@ def _mirror(
 
 def assemble_matrix(
     kernel: Kernel1D,
-    ihelp: IndexHelper,
+    ihelp: IndexHelper | None,
     alphas: list[Tensor],
     coeffs: list[Tensor],
     positions: Tensor,
@@ -237,7 +270,7 @@ def assemble_matrix(
     chunk_size: int | None = None,
     checkpoint: bool = False,
     pairs: Sequence[Tensor] | None = None,
-    plan: PairPlan | None = None,
+    plan: PairPlan | PairPlanNode | None = None,
 ) -> Tensor:
     """
     Assemble the full AO integral matrix of one molecule. Every shell is
@@ -247,8 +280,9 @@ def assemble_matrix(
     ----------
     kernel : Kernel1D
         ``compute_1d``-contract kernel (OS supports ``emax > 0``).
-    ihelp : IndexHelper
-        Index helper of the (unbatched) molecule.
+    ihelp : IndexHelper | None
+        Index helper of the (unbatched) molecule. May be omitted when a
+        prepared ``plan`` is supplied.
     alphas, coeffs : list[Tensor]
         Per-unique-shell exponents and coefficients (``Basis.create_cgtos``).
     positions : Tensor
@@ -280,7 +314,7 @@ def assemble_matrix(
         indices are constants, so everything is static and the function works
         under ``vmap`` and ``torch.compile`` as well. The error bound of the
         screening only holds for the geometries the selection was made for.
-    plan : PairPlan | None
+    plan : PairPlan | PairPlanNode | None
         Structural plan of `ihelp` from :func:`prepare`. Built on the fly if
         not given (not possible inside ``torch.compile``).
 
@@ -543,13 +577,13 @@ def _screen(
 
 def select_pairs(
     kernel: Kernel1D,
-    ihelp: IndexHelper,
+    ihelp: IndexHelper | None,
     alphas: list[Tensor],
     coeffs: list[Tensor],
     positions: Tensor,
     threshold: float,
     origin: Tensor | None = None,
-    plan: PairPlan | None = None,
+    plan: PairPlan | PairPlanNode | None = None,
 ) -> tuple[Tensor, ...]:
     """
     Shell pairs to compute for the given geometries, for the ``pairs``
@@ -565,8 +599,9 @@ def select_pairs(
     ----------
     kernel : Kernel1D
         ``compute_1d``-contract kernel (normalizes the shells).
-    ihelp : IndexHelper
-        Index helper of the (unbatched) molecule.
+    ihelp : IndexHelper | None
+        Index helper of the (unbatched) molecule. May be omitted when a
+        prepared ``plan`` is supplied.
     alphas, coeffs : list[Tensor]
         Per-unique-shell exponents and coefficients (``Basis.create_cgtos``).
     positions : Tensor
@@ -575,7 +610,7 @@ def select_pairs(
         Drop pairs whose bound is below this value.
     origin : Tensor | None
         Multipole origin (default: Cartesian origin).
-    plan : PairPlan | None
+    plan : PairPlan | PairPlanNode | None
         Structural plan of `ihelp` from :func:`prepare`. Built on the fly if
         not given.
 

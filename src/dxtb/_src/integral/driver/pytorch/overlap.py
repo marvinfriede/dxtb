@@ -34,7 +34,11 @@ from .base import IntegralPytorch
 from .driver import IntDriverPytorch
 from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
 from .impls.pairs import assemble_matrix
-from .setup import PytorchIntegralSetup, setup_integrals
+from .setup import (
+    PytorchIntegralSetup,
+    PytorchIntegralSetupNode,
+    setup_integrals,
+)
 
 __all__ = [
     "OverlapPytorch",
@@ -57,11 +61,15 @@ def setup_overlap(
     return setup_integrals(basis, algorithm=algorithm)
 
 
-def build_overlap(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+def build_overlap(
+    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    positions: Tensor,
+) -> Tensor:
     """Build an overlap matrix from immutable setup data and current positions."""
+    ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
     raw = assemble_matrix(
         get_kernel(setup.algorithm),
-        setup.ihelp,
+        ihelp,
         list(setup.alphas),
         list(setup.coeffs),
         positions,

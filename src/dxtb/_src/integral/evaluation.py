@@ -36,6 +36,8 @@ from dxtb._src.integral.driver.libcint import (
 )
 from dxtb._src.integral.driver.pytorch.multipole import (
     build_dipole as build_dipole_pytorch,
+)
+from dxtb._src.integral.driver.pytorch.multipole import (
     build_quadrupole as build_quadrupole_pytorch,
 )
 from dxtb._src.integral.driver.pytorch.overlap import (
@@ -43,7 +45,8 @@ from dxtb._src.integral.driver.pytorch.overlap import (
 )
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
-    setup_integrals,
+    PytorchIntegralSetupNode,
+    setup_integrals_core,
 )
 from dxtb._src.integral.types.dipole import shift_dipole_origin
 from dxtb._src.integral.types.quadrupole import (
@@ -69,7 +72,7 @@ class IntegralSetup:
 
     driver_type: int
     intlevel: int
-    pytorch: PytorchIntegralSetup | None = None
+    pytorch: PytorchIntegralSetup | PytorchIntegralSetupNode | None = None
     libcint: LibcintIntegralSetup | None = None
 
     def to(
@@ -84,9 +87,7 @@ class IntegralSetup:
         libcint = None
         if self.libcint is not None:
             libcint_device = (
-                torch.device("cpu")
-                if self.libcint.force_cpu
-                else device
+                torch.device("cpu") if self.libcint.force_cpu else device
             )
             libcint = replace(
                 self.libcint,
@@ -116,7 +117,7 @@ def setup_integral_evaluation(
 
     if driver_type == labels.INTDRIVER_PYTORCH:
         basis = Basis(numbers, par, ihelp)
-        pytorch_setup = setup_integrals(
+        pytorch_setup = setup_integrals_core(
             basis,
             **({} if algorithm is None else {"algorithm": algorithm}),
         )
@@ -194,7 +195,11 @@ def build_integral_matrices(
         def build_quadrupole() -> Tensor:
             return build_quadrupole_pytorch(integral_setup, positions)
 
-        ihelp = integral_setup.ihelp
+        ihelp = (
+            integral_setup.index
+            if isinstance(integral_setup, PytorchIntegralSetupNode)
+            else integral_setup.ihelp
+        )
         integral_positions = positions
     elif setup.driver_type == labels.INTDRIVER_LIBCINT:
         if setup.libcint is None:
@@ -219,9 +224,7 @@ def build_integral_matrices(
     quadrupole = None
 
     if setup.intlevel >= labels.INTLEVEL_DIPOLE:
-        raw_dipole = normalize_integral_matrix(
-            build_dipole(), backend_norm
-        )
+        raw_dipole = normalize_integral_matrix(build_dipole(), backend_norm)
         if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
             if setup.intlevel > labels.INTLEVEL_MAX:
                 raise RuntimeError(
@@ -239,17 +242,13 @@ def build_integral_matrices(
             quadrupole = shift_quadrupole_origin(
                 quadrupole, raw_dipole, overlap, orbital_positions
             )
-            dipole = shift_dipole_origin(
-                raw_dipole, overlap, orbital_positions
-            )
+            dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
             quadrupole = make_quadrupole_traceless(quadrupole)
         else:
             orbital_positions = ihelp.spread_atom_to_orbital(
                 integral_positions, dim=-2, extra=True
             )
-            dipole = shift_dipole_origin(
-                raw_dipole, overlap, orbital_positions
-            )
+            dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
 
     target_device = positions.device
     overlap_norm = backend_norm.to(device=target_device)

@@ -35,20 +35,21 @@ from .driver import IntDriverPytorch
 from .impls.kernels import get_kernel
 from .impls.pairs import assemble_matrix
 from .impls.pipeline import DIPOLE_COMPONENTS, QUADRUPOLE_COMPONENTS
-from .setup import PytorchIntegralSetup
+from .setup import PytorchIntegralSetup, PytorchIntegralSetupNode
 
 __all__ = ["MultipolePytorch", "build_dipole", "build_quadrupole"]
 
 
 def _build_multipole(
-    setup: PytorchIntegralSetup,
+    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
     components: tuple[tuple[int, int, int], ...],
 ) -> Tensor:
     """Build a raw multipole matrix from setup data and current positions."""
+    ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
     return assemble_matrix(
         get_kernel(setup.algorithm),
-        setup.ihelp,
+        ihelp,
         list(setup.alphas),
         list(setup.coeffs),
         positions,
@@ -57,12 +58,18 @@ def _build_multipole(
     )
 
 
-def build_dipole(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+def build_dipole(
+    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    positions: Tensor,
+) -> Tensor:
     """Build the raw, origin-centered three-component dipole matrix."""
     return _build_multipole(setup, positions, DIPOLE_COMPONENTS)
 
 
-def build_quadrupole(setup: PytorchIntegralSetup, positions: Tensor) -> Tensor:
+def build_quadrupole(
+    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    positions: Tensor,
+) -> Tensor:
     """Build the raw, origin-centered nine-component quadrupole matrix."""
     return _build_multipole(setup, positions, QUADRUPOLE_COMPONENTS)
 

@@ -28,11 +28,21 @@ from torch.func import vmap
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
+from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetup
 from dxtb._src.integral.driver.pytorch.impls.kernels import get_kernel
-from dxtb._src.integral.driver.pytorch.impls.pairs import assemble_matrix
+from dxtb._src.integral.driver.pytorch.impls.pairs import (
+    PairClassNode,
+    PairPlanNode,
+    assemble_matrix,
+)
 from dxtb._src.integral.driver.pytorch.overlap import build_overlap
+from dxtb._src.integral.driver.pytorch.setup import (
+    PytorchIntegralSetupNode,
+    core_pytorch_integral_setup,
+    setup_integrals,
+)
 from dxtb._src.ncoord import cn_d3, exp_count, gfn2_count
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional.core import CoreIndexData
@@ -40,38 +50,6 @@ from dxtb._src.typing import Tensor
 from dxtb._src.xtb.h0 import H0Setup
 
 from .samples import samples
-
-
-class _PairClassNode(Node):
-    """Immutable tensor leaves and scalar metadata for one pair class."""
-
-    ub: int = context()
-    uk: int = context()
-    lb: int = context()
-    lk: int = context()
-    ib: Tensor = child(keep_dtype=True)
-    jk: Tensor = child(keep_dtype=True)
-    idx: Tensor = child(keep_dtype=True)
-    weight: Tensor = child()
-
-
-class _PairPlanNode(Node):
-    """Ordered PyTorch pair structure without mutable ``_Class`` objects."""
-
-    nao: int = context()
-    unique_angular: tuple[int, ...] = context()
-    atom: Tensor = child(keep_dtype=True)
-    classes: tuple[_PairClassNode, ...] = child()
-
-
-class _PytorchSetupNode(Node):
-    """Test-local schema for PyTorch basis and pair setup values."""
-
-    index: CoreIndexData = child()
-    alphas: tuple[Tensor, ...] = child()
-    coeffs: tuple[Tensor, ...] = child()
-    pair_plan: _PairPlanNode = child()
-    algorithm: str = context()
 
 
 class _LibcintBasisNode(Node):
@@ -120,7 +98,7 @@ class _IntegralSetupNode(Node):
 
     driver_type: int = context()
     intlevel: int = context()
-    pytorch: _PytorchSetupNode | None = child()
+    pytorch: PytorchIntegralSetupNode | None = child()
     libcint: _LibcintSetupNode | None = child()
 
 
@@ -165,38 +143,8 @@ class _H0SetupNode(Node):
     cn_kcn: Tensor | None = child()
 
 
-def _pair_plan_node(plan) -> _PairPlanNode:
-    return _PairPlanNode(
-        nao=plan.nao,
-        unique_angular=tuple(plan.unique_angular),
-        atom=plan.atom,
-        classes=tuple(
-            _PairClassNode(
-                ub=item.ub,
-                uk=item.uk,
-                lb=item.lb,
-                lk=item.lk,
-                ib=item.ib,
-                jk=item.jk,
-                idx=item.idx,
-                weight=item.weight,
-            )
-            for item in plan.classes
-        ),
-    )
-
-
-def _pytorch_node(setup) -> _PytorchSetupNode:
-    return _PytorchSetupNode(
-        index=CoreIndexData(
-            shells_to_atom=setup.ihelp.shells_to_atom,
-            orbitals_to_shell=setup.ihelp.orbitals_to_shell,
-        ),
-        alphas=setup.alphas,
-        coeffs=setup.coeffs,
-        pair_plan=_pair_plan_node(setup.pair_plan),
-        algorithm=setup.algorithm,
-    )
+def _pytorch_node(setup) -> PytorchIntegralSetupNode:
+    return core_pytorch_integral_setup(setup)
 
 
 def _h0_node(setup: H0Setup) -> _H0SetupNode:
@@ -300,25 +248,19 @@ def test_pair_plan_node_roundtrip_conversion_stack_and_overlap() -> None:
     system = calc.system
     assert system.integral_setup is not None
     assert system.integral_setup.pytorch is not None
-    legacy = system.integral_setup.pytorch
+    assert type(system.integral_setup.pytorch) is PytorchIntegralSetupNode
+    legacy = setup_integrals(Basis(numbers, par, system.ihelp))
     proposed = _pytorch_node(legacy)
 
     leaves, spec = tree_flatten(proposed)
     rebuilt = tree_unflatten(leaves, spec)
-    assert type(rebuilt) is _PytorchSetupNode
-    assert type(rebuilt.pair_plan) is _PairPlanNode
+    assert type(rebuilt) is PytorchIntegralSetupNode
+    assert type(rebuilt.pair_plan) is PairPlanNode
+    assert type(rebuilt.index) is CoreIndexData
     assert rebuilt.algorithm == legacy.algorithm
     assert all(
         any(leaf is tensor for leaf in leaves)
-        for tensor in (
-            *legacy.alphas,
-            *legacy.coeffs,
-            legacy.pair_plan.atom,
-            *(item.ib for item in legacy.pair_plan.classes),
-            *(item.jk for item in legacy.pair_plan.classes),
-            *(item.idx for item in legacy.pair_plan.classes),
-            *(item.weight for item in legacy.pair_plan.classes),
-        )
+        for tensor in (*legacy.alphas, *legacy.coeffs)
     )
 
     converted = proposed.to(dtype=torch.float32)
@@ -340,12 +282,12 @@ def test_pair_plan_node_roundtrip_conversion_stack_and_overlap() -> None:
         for item in structural_meta.pair_plan.classes
     )
     stacked = stack((proposed, proposed))
-    assert type(stacked) is _PytorchSetupNode
+    assert type(stacked) is PytorchIntegralSetupNode
     assert proposed.algorithm not in tree_flatten(proposed)[0]
     assert stacked.pair_plan.atom.shape[0] == 2
     assert stacked.pair_plan.classes[0].idx.shape[0] == 2
 
-    def plan_probe(value: _PytorchSetupNode) -> Tensor:
+    def plan_probe(value: PytorchIntegralSetupNode) -> Tensor:
         return value.pair_plan.atom.sum() + sum(
             entry.weight.sum() for entry in value.pair_plan.classes
         )
@@ -414,9 +356,19 @@ def test_pair_plan_node_roundtrip_conversion_stack_and_overlap() -> None:
         )
         for name in ("ib", "jk", "idx", "weight"):
             old_value, new_value = getattr(old, name), getattr(new, name)
+            assert new_value is not old_value
             assert old_value.shape == new_value.shape
             assert old_value.dtype == new_value.dtype
+            assert old_value.device == new_value.device
             torch.testing.assert_close(old_value, new_value, rtol=0.0, atol=0.0)
+            assert any(leaf is new_value for leaf in leaves)
+    assert proposed.pair_plan.atom is proposed.index.shells_to_atom
+    assert proposed.pair_plan.atom is not legacy.pair_plan.atom
+    assert any(leaf is proposed.pair_plan.atom for leaf in leaves)
+    assert (
+        proposed.index.orbitals_to_shell is not legacy.ihelp.orbitals_to_shell
+    )
+    assert any(leaf is proposed.index.orbitals_to_shell for leaf in leaves)
 
 
 def test_integral_and_h0_optional_backend_schemas() -> None:
@@ -431,10 +383,11 @@ def test_integral_and_h0_optional_backend_schemas() -> None:
     assert pytorch_calc.system.integral_setup is not None
     source = pytorch_calc.system.integral_setup
     assert source.pytorch is not None and source.libcint is None
+    assert type(source.pytorch) is PytorchIntegralSetupNode
     pytorch_node = _IntegralSetupNode(
         driver_type=source.driver_type,
         intlevel=source.intlevel,
-        pytorch=_pytorch_node(source.pytorch),
+        pytorch=source.pytorch,
         libcint=None,
     )
     leaves, spec = tree_flatten(pytorch_node)

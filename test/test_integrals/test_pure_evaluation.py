@@ -17,9 +17,11 @@ from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
+from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlanNode
 from dxtb._src.integral.driver.pytorch.overlap import (
     build_overlap as build_overlap_pytorch,
 )
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.typing import Tensor
 
@@ -53,6 +55,38 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     setup = calc.system.integral_setup
     h0_setup = calc.system.h0_setup
     assert setup is not None and h0_setup is not None
+    core_setup = setup.pytorch
+    structural_snapshot = None
+    structural_ids = None
+    if driver == labels.INTDRIVER_PYTORCH:
+        assert isinstance(core_setup, PytorchIntegralSetupNode)
+        structural_snapshot = [
+            core_setup.index.shells_to_atom.clone(),
+            core_setup.index.orbitals_to_shell.clone(),
+            core_setup.pair_plan.atom.clone(),
+        ]
+        structural_ids = (
+            id(core_setup),
+            id(core_setup.pair_plan),
+            id(core_setup.index),
+            id(core_setup.index.shells_to_atom),
+            id(core_setup.index.orbitals_to_shell),
+            id(core_setup.pair_plan.atom),
+            tuple(
+                (
+                    id(pair_class),
+                    id(pair_class.ib),
+                    id(pair_class.jk),
+                    id(pair_class.idx),
+                    id(pair_class.weight),
+                    pair_class.ib.clone(),
+                    pair_class.jk.clone(),
+                    pair_class.idx.clone(),
+                    pair_class.weight.clone(),
+                )
+                for pair_class in core_setup.pair_plan.classes
+            ),
+        )
     if setup.libcint is not None:
         assert not hasattr(setup.libcint, "par")
         assert all(
@@ -95,6 +129,69 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     torch.testing.assert_close(norm1, norm3)
     assert torch.isfinite(norm1).all()
     assert torch.isfinite(norm2).all()
+
+    if isinstance(core_setup, PytorchIntegralSetupNode):
+        assert setup.pytorch is core_setup
+        assert core_setup.pair_plan is not None
+        assert structural_snapshot is not None
+        assert structural_ids is not None
+        assert id(core_setup) == structural_ids[0]
+        assert id(core_setup.pair_plan) == structural_ids[1]
+        assert id(core_setup.index) == structural_ids[2]
+        assert id(core_setup.index.shells_to_atom) == structural_ids[3]
+        assert id(core_setup.index.orbitals_to_shell) == structural_ids[4]
+        assert id(core_setup.pair_plan.atom) == structural_ids[5]
+        for current, original in zip(
+            (
+                core_setup.index.shells_to_atom,
+                core_setup.index.orbitals_to_shell,
+                core_setup.pair_plan.atom,
+            ),
+            structural_snapshot,
+        ):
+            assert torch.equal(current, original)
+        for pair_class, snapshot in zip(
+            core_setup.pair_plan.classes, structural_ids[6]
+        ):
+            (
+                pair_class_id,
+                ib_id,
+                jk_id,
+                idx_id,
+                weight_id,
+                ib,
+                jk,
+                idx,
+                weight,
+            ) = snapshot
+            assert id(pair_class) == pair_class_id
+            assert id(pair_class.ib) == ib_id
+            assert id(pair_class.jk) == jk_id
+            assert id(pair_class.idx) == idx_id
+            assert id(pair_class.weight) == weight_id
+            assert torch.equal(pair_class.ib, ib)
+            assert torch.equal(pair_class.jk, jk)
+            assert torch.equal(pair_class.idx, idx)
+            assert torch.equal(pair_class.weight, weight)
+
+        fresh_calc = Calculator(
+            numbers,
+            GFN2_XTB,
+            dtype=positions.dtype,
+            opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+        )
+        fresh_setup = fresh_calc.system.integral_setup
+        assert fresh_setup is not None
+        fresh, _, _ = build_integral_matrices(
+            fresh_setup,
+            fresh_calc.system.h0_setup,
+            positions,
+            charge=0.0,
+        )
+        for name in ("overlap", "dipole", "quadrupole", "hcore"):
+            torch.testing.assert_close(
+                getattr(first, name), getattr(fresh, name)
+            )
 
     def loss(geometry: Tensor) -> Tensor:
         matrices, refocc, _ = build_integral_matrices(
@@ -140,7 +237,9 @@ def test_system_reuses_setup_pair_plan_across_geometries(
     assert system.integral_setup is not None
     setup = system.integral_setup.pytorch
     assert setup is not None
-    assert isinstance(setup.pair_plan, pair_builder.PairPlan)
+    assert type(setup) is PytorchIntegralSetupNode
+    assert type(setup.pair_plan) is PairPlanNode
+    assert not hasattr(setup, "ihelp")
     assert not hasattr(setup.pair_plan, "positions")
 
     plan_uses: list[object] = []
@@ -169,8 +268,8 @@ def test_system_reuses_setup_pair_plan_across_geometries(
     assert all(plan is setup.pair_plan for plan in plan_uses)
 
 
-def test_pytorch_integral_setup_conversion_rebuilds_pair_plan() -> None:
-    """Converted setup has a device-local plan matching its IndexHelper."""
+def test_pytorch_integral_node_conversion_preserves_pair_plan() -> None:
+    """Node conversion changes tensor placement without rebuilding topology."""
     numbers = samples["H2O"]["numbers"].to(device="cpu")
     positions = samples["H2O"]["positions"].to(
         device="cpu", dtype=torch.float64
@@ -188,13 +287,12 @@ def test_pytorch_integral_setup_conversion_rebuilds_pair_plan() -> None:
     assert calc.system.integral_setup is not None
     setup = calc.system.integral_setup.pytorch
     assert setup is not None
+    assert type(setup) is PytorchIntegralSetupNode
 
     converted = setup.to(device="cpu", dtype=torch.float32)
     assert converted.pair_plan is not setup.pair_plan
-    assert converted.pair_plan.atom.device == torch.device(
-        converted.ihelp.device
-    )
-    assert torch.equal(converted.pair_plan.atom, converted.ihelp.shells_to_atom)
+    assert converted.index.shells_to_atom.device == torch.device("cpu")
+    assert torch.equal(converted.pair_plan.atom, converted.index.shells_to_atom)
     assert converted.pair_plan.nao == setup.pair_plan.nao
     assert len(converted.pair_plan.classes) == len(setup.pair_plan.classes)
     for old, new in zip(setup.pair_plan.classes, converted.pair_plan.classes):
@@ -207,8 +305,9 @@ def test_pytorch_integral_setup_conversion_rebuilds_pair_plan() -> None:
         assert torch.equal(old.ib, new.ib)
         assert torch.equal(old.jk, new.jk)
         assert torch.equal(old.idx, new.idx)
-        assert new.idx.device == torch.device(converted.ihelp.device)
-        assert new.weight.device == torch.device(converted.ihelp.device)
+        assert new.idx.device == torch.device("cpu")
+        assert new.weight.device == torch.device("cpu")
+        assert new.weight.dtype == torch.float32
 
     overlap = build_overlap_pytorch(
         converted, positions.to(dtype=torch.float32)
