@@ -2171,7 +2171,8 @@ def test_h0_node_tensors_are_in_persistent_snapshots() -> None:
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
-def test_libcint_node_tensors_are_in_persistent_snapshots() -> None:
+@pytest.mark.parametrize("field", ["slater", "shells_to_ushell"])
+def test_libcint_node_tensors_are_in_persistent_snapshots(field: str) -> None:
     """The persistent-state snapshot observes captured libcint basis data."""
     sample = samples["H2O"]
     positions = sample["positions"].to(dtype=torch.float64)
@@ -2187,11 +2188,13 @@ def test_libcint_node_tensors_are_in_persistent_snapshots() -> None:
     assert setup is not None
     assert type(setup) is LibcintIntegralSetupNode
     before = _persistent_identity_snapshot(system)
-    tensor = setup.basis_setups[0].slater
+    tensor = getattr(setup.basis_setups[0], field)
     original = tensor.clone()
     try:
         with torch.no_grad():
-            tensor.view(-1)[0].add_(1.0)
+            tensor.view(-1)[0].add_(
+                1 if not tensor.is_floating_point() else 1.0
+            )
         with pytest.raises(AssertionError):
             _assert_persistent_identity_unchanged(system, before)
     finally:

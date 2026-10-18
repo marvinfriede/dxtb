@@ -289,8 +289,8 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 ## C7 Integrals, Hamiltonian and driver
 
-**Status: C7.0 preflight and C7.1–C7.3 setup migrations complete; broader C7
-remains partial.** The schema inventory, production ownership, matched-base
+**Status: C7 setup Node acceptance complete; legacy driver retirement remains
+separate.** The schema inventory, production ownership, matched-base
 numerical outcomes, and transform evidence are recorded in
 [`C7 integral Node schema`](C7.0-integral-node-schema.md). Exact single-System
 PyTorch setup owns registered PairPlan and setup Nodes, and the exact
@@ -313,11 +313,16 @@ references, or tolerances changed.
 
 **Needs.** C5, B4, B6b-core. **Size.** M.
 
-**Packages.** C7.1 PyTorch setup/PairPlan Nodes, C7.2 H0/index Nodes, and C7.3
-libcint structural setup/compatibility Nodes are complete. C7.4 covers
-IntegralMatrices output integration only if direct transform-return support
-requires it. Legacy Calculator drivers remain until their separately accepted
-compatibility retirement; broader C7 remains partial.
+**Packages.** C7.1 PyTorch setup/PairPlan Nodes, C7.2 H0/index Nodes, C7.3
+libcint structural setup/compatibility Nodes, and C7.4 combined acceptance are
+complete. C7.4 reviewed whether transforms require the outer `IntegralSetup`
+as a pytree input or `IntegralMatrices` as a direct transformed output. The
+supported API requires neither: transforms capture setup and return tensor
+fields, while public singlepoint results use the registered `Result` pytree.
+The validated frozen dataclasses remain unchanged. C7 acceptance covers the
+scoped single-System Node setup boundary; legacy Calculator drivers, integral
+containers, and packed routes remain in their separately accepted
+compatibility-retirement packages.
 
 ---
 

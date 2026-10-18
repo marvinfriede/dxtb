@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 import torch
 from tad_mctc.tree import Node, stack
@@ -27,6 +28,7 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
+from dxtb._src.exlibs import libcint
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
@@ -288,6 +290,60 @@ def test_libcint_node_preserves_higher_angular_shell_order() -> None:
     legacy_overlap = build_overlap_libcint(setup_libcint(legacy, positions))
     assert core_overlap.shape == legacy_overlap.shape
     torch.testing.assert_close(core_overlap, legacy_overlap)
+
+
+@pytest.mark.parametrize("name", ["H2", "LiH", "H2O", "SiH4", "CH4"])
+def test_libcint_node_wrapper_maps_match_legacy(name: str) -> None:
+    """The wrapper-derived contracted and backward maps retain exact order."""
+    numbers = samples[name]["numbers"]
+    positions = samples[name]["positions"].to(dtype=torch.float64)
+    par = ParamModule(GFN2_XTB, dtype=positions.dtype)
+    legacy = _legacy_setup(numbers, par, force_cpu=True)
+    atom_basis = legacy.basis_setups[0].create_libcint(positions)
+    legacy_wrapper = libcint.LibcintWrapper(atom_basis, legacy.ihelp)
+    core_wrapper = libcint.LibcintWrapper(atom_basis)
+
+    for name in ("full_ao_to_atom", "full_ao_to_shell"):
+        torch.testing.assert_close(
+            getattr(core_wrapper, name), getattr(legacy_wrapper, name)
+        )
+    np.testing.assert_array_equal(
+        core_wrapper.full_shell_to_aoloc,
+        legacy_wrapper.full_shell_to_aoloc,
+    )
+    assert core_wrapper.nao() == legacy_wrapper.nao()
+    assert core_wrapper.shell_idxs == legacy_wrapper.shell_idxs
+    assert core_wrapper.ao_idxs() == legacy_wrapper.ao_idxs()
+    assert core_wrapper.ngauss_at_shell == legacy_wrapper.ngauss_at_shell
+    torch.testing.assert_close(
+        core_wrapper.ao_to_atom(), legacy_wrapper.ao_to_atom()
+    )
+    torch.testing.assert_close(
+        core_wrapper.ao_to_shell(), legacy_wrapper.ao_to_shell()
+    )
+
+    core_uncontracted, core_map = core_wrapper.get_uncontracted_wrapper()
+    legacy_uncontracted, legacy_map = legacy_wrapper.get_uncontracted_wrapper()
+    torch.testing.assert_close(core_map, legacy_map)
+    for name in ("full_ao_to_atom", "full_ao_to_shell"):
+        torch.testing.assert_close(
+            getattr(core_uncontracted, name),
+            getattr(legacy_uncontracted, name),
+        )
+    np.testing.assert_array_equal(
+        core_uncontracted.full_shell_to_aoloc,
+        legacy_uncontracted.full_shell_to_aoloc,
+    )
+
+
+def test_core_libcint_setup_rejects_non_cpu_force_cpu_source() -> None:
+    """Direct conversion requires normalized CPU sources when force_cpu is set."""
+    numbers = samples["H2"]["numbers"]
+    par = ParamModule(GFN2_XTB, dtype=torch.float64)
+    legacy = _legacy_setup(numbers, par, force_cpu=True)
+    inconsistent = replace(legacy, numbers=legacy.numbers.to(device="meta"))
+    with pytest.raises(ValueError, match="CPU-resident libcint setup tensors"):
+        core_libcint_setup(inconsistent)
 
 
 def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:

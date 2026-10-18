@@ -179,6 +179,29 @@ def core_libcint_setup(
     basis = setup.basis_setups[0]
     ihelp = basis.ihelp
 
+    source_tensors = (
+        setup.numbers,
+        basis.numbers,
+        basis.unique,
+        basis.ngauss,
+        basis.pqn,
+        basis.slater,
+        basis.valence,
+        ihelp.shells_per_atom,
+        ihelp.shells_to_ushell,
+        ihelp.angular,
+        ihelp.ushells_per_unique,
+        ihelp.unique_angular,
+        ihelp.shells_to_atom,
+        ihelp.orbitals_to_shell,
+    )
+    if setup.force_cpu and any(
+        tensor.device.type != "cpu" for tensor in source_tensors
+    ):
+        raise ValueError(
+            "force_cpu=True requires CPU-resident libcint setup tensors."
+        )
+
     def snapshot(value: Tensor) -> Tensor:
         return value.clone()
 
