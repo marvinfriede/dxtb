@@ -57,7 +57,7 @@ from dxtb._src.integral.types.quadrupole import (
 from dxtb._src.integral.utils import snorm
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
-from dxtb._src.xtb.h0 import H0Setup, build_hcore
+from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, build_hcore
 
 __all__ = [
     "IntegralSetup",
@@ -178,7 +178,7 @@ def setup_integral_evaluation(
 
 def build_integral_matrices(
     setup: IntegralSetup,
-    h0_setup: H0Setup,
+    h0_setup: H0Setup | H0SetupNode,
     positions: Tensor,
     charge: Tensor | float | int,
 ) -> tuple[IntegralMatrices, Tensor, Tensor]:

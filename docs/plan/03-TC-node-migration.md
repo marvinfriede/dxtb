@@ -289,15 +289,17 @@ isolated legacy-only component/cache adapters may remain until E4.6a/E4.6b.
 
 ## C7 Integrals, Hamiltonian and driver
 
-**Status: C7.0 preflight and C7.1 PyTorch setup/PairPlan migration complete;
-broader C7 remains partial.** The schema inventory, production ownership,
-matched-base numerical outcomes, and transform evidence are recorded in
+**Status: C7.0 preflight, C7.1 PyTorch setup/PairPlan migration, and C7.2 H0
+setup migration complete; broader C7 remains partial.** The schema inventory,
+production ownership, matched-base numerical outcomes, and transform evidence are recorded in
 [`C7 integral Node schema`](C7.0-integral-node-schema.md). Exact single-System
-PyTorch setup now owns registered PairPlan and setup Nodes; direct legacy
-drivers and libcint setup remain on their established routes. The accepted
-base GFN2 LiH exponent-gradient failure and six other selected numerical
-failures were reproduced on the candidate with matching signatures and are
-recorded separately. No production physics or tolerance was changed.
+PyTorch setup owns registered PairPlan and setup Nodes, and the exact
+single-System H0 setup owns `H0SetupNode` with explicit `H0IndexNode` maps.
+Direct legacy `H0Setup` construction/evaluation, Calculator drivers, packed
+routes, and libcint setup remain on their established routes. The accepted-base
+GFN2 LiH exponent-gradient failure remains on the C7.2 selected candidate with
+the same signature; the C7.2 focused H0/integral selection adds no new
+failure. No production physics or tolerance was changed.
 
 **Goal.** Migrate the integral description objects, the Hamiltonian and the driver.
 
@@ -307,11 +309,11 @@ recorded separately. No production physics or tolerance was changed.
 
 **Needs.** C5, B4, B6b-core. **Size.** M.
 
-**Packages.** C7.1 PyTorch setup/PairPlan Nodes is complete. C7.2 owns H0
-setup and Hamiltonian structural Nodes; C7.3 owns libcint setup/adapter Nodes;
-C7.4 covers IntegralMatrices output integration only if direct
-transform-return support requires it. Legacy Calculator drivers remain until
-their separately accepted compatibility retirement.
+**Packages.** C7.1 PyTorch setup/PairPlan Nodes and C7.2 H0/index Nodes are
+complete. C7.3 owns libcint setup/adapter Nodes; C7.4 covers IntegralMatrices
+output integration only if direct transform-return support requires it.
+Legacy Calculator drivers remain until their separately accepted
+compatibility retirement.
 
 ---
 

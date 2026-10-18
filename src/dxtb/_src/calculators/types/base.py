@@ -60,6 +60,7 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.tensors import normalize_device
+from dxtb._src.xtb.h0 import H0SetupNode, legacy_h0_setup
 from dxtb.config import Config
 from dxtb.integrals import Integrals
 
@@ -372,11 +373,14 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
             if self.system.h0_setup is None:
                 raise RuntimeError("Core Hamiltonian setup is missing.")
+            h0_setup = self.system.h0_setup
+            if isinstance(h0_setup, H0SetupNode):
+                h0_setup = legacy_h0_setup(h0_setup, self.ihelp)
             integrals.hcore = ints.factories.new_hcore(
                 self.numbers,
                 self.model.par,
                 self.ihelp,
-                setup=self.system.h0_setup,
+                setup=h0_setup,
                 **self.dd,
             )
             integrals.overlap = ints.factories.new_overlap(

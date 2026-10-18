@@ -22,6 +22,7 @@ from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor, symmetrize
 from tad_mctc.data import radii
 from tad_mctc.data.radii import ATOMIC_RADII
+from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import Tensor
 from tad_mctc.units import EV2AU
 from tad_multicharge.model.eeq import EEQModel
@@ -35,6 +36,7 @@ from dxtb._src.ncoord import (
     gfn2_count,
 )
 from dxtb._src.param import Param, ParamModule
+from dxtb._src.utils import wrap_gather
 from dxtb._src.utils.tensors import structure_charge
 
 PAD = -1
@@ -115,6 +117,244 @@ class H0Setup:
                 rad=self.eeq_model.rad.to(device=device, dtype=dtype),
             )
         return replace(self, **values)
+
+
+class H0IndexNode(Node):
+    """Minimal immutable index mappings used by pure H0 evaluation."""
+
+    atom_to_unique: Tensor = child(keep_dtype=True)
+    shells_to_ushell: Tensor = child(keep_dtype=True)
+    unique_angular: Tensor = child(keep_dtype=True)
+    shells_to_atom: Tensor = child(keep_dtype=True)
+    orbitals_to_shell: Tensor = child(keep_dtype=True)
+
+    def spread_uspecies_to_atom(
+        self,
+        x: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        return wrap_gather(x, dim, self.atom_to_unique, extra=extra)
+
+    def spread_atom_to_shell(
+        self,
+        x: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        return wrap_gather(x, dim, self.shells_to_atom, extra=extra)
+
+    def spread_uspecies_to_shell(
+        self,
+        x: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        return self.spread_atom_to_shell(
+            self.spread_uspecies_to_atom(x, dim=dim, extra=extra),
+            dim=dim,
+            extra=extra,
+        )
+
+    def spread_ushell_to_shell(
+        self,
+        x: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        return wrap_gather(x, dim, self.shells_to_ushell, extra=extra)
+
+    def spread_shell_to_orbital(
+        self,
+        x: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        return wrap_gather(x, dim, self.orbitals_to_shell, extra=extra)
+
+
+class H0SetupNode(Node):
+    """Captured, differentiable H0 data without a live IndexHelper."""
+
+    method: str = context()
+    cn_kind: str = context()
+
+    index: H0IndexNode = child()
+    numbers: Tensor = child(keep_dtype=True)
+    unique: Tensor = child(keep_dtype=True)
+    hscale: Tensor = child()
+    kcn: Tensor = child()
+    kpair: Tensor = child()
+    refocc: Tensor = child()
+    selfenergy: Tensor = child()
+    shpoly: Tensor = child()
+    valence: Tensor = child(keep_dtype=True)
+    en: Tensor = child()
+    enscale: Tensor = child()
+    rad: Tensor = child()
+    kq: Tensor | None = child()
+    kqat: Tensor | None = child()
+    h0rad: Tensor | None = child()
+    kdiff: Tensor | None = child()
+    enshell: Tensor | None = child()
+    enscale4: Tensor | None = child()
+    eeq_model: EEQModel | None = child()
+    cn_radii: Tensor | None = child()
+    cn_cutoff: Tensor | None = child()
+    cn_max: Tensor | None = child()
+    cn_kcn: Tensor | None = child()
+
+    @property
+    def ihelp(self) -> H0IndexNode:
+        """Compatibility name for the narrow H0 index mapping."""
+        return self.index
+
+    @property
+    def cn(self) -> Callable[[Tensor, Tensor], Tensor] | None:
+        """Create the validated stateless built-in CN callable locally."""
+        if self.cn_kind == "cn_d3(exp_count)":
+            return partial(cn_d3, counting_function=exp_count)
+        if self.cn_kind == "cn_d3(gfn2_count)":
+            return partial(cn_d3, counting_function=gfn2_count)
+        if self.cn_kind == "erf_count":
+            return None
+        raise RuntimeError(
+            f"Unknown H0 coordination descriptor '{self.cn_kind}'."
+        )
+
+
+def _h0_cn_kind(setup: H0Setup) -> str:
+    """Validate a legacy setup's CN callable and return its static descriptor."""
+    if setup.method == "gfn0":
+        if setup.cn is not None:
+            raise TypeError(
+                "GFN0 H0 Node conversion requires the built-in erf CN."
+            )
+        return "erf_count"
+
+    expected = {
+        "gfn1": ("cn_d3(exp_count)", exp_count),
+        "gfn2": ("cn_d3(gfn2_count)", gfn2_count),
+    }
+    if setup.method not in expected:
+        raise TypeError(
+            f"Unsupported H0 method '{setup.method}' for Node conversion."
+        )
+
+    kind, counting_function = expected[setup.method]
+    function = setup.cn
+    if not isinstance(function, partial):
+        raise TypeError(
+            f"H0 Node conversion does not support custom {setup.method.upper()} CN callables."
+        )
+    if (
+        function.func is not cn_d3
+        or function.args
+        or function.keywords != {"counting_function": counting_function}
+    ):
+        raise TypeError(
+            f"H0 Node conversion requires the built-in {setup.method.upper()} CN strategy."
+        )
+    return kind
+
+
+def core_h0_setup(setup: H0Setup) -> H0SetupNode:
+    """Capture a legacy setup as an isolated Node, preserving autograd edges."""
+    cn_kind = _h0_cn_kind(setup)
+
+    def clone(value: Tensor | None) -> Tensor | None:
+        return None if value is None else value.clone()
+
+    eeq_model = None
+    if setup.eeq_model is not None:
+        eeq_model = EEQModel(
+            chi=setup.eeq_model.chi.clone(),
+            kcn=setup.eeq_model.kcn.clone(),
+            eta=setup.eeq_model.eta.clone(),
+            rad=setup.eeq_model.rad.clone(),
+        )
+
+    index = H0IndexNode(
+        atom_to_unique=setup.ihelp.atom_to_unique.clone(),
+        shells_to_ushell=setup.ihelp.shells_to_ushell.clone(),
+        unique_angular=setup.ihelp.unique_angular.clone(),
+        shells_to_atom=setup.ihelp.shells_to_atom.clone(),
+        orbitals_to_shell=setup.ihelp.orbitals_to_shell.clone(),
+    )
+    return H0SetupNode(
+        method=setup.method,
+        cn_kind=cn_kind,
+        index=index,
+        numbers=setup.numbers.clone(),
+        unique=setup.unique.clone(),
+        hscale=setup.hscale.clone(),
+        kcn=setup.kcn.clone(),
+        kpair=setup.kpair.clone(),
+        refocc=setup.refocc.clone(),
+        selfenergy=setup.selfenergy.clone(),
+        shpoly=setup.shpoly.clone(),
+        valence=setup.valence.clone(),
+        en=setup.en.clone(),
+        enscale=setup.enscale.clone(),
+        rad=setup.rad.clone(),
+        kq=clone(setup.kq),
+        kqat=clone(setup.kqat),
+        h0rad=clone(setup.h0rad),
+        kdiff=clone(setup.kdiff),
+        enshell=clone(setup.enshell),
+        enscale4=clone(setup.enscale4),
+        eeq_model=eeq_model,
+        cn_radii=clone(setup.cn_radii),
+        cn_cutoff=clone(setup.cn_cutoff),
+        cn_max=clone(setup.cn_max),
+        cn_kcn=clone(setup.cn_kcn),
+    )
+
+
+def legacy_h0_setup(setup: H0SetupNode, ihelp: IndexHelper) -> H0Setup:
+    """Build a temporary legacy view for the Calculator-owned H0 adapter."""
+    return H0Setup(
+        method=setup.method,
+        numbers=setup.numbers,
+        unique=setup.unique,
+        ihelp=ihelp,
+        hscale=setup.hscale,
+        kcn=setup.kcn,
+        kpair=setup.kpair,
+        refocc=setup.refocc,
+        selfenergy=setup.selfenergy,
+        shpoly=setup.shpoly,
+        valence=setup.valence,
+        en=setup.en,
+        enscale=setup.enscale,
+        rad=setup.rad,
+        cn=setup.cn,
+        kq=setup.kq,
+        kqat=setup.kqat,
+        h0rad=setup.h0rad,
+        kdiff=setup.kdiff,
+        enshell=setup.enshell,
+        enscale4=setup.enscale4,
+        eeq_model=setup.eeq_model,
+        cn_radii=setup.cn_radii,
+        cn_cutoff=setup.cn_cutoff,
+        cn_max=setup.cn_max,
+        cn_kcn=setup.cn_kcn,
+    )
+
+
+def setup_h0_core(
+    numbers: Tensor,
+    par: Param | ParamModule,
+    ihelp: IndexHelper,
+    *,
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> H0SetupNode:
+    """Build and capture one H0 setup for the exact single-System path."""
+    return core_h0_setup(
+        setup_h0(numbers, par, ihelp, device=device, dtype=dtype)
+    )
 
 
 def gather_hscale(
@@ -337,7 +577,7 @@ def setup_h0(
 
 
 def build_hcore(
-    setup: H0Setup,
+    setup: H0Setup | H0SetupNode,
     positions: Tensor,
     overlap: Tensor,
     charge: Tensor | float | int | None = None,
@@ -347,7 +587,7 @@ def build_hcore(
 
 
 def build_hcore_raw(
-    setup: H0Setup,
+    setup: H0Setup | H0SetupNode,
     positions: Tensor,
     charge: Tensor | float | int | None = None,
 ) -> tuple[Tensor, Tensor]:
@@ -356,13 +596,13 @@ def build_hcore_raw(
 
 
 def _build_hcore(
-    setup: H0Setup,
+    setup: H0Setup | H0SetupNode,
     positions: Tensor,
     overlap: Tensor | None,
     charge: Tensor | float | int | None,
 ) -> tuple[Tensor, Tensor]:
     """Implement the shared H0 formula for true and raw compatibility APIs."""
-    ihelp = setup.ihelp
+    ihelp = setup.index if isinstance(setup, H0SetupNode) else setup.ihelp
     if setup.method == "gfn0":
         if charge is None:
             raise ValueError("Total molecular charge is required for GFN0 H0.")

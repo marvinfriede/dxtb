@@ -2131,7 +2131,6 @@ def test_d3_setup_tensors_are_in_persistent_snapshots() -> None:
         with torch.no_grad():
             selected_setup.reference_c6.copy_(original_c6)
     _assert_snapshot_equal(_snapshot_tree(system.d3_setups), before_value)
-
     old_c6 = selected_setup.reference_c6
     replacement_c6 = (
         old_c6.detach().clone().requires_grad_(old_c6.requires_grad)
@@ -2149,6 +2148,24 @@ def test_d3_setup_tensors_are_in_persistent_snapshots() -> None:
     finally:
         object.__setattr__(selected_setup, "reference_c6", old_c6)
     _assert_persistent_identity_unchanged(system, before_identity)
+
+
+def test_h0_node_tensors_are_in_persistent_snapshots() -> None:
+    """The persistent-state snapshot sees and detects H0 Node mutations."""
+    system = _prepare_case(GFN1_XTB).system
+    assert system.h0_setup is not None
+    before = _persistent_identity_snapshot(system)
+    tensor = system.h0_setup.hscale
+    original = tensor.clone()
+    try:
+        with torch.no_grad():
+            tensor.view(-1)[0].add_(1.0)
+        with pytest.raises(AssertionError):
+            _assert_persistent_identity_unchanged(system, before)
+    finally:
+        with torch.no_grad():
+            tensor.copy_(original)
+    _assert_persistent_identity_unchanged(system, before)
 
 
 def test_functional_interaction_aggregates_match_legacy() -> None:

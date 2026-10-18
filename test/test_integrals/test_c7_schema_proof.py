@@ -18,16 +18,13 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from functools import partial
-
 import pytest
 import torch
 from tad_mctc.tree import Node, child, context, stack
 from torch.func import vmap
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
-from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
+from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetup
@@ -43,11 +40,10 @@ from dxtb._src.integral.driver.pytorch.setup import (
     core_pytorch_integral_setup,
     setup_integrals,
 )
-from dxtb._src.ncoord import cn_d3, exp_count, gfn2_count
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
-from dxtb._src.xtb.h0 import H0Setup
+from dxtb._src.xtb.h0 import H0SetupNode
 
 from .samples import samples
 
@@ -102,104 +98,8 @@ class _IntegralSetupNode(Node):
     libcint: _LibcintSetupNode | None = child()
 
 
-class _H0IndexNode(Node):
-    """Minimal extra mappings required by H0 parameter expansion."""
-
-    atom_to_unique: Tensor = child(keep_dtype=True)
-    shells_to_ushell: Tensor = child(keep_dtype=True)
-    unique_angular: Tensor = child(keep_dtype=True)
-    shells_to_atom: Tensor = child(keep_dtype=True)
-    orbitals_to_shell: Tensor = child(keep_dtype=True)
-
-
-class _H0SetupNode(Node):
-    """Test-local H0 schema with callable CN behavior reduced to a descriptor."""
-
-    method: str = context()
-    cn_kind: str = context()
-    numbers: Tensor = child(keep_dtype=True)
-    unique: Tensor = child(keep_dtype=True)
-    index: _H0IndexNode = child()
-    hscale: Tensor = child()
-    kcn: Tensor = child()
-    kpair: Tensor = child()
-    refocc: Tensor = child()
-    selfenergy: Tensor = child()
-    shpoly: Tensor = child()
-    valence: Tensor = child(keep_dtype=True)
-    en: Tensor = child()
-    enscale: Tensor = child()
-    rad: Tensor = child()
-    kq: Tensor | None = child()
-    kqat: Tensor | None = child()
-    h0rad: Tensor | None = child()
-    kdiff: Tensor | None = child()
-    enshell: Tensor | None = child()
-    enscale4: Tensor | None = child()
-    eeq_model: object | None = child()
-    cn_radii: Tensor | None = child()
-    cn_cutoff: Tensor | None = child()
-    cn_max: Tensor | None = child()
-    cn_kcn: Tensor | None = child()
-
-
 def _pytorch_node(setup) -> PytorchIntegralSetupNode:
     return core_pytorch_integral_setup(setup)
-
-
-def _h0_node(setup: H0Setup) -> _H0SetupNode:
-    cn_kind = {
-        "gfn0": "erf_count",
-        "gfn1": "cn_d3(exp_count)",
-        "gfn2": "cn_d3(gfn2_count)",
-    }[setup.method]
-    if setup.method == "gfn1":
-        assert isinstance(setup.cn, partial)
-        assert setup.cn.func is cn_d3
-        assert setup.cn.args == ()
-        assert setup.cn.keywords == {"counting_function": exp_count}
-    elif setup.method == "gfn2":
-        assert isinstance(setup.cn, partial)
-        assert setup.cn.func is cn_d3
-        assert setup.cn.args == ()
-        assert setup.cn.keywords == {"counting_function": gfn2_count}
-    else:
-        assert setup.cn is None
-    ihelp = setup.ihelp
-    return _H0SetupNode(
-        method=setup.method,
-        cn_kind=cn_kind,
-        numbers=setup.numbers,
-        unique=setup.unique,
-        index=_H0IndexNode(
-            atom_to_unique=ihelp.atom_to_unique,
-            shells_to_ushell=ihelp.shells_to_ushell,
-            unique_angular=ihelp.unique_angular,
-            shells_to_atom=ihelp.shells_to_atom,
-            orbitals_to_shell=ihelp.orbitals_to_shell,
-        ),
-        hscale=setup.hscale,
-        kcn=setup.kcn,
-        kpair=setup.kpair,
-        refocc=setup.refocc,
-        selfenergy=setup.selfenergy,
-        shpoly=setup.shpoly,
-        valence=setup.valence,
-        en=setup.en,
-        enscale=setup.enscale,
-        rad=setup.rad,
-        kq=setup.kq,
-        kqat=setup.kqat,
-        h0rad=setup.h0rad,
-        kdiff=setup.kdiff,
-        enshell=setup.enshell,
-        enscale4=setup.enscale4,
-        eeq_model=setup.eeq_model,
-        cn_radii=setup.cn_radii,
-        cn_cutoff=setup.cn_cutoff,
-        cn_max=setup.cn_max,
-        cn_kcn=setup.cn_kcn,
-    )
 
 
 def _libcint_node(setup: LibcintIntegralSetup) -> _LibcintSetupNode:
@@ -409,10 +309,12 @@ def test_integral_and_h0_optional_backend_schemas() -> None:
         )
         assert calc.system.h0_setup is not None
         source_h0 = calc.system.h0_setup
-        h0 = _h0_node(source_h0)
-        leaves, spec = tree_flatten(h0)
+        assert type(source_h0) is H0SetupNode
+        assert not hasattr(source_h0, "param")
+        assert not isinstance(source_h0.index, IndexHelper)
+        leaves, spec = tree_flatten(source_h0)
         rebuilt_h0 = tree_unflatten(leaves, spec)
-        assert type(rebuilt_h0) is _H0SetupNode
+        assert type(rebuilt_h0) is H0SetupNode
         assert rebuilt_h0.method == method
         assert rebuilt_h0.cn_kind == expected_cn
         assert all(
@@ -430,6 +332,11 @@ def test_integral_and_h0_optional_backend_schemas() -> None:
                 source_h0.en,
                 source_h0.enscale,
                 source_h0.rad,
+                source_h0.index.atom_to_unique,
+                source_h0.index.shells_to_ushell,
+                source_h0.index.unique_angular,
+                source_h0.index.shells_to_atom,
+                source_h0.index.orbitals_to_shell,
             )
         )
         for name in (
@@ -457,7 +364,7 @@ def test_integral_and_h0_optional_backend_schemas() -> None:
                     source_h0.eeq_model.rad,
                 )
             )
-        converted_h0 = h0.to(dtype=torch.float32)
+        converted_h0 = source_h0.to(dtype=torch.float32)
         assert converted_h0.numbers.dtype == source_h0.numbers.dtype
         assert converted_h0.unique.dtype == source_h0.unique.dtype
         assert converted_h0.valence.dtype == source_h0.valence.dtype
@@ -466,13 +373,9 @@ def test_integral_and_h0_optional_backend_schemas() -> None:
             assert converted_h0.eeq_model is not source_h0.eeq_model
             assert converted_h0.eeq_model.chi.dtype == torch.float32
 
-        if method == "gfn1":
-            custom_cn = replace(
-                source_h0,
-                cn=partial(cn_d3, counting_function=gfn2_count),
-            )
-            with pytest.raises(AssertionError):
-                _h0_node(custom_cn)
+        assert converted_h0.index.atom_to_unique.dtype == torch.int64
+        assert converted_h0.index.unique_angular.dtype == torch.int64
+        assert converted_h0.cn_kind == source_h0.cn_kind
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")

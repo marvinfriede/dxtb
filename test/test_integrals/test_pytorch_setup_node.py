@@ -466,6 +466,26 @@ def test_node_screening_chunking_checkpoint_and_missing_plan() -> None:
         )
         _assert_matrix_parity(actual, expected)
 
+    screened_node = assemble_matrix(
+        compute_1d_os,
+        None,
+        alphas,
+        coeffs,
+        positions,
+        plan=core.pair_plan,
+        screening_threshold=1e-8,
+    )
+    screened_legacy = assemble_matrix(
+        compute_1d_os,
+        legacy.ihelp,
+        list(legacy.alphas),
+        list(legacy.coeffs),
+        positions,
+        plan=legacy.pair_plan,
+        screening_threshold=1e-8,
+    )
+    _assert_matrix_parity(screened_node, screened_legacy)
+
     with pytest.raises(
         ValueError, match="prepared pair plan or an IndexHelper"
     ):

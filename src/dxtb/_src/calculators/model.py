@@ -122,7 +122,7 @@ from dxtb._src.integral.evaluation import (
 from dxtb._src.param import ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.xtb.h0 import H0Setup, setup_h0
+from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, setup_h0, setup_h0_core
 from dxtb.config import Config
 
 if TYPE_CHECKING:
@@ -197,7 +197,7 @@ class System:
     integral_setup: IntegralSetup | None
     """Immutable backend setup used by pure integral evaluation."""
 
-    h0_setup: H0Setup | None
+    h0_setup: H0Setup | H0SetupNode | None
     """Composition-dependent H0 data for pure matrix construction."""
 
     _classical_extension_cache: ClassicalListCache = field(repr=False)
@@ -707,7 +707,11 @@ class Model:
         h0_setup = None
         integral_setup = None
         if config.ints.level >= labels.INTLEVEL_OVERLAP:
-            h0_setup = setup_h0(numbers, par, ihelp, **dd)
+            h0_setup = (
+                setup_h0_core(numbers, par, ihelp, **dd)
+                if batch_mode == 0
+                else setup_h0(numbers, par, ihelp, **dd)
+            )
             # B4's pure evaluation core handles one system. Keep existing
             # Calculator batching on its legacy adapter until the later
             # batching package supplies stacked-System/vmap evaluation.
