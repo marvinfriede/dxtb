@@ -258,8 +258,17 @@ def setup_scf_inputs(
     interaction_data: InteractionListCache,
     ihelp: IndexHelper,
     config: ConfigSCF,
+    *,
+    core_index: CoreIndexData | None = None,
 ) -> SCFInputs:
-    """Build immutable core values from one legacy single-System setup."""
+    """Build immutable core values from one legacy single-System setup.
+
+    ``core_index`` is reserved for a trusted index captured by the active
+    System integral setup. Its map values are established at that setup
+    boundary; this function validates shape, dtype, and device without
+    synchronizing tensor values during SCF preparation. Direct and legacy
+    callers should omit it and retain the isolated IndexHelper snapshot.
+    """
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
     if config.fermi.maxiter < 0:
@@ -269,6 +278,24 @@ def setup_scf_inputs(
         raise ValueError("E4.0 SCFInputs require one unbatched System.")
     if integrals.hcore is None or integrals.overlap is None:
         raise ValueError("SCFInputs require hcore and overlap integrals.")
+    if core_index is not None:
+        if type(core_index) is not CoreIndexData:
+            raise TypeError("Captured SCF index must be CoreIndexData.")
+        if (
+            core_index.shells_to_atom.shape != ihelp.shells_to_atom.shape
+            or core_index.orbitals_to_shell.shape
+            != ihelp.orbitals_to_shell.shape
+            or core_index.shells_to_atom.dtype != ihelp.shells_to_atom.dtype
+            or core_index.orbitals_to_shell.dtype
+            != ihelp.orbitals_to_shell.dtype
+            or core_index.shells_to_atom.device != ihelp.shells_to_atom.device
+            or core_index.orbitals_to_shell.device
+            != ihelp.orbitals_to_shell.device
+        ):
+            raise ValueError(
+                "Captured SCF index maps must match the IndexHelper shape, "
+                "dtype, and device."
+            )
 
     orbital_mask = ihelp.spread_shell_to_orbital(ihelp.orbitals_per_shell)
     orbital_mask = orbital_mask.to(dtype=torch.bool)
@@ -312,11 +339,15 @@ def setup_scf_inputs(
 
     return SCFInputs(
         numbers=numbers,
-        index=CoreIndexData(
-            # These are integer structural maps. Own their storage so a later
-            # legacy IndexHelper operation cannot alter prepared core inputs.
-            shells_to_atom=ihelp.shells_to_atom.clone(),
-            orbitals_to_shell=ihelp.orbitals_to_shell.clone(),
+        index=(
+            core_index
+            if core_index is not None
+            else CoreIndexData(
+                # Direct and legacy callers own an isolated structural
+                # snapshot so later IndexHelper mutation cannot change it.
+                shells_to_atom=ihelp.shells_to_atom.clone(),
+                orbitals_to_shell=ihelp.orbitals_to_shell.clone(),
+            )
         ),
         integrals=integrals,
         n0=n0,

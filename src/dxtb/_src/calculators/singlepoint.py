@@ -72,6 +72,8 @@ from dxtb._src.components.interactions.solvation.alpb import (
     build_generalized_born_data,
 )
 from dxtb._src.constants import defaults
+from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
@@ -515,6 +517,27 @@ def singlepoint(
         *call_components, device=positions.device, dtype=positions.dtype
     )
     interaction_data = _interaction_data(system, positions, call_interactions)
+    backend_setup = (
+        system.integral_setup.pytorch
+        if system.integral_setup.pytorch is not None
+        else system.integral_setup.libcint
+    )
+    candidate_index = (
+        backend_setup.index
+        if type(backend_setup)
+        in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
+        else None
+    )
+    core_index = (
+        candidate_index
+        if candidate_index is not None
+        and candidate_index.shells_to_atom.device
+        == system.ihelp.shells_to_atom.device
+        and candidate_index.orbitals_to_shell.device
+        == system.ihelp.orbitals_to_shell.device
+        else None
+    )
+
     scf_results = scf.solve(
         system.numbers,
         positions,
@@ -526,6 +549,7 @@ def singlepoint(
         system.config.scf,
         matrices,
         refocc,
+        core_index=core_index,
     )
     scf_output = _normalize_scf_output(scf_results, positions)
 

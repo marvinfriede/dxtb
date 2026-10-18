@@ -41,6 +41,15 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 
+from .anderson import (
+    AndersonSettings,
+    _solve_map_anderson,
+    setup_anderson_solver_settings,
+    solve_scf_anderson,
+    solve_scf_fock_anderson,
+    solve_scf_potential_anderson,
+)
+from .core import CoreIndexData
 from .data import (
     PotentialLayout,
     SCFCharges,
@@ -50,28 +59,7 @@ from .data import (
     pack_charges,
     setup_scf_inputs,
 )
-from .solver import (
-    FERMI_FAILURE_ELECTRON_COUNT,
-    FERMI_FAILURE_INVALID_TEMPERATURE,
-    FERMI_FAILURE_NONCONVERGENCE,
-    FERMI_FAILURE_NONE,
-    FERMI_FAILURE_TOO_MANY_ELECTRONS,
-    SCFSolveResult,
-    SCFSolverSettings,
-    SCFTrajectoryStatus,
-    setup_simple_solver_settings,
-    solve_scf_fock_simple,
-    solve_scf_potential_simple,
-    solve_scf_simple,
-)
-from .anderson import (
-    AndersonSettings,
-    setup_anderson_solver_settings,
-    solve_scf_anderson,
-    solve_scf_fock_anderson,
-    solve_scf_potential_anderson,
-    _solve_map_anderson,
-)
+from .implicit import _prepare_scf_root, _SCFMapTensorTree
 from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -82,15 +70,26 @@ from .map import (
     scf_map,
     unpack_potential,
 )
-from .implicit import _SCFMapTensorTree, _prepare_scf_root
 from .solver import (
+    FERMI_FAILURE_ELECTRON_COUNT,
+    FERMI_FAILURE_INVALID_TEMPERATURE,
+    FERMI_FAILURE_NONCONVERGENCE,
+    FERMI_FAILURE_NONE,
+    FERMI_FAILURE_TOO_MANY_ELECTRONS,
+    SCFSolveResult,
+    SCFSolverSettings,
+    SCFTrajectoryStatus,
+    _project_potential_padding,
     _solve_map,
+    fermi_failure_code,
+    fermi_status_ok,
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
-    fermi_failure_code,
-    fermi_status_ok,
-    _project_potential_padding,
+    setup_simple_solver_settings,
+    solve_scf_fock_simple,
+    solve_scf_potential_simple,
+    solve_scf_simple,
 )
 
 __all__ = [
@@ -511,6 +510,8 @@ def run_prepared_functional_full(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     route: FullSCFRoute,
+    *,
+    core_index: CoreIndexData | None = None,
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
     if route.kind != "functional":
@@ -533,6 +534,7 @@ def run_prepared_functional_full(
         cache,
         ihelp,
         effective_config,
+        core_index=core_index,
     )
     return _solve_representation(guess, inputs, effective_config)
 
@@ -548,6 +550,8 @@ def run_prepared_functional_implicit(
     ihelp: IndexHelper,
     config: ConfigSCF,
     integrals: IntegralMatrices,
+    *,
+    core_index: CoreIndexData | None = None,
 ) -> SCFSolveResult:
     """Acquire a functional primal root, attach its raw-map IFT, then finalize.
 
@@ -568,6 +572,7 @@ def run_prepared_functional_implicit(
         cache,
         ihelp,
         config,
+        core_index=core_index,
     )
     settings = _solver_settings(config, guess.dtype)
     charges = SCFCharges(

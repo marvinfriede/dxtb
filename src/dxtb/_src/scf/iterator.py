@@ -48,6 +48,9 @@ from .base import SCFResult
 from .guess import get_guess
 
 if TYPE_CHECKING:
+    from .functional.core import CoreIndexData
+
+if TYPE_CHECKING:
     from .functional.eager import FunctionalCoreResult
 
 __all__ = ["solve"]
@@ -98,6 +101,7 @@ def solve(
     integrals: IntegralMatrices,
     refocc: Tensor,
     *args: Any,
+    core_index: CoreIndexData | None = None,
     **kwargs: Any,
 ) -> SCFResult | FunctionalCoreResult:
     """
@@ -168,8 +172,10 @@ def solve(
             legacy_engine_overrides=bool(args) or bool(kwargs),
         )
         if functional_implicit:
-            from .functional.eager import functional_core_result
-            from .functional.eager import run_prepared_functional_implicit
+            from .functional.eager import (
+                functional_core_result,
+                run_prepared_functional_implicit,
+            )
 
             result = run_prepared_functional_implicit(
                 numbers,
@@ -182,6 +188,7 @@ def solve(
                 ihelp,
                 config,
                 integrals,
+                core_index=core_index,
             )
             return functional_core_result(result)
 
@@ -190,6 +197,7 @@ def solve(
     elif config.scf_mode == labels.SCF_MODE_FULL:
         # pylint: disable=import-outside-toplevel
         from dxtb import OutputHandler
+
         from .functional.eager import (
             apply_functional_full_policy,
             resolve_full_scf_route,
@@ -220,6 +228,7 @@ def solve(
                 config,
                 integrals,
                 route,
+                core_index=core_index,
             )
             return apply_functional_full_policy(result, config, route)
 

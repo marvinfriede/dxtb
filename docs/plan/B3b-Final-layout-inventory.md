@@ -167,6 +167,96 @@ these focused layout tests exercise the PyTorch setup and CPU-only metadata.
 | `basis/bas.py` / `LibcintBasisNode.create_libcint_cgtos`: `.item()`/`.tolist()` on valence/angular structure | Captured numbers-only basis metadata plus captured Slater tensors | Call-local external CGTO construction; host scalar extraction, outside the PyTorch pure transform guarantee | Accepted libcint compatibility boundary from C7.3; no ParamModule regather or persistent wrapper. Do not move wrappers/CGTOs to System. |
 | H0 and functional/index-map `wrap_gather` operations | Captured fixed index tensors and numerical tensors | Fixed-shape differentiable gathers; no shape discovery | Intentionally retained and transform-visible. A gather is not misplaced merely because it runs per evaluation. |
 
+## B3b-Final.1 — SCF structural-map ownership
+
+Status: complete for the per-call `CoreIndexData` construction question;
+final B3b remains open for the later core/packed and cross-family boundary.
+
+`setup_scf_inputs()` has two production callers through the prepared
+functional runners: eager FULL and the implicit-root path, both dispatched by
+`scf.iterator.solve()`. It also remains a direct functional preparation API
+used by tests/diagnostics and compatibility callers. Both runners pass through
+the direct fallback unless `System.singlepoint()` supplied a captured map.
+Legacy packed Calculator paths do not qualify for the functional unbatched
+route and do not pass a map.
+
+For exact single-System setups, both backend Nodes already capture the two
+maps SCF reductions need:
+
+| Owner | Map fields | Construction and device policy | Relation to `System.ihelp` |
+|---|---|---|---|
+| `PytorchIntegralSetupNode.index` | `shells_to_atom`, `orbitals_to_shell` | Captured once by C7.1 from the active setup; positions-device placement | Equal in shape, integer dtype, device, ordering and contents; separate tensor storage |
+| `LibcintIntegralSetupNode.index` | `shells_to_atom`, `orbitals_to_shell` | Captured once by C7.3; CPU when `force_cpu=True` | Equal in structural values; CPU placement can differ from the SCF helper on non-CPU systems |
+| `H0SetupNode.index` | Same two maps plus atom/species/shell maps | Captured once by C7.2 on the System setup device | Equal values; separately owned structural tensors |
+| `System.ihelp` | Full mutable IndexHelper state including `orbitals_per_shell` | Legacy compatibility owner | Remains required for charge/reference-occupation setup and padding-aware orbital-mask construction |
+
+On the exact singlepoint path, `System.singlepoint()` selects the active
+backend Node's `CoreIndexData` and supplies it only to `scf.solve()`. The
+prepared FULL and implicit runners pass it to `setup_scf_inputs()`, where
+shape, dtype, and device are checked before reuse. A mismatched backend device
+falls back to the old isolated map snapshot. Direct calls with no map still
+construct one `CoreIndexData` from two graph-independent integer clones; that
+boundary preserves isolation from a caller's mutable IndexHelper. Passing a
+legacy `PytorchIntegralSetup`/`LibcintIntegralSetup` without a Node `index`
+also follows that fallback. Packed modes do not enter this route.
+The optional `core_index` is an internal trusted-input boundary: its values
+come from the active captured setup Node, whose map equivalence is tested at
+setup. Per-call validation checks shape, dtype, and device without synchronizing
+map values; direct callers should omit the optional argument.
+
+Instrumentation on GFN1/H2 observed, per eligible functional SCF preparation:
+zero `CoreIndexData` constructions and zero clones of the two IndexHelper
+maps; `SCFInputs.index` is the exact active backend Node object. A direct
+`setup_scf_inputs()` call observed one construction and exactly two map clones.
+Both the prepared FULL and implicit-root singlepoint paths now have direct
+identity assertions for the captured `SCFInputs.index`.
+System setup still performs the existing backend-specific captured map
+construction once. No speed claim is made from eliminating these two small
+integer copies. `orbital_mask` continues to use
+`ihelp.spread_shell_to_orbital(ihelp.orbitals_per_shell)`; the captured
+reduction Node does not encode the orbital counts or padding semantics.
+
+The map equivalence test covers GFN0, GFN1, and GFN2 with H2, LiH, H2O, and
+SiH4 for PyTorch, plus the installed libcint route with H2O. It checks shape,
+dtype, device, values, independent source identity/storage, and H0 map parity.
+The direct fallback checks its two clones. The eligible System test checks
+Node identity and zero per-call construction/cloning. This closes no
+parameter-gather issue: instrumentation of `ParamModule.get()` and
+`get_elem_param()` after GFN1/H2 setup observed no calls over two geometries.
+The existing fixed-shape gathers and the call-local padding mask remain
+intentional. No physics change was made.
+
+The accepted A/B/A history test now differentiates geometry A, evaluates B,
+then differentiates A again before comparing position gradients. No packed
+path or direct functional signature was removed. Effective `dd` dtype fallback
+still applies with no floating setup, including explicit float32/float64
+overrides, and mismatched device/dtype checks remain active.
+
+The small structural-copy reduction was characterized by construction and
+clone counts; no wall-clock performance measurement was performed. The
+primary selected functional control run passed 13 tests and had one existing
+Anderson real-position-gradient parity failure at
+`test_functional_anderson.py::test_anderson_solver_real_position_parameter_and_field_gradients`
+(maximum absolute difference 2.5e-11 against 2e-13). That test directly builds
+SCF inputs without the optional captured map; it does not exercise the new
+reuse branch. No matched-base execution was performed for that numerical
+failure. One initial integration run exposed a candidate-only compatibility
+failure when a legacy `PytorchIntegralSetup` was substituted into a System;
+the backend map lookup now falls back when the object has no captured `index`,
+and all three affected legacy setup parameterizations pass after the fix.
+
+## B3b-Final.1 focused validation
+
+`test/test_calculator/test_b3b_layout_contract.py`: 26 passed in each approved
+CPU environment. PyTorch versions were 2.6.0, 2.8.0, 2.11.0, 2.13.0, and
+2.14.1 respectively; the libcint map test ran (not skipped) in all five. CUDA
+was not tested under the CPU-only policy. Primary environment model,
+singlepoint, PyTorch setup Node, and H0 setup Node selection excluding the ten
+known GFN1 density-parity cases: 114 passed. Selected functional-map/root
+controls: 13 passed; the separate Anderson parity case above failed. The E0
+iteration-compatibility module passed 9 tests. Full E3 was not run; no E3
+acceptance claim is made.
+
 Parameter lookup audit found no exact single-System pure evaluator that
 regathers from `ParamModule`: setup factories gather and capture graph-bearing
 values; evaluation consumes those values plus per-call geometry/charge. D3/D4,
@@ -192,11 +282,11 @@ exception. No detached cache or newly persistent evaluation state was found.
 
 Recommended follow-up split:
 
-1. **B3b-Final.1 — remaining transform-critical maps and gathers:** prove
-   whether the functional SCF map copy can use an already captured map; add
-   any genuinely missing numbers-only mask/index Node only for an identified
-   kernel; instrument setup versus evaluation parameter access. Preserve
-   differentiable fixed-shape gathers and geometry-dependent pair selection.
+1. **B3b-Final.1 — transform-critical maps and gathers:** complete. Functional
+   SCF reuses an active backend Node when its structural maps match the
+   evaluation device; direct and device-mismatched compatibility paths retain
+   isolated clones. Parameter-gather instrumentation found no unintended
+   per-call lookup. The padding-aware orbital mask remains IndexHelper-owned.
 2. **B3b-Final.2 — core/packed layout boundary:** introduce an explicit exact
    single-System layout without `batch_mode` or mutable `dd`; preserve packed
    modes 1/2, Calculator.type, explicit setup dtype overrides, and direct
