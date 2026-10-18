@@ -40,6 +40,15 @@ B5/B5.6/C1 without waiting for C5-C7. The structural core values (C5-C7)
 and C8b Model/System stackability proceed bottom-up after their TB
 mutation-removal prerequisites.
 
+**Current status (B3b-Final.0).** B2 and C7.0-C7.4 are complete. C7 setup
+Node acceptance is closed at its scoped boundary; legacy drivers remain under
+their separate compatibility packages. B3b-Final.0 records the field, mask,
+index and parameter-gather audit in
+[`B3b final layout inventory`](B3b-Final-layout-inventory.md). Final B3b is
+still open for its implementation packages, broader C6 remains partial, and
+C8b must wait for both. B2 and C7 are prerequisites already satisfied, not
+current blockers.
+
 ---
 
 ## C1 `Node` base in tad-mctc: done
@@ -137,7 +146,7 @@ C6.4 is complete: eligible single-System D4SC setup is stored as a
 container metadata remain static, while tensor-valued parameters and model
 state remain dynamic children. The legacy `D4SCSetup`, component, cache, and
 functional-interaction preparation routes remain available and unchanged.
-Broader C6 remains partial; C7 remains independently unblocked.
+Broader C6 remains partial; C7 scoped setup Node acceptance is complete.
 
 C6.4a is complete: single-System functional FULL and implicit D4SC preparation
 now derive model configuration from the same System-owned setup snapshot used
@@ -217,7 +226,7 @@ second-order, and third-order selections: 8 passed and 2 expected XFAIL. The
 third-order pair required a separate 495-second two-worker run. Broader C6
 remains partial. The NO2 worker-mode NaN, intermittent E0 gradcheck, ten GFN1
 density-parity failures, and unclassified C6.7 broad-suite failures remain
-separate unresolved issues. C7 remains independently unblocked, C8b remains
+separate unresolved issues. C7 scoped setup Node acceptance is complete; C8b remains
 blocked by its prerequisites, C9 is deferred, and full E3 remains blocked by
 E1.3. The next ownership slice is B6a-Cache.1.
 
