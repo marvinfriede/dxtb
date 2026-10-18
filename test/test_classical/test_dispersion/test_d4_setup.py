@@ -125,6 +125,31 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     assert system.d4_classical.get_cache(numbers) is not second
 
 
+def test_gfn2_d4_classical_list_compatibility_view_parity() -> None:
+    """The fresh compatibility view preserves D4 and mixed classical terms."""
+    numbers, positions = _geometry()
+    system = _system(_parameters(self_consistent=False)).setup(numbers)
+    first_view = system.classical_cache
+    second_view = system.classical_cache
+    assert first_view is not second_view
+    assert first_view["DispersionD4"] is system.d4_setup
+    assert second_view["DispersionD4"] is system.d4_setup
+
+    # The view is intentionally not write-through to System setup ownership.
+    first_view["DispersionD4"] = object()
+    assert system.classical_cache["DispersionD4"] is system.d4_setup
+
+    charge = torch.tensor(0.4, **DD)
+    compatibility = system.classicals.get_energy(
+        positions, second_view, charge=charge
+    )
+    result = system.singlepoint(positions, chrg=charge)
+    expected = dict(result.classical)
+    assert compatibility.keys() == expected.keys()
+    for label, energy in compatibility.items():
+        torch.testing.assert_close(energy, expected[label])
+
+
 def test_explicit_q_remains_a_legacy_get_cache_override() -> None:
     """Direct callers can still provide static atom charges to the adapter."""
     numbers, positions = _geometry()

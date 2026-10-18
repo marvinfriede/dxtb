@@ -409,6 +409,7 @@ def _persistent_identity_snapshot(system) -> tuple[object, ...]:
         system.h0_setup,
         system._classical_extension_cache,
         system._packed_classical_cache,
+        system.d3_setups,
         system.repulsion_setup,
         system.repulsion_classical,
         system.srb_setup,
@@ -1955,6 +1956,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
                 current_system.h0_setup,
                 current_system._classical_extension_cache,
                 current_system._packed_classical_cache,
+                current_system.d3_setups,
             )
         )
 
@@ -2069,6 +2071,84 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
             ), f"{label} call data did not respond to changed geometry/input"
 
     _assert_snapshot_equal(persistent_snapshot(system), before)
+
+
+def test_d3_setup_tensors_are_in_persistent_snapshots() -> None:
+    """Snapshots observe all captured D3 Nodes, including nested parameters."""
+    from dxtb._src.components.classicals.dispersion.factory import (
+        new_dispersion,
+    )
+    from dxtb.config import Config
+
+    numbers = samples["LiH"]["numbers"]
+    parameters = ParamModule(GFN1_XTB, dtype=torch.float64)
+    first = new_dispersion(numbers, parameters, dtype=torch.float64)
+    second = new_dispersion(numbers, parameters, dtype=torch.float64)
+    assert first is not None and second is not None
+    first.label = "D3:snapshot-first"
+    second.label = "D3:snapshot-second"
+    system = Model(
+        par=parameters,
+        config=Config.create(exclude="all"),
+        classical=(first, second),
+    ).setup(numbers)
+    assert len(system.d3_setups) == 2
+
+    for component, setup in system.d3_setups:
+        assert component is first or component is second
+        leaves = _tensor_leaves(setup)
+        expected = (
+            setup.setup_numbers,
+            setup.component_numbers,
+            setup.reference_cn,
+            setup.reference_c6,
+            setup.rcov,
+            setup.rvdw,
+            setup.r4r2,
+            setup.cutoff,
+            *(
+                value
+                for _, value in setup.parameters
+                if isinstance(value, torch.Tensor)
+            ),
+        )
+        assert all(
+            any(leaf is tensor for leaf in leaves) for tensor in expected
+        )
+
+    before_value = _snapshot_tree(system.d3_setups)
+    before_identity = _persistent_identity_snapshot(system)
+    selected_component, selected_setup = system.d3_setups[1]
+    original_c6 = selected_setup.reference_c6.detach().clone()
+    try:
+        with torch.no_grad():
+            selected_setup.reference_c6.add_(1.0)
+        with pytest.raises(AssertionError):
+            _assert_snapshot_equal(
+                _snapshot_tree(system.d3_setups), before_value
+            )
+    finally:
+        with torch.no_grad():
+            selected_setup.reference_c6.copy_(original_c6)
+    _assert_snapshot_equal(_snapshot_tree(system.d3_setups), before_value)
+
+    old_c6 = selected_setup.reference_c6
+    replacement_c6 = (
+        old_c6.detach().clone().requires_grad_(old_c6.requires_grad)
+    )
+    assert replacement_c6 is not old_c6
+    assert replacement_c6.dtype == old_c6.dtype
+    assert replacement_c6.device == old_c6.device
+    torch.testing.assert_close(replacement_c6, old_c6, rtol=0.0, atol=0.0)
+    try:
+        # Replace only the captured leaf while keeping every snapshot root
+        # object identical, so this specifically exercises leaf identity.
+        object.__setattr__(selected_setup, "reference_c6", replacement_c6)
+        with pytest.raises(AssertionError):
+            _assert_persistent_identity_unchanged(system, before_identity)
+    finally:
+        object.__setattr__(selected_setup, "reference_c6", old_c6)
+    _assert_persistent_identity_unchanged(system, before_identity)
 
 
 def test_functional_interaction_aggregates_match_legacy() -> None:

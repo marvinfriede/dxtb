@@ -8,7 +8,7 @@ import torch
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
-from dxtb import GFN1_XTB
+from dxtb import GFN1_XTB, Calculator
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     ClassicalList,
@@ -578,6 +578,81 @@ def test_multiple_distinct_custom_d3_labels_keep_order_and_setups() -> None:
             contributions[component.label],
             dispersion_d3_energy(setup, positions),
         )
+
+
+def test_d3_reset_preserves_single_system_setup_and_legacy_batch_energy() -> (
+    None
+):
+    """D3 reset clones component numbers but preserves captured System data."""
+    sample = samples["LiH"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].double()
+    from dxtb._src.components.classicals import ClassicalList
+
+    par = ParamModule(GFN1_XTB, dtype=torch.double)
+    par.set_differentiable("dispersion", "d3", "s6")
+    calc = Calculator(
+        numbers,
+        par,
+        dtype=torch.double,
+        opts={"verbosity": 0, "exclude": ["scf", "rep", "hal", "ies", "srb"]},
+    )
+    system = calc.system
+    component, setup = system.d3_setups[0]
+    assert type(component) is DispersionD3
+    original_numbers = component.numbers
+    original_setup = setup
+    parameter = par.get("dispersion.d3.s6")
+
+    def single_system_observables():
+        current_positions = positions.clone().requires_grad_(True)
+        result = system.singlepoint(current_positions)
+        energy = dict(result.classical)[component.label].sum()
+        position_gradient, parameter_gradient = torch.autograd.grad(
+            energy, (current_positions, parameter)
+        )
+        return (
+            energy.detach(),
+            position_gradient.detach(),
+            parameter_gradient.detach(),
+        )
+
+    before = single_system_observables()
+    calc.reset()
+    after = single_system_observables()
+
+    assert component.numbers is not original_numbers
+    assert torch.equal(component.numbers, original_numbers)
+    assert system.d3_setups[0][1] is original_setup
+    torch.testing.assert_close(after[0], before[0])
+    torch.testing.assert_close(after[1], before[1])
+    torch.testing.assert_close(after[2], before[2])
+    assert torch.isfinite(after[2]).all()
+    assert torch.count_nonzero(after[2]) > 0
+
+    packed_numbers = torch.stack((numbers, numbers))
+    packed_positions = torch.stack((positions, positions))
+    packed_par = ParamModule(GFN1_XTB, dtype=torch.double)
+    packed_component = new_dispersion(
+        packed_numbers, packed_par, dtype=torch.double
+    )
+    assert type(packed_component) is DispersionD3
+    classicals = ClassicalList(packed_component)
+    from dxtb._src.basis.indexhelper import IndexHelper
+
+    ihelp = IndexHelper.from_numbers(packed_numbers, packed_par, batch_mode=1)
+    packed_cache = classicals.get_cache(packed_numbers, ihelp)
+    packed_before = classicals.get_energy(packed_positions, packed_cache)[
+        packed_component.label
+    ]
+    packed_original_numbers = packed_component.numbers
+    classicals.reset_all()
+    packed_after = classicals.get_energy(packed_positions, packed_cache)[
+        packed_component.label
+    ]
+    assert packed_component.numbers is not packed_original_numbers
+    assert torch.equal(packed_component.numbers, packed_original_numbers)
+    torch.testing.assert_close(packed_after, packed_before)
 
 
 def test_normal_singlepoint_uses_captured_d3_core() -> None:

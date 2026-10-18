@@ -33,6 +33,7 @@ from dxtb._src.components.classicals import (
     DispersionD3,
     Repulsion,
 )
+from dxtb._src.components.classicals.base import Classical
 from dxtb._src.components.classicals.dispersion.factory import new_dispersion
 from dxtb._src.components.classicals.repulsion.factory import new_repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
@@ -97,6 +98,12 @@ def test_single_system_setup_does_not_use_generic_classical_cache(
     assert list(system.classical_cache) == [
         component.label for component in system.classicals.components
     ]
+    first_view = system.classical_cache
+    second_view = system.classical_cache
+    first_view["Repulsion"] = object()
+    assert first_view is not second_view
+    assert second_view["Repulsion"] is system.repulsion_setup
+    assert system.classical_cache["Repulsion"] is system.repulsion_setup
 
 
 def test_empty_single_system_has_no_classical_cache_entries() -> None:
@@ -114,6 +121,50 @@ def test_empty_single_system_has_no_classical_cache_entries() -> None:
     result = system.singlepoint(positions)
     assert result.classical == ()
     torch.testing.assert_close(result.energy, torch.zeros_like(result.energy))
+
+
+def test_classical_cache_view_includes_legacy_extension_data() -> None:
+    """The view combines family Nodes with setup-time extension values."""
+
+    class ClassicalExtension(Classical):
+        __slots__ = ["scale"]
+
+        def __init__(self) -> None:
+            super().__init__(device=DEVICE, dtype=torch.double)
+            self.scale = torch.tensor(0.125, device=DEVICE, dtype=torch.double)
+            self.label = "ClassicalExtension"
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            return self.scale
+
+        def get_energy(self, positions, cache, **kwargs):
+            return torch.ones(positions.shape[-2], **DD) * cache
+
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.6]], **DD)
+    extension = ClassicalExtension()
+    system = Model(
+        par=ParamModule(GFN1_XTB, **DD),
+        config=Config.create(exclude="scf"),
+        classical=(extension,),
+    ).setup(numbers)
+
+    first = system.classical_cache
+    second = system.classical_cache
+    assert first is not second
+    assert first[extension.label] is extension.scale
+    assert second[extension.label] is extension.scale
+    first[extension.label] = object()
+    assert system.classical_cache[extension.label] is extension.scale
+
+    charge = torch.tensor(0.0, **DD)
+    compatibility = system.classicals.get_energy(
+        positions, second, charge=charge
+    )
+    expected = dict(system.singlepoint(positions, chrg=charge).classical)
+    assert compatibility.keys() == expected.keys()
+    for label, energy in compatibility.items():
+        torch.testing.assert_close(energy, expected[label])
 
 
 def test_single_system_rejects_ambiguous_extension_labels() -> None:
