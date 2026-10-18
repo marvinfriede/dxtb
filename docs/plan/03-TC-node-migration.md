@@ -240,6 +240,14 @@ approved CPU environments. The C6.10 E0 selection first had the tracked
 The exact base passed 24/24, and isolated reruns passed on base and candidate.
 The intermittent observation remains tracked rather than resolved.
 
+C6.11 reviewed the accepted C6.1-C6.10 family contracts and hardened the
+classical D4 core path to validate dtype/device before reconstructing call-local
+external objects. The established invalid-cache TypeError text is retained.
+The acceptance inventory records the remaining generic-cache/B6a-B3b work;
+DFT-D3 migration is outside this package. See
+[`C6.11 acceptance inventory`](C6.11-C6-acceptance-inventory.md). Broader C6
+remains partial.
+
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
 functions do not rely on such hidden state; consider separate C6.1 hardening
