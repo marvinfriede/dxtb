@@ -375,13 +375,13 @@ def dispersion_d4_energy(
     q: Tensor | None = None,
 ) -> Tensor:
     """Evaluate classical D4 using explicit setup and call inputs."""
-    if isinstance(setup, DispersionD4CoreSetup):
-        setup = _d4_setup_view(setup)
-
     if positions.device != setup.numbers.device:
         raise RuntimeError("D4 setup and positions must be on the same device.")
     if positions.dtype != setup.rcov.dtype:
         raise RuntimeError("D4 setup and positions must have the same dtype.")
+
+    if isinstance(setup, DispersionD4CoreSetup):
+        setup = _d4_setup_view(setup)
 
     charge_tensor = any_to_tensor(
         charge, device=positions.device, dtype=positions.dtype

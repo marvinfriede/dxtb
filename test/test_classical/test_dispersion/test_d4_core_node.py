@@ -27,6 +27,7 @@ import torch
 from tad_mctc.tree import Node, stack
 from torch.utils import _pytree
 
+import dxtb._src.components.classicals.dispersion.d4 as d4_impl
 from dxtb import GFN2_XTB, ParamModule
 from dxtb._src.components.classicals import (
     DispersionD4,
@@ -183,6 +184,76 @@ def test_d4_core_dtype_device_stack_and_vmap() -> None:
     torch.testing.assert_close(
         torch.func.vmap(probe)(stacked), torch.stack((probe(core), probe(core)))
     )
+
+
+def test_d4_parameter_values_keep_static_and_tensor_types() -> None:
+    """D4 parameter wrappers preserve scalar kinds and tensor dtypes."""
+    for value in (True, 4, 1.25, "mode"):
+        encoded = d4_impl._D4ParameterValue.encode(value)
+        assert type(encoded.decode()) is type(value)
+
+    bool_value = d4_impl._D4ParameterValue.encode(torch.tensor([True]))
+    int_value = d4_impl._D4ParameterValue.encode(torch.tensor([2]))
+    float_value = d4_impl._D4ParameterValue.encode(
+        torch.tensor([1.5], dtype=torch.float64)
+    )
+    assert bool_value.tensor_value is not None
+    assert int_value.tensor_value is not None
+    assert float_value.tensor_value is not None
+
+    assert bool_value.tensor_value.dtype is torch.bool
+    assert int_value.tensor_value.dtype is torch.int64
+    assert float_value.tensor_value.dtype is torch.float64
+
+    converted_bool = bool_value.to(dtype=torch.float32)
+    converted_int = int_value.to(dtype=torch.float32)
+    converted_float = float_value.to(dtype=torch.float32)
+    assert converted_bool.tensor_value is not None
+    assert converted_int.tensor_value is not None
+    assert converted_float.tensor_value is not None
+    assert converted_bool.tensor_value.dtype is torch.bool
+    assert converted_int.tensor_value.dtype is torch.int64
+    assert converted_float.tensor_value.dtype is torch.float32
+
+
+@pytest.mark.parametrize("mismatch", ("dtype", "device", "device_and_dtype"))
+def test_d4_core_rejects_invalid_positions_before_reconstruction(
+    monkeypatch: pytest.MonkeyPatch, mismatch: str
+) -> None:
+    """Core and legacy setups preserve validation errors without extra work."""
+    numbers, positions = _geometry()
+    legacy = _component(numbers).get_cache(numbers)
+    core = core_dispersion_d4_setup(legacy)
+    if mismatch == "dtype":
+        invalid_positions = positions.float()
+        message = "D4 setup and positions must have the same dtype."
+    elif mismatch == "device_and_dtype":
+        invalid_positions = positions.to(device="meta", dtype=torch.float32)
+        message = "D4 setup and positions must be on the same device."
+    else:
+        invalid_positions = positions.to(device="meta")
+        message = "D4 setup and positions must be on the same device."
+
+    def unexpected_reconstruction(
+        _: DispersionD4CoreSetup,
+    ) -> DispersionD4Setup:
+        pytest.fail("Core external objects were built before input validation.")
+
+    monkeypatch.setattr(d4_impl, "_d4_setup_view", unexpected_reconstruction)
+    for setup in (legacy, core):
+        with pytest.raises(RuntimeError, match=message):
+            dispersion_d4_energy(setup, invalid_positions, 0.0)
+
+
+def test_d4_core_dtype_conversion_can_be_evaluated() -> None:
+    """Explicit setup dtype conversion produces a compatible evaluation."""
+    numbers, positions = _geometry()
+    core = core_dispersion_d4_setup(_component(numbers).get_cache(numbers))
+    converted = core.to(dtype=torch.float32)
+
+    result = dispersion_d4_energy(converted, positions.float(), 0.0)
+
+    assert torch.isfinite(result).all()
 
 
 def test_d4_core_call_local_model_cutoff_and_damping(
