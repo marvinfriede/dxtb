@@ -517,86 +517,98 @@ class Model:
             halogen, ies, dispersion, repulsion, srb, *self.classical, **dd
         )
 
-        # the data that does not depend on the geometry
-        classical_cache = classicals.get_cache(numbers, ihelp)
-        d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         if batch_mode == 0:
-            for d3_classical in (
-                c for c in classicals.components if type(c) is DispersionD3
-            ):
-                legacy_setup = classical_cache[d3_classical.label]
-                assert isinstance(legacy_setup, DispersionD3Cache)
-                d3_setup = core_dispersion_d3_setup(
-                    legacy_setup,
-                    numbers,
-                    d3_classical.numbers,
-                    d3_classical.param,
-                    snapshot=True,
-                )
-                d3_setups.append((d3_classical, d3_setup))
-                classical_cache[d3_classical.label] = d3_setup
+            labels_by_name: dict[str, Classical] = {}
+            for component in classicals.components:
+                previous = labels_by_name.get(component.label)
+                if previous is not None and previous is not component:
+                    raise ValueError(
+                        "Distinct classical contributions in a single System "
+                        f"share the label '{component.label}'."
+                    )
+                labels_by_name[component.label] = component
+
+        # The single-System core captures each exact built-in setup directly.
+        # ClassicalList.get_cache remains the compatibility boundary for
+        # packed systems; custom components retain their legacy setup hooks.
+        classical_cache = ClassicalListCache()
+        d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
         )
-        repulsion_setup = (
-            classical_cache[repulsion_classical.label]
-            if repulsion_classical is not None
-            else None
-        )
-        if repulsion_classical is not None and batch_mode == 0:
-            assert isinstance(repulsion_setup, RepulsionSetup)
-            repulsion_setup = core_repulsion_setup(repulsion_setup)
-            classical_cache[repulsion_classical.label] = repulsion_setup
+        repulsion_setup = None
         srb_classical = next(
             (c for c in classicals.components if type(c) is ShortRangeBond),
             None,
         )
-        srb_setup = (
-            classical_cache[srb_classical.label]
-            if srb_classical is not None
-            else None
-        )
-        if srb_classical is not None and batch_mode == 0:
-            assert isinstance(srb_setup, ShortRangeBondSetup)
-            srb_setup = core_srb_setup(srb_setup)
-            classical_cache[srb_classical.label] = srb_setup
+        srb_setup = None
         d4_classical = next(
             (c for c in classicals.components if type(c) is DispersionD4),
             None,
         )
-        d4_setup = (
-            classical_cache[d4_classical.label]
-            if d4_classical is not None
-            else None
-        )
-        if d4_classical is not None and batch_mode == 0:
-            assert isinstance(d4_setup, DispersionD4Setup)
-            d4_setup = core_dispersion_d4_setup(d4_setup)
-            classical_cache[d4_classical.label] = d4_setup
+        d4_setup = None
         ies_classical = next(
             (c for c in classicals.components if type(c) is IES), None
         )
-        ies_setup = (
-            classical_cache[ies_classical.label]
-            if ies_classical is not None
-            else None
-        )
-        if ies_classical is not None and batch_mode == 0:
-            assert isinstance(ies_setup, IESSetup)
-            ies_setup = core_ies_setup(ies_setup)
-            classical_cache[ies_classical.label] = ies_setup
+        ies_setup = None
         halogen_classical = next(
             (c for c in classicals.components if type(c) is Halogen), None
         )
-        halogen_setup = (
-            classical_cache[halogen_classical.label]
-            if halogen_classical is not None
-            else None
-        )
-        if halogen_classical is not None and batch_mode == 0:
-            assert isinstance(halogen_setup, HalogenSetup)
-            halogen_setup = core_halogen_setup(halogen_setup)
-            classical_cache[halogen_classical.label] = halogen_setup
+        halogen_setup = None
+
+        if batch_mode == 0:
+            for component in classicals.components:
+                if type(component) is DispersionD3:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, DispersionD3Cache)
+                    setup = core_dispersion_d3_setup(
+                        legacy_setup,
+                        numbers,
+                        component.numbers,
+                        component.param,
+                        snapshot=True,
+                    )
+                    d3_setups.append((component, setup))
+                elif type(component) is Repulsion:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, RepulsionSetup)
+                    setup = core_repulsion_setup(legacy_setup)
+                    repulsion_setup = setup
+                elif type(component) is ShortRangeBond:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, ShortRangeBondSetup)
+                    setup = core_srb_setup(legacy_setup)
+                    srb_setup = setup
+                elif type(component) is DispersionD4:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, DispersionD4Setup)
+                    setup = core_dispersion_d4_setup(legacy_setup)
+                    d4_setup = setup
+                elif type(component) is IES:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, IESSetup)
+                    setup = core_ies_setup(legacy_setup)
+                    ies_setup = setup
+                elif type(component) is Halogen:
+                    legacy_setup = component.get_cache(numbers, ihelp)
+                    assert isinstance(legacy_setup, HalogenSetup)
+                    setup = core_halogen_setup(legacy_setup)
+                    halogen_setup = setup
+                else:
+                    setup = component.get_cache(numbers, ihelp)
+                classical_cache[component.label] = setup
+        else:
+            classical_cache = classicals.get_cache(numbers, ihelp)
+            if repulsion_classical is not None:
+                repulsion_setup = classical_cache[repulsion_classical.label]
+            if srb_classical is not None:
+                srb_setup = classical_cache[srb_classical.label]
+            if d4_classical is not None:
+                d4_setup = classical_cache[d4_classical.label]
+            if ies_classical is not None:
+                ies_setup = classical_cache[ies_classical.label]
+            if halogen_classical is not None:
+                halogen_setup = classical_cache[halogen_classical.label]
 
         OutputHandler.write_stdout("done", v=4)
 

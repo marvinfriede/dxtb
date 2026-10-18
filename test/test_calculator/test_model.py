@@ -28,6 +28,9 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
+from dxtb._src.components.classicals import ClassicalList, DispersionD3
+from dxtb._src.components.classicals.dispersion.factory import new_dispersion
+from dxtb._src.components.classicals.repulsion.factory import new_repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3, ES3Cache
 from dxtb._src.constants import labels
@@ -63,6 +66,63 @@ def test_setup() -> None:
 
     batch = model.setup(torch.tensor([[3, 1], [1, 1]], device=DEVICE))
     assert batch.batch_mode == 1
+
+
+def test_single_system_setup_does_not_use_generic_classical_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Build exact family setups without calling the generic list builder."""
+    numbers = torch.tensor([3, 1], device=DEVICE)
+
+    def fail_get_cache(*args, **kwargs):
+        raise AssertionError("ClassicalList.get_cache must not run")
+
+    monkeypatch.setattr(ClassicalList, "get_cache", fail_get_cache)
+    system = Model(par=ParamModule(GFN1_XTB, **DD)).setup(numbers)
+
+    assert type(system.repulsion_setup).__name__ == "RepulsionCoreSetup"
+    assert len(system.d3_setups) == 1
+    assert type(system.d3_setups[0][1]).__name__ == "DispersionD3CoreSetup"
+    assert set(system.classical_cache) == {
+        component.label for component in system.classicals.components
+    }
+
+
+def test_single_system_rejects_ambiguous_extension_labels() -> None:
+    """Reject labels that would collapse distinct System contributions."""
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+
+    exact_d3 = new_dispersion(
+        numbers, par, charge=torch.tensor(0.0, **DD), **DD
+    )
+    assert type(exact_d3) is DispersionD3
+
+    class D3Extension(DispersionD3):
+        pass
+
+    extension = D3Extension(
+        exact_d3.numbers, exact_d3.param, dtype=torch.double, device=DEVICE
+    )
+    exact_d3.label = extension.label = "D3:shared"
+
+    with pytest.raises(ValueError, match="D3:shared"):
+        Model(
+            par=par,
+            config=Config.create(exclude="disp"),
+            classical=(exact_d3, extension),
+        ).setup(numbers)
+
+    repulsion_a = new_repulsion(numbers.unique(), par, **DD)
+    repulsion_b = new_repulsion(numbers.unique(), par, **DD)
+    assert repulsion_a is not None and repulsion_b is not None
+    repulsion_a.label = repulsion_b.label = "Repulsion:extension"
+    with pytest.raises(ValueError, match="Repulsion:extension"):
+        Model(
+            par=par,
+            config=Config.create(exclude="rep"),
+            classical=(repulsion_a, repulsion_b),
+        ).setup(numbers)
 
 
 def test_custom_ordinary_es2_replaces_excluded_builtin() -> None:
