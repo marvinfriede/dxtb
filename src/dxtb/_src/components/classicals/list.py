@@ -38,7 +38,7 @@ from dxtb._src.typing import (
 from ..list import ComponentList, ComponentListCache
 from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
-from .dispersion.d3 import LABEL_DISPERSIOND3
+from .dispersion.d3 import LABEL_DISPERSIOND3, DispersionD3
 from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
 from .halogen import LABEL_HALOGEN, Halogen
 from .ies import IES, LABEL_IES
@@ -95,6 +95,19 @@ class ClassicalList(ComponentList[Classical]):
                     f"Multiple classical contributions use the label '{label}'. "
                     f"Duplicate {duplicate_name} labels are ambiguous."
                 )
+
+        exact_d3: dict[str, DispersionD3] = {}
+        for component in components:
+            if type(component) is not DispersionD3:
+                continue
+            previous = exact_d3.get(component.label)
+            if previous is not None and previous is not component:
+                raise ValueError(
+                    "Multiple exact DispersionD3 contributions use the label "
+                    f"'{component.label}'. Duplicate labels are ambiguous."
+                )
+            exact_d3[component.label] = component
+
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Classical:

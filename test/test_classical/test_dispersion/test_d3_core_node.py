@@ -10,7 +10,11 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN1_XTB
 from dxtb._src.calculators.model import Model
-from dxtb._src.components.classicals import ClassicalList, DispersionD3CoreSetup
+from dxtb._src.components.classicals import (
+    ClassicalList,
+    DispersionD3CoreSetup,
+    new_repulsion,
+)
 from dxtb._src.components.classicals.dispersion import (
     DispersionD3Cache,
     core_dispersion_d3_setup,
@@ -62,7 +66,14 @@ def test_duplicate_canonical_d3_labels_are_rejected() -> None:
 
     first = _component(numbers)
     second = _component(numbers)
+    first.param["s6"] = torch.tensor(0.1, dtype=torch.double)
+    second.param["s6"] = torch.tensor(0.9, dtype=torch.double)
     with pytest.raises(ValueError, match="Duplicate DispersionD3 labels"):
+        ClassicalList(first, second)
+
+    first.label = "D3:custom"
+    second.label = "D3:custom"
+    with pytest.raises(ValueError, match="D3:custom"):
         ClassicalList(first, second)
 
     repeated = ClassicalList(first, first)
@@ -265,7 +276,7 @@ def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
     )
 
     p_core = sample["positions"].double().clone().requires_grad_(True)
-    e_core = dispersion_d3_energy(core, p_core).sum()
+    e_core = component.get_energy(p_core, core).sum()
     grad_pos_core, grad_par_core = torch.autograd.grad(
         e_core, (p_core, parameter)
     )
@@ -281,13 +292,25 @@ def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
     mixed_legacy = torch.autograd.grad(pos_grad_legacy[0, 0], parameter)[0]
 
     p_core_mixed = sample["positions"].double().clone().requires_grad_(True)
-    e_core_mixed = dispersion_d3_energy(core, p_core_mixed).sum()
+    e_core_mixed = component.get_energy(p_core_mixed, core).sum()
     pos_grad_core = torch.autograd.grad(
         e_core_mixed, p_core_mixed, create_graph=True
     )[0]
     mixed_core = torch.autograd.grad(pos_grad_core[0, 0], parameter)[0]
     assert torch.isfinite(mixed_core)
     torch.testing.assert_close(mixed_core, mixed_legacy)
+
+    for chunk_size in (None, 1):
+        torch.testing.assert_close(
+            component.get_energy(
+                sample["positions"].double(), core, chunk_size=chunk_size
+            ),
+            component.get_energy(
+                sample["positions"].double(), legacy, chunk_size=chunk_size
+            ),
+        )
+    with pytest.raises(TypeError, match="DispersionD3Cache"):
+        component.get_energy(sample["positions"].double(), object())
 
 
 def test_model_setup_owns_core_and_singlepoint_uses_it() -> None:
@@ -375,6 +398,118 @@ def test_system_d3_geometry_history_is_independent() -> None:
     assert system.d3_setup is setup
     torch.testing.assert_close(first, last)
     torch.testing.assert_close(first_gradient, last_gradient)
+
+
+def test_classical_list_evaluates_system_owned_d3_core() -> None:
+    """Verify the classical-list compatibility API accepts the System Node."""
+    sample = samples["LiH"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].double()
+    from dxtb.config import Config
+
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.double),
+        config=Config.create(exclude="scf"),
+    ).setup(numbers)
+    assert len(system.classicals.components) > 1
+    d3_component = next(
+        component
+        for component in system.classicals.components
+        if type(component) is DispersionD3
+    )
+    core = system.classical_cache[d3_component.label]
+    assert type(core) is DispersionD3CoreSetup
+
+    charge = torch.tensor(0.0, dtype=torch.double)
+    contributions = system.classicals.get_energy(
+        positions, system.classical_cache, charge=charge
+    )
+    result = system.singlepoint(positions, chrg=charge)
+    result_contributions = dict(result.classical)
+    assert contributions.keys() == result_contributions.keys()
+    for label, energy in contributions.items():
+        torch.testing.assert_close(energy, result_contributions[label])
+    torch.testing.assert_close(
+        contributions[d3_component.label], dispersion_d3_energy(core, positions)
+    )
+    for chunk_size in (None, 1):
+        torch.testing.assert_close(
+            d3_component.get_energy(positions, core, chunk_size=chunk_size),
+            dispersion_d3_energy(core, positions, chunk_size=chunk_size),
+        )
+
+
+def test_core_cache_snapshot_and_legacy_component_ownership_diverge() -> None:
+    """Verify core cache authority survives component mutation."""
+    sample = samples["LiH"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].double()
+    from dxtb.config import Config
+
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.double),
+        config=Config.create(exclude="scf"),
+    ).setup(numbers)
+    component, core = system.d3_setups[0]
+    legacy = component.get_cache(numbers)
+    cache = system.classical_cache
+    before_core = system.classicals.get_energy(positions, cache)[
+        component.label
+    ]
+    before_legacy = component.get_energy(positions, legacy)
+
+    component.param["s6"] = torch.full_like(component.param["s6"], 0.25)
+    component.numbers = numbers.flip(0)
+
+    after_core = system.classicals.get_energy(positions, cache)[component.label]
+    after_legacy = component.get_energy(positions, legacy)
+    torch.testing.assert_close(after_core, before_core)
+    assert not torch.allclose(after_legacy, before_legacy)
+    torch.testing.assert_close(
+        after_core, dispersion_d3_energy(core, positions)
+    )
+
+
+def test_d3_custom_label_validation_preserves_extension_collisions() -> None:
+    """Keep non-exact D3 and cross-family labels on existing policy."""
+    numbers = samples["LiH"]["numbers"]
+
+    class D3Extension(DispersionD3):
+        pass
+
+    exact = _component(numbers)
+    exact.label = "D3:shared"
+    extension = D3Extension(numbers, exact.param, dtype=torch.double)
+    extension.label = exact.label
+    assert ClassicalList(exact, extension).components == [exact, extension]
+
+    other = _component(numbers)
+    other.label = "D3:extension-only"
+    extension2 = D3Extension(numbers, other.param, dtype=torch.double)
+    extension2.label = other.label
+    assert ClassicalList(other, extension2).components == [other, extension2]
+
+    first_extension = D3Extension(numbers, exact.param, dtype=torch.double)
+    second_extension = D3Extension(numbers, exact.param, dtype=torch.double)
+    first_extension.label = second_extension.label = "D3:two-extensions"
+    assert ClassicalList(first_extension, second_extension).components == [
+        first_extension,
+        second_extension,
+    ]
+
+    repulsion = new_repulsion(
+        numbers.unique(),
+        ParamModule(GFN1_XTB, dtype=torch.double),
+        dtype=torch.double,
+    )
+    assert repulsion is not None
+    repulsion.label = "D3:cross-family"
+    cross_family = _component(numbers)
+    cross_family.label = repulsion.label
+    assert ClassicalList(cross_family, repulsion).components == [
+        cross_family,
+        repulsion,
+    ]
 
 
 def test_legacy_cache_api_and_distinct_custom_labels() -> None:

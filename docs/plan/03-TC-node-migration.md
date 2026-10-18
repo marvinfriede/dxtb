@@ -251,11 +251,17 @@ remains partial.
 B6a-D3.1 is complete: exact single-System DFT-D3 setup values are captured in
 `DispersionD3CoreSetup` and evaluated by the pure
 `dispersion_d3_energy()` path. Direct component/cache APIs, custom subclasses,
-and packed routes remain legacy-compatible. `ClassicalList` now rejects
-distinct components sharing the canonical `DispersionD3` label while keeping
-same-object first-occurrence deduplication and distinct custom labels. The
-legacy distinction between numbers used to gather setup arrays and numbers
-used by D3 evaluation is represented explicitly. This does not remove the
+and packed routes remain legacy-compatible. B6a-D3.1a lets
+`DispersionD3.get_energy()` consume either the legacy cache or the captured
+core setup, so the `ClassicalList` compatibility route works without
+rebuilding setup from mutable component state. It also rejects distinct exact
+D3 components sharing any label while preserving the canonical-label error,
+same-object first-occurrence deduplication, and custom labels when unique.
+Same-label collisions involving a D3 subclass or a different classical
+family retain the existing container policy; resolving those would require a
+broader cache-key uniqueness decision.
+The legacy distinction between numbers used to gather setup arrays and
+numbers used by D3 evaluation remains explicit. This does not remove the
 generic `ClassicalListCache` construction/storage boundary; broader B6a and
 B3b remain partial. E1.3 tad-dftd3 forward-AD support remains blocked
 upstream.

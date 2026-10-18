@@ -352,6 +352,13 @@ class DispersionD3(Dispersion):
         Tensor
             Atom-resolved D3 dispersion energy.
         """
+        if isinstance(cache, DispersionD3CoreSetup):
+            return dispersion_d3_energy(
+                cache,
+                positions,
+                chunk_size=kwargs.pop("chunk_size", None),
+            )
+
         if not isinstance(cache, DispersionD3Cache):
             raise TypeError(
                 f"Cache in {self.label} is not of type 'DispersionD3Cache'."
