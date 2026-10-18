@@ -38,13 +38,14 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. Remaining work includes masks/index mappings, transform-critical gathers, `batch_mode`/`dd`, and broader B6a's removal of the final generic stored built-in `ClassicalListCache` boundary. Final B3b closure waits for that existing broader B6a work; B6b-core and E3.0 do not. |
+| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. B6a-Cache.1 removes generic built-in classical-cache construction and persistent ownership for eligible single Systems; the compatibility property is derived on demand, and packed/custom paths retain legacy caches. Remaining B3b work includes masks/index mappings, transform-critical gathers, and `batch_mode`/`dd`. Final B3b remains open for those layout and setup requirements; B6b-core and E3.0 do not depend on final B3b. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B5.6           | done                            | Public tensor-valued `SCFStatus` schema is complete and verified across the five approved Torch environments; C8a Result pytree migration is unblocked. |
 | B6a-SCF-core   | done                            | Bounded state-removal implementation required by accepted E4core; named existing tests provide the evidence listed below. |
-| B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for final generic stored built-in classical-cache removal. |
-| B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, B6b-core, B6a-D3.1, and B6a-D3.1a are complete. Exact single-System DFT-D3 has explicit captured setup and pure evaluation; the direct `ClassicalList` route also accepts that setup, while direct and packed legacy routes remain supported. Duplicate labels among distinct exact D3 components are rejected. Same-label collisions involving subclasses or another classical family remain under the existing general container policy. Broader B6a remains open for removal of generic stored built-in classical-cache ownership; the separately owned legacy compatibility purge remains open. C5 is complete and unblocks C6/C7. |
+| B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for legacy component/cache API retirement and upstream D3 forward-AD support. |
+| B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, B6b-core, B6a-D3.1, B6a-D3.1a, and B6a-Cache.1 are complete. Exact single-System classical families now own their captured setup values directly; normal setup does not call `ClassicalList.get_cache()`, and no persistent generic built-in cache is stored. `System.classical_cache` is an on-demand compatibility view; packed systems and explicit custom-extension data retain legacy ownership. Single-System setup rejects ambiguous duplicate classical labels without changing direct or packed `ClassicalList` policy. Broader B6a remains open for retirement of legacy Component/Cache lifecycle APIs and the separately owned compatibility purge. C5 is complete and unblocks C6/C7. |
+| B6a-Cache.1   | done                            | Exact single-System Repulsion, SRB, IES, Halogen, classical D4, and D3 setups are captured directly through their family builders. The stored generic cache was replaced by explicit custom-extension data and packed-only legacy storage. The `System.classical_cache` compatibility property assembles an ordered view over family Nodes and stored extension data on demand. The System boundary rejects duplicate active labels and multiple exact instances of the singular-setup families; D3 supports multiple identity-associated setups. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
@@ -376,18 +377,23 @@ Document them as scheduled for removal.
   layout before C8b freezes it;
 - [x] B6a-D3.1 migrates exact built-in DFT-D3 to explicit setup data and pure
   single-System evaluation while preserving direct and packed legacy routes.
-- [ ] under broader B6a, retire the generic stored `ClassicalListCache` from
-  the final built-in System. All exact built-in classical families with numbers-only setup must
-  construct setup values directly, without first constructing the generic
-  cache; core `System.singlepoint` must not read `System.classical_cache`.
-  Generic cache/`get_cache` compatibility may remain only on explicitly legacy/custom
-  extension paths outside the stackable core.
+- [x] B6a-Cache.1 constructs exact built-in classical setup values directly
+  for eligible single Systems without calling `ClassicalList.get_cache()`;
+  core `System.singlepoint` reads family-owned setup Nodes. No persistent
+  generic built-in classical cache is retained. The compatibility property
+  assembles an ordered view on demand, while extension-only caches are stored
+  separately and packed Systems retain their full legacy cache.
+- [ ] decide and retire remaining public `System.classical_cache` and
+  component/cache lifecycle compatibility only after separately scoped API
+  review; do not conflate that retirement with removal of persistent built-in
+  cache ownership.
 
 Use existing explicit builders already present for migrated families,
-including repulsion, SRB, D4, IES, and halogen. The broader B6a/B3b
-acceptance is removal of the generic stored built-in cache mechanism, not only
-DFT-D3's individual evaluation lookup. Final B3b closure
-depends on that broader B6a work. B6b-core and E3.0 remain independent of it.
+including repulsion, SRB, D3, D4, IES, and halogen. B6a-Cache.1 closes the
+generic stored built-in cache mechanism for the single-System core; packed
+batches and custom extensions remain explicit compatibility routes. Final
+B3b closure still depends on the remaining masks, mappings, gather, and layout
+items above. B6b-core and E3.0 remain independent of that closure.
 B3a, not full B3, was the prerequisite for B5. Mark B3 complete only when
 every remaining item is closed.
 
@@ -2051,8 +2057,10 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 
 C8b follows final B3b, B6b-core, C5, C6, C7, and B2. Final B3b establishes the
 layout, including removal of transitional `batch_mode`/`dd`, explicit setup
-for built-in DFT-D3, and removal of the generic stored built-in
-`ClassicalListCache` boundary.
+for built-in DFT-D3, and the absence of persistent generic built-in
+`ClassicalListCache` ownership on single Systems. The on-demand
+`System.classical_cache` view is a compatibility adapter and may be retired
+only after its callers receive a separately accepted compatibility decision.
 The complete Model and live mutable integral container have already been
 removed; `integral_setup` and `h0_setup` are established. C8b migrates that
 already-correct built-in layout to stackable Nodes; it does not own
@@ -2063,10 +2071,11 @@ support is established separately by C8a.
 
 Before conversion, ensure the dataclass layouts already match the target architecture.
 
-Before C8b, remove `batch_mode` and `dd`, migrate built-in DFT-D3 numbers-only
-data from `classical_cache`, and remove `System.classical_cache` after exact
-built-in setup values are built directly without constructing the generic
-`ClassicalListCache`.
+Before C8b, remove `batch_mode` and `dd`; exact built-in DFT-D3 setup and direct
+single-System setup construction are complete under B6a-Cache.1. Any removal
+of the compatibility property itself must account for Calculator legacy and
+custom extension callers rather than reintroducing generic persistent setup
+ownership.
 
 The complete Model and live mutable integral container are already absent;
 `integral_setup` and `h0_setup` are setup-owned values. Arbitrary custom
@@ -2610,7 +2619,8 @@ B3a + B4 ──> E2-core fixed-shape single-System PairPlan/integral path
 B5 + E4core ──> B5.6 ──> C8a Result pytree
 B4 + B5 + B6a-SCF-core ──> E4core
 B6a-SCF-core + E4core + E4.5b ──> B6b-core ──> C5 ──> C6/C7
-broader B6a built-in DFT-D3 setup and final generic stored built-in cache removal ──> final B3b closure
+final B3b masks/index mappings and transform-critical gathers ──> final B3b closure
+legacy classical cache/lifecycle retirement ──> separately scoped compatibility cleanup
 final B3b + C5/C6/C7 + B2 ──> C8b
 B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
@@ -2799,8 +2809,8 @@ Do not:
 
 Before calling the new structural core complete:
 
-- B2, final B3b core layout (including broader B6a's built-in DFT-D3 setup
-  and final generic stored built-in classical-cache removal), B4, B5,
+- B2, final B3b core layout (masks/index mappings and transform-critical
+  gathers), B4, B5,
   B6a-SCF-core, B6a-SCF-validation,
   B6b-core, B7, and B8a complete;
 - no calculator/core caches;
@@ -2949,8 +2959,8 @@ Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
 Still separately open: E1.3; B3b; remaining C6/C7 and C8b work; E6 batch migration;
-broader B6a DFT-D3 explicit setup and final generic stored built-in cache
-removal. B6b-core and C5 are complete; C9 remains deferred.
+broader B6a legacy component/cache lifecycle retirement and compatibility-owner
+purge. B6b-core and C5 are complete; C9 remains deferred.
 
 ## Historical package records
 

@@ -120,6 +120,7 @@ from dxtb._src.integral.evaluation import (
     setup_integral_evaluation,
 )
 from dxtb._src.param import ParamModule
+from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
 from dxtb._src.xtb.h0 import H0Setup, setup_h0
 from dxtb.config import Config
@@ -199,8 +200,11 @@ class System:
     h0_setup: H0Setup | None
     """Composition-dependent H0 data for pure matrix construction."""
 
-    classical_cache: ClassicalListCache
-    """Legacy numbers-only data for unmigrated classical contributions."""
+    _classical_extension_cache: ClassicalListCache = field(repr=False)
+    """Setup-time compatibility data for custom classical extensions only."""
+
+    _packed_classical_cache: ClassicalListCache | None = field(repr=False)
+    """Full legacy cache retained only for packed Calculator systems."""
 
     repulsion_setup: RepulsionCoreSetup | RepulsionSetup | None
     """Numbers-only setup associated with the exact migrated Repulsion."""
@@ -255,6 +259,50 @@ class System:
     def d3_setup(self) -> DispersionD3CoreSetup | None:
         """Return the sole exact D3 setup when the System has one."""
         return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
+
+    @property
+    def classical_cache(self) -> ClassicalListCache:
+        """Build a compatibility view over captured setup values on demand.
+
+        Single-System core setup Nodes remain the sole persistent owners for
+        exact built-in terms. Custom extension setup data is retained in a
+        separate compatibility cache. Packed systems keep their established
+        complete legacy cache.
+        """
+        if self.batch_mode != 0:
+            if self._packed_classical_cache is None:
+                return ClassicalListCache()
+            return self._packed_classical_cache
+
+        cache = ClassicalListCache()
+        for component in self.classicals.components:
+            if component is self.repulsion_classical:
+                setup = self.repulsion_setup
+            elif component is self.srb_classical:
+                setup = self.srb_setup
+            elif component is self.d4_classical:
+                setup = self.d4_setup
+            elif component is self.ies_classical:
+                setup = self.ies_setup
+            elif component is self.halogen_classical:
+                setup = self.halogen_setup
+            else:
+                setup = next(
+                    (
+                        captured
+                        for d3_component, captured in self.d3_setups
+                        if component is d3_component
+                    ),
+                    None,
+                )
+                if setup is None:
+                    if component.label not in self._classical_extension_cache:
+                        continue
+                    setup = self._classical_extension_cache[component.label]
+
+            if setup is not None:
+                cache[component.label] = setup
+        return cache
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -528,10 +576,36 @@ class Model:
                     )
                 labels_by_name[component.label] = component
 
+            # These family-owned System fields intentionally represent one
+            # setup per family. D3 is the exception: it has an identity-keyed
+            # sequence of setups. Reject multiple exact instances of the
+            # other migrated families instead of allowing the later setup to
+            # replace the earlier one.
+            single_setup_types = (
+                Repulsion,
+                ShortRangeBond,
+                IES,
+                Halogen,
+                DispersionD4,
+            )
+            for component_type in single_setup_types:
+                matches = [
+                    component
+                    for component in classicals.components
+                    if type(component) is component_type
+                ]
+                if len(matches) > 1:
+                    raise ValueError(
+                        "A single System supports at most one exact "
+                        f"{component_type.__name__} component; found "
+                        f"{len(matches)} with distinct labels."
+                    )
+
         # The single-System core captures each exact built-in setup directly.
         # ClassicalList.get_cache remains the compatibility boundary for
         # packed systems; custom components retain their legacy setup hooks.
-        classical_cache = ClassicalListCache()
+        classical_extension_cache = ClassicalListCache()
+        packed_classical_cache = None
         d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
@@ -558,6 +632,7 @@ class Model:
 
         if batch_mode == 0:
             for component in classicals.components:
+                timer.start(component.label, parent_uid="Classicals")
                 if type(component) is DispersionD3:
                     legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, DispersionD3Cache)
@@ -596,19 +671,30 @@ class Model:
                     halogen_setup = setup
                 else:
                     setup = component.get_cache(numbers, ihelp)
-                classical_cache[component.label] = setup
+                if type(component) not in (
+                    DispersionD3,
+                    Repulsion,
+                    ShortRangeBond,
+                    DispersionD4,
+                    IES,
+                    Halogen,
+                ):
+                    classical_extension_cache[component.label] = setup
+                timer.stop(component.label)
         else:
-            classical_cache = classicals.get_cache(numbers, ihelp)
+            packed_classical_cache = classicals.get_cache(numbers, ihelp)
             if repulsion_classical is not None:
-                repulsion_setup = classical_cache[repulsion_classical.label]
+                repulsion_setup = packed_classical_cache[
+                    repulsion_classical.label
+                ]
             if srb_classical is not None:
-                srb_setup = classical_cache[srb_classical.label]
+                srb_setup = packed_classical_cache[srb_classical.label]
             if d4_classical is not None:
-                d4_setup = classical_cache[d4_classical.label]
+                d4_setup = packed_classical_cache[d4_classical.label]
             if ies_classical is not None:
-                ies_setup = classical_cache[ies_classical.label]
+                ies_setup = packed_classical_cache[ies_classical.label]
             if halogen_classical is not None:
-                halogen_setup = classical_cache[halogen_classical.label]
+                halogen_setup = packed_classical_cache[halogen_classical.label]
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -649,7 +735,8 @@ class Model:
             interactions=interactions,
             integral_setup=integral_setup,
             h0_setup=h0_setup,
-            classical_cache=classical_cache,
+            _classical_extension_cache=classical_extension_cache,
+            _packed_classical_cache=packed_classical_cache,
             repulsion_setup=repulsion_setup,
             repulsion_classical=repulsion_classical,
             srb_setup=srb_setup,

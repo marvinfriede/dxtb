@@ -28,7 +28,11 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
-from dxtb._src.components.classicals import ClassicalList, DispersionD3
+from dxtb._src.components.classicals import (
+    ClassicalList,
+    DispersionD3,
+    Repulsion,
+)
 from dxtb._src.components.classicals.dispersion.factory import new_dispersion
 from dxtb._src.components.classicals.repulsion.factory import new_repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
@@ -83,9 +87,33 @@ def test_single_system_setup_does_not_use_generic_classical_cache(
     assert type(system.repulsion_setup).__name__ == "RepulsionCoreSetup"
     assert len(system.d3_setups) == 1
     assert type(system.d3_setups[0][1]).__name__ == "DispersionD3CoreSetup"
+    assert not system._classical_extension_cache
+    assert system._packed_classical_cache is None
     assert set(system.classical_cache) == {
         component.label for component in system.classicals.components
     }
+    assert system.classical_cache is not system.classical_cache
+    assert system.classical_cache["Repulsion"] is system.repulsion_setup
+    assert list(system.classical_cache) == [
+        component.label for component in system.classicals.components
+    ]
+
+
+def test_empty_single_system_has_no_classical_cache_entries() -> None:
+    """The compatibility view is empty when every classical is excluded."""
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    positions = torch.zeros((2, 3), **DD)
+    system = Model(
+        par=ParamModule(GFN1_XTB, **DD),
+        config=Config.create(exclude="all"),
+    ).setup(numbers)
+
+    assert system.classicals.components == []
+    assert not system._classical_extension_cache
+    assert not system.classical_cache
+    result = system.singlepoint(positions)
+    assert result.classical == ()
+    torch.testing.assert_close(result.energy, torch.zeros_like(result.energy))
 
 
 def test_single_system_rejects_ambiguous_extension_labels() -> None:
@@ -122,6 +150,113 @@ def test_single_system_rejects_ambiguous_extension_labels() -> None:
             par=par,
             config=Config.create(exclude="rep"),
             classical=(repulsion_a, repulsion_b),
+        ).setup(numbers)
+
+    class RepulsionExtension(Repulsion):
+        pass
+
+    repulsion_extension_a = RepulsionExtension(
+        repulsion_a.arep,
+        repulsion_a.zeff,
+        repulsion_a.kexp,
+        repulsion_a.klight,
+        repulsion_a.cutoff,
+        device=DEVICE,
+        dtype=torch.double,
+        en=repulsion_a.en,
+        enscale=repulsion_a.enscale,
+    )
+    repulsion_extension_b = RepulsionExtension(
+        repulsion_b.arep,
+        repulsion_b.zeff,
+        repulsion_b.kexp,
+        repulsion_b.klight,
+        repulsion_b.cutoff,
+        device=DEVICE,
+        dtype=torch.double,
+        en=repulsion_b.en,
+        enscale=repulsion_b.enscale,
+    )
+    repulsion_extension_a.label = repulsion_extension_b.label = (
+        "Repulsion:two-subclasses"
+    )
+    with pytest.raises(ValueError, match="Repulsion:two-subclasses"):
+        Model(
+            par=par,
+            config=Config.create(exclude="rep,disp"),
+            classical=(repulsion_extension_a, repulsion_extension_b),
+        ).setup(numbers)
+
+    exact_d3_extension = D3Extension(
+        exact_d3.numbers, exact_d3.param, dtype=torch.double, device=DEVICE
+    )
+    repulsion_extension_a.label = exact_d3_extension.label = (
+        "Two-unrelated-extensions"
+    )
+    with pytest.raises(ValueError, match="Two-unrelated-extensions"):
+        Model(
+            par=par,
+            config=Config.create(exclude="rep,disp"),
+            classical=(repulsion_extension_a, exact_d3_extension),
+        ).setup(numbers)
+
+    d3_repulsion = new_repulsion(numbers.unique(), par, **DD)
+    assert d3_repulsion is not None
+    exact_d3.label = d3_repulsion.label = "same-custom-label"
+    with pytest.raises(ValueError, match="same-custom-label"):
+        Model(
+            par=par,
+            config=Config.create(exclude="rep,disp"),
+            classical=(exact_d3, d3_repulsion),
+        ).setup(numbers)
+
+
+def test_single_system_d3_labels_preserve_order_and_identity() -> None:
+    """Distinct D3 labels map to their captured Nodes in list order."""
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    first = new_dispersion(numbers, par, charge=torch.tensor(0.0, **DD), **DD)
+    second = new_dispersion(numbers, par, charge=torch.tensor(0.0, **DD), **DD)
+    assert type(first) is DispersionD3 and type(second) is DispersionD3
+    first.label = "D3:first"
+    second.label = "D3:second"
+
+    system = Model(
+        par=par,
+        config=Config.create(exclude="disp"),
+        classical=(first, second, first),
+    ).setup(numbers)
+
+    selected_d3 = [
+        component
+        for component in system.classicals.components
+        if type(component) is DispersionD3
+    ]
+    assert selected_d3 == [first, second]
+    assert list(system.classical_cache) == [
+        component.label for component in system.classicals.components
+    ]
+    assert len(system.d3_setups) == 2
+    view = system.classical_cache
+    assert view["D3:first"] is system.d3_setups[0][1]
+    assert view["D3:second"] is system.d3_setups[1][1]
+
+
+def test_single_system_rejects_multiple_exact_single_setup_families() -> None:
+    """One family-owned setup field cannot represent two exact instances."""
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    first = new_repulsion(numbers.unique(), par, **DD)
+    second = new_repulsion(numbers.unique(), par, **DD)
+    assert type(first) is Repulsion and type(second) is Repulsion
+    first.label = "Repulsion:first"
+    second.label = "Repulsion:second"
+
+    with pytest.raises(ValueError, match="at most one exact Repulsion"):
+        Model(
+            par=par,
+            config=Config.create(exclude="all"),
+            classical=(first, second),
         ).setup(numbers)
 
 

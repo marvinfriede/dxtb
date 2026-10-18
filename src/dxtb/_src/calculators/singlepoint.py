@@ -380,7 +380,9 @@ def singlepoint(
                 ),
                 None,
             )
-            if type(component) is DispersionD3 and d3_setup is not None:
+            if type(component) is DispersionD3:
+                if d3_setup is None:
+                    raise RuntimeError("Single-system D3 setup is missing.")
                 classical[component.label] = dispersion_d3_energy(
                     d3_setup, positions
                 )
@@ -444,7 +446,7 @@ def singlepoint(
                     # Custom IES subclasses retain their cache-driven hooks.
                     setup = component.get_cache(system.numbers, system.ihelp)
                 else:
-                    setup = system.classical_cache[component.label]
+                    setup = system._classical_extension_cache[component.label]
                 classical[component.label] = component.get_energy(
                     positions, setup, charge=charge
                 )

@@ -25,62 +25,63 @@ from typing import Callable
 
 import pytest
 import torch
-import dxtb._src.scf.functional.map as functional_map
 from tad_mctc import storch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
+import dxtb._src.scf.functional.map as functional_map
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
-from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.calculators.model import Model
+from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.base import Component
+from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.coulomb.multipole import AES2
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
-from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
 from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
-from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.components.interactions.list import (
-    InteractionListCache,
     _FUNCTIONAL_SCF_INTERACTION_TYPES,
+    InteractionListCache,
 )
-from dxtb._src.basis.indexhelper import IndexHelper
+from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     ChargeLayout,
-    SCFCharges,
     PotentialLayout,
+    SCFCharges,
     SCFPotential,
-    pack_potential,
-    potential_initial_guess,
-    potential_map,
-    potential_layout,
-    pack_charges,
-    potential_from_charges,
-    potential_initial_guess,
-    scf_map,
     fock_initial_guess,
     fock_map,
-    setup_scf_inputs,
+    functional_scf_interactions_eligible,
     interaction_energy_from_charges,
+    pack_charges,
+    pack_potential,
+    potential_from_charges,
+    potential_initial_guess,
+    potential_layout,
+    potential_map,
+    scf_map,
+    setup_scf_inputs,
     unpack_charges,
     unpack_potential,
     validate_functional_scf_interactions,
-    functional_scf_interactions_eligible,
 )
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
     FunctionalInteractionSet,
     tensor_leaves,
 )
-from dxtb._src.scf.functional.map import _transitional_diagonalize
-from dxtb._src.scf.functional.map import evaluate_hamiltonian
+from dxtb._src.scf.functional.map import (
+    _transitional_diagonalize,
+    evaluate_hamiltonian,
+)
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
     free_energy_from_spectral,
@@ -406,8 +407,8 @@ def _persistent_identity_snapshot(system) -> tuple[object, ...]:
         system.generalized_born_setup,
         system.integral_setup,
         system.h0_setup,
-        system.classical_cache,
-        *system.classical_cache.values(),
+        system._classical_extension_cache,
+        system._packed_classical_cache,
         system.repulsion_setup,
         system.repulsion_classical,
         system.srb_setup,
@@ -1952,7 +1953,8 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
                 current_system.generalized_born_setup,
                 current_system.integral_setup,
                 current_system.h0_setup,
-                current_system.classical_cache,
+                current_system._classical_extension_cache,
+                current_system._packed_classical_cache,
             )
         )
 

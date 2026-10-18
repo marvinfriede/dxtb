@@ -219,7 +219,7 @@ remains partial. The NO2 worker-mode NaN, intermittent E0 gradcheck, ten GFN1
 density-parity failures, and unclassified C6.7 broad-suite failures remain
 separate unresolved issues. C7 remains independently unblocked, C8b remains
 blocked by its prerequisites, C9 is deferred, and full E3 remains blocked by
-E1.3. The next family slice is C6.10 classical D4 setup migration.
+E1.3. The next ownership slice is B6a-Cache.1.
 
 C6.10 is complete: eligible exact single-System classical D4 setup values are
 held by `DispersionD4CoreSetup`. Ordered sparse parameters, model tensor
@@ -261,10 +261,15 @@ Same-label collisions involving a D3 subclass or a different classical
 family retain the existing container policy; resolving those would require a
 broader cache-key uniqueness decision.
 The legacy distinction between numbers used to gather setup arrays and
-numbers used by D3 evaluation remains explicit. This does not remove the
-generic `ClassicalListCache` construction/storage boundary; broader B6a and
-B3b remain partial. E1.3 tad-dftd3 forward-AD support remains blocked
-upstream.
+numbers used by D3 evaluation remains explicit. B6a-Cache.1 now constructs
+each exact built-in setup directly for single Systems and removes persistent
+generic built-in cache ownership. `System.classical_cache` remains as an
+on-demand compatibility view; custom extension data and packed batches retain
+their explicit legacy ownership. Broader B6a/B3b and C6 remain partial, and
+E1.3 tad-dftd3 forward-AD support remains blocked upstream.
+The single-System boundary rejects duplicate active labels and multiple exact
+instances of a family represented by one setup field; D3 remains multi-instance
+because its captured setups are associated with components by identity.
 
 Static averaging-callable context does not expose arbitrary tensor-valued
 state held by custom callables as dynamic Node leaves. The built-in averaging
