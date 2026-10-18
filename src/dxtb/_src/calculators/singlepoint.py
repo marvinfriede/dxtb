@@ -34,24 +34,41 @@ from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
+    DispersionD3CoreSetup,
     dispersion_d3_energy,
 )
 from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
+    DispersionD4CoreSetup,
     dispersion_d4_energy,
 )
-from dxtb._src.components.classicals.halogen import Halogen, halogen_energy
-from dxtb._src.components.classicals.ies import IES, ies_energy
-from dxtb._src.components.classicals.repulsion.rep import Repulsion
-from dxtb._src.components.classicals.shortrangebond import ShortRangeBond
+from dxtb._src.components.classicals.halogen import (
+    Halogen,
+    HalogenCoreSetup,
+    halogen_energy,
+)
+from dxtb._src.components.classicals.ies import IES, IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.repulsion.rep import (
+    Repulsion,
+    RepulsionCoreSetup,
+)
+from dxtb._src.components.classicals.shortrangebond import (
+    ShortRangeBond,
+    ShortRangeBondCoreSetup,
+)
 from dxtb._src.components.interactions.coulomb.multipole import (
+    AES2CoreSetup,
     build_aes2_data,
 )
 from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2Cache,
+    ES2CoreSetup,
     build_es2_coulomb,
 )
-from dxtb._src.components.interactions.coulomb.thirdorder import ES3Cache
+from dxtb._src.components.interactions.coulomb.thirdorder import (
+    ES3Cache,
+    ES3CoreSetup,
+)
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
     build_d4sc_data,
@@ -69,11 +86,10 @@ from dxtb._src.components.interactions.field.efieldgrad import (
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
+    GeneralizedBornCoreSetup,
     build_generalized_born_data,
 )
 from dxtb._src.constants import defaults
-from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
-from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
@@ -171,13 +187,21 @@ def _interaction_data(
     returned data is local to this call.
     """
     interactions = system.interactions if interactions is None else interactions
+    core = system._active_exact_core()
     owns_selected_d4sc = system.d4sc_interaction is not None and any(
         interaction is system.d4sc_interaction
         for interaction in interactions.components
     )
-    authoritative_d4sc_setup = system.d4sc_setup if owns_selected_d4sc else None
+    authoritative_d4sc_setup = (
+        core.interaction_setup(system.d4sc_interaction)
+        if core is not None and owns_selected_d4sc
+        else system.d4sc_setup if owns_selected_d4sc else None
+    )
     data = _SystemInteractionData(authoritative_d4sc_setup)
     for interaction in interactions.components:
+        captured_setup = (
+            core.interaction_setup(interaction) if core is not None else None
+        )
         if type(interaction) is ElectricField:
             data[interaction.label] = build_electric_field_data(
                 positions, interaction.field
@@ -186,52 +210,84 @@ def _interaction_data(
             data[interaction.label] = build_electric_field_grad_data(
                 positions, interaction.field_grad
             )
-        elif interaction is system.es2_interaction:
-            if system.es2_setup is None:
-                raise RuntimeError("Single-system ES2 setup is missing.")
-            matrix = build_es2_coulomb(system.es2_setup, positions)
-            data[interaction.label] = ES2Cache(
-                matrix, shell_resolved=system.es2_setup.shell_resolved
+        elif isinstance(captured_setup, ES2CoreSetup) or (
+            captured_setup is None and interaction is system.es2_interaction
+        ):
+            setup = (
+                captured_setup
+                if isinstance(captured_setup, ES2CoreSetup)
+                else system.es2_setup
             )
-        elif interaction is system.es3_interaction:
-            if system.es3_setup is None:
+            if setup is None:
+                raise RuntimeError("Single-system ES2 setup is missing.")
+            matrix = build_es2_coulomb(setup, positions)
+            data[interaction.label] = ES2Cache(
+                matrix, shell_resolved=setup.shell_resolved
+            )
+        elif isinstance(captured_setup, ES3CoreSetup) or (
+            captured_setup is None and interaction is system.es3_interaction
+        ):
+            setup = (
+                captured_setup
+                if isinstance(captured_setup, ES3CoreSetup)
+                else system.es3_setup
+            )
+            if setup is None:
                 raise RuntimeError("Single-system ES3 setup is missing.")
             data[interaction.label] = ES3Cache(
-                system.es3_setup.hubbard_derivs,
-                shell_resolved=system.es3_setup.shell_resolved,
+                setup.hubbard_derivs,
+                shell_resolved=setup.shell_resolved,
             )
-        elif interaction is system.aes2_interaction:
-            if system.aes2_setup is None:
+        elif isinstance(captured_setup, AES2CoreSetup) or (
+            captured_setup is None and interaction is system.aes2_interaction
+        ):
+            setup = (
+                captured_setup
+                if isinstance(captured_setup, AES2CoreSetup)
+                else system.aes2_setup
+            )
+            if setup is None:
                 raise RuntimeError("Single-system AES2 setup is missing.")
-            data[interaction.label] = build_aes2_data(
-                system.aes2_setup, positions
+            data[interaction.label] = build_aes2_data(setup, positions)
+        elif isinstance(captured_setup, D4SCCoreSetup) or (
+            captured_setup is None and interaction is system.d4sc_interaction
+        ):
+            setup = (
+                captured_setup
+                if isinstance(captured_setup, D4SCCoreSetup)
+                else system.d4sc_setup
             )
-        elif interaction is system.d4sc_interaction:
-            if system.d4sc_setup is None:
+            if setup is None:
                 raise RuntimeError("Single-system D4SC setup is missing.")
-            data[interaction.label] = build_d4sc_data(
-                system.d4sc_setup, positions
+            data[interaction.label] = build_d4sc_data(setup, positions)
+        elif isinstance(captured_setup, GeneralizedBornCoreSetup) or (
+            captured_setup is None
+            and interaction is system.generalized_born_interaction
+        ):
+            setup = (
+                captured_setup
+                if isinstance(captured_setup, GeneralizedBornCoreSetup)
+                else system.generalized_born_setup
             )
-        elif interaction is system.generalized_born_interaction:
-            if system.generalized_born_setup is None:
+            if setup is None:
                 raise RuntimeError(
                     "Single-system GeneralizedBorn setup is missing."
                 )
             data[interaction.label] = build_generalized_born_data(
-                system.generalized_born_setup, positions
+                setup, positions
             )
         elif (
             isinstance(interaction, GeneralizedBorn)
             and type(interaction) is not GeneralizedBorn
         ):
             data[interaction.label] = interaction.get_cache(
-                numbers=system.numbers,
+                numbers=(core.numbers if core is not None else system.numbers),
                 positions=positions,
                 ihelp=system.ihelp,
             )
         else:
             data[interaction.label] = interaction.get_cache(
-                numbers=system.numbers,
+                numbers=(core.numbers if core is not None else system.numbers),
                 positions=positions,
                 ihelp=system.ihelp,
             )
@@ -314,24 +370,40 @@ def singlepoint(
     field_grad: Tensor | None = None,
 ) -> Result:
     """Evaluate one System without Calculator or legacy integral state."""
-    if system.numbers.ndim != 1:
+    core = system._active_exact_core()
+    numbers = core.numbers if core is not None else system.numbers
+    config = core.config if core is not None else system.config
+    integral_setup = (
+        core.integral_setup if core is not None else system.integral_setup
+    )
+    h0_setup = core.h0_setup if core is not None else system.h0_setup
+
+    if numbers.ndim != 1:
         raise ValueError("Core singlepoint accepts one system at a time.")
-    if positions.shape != (system.numbers.shape[0], 3):
+    if positions.shape != (numbers.shape[0], 3):
         raise ValueError(
             "Core singlepoint expects positions with shape (nat, 3)."
         )
-    system_device = system.numbers.device
+    system_device = numbers.device
     if positions.device != system_device:
         raise DeviceError(
             f"Device mismatch: System is on '{system_device}', but positions "
             f"are on '{positions.device}'."
         )
 
-    floating_setup = _floating_setup_tensor(system)
-    expected_dtype = (
-        system.dd["dtype"] if floating_setup is None else floating_setup.dtype
+    floating_setup = (
+        None if core is not None else _floating_setup_tensor(system)
     )
-    if floating_setup is not None:
+    expected_dtype = (
+        core.effective_dtype
+        if core is not None
+        else (
+            system.dd["dtype"]
+            if floating_setup is None
+            else floating_setup.dtype
+        )
+    )
+    if core is None and floating_setup is not None:
         if floating_setup.device != system_device:
             raise DeviceError(
                 "System floating setup is on "
@@ -352,7 +424,7 @@ def singlepoint(
 
     field = _call_tensor("field", field, positions, (3,))
     field_grad = _call_tensor("field_grad", field_grad, positions, (3, 3))
-    if field is not None and system.config.ints.level < labels.INTLEVEL_DIPOLE:
+    if field is not None and config.ints.level < labels.INTLEVEL_DIPOLE:
         raise RuntimeError(
             "An electric field requires dipole integrals. Construct the "
             "System with an integral level of at least "
@@ -360,7 +432,7 @@ def singlepoint(
         )
     if (
         field_grad is not None
-        and system.config.ints.level < labels.INTLEVEL_QUADRUPOLE
+        and config.ints.level < labels.INTLEVEL_QUADRUPOLE
     ):
         raise RuntimeError(
             "An electric field gradient requires quadrupole integrals. "
@@ -374,13 +446,20 @@ def singlepoint(
         classical = {}
         for component in system.classicals.components:
             timer.start(component.label, parent_uid="Classicals")
-            d3_setup = next(
-                (
-                    setup
-                    for d3_component, setup in system.d3_setups
-                    if component is d3_component
-                ),
-                None,
+            captured_setup = (
+                core.classical_setup(component) if core is not None else None
+            )
+            d3_setup = (
+                captured_setup
+                if isinstance(captured_setup, DispersionD3CoreSetup)
+                else next(
+                    (
+                        setup
+                        for d3_component, setup in system.d3_setups
+                        if component is d3_component
+                    ),
+                    None,
+                )
             )
             if type(component) is DispersionD3:
                 if d3_setup is None:
@@ -388,22 +467,44 @@ def singlepoint(
                 classical[component.label] = dispersion_d3_energy(
                     d3_setup, positions
                 )
-            elif component is system.d4_classical:
-                if system.d4_setup is None:
+            elif type(component) is DispersionD4:
+                d4_setup = (
+                    captured_setup
+                    if isinstance(captured_setup, DispersionD4CoreSetup)
+                    else (
+                        system.d4_setup
+                        if component is system.d4_classical
+                        else None
+                    )
+                )
+                if d4_setup is None:
                     raise RuntimeError("Single-system D4 setup is missing.")
                 classical[component.label] = dispersion_d4_energy(
-                    system.d4_setup, positions, charge
+                    d4_setup, positions, charge
                 )
-            elif component is system.halogen_classical:
-                if system.halogen_setup is None:
+            elif type(component) is Halogen:
+                halogen_setup = (
+                    captured_setup
+                    if isinstance(captured_setup, HalogenCoreSetup)
+                    else (
+                        system.halogen_setup
+                        if component is system.halogen_classical
+                        else None
+                    )
+                )
+                if halogen_setup is None:
                     raise RuntimeError(
                         "Single-system halogen setup is missing."
                     )
                 classical[component.label] = halogen_energy(
-                    system.halogen_setup, positions
+                    halogen_setup, positions
                 )
             else:
-                if component is system.repulsion_classical:
+                if isinstance(captured_setup, RepulsionCoreSetup):
+                    setup = captured_setup
+                elif isinstance(captured_setup, ShortRangeBondCoreSetup):
+                    setup = captured_setup
+                elif component is system.repulsion_classical:
                     setup = system.repulsion_setup
                 elif component is system.srb_classical:
                     setup = system.srb_setup
@@ -434,13 +535,20 @@ def singlepoint(
                 ):
                     # Custom subclasses retain cache-driven legacy behavior.
                     setup = component.get_cache(system.numbers, system.ihelp)
-                elif component is system.ies_classical:
-                    if system.ies_setup is None:
+                elif isinstance(captured_setup, IESCoreSetup) or (
+                    captured_setup is None and component is system.ies_classical
+                ):
+                    ies_setup = (
+                        captured_setup
+                        if isinstance(captured_setup, IESCoreSetup)
+                        else system.ies_setup
+                    )
+                    if ies_setup is None:
                         raise RuntimeError(
                             "Single-system IES setup is missing."
                         )
                     classical[component.label] = ies_energy(
-                        system.ies_setup, positions, charge
+                        ies_setup, positions, charge
                     )
                     timer.stop(component.label)
                     continue
@@ -459,7 +567,7 @@ def singlepoint(
         classical_energy = positions.new_zeros(positions.shape[:-1])
     zero_energy = torch.zeros_like(classical_energy)
 
-    if {"all", "scf"} & set(system.config.exclude):
+    if {"all", "scf"} & set(config.exclude):
         return Result.snapshot(
             energy=classical_energy,
             scf=zero_energy,
@@ -470,24 +578,24 @@ def singlepoint(
             ),
         )
 
-    if system.h0_setup is None:
+    if h0_setup is None:
         raise NotImplementedError("Core Hamiltonian setup is missing.")
-    if system.integral_setup is None:
+    if integral_setup is None:
         raise NotImplementedError(
             "Single-system integral setup is missing. Core evaluation does "
             "not support legacy batched Calculator setup."
         )
-    if system.config.ints.level < labels.INTLEVEL_HCORE:
+    if config.ints.level < labels.INTLEVEL_HCORE:
         raise NotImplementedError(
             "Core Hamiltonian missing. Skipping the Core Hamiltonian in "
             "the SCF is currently not supported. Please increase the "
             "integral level to at least '2'. Currently, the level is set "
-            f"to '{system.config.ints.level}'."
+            f"to '{config.ints.level}'."
         )
 
     matrices, refocc, overlap_norm = build_integral_matrices(
-        system.integral_setup,
-        system.h0_setup,
+        integral_setup,
+        h0_setup,
         positions,
         charge,
     )
@@ -517,17 +625,7 @@ def singlepoint(
         *call_components, device=positions.device, dtype=positions.dtype
     )
     interaction_data = _interaction_data(system, positions, call_interactions)
-    backend_setup = (
-        system.integral_setup.pytorch
-        if system.integral_setup.pytorch is not None
-        else system.integral_setup.libcint
-    )
-    candidate_index = (
-        backend_setup.index
-        if type(backend_setup)
-        in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-        else None
-    )
+    candidate_index = core.index if core is not None else None
     core_index = (
         candidate_index
         if candidate_index is not None
@@ -539,17 +637,18 @@ def singlepoint(
     )
 
     scf_results = scf.solve(
-        system.numbers,
+        numbers,
         positions,
         charge,
         spin_tensor,
         call_interactions,
         interaction_data,
         system.ihelp,
-        system.config.scf,
+        config.scf,
         matrices,
         refocc,
         core_index=core_index,
+        core_index_owner=core if core_index is not None else None,
     )
     scf_output = _normalize_scf_output(scf_results, positions)
 

@@ -69,26 +69,88 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
     assert type(single.repulsion_setup).__name__ == "RepulsionCoreSetup"
     assert single.classical_cache is not single.classical_cache
     assert single.classical_cache["Repulsion"] is single.repulsion_setup
+    assert single.exact_core is not None
+    assert single.exact_core.numbers is single.numbers
+    assert single.exact_core.config is single.config
+    assert single.exact_core.effective_dtype is torch.float64
+    assert single.exact_core.integral_setup is single.integral_setup
+    assert single.exact_core.h0_setup is single.h0_setup
+    assert single.exact_core.index is single.integral_setup.pytorch.index
+    assert not hasattr(single.exact_core, "batch_mode")
+    assert not hasattr(single.exact_core, "dd")
+    assert not hasattr(single.exact_core, "ihelp")
+    assert not hasattr(single.exact_core, "classicals")
+    assert not hasattr(single.exact_core, "interactions")
+    assert [entry.label for entry in single.exact_core.classical_setups] == [
+        component.label
+        for component in single.classicals.components
+        if type(component).__name__
+        in {
+            "DispersionD3",
+            "Repulsion",
+            "ShortRangeBond",
+            "DispersionD4",
+            "IES",
+            "Halogen",
+        }
+    ]
+    for component in single.classicals.components:
+        setup = single.exact_core.classical_setup(component)
+        if setup is not None:
+            assert any(
+                entry.component_identity == id(component)
+                and entry.setup is setup
+                for entry in single.exact_core.classical_setups
+            )
+    assert [entry.label for entry in single.exact_core.interaction_setups] == [
+        component.label
+        for component in single.interactions.components
+        if single.exact_core.interaction_setup(component) is not None
+    ]
+    assert (
+        single.exact_core.interaction_setup(single.es2_interaction)
+        is single.es2_setup
+    )
+    assert (
+        single.exact_core.interaction_setup(single.es3_interaction)
+        is single.es3_setup
+    )
+    assert (
+        single.exact_core.interaction_setup(single.d4sc_interaction)
+        is single.d4sc_setup
+    )
 
     packed_numbers = torch.tensor([[1, 1], [1, 1]])
     for mode in (1, 2):
         packed = model.setup(packed_numbers, batch_mode=mode)
         assert packed.batch_mode == mode
+        assert packed.exact_core is None
         assert packed._packed_classical_cache is not None
         assert packed.classical_cache is packed._packed_classical_cache
         assert type(packed.repulsion_setup).__name__ == "RepulsionSetup"
         assert packed.integral_setup is None
 
 
-def test_effective_dtype_fallback_preserves_explicit_setup_override() -> None:
+@pytest.mark.parametrize(
+    "method,method_label",
+    [
+        (GFN0_XTB, labels.GFN0_XTB),
+        (GFN1_XTB, labels.GFN1_XTB),
+        (GFN2_XTB, labels.GFN2_XTB),
+    ],
+    ids=["gfn0", "gfn1", "gfn2"],
+)
+def test_effective_dtype_fallback_preserves_explicit_setup_override(
+    method: str, method_label: int
+) -> None:
     """No-integral setups still validate against the effective setup dtype."""
     config = Config.create(
-        method=labels.GFN1_XTB,
+        method=method_label,
         exclude=("all",),
         int_level=0,
     )
     system = Model(
-        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        par=ParamModule(method, dtype=torch.float64),
         config=config,
         auto_int_level=False,
     ).setup(
@@ -97,6 +159,8 @@ def test_effective_dtype_fallback_preserves_explicit_setup_override() -> None:
     )
     assert system.h0_setup is None
     assert system.integral_setup is None
+    assert system.exact_core is not None
+    assert system.exact_core.effective_dtype is torch.float32
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float32
     )
@@ -104,6 +168,45 @@ def test_effective_dtype_fallback_preserves_explicit_setup_override() -> None:
     assert result.energy.dtype == torch.float32
     with pytest.raises(DtypeError, match="Dtype mismatch"):
         system.singlepoint(positions.to(torch.float64))
+    original_dtype = system.dd["dtype"]
+    try:
+        system.dd["dtype"] = torch.float64
+        assert system.singlepoint(positions).energy.dtype is torch.float32
+        with pytest.raises(DtypeError, match="Dtype mismatch"):
+            system.singlepoint(positions.to(torch.float64))
+    finally:
+        system.dd["dtype"] = original_dtype
+
+
+def test_calculator_type_updates_no_setup_exact_core_dtype() -> None:
+    """Calculator.type keeps effective dtype when no float setup exists."""
+    from dxtb import Calculator
+
+    calculator = Calculator(
+        torch.tensor([1, 1]),
+        GFN1_XTB,
+        opts={"exclude": "all", "int_level": 0, "verbosity": 0},
+        dtype=torch.float64,
+        auto_int_level=False,
+    )
+    assert calculator.system.exact_core is not None
+    assert calculator.system.integral_setup is None
+    assert calculator.system.h0_setup is None
+    assert calculator.system.exact_core.effective_dtype is torch.float64
+
+    calculator.type(torch.float32)
+    assert calculator.system.exact_core is not None
+    assert calculator.system.exact_core.effective_dtype is torch.float32
+    positions32 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float32
+    )
+    assert (
+        calculator.system.singlepoint(positions32).energy.dtype is torch.float32
+    )
+
+    calculator.type(torch.float64)
+    calculator.type(torch.float32)
+    assert calculator.system.exact_core.effective_dtype is torch.float32
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -269,9 +372,13 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
+    assert system.exact_core is not None
+    config = replace(system.config, scf=scf)
+    exact_core = replace(system.exact_core, config=config)
     system = replace(
         system,
-        config=replace(system.config, scf=scf),
+        config=config,
+        exact_core=exact_core,
     )
     assert system.integral_setup is not None
     assert system.integral_setup.pytorch is not None
@@ -338,6 +445,26 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
     assert inputs.index.orbitals_to_shell is not legacy_maps[1]
     assert clone_counter.count == 2
     assert constructions == 1
+
+    assert case.system.exact_core is not None
+    unrelated_index = CoreIndexData(
+        shells_to_atom=legacy_maps[0].clone(),
+        orbitals_to_shell=legacy_maps[1].clone(),
+    )
+    with pytest.raises(ValueError, match="does not belong to this System"):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+            core_index=unrelated_index,
+            core_index_owner=case.system.exact_core,
+        )
 
 
 def test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding() -> None:

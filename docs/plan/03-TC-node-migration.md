@@ -40,15 +40,21 @@ B5/B5.6/C1 without waiting for C5-C7. The structural core values (C5-C7)
 and C8b Model/System stackability proceed bottom-up after their TB
 mutation-removal prerequisites.
 
-**Current status (B3b-Final.1).** B2 and C7.0-C7.4 are complete. C7 setup
+**Current status (B3b-Final.2).** B2 and C7.0-C7.4 are complete. C7 setup
 Node acceptance is closed at its scoped boundary; legacy drivers remain under
 their separate compatibility packages. B3b-Final.0 inventories the System
-layout, and B3b-Final.1 closes the functional-SCF captured-map reuse and
-per-call parameter-gather audit; evidence is in
+layout, B3b-Final.1 closes functional-SCF captured-map reuse and the
+per-call parameter-gather audit, and B3b-Final.2 adds a frozen exact-mode
+layout value with effective dtype while preserving packed modes 1/2 and the
+legacy facade. Its setup references alias the accepted Nodes; it is not yet a
+stackable System Node or a fully independent descriptor dispatcher. Evidence
+and the matched-base Anderson failure classification are in
 [`B3b final layout inventory`](B3b-Final-layout-inventory.md). Final B3b
-remains open for the core/packed layout boundary and cross-family compatibility
-acceptance. Broader C6 remains partial, and C8b must wait for both. B2 and C7
-are prerequisites already satisfied, not current blockers.
+remains open for cross-family compatibility acceptance and complete descriptor
+ownership. Broader C6 remains partial, and C8b must wait for both. B2 and C7
+are prerequisites already satisfied, not current blockers. The Anderson
+gradient discrepancy remains inherited and unresolved; no numerical policy
+was changed.
 
 ---
 

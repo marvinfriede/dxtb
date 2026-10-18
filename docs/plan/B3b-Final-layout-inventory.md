@@ -302,3 +302,86 @@ resolved to its existing acceptance contract. E6a and the later E6b policy,
 implementation, and route milestones remain independent in their documented
 order. No C8b Node conversion, production change, numerical reference update,
 or tolerance change is part of B3b-Final.0.
+
+## B3b-Final.2 — exact-core / packed boundary evidence
+
+Implementation base: `0c0c30dd770fd5df581327f959d161c86e2b1ea1`.
+
+The Anderson position/parameter/field-gradient test was run on both the
+B3b-Final.1 base (`58d1535feeaf17e470e1713a697c0640638c9b22`) and candidate
+(`0c0c30dd770fd5df581327f959d161c86e2b1ea1`) in Python 3.14.8 / Torch 2.14.1,
+with one CPU thread. Serial and work-stealing executions fail identically on
+both revisions. The first position-gradient maximum absolute discrepancy is
+`2.5006982595776606e-11` against `2e-13`; an independent local reproduction
+measured a second-gradient maximum absolute discrepancy of
+`8.298363385339513e-11`. This remains an inherited, unresolved Anderson
+gradient issue; no tolerance or reference was changed.
+
+The implementation adds a frozen, non-Node `ExactSystemCore` value for exact
+mode-0 Systems. It carries the existing numbers tensor, immutable effective
+`Config`, explicit effective floating dtype, the already captured
+`IntegralSetup` and `H0SetupNode`, the active backend `CoreIndexData`, and
+identity-keyed ordered references to the existing family setup Nodes. These
+are aliases to existing setup owners, not clones or second tensor owners. The
+core omits `batch_mode`, mutable `dd`, full `IndexHelper`, component lists,
+legacy integral drivers, and extension caches. It includes an integer
+IndexHelper identity token solely to validate the trusted internal SCF-map
+handoff; map tensors remain dynamic children of their C7 setup Nodes.
+
+Packed modes 1 and 2 keep `exact_core=None`, their actual mode, legacy
+IndexHelper, and the persistent packed classical cache. The exact-mode
+`classical_cache` remains a newly assembled compatibility dictionary on each
+access and points to authoritative setup Nodes. Existing custom extension
+caches remain in their separate compatibility owner. `Model.setup()` public
+arguments and direct/packed Calculator paths are unchanged.
+
+`effective_dtype` comes from the effective `dd["dtype"]` at setup, preserving
+explicit overrides even when all setup families and SCF are excluded. The
+exact singlepoint validator reads this immutable scalar; device authority
+remains `numbers.device`. `Calculator.type()` updates the scalar and the
+converted integral/H0 setup references together. Existing classical setup
+conversion limitations of `Calculator.type()` remain unchanged.
+
+`System.singlepoint()` and functional FULL/implicit preparation consume
+captured family setups and the trusted active backend map when its device
+matches the legacy IndexHelper. The internal SCF input API requires both the
+map and its owning core provenance; direct callers without that owner retain
+the two-clone isolated-map fallback. Padding-aware orbital-mask construction
+continues to use `IndexHelper.orbitals_per_shell`. No per-call parameter
+regather was observed by the exact built-in GFN1 H2 instrumentation test.
+
+This is a staged exact-core value, not the C8b `System` Node and not yet a
+fully independent evaluation façade: ordered built-in setup references are
+identity-associated with the compatibility components, while result and
+extension ordering still follows the existing component containers. Final
+B3b.3 must establish the complete built-in/extension descriptor dispatch and
+cross-family compatibility contract before C8b. No stackability or
+whole-System `vmap` claim is made.
+
+Focused results: the B3b layout contract passed 29 tests in each approved CPU
+environment (Python/Torch 3.10.22/2.6.0, 3.11.15/2.8.0, 3.12.10/2.11.0,
+3.12.10/2.13.0, and 3.14.8/2.14.1). The combined primary selection of layout,
+Model, singlepoint, C7 setup, and functional-map tests passed 222 tests; the
+ten known GFN1 production/legacy density-parity cases were excluded there.
+When included, all ten fail with the established density/matrix parity
+discrepancy; a representative case fails identically on the B3b-Final.2 base
+and candidate. The Anderson/implicit-root non-slow selection passed 61 tests
+with the separately excluded matched-base Anderson gradient case. CUDA was
+not tested. TorchScript emits its existing deprecation/future warning in the
+new layout probes; no production warning suppression was added.
+
+Disposition: B3b-Final.2 establishes effective dtype ownership and an
+identity-preserving exact/packed staged boundary. It does not close final
+B3b. B3b-Final.3 remains responsible for the accepted cross-family setup and
+compatibility inventory, including any remaining limitations in the
+component/descriptor ownership boundary.
+
+Independent review: **NO FINDING** for a confirmed new production defect.
+The reviewer confirmed that setup Nodes are aliased rather than duplicated,
+the trusted SCF-map provenance and direct fallback are preserved, and no
+physics/reference/tolerance edits occurred. The reviewer also confirmed the
+stated scope caveat: `System.singlepoint()` still uses mutable component lists
+for dispatch and result order, so this is not yet an independent evaluation
+dispatcher. Active-classical `Calculator.type()` remains a known compatibility
+limitation and was not expanded by this package; the dtype-transition tests
+exercise the no-setup case only.

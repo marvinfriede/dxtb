@@ -102,6 +102,7 @@ def solve(
     refocc: Tensor,
     *args: Any,
     core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
     **kwargs: Any,
 ) -> SCFResult | FunctionalCoreResult:
     """
@@ -189,6 +190,7 @@ def solve(
                 config,
                 integrals,
                 core_index=core_index,
+                core_index_owner=core_index_owner,
             )
             return functional_core_result(result)
 
@@ -229,6 +231,7 @@ def solve(
                 integrals,
                 route,
                 core_index=core_index,
+                core_index_owner=core_index_owner,
             )
             return apply_functional_full_policy(result, config, route)
 

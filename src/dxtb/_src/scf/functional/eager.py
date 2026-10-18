@@ -512,6 +512,7 @@ def run_prepared_functional_full(
     route: FullSCFRoute,
     *,
     core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
     if route.kind != "functional":
@@ -535,6 +536,7 @@ def run_prepared_functional_full(
         ihelp,
         effective_config,
         core_index=core_index,
+        core_index_owner=core_index_owner,
     )
     return _solve_representation(guess, inputs, effective_config)
 
@@ -552,6 +554,7 @@ def run_prepared_functional_implicit(
     integrals: IntegralMatrices,
     *,
     core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
 ) -> SCFSolveResult:
     """Acquire a functional primal root, attach its raw-map IFT, then finalize.
 
@@ -573,6 +576,7 @@ def run_prepared_functional_implicit(
         ihelp,
         config,
         core_index=core_index,
+        core_index_owner=core_index_owner,
     )
     settings = _solver_settings(config, guess.dtype)
     charges = SCFCharges(

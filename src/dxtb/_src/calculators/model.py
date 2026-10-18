@@ -115,6 +115,8 @@ from dxtb._src.components.interactions.solvation.alpb import (
     setup_generalized_born,
 )
 from dxtb._src.constants import defaults
+from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.integral.evaluation import (
     IntegralSetup,
     setup_integral_evaluation,
@@ -127,8 +129,72 @@ from dxtb.config import Config
 
 if TYPE_CHECKING:
     from dxtb._src.calculators.result import Result
+    from dxtb._src.scf.functional.core import CoreIndexData
 
 __all__ = ["Model", "System"]
+
+
+CoreSetup = (
+    RepulsionCoreSetup
+    | ShortRangeBondCoreSetup
+    | DispersionD3CoreSetup
+    | DispersionD4CoreSetup
+    | IESCoreSetup
+    | HalogenCoreSetup
+    | ES2CoreSetup
+    | ES3CoreSetup
+    | AES2CoreSetup
+    | D4SCCoreSetup
+    | GeneralizedBornCoreSetup
+)
+
+
+@dataclass(frozen=True, eq=False)
+class CoreSetupRef:
+    """Identity-keyed reference to one exact built-in setup value."""
+
+    component_identity: int
+    label: str
+    setup: CoreSetup
+
+
+@dataclass(frozen=True, eq=False)
+class ExactSystemCore:
+    """Immutable exact single-System values shared with the compatibility façade.
+
+    Setup objects are references to the already captured family Nodes. This
+    record introduces no second tensor storage and intentionally excludes
+    packed-mode selectors, mutable dtype dictionaries, IndexHelper, and
+    mutable component containers.
+    """
+
+    numbers: Tensor
+    effective_dtype: torch.dtype
+    config: Config
+    integral_setup: IntegralSetup | None
+    h0_setup: H0SetupNode | None
+    index: CoreIndexData | None
+    index_helper_identity: int
+    classical_setups: tuple[CoreSetupRef, ...]
+    interaction_setups: tuple[CoreSetupRef, ...]
+
+    def classical_setup(self, component: Classical) -> CoreSetup | None:
+        """Look up a captured setup by component identity, never by label."""
+        return self._setup(self.classical_setups, component)
+
+    def interaction_setup(self, component: Interaction) -> CoreSetup | None:
+        """Look up a captured setup by component identity, never by label."""
+        return self._setup(self.interaction_setups, component)
+
+    @staticmethod
+    def _setup(
+        entries: tuple[CoreSetupRef, ...], component: Classical | Interaction
+    ) -> CoreSetup | None:
+        identity = id(component)
+        for entry in entries:
+            if entry.component_identity == identity:
+                return entry.setup
+        return None
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -242,6 +308,9 @@ class System:
     d3_setups: tuple[tuple[DispersionD3, DispersionD3CoreSetup], ...] = ()
     """Captured setup for each exact single-System classical D3 component."""
 
+    exact_core: ExactSystemCore | None = field(default=None, repr=False)
+    """Exact unbatched values; None for packed compatibility Systems."""
+
     def singlepoint(
         self,
         positions: Tensor,
@@ -259,6 +328,19 @@ class System:
     def d3_setup(self) -> DispersionD3CoreSetup | None:
         """Return the sole exact D3 setup when the System has one."""
         return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
+
+    def _active_exact_core(self) -> ExactSystemCore | None:
+        """Return the captured core while its façade setup references agree."""
+        core = self.exact_core
+        if (
+            core is None
+            or core.numbers is not self.numbers
+            or core.config is not self.config
+            or core.integral_setup is not self.integral_setup
+            or core.h0_setup is not self.h0_setup
+        ):
+            return None
+        return core
 
     @property
     def classical_cache(self) -> ClassicalListCache:
@@ -730,6 +812,95 @@ class Model:
 
         OutputHandler.write_stdout("done\n", v=4)
 
+        exact_core = None
+        if batch_mode == 0:
+            classical_setup_refs: list[CoreSetupRef] = []
+            for component in classicals.components:
+                if type(component) is DispersionD3:
+                    setup = next(
+                        (
+                            captured
+                            for owner, captured in d3_setups
+                            if owner is component
+                        ),
+                        None,
+                    )
+                elif component is repulsion_classical:
+                    setup = repulsion_setup
+                elif component is srb_classical:
+                    setup = srb_setup
+                elif component is d4_classical:
+                    setup = d4_setup
+                elif component is ies_classical:
+                    setup = ies_setup
+                elif component is halogen_classical:
+                    setup = halogen_setup
+                else:
+                    setup = None
+                if setup is not None and isinstance(
+                    setup,
+                    (
+                        RepulsionCoreSetup,
+                        ShortRangeBondCoreSetup,
+                        DispersionD3CoreSetup,
+                        DispersionD4CoreSetup,
+                        IESCoreSetup,
+                        HalogenCoreSetup,
+                    ),
+                ):
+                    classical_setup_refs.append(
+                        CoreSetupRef(id(component), component.label, setup)
+                    )
+
+            interaction_setup_refs: list[CoreSetupRef] = []
+            for interaction in interactions.components:
+                if interaction is es2_interaction:
+                    setup = es2_setup
+                elif interaction is es3_interaction:
+                    setup = es3_setup
+                elif interaction is aes2_interaction:
+                    setup = aes2_setup
+                elif interaction is d4sc_interaction:
+                    setup = d4sc_setup
+                elif interaction is generalized_born_interaction:
+                    setup = generalized_born_setup
+                else:
+                    setup = None
+                if setup is not None:
+                    interaction_setup_refs.append(
+                        CoreSetupRef(id(interaction), interaction.label, setup)
+                    )
+
+            backend_setup = (
+                integral_setup.pytorch
+                if integral_setup is not None
+                and integral_setup.pytorch is not None
+                else (
+                    integral_setup.libcint
+                    if integral_setup is not None
+                    else None
+                )
+            )
+            core_index = (
+                backend_setup.index
+                if type(backend_setup)
+                in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
+                else None
+            )
+            exact_core = ExactSystemCore(
+                numbers=numbers,
+                effective_dtype=dd["dtype"],
+                config=config,
+                integral_setup=integral_setup,
+                h0_setup=(
+                    h0_setup if isinstance(h0_setup, H0SetupNode) else None
+                ),
+                index=core_index,
+                index_helper_identity=id(ihelp),
+                classical_setups=tuple(classical_setup_refs),
+                interaction_setups=tuple(interaction_setup_refs),
+            )
+
         return System(
             numbers=numbers,
             config=config,
@@ -763,6 +934,7 @@ class Model:
             generalized_born_setup=generalized_born_setup,
             generalized_born_interaction=generalized_born_interaction,
             dd=dd,
+            exact_core=exact_core,
         )
 
 

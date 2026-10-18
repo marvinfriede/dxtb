@@ -591,21 +591,45 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         # Keep the system consistent with the converted components where
         # supported. Classical and ES2/ES3 setup data are not converted;
         # evaluating after `type` is a known issue (see known_issues.rst).
+        integral_setup = (
+            None
+            if self.system.integral_setup is None
+            else self.system.integral_setup.to(dtype=dtype)
+        )
+        h0_setup = (
+            None
+            if self.system.h0_setup is None
+            else self.system.h0_setup.to(dtype=dtype)
+        )
+        exact_core = self.system.exact_core
+        if exact_core is not None:
+            backend_setup = (
+                integral_setup.pytorch
+                if integral_setup is not None
+                and integral_setup.pytorch is not None
+                else (
+                    integral_setup.libcint
+                    if integral_setup is not None
+                    else None
+                )
+            )
+            exact_core = replace(
+                exact_core,
+                effective_dtype=dtype,
+                integral_setup=integral_setup,
+                h0_setup=(
+                    h0_setup if isinstance(h0_setup, H0SetupNode) else None
+                ),
+                index=getattr(backend_setup, "index", None),
+            )
         self.system = replace(
             self.system,
             classicals=self.classicals,
             interactions=self.interactions,
-            integral_setup=(
-                None
-                if self.system.integral_setup is None
-                else self.system.integral_setup.to(dtype=dtype)
-            ),
-            h0_setup=(
-                None
-                if self.system.h0_setup is None
-                else self.system.h0_setup.to(dtype=dtype)
-            ),
+            integral_setup=integral_setup,
+            h0_setup=h0_setup,
             dd={**self.system.dd, "dtype": dtype},
+            exact_core=exact_core,
         )
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)

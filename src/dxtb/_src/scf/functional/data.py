@@ -260,14 +260,17 @@ def setup_scf_inputs(
     config: ConfigSCF,
     *,
     core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
 ) -> SCFInputs:
     """Build immutable core values from one legacy single-System setup.
 
-    ``core_index`` is reserved for a trusted index captured by the active
-    System integral setup. Its map values are established at that setup
-    boundary; this function validates shape, dtype, and device without
-    synchronizing tensor values during SCF preparation. Direct and legacy
-    callers should omit it and retain the isolated IndexHelper snapshot.
+    ``core_index`` and ``core_index_owner`` are reserved for a trusted index
+    captured by the active System integral setup. The owner must identify this
+    exact IndexHelper instance and own the supplied map. Its map values are
+    established at that setup boundary; this function validates provenance,
+    shape, dtype, and device without synchronizing tensor values during SCF
+    preparation. Direct and legacy callers should omit both and retain the
+    isolated IndexHelper snapshot.
     """
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
@@ -281,6 +284,16 @@ def setup_scf_inputs(
     if core_index is not None:
         if type(core_index) is not CoreIndexData:
             raise TypeError("Captured SCF index must be CoreIndexData.")
+        if (
+            core_index_owner is None
+            or getattr(core_index_owner, "index", None) is not core_index
+            or getattr(core_index_owner, "numbers", None) is not numbers
+            or getattr(core_index_owner, "index_helper_identity", None)
+            != id(ihelp)
+        ):
+            raise ValueError(
+                "Captured SCF index does not belong to this System setup."
+            )
         if (
             core_index.shells_to_atom.shape != ihelp.shells_to_atom.shape
             or core_index.orbitals_to_shell.shape
@@ -296,6 +309,8 @@ def setup_scf_inputs(
                 "Captured SCF index maps must match the IndexHelper shape, "
                 "dtype, and device."
             )
+    elif core_index_owner is not None:
+        raise ValueError("A captured SCF index owner requires its index map.")
 
     orbital_mask = ihelp.spread_shell_to_orbital(ihelp.orbitals_per_shell)
     orbital_mask = orbital_mask.to(dtype=torch.bool)

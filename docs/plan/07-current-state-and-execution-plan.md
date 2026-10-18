@@ -38,7 +38,7 @@ Current state:
 | T0.10-T0.12    | done                            | Inventory, report and `refocc` fix exist.                                                          |
 | B1             | done                            | Model/System/Result split is implemented; System does not retain the complete Model.                |
 | B2             | done                            | Frozen configuration and input validation are implemented.                                          |
-| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. B6a-Cache.1 removes generic built-in classical-cache construction and persistent ownership for eligible single Systems; the compatibility property is derived on demand, and packed/custom paths retain legacy caches. B3b-Final.1 proves and uses the active captured backend `CoreIndexData` on eligible functional SCF calls, while direct callers retain their isolated copies; parameter-gather instrumentation found no unintended per-call ParamModule lookups. Remaining B3b work is the core/packed `batch_mode`/`dd` boundary and cross-family compatibility acceptance. Final B3b remains open; B6b-core and E3.0 do not depend on final B3b. |
+| B3             | partial                         | B3a is done, transitional. B3b has completed setup separation for ES2/ES3, AES2, repulsion, SRB, classical D4, IES, halogen, D4SC, ALPB, and E2-core PairPlan; `System.model` and the live mutable integral container are removed, with `integral_setup`/`h0_setup` established. B6a-Cache.1 removes generic built-in classical-cache construction and persistent ownership for eligible single Systems; the compatibility property is derived on demand, and packed/custom paths retain legacy caches. B3b-Final.1 reuses the captured backend `CoreIndexData` on eligible functional SCF calls; direct callers retain isolated copies. B3b-Final.2 adds frozen `ExactSystemCore` metadata with effective dtype and aliases to existing setup Nodes; packed modes retain their actual legacy mode/cache. It is a staged value, not the C8b System Node or a complete independent descriptor dispatcher. Final B3b.3 still owes cross-family compatibility acceptance and complete ownership policy. The Anderson gradient discrepancy matches base and candidate and remains unresolved. B6b-core and E3.0 do not depend on final B3b. |
 | B4             | done, single-system core        | Pure integral/H0 evaluation is complete; legacy Calculator batch construction remains until E6broute production migration. |
 | B5             | done                            | B5.1/B5.2, B5.4, and B5.5 public Result/property boundary are complete.                              |
 | B5.6           | done                            | Public tensor-valued `SCFStatus` schema is complete and verified across the five approved Torch environments; C8a Result pytree migration is unblocked. |
@@ -2923,8 +2923,16 @@ Success means measured speed/memory improves without creating a second semantics
 
 # 30. Immediate next action
 
-The next independent structural packages are the remaining C6 family slices
-and C7. C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
+The immediate B3b action is B3b-Final.3: accept the staged exact/packed layout
+against the cross-family compatibility inventory and finish any remaining
+ownership decision before C8b. B3b-Final.2 adds `ExactSystemCore`, a frozen
+non-Node value for mode-0 Systems that aliases existing setup Nodes and owns
+the effective dtype; packed modes 1/2 retain their real mode and legacy cache.
+It intentionally does not remove the compatibility facade or claim
+stackability. The matched Anderson position-gradient discrepancy fails
+identically on the B3b-Final.1 base and candidate and remains unresolved.
+
+The C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
 scalar hardening, C6.4 D4SC, C6.4a setup-authority hardening, C6.4b
 interaction-identity hardening, C6.5 deterministic component-list ordering,
 C6.6 Repulsion, C6.7 ShortRangeBond, C6.8 IES, C6.9 Halogen, and C6.10
