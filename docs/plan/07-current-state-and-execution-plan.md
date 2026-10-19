@@ -2929,7 +2929,9 @@ descriptors hid their nested setup Nodes from standard pytree traversal.
 C6-Final.1 closes that descriptor gap; `ExactSystemCore` is
 a frozen non-Node value for exact Systems that aliases existing setup Nodes
 and owns effective dtype; packed modes 1/2 retain their actual mode and legacy
-cache. This does not remove the compatibility facade or claim stackability.
+cache. C6-Final.1a removes temporary descriptor Nodes from repeated exact-core
+coherence validation while preserving the same identity and metadata checks.
+This does not remove the compatibility facade or claim stackability.
 The Anderson position-gradient discrepancy failed identically on the
 B3b-Final.1 base and candidate and remains unresolved. B3b-Final.2a restores
 public forwarding for arbitrary `core_index_owner` keywords while retaining

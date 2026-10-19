@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import get_args, get_type_hints
 
 import pytest
@@ -171,6 +172,94 @@ def test_core_setup_union_contains_all_registered_families() -> None:
     for descriptor_type in (ClassicalTermDescriptor, InteractionTermDescriptor):
         setup_type = get_type_hints(descriptor_type)["setup"]
         assert {member.__name__ for member in get_args(setup_type)} == expected
+
+
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+def test_singlepoint_coherence_checks_do_not_construct_descriptors(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Persistent descriptors are reused during repeated evaluations."""
+    from dxtb._src.calculators.singlepoint import singlepoint
+
+    method_label = labels.GFN1_XTB if method == GFN1_XTB else labels.GFN2_XTB
+    positions_a = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    positions_b = positions_a.clone()
+    positions_b[1, 2] += 0.05
+
+    system = _system(method, method_label, [1, 1])
+    assert system.exact_core is not None
+    persistent_classical = system.exact_core.classical_terms
+    persistent_interactions = system.exact_core.interaction_terms
+    assert persistent_classical or persistent_interactions
+
+    counts = {ClassicalTermDescriptor: 0, InteractionTermDescriptor: 0}
+    for descriptor_type in counts:
+        original_init = descriptor_type.__init__
+
+        def counted_init(
+            self, *args, __init=original_init, __type=descriptor_type, **kwargs
+        ):
+            counts[__type] += 1
+            __init(self, *args, **kwargs)
+
+        monkeypatch.setattr(descriptor_type, "__init__", counted_init)
+
+    for positions in (positions_a, positions_b, positions_a):
+        singlepoint(system, positions)
+
+    assert counts == {ClassicalTermDescriptor: 0, InteractionTermDescriptor: 0}
+    assert system._active_exact_core() is system.exact_core
+    assert system.exact_core.classical_terms is persistent_classical
+    assert system.exact_core.interaction_terms is persistent_interactions
+
+
+def test_full_and_implicit_coherence_checks_do_not_construct_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FULL and implicit calls keep using setup-time descriptor identities."""
+    system = _system(GFN1_XTB, labels.GFN1_XTB, [1, 1])
+    assert system.exact_core is not None
+    persistent_classical = system.exact_core.classical_terms
+    persistent_interactions = system.exact_core.interaction_terms
+    counts = {ClassicalTermDescriptor: 0, InteractionTermDescriptor: 0}
+    for descriptor_type in counts:
+        original_init = descriptor_type.__init__
+
+        def counted_init(
+            self, *args, __init=original_init, __type=descriptor_type, **kwargs
+        ):
+            counts[__type] += 1
+            __init(self, *args, **kwargs)
+
+        monkeypatch.setattr(descriptor_type, "__init__", counted_init)
+
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    full_result = system.singlepoint(positions)
+    assert full_result.energy is not None
+
+    scf = replace(
+        system.config.scf,
+        scf_mode=labels.SCF_MODE_IMPLICIT,
+        mixer=labels.MIXER_LINEAR,
+        maxiter=100,
+        x_atol=1.0e-12,
+        x_atol_max=1.0e-12,
+    )
+    config = replace(system.config, scf=scf)
+    assert system.exact_core is not None
+    implicit_core = replace(system.exact_core, config=config)
+    implicit_system = replace(system, config=config, exact_core=implicit_core)
+    implicit_result = implicit_system.singlepoint(positions)
+    assert implicit_result.energy is not None
+
+    assert counts == {ClassicalTermDescriptor: 0, InteractionTermDescriptor: 0}
+    assert system.exact_core.classical_terms is persistent_classical
+    assert system.exact_core.interaction_terms is persistent_interactions
+    assert implicit_system._active_exact_core() is implicit_core
 
 
 def test_c6_descriptor_method_compositions_have_distinct_trees() -> None:

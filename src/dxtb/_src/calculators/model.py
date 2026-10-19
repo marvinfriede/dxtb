@@ -273,32 +273,41 @@ def _interaction_term_kind(
 
 def _classical_terms_match(
     captured: tuple[ClassicalTermDescriptor, ...],
-    expected: list[ClassicalTermDescriptor],
+    expected: list[tuple[str, str, int, CoreSetup, bool, tuple[str, ...]]],
 ) -> bool:
-    """Compare immutable descriptors by metadata and setup identity."""
+    """Compare captured descriptors without constructing temporary Nodes."""
     return len(captured) == len(expected) and all(
-        left.kind == right.kind
-        and left.label == right.label
-        and left.position == right.position
-        and left.setup is right.setup
-        and left.charge_dependent == right.charge_dependent
-        and left.geometry_inputs == right.geometry_inputs
-        for left, right in zip(captured, expected)
+        entry.kind == kind
+        and entry.label == label
+        and entry.position == position
+        and entry.setup is setup
+        and entry.charge_dependent == charge_dependent
+        and entry.geometry_inputs == geometry_inputs
+        for entry, (
+            kind,
+            label,
+            position,
+            setup,
+            charge_dependent,
+            geometry_inputs,
+        ) in zip(captured, expected)
     )
 
 
 def _interaction_terms_match(
     captured: tuple[InteractionTermDescriptor, ...],
-    expected: list[InteractionTermDescriptor],
+    expected: list[tuple[str, str, int, CoreSetup, tuple[str, ...]]],
 ) -> bool:
-    """Compare immutable descriptors by metadata and setup identity."""
+    """Compare captured descriptors without constructing temporary Nodes."""
     return len(captured) == len(expected) and all(
-        left.kind == right.kind
-        and left.label == right.label
-        and left.position == right.position
-        and left.setup is right.setup
-        and left.geometry_inputs == right.geometry_inputs
-        for left, right in zip(captured, expected)
+        entry.kind == kind
+        and entry.label == label
+        and entry.position == position
+        and entry.setup is setup
+        and entry.geometry_inputs == geometry_inputs
+        for entry, (kind, label, position, setup, geometry_inputs) in zip(
+            captured, expected
+        )
     )
 
 
@@ -499,7 +508,9 @@ class System:
             return None
 
         expected_classical: list[tuple[int, int, str, CoreSetup]] = []
-        expected_classical_terms: list[ClassicalTermDescriptor] = []
+        expected_classical_terms: list[
+            tuple[str, str, int, CoreSetup, bool, tuple[str, ...]]
+        ] = []
         for position, component in enumerate(self.classicals.components):
             setup = None
             if component is self.repulsion_classical:
@@ -539,18 +550,20 @@ class System:
                 if kind is None:
                     return None
                 expected_classical_terms.append(
-                    ClassicalTermDescriptor(
-                        kind=kind[0],
-                        label=component.label,
-                        position=position,
-                        setup=setup,
-                        charge_dependent=kind[1],
-                        geometry_inputs=("positions",),
+                    (
+                        kind[0],
+                        component.label,
+                        position,
+                        setup,
+                        kind[1],
+                        ("positions",),
                     )
                 )
 
         expected_interactions: list[tuple[int, int, str, CoreSetup]] = []
-        expected_interaction_terms: list[InteractionTermDescriptor] = []
+        expected_interaction_terms: list[
+            tuple[str, str, int, CoreSetup, tuple[str, ...]]
+        ] = []
         for position, interaction in enumerate(self.interactions.components):
             if interaction is self.es2_interaction:
                 setup = self.es2_setup
@@ -581,12 +594,12 @@ class System:
                 if kind is None:
                     return None
                 expected_interaction_terms.append(
-                    InteractionTermDescriptor(
-                        kind=kind,
-                        label=interaction.label,
-                        position=position,
-                        setup=setup,
-                        geometry_inputs=("positions",),
+                    (
+                        kind,
+                        interaction.label,
+                        position,
+                        setup,
+                        ("positions",),
                     )
                 )
 

@@ -62,8 +62,11 @@ partial and independently blocks C8b. C6-Final.0 found that persistent
 ordered descriptors hid their nested setup Nodes from standard pytree
 traversal. C6-Final.1 registers those descriptors, making the existing setup
 Nodes dynamic children while leaving ExactSystemCore and the call-local
-FunctionalInteractionSet unchanged. C6-Final.2/3 cross-family acceptance
-remain before C8b. B2, B3b, and C7 are satisfied prerequisites.
+FunctionalInteractionSet unchanged. C6-Final.1a removes temporary descriptor
+Node construction from exact-core coherence checks by comparing expected
+metadata tuples with the persistent descriptors; setup, owner, ordering, and
+index-identity checks remain. C6-Final.2/3 cross-family acceptance remain
+before C8b. B2, B3b, and C7 are satisfied prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
