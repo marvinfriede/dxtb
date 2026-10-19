@@ -83,7 +83,9 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
     assert not hasattr(single.exact_core, "ihelp")
     assert not hasattr(single.exact_core, "classicals")
     assert not hasattr(single.exact_core, "interactions")
-    assert [entry.label for entry in single.exact_core.classical_setups] == [
+    compatibility = single._exact_compatibility
+    assert compatibility is not None
+    assert [entry.label for entry in compatibility.classical_setups] == [
         component.label
         for component in single.classicals.components
         if type(component).__name__
@@ -97,29 +99,22 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
         }
     ]
     for component in single.classicals.components:
-        setup = single.exact_core.classical_setup(component)
+        setup = single.classical_setup(component)
         if setup is not None:
             assert any(
                 entry.component_identity == id(component)
                 and entry.setup is setup
-                for entry in single.exact_core.classical_setups
+                for entry in compatibility.classical_setups
             )
-    assert [entry.label for entry in single.exact_core.interaction_setups] == [
+    assert [entry.label for entry in compatibility.interaction_setups] == [
         component.label
         for component in single.interactions.components
-        if single.exact_core.interaction_setup(component) is not None
+        if single.interaction_setup(component) is not None
     ]
+    assert single.interaction_setup(single.es2_interaction) is single.es2_setup
+    assert single.interaction_setup(single.es3_interaction) is single.es3_setup
     assert (
-        single.exact_core.interaction_setup(single.es2_interaction)
-        is single.es2_setup
-    )
-    assert (
-        single.exact_core.interaction_setup(single.es3_interaction)
-        is single.es3_setup
-    )
-    assert (
-        single.exact_core.interaction_setup(single.d4sc_interaction)
-        is single.d4sc_setup
+        single.interaction_setup(single.d4sc_interaction) is single.d4sc_setup
     )
 
     packed_numbers = torch.tensor([[1, 1], [1, 1]])
@@ -131,6 +126,181 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
         assert packed.classical_cache is packed._packed_classical_cache
         assert type(packed.repulsion_setup).__name__ == "RepulsionSetup"
         assert packed.integral_setup is None
+
+
+@pytest.mark.parametrize(
+    ("method", "method_label"),
+    [
+        (GFN0_XTB, labels.GFN0_XTB),
+        (GFN1_XTB, labels.GFN1_XTB),
+        (GFN2_XTB, labels.GFN2_XTB),
+    ],
+    ids=["gfn0", "gfn1", "gfn2"],
+)
+def test_classical_descriptors_drive_exact_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    method_label: int,
+) -> None:
+    """Captured ordered descriptors evaluate built-ins without component hooks."""
+    numbers = torch.tensor([1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    model = Model(
+        par=ParamModule(method, dtype=torch.float64),
+        config=Config.create(
+            method=method_label,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            exclude="scf",
+        ),
+    )
+    system = model.setup(numbers)
+    core = system.exact_core
+    assert core is not None
+    assert system._active_exact_core() is core
+    assert [term.position for term in core.classical_terms] == sorted(
+        term.position for term in core.classical_terms
+    )
+    assert [term.label for term in core.classical_terms] == [
+        entry.label for entry in system._exact_compatibility.classical_setups
+    ]
+    assert all(
+        term.setup is entry.setup
+        for term, entry in zip(
+            core.classical_terms, system._exact_compatibility.classical_setups
+        )
+    )
+    assert all(not hasattr(term, "component") for term in core.classical_terms)
+
+    charge = torch.zeros(1, dtype=positions.dtype, device=positions.device)
+    # Establish the compatibility result through the legacy component APIs,
+    # independently of the descriptor-driven System evaluator below.
+    legacy = system.classicals.get_energy(
+        positions, system.classical_cache, charge=charge
+    )
+    for position, component in enumerate(system.classicals.components):
+        if core.classical_term_at(position) is not None:
+            monkeypatch.setattr(
+                component,
+                "get_energy",
+                lambda *args, **kwargs: pytest.fail(
+                    "exact classical descriptor called component.get_energy"
+                ),
+            )
+    actual = system.singlepoint(positions, chrg=charge)
+    assert [label for label, _ in actual.classical] == [
+        label for label in legacy
+    ]
+    for label, energy in actual.classical:
+        torch.testing.assert_close(energy, legacy[label])
+
+
+@pytest.mark.parametrize(
+    ("method", "method_label"),
+    [(GFN1_XTB, labels.GFN1_XTB), (GFN2_XTB, labels.GFN2_XTB)],
+    ids=["gfn1", "gfn2"],
+)
+def test_interaction_descriptors_feed_functional_preparation(
+    method: str, method_label: int
+) -> None:
+    """Exact setup descriptors supply the existing functional entry schema."""
+    from dxtb._src.scf.functional.interactions import (
+        prepare_functional_interactions,
+    )
+
+    numbers = torch.tensor([1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    system = Model(
+        par=ParamModule(method, dtype=torch.float64),
+        config=Config.create(
+            method=method_label,
+            int_driver=labels.INTDRIVER_PYTORCH,
+        ),
+    ).setup(numbers)
+    core = system.exact_core
+    assert core is not None
+    assert system._active_exact_core() is core
+    assert [term.position for term in core.interaction_terms] == sorted(
+        term.position for term in core.interaction_terms
+    )
+    assert [term.label for term in core.interaction_terms] == [
+        entry.label for entry in system._exact_compatibility.interaction_setups
+    ]
+    assert all(
+        term.setup is entry.setup
+        for term, entry in zip(
+            core.interaction_terms,
+            system._exact_compatibility.interaction_setups,
+        )
+    )
+    data = _interaction_data(system, positions)
+    assert data.functional_kinds == {
+        term.label: term.kind for term in core.interaction_terms
+    }
+    prepared = prepare_functional_interactions(
+        system.interactions,
+        data,
+        numbers,
+        d4sc_setup=data.d4sc_setup,
+        kind_by_label=data.functional_kinds,
+    )
+    assert tuple(entry.kind for entry in prepared.entries) == tuple(
+        term.kind for term in core.interaction_terms
+    )
+
+
+def test_mixed_classical_extension_keeps_global_result_order() -> None:
+    """Descriptor-built terms and legacy extensions retain list ordering."""
+    from dxtb._src.components.classicals import Classical
+
+    class ClassicalExtension(Classical):
+        __slots__ = ("scale",)
+
+        def __init__(self) -> None:
+            super().__init__(device="cpu", dtype=torch.float64)
+            self.label = "ClassicalExtension"
+            self.scale = torch.tensor(0.125, dtype=torch.float64)
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            return self.scale
+
+        def get_energy(self, positions, cache, **kwargs):
+            return (
+                torch.ones(positions.shape[-2], dtype=positions.dtype) * cache
+            )
+
+    numbers = torch.tensor([1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    extension = ClassicalExtension()
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        config=Config.create(
+            method=labels.GFN1_XTB,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            exclude="scf",
+        ),
+        classical=(extension,),
+    ).setup(numbers)
+    assert system.exact_core is not None
+    assert system._active_exact_core() is system.exact_core
+    actual = system.singlepoint(positions)
+    expected = replace(system, exact_core=None).singlepoint(positions)
+    assert [label for label, _ in actual.classical] == [
+        component.label for component in system.classicals.components
+    ]
+    assert [label for label, _ in actual.classical] == [
+        label for label, _ in expected.classical
+    ]
+    for (label, energy), (expected_label, expected_energy) in zip(
+        actual.classical, expected.classical
+    ):
+        assert label == expected_label
+        torch.testing.assert_close(energy, expected_energy)
 
 
 @pytest.mark.parametrize(
@@ -296,6 +466,17 @@ def test_exact_core_checks_ordered_d3_setup_coherency() -> None:
     system = model.setup(numbers)
     assert system.exact_core is not None
     assert tuple(owner for owner, _ in system.d3_setups) == (first, second)
+    d3_terms = [
+        term for term in system.exact_core.classical_terms if term.kind == "d3"
+    ]
+    assert [term.label for term in d3_terms] == ["D3:first", "D3:second"]
+    assert [term.position for term in d3_terms] == sorted(
+        term.position for term in d3_terms
+    )
+    assert all(
+        term.setup is setup
+        for term, (_, setup) in zip(d3_terms, system.d3_setups)
+    )
     assert (
         replace(
             system, d3_setups=tuple(reversed(system.d3_setups))
@@ -314,8 +495,7 @@ def test_exact_core_checks_d4sc_component_identity() -> None:
     assert system.es2_interaction is not None
     assert system.exact_core is not None
     assert (
-        system.exact_core.interaction_setup(system.d4sc_interaction)
-        is system.d4sc_setup
+        system.interaction_setup(system.d4sc_interaction) is system.d4sc_setup
     )
     assert (
         replace(
@@ -706,7 +886,7 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
             case.system.ihelp,
             case.system.config.scf,
             core_index=unrelated_index,
-            core_index_owner=case.system.exact_core,
+            core_index_owner=case.system,
         )
 
 

@@ -2977,8 +2977,11 @@ E3.1b transform-compatible implicit physical-root implementation is complete.
 Full E3 is acceptance-only and remains blocked where its DFT-D3-enabled GFN1
 row depends on E1.3; do not approximate that row by omitting DFT-D3. B5.6 —
 public tensor-valued SCF solver-status schema — is complete and verified.
-C7 setup acceptance is complete. C8b remains blocked by final B3b and remaining
-C6 acceptance; B2 and C7 are complete prerequisites. C9 is deferred until legacy-owner retirement through
+C7 setup acceptance and final B3b exact-core/compatibility acceptance are
+complete. B3b-Final.3 established ordered classical and interaction descriptors
+for exact built-ins, with legacy identity associations, extensions, and packed
+Calculator state kept at the compatibility boundary. C8b remains blocked by
+broader C6 acceptance; B2, C5, C7, and B3b are complete prerequisites. C9 is deferred until legacy-owner retirement through
 E4.6a/E4.6b.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
@@ -2998,7 +3001,7 @@ Whole-System transforms remain E6a scope.
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
-Still separately open: E1.3; final B3b; broader C6 and C8b; E6 batch migration;
+Still separately open: E1.3; broader C6 and C8b; E6 batch migration;
 broader B6a legacy component/cache lifecycle retirement and compatibility-owner
 purge. B6b-core and C5 are complete; C9 remains deferred.
 

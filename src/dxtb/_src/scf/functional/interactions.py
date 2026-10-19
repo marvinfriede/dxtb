@@ -30,10 +30,10 @@ from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
-    DispersionD4SC,
     D4SCSetup,
-    _d4sc_setup_view,
+    DispersionD4SC,
     _build_d4sc_model,
+    _d4sc_setup_view,
     setup_d4sc,
 )
 from dxtb._src.components.interactions.field.efield import ElectricField
@@ -55,6 +55,7 @@ def prepare_functional_interactions(
     numbers: Tensor,
     *,
     d4sc_setup: D4SCCoreSetup | None = None,
+    kind_by_label: dict[str, str] | None = None,
 ) -> FunctionalInteractionSet:
     """Convert supported components/caches to frozen core entries.
 
@@ -65,8 +66,22 @@ def prepare_functional_interactions(
     entries: list[FunctionalInteractionEntry] = []
     for component in interactions.components:
         cache = interaction_data[component.label]
-        kind = type(component)
-        if kind is ES2:
+        kind = (
+            kind_by_label.get(component.label)
+            if kind_by_label is not None
+            else None
+        )
+        if kind is None:
+            kind = {
+                ES2: "es2",
+                ES3: "es3",
+                AES2: "aes2",
+                DispersionD4SC: "d4sc",
+                GeneralizedBorn: "generalized_born",
+                ElectricField: "electric_field",
+                ElectricFieldGrad: "electric_field_grad",
+            }.get(type(component))
+        if kind == "es2":
             entries.append(
                 FunctionalInteractionEntry(
                     "es2",
@@ -74,7 +89,7 @@ def prepare_functional_interactions(
                     (("shell_resolved", cache.shell_resolved),),
                 )
             )
-        elif kind is ES3:
+        elif kind == "es3":
             entries.append(
                 FunctionalInteractionEntry(
                     "es3",
@@ -82,7 +97,7 @@ def prepare_functional_interactions(
                     (("shell_resolved", cache.shell_resolved),),
                 )
             )
-        elif kind is AES2:
+        elif kind == "aes2":
             entries.append(
                 FunctionalInteractionEntry(
                     "aes2",
@@ -98,7 +113,7 @@ def prepare_functional_interactions(
                     ),
                 )
             )
-        elif kind is DispersionD4SC:
+        elif kind == "d4sc":
             setup = (
                 _d4sc_setup_view(d4sc_setup)
                 if d4sc_setup is not None
@@ -111,20 +126,20 @@ def prepare_functional_interactions(
                     (("setup", setup),),
                 )
             )
-        elif kind is GeneralizedBorn:
+        elif kind == "generalized_born":
             entries.append(
                 FunctionalInteractionEntry(
                     "generalized_born", (("mat", cache.mat),)
                 )
             )
-        elif kind is ElectricField:
+        elif kind == "electric_field":
             entries.append(
                 FunctionalInteractionEntry(
                     "electric_field",
                     (("vat", cache.vat), ("vdp", cache.vdp)),
                 )
             )
-        elif kind is ElectricFieldGrad:
+        elif kind == "electric_field_grad":
             entries.append(
                 FunctionalInteractionEntry(
                     "electric_field_grad",
@@ -136,7 +151,9 @@ def prepare_functional_interactions(
                 )
             )
         else:  # guarded by exact-type eligibility before conversion
-            raise TypeError(f"Unsupported functional interaction {kind!r}.")
+            raise TypeError(
+                f"Unsupported functional interaction {type(component)!r}."
+            )
     return FunctionalInteractionSet(tuple(entries))
 
 

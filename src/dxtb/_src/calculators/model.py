@@ -151,11 +151,35 @@ CoreSetup = (
 
 @dataclass(frozen=True, eq=False)
 class CoreSetupRef:
-    """Identity-keyed reference to one exact built-in setup value."""
+    """Compatibility association for validating one captured setup."""
 
     component_identity: int
     label: str
+    position: int
     setup: CoreSetup
+
+
+@dataclass(frozen=True, eq=False)
+class ClassicalTermDescriptor:
+    """Ordered exact classical term without a live component reference."""
+
+    kind: str
+    label: str
+    position: int
+    setup: CoreSetup
+    charge_dependent: bool
+    geometry_inputs: tuple[str, ...]
+
+
+@dataclass(frozen=True, eq=False)
+class InteractionTermDescriptor:
+    """Ordered exact interaction term without a live component reference."""
+
+    kind: str
+    label: str
+    position: int
+    setup: CoreSetup
+    geometry_inputs: tuple[str, ...]
 
 
 @dataclass(frozen=True, eq=False)
@@ -174,27 +198,109 @@ class ExactSystemCore:
     integral_setup: IntegralSetup | None
     h0_setup: H0SetupNode | None
     index: CoreIndexData | None
+    classical_terms: tuple[ClassicalTermDescriptor, ...]
+    interaction_terms: tuple[InteractionTermDescriptor, ...]
+
+    def classical_term_at(
+        self, position: int
+    ) -> ClassicalTermDescriptor | None:
+        """Return an ordered descriptor without consulting components."""
+        return next(
+            (
+                entry
+                for entry in self.classical_terms
+                if entry.position == position
+            ),
+            None,
+        )
+
+    def interaction_term_at(
+        self, position: int
+    ) -> InteractionTermDescriptor | None:
+        """Return an ordered descriptor without consulting components."""
+        return next(
+            (
+                entry
+                for entry in self.interaction_terms
+                if entry.position == position
+            ),
+            None,
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class ExactSystemCompatibility:
+    """Identity associations used only at the mutable System boundary."""
+
     index_helper_identity: int
     classical_setups: tuple[CoreSetupRef, ...]
     interaction_setups: tuple[CoreSetupRef, ...]
 
-    def classical_setup(self, component: Classical) -> CoreSetup | None:
-        """Look up a captured setup by component identity, never by label."""
-        return self._setup(self.classical_setups, component)
 
-    def interaction_setup(self, component: Interaction) -> CoreSetup | None:
-        """Look up a captured setup by component identity, never by label."""
-        return self._setup(self.interaction_setups, component)
-
-    @staticmethod
-    def _setup(
-        entries: tuple[CoreSetupRef, ...], component: Classical | Interaction
-    ) -> CoreSetup | None:
-        identity = id(component)
-        for entry in entries:
-            if entry.component_identity == identity:
-                return entry.setup
+def _classical_term_kind(
+    component: Classical, setup: CoreSetup | None
+) -> tuple[str, bool] | None:
+    """Describe only exact built-ins whose setup is already captured."""
+    kinds: dict[type, tuple[type, str, bool]] = {
+        Repulsion: (RepulsionCoreSetup, "repulsion", False),
+        ShortRangeBond: (ShortRangeBondCoreSetup, "srb", False),
+        DispersionD3: (DispersionD3CoreSetup, "d3", False),
+        DispersionD4: (DispersionD4CoreSetup, "d4", True),
+        IES: (IESCoreSetup, "ies", True),
+        Halogen: (HalogenCoreSetup, "halogen", False),
+    }
+    spec = kinds.get(type(component))
+    if spec is None or not isinstance(setup, spec[0]):
         return None
+    return spec[1], spec[2]
+
+
+def _interaction_term_kind(
+    interaction: Interaction, setup: CoreSetup | None
+) -> str | None:
+    """Describe only exact built-in interactions with captured setup data."""
+    kinds: dict[type, tuple[type, str]] = {
+        ES2: (ES2CoreSetup, "es2"),
+        ES3: (ES3CoreSetup, "es3"),
+        AES2: (AES2CoreSetup, "aes2"),
+        DispersionD4SC: (D4SCCoreSetup, "d4sc"),
+        GeneralizedBorn: (GeneralizedBornCoreSetup, "generalized_born"),
+    }
+    spec = kinds.get(type(interaction))
+    if spec is None or not isinstance(setup, spec[0]):
+        return None
+    return spec[1]
+
+
+def _classical_terms_match(
+    captured: tuple[ClassicalTermDescriptor, ...],
+    expected: list[ClassicalTermDescriptor],
+) -> bool:
+    """Compare immutable descriptors by metadata and setup identity."""
+    return len(captured) == len(expected) and all(
+        left.kind == right.kind
+        and left.label == right.label
+        and left.position == right.position
+        and left.setup is right.setup
+        and left.charge_dependent == right.charge_dependent
+        and left.geometry_inputs == right.geometry_inputs
+        for left, right in zip(captured, expected)
+    )
+
+
+def _interaction_terms_match(
+    captured: tuple[InteractionTermDescriptor, ...],
+    expected: list[InteractionTermDescriptor],
+) -> bool:
+    """Compare immutable descriptors by metadata and setup identity."""
+    return len(captured) == len(expected) and all(
+        left.kind == right.kind
+        and left.label == right.label
+        and left.position == right.position
+        and left.setup is right.setup
+        and left.geometry_inputs == right.geometry_inputs
+        for left, right in zip(captured, expected)
+    )
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -311,6 +417,11 @@ class System:
     exact_core: ExactSystemCore | None = field(default=None, repr=False)
     """Exact unbatched values; None for packed compatibility Systems."""
 
+    _exact_compatibility: ExactSystemCompatibility | None = field(
+        default=None, repr=False
+    )
+    """Identity tokens kept outside the future stackable core value."""
+
     def singlepoint(
         self,
         positions: Tensor,
@@ -329,16 +440,50 @@ class System:
         """Return the sole exact D3 setup when the System has one."""
         return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
 
+    def classical_setup(self, component: Classical) -> CoreSetup | None:
+        """Compatibility lookup isolated from exact numerical dispatch."""
+        return self._compat_setup(
+            (
+                self._exact_compatibility.classical_setups
+                if self._exact_compatibility is not None
+                else ()
+            ),
+            component,
+        )
+
+    def interaction_setup(self, component: Interaction) -> CoreSetup | None:
+        """Compatibility lookup isolated from exact numerical dispatch."""
+        return self._compat_setup(
+            (
+                self._exact_compatibility.interaction_setups
+                if self._exact_compatibility is not None
+                else ()
+            ),
+            component,
+        )
+
+    @staticmethod
+    def _compat_setup(
+        entries: tuple[CoreSetupRef, ...], component: Classical | Interaction
+    ) -> CoreSetup | None:
+        identity = id(component)
+        for entry in entries:
+            if entry.component_identity == identity:
+                return entry.setup
+        return None
+
     def _active_exact_core(self) -> ExactSystemCore | None:
         """Return the captured core while its façade setup references agree."""
         core = self.exact_core
+        compatibility = self._exact_compatibility
         if (
             core is None
+            or compatibility is None
             or core.numbers is not self.numbers
             or core.config is not self.config
             or core.integral_setup is not self.integral_setup
             or core.h0_setup is not self.h0_setup
-            or core.index_helper_identity != id(self.ihelp)
+            or compatibility.index_helper_identity != id(self.ihelp)
         ):
             return None
 
@@ -347,11 +492,16 @@ class System:
             for component in self.classicals.components
             if type(component) is DispersionD3
         )
-        if tuple(owner for owner, _ in self.d3_setups) != d3_components:
+        d3_owners = tuple(owner for owner, _ in self.d3_setups)
+        if len(d3_owners) != len(d3_components) or any(
+            owner is not component
+            for owner, component in zip(d3_owners, d3_components)
+        ):
             return None
 
-        expected_classical: list[tuple[int, str, CoreSetup]] = []
-        for component in self.classicals.components:
+        expected_classical: list[tuple[int, int, str, CoreSetup]] = []
+        expected_classical_terms: list[ClassicalTermDescriptor] = []
+        for position, component in enumerate(self.classicals.components):
             setup = None
             if component is self.repulsion_classical:
                 setup = self.repulsion_setup
@@ -384,11 +534,25 @@ class System:
                 ),
             ):
                 expected_classical.append(
-                    (id(component), component.label, setup)
+                    (position, id(component), component.label, setup)
+                )
+                kind = _classical_term_kind(component, setup)
+                if kind is None:
+                    return None
+                expected_classical_terms.append(
+                    ClassicalTermDescriptor(
+                        kind=kind[0],
+                        label=component.label,
+                        position=position,
+                        setup=setup,
+                        charge_dependent=kind[1],
+                        geometry_inputs=("positions",),
+                    )
                 )
 
-        expected_interactions: list[tuple[int, str, CoreSetup]] = []
-        for interaction in self.interactions.components:
+        expected_interactions: list[tuple[int, int, str, CoreSetup]] = []
+        expected_interaction_terms: list[InteractionTermDescriptor] = []
+        for position, interaction in enumerate(self.interactions.components):
             if interaction is self.es2_interaction:
                 setup = self.es2_setup
             elif interaction is self.es3_interaction:
@@ -412,15 +576,35 @@ class System:
                 ),
             ):
                 expected_interactions.append(
-                    (id(interaction), interaction.label, setup)
+                    (position, id(interaction), interaction.label, setup)
+                )
+                kind = _interaction_term_kind(interaction, setup)
+                if kind is None:
+                    return None
+                expected_interaction_terms.append(
+                    InteractionTermDescriptor(
+                        kind=kind,
+                        label=interaction.label,
+                        position=position,
+                        setup=setup,
+                        geometry_inputs=("positions",),
+                    )
                 )
 
         if not self._setup_refs_match(
-            core.classical_setups, expected_classical
+            compatibility.classical_setups, expected_classical
         ):
             return None
         if not self._setup_refs_match(
-            core.interaction_setups, expected_interactions
+            compatibility.interaction_setups, expected_interactions
+        ):
+            return None
+        if not _classical_terms_match(
+            core.classical_terms, expected_classical_terms
+        ):
+            return None
+        if not _interaction_terms_match(
+            core.interaction_terms, expected_interaction_terms
         ):
             return None
 
@@ -447,16 +631,17 @@ class System:
     @staticmethod
     def _setup_refs_match(
         captured: tuple[CoreSetupRef, ...],
-        expected: list[tuple[int, str, CoreSetup]],
+        expected: list[tuple[int, int, str, CoreSetup]],
     ) -> bool:
         """Check ordered setup references without tensor equality/sync."""
         if len(captured) != len(expected):
             return False
         return all(
-            entry.component_identity == component_identity
+            entry.position == position
+            and entry.component_identity == component_identity
             and entry.label == label
             and entry.setup is setup
-            for entry, (component_identity, label, setup) in zip(
+            for entry, (position, component_identity, label, setup) in zip(
                 captured, expected
             )
         )
@@ -932,9 +1117,11 @@ class Model:
         OutputHandler.write_stdout("done\n", v=4)
 
         exact_core = None
+        exact_compatibility = None
         if batch_mode == 0:
             classical_setup_refs: list[CoreSetupRef] = []
-            for component in classicals.components:
+            classical_terms: list[ClassicalTermDescriptor] = []
+            for position, component in enumerate(classicals.components):
                 if type(component) is DispersionD3:
                     setup = next(
                         (
@@ -968,11 +1155,29 @@ class Model:
                     ),
                 ):
                     classical_setup_refs.append(
-                        CoreSetupRef(id(component), component.label, setup)
+                        CoreSetupRef(
+                            id(component), component.label, position, setup
+                        )
+                    )
+                    kind = _classical_term_kind(component, setup)
+                    if kind is None:
+                        raise RuntimeError(
+                            "Exact classical setup has no built-in descriptor."
+                        )
+                    classical_terms.append(
+                        ClassicalTermDescriptor(
+                            kind=kind[0],
+                            label=component.label,
+                            position=position,
+                            setup=setup,
+                            charge_dependent=kind[1],
+                            geometry_inputs=("positions",),
+                        )
                     )
 
             interaction_setup_refs: list[CoreSetupRef] = []
-            for interaction in interactions.components:
+            interaction_terms: list[InteractionTermDescriptor] = []
+            for position, interaction in enumerate(interactions.components):
                 if interaction is es2_interaction:
                     setup = es2_setup
                 elif interaction is es3_interaction:
@@ -987,7 +1192,23 @@ class Model:
                     setup = None
                 if setup is not None:
                     interaction_setup_refs.append(
-                        CoreSetupRef(id(interaction), interaction.label, setup)
+                        CoreSetupRef(
+                            id(interaction), interaction.label, position, setup
+                        )
+                    )
+                    kind = _interaction_term_kind(interaction, setup)
+                    if kind is None:
+                        raise RuntimeError(
+                            "Exact interaction setup has no built-in descriptor."
+                        )
+                    interaction_terms.append(
+                        InteractionTermDescriptor(
+                            kind=kind,
+                            label=interaction.label,
+                            position=position,
+                            setup=setup,
+                            geometry_inputs=("positions",),
+                        )
                     )
 
             backend_setup = (
@@ -1015,6 +1236,10 @@ class Model:
                     h0_setup if isinstance(h0_setup, H0SetupNode) else None
                 ),
                 index=core_index,
+                classical_terms=tuple(classical_terms),
+                interaction_terms=tuple(interaction_terms),
+            )
+            exact_compatibility = ExactSystemCompatibility(
                 index_helper_identity=id(ihelp),
                 classical_setups=tuple(classical_setup_refs),
                 interaction_setups=tuple(interaction_setup_refs),
@@ -1054,6 +1279,7 @@ class Model:
             generalized_born_interaction=generalized_born_interaction,
             dd=dd,
             exact_core=exact_core,
+            _exact_compatibility=exact_compatibility,
         )
 
 

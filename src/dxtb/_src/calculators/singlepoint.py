@@ -30,7 +30,7 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import labels
 from dxtb._src import scf
-from dxtb._src.calculators.model import System
+from dxtb._src.calculators.model import ClassicalTermDescriptor, System
 from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
@@ -48,6 +48,7 @@ from dxtb._src.components.classicals.halogen import (
     halogen_energy,
 )
 from dxtb._src.components.classicals.ies import IES, IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.repulsion.base import repulsion_energy
 from dxtb._src.components.classicals.repulsion.rep import (
     Repulsion,
     RepulsionCoreSetup,
@@ -55,6 +56,7 @@ from dxtb._src.components.classicals.repulsion.rep import (
 from dxtb._src.components.classicals.shortrangebond import (
     ShortRangeBond,
     ShortRangeBondCoreSetup,
+    short_range_bond_energy,
 )
 from dxtb._src.components.interactions.coulomb.multipole import (
     AES2CoreSetup,
@@ -169,12 +171,61 @@ def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     )
 
 
+def _evaluate_classical_descriptor(
+    descriptor: ClassicalTermDescriptor,
+    positions: Tensor,
+    charge: Tensor,
+) -> Tensor:
+    """Evaluate a captured built-in term without component dispatch."""
+    setup = descriptor.setup
+    if descriptor.kind == "d3":
+        if not isinstance(setup, DispersionD3CoreSetup):
+            raise TypeError("D3 descriptor has an invalid setup value.")
+        return dispersion_d3_energy(setup, positions)
+    if descriptor.kind == "repulsion":
+        if not isinstance(setup, RepulsionCoreSetup):
+            raise TypeError("Repulsion descriptor has an invalid setup value.")
+        energy = repulsion_energy(
+            positions,
+            setup.mask,
+            setup.arep,
+            setup.kexp,
+            setup.zeff,
+            setup.cutoff,
+        )
+        return 0.5 * torch.sum(energy, dim=-1)
+    if descriptor.kind == "srb":
+        if not isinstance(setup, ShortRangeBondCoreSetup):
+            raise TypeError("SRB descriptor has an invalid setup value.")
+        return short_range_bond_energy(setup, positions)
+    if descriptor.kind == "d4":
+        if not isinstance(setup, DispersionD4CoreSetup):
+            raise TypeError("D4 descriptor has an invalid setup value.")
+        return dispersion_d4_energy(setup, positions, charge)
+    if descriptor.kind == "ies":
+        if not isinstance(setup, IESCoreSetup):
+            raise TypeError("IES descriptor has an invalid setup value.")
+        return ies_energy(setup, positions, charge)
+    if descriptor.kind == "halogen":
+        if not isinstance(setup, HalogenCoreSetup):
+            raise TypeError("Halogen descriptor has an invalid setup value.")
+        return halogen_energy(setup, positions)
+    raise RuntimeError(f"Unknown classical term kind '{descriptor.kind}'.")
+
+
 class _SystemInteractionData(InteractionListCache):
     """Call-local interaction caches with their captured D4SC authority."""
 
-    def __init__(self, d4sc_setup: D4SCCoreSetup | None) -> None:
+    def __init__(
+        self,
+        d4sc_setup: D4SCCoreSetup | None,
+        functional_kinds: dict[str, str] | None = None,
+    ) -> None:
         super().__init__()
         self.d4sc_setup = d4sc_setup
+        self.functional_kinds = (
+            {} if functional_kinds is None else functional_kinds
+        )
 
 
 def _interaction_data(
@@ -188,19 +239,77 @@ def _interaction_data(
     """
     interactions = system.interactions if interactions is None else interactions
     core = system._active_exact_core()
+    descriptors = (
+        {term.position: term for term in core.interaction_terms}
+        if core is not None
+        else {}
+    )
+    functional_kinds: dict[str, str] = {}
+    d4sc_descriptor = next(
+        (term for term in descriptors.values() if term.kind == "d4sc"), None
+    )
     owns_selected_d4sc = system.d4sc_interaction is not None and any(
         interaction is system.d4sc_interaction
         for interaction in interactions.components
     )
     authoritative_d4sc_setup = (
-        core.interaction_setup(system.d4sc_interaction)
-        if core is not None and owns_selected_d4sc
+        system.interaction_setup(system.d4sc_interaction)
+        if d4sc_descriptor is not None
+        and owns_selected_d4sc
+        and system.interaction_setup(system.d4sc_interaction)
+        is d4sc_descriptor.setup
         else system.d4sc_setup if owns_selected_d4sc else None
     )
-    data = _SystemInteractionData(authoritative_d4sc_setup)
-    for interaction in interactions.components:
+    data = _SystemInteractionData(authoritative_d4sc_setup, functional_kinds)
+    for position, interaction in enumerate(interactions.components):
+        descriptor = descriptors.get(position)
+        if descriptor is not None:
+            trusted_setup = system.interaction_setup(interaction)
+            if (
+                trusted_setup is not descriptor.setup
+                or interaction.label != descriptor.label
+            ):
+                descriptor = None
+        if descriptor is not None:
+            setup = descriptor.setup
+            functional_kinds[descriptor.label] = descriptor.kind
+            if descriptor.kind == "es2":
+                if not isinstance(setup, ES2CoreSetup):
+                    raise TypeError("ES2 descriptor has an invalid setup.")
+                matrix = build_es2_coulomb(setup, positions)
+                data[descriptor.label] = ES2Cache(
+                    matrix, shell_resolved=setup.shell_resolved
+                )
+            elif descriptor.kind == "es3":
+                if not isinstance(setup, ES3CoreSetup):
+                    raise TypeError("ES3 descriptor has an invalid setup.")
+                data[descriptor.label] = ES3Cache(
+                    setup.hubbard_derivs, shell_resolved=setup.shell_resolved
+                )
+            elif descriptor.kind == "aes2":
+                if not isinstance(setup, AES2CoreSetup):
+                    raise TypeError("AES2 descriptor has an invalid setup.")
+                data[descriptor.label] = build_aes2_data(setup, positions)
+            elif descriptor.kind == "d4sc":
+                if not isinstance(setup, D4SCCoreSetup):
+                    raise TypeError("D4SC descriptor has an invalid setup.")
+                data[descriptor.label] = build_d4sc_data(setup, positions)
+            elif descriptor.kind == "generalized_born":
+                if not isinstance(setup, GeneralizedBornCoreSetup):
+                    raise TypeError(
+                        "GeneralizedBorn descriptor has an invalid setup."
+                    )
+                data[descriptor.label] = build_generalized_born_data(
+                    setup, positions
+                )
+            else:
+                raise RuntimeError(
+                    f"Unknown interaction term kind '{descriptor.kind}'."
+                )
+            continue
+
         captured_setup = (
-            core.interaction_setup(interaction) if core is not None else None
+            system.interaction_setup(interaction) if core is not None else None
         )
         if type(interaction) is ElectricField:
             data[interaction.label] = build_electric_field_data(
@@ -447,11 +556,24 @@ def singlepoint(
     # B5 provides the pure evaluation boundary. B6a removes persistent
     # component state behind this boundary.
     if system.classicals.components:
-        classical = {}
-        for component in system.classicals.components:
+        classical: list[tuple[str, Tensor]] = []
+        classical_terms = (
+            {term.position: term for term in core.classical_terms}
+            if core is not None
+            else {}
+        )
+        for position, component in enumerate(system.classicals.components):
+            term = classical_terms.get(position)
+            if term is not None:
+                timer.start(term.label, parent_uid="Classicals")
+                energy = _evaluate_classical_descriptor(term, positions, charge)
+                classical.append((term.label, energy))
+                timer.stop(term.label)
+                continue
+
             timer.start(component.label, parent_uid="Classicals")
             captured_setup = (
-                core.classical_setup(component) if core is not None else None
+                system.classical_setup(component) if core is not None else None
             )
             d3_setup = (
                 captured_setup
@@ -468,8 +590,11 @@ def singlepoint(
             if type(component) is DispersionD3:
                 if d3_setup is None:
                     raise RuntimeError("Single-system D3 setup is missing.")
-                classical[component.label] = dispersion_d3_energy(
-                    d3_setup, positions
+                classical.append(
+                    (
+                        component.label,
+                        dispersion_d3_energy(d3_setup, positions),
+                    )
                 )
             elif type(component) is DispersionD4:
                 d4_setup = (
@@ -483,8 +608,11 @@ def singlepoint(
                 )
                 if d4_setup is None:
                     raise RuntimeError("Single-system D4 setup is missing.")
-                classical[component.label] = dispersion_d4_energy(
-                    d4_setup, positions, charge
+                classical.append(
+                    (
+                        component.label,
+                        dispersion_d4_energy(d4_setup, positions, charge),
+                    )
                 )
             elif type(component) is Halogen:
                 halogen_setup = (
@@ -500,8 +628,8 @@ def singlepoint(
                     raise RuntimeError(
                         "Single-system halogen setup is missing."
                     )
-                classical[component.label] = halogen_energy(
-                    halogen_setup, positions
+                classical.append(
+                    (component.label, halogen_energy(halogen_setup, positions))
                 )
             else:
                 if isinstance(captured_setup, RepulsionCoreSetup):
@@ -551,8 +679,11 @@ def singlepoint(
                         raise RuntimeError(
                             "Single-system IES setup is missing."
                         )
-                    classical[component.label] = ies_energy(
-                        ies_setup, positions, charge
+                    classical.append(
+                        (
+                            component.label,
+                            ies_energy(ies_setup, positions, charge),
+                        )
                     )
                     timer.stop(component.label)
                     continue
@@ -561,13 +692,18 @@ def singlepoint(
                     setup = component.get_cache(system.numbers, system.ihelp)
                 else:
                     setup = system._classical_extension_cache[component.label]
-                classical[component.label] = component.get_energy(
-                    positions, setup, charge=charge
+                classical.append(
+                    (
+                        component.label,
+                        component.get_energy(positions, setup, charge=charge),
+                    )
                 )
             timer.stop(component.label)
-        classical_energy = torch.stack(tuple(classical.values())).sum(0)
+        classical_energy = torch.stack(
+            tuple(value for _, value in classical)
+        ).sum(0)
     else:
-        classical = {}
+        classical = []
         classical_energy = positions.new_zeros(positions.shape[:-1])
     zero_energy = torch.zeros_like(classical_energy)
 
@@ -575,7 +711,7 @@ def singlepoint(
         return Result.snapshot(
             energy=classical_energy,
             scf=zero_energy,
-            classical=tuple(classical.items()),
+            classical=tuple(classical),
             fenergy=zero_energy,
             iterations=torch.zeros(
                 (), dtype=torch.int64, device=positions.device
@@ -648,7 +784,7 @@ def singlepoint(
     scf_kwargs = (
         {
             "core_index": core_index,
-            "core_index_owner": core,
+            "core_index_owner": system,
         }
         if core is not None and core_index is not None
         else {}
@@ -672,7 +808,7 @@ def singlepoint(
     return Result.snapshot(
         energy=total_energy,
         scf=scf_output.energy,
-        classical=tuple(classical.items()),
+        classical=tuple(classical),
         fenergy=scf_output.fenergy,
         charges=scf_output.charges,
         density=scf_output.density,

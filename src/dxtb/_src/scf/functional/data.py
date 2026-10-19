@@ -265,12 +265,12 @@ def setup_scf_inputs(
     """Build immutable core values from one legacy single-System setup.
 
     ``core_index`` and ``core_index_owner`` are reserved for a trusted index
-    captured by the active System integral setup. The owner must identify this
-    exact IndexHelper instance and own the supplied map. Its map values are
-    established at that setup boundary; this function validates provenance,
-    shape, dtype, and device without synchronizing tensor values during SCF
-    preparation. Direct and legacy callers should omit both and retain the
-    isolated IndexHelper snapshot.
+    captured by the active System integral setup. The owner must be the
+    compatible System façade whose active exact core owns the supplied map.
+    Its map values are established at setup; this function validates owner,
+    IndexHelper provenance, shape, dtype, and device without synchronizing
+    tensor values during SCF preparation. Direct and legacy callers should
+    omit both and retain the isolated IndexHelper snapshot.
     """
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
@@ -284,12 +284,16 @@ def setup_scf_inputs(
     if core_index is not None:
         if type(core_index) is not CoreIndexData:
             raise TypeError("Captured SCF index must be CoreIndexData.")
+        active_core = getattr(
+            core_index_owner, "_active_exact_core", lambda: None
+        )()
+        compatibility = getattr(core_index_owner, "_exact_compatibility", None)
         if (
-            core_index_owner is None
-            or getattr(core_index_owner, "index", None) is not core_index
-            or getattr(core_index_owner, "numbers", None) is not numbers
-            or getattr(core_index_owner, "index_helper_identity", None)
-            != id(ihelp)
+            active_core is None
+            or active_core.index is not core_index
+            or active_core.numbers is not numbers
+            or compatibility is None
+            or compatibility.index_helper_identity != id(ihelp)
         ):
             raise ValueError(
                 "Captured SCF index does not belong to this System setup."
@@ -327,6 +331,7 @@ def setup_scf_inputs(
         interaction_data,
         numbers,
         d4sc_setup=getattr(interaction_data, "d4sc_setup", None),
+        kind_by_label=getattr(interaction_data, "functional_kinds", None),
     )
     kt_value = config.fermi.etemp * KELVIN2AU
     if kt_value == 0.0:

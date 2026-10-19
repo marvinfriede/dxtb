@@ -454,3 +454,92 @@ Disposition: B3b-Final.2a restores the compatibility and snapshot authority
 boundaries while retaining the staged exact/packed layout. Final B3b.3 remains
 open for cross-family compatibility acceptance and descriptor ownership;
 C8b is not started.
+
+## B3b-Final.3 — ordered family descriptors and compatibility acceptance
+
+Base: `36cfeb6ac7e4b2248c726222757c00b9cc29f0a8`.
+
+`ExactSystemCore` now owns ordered frozen `ClassicalTermDescriptor` and
+`InteractionTermDescriptor` tuples. A descriptor records exact built-in kind,
+result label, global insertion position, the existing authoritative setup
+Node, and the static geometry/charge input contract. It contains no live
+component object and no Python object-id token. It aliases the C5/C6/C7 setup
+Node already captured by `System`; no parameter tensor storage is copied.
+Compatibility-only component identity associations and IndexHelper
+provenance live in `System._exact_compatibility`, outside the staged core.
+
+Exact single-System classical evaluation uses descriptor kind and setup to
+select the existing family energy function for Repulsion, SRB, D3, D4, IES and
+Halogen. It retains the original global component insertion order by merging
+descriptor-backed exact terms with custom extension terms at their established
+positions. The exact path does not call `get_cache()` or `get_energy()` on an
+exact built-in component. Multiple exact D3 terms keep their ordered setup
+association and labels. Custom subclasses stay on their legacy cache/evaluator
+hooks. Descriptor construction requires exact component types and the
+corresponding setup Node, so a subclass cannot claim a built-in kind by label.
+
+Interaction call-data construction similarly consumes ordered exact
+descriptors for ES2, ES3, AES2, D4SC and GeneralizedBorn. It passes descriptor
+kinds to the existing `prepare_functional_interactions()` adapter, which
+continues to produce the established `FunctionalInteractionSet`; it does not
+introduce another interaction representation. Explicit electric fields and
+field gradients remain per-call values. D4SC's setup remains identity-bound to
+the selected exact component. Direct interaction-list callers without a kind
+mapping retain the original exact-type adapter behavior, and unsupported
+custom interactions retain their established compatibility boundary.
+
+`System._active_exact_core()` checks the current façade's exact setup
+associations, ordered descriptors, D3 owner ordering, integral/H0 setup
+identity, and backend index identity. If a supported façade setup replacement
+makes that staged snapshot incoherent, exact dispatch is disabled and the
+established compatibility path uses the replacement. In-place mutation of a
+legacy component does not alter captured built-in setup Nodes; the legacy
+component still governs its separately supported extension hooks. Packed
+modes retain `exact_core=None`, their real batch mode, full classical cache,
+IndexHelper and Calculator driver. No C8b registration or mixed-System
+stackability was added.
+
+The `core_index_owner` regression from B3b-Final.2a remains fixed by the
+separate trusted `solve_with_core_index()` boundary. Public `solve()` retains
+arbitrary positional/keyword forwarding. SCF map provenance checks, zero
+trusted-map reconstruction, direct-call isolated map copies, padding-aware
+orbital masks, effective dtype, floating setup device validation and the
+no-floating-setup dtype path remain unchanged.
+
+### B3b-Final.3 validation evidence
+
+On Python 3.14.8 / PyTorch 2.14.1 CPU, the combined B3b layout,
+singlepoint-core, eager compatibility, Model, list-order and functional-map
+selection passed **291 tests** (11 deselected known GFN1 production/legacy
+parity cases; no failures). The classical and interaction family control
+selection (excluding setup tests that trigger the broken optional PySCF
+import) completed with **354 passed, 4 skipped**. Unfiltered attempts hit three
+setup tests (`test_custom_exact_repulsion_replaces_excluded_builtin`, SRB's
+`test_param_module_gradients`, and
+`test_system_setup_parameter_gradients[gfn2-H2O-element.O.zeff]`) that import
+PySCF and fail before dxtb execution because the installed `libcvhf.so` has
+the unresolved symbol `int2e_spsp1spsp2_spinor`. The separate
+meaningful libcint/integral selection passed **129**, skipped **1**; E0
+iteration compatibility passed **9**; the selected implicit-root path passed
+**8**; selected E3.1b root-map, solver-outcome and H2 response controls passed
+**19** (8 deselected). Focused descriptor tests passed **7/7** in each of
+the five approved CPU environments (Python 3.10.22/Torch 2.6.0,
+Python 3.11.15/Torch 2.8.0, Python 3.12.10/Torch 2.11.0, Python 3.12.10/Torch
+2.13.0, Python 3.14.8/Torch 2.14.1). `tad-libcint` 0.3.0 is installed in all
+five; all five environments report CPU-only PyTorch and CUDA unavailable. The
+PySCF import failure is an environment limitation distinct from
+`tad-libcint`.
+
+The inherited Anderson first- and second-gradient discrepancies, ten GFN1
+production/legacy density-parity cases, GFN2 LiH NaN-H0/eigensolver failure,
+SiH4 force residuals, intermittent E0 small-gap order-2 gradcheck, historical
+NO2 worker-mode NaN, unclassified C6.7 broad-suite failures, and E1.3
+DFT-D3 forward-AD blocker remain separate and unchanged. No physics, reference,
+tolerance, or XFAIL changes were made.
+
+Disposition: ordered immutable built-in descriptors are consumed by exact
+single-System classical and functional-interaction preparation, while
+compatibility associations and packed/extension state remain outside the
+core. This closes final B3b's staged-layout and compatibility ownership
+contract. Broader C6 remains independently partial and is still a C8b
+prerequisite. C8b, E6a, E6bcompat-policy, E6bimpl, and E6broute remain open.
