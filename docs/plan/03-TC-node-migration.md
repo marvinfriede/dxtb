@@ -68,8 +68,15 @@ metadata tuples with the persistent descriptors; setup, owner, ordering, and
 index-identity checks remain. C6-Final.2 passed the available cross-family
 Node, functional-map, implicit-root, E0, and pure integral controls; libcint
 numerical controls remain blocked by the missing PySCF interface in the
-available environment. C6-Final.3 legacy/packed/environment acceptance
-remains before C8b. B2, B3b, and C7 are satisfied prerequisites.
+available environment at that time. C6-Final.3 has since exercised current
+source descriptor/model, packed/cache, interaction-family, and selected
+PySCF-backed libcint controls in Python 3.12/Torch 2.14.1. Focused
+current-source tests cover family Nodes, Calculator/result behavior, packed
+mode energy/gradient parity, and selected libcint/System paths; only this one
+of the five approved environments was available, and broader selections that
+did not finish are not counted. C6 is complete at its exact-core/legacy
+compatibility boundary; C8b may begin. B2, B3b, C6, and C7 are satisfied
+prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
