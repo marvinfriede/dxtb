@@ -65,8 +65,11 @@ Nodes dynamic children while leaving ExactSystemCore and the call-local
 FunctionalInteractionSet unchanged. C6-Final.1a removes temporary descriptor
 Node construction from exact-core coherence checks by comparing expected
 metadata tuples with the persistent descriptors; setup, owner, ordering, and
-index-identity checks remain. C6-Final.2/3 cross-family acceptance remain
-before C8b. B2, B3b, and C7 are satisfied prerequisites.
+index-identity checks remain. C6-Final.2 passed the available cross-family
+Node, functional-map, implicit-root, E0, and pure integral controls; libcint
+numerical controls remain blocked by the missing PySCF interface in the
+available environment. C6-Final.3 legacy/packed/environment acceptance
+remains before C8b. B2, B3b, and C7 are satisfied prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
