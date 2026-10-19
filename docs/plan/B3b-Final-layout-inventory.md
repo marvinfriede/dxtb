@@ -510,8 +510,10 @@ no-floating-setup dtype path remain unchanged.
 
 On Python 3.14.8 / PyTorch 2.14.1 CPU, the combined B3b layout,
 singlepoint-core, eager compatibility, Model, list-order and functional-map
-selection passed **291 tests** (11 deselected known GFN1 production/legacy
-parity cases; no failures). The classical and interaction family control
+selection passed **291 tests** (12 deselected GFN1 production/legacy parity
+cases; no failures). A later direct run collected those 12 node IDs: ten
+failed in the known parity family and two passed; see the C6-Final.0 audit.
+The classical and interaction family control
 selection (excluding setup tests that trigger the broken optional PySCF
 import) completed with **354 passed, 4 skipped**. Unfiltered attempts hit three
 setup tests (`test_custom_exact_repulsion_replaces_excluded_builtin`, SRB's

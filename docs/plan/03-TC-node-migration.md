@@ -58,7 +58,12 @@ remain on their legacy routes. The result is the accepted staged input layout
 for C8b, not a registered/stackable System Node. Evidence and the inherited
 Anderson gradient classification are in [`B3b final layout inventory`](B3b-Final-layout-inventory.md).
 Final B3b is complete at this compatibility boundary. Broader C6 remains
-partial and independently blocks C8b. B2 and C7 are satisfied prerequisites.
+partial and independently blocks C8b. C6-Final.0's real-tree probe found that
+the persistent ordered term descriptors are ordinary dataclasses, so standard
+pytree flattening stops before their nested setup Nodes. C6-Final.1 must close
+that descriptor boundary before C8b; the call-local FunctionalInteractionSet
+continues to use its explicit tensor-tree adapter. B2, B3b, and C7 are
+satisfied prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
