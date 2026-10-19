@@ -18,14 +18,25 @@
 
 from __future__ import annotations
 
+from typing import get_args, get_type_hints
+
 import pytest
 import torch
+from tad_mctc.tree import Node, stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.config.main import Config
-from dxtb._src.calculators.model import Model, System
-from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.calculators.model import (
+    ClassicalTermDescriptor,
+    InteractionTermDescriptor,
+    Model,
+    System,
+)
+from dxtb._src.calculators.singlepoint import (
+    _evaluate_classical_descriptor,
+    _interaction_data,
+)
 from dxtb._src.components.classicals import Classical
 from dxtb._src.scf.functional.core import tensor_leaves
 from dxtb._src.scf.functional.interactions import (
@@ -40,13 +51,14 @@ def _system(method: str, label: int, numbers: list[int]) -> System:
     ).setup(torch.tensor(numbers))
 
 
-def test_c6_descriptor_nested_setup_is_opaque_to_standard_pytree() -> None:
-    """The current dataclass descriptor hides its registered setup Node."""
+def test_c6_descriptor_children_expose_setup_nodes_to_standard_pytree() -> None:
+    """Registered descriptors expose their captured setup Node leaves."""
     system = _system(GFN2_XTB, labels.GFN2_XTB, [1, 1])
     assert system.exact_core is not None
     core = system.exact_core
     descriptor = system.exact_core.classical_terms[0]
     setup = descriptor.setup
+    assert isinstance(descriptor, Node)
 
     for term in core.classical_terms:
         component = system.classicals.components[term.position]
@@ -60,44 +72,109 @@ def test_c6_descriptor_nested_setup_is_opaque_to_standard_pytree() -> None:
     assert tree_unflatten(core_leaves, core_spec) is core
 
     descriptor_leaves, descriptor_spec = tree_flatten(descriptor)
-    assert descriptor_leaves == [descriptor]
-    assert tree_unflatten(descriptor_leaves, descriptor_spec) is descriptor
+    setup_leaves, setup_spec = tree_flatten(setup)
+    assert descriptor_leaves
+    assert all(isinstance(leaf, torch.Tensor) for leaf in descriptor_leaves)
+    assert len(descriptor_leaves) == len(setup_leaves)
+    assert all(
+        left is right for left, right in zip(descriptor_leaves, setup_leaves)
+    )
+    assert descriptor.setup is setup
+
+    rebuilt_descriptor = tree_unflatten(descriptor_leaves, descriptor_spec)
+    assert isinstance(rebuilt_descriptor, type(descriptor))
+    assert rebuilt_descriptor is not descriptor
+    assert rebuilt_descriptor.kind == descriptor.kind
+    assert rebuilt_descriptor.label == descriptor.label
+    assert rebuilt_descriptor.position == descriptor.position
+    assert rebuilt_descriptor.charge_dependent is descriptor.charge_dependent
+    assert rebuilt_descriptor.geometry_inputs == descriptor.geometry_inputs
+    assert type(rebuilt_descriptor.setup) is type(setup)
+    assert tree_flatten(rebuilt_descriptor.setup)[1] == setup_spec
+    for actual, expected in zip(
+        tree_flatten(rebuilt_descriptor.setup)[0], setup_leaves
+    ):
+        torch.testing.assert_close(actual, expected)
 
     interaction = core.interaction_terms[0]
+    assert isinstance(interaction, Node)
     interaction_leaves, interaction_spec = tree_flatten(interaction)
-    assert interaction_leaves == [interaction]
-    assert tree_unflatten(interaction_leaves, interaction_spec) is interaction
     interaction_tensor_leaves, _ = tree_flatten(interaction.setup)
-    assert interaction_tensor_leaves
+    assert len(interaction_leaves) == len(interaction_tensor_leaves)
     assert all(
-        isinstance(leaf, torch.Tensor) for leaf in interaction_tensor_leaves
+        left is right
+        for left, right in zip(interaction_leaves, interaction_tensor_leaves)
     )
+    rebuilt_interaction = tree_unflatten(interaction_leaves, interaction_spec)
+    assert rebuilt_interaction.kind == interaction.kind
+    assert rebuilt_interaction.label == interaction.label
+    assert rebuilt_interaction.position == interaction.position
+    assert rebuilt_interaction.geometry_inputs == interaction.geometry_inputs
+    assert type(rebuilt_interaction.setup) is type(interaction.setup)
 
-    setup_leaves, setup_spec = tree_flatten(setup)
-    assert setup_leaves
-    assert all(isinstance(leaf, torch.Tensor) for leaf in setup_leaves)
-    rebuilt_setup = tree_unflatten(setup_leaves, setup_spec)
-    rebuilt_leaves, rebuilt_spec = tree_flatten(rebuilt_setup)
-    assert rebuilt_setup is not setup
-    assert rebuilt_spec == setup_spec
-    assert all(
-        left is right for left, right in zip(rebuilt_leaves, setup_leaves)
-    )
-
-    # The accepted implicit tensor-tree adapter recurses through dataclasses,
-    # so it sees the same setup tensors even though standard pytree does not.
+    # The implicit adapter and standard pytree now reach the same tensor objects.
     nested = tensor_leaves(descriptor)
     assert nested
     assert all(path.startswith("setup.") for path, _ in nested)
-    assert {path[len("setup.") :] for path, _ in nested} == {
-        path for path, _ in tensor_leaves(setup)
-    }
     setup_values = {id(value) for _, value in tensor_leaves(setup)}
     assert {id(value) for _, value in nested} == setup_values
+    assert {id(value) for value in descriptor_leaves} == setup_values
+
+    def assert_no_tensor_context(spec) -> None:
+        def contains_tensor(value) -> bool:
+            if isinstance(value, torch.Tensor):
+                return True
+            if isinstance(value, (tuple, list)):
+                return any(contains_tensor(item) for item in value)
+            if isinstance(value, dict):
+                return any(contains_tensor(item) for item in value.values())
+            return False
+
+        assert not contains_tensor(spec.context)
+        children = (
+            (spec.child(index) for index in range(spec.num_children))
+            if hasattr(spec, "child") and hasattr(spec, "num_children")
+            else iter(spec.children_specs)
+        )
+        for child_spec in children:
+            assert_no_tensor_context(child_spec)
+
+    assert_no_tensor_context(descriptor_spec)
+    wrapped = (descriptor, None, ())
+    wrapped_leaves, wrapped_spec = tree_flatten(wrapped)
+    rebuilt_wrapped = tree_unflatten(wrapped_leaves, wrapped_spec)
+    assert rebuilt_wrapped[1:] == (None, ())
+    assert type(rebuilt_wrapped[0].setup) is type(descriptor.setup)
+    assert all(
+        left is right
+        for left, right in zip(
+            tree_flatten(rebuilt_wrapped[0].setup)[0], setup_leaves
+        )
+    )
 
 
-def test_c6_system_descriptor_tree_is_not_ready_for_standard_stack() -> None:
-    """Different exact method compositions have different opaque trees."""
+def test_core_setup_union_contains_all_registered_families() -> None:
+    """The descriptor setup annotation names all eleven family Nodes."""
+    expected = {
+        "RepulsionCoreSetup",
+        "ShortRangeBondCoreSetup",
+        "DispersionD3CoreSetup",
+        "DispersionD4CoreSetup",
+        "IESCoreSetup",
+        "HalogenCoreSetup",
+        "ES2CoreSetup",
+        "ES3CoreSetup",
+        "AES2CoreSetup",
+        "D4SCCoreSetup",
+        "GeneralizedBornCoreSetup",
+    }
+    for descriptor_type in (ClassicalTermDescriptor, InteractionTermDescriptor):
+        setup_type = get_type_hints(descriptor_type)["setup"]
+        assert {member.__name__ for member in get_args(setup_type)} == expected
+
+
+def test_c6_descriptor_method_compositions_have_distinct_trees() -> None:
+    """Different exact method compositions remain structurally distinct."""
     gfn1 = _system(GFN1_XTB, labels.GFN1_XTB, [1, 1]).exact_core
     gfn2 = _system(GFN2_XTB, labels.GFN2_XTB, [1, 1]).exact_core
     assert gfn1 is not None and gfn2 is not None
@@ -119,10 +196,171 @@ def test_c6_system_descriptor_tree_is_not_ready_for_standard_stack() -> None:
     gfn1_leaves, gfn1_spec = tree_flatten(gfn1.classical_terms)
     gfn2_leaves, gfn2_spec = tree_flatten(gfn2.classical_terms)
     assert gfn1_spec != gfn2_spec
-    assert len(gfn1_leaves) == len(gfn1.classical_terms)
-    assert len(gfn2_leaves) == len(gfn2.classical_terms)
-    assert all(not isinstance(leaf, torch.Tensor) for leaf in gfn1_leaves)
-    assert all(not isinstance(leaf, torch.Tensor) for leaf in gfn2_leaves)
+    assert gfn1_leaves and gfn2_leaves
+    assert all(isinstance(leaf, torch.Tensor) for leaf in gfn1_leaves)
+    assert all(isinstance(leaf, torch.Tensor) for leaf in gfn2_leaves)
+
+
+def test_c6_descriptor_trees_stack_only_for_compatible_setup_shapes() -> None:
+    """Stack matching descriptor trees without sharing setup storage."""
+    first = _system(GFN2_XTB, labels.GFN2_XTB, [1, 1]).exact_core
+    second = _system(GFN2_XTB, labels.GFN2_XTB, [1, 1]).exact_core
+    assert first is not None and second is not None
+
+    first_tree = (first.classical_terms, first.interaction_terms)
+    second_tree = (second.classical_terms, second.interaction_terms)
+    first_leaves, first_spec = tree_flatten(first_tree)
+    second_leaves, second_spec = tree_flatten(second_tree)
+    assert first_spec == second_spec
+    assert len(first_leaves) == len(second_leaves)
+    assert [leaf.shape for leaf in first_leaves] == [
+        leaf.shape for leaf in second_leaves
+    ]
+    assert [leaf.dtype for leaf in first_leaves] == [
+        leaf.dtype for leaf in second_leaves
+    ]
+    for lhs, rhs in zip(first_leaves, second_leaves):
+        assert lhs is not rhs
+        if lhs.numel() and rhs.numel():
+            assert (
+                lhs.untyped_storage().data_ptr()
+                != rhs.untyped_storage().data_ptr()
+            )
+
+    stacked = stack((first_tree, second_tree))
+    stacked_leaves, stacked_spec = tree_flatten(stacked)
+    assert stacked_spec == first_spec
+    assert all(
+        value.shape[0] == 2 and value.dtype == original.dtype
+        for value, original in zip(stacked_leaves, first_leaves)
+    )
+
+    lih = _system(GFN2_XTB, labels.GFN2_XTB, [3, 1]).exact_core
+    assert lih is not None
+    lih_tree = (lih.classical_terms, lih.interaction_terms)
+    lih_leaves, lih_spec = tree_flatten(lih_tree)
+    assert lih_spec == first_spec
+    assert any(a.shape != b.shape for a, b in zip(first_leaves, lih_leaves))
+    with pytest.raises((RuntimeError, ValueError)):
+        stack((first_tree, lih_tree))
+
+
+@pytest.mark.parametrize(
+    "method,label,kind",
+    [
+        (GFN1_XTB, labels.GFN1_XTB, "d3"),
+        (GFN2_XTB, labels.GFN2_XTB, "aes2"),
+    ],
+)
+def test_c6_descriptor_conversion_preserves_metadata_and_structure(
+    method: str, label: int, kind: str
+) -> None:
+    """Node conversion changes floating leaves and keeps structural dtypes."""
+    core = _system(method, label, [1, 1]).exact_core
+    assert core is not None
+    descriptor = next(
+        term
+        for term in (*core.classical_terms, *core.interaction_terms)
+        if term.kind == kind
+    )
+    leaves, _ = tree_flatten(descriptor)
+    converted = descriptor.to(dtype=torch.float32)
+    converted_leaves, _ = tree_flatten(converted)
+    assert type(converted) is type(descriptor)
+    assert (converted.kind, converted.label, converted.position) == (
+        descriptor.kind,
+        descriptor.label,
+        descriptor.position,
+    )
+    assert converted.geometry_inputs == descriptor.geometry_inputs
+    if hasattr(descriptor, "charge_dependent"):
+        assert converted.charge_dependent is descriptor.charge_dependent
+    assert len(leaves) == len(converted_leaves)
+    assert any(
+        old.is_floating_point() and new.dtype == torch.float32
+        for old, new in zip(leaves, converted_leaves)
+    )
+    if kind == "d3":
+        assert any(old.dtype in (torch.int32, torch.int64) for old in leaves)
+    if kind == "aes2":
+        assert any(old.dtype == torch.bool for old in leaves)
+    for old, new in zip(leaves, converted_leaves):
+        if old.is_floating_point():
+            assert new.dtype == torch.float32
+        else:
+            assert new.dtype == old.dtype
+    roundtrip = converted.to(dtype=torch.float64)
+    for old, new in zip(leaves, tree_flatten(roundtrip)[0]):
+        if old.is_floating_point():
+            torch.testing.assert_close(new, old)
+        else:
+            assert new.dtype == old.dtype
+            torch.testing.assert_close(new, old)
+    cpu_copy = descriptor.to(device="cpu")
+    assert type(cpu_copy) is type(descriptor)
+    assert all(leaf.device.type == "cpu" for leaf in tree_flatten(cpu_copy)[0])
+
+
+def test_c6_repulsion_descriptor_preserves_parameter_and_mixed_gradients() -> (
+    None
+):
+    """The registered child keeps the original parameter graph intact."""
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    par.set_differentiable("element.H.arep")
+    numbers = torch.tensor([1, 1])
+    system = Model(
+        par=par,
+        config=Config.create(method=labels.GFN1_XTB, exclude="scf"),
+    ).setup(numbers)
+    assert system.exact_core is not None
+    descriptor = next(
+        term
+        for term in system.exact_core.classical_terms
+        if term.kind == "repulsion"
+    )
+    component = system.repulsion_classical
+    legacy_setup = component.get_cache(system.numbers, system.ihelp)
+    parameter = par.get("element.H.arep")
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+
+    core_positions = positions.clone().requires_grad_(True)
+    core_energy = _evaluate_classical_descriptor(
+        descriptor, core_positions, torch.tensor(0.0, dtype=torch.float64)
+    ).sum()
+    core_pos_grad, core_param_grad = torch.autograd.grad(
+        core_energy, (core_positions, parameter), create_graph=True
+    )
+    core_mixed = torch.autograd.grad(core_pos_grad.sum(), parameter)[0]
+
+    legacy_positions = positions.clone().requires_grad_(True)
+    legacy_energy = component.get_energy(legacy_positions, legacy_setup).sum()
+    legacy_pos_grad, legacy_param_grad = torch.autograd.grad(
+        legacy_energy, (legacy_positions, parameter), create_graph=True
+    )
+    legacy_mixed = torch.autograd.grad(legacy_pos_grad.sum(), parameter)[0]
+
+    torch.testing.assert_close(core_energy, legacy_energy)
+    torch.testing.assert_close(core_pos_grad, legacy_pos_grad)
+    torch.testing.assert_close(core_param_grad, legacy_param_grad)
+    torch.testing.assert_close(core_mixed, legacy_mixed)
+    assert torch.count_nonzero(core_param_grad) > 0
+
+    direction = torch.ones_like(positions) * 0.1
+    core_jvp = torch.func.jvp(
+        lambda geometry: _evaluate_classical_descriptor(
+            descriptor, geometry, torch.tensor(0.0, dtype=torch.float64)
+        ).sum(),
+        (positions,),
+        (direction,),
+    )[1]
+    legacy_jvp = torch.func.jvp(
+        lambda geometry: component.get_energy(geometry, legacy_setup).sum(),
+        (positions,),
+        (direction,),
+    )[1]
+    torch.testing.assert_close(core_jvp, legacy_jvp)
 
 
 def test_c6_same_size_compositions_can_have_incompatible_dynamic_shapes() -> (

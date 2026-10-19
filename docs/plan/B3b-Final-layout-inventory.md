@@ -545,3 +545,13 @@ compatibility associations and packed/extension state remain outside the
 core. This closes final B3b's staged-layout and compatibility ownership
 contract. Broader C6 remains independently partial and is still a C8b
 prerequisite. C8b, E6a, E6bcompat-policy, E6bimpl, and E6broute remain open.
+
+## C6-Final.1 descriptor tree follow-up
+
+C6-Final.1 registers the ordered classical and interaction term descriptors
+that reference the setup Nodes listed above. The descriptor owns static
+dispatch metadata and has the existing family setup as its dynamic child.
+This change does not register `ExactSystemCore`, change System setup ownership
+or compatibility associations, or alter B3b's accepted layout contract. See
+the C6 acceptance inventory for tree, conversion, gradient, and structural
+stacking evidence; C6-Final.2 and C6-Final.3 remain required before C8b.

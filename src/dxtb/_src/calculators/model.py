@@ -45,6 +45,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import torch
+from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
@@ -159,27 +160,25 @@ class CoreSetupRef:
     setup: CoreSetup
 
 
-@dataclass(frozen=True, eq=False)
-class ClassicalTermDescriptor:
+class ClassicalTermDescriptor(Node):
     """Ordered exact classical term without a live component reference."""
 
-    kind: str
-    label: str
-    position: int
-    setup: CoreSetup
-    charge_dependent: bool
-    geometry_inputs: tuple[str, ...]
+    setup: CoreSetup = child()
+    kind: str = context()
+    label: str = context()
+    position: int = context()
+    charge_dependent: bool = context()
+    geometry_inputs: tuple[str, ...] = context()
 
 
-@dataclass(frozen=True, eq=False)
-class InteractionTermDescriptor:
+class InteractionTermDescriptor(Node):
     """Ordered exact interaction term without a live component reference."""
 
-    kind: str
-    label: str
-    position: int
-    setup: CoreSetup
-    geometry_inputs: tuple[str, ...]
+    setup: CoreSetup = child()
+    kind: str = context()
+    label: str = context()
+    position: int = context()
+    geometry_inputs: tuple[str, ...] = context()
 
 
 @dataclass(frozen=True, eq=False)
