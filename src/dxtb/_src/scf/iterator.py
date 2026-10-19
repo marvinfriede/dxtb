@@ -102,7 +102,6 @@ def solve(
     refocc: Tensor,
     *args: Any,
     core_index: CoreIndexData | None = None,
-    core_index_owner: object | None = None,
     **kwargs: Any,
 ) -> SCFResult | FunctionalCoreResult:
     """
@@ -134,6 +133,77 @@ def solve(
     SCFResult | FunctionalCoreResult
         Legacy result mapping or tensor-status functional full-SCF result.
     """
+    return _solve_impl(
+        numbers,
+        positions,
+        chrg,
+        spin,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+        refocc,
+        args,
+        core_index,
+        None,
+        kwargs,
+    )
+
+
+def solve_with_core_index(
+    numbers: Tensor,
+    positions: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    refocc: Tensor,
+    *,
+    core_index: CoreIndexData,
+    core_index_owner: object,
+    args: tuple[Any, ...] = (),
+    kwargs: dict[str, Any] | None = None,
+) -> SCFResult | FunctionalCoreResult:
+    """Run SCF with an internally trusted captured structural map."""
+    return _solve_impl(
+        numbers,
+        positions,
+        chrg,
+        spin,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+        refocc,
+        args,
+        core_index,
+        core_index_owner,
+        {} if kwargs is None else kwargs,
+    )
+
+
+def _solve_impl(
+    numbers: Tensor,
+    positions: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    refocc: Tensor,
+    args: tuple[Any, ...],
+    core_index: CoreIndexData | None,
+    core_index_owner: object | None,
+    kwargs: dict[str, Any],
+) -> SCFResult | FunctionalCoreResult:
+    """Share numerical dispatch while preserving the public kwargs mapping."""
     n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
 
     if config.requires_iterations is False:

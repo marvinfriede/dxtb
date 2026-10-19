@@ -385,3 +385,72 @@ for dispatch and result order, so this is not yet an independent evaluation
 dispatcher. Active-classical `Calculator.type()` remains a known compatibility
 limitation and was not expanded by this package; the dtype-transition tests
 exercise the no-setup case only.
+
+## B3b-Final.2a — exact-core compatibility hardening
+
+Base: `fe2f0db6261e5e0b0dcf129c583001d9c6acee9e`.
+
+The B3b-Final.2 public `scf.iterator.solve()` signature explicitly consumed
+`core_index_owner`, so explicit `None` and an arbitrary object stopped counting
+as legacy engine overrides. The public compatibility function now reserves
+only the previously introduced `core_index` input and forwards all other
+keywords unchanged. `solve_with_core_index()` is a separate internal entry
+point for the captured map/owner pair used by exact `System.singlepoint()`;
+both entries share the same dispatcher. FULL and implicit public callers with
+`core_index_owner=None` or an object therefore retain legacy engine routing,
+and the trusted functional route still checks map identity, owning-core
+identity, IndexHelper provenance, shape, dtype, and device. Direct callers
+without a trusted owner retain their isolated map copies.
+
+`System._active_exact_core()` now checks that ordered exact classical and
+interaction setup references still match the current façade by component
+identity, label, and setup-object identity. The exact D3 owner sequence must
+also match the exact D3 components in classical insertion order. This check
+covers Repulsion, SRB, D4, IES, Halogen, D3, ES2, ES3, AES2, D4SC, and
+GeneralizedBorn without comparing tensor contents or creating copied setup
+owners. Replacing a valid setup deactivates the captured core, so the existing
+facade setup controls evaluation; unchanged family Nodes retain their original
+identity. D4SC setup authority remains bound to its component identity.
+
+Exact-core singlepoint validation again checks the representative floating
+setup tensor's device against `numbers.device`, then verifies that its dtype
+matches `ExactSystemCore.effective_dtype`. The effective dtype scalar remains
+authoritative when no floating setup exists. The libcint CPU fallback is
+validated using the existing H0-first representative tensor policy; no
+CPU-resident libcint basis leaf is compared against the positions device.
+When the captured SCF map is structurally/device-incompatible, singlepoint
+declines the trusted handoff and uses the direct legacy preparation path.
+
+The new regressions fail on the exact B3b-Final.2 base for the owner-keyword
+routing, stale Repulsion setup, and floating setup device check. On the base,
+the `meta` H0 mismatch proceeds into CN/H0 numerical work and raises a later
+PyTorch device `RuntimeError`; the candidate raises the established early
+`DeviceError`. A valid Repulsion replacement with a changed `arep` evaluates
+through the replacement and matches the same facade with `exact_core=None`.
+Two ordered exact D3 setups are also checked by identity and insertion order.
+
+Final focused primary validation used Python 3.14.8 / PyTorch 2.14.1 with CPU
+work-stealing pytest. The Model/singlepoint/functional compatibility
+selection passed 219 tests (excluding the known GFN1 legacy-parity cases).
+The C7 PyTorch/libcint/H0 setup-node controls passed 64 tests, the E0
+iteration compatibility controls passed 9 tests, and selected public
+implicit/FULL route controls passed 3 tests. The focused compatibility,
+coherency, dtype/device and captured-map tests passed 21 tests in each of the
+five approved Python/PyTorch CPU environments: Python 3.10.22 / Torch 2.6.0,
+Python 3.11.15 / Torch 2.8.0, Python 3.12.10 / Torch 2.11.0, Python 3.12.10 /
+Torch 2.13.0, and Python 3.14.8 / Torch 2.14.1. A larger combined
+implicit-root/root-derivative/E0/C7 selection was interrupted after workers
+produced progress dots without returning a pytest summary; it is not counted
+as a passing run. The affected Model/singlepoint/functional compatibility
+selection has ten failures in
+`test_production_singlepoint_matches_legacy_full`; all ten exact parameterized
+cases fail on both the B3b-Final.2 base and candidate with the same established
+GFN1 density/matrix parity discrepancy. The new trusted-route spy was updated
+to observe `solve_with_core_index()`. CUDA was not run. `tad-libcint` is
+installed in all five approved CPU environments, but no libcint test matrix
+was run for this package.
+
+Disposition: B3b-Final.2a restores the compatibility and snapshot authority
+boundaries while retaining the staged exact/packed layout. Final B3b.3 remains
+open for cross-family compatibility acceptance and descriptor ownership;
+C8b is not started.

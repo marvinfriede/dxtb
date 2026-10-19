@@ -18,28 +18,28 @@
 
 from __future__ import annotations
 
-import inspect
 import importlib
+import inspect
 import sys
 from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
+from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import (
-    Calculator,
     GFN1_XTB,
     GFN2_XTB,
+    Calculator,
     OutputHandler,
     ParamModule,
     labels,
 )
-from dxtb._src.components.interactions.container import Charges, Potential
-from tad_mctc.exceptions import DeviceError, DtypeError
 from dxtb._src.calculators.config import Config
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import singlepoint
+from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.scf.status import SCFStatus
 
 
@@ -239,8 +239,8 @@ def test_default_full_singlepoint_uses_functional_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Default FULL singlepoint bypasses the mutable legacy full engine."""
-    from dxtb._src.scf.functional.eager import FunctionalCoreResult
     from dxtb._src.scf import unrolling
+    from dxtb._src.scf.functional.eager import FunctionalCoreResult
 
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
@@ -258,7 +258,7 @@ def test_default_full_singlepoint_uses_functional_route(
 
     monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", unexpected)
     core_module = importlib.import_module("dxtb._src.calculators.singlepoint")
-    original_solve = core_module.scf.solve
+    original_solve = core_module.scf.solve_with_core_index
     captured: dict[str, object] = {}
 
     def capture_solve(*args: object, **kwargs: object) -> object:
@@ -266,7 +266,7 @@ def test_default_full_singlepoint_uses_functional_route(
         captured["result"] = result
         return result
 
-    monkeypatch.setattr(core_module.scf, "solve", capture_solve)
+    monkeypatch.setattr(core_module.scf, "solve_with_core_index", capture_solve)
     OutputHandler.clear_warnings()
     result = singlepoint(system, positions)
     assert len(OutputHandler.warnings) == 1
@@ -371,7 +371,9 @@ def test_production_converged_route_executes_only_physical_maps(
 ) -> None:
     """Eager production stops mapping after convergence, unlike fixed trips."""
     from test.test_scf.test_functional_map import _prepare_case
-    from dxtb._src.scf.functional import anderson, map as functional_map
+
+    from dxtb._src.scf.functional import anderson
+    from dxtb._src.scf.functional import map as functional_map
     from dxtb._src.scf.unrolling.base import BaseTSCF
 
     options = {
@@ -460,9 +462,10 @@ def test_production_singlepoint_matches_legacy_full(
     representation: int, mixer: int, temperature: float
 ) -> None:
     """Production FULL dispatch preserves legacy values in each route."""
+    from test.test_scf.test_functional_map import _prepare_case
+
     from dxtb._src.scf.functional import FunctionalCoreResult
     from dxtb._src.scf.unrolling import SelfConsistentFieldFull
-    from test.test_scf.test_functional_map import _prepare_case
 
     options = {
         "scp_mode": representation,
@@ -536,8 +539,9 @@ def test_production_maxiter_zero_is_valid_one_shot(
     representation: int, mixer: int, force_convergence: bool
 ) -> None:
     """The production boundary preserves maxiter=0 for every representation."""
-    from dxtb import SCFFailureCode
     from test.test_scf.test_functional_map import _prepare_case
+
+    from dxtb import SCFFailureCode
 
     case = _prepare_case(
         GFN1_XTB,
@@ -573,11 +577,12 @@ def test_production_positive_budget_nonconvergence_policy(
     force_convergence: bool,
 ) -> None:
     """Production FULL policy warns or raises after a positive failed budget."""
+    from test.test_scf.test_functional_map import _prepare_case
+
     from dxtb._src.typing.exceptions import (
         SCFConvergenceError,
         SCFConvergenceWarning,
     )
-    from test.test_scf.test_functional_map import _prepare_case
 
     case = _prepare_case(
         GFN1_XTB,
@@ -612,8 +617,9 @@ def test_production_negative_temperature_preserves_legacy_results(
     mixer: int,
 ) -> None:
     """Negative temperature keeps legacy low-T results and warning ordering."""
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
     from test.test_scf.test_functional_map import _prepare_case
+
+    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 
     case = _prepare_case(
         GFN1_XTB,
@@ -713,8 +719,9 @@ def test_production_dynamic_damping_matches_legacy(
 
 def test_production_gfn2_default_broyden_route_matches_legacy() -> None:
     """GFN2 default potential/Broyden/300 K route matches legacy outputs."""
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
     from test.test_scf.test_functional_map import _prepare_case
+
+    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 
     options = {
         "scp_mode": labels.SCP_MODE_POTENTIAL,

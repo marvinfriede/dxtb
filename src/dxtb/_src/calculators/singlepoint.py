@@ -391,9 +391,7 @@ def singlepoint(
             f"are on '{positions.device}'."
         )
 
-    floating_setup = (
-        None if core is not None else _floating_setup_tensor(system)
-    )
+    floating_setup = _floating_setup_tensor(system)
     expected_dtype = (
         core.effective_dtype
         if core is not None
@@ -403,12 +401,18 @@ def singlepoint(
             else floating_setup.dtype
         )
     )
-    if core is None and floating_setup is not None:
+    if floating_setup is not None:
         if floating_setup.device != system_device:
             raise DeviceError(
                 "System floating setup is on "
                 f"'{floating_setup.device}', but System numbers are on "
                 f"'{system_device}'."
+            )
+        if core is not None and floating_setup.dtype != core.effective_dtype:
+            raise DtypeError(
+                "Dtype mismatch: System floating setup is of type "
+                f"'{floating_setup.dtype}', but exact core declares "
+                f"'{core.effective_dtype}'."
             )
     if positions.dtype != expected_dtype:
         raise DtypeError(
@@ -636,7 +640,20 @@ def singlepoint(
         else None
     )
 
-    scf_results = scf.solve(
+    scf_solve = (
+        scf.solve_with_core_index
+        if core is not None and core_index is not None
+        else scf.solve
+    )
+    scf_kwargs = (
+        {
+            "core_index": core_index,
+            "core_index_owner": core,
+        }
+        if core is not None and core_index is not None
+        else {}
+    )
+    scf_results = scf_solve(
         numbers,
         positions,
         charge,
@@ -647,8 +664,7 @@ def singlepoint(
         config.scf,
         matrices,
         refocc,
-        core_index=core_index,
-        core_index_owner=core if core_index is not None else None,
+        **scf_kwargs,
     )
     scf_output = _normalize_scf_output(scf_results, positions)
 

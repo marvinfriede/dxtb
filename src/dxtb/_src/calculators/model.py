@@ -338,9 +338,128 @@ class System:
             or core.config is not self.config
             or core.integral_setup is not self.integral_setup
             or core.h0_setup is not self.h0_setup
+            or core.index_helper_identity != id(self.ihelp)
         ):
             return None
+
+        d3_components = tuple(
+            component
+            for component in self.classicals.components
+            if type(component) is DispersionD3
+        )
+        if tuple(owner for owner, _ in self.d3_setups) != d3_components:
+            return None
+
+        expected_classical: list[tuple[int, str, CoreSetup]] = []
+        for component in self.classicals.components:
+            setup = None
+            if component is self.repulsion_classical:
+                setup = self.repulsion_setup
+            elif component is self.srb_classical:
+                setup = self.srb_setup
+            elif component is self.d4_classical:
+                setup = self.d4_setup
+            elif component is self.ies_classical:
+                setup = self.ies_setup
+            elif component is self.halogen_classical:
+                setup = self.halogen_setup
+            else:
+                setup = next(
+                    (
+                        value
+                        for owner, value in self.d3_setups
+                        if owner is component
+                    ),
+                    None,
+                )
+            if isinstance(
+                setup,
+                (
+                    RepulsionCoreSetup,
+                    ShortRangeBondCoreSetup,
+                    DispersionD3CoreSetup,
+                    DispersionD4CoreSetup,
+                    IESCoreSetup,
+                    HalogenCoreSetup,
+                ),
+            ):
+                expected_classical.append(
+                    (id(component), component.label, setup)
+                )
+
+        expected_interactions: list[tuple[int, str, CoreSetup]] = []
+        for interaction in self.interactions.components:
+            if interaction is self.es2_interaction:
+                setup = self.es2_setup
+            elif interaction is self.es3_interaction:
+                setup = self.es3_setup
+            elif interaction is self.aes2_interaction:
+                setup = self.aes2_setup
+            elif interaction is self.d4sc_interaction:
+                setup = self.d4sc_setup
+            elif interaction is self.generalized_born_interaction:
+                setup = self.generalized_born_setup
+            else:
+                setup = None
+            if isinstance(
+                setup,
+                (
+                    ES2CoreSetup,
+                    ES3CoreSetup,
+                    AES2CoreSetup,
+                    D4SCCoreSetup,
+                    GeneralizedBornCoreSetup,
+                ),
+            ):
+                expected_interactions.append(
+                    (id(interaction), interaction.label, setup)
+                )
+
+        if not self._setup_refs_match(
+            core.classical_setups, expected_classical
+        ):
+            return None
+        if not self._setup_refs_match(
+            core.interaction_setups, expected_interactions
+        ):
+            return None
+
+        backend_setup = (
+            self.integral_setup.pytorch
+            if self.integral_setup is not None
+            and self.integral_setup.pytorch is not None
+            else (
+                self.integral_setup.libcint
+                if self.integral_setup is not None
+                else None
+            )
+        )
+        expected_index = (
+            backend_setup.index
+            if type(backend_setup)
+            in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
+            else None
+        )
+        if core.index is not expected_index:
+            return None
         return core
+
+    @staticmethod
+    def _setup_refs_match(
+        captured: tuple[CoreSetupRef, ...],
+        expected: list[tuple[int, str, CoreSetup]],
+    ) -> bool:
+        """Check ordered setup references without tensor equality/sync."""
+        if len(captured) != len(expected):
+            return False
+        return all(
+            entry.component_identity == component_identity
+            and entry.label == label
+            and entry.setup is setup
+            for entry, (component_identity, label, setup) in zip(
+                captured, expected
+            )
+        )
 
     @property
     def classical_cache(self) -> ClassicalListCache:

@@ -23,38 +23,40 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
 
+from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
 from dxtb._src.calculators.config.scf import ConfigFermi
 from dxtb._src.calculators.result import Result
-from dxtb._src.calculators.singlepoint import _interaction_data
-from dxtb._src.calculators.singlepoint import _iteration_tensor
+from dxtb._src.calculators.singlepoint import (
+    _interaction_data,
+    _iteration_tensor,
+)
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
+from dxtb._src.scf import iterator as scf_iterator
+from dxtb._src.scf.functional import anderson as functional_anderson
+from dxtb._src.scf.functional import eager as functional_eager
 from dxtb._src.scf.functional import (
     resolve_full_scf_route,
-    run_prepared_functional_full,
     run_functional_full_eager,
+    run_prepared_functional_full,
 )
-from dxtb._src.scf import iterator as scf_iterator
-from dxtb._src.scf.functional import eager as functional_eager
+from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional.data import setup_scf_inputs
+from dxtb._src.scf.functional.eager import (
+    _check_subsolve_status,
+    _solve_representation,
+)
 from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_NONE,
     SCFTrajectoryStatus,
 )
-from dxtb._src.scf.functional.eager import (
-    _check_subsolve_status,
-    _solve_representation,
-)
-from dxtb._src.scf.functional.data import setup_scf_inputs
-from dxtb._src.scf.functional import anderson as functional_anderson
-from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.wavefunction.filling import FermiStatus
 
-from .test_functional_map import _prepare_case, _assert_tensor_equal
 from .test_functional_fock import _assert_public_parity
+from .test_functional_map import _assert_tensor_equal, _prepare_case
 
 
 def test_default_full_route_resolves_potential_and_broyden_compatibility() -> (
@@ -215,6 +217,115 @@ def test_full_engine_overrides_remain_legacy_owned(
         assert forwarded_args[3] is marker
     else:
         assert forwarded_kwargs[override] is options
+
+
+@pytest.mark.parametrize("owner", [None, "object"])
+def test_core_index_owner_keyword_remains_legacy_owned(
+    monkeypatch: pytest.MonkeyPatch, owner: object | str | None
+) -> None:
+    """The public solver does not reserve the internal owner keyword."""
+    from dxtb._src.scf import unrolling
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
+    )
+    marker = object() if owner == "object" else None
+    seen: dict[str, object] = {}
+
+    class CaptureEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            seen["kwargs"] = kwargs
+
+        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
+            return {}
+
+    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
+        raise AssertionError("legacy overrides must not enter functional SCF")
+
+    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
+    monkeypatch.setattr(
+        functional_eager, "run_prepared_functional_full", unexpected
+    )
+    result = scf_iterator.solve(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+        case.integrals,
+        case.refocc,
+        core_index_owner=marker,
+    )
+    assert result == {}
+    assert seen["kwargs"]["core_index_owner"] is marker
+
+
+@pytest.mark.parametrize("owner", [None, "object"])
+def test_core_index_owner_keyword_remains_legacy_owned_for_implicit(
+    monkeypatch: pytest.MonkeyPatch, owner: object | str | None
+) -> None:
+    """Implicit mode also forwards the reserved-looking keyword unchanged."""
+    from dxtb._src.scf import implicit
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
+    )
+    config = replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT)
+    marker = object() if owner == "object" else None
+    seen: dict[str, object] = {}
+
+    class CaptureEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            seen["kwargs"] = kwargs
+
+        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(implicit, "SelfConsistentFieldImplicit", CaptureEngine)
+    result = scf_iterator.solve(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        case.refocc,
+        core_index_owner=marker,
+    )
+    assert result == {}
+    assert seen["kwargs"]["core_index_owner"] is marker
+
+
+def test_core_index_remains_the_preexisting_internal_keyword() -> None:
+    """The earlier core_index handoff remains reserved by the solver."""
+    from dxtb._src.scf.functional import FunctionalCoreResult
+
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
+    )
+    result = scf_iterator.solve(
+        case.system.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+        case.integrals,
+        case.refocc,
+        core_index=None,
+    )
+    assert isinstance(result, FunctionalCoreResult)
 
 
 @pytest.mark.parametrize("key", ["unexpected_option", "solver_options"])

@@ -23,7 +23,7 @@ Definition of the self-consistent iterations.
 
 from .base import *
 from .guess import get_guess
-from .iterator import solve
+from .iterator import solve, solve_with_core_index
 from .nonselfconsistent import (
     solve_nonselfconsistent as solve_nonselfconsistent,
 )

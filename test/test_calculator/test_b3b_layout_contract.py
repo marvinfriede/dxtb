@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
@@ -176,6 +178,247 @@ def test_effective_dtype_fallback_preserves_explicit_setup_override(
             system.singlepoint(positions.to(torch.float64))
     finally:
         system.dd["dtype"] = original_dtype
+
+
+def test_exact_core_deactivates_when_family_setup_is_replaced() -> None:
+    """A façade setup replacement cannot leave the old core authoritative."""
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    system = _model().setup(torch.tensor([1, 1]))
+    assert system.exact_core is not None
+    assert system.repulsion_setup is not None
+    original = system.repulsion_setup
+    replacement = replace(original, arep=original.arep * 1.7)
+    changed = replace(system, repulsion_setup=replacement)
+
+    assert system._active_exact_core() is system.exact_core
+    assert replace(system, repulsion_setup=None)._active_exact_core() is None
+    assert changed._active_exact_core() is None
+
+    baseline = system.singlepoint(positions)
+    changed_result = changed.singlepoint(positions)
+    expected = replace(changed, exact_core=None).singlepoint(positions)
+    torch.testing.assert_close(changed_result.energy, expected.energy)
+    torch.testing.assert_close(
+        dict(changed_result.classical)["Repulsion"],
+        dict(expected.classical)["Repulsion"],
+    )
+    assert not torch.allclose(
+        dict(baseline.classical)["Repulsion"],
+        dict(changed_result.classical)["Repulsion"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "method_label", "field"),
+    [
+        (GFN1_XTB, labels.GFN1_XTB, "repulsion_setup"),
+        (GFN0_XTB, labels.GFN0_XTB, "srb_setup"),
+        (GFN2_XTB, labels.GFN2_XTB, "d4_setup"),
+        (GFN0_XTB, labels.GFN0_XTB, "ies_setup"),
+        (GFN1_XTB, labels.GFN1_XTB, "halogen_setup"),
+    ],
+    ids=["repulsion", "srb", "d4", "ies", "halogen"],
+)
+def test_exact_core_checks_classical_setup_coherency(
+    method: str, method_label: int, field: str
+) -> None:
+    """Every migrated classical facade setup is checked by identity."""
+    system = Model(
+        par=ParamModule(method, dtype=torch.float64),
+        config=Config.create(method=method_label),
+    ).setup(torch.tensor([1, 1]))
+    assert system.exact_core is not None
+    setup = getattr(system, field)
+    if setup is None:
+        pytest.fail(f"{method_label} fixture has no {field}")
+    assert system._active_exact_core() is system.exact_core
+    assert replace(system, **{field: None})._active_exact_core() is None
+
+
+@pytest.mark.parametrize(
+    "field", ["es2_setup", "es3_setup", "aes2_setup", "d4sc_setup"]
+)
+def test_exact_core_checks_interaction_setup_coherency(field: str) -> None:
+    """Each captured interaction setup remains coherent with its façade."""
+    method = GFN1_XTB if field in ("es2_setup", "es3_setup") else GFN2_XTB
+    method_label = labels.GFN1_XTB if method == GFN1_XTB else labels.GFN2_XTB
+    system = Model(
+        par=ParamModule(method, dtype=torch.float64),
+        config=Config.create(method=method_label),
+    ).setup(torch.tensor([1, 1]))
+    assert system.exact_core is not None
+    setup = getattr(system, field)
+    assert setup is not None, f"default configuration has no {field}"
+    assert system._active_exact_core() is system.exact_core
+    assert replace(system, **{field: None})._active_exact_core() is None
+
+
+def test_exact_core_checks_generalized_born_setup_coherency() -> None:
+    """GeneralizedBorn setup remains tied to its exact interaction object."""
+    from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
+
+    numbers = torch.tensor([1, 1])
+    gb = GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64)
+    system = Model(
+        par=ParamModule(GFN2_XTB, dtype=torch.float64),
+        config=Config.create(method=labels.GFN2_XTB),
+        interaction=(gb,),
+    ).setup(numbers)
+    assert system.generalized_born_setup is not None
+    assert system._active_exact_core() is system.exact_core
+    assert (
+        replace(system, generalized_born_setup=None)._active_exact_core()
+        is None
+    )
+
+
+def test_exact_core_checks_ordered_d3_setup_coherency() -> None:
+    """D3 order and interaction ownership remain tied to the façade."""
+    from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
+
+    numbers = torch.tensor([1, 1])
+    parameters = {
+        "s6": torch.tensor(1.0, dtype=torch.float64),
+        "a1": torch.tensor(0.5, dtype=torch.float64),
+        "a2": torch.tensor(5.7, dtype=torch.float64),
+    }
+    first = DispersionD3(numbers, parameters, dtype=torch.float64)
+    first.label = "D3:first"
+    second = DispersionD3(numbers, parameters, dtype=torch.float64)
+    second.label = "D3:second"
+    model = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        config=Config.create(method=labels.GFN1_XTB, exclude=("disp",)),
+        classical=(first, second),
+    )
+    system = model.setup(numbers)
+    assert system.exact_core is not None
+    assert tuple(owner for owner, _ in system.d3_setups) == (first, second)
+    assert (
+        replace(
+            system, d3_setups=tuple(reversed(system.d3_setups))
+        )._active_exact_core()
+        is None
+    )
+
+
+def test_exact_core_checks_d4sc_component_identity() -> None:
+    """A same-label interaction cannot claim another component's setup."""
+    system = Model(
+        par=ParamModule(GFN2_XTB, dtype=torch.float64),
+        config=Config.create(method=labels.GFN2_XTB),
+    ).setup(torch.tensor([1, 1]))
+    assert system.d4sc_interaction is not None
+    assert system.es2_interaction is not None
+    assert system.exact_core is not None
+    assert (
+        system.exact_core.interaction_setup(system.d4sc_interaction)
+        is system.d4sc_setup
+    )
+    assert (
+        replace(
+            system,
+            d4sc_interaction=system.es2_interaction,
+        )._active_exact_core()
+        is None
+    )
+
+
+def test_exact_core_floating_setup_device_and_dtype_are_prevalidated() -> None:
+    """Coherent exact cores reject mismatched setup device and dtype early."""
+    system = _model().setup(torch.tensor([1, 1]))
+    assert system.exact_core is not None
+    assert system.h0_setup is not None
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+
+    meta_h0 = system.h0_setup.to(device="meta")
+    meta_core = replace(system.exact_core, h0_setup=meta_h0)
+    meta_system = replace(system, h0_setup=meta_h0, exact_core=meta_core)
+    with pytest.raises(DeviceError, match="System floating setup"):
+        meta_system.singlepoint(positions)
+
+    float32_h0 = system.h0_setup.to(dtype=torch.float32)
+    mismatched_core = replace(system.exact_core, h0_setup=float32_h0)
+    mismatched_core = replace(mismatched_core, effective_dtype=torch.float64)
+    mismatched = replace(
+        system, h0_setup=float32_h0, exact_core=mismatched_core
+    )
+    with pytest.raises(DtypeError, match="exact core declares"):
+        mismatched.singlepoint(positions)
+
+
+def test_device_mismatched_captured_index_uses_legacy_preparation() -> None:
+    """A structural device mismatch declines trusted map reuse safely."""
+    from dxtb._src.calculators.singlepoint import singlepoint
+
+    system = _model().setup(torch.tensor([1, 1]))
+    assert system.exact_core is not None
+    assert system.exact_core.index is not None
+    mismatched_index = system.exact_core.index.to(device="meta")
+    mismatched_core = replace(system.exact_core, index=mismatched_index)
+    fallback_system = replace(system, exact_core=mismatched_core)
+    assert fallback_system._active_exact_core() is None
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    result = singlepoint(fallback_system, positions)
+    assert torch.isfinite(result.energy).all()
+
+
+def test_active_core_index_device_mismatch_uses_public_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backend map on another device bypasses the trusted SCF handoff."""
+    from dxtb._src.calculators import singlepoint as singlepoint_module
+    from dxtb._src.integral.container import IntegralMatrices
+
+    system = _model().setup(torch.tensor([1, 1]))
+    assert system.integral_setup is not None
+    assert system.integral_setup.pytorch is not None
+    assert system.exact_core is not None
+    backend = system.integral_setup.pytorch
+    meta_backend = backend.to(device="meta")
+    meta_index = meta_backend.index
+    meta_integrals = replace(system.integral_setup, pytorch=meta_backend)
+    meta_core = replace(
+        system.exact_core, integral_setup=meta_integrals, index=meta_index
+    )
+    mismatched = replace(
+        system, integral_setup=meta_integrals, exact_core=meta_core
+    )
+    assert mismatched._active_exact_core() is meta_core
+
+    dtype = torch.float64
+    matrices = IntegralMatrices(
+        hcore=torch.eye(2, dtype=dtype), overlap=torch.eye(2, dtype=dtype)
+    )
+    assert system.h0_setup is not None
+    monkeypatch.setattr(
+        singlepoint_module,
+        "build_integral_matrices",
+        lambda *args, **kwargs: (matrices, system.h0_setup.refocc, None),
+    )
+
+    class LegacySolverReached(RuntimeError):
+        pass
+
+    def trusted_solver_reached(*args, **kwargs):
+        raise AssertionError("device-mismatched map used trusted handoff")
+
+    def legacy_solver_reached(*args, **kwargs):
+        raise LegacySolverReached
+
+    monkeypatch.setattr(
+        singlepoint_module.scf, "solve_with_core_index", trusted_solver_reached
+    )
+    monkeypatch.setattr(singlepoint_module.scf, "solve", legacy_solver_reached)
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=dtype)
+    with pytest.raises(LegacySolverReached):
+        singlepoint(mismatched, positions)
 
 
 def test_calculator_type_updates_no_setup_exact_core_dtype() -> None:

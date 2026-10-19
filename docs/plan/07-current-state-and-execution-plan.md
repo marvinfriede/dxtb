@@ -2931,6 +2931,13 @@ the effective dtype; packed modes 1/2 retain their real mode and legacy cache.
 It intentionally does not remove the compatibility facade or claim
 stackability. The matched Anderson position-gradient discrepancy fails
 identically on the B3b-Final.1 base and candidate and remains unresolved.
+B3b-Final.2a restores public legacy forwarding for the arbitrary
+`core_index_owner` keyword while retaining a separate trusted internal map
+entry point. It also checks façade/core setup-reference coherence and floating
+setup device/dtype before evaluation. The exact-base reproducers, validation,
+and known inherited GFN1 parity failures are recorded in
+[`B3b final layout inventory`](B3b-Final-layout-inventory.md). Final B3b.3
+remains open; C8b has not started.
 
 The C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
 scalar hardening, C6.4 D4SC, C6.4a setup-authority hardening, C6.4b
