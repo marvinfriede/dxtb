@@ -966,16 +966,19 @@ class Model:
                 "Functional parameter tree has incompatible auto_int_level."
             )
 
-        state_values = parameter_tree.parameters.params
-        expected_shapes = {
-            name: tuple(value.shape)
+        # Take one shallow snapshot so validation and functional_call consume
+        # the same tensor references, even if the caller later edits the
+        # ModuleNode's mutable mapping.
+        state_values = dict(parameter_tree.parameters.params)
+        expected_state = {
+            name: (tuple(value.shape), value.dtype)
             for name, value in (
                 *self.par.named_parameters(),
                 *self.par.named_buffers(),
             )
         }
         actual_names = set(state_values)
-        expected_names = set(expected_shapes)
+        expected_names = set(expected_state)
         missing = sorted(expected_names - actual_names)
         unexpected = sorted(actual_names - expected_names)
         if missing or unexpected:
@@ -988,17 +991,26 @@ class Model:
                 raise TypeError(
                     f"Functional state entry '{name}' must be a Tensor."
                 )
-            if tuple(value.shape) != expected_shapes[name]:
+            expected_shape, expected_dtype = expected_state[name]
+            if tuple(value.shape) != expected_shape:
                 raise ValueError(
                     f"Functional state entry '{name}' has shape "
-                    f"{tuple(value.shape)}, expected {expected_shapes[name]}."
+                    f"{tuple(value.shape)}, expected {expected_shape}."
+                )
+            if expected_dtype.is_floating_point:
+                if not value.is_floating_point() or value.is_complex():
+                    raise TypeError(
+                        f"Functional state entry '{name}' must have a real "
+                        f"floating dtype, got {value.dtype}."
+                    )
+            elif value.dtype != expected_dtype:
+                raise TypeError(
+                    f"Functional state entry '{name}' must preserve its "
+                    f"structural dtype {expected_dtype}, got {value.dtype}."
                 )
 
         adapter = _ModelSetupAdapter(self)
-        state = {
-            f"par.{name}": value
-            for name, value in parameter_tree.parameters.params.items()
-        }
+        state = {f"par.{name}": value for name, value in state_values.items()}
         return torch.func.functional_call(
             adapter,
             state,

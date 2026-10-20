@@ -18,23 +18,27 @@
 
 from __future__ import annotations
 
+import gc
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
-from threading import Event, Lock
+from threading import Event, Lock, local
+from weakref import ref
 
 import pytest
 import torch
 from tad_mctc.tree import ModuleNode, combine, partition
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
-from dxtb import GFN1_XTB, ParamModule, labels
+import dxtb._src.calculators.model as model_module
+from dxtb import GFN1_XTB, IndexHelper, ParamModule, labels
 from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import (
     Model,
     ModelParameterNode,
     System,
     _ModelSetupAdapter,
+    _parameter_setup_lock,
 )
 from dxtb._src.components.classicals import Repulsion, new_repulsion
 from dxtb._src.exlibs.available import has_libcint
@@ -116,6 +120,40 @@ def _assert_state_snapshot(par: ParamModule, snapshot) -> None:
     for name, original in buffers.items():
         assert current_buffers[name] is original
         torch.testing.assert_close(current_buffers[name], buffer_values[name])
+
+
+class _ObservedParameterSetupLock:
+    """Report entry to a Model-mediated owner-lock acquisition."""
+
+    def __init__(self, lock, attempting: Event) -> None:
+        self.lock = lock
+        self.attempting = attempting
+
+    def __enter__(self):
+        self.attempting.set()
+        self.lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.lock.release()
+
+
+def _observe_parameter_setup_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    role: local,
+    attempts: dict[str, Event],
+) -> None:
+    """Instrument the actual owner-lock boundary for selected workers."""
+    original = model_module._parameter_setup_lock
+
+    def observed(par):
+        lock = original(par)
+        worker = getattr(role, "worker", None)
+        if worker in attempts:
+            return _ObservedParameterSetupLock(lock, attempts[worker])
+        return lock
+
+    monkeypatch.setattr(model_module, "_parameter_setup_lock", observed)
 
 
 def test_model_parameter_node_exposes_named_parameters_and_buffers() -> None:
@@ -579,6 +617,104 @@ def test_functional_parameter_tree_rejects_invalid_state(
     _assert_state_snapshot(model.par, snapshot)
 
 
+@pytest.mark.parametrize(
+    ("name", "dtype"),
+    [
+        ("parameter_tree.element.H.arep.param", torch.int64),
+        ("parameter_tree.element.H.arep.param", torch.bool),
+        ("parameter_tree.element.H.arep.param", torch.complex64),
+        ("parameter_tree.element.H.ngauss.param", torch.int64),
+        ("parameter_tree.element.H.ngauss.param", torch.bool),
+        ("parameter_tree.element.H.ngauss.param", torch.float64),
+        ("parameter_tree.element.H.ngauss.param", torch.complex64),
+    ],
+)
+def test_functional_parameter_tree_rejects_dtype_category_changes(
+    name: str, dtype: torch.dtype
+) -> None:
+    """Functional substitutions preserve floating and structural categories."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    original = tree.parameters.params[name]
+    replacement = torch.ones_like(original, dtype=dtype)
+    malformed = _replace_tree_value(tree, name, replacement)
+    snapshot = _state_snapshot(model.par)
+
+    with pytest.raises(TypeError, match="dtype"):
+        model.setup_functional(torch.tensor([1, 1]), malformed)
+    _assert_state_snapshot(model.par, snapshot)
+
+
+def test_functional_parameter_tree_accepts_structural_integer_dtype() -> None:
+    """A structural integer leaf remains valid in its registered dtype."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.ngauss.param"
+    value = tree.parameters.params[name]
+    assert value.dtype is torch.uint8
+    valid = _replace_tree_value(tree, name, value.clone())
+    system = model.setup_functional(torch.tensor([1, 1]), valid)
+    assert system.repulsion_setup is not None
+
+
+def test_functional_setup_uses_one_shallow_state_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation and functional_call use one mapping of original leaves."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    original = tree.parameters.params[name]
+    replacement = (original + 0.3).requires_grad_()
+    alternate = original + 0.8
+
+    class ChangingStateDict(dict):
+        """Expose changed values if setup rereads the mutable input mapping."""
+
+        def __init__(self, values, key, later_value) -> None:
+            super().__init__(values)
+            self.key = key
+            self.later_value = later_value
+            self.reads = 0
+            self.armed = False
+
+        def items(self):
+            self.reads += 1
+            result = dict.items(self)
+            if self.armed and self.reads == 1:
+
+                def iterate():
+                    yield from result
+                    self[self.key] = self.later_value
+
+                return iterate()
+            return result
+
+    values = dict(tree.parameters.params)
+    values[name] = replacement
+    source = ChangingStateDict(values, name, alternate)
+    state_tree = tree.replace(parameters=tree.parameters.replace(params=source))
+    source.reads = 0
+    source.armed = True
+    original_functional_call = torch.func.functional_call
+    forwarded = {}
+
+    def inspect_functional_call(module, state, *args, **kwargs):
+        forwarded.update(state)
+        return original_functional_call(module, state, *args, **kwargs)
+
+    monkeypatch.setattr(torch.func, "functional_call", inspect_functional_call)
+    system = model.setup_functional(torch.tensor([1, 1]), state_tree)
+    assert system.repulsion_setup is not None
+    torch.testing.assert_close(system.repulsion_setup.arep[0, 1], replacement)
+    assert source[name] is replacement
+    assert forwarded[f"par.{name}"] is replacement
+    assert source.reads == 0
+    loss = system.repulsion_setup.arep[0, 1]
+    (gradient,) = torch.autograd.grad(loss, replacement)
+    torch.testing.assert_close(gradient, torch.ones_like(replacement))
+
+
 def test_functional_parameter_tree_accepts_partition_reconstruction() -> None:
     """A structurally valid partition/combine round-trip remains usable."""
     model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
@@ -667,7 +803,7 @@ def test_functional_setup_serializes_shared_parammodule_substitution(
             first_entered.set()
             # Bounded wait: the test always releases this call, even if a
             # regression prevents the second call from entering.
-            release_first.wait(timeout=2.0)
+            release_first.wait(timeout=10.0)
         elif ordinal == 2:
             second_entered.set()
         return original_forward(adapter, *args, **kwargs)
@@ -678,16 +814,16 @@ def test_functional_setup_serializes_shared_parammodule_substitution(
             first_future = executor.submit(
                 first.setup_functional, numbers, first_substitution
             )
-            assert first_entered.wait(timeout=2.0)
+            assert first_entered.wait(timeout=10.0)
 
             def second_setup():
                 second_started.set()
                 return second.setup_functional(numbers, second_substitution)
 
             second_future = executor.submit(second_setup)
-            assert second_started.wait(timeout=2.0)
-            # A per-Model lock or no lock lets the second adapter enter here.
-            second_overlapped = second_entered.wait(timeout=0.15)
+            assert second_started.wait(timeout=10.0)
+            # An owner-scoped lock prevents the second adapter from entering.
+            second_overlapped = second_entered.wait(timeout=0.5)
             release_first.set()
             first_system = first_future.result(timeout=10.0)
             second_system = second_future.result(timeout=10.0)
@@ -712,6 +848,22 @@ def test_functional_setup_serializes_shared_parammodule_substitution(
     )
 
 
+def test_parameter_setup_lock_registry_is_owner_scoped_and_weak() -> None:
+    """A shared ParamModule shares one lock without being retained by it."""
+    first_par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    second_par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    first_lock = _parameter_setup_lock(first_par)
+    assert _parameter_setup_lock(first_par) is first_lock
+    assert _parameter_setup_lock(second_par) is not first_lock
+
+    collected_owner = ParamModule(GFN1_XTB, dtype=torch.float64)
+    _parameter_setup_lock(collected_owner)
+    owner_ref = ref(collected_owner)
+    del collected_owner
+    gc.collect()
+    assert owner_ref() is None
+
+
 def test_ordinary_setup_waits_for_functional_substitution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -725,48 +877,59 @@ def test_ordinary_setup_waits_for_functional_substitution(
     substituted = _replace_tree_value(tree, name, replacement)
     entered = Event()
     release = Event()
-    ordinary_started = Event()
-    snapshot_started = Event()
+    ordinary_attempting = Event()
+    ordinary_entered = Event()
+    role = local()
+    _observe_parameter_setup_attempts(
+        monkeypatch, role, {"ordinary": ordinary_attempting}
+    )
     original_forward = _ModelSetupAdapter.forward
+    original_from_numbers = IndexHelper.from_numbers
 
     def paused_forward(adapter, *args, **kwargs):
         entered.set()
-        if not release.wait(timeout=2.0):
+        if not release.wait(timeout=10.0):
             raise RuntimeError("bounded functional setup wait expired")
         return original_forward(adapter, *args, **kwargs)
 
+    def tracked_from_numbers(cls, *args, **kwargs):
+        if getattr(role, "worker", None) == "ordinary":
+            ordinary_entered.set()
+        return original_from_numbers(*args, **kwargs)
+
     monkeypatch.setattr(_ModelSetupAdapter, "forward", paused_forward)
+    monkeypatch.setattr(
+        IndexHelper, "from_numbers", classmethod(tracked_from_numbers)
+    )
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            functional_future = executor.submit(
-                model.setup_functional, numbers, substituted
-            )
-            assert entered.wait(timeout=2.0)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+
+            def functional_setup():
+                role.worker = "functional"
+                try:
+                    return model.setup_functional(numbers, substituted)
+                finally:
+                    role.worker = None
 
             def ordinary_setup():
-                ordinary_started.set()
-                return model.setup(numbers)
+                role.worker = "ordinary"
+                try:
+                    return model.setup(numbers)
+                finally:
+                    role.worker = None
 
+            functional_future = executor.submit(functional_setup)
+            assert entered.wait(timeout=10.0)
             ordinary_future = executor.submit(ordinary_setup)
-            assert ordinary_started.wait(timeout=2.0)
-            ordinary_overlapped = ordinary_future.done()
-
-            def parameter_snapshot():
-                snapshot_started.set()
-                return model.parameter_tree
-
-            snapshot_future = executor.submit(parameter_snapshot)
-            assert snapshot_started.wait(timeout=2.0)
-            snapshot_overlapped = snapshot_future.done()
+            assert ordinary_attempting.wait(timeout=10.0)
+            ordinary_overlapped = ordinary_entered.wait(timeout=0.5)
             release.set()
             functional_system = functional_future.result(timeout=10.0)
             ordinary_system = ordinary_future.result(timeout=10.0)
-            restored_tree = snapshot_future.result(timeout=10.0)
     finally:
         release.set()
 
     assert not ordinary_overlapped
-    assert not snapshot_overlapped
     assert functional_system.repulsion_setup is not None
     assert ordinary_system.repulsion_setup is not None
     torch.testing.assert_close(
@@ -774,6 +937,77 @@ def test_ordinary_setup_waits_for_functional_substitution(
     )
     torch.testing.assert_close(
         ordinary_system.repulsion_setup.arep[0, 1], baseline
+    )
+
+
+def test_parameter_tree_snapshot_waits_for_functional_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parameter snapshots wait until temporary module state is restored."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    baseline = tree.parameters.params[name]
+    substituted = _replace_tree_value(tree, name, baseline + 0.6)
+    entered = Event()
+    release = Event()
+    snapshot_attempting = Event()
+    snapshot_entered = Event()
+    role = local()
+    _observe_parameter_setup_attempts(
+        monkeypatch, role, {"snapshot": snapshot_attempting}
+    )
+    original_forward = _ModelSetupAdapter.forward
+    original_from_module = ModuleNode.from_module
+
+    def paused_forward(adapter, *args, **kwargs):
+        entered.set()
+        if not release.wait(timeout=10.0):
+            raise RuntimeError("bounded functional setup wait expired")
+        return original_forward(adapter, *args, **kwargs)
+
+    def tracked_from_module(module):
+        if getattr(role, "worker", None) == "snapshot":
+            snapshot_entered.set()
+        return original_from_module(module)
+
+    monkeypatch.setattr(_ModelSetupAdapter, "forward", paused_forward)
+    monkeypatch.setattr(
+        ModuleNode, "from_module", staticmethod(tracked_from_module)
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+
+            def functional_setup():
+                role.worker = "functional"
+                try:
+                    return model.setup_functional(numbers, substituted)
+                finally:
+                    role.worker = None
+
+            def parameter_snapshot():
+                role.worker = "snapshot"
+                try:
+                    return model.parameter_tree
+                finally:
+                    role.worker = None
+
+            functional_future = executor.submit(functional_setup)
+            assert entered.wait(timeout=10.0)
+            snapshot_future = executor.submit(parameter_snapshot)
+            assert snapshot_attempting.wait(timeout=10.0)
+            snapshot_overlapped = snapshot_entered.wait(timeout=0.5)
+            release.set()
+            functional_system = functional_future.result(timeout=10.0)
+            restored_tree = snapshot_future.result(timeout=10.0)
+    finally:
+        release.set()
+
+    assert not snapshot_overlapped
+    assert functional_system.repulsion_setup is not None
+    torch.testing.assert_close(
+        functional_system.repulsion_setup.arep[0, 1], baseline + 0.6
     )
     assert restored_tree.parameters.params[name] is baseline
 

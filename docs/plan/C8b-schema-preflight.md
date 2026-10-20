@@ -296,19 +296,30 @@ per-call energy.
 The hardening also validates the `ModuleNode` child before dereferencing it,
 checks that its state keys and tensor shapes match the owning ParamModule, and
 preserves support for converted floating dtypes and non-Parameter tensor
-leaves. These metadata-only checks precede `functional_call`; no tensor values
-are synchronized or compared. A float64 parameter tree converted to float32
-now has a numerical acceptance control against a separately constructed
-float32 Model, including setup values, H2 energy, and a real parameter
-gradient. The GFN1 `hamiltonian.xtb.kpol` path similarly proves functional
-substitution through `H0SetupNode`, H2 energy, and gradients against a direct
-ParamModule reference.
+leaves. It accepts real floating replacements for floating state and requires
+nonfloating structural state to retain its registered dtype; in particular,
+float64-to-float32 trees remain supported while integer, Boolean, and complex
+substitutions for floating parameters are rejected before setup. State
+validation and `functional_call` share one shallow snapshot of the input
+mapping and its tensor references. These metadata-only checks precede
+`functional_call`; no tensor values are synchronized or compared. A float64
+parameter tree converted to float32 has a numerical acceptance control against
+a separately constructed float32 Model, including setup values, H2 energy,
+and a real parameter gradient. The GFN1 `hamiltonian.xtb.kpol` path similarly
+proves functional substitution through `H0SetupNode`, H2 energy, and gradients
+against a direct ParamModule reference.
 
 Failure-path controls cover invalid batch mode after substitution begins,
 original parameter and buffer object/value restoration, subsequent ordinary
 and functional setup, mode-1 packed setup, and a custom Repulsion subclass
 retaining its legacy cache hook and component identity. CUDA was unavailable;
 converted CUDA setup remains unverified.
+
+The concurrency regressions now observe entry into the owner-lock acquisition
+and the protected `IndexHelper.from_numbers`/`ModuleNode.from_module` stages.
+A lock-bypassed test-only run makes each ordinary-setup and parameter-snapshot
+regression fail at its corresponding overlap assertion. The synchronization
+contract remains limited to Model-mediated setup and parameter-tree snapshots.
 
 Executable proof uses the actual GFN1 `parameter_tree.element.H.arep.param`
 path. The replacement reaches `RepulsionCoreSetup.arep`, changes the full H2

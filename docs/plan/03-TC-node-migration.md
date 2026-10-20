@@ -465,6 +465,12 @@ reentrant lock. This protects parameter snapshots, setup reads, and
 restoration. Direct concurrent `ParamModule` access and later evaluation
 involving mutable legacy extension state remain outside this guarantee.
 
+Functional state validation compares floating/integer/bool dtype categories
+with the owning module's registered state while allowing real floating dtype
+conversion. It uses one shallow mapping snapshot for validation and
+`functional_call`, retaining the caller's tensor references and gradient
+paths.
+
 **Implementation split.** C8b.1 registers the exact-core and selected-backend
 wrapper schema and proves conversion/alias behavior. C8b.2 registers the
 Model parameter tree and integrates genuine functional parameter substitution
