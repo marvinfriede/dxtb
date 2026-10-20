@@ -178,3 +178,60 @@ E1.3, E6a, E6b, E4.6, and legacy component retirement remain independent.
 complete. The source-backed schema is suitable for bounded C8b.1 work, while
 the unpadded different-size P9 stack remains an explicit C8b.3 acceptance
 requirement.
+
+## C8b.1 production exact-core implementation
+
+Base: `87e915f42d84200075df9351ac73eb148cd22f7b`.
+
+`ExactSystemCore` is now a registered tad-mctc `Node`. Its dynamic children
+are integer-preserving `numbers`, an optional `IntegralBackendNode`, optional
+H0 setup, and ordered classical and interaction descriptor tuples. Its static
+context is the effective floating dtype and frozen `Config`. The backend
+wrapper stores driver and integral level plus the selected backend Node only;
+it never stores the legacy outer `IntegralSetup` or the inactive backend.
+The existing PyTorch/libcint setup Node is retained by identity at initial
+capture. `core.index` is a derived alias of `core.integral.backend.index`, so
+the backend remains the sole owner of this SCF map.
+
+`core.integral_setup` remains a compatibility property that constructs a
+lightweight outer `IntegralSetup` view around the same selected backend Node.
+Evaluation continues to use the System façade's original `IntegralSetup`
+after `_active_exact_core()` verifies selected-backend identity, driver,
+integral level, H0 identity, descriptor metadata/setup identity and
+IndexHelper provenance. The outer facade is not a pytree child. `Calculator.type`
+rebuilds the wrapper around its converted backend Node and updates effective
+dtype without duplicating setup tensors. Packed modes retain `exact_core=None`.
+
+The backend wrapper carries a logical System-device context so a force-CPU
+libcint Node can remain a CPU child while the core is on the requested System
+device. This is required by tad-mctc `Node`'s device-homogeneity validation;
+`ExactSystemCore.to()` synchronizes that logical context from converted
+`numbers`. CPU conversion is exercised. CUDA was unavailable, so construction
+and conversion with CUDA positions plus CPU libcint leaves remain unverified
+on hardware. The legacy libcint `force_cpu` setting itself is preserved.
+
+Current validation used Python 3.12.10/Torch 2.14.1 CPU. The focused schema,
+descriptor, and B3b layout selection passed 73 tests with libcint and 70
+passed/3 skipped in the no-libcint profile. Model/System, C7 setup Node, and
+family Node controls passed 252 tests and reproduced the ten established
+GFN1 FULL density/orbital parity failures; two other parity parameterizations
+remain passing. Functional map controls passed 57; non-slow implicit-root and
+E0 controls passed 33 with 3 slow cases deselected. Pure integral evaluation
+passed 31 with 1 skip. Libcint overlap, overlap-gradient, and multipole
+controls passed 209; the integral-level libcint selection passed 8. No
+tolerances or XFAILs changed. The broad regression selection had 10 failures,
+all matching the already classified GFN1 parity family; no new failure was
+identified. One attempted combined map/root/E0/integral command was
+interrupted without a completed result and is not counted.
+
+The libcint profile imported tad-libcint 0.3.0 and PySCF 2.14.0 successfully;
+the no-libcint profile reported both unavailable and raised
+`ModuleNotFoundError` on imports. These are two dependency profiles of one
+Python/Torch combination, not two of the five approved combinations. No other
+approved Python/Torch environments were available. CUDA was unavailable, so
+mixed CUDA-System/CPU-libcint construction and conversion remain unverified.
+
+This closes only C8b.1's exact-core/backend schema scope. Model parameter
+partition and façade migration remain C8b.2; different-size P9 padding and
+partition acceptance remain C8b.3. Whole-System `vmap` and production mixed
+System batching remain E6a and E6b, respectively.

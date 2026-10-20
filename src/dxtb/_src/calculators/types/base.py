@@ -613,14 +613,22 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                     else None
                 )
             )
-            exact_core = replace(
-                exact_core,
+            core_integral = None
+            if integral_setup is not None:
+                from dxtb._src.calculators.model import IntegralBackendNode
+
+                core_integral = IntegralBackendNode(
+                    driver_type=integral_setup.driver_type,
+                    intlevel=integral_setup.intlevel,
+                    logical_device=self.system.numbers.device,
+                    backend=backend_setup,
+                )
+            exact_core = exact_core.replace(
                 effective_dtype=dtype,
-                integral_setup=integral_setup,
+                integral=core_integral,
                 h0_setup=(
                     h0_setup if isinstance(h0_setup, H0SetupNode) else None
                 ),
-                index=getattr(backend_setup, "index", None),
             )
         self.system = replace(
             self.system,

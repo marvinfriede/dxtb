@@ -79,11 +79,14 @@ prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
-**Current C8b status.** C8b.0 has now established and tested a test-local
-registered exact-core wrapper, selected PyTorch/libcint backend visibility,
-derived index ownership, Model `ModuleNode` partitioning, and compatible
-descriptor stacking. Production `ExactSystemCore`, `System`, and `Model`
-remain unchanged and unregistered. See [`C8b schema preflight`](C8b-schema-preflight.md).
+**Current C8b status.** C8b.0 established and tested the schema, alias,
+parameter-partition, and stacking preflight. C8b.1 has registered production
+`ExactSystemCore` and its selected integral backend wrapper. The legacy
+`System` façade and `Model` remain unchanged; C8b.2 owns Model parameter
+partition/facade integration, and C8b.3 owns padded mixed-size P9 stacking.
+See [`C8b schema preflight`](C8b-schema-preflight.md) for prototype and
+production evidence. CUDA validation of mixed-device libcint core trees is
+still unavailable in the current environment.
 
 ---
 

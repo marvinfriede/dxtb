@@ -160,6 +160,20 @@ def _partition_signature(core: _ExactCoreNode) -> tuple:
     )
 
 
+def _core_repulsion_energy(
+    core: ExactSystemCore, positions: torch.Tensor
+) -> torch.Tensor:
+    """Evaluate the existing Repulsion kernel from a complete core tree."""
+    from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
+
+    descriptor = next(
+        term for term in core.classical_terms if term.kind == "repulsion"
+    )
+    return _evaluate_classical_descriptor(
+        descriptor, positions, positions.new_zeros((1,))
+    ).sum()
+
+
 def _static_signature(value):
     """Canonicalize supported static Node context without object IDs/repr."""
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -263,13 +277,18 @@ def _walk_spec(spec):
         ),
     ],
 )
-def test_production_outer_values_are_still_opaque_and_backend_is_not(
+def test_production_exact_core_and_backend_are_registered(
     driver: int,
 ) -> None:
-    """The schema exposes the backend without changing production owners."""
+    """The exact core exposes its selected backend and setup leaves."""
     system = _system(driver=driver)
     assert system.exact_core is not None
-    assert tree_flatten(system.exact_core)[0] == [system.exact_core]
+    core = system.exact_core
+    core_leaves, core_spec = tree_flatten(core)
+    assert core_leaves and all(isinstance(x, torch.Tensor) for x in core_leaves)
+    assert not any(
+        _contains_tensor(node.context) for node in _walk_spec(core_spec)
+    )
     assert tree_flatten(system.integral_setup)[0] == [system.integral_setup]
     assert system.integral_setup is not None
     backend = (
@@ -286,7 +305,37 @@ def test_production_outer_values_are_still_opaque_and_backend_is_not(
     assert backend_leaves and all(
         isinstance(x, torch.Tensor) for x in backend_leaves
     )
-    assert system.exact_core.index is backend.index
+    assert core.integral is not None
+    assert core.integral.backend is backend
+    legacy_view = core.integral_setup
+    assert legacy_view is not None
+    assert legacy_view.driver_type == system.integral_setup.driver_type
+    assert legacy_view.intlevel == system.integral_setup.intlevel
+    assert (
+        legacy_view.pytorch is backend
+        if isinstance(backend, PytorchIntegralSetupNode)
+        else legacy_view.libcint is backend
+    )
+    assert core.index is backend.index
+    expected = [core.numbers]
+    expected.extend(tree_flatten(core.integral)[0])
+    if core.h0_setup is not None:
+        expected.extend(tree_flatten(core.h0_setup)[0])
+    for term in core.classical_terms + core.interaction_terms:
+        expected.extend(tree_flatten(term)[0])
+    assert len(core_leaves) == len(expected)
+    assert all(
+        actual is wanted for actual, wanted in zip(core_leaves, expected)
+    )
+
+    rebuilt = tree_unflatten(core_leaves, core_spec)
+    assert type(rebuilt.integral.backend) is type(backend)
+    assert rebuilt.index is rebuilt.integral.backend.index
+    rebuilt_leaves, _ = tree_flatten(rebuilt)
+    assert all(
+        actual is original
+        for actual, original in zip(rebuilt_leaves, core_leaves)
+    )
 
 
 def test_optional_integral_and_h0_children_round_trip_as_none() -> None:
@@ -299,7 +348,7 @@ def test_optional_integral_and_h0_children_round_trip_as_none() -> None:
     system = model.setup(torch.tensor([1, 1]))
     proto = _prototype(system)
     assert system.exact_core is not None
-    assert system.exact_core.integral_setup is None
+    assert system.exact_core.integral is None
     assert proto.integral.backend is None
     assert proto.h0 is None
     leaves, spec = tree_flatten(proto)
@@ -334,6 +383,28 @@ def test_candidate_core_flattens_backend_h0_and_descriptor_setup_nodes(
 ) -> None:
     """Both backends and all nested setup Nodes are dynamic children."""
     system = _system(driver=driver)
+    assert system.exact_core is not None
+    production_core = system.exact_core
+    production_leaves, production_spec = tree_flatten(production_core)
+    assert production_leaves and all(
+        isinstance(leaf, torch.Tensor) for leaf in production_leaves
+    )
+    assert not any(
+        _contains_tensor(node.context) for node in _walk_spec(production_spec)
+    )
+    assert production_core.integral is not None
+    converted_core = production_core.to(dtype=torch.float32)
+    assert converted_core.effective_dtype is torch.float32
+    assert converted_core.config is production_core.config
+    assert converted_core.integral.backend.index is converted_core.index
+    for original, converted_leaf in zip(
+        production_leaves, tree_flatten(converted_core)[0]
+    ):
+        if original.dtype == torch.bool or not original.is_floating_point():
+            assert converted_leaf.dtype is original.dtype
+        else:
+            assert converted_leaf.dtype is torch.float32
+
     proto = _prototype(system)
     leaves, spec = tree_flatten(proto)
     assert leaves and all(isinstance(leaf, torch.Tensor) for leaf in leaves)
@@ -406,8 +477,9 @@ def test_core_stack_positive_different_composition_and_shape_rejection() -> (
     None
 ):
     """Equal atom count alone is insufficient; equal leaves can stack."""
-    gfn2_h2_a = _prototype(_system(method=GFN2_XTB, numbers=(1, 1)))
-    gfn2_h2_b = _prototype(_system(method=GFN2_XTB, numbers=(1, 1)))
+    gfn2_h2_a = _system(method=GFN2_XTB, numbers=(1, 1)).exact_core
+    gfn2_h2_b = _system(method=GFN2_XTB, numbers=(1, 1)).exact_core
+    assert gfn2_h2_a is not None and gfn2_h2_b is not None
     h2_leaves, h2_spec = tree_flatten(gfn2_h2_a)
     h2_b_leaves, h2_b_spec = tree_flatten(gfn2_h2_b)
     assert h2_spec == h2_b_spec
@@ -420,8 +492,9 @@ def test_core_stack_positive_different_composition_and_shape_rejection() -> (
 
     # Carbon and nitrogen have different compositions but compatible GFN1
     # shell/pair structures in this exact-size bucket.
-    c2 = _prototype(_system(method=GFN1_XTB, numbers=(6, 6)))
-    n2 = _prototype(_system(method=GFN1_XTB, numbers=(7, 7)))
+    c2 = _system(method=GFN1_XTB, numbers=(6, 6)).exact_core
+    n2 = _system(method=GFN1_XTB, numbers=(7, 7)).exact_core
+    assert c2 is not None and n2 is not None
     c2_leaves, c2_spec = tree_flatten(c2)
     n2_leaves, n2_spec = tree_flatten(n2)
     assert c2_spec == n2_spec
@@ -470,6 +543,32 @@ def test_core_stack_positive_different_composition_and_shape_rejection() -> (
         ]
     )
     torch.testing.assert_close(mapped, serial)
+
+    # Map the complete production core, selecting its existing descriptor
+    # inside the pure function instead of mapping descriptor-only inputs.
+    core_batch = stack((c2, n2))
+    mapped_core = torch.func.vmap(_core_repulsion_energy)(core_batch, positions)
+    serial_core = torch.stack(
+        [
+            _core_repulsion_energy(c2, positions[0]),
+            _core_repulsion_energy(n2, positions[1]),
+        ]
+    )
+    torch.testing.assert_close(mapped_core, serial_core)
+    mapped_core_grad = torch.func.vmap(
+        torch.func.grad(_core_repulsion_energy, argnums=1)
+    )(core_batch, positions)
+    serial_core_grad = torch.stack(
+        [
+            torch.func.grad(_core_repulsion_energy, argnums=1)(
+                c2, positions[0]
+            ),
+            torch.func.grad(_core_repulsion_energy, argnums=1)(
+                n2, positions[1]
+            ),
+        ]
+    )
+    torch.testing.assert_close(mapped_core_grad, serial_core_grad)
     mapped_pos_grad = torch.func.vmap(
         torch.func.grad(
             lambda term, pos, charge: _evaluate_classical_descriptor(
@@ -495,8 +594,9 @@ def test_core_stack_positive_different_composition_and_shape_rejection() -> (
     )
     torch.testing.assert_close(mapped_pos_grad, serial_pos_grad)
 
-    h2 = _prototype(_system(method=GFN1_XTB, numbers=(1, 1)))
-    lih = _prototype(_system(method=GFN1_XTB, numbers=(3, 1)))
+    h2 = _system(method=GFN1_XTB, numbers=(1, 1)).exact_core
+    lih = _system(method=GFN1_XTB, numbers=(3, 1)).exact_core
+    assert h2 is not None and lih is not None
     with pytest.raises((ValueError, RuntimeError)):
         stack((h2, lih))
 

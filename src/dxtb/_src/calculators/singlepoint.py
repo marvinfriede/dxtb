@@ -482,9 +482,10 @@ def singlepoint(
     core = system._active_exact_core()
     numbers = core.numbers if core is not None else system.numbers
     config = core.config if core is not None else system.config
-    integral_setup = (
-        core.integral_setup if core is not None else system.integral_setup
-    )
+    # Keep the legacy IntegralSetup facade at this evaluation boundary. The
+    # active core has already verified that its selected backend Node is the
+    # same authoritative child held by this facade.
+    integral_setup = system.integral_setup
     h0_setup = core.h0_setup if core is not None else system.h0_setup
 
     if numbers.ndim != 1:

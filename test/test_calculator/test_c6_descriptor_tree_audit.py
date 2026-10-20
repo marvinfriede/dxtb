@@ -69,8 +69,28 @@ def test_c6_descriptor_children_expose_setup_nodes_to_standard_pytree() -> None:
         assert term.setup is system.interaction_setup(component)
 
     core_leaves, core_spec = tree_flatten(core)
-    assert core_leaves == [core]
-    assert tree_unflatten(core_leaves, core_spec) is core
+    assert isinstance(core, Node)
+    assert core_leaves and all(
+        isinstance(leaf, torch.Tensor) for leaf in core_leaves
+    )
+    expected_core_leaves = [core.numbers]
+    if core.integral is not None:
+        expected_core_leaves.extend(tree_flatten(core.integral)[0])
+    if core.h0_setup is not None:
+        expected_core_leaves.extend(tree_flatten(core.h0_setup)[0])
+    for term in core.classical_terms + core.interaction_terms:
+        expected_core_leaves.extend(tree_flatten(term)[0])
+    assert len(core_leaves) == len(expected_core_leaves)
+    assert all(
+        actual is expected
+        for actual, expected in zip(core_leaves, expected_core_leaves)
+    )
+    rebuilt_core = tree_unflatten(core_leaves, core_spec)
+    assert isinstance(rebuilt_core, type(core))
+    assert rebuilt_core.index is rebuilt_core.integral.backend.index
+    assert [term.kind for term in rebuilt_core.classical_terms] == [
+        term.kind for term in core.classical_terms
+    ]
 
     descriptor_leaves, descriptor_spec = tree_flatten(descriptor)
     setup_leaves, setup_spec = tree_flatten(setup)

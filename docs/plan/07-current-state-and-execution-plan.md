@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a complete; C8b.0 preflight complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proves a test-local exact-core Node schema, selected PyTorch/libcint backend visibility, derived index aliasing, ModuleNode parameter partitioning, and compatible descriptor stacking. Production System/Model are still unregistered. C8b.1-.3 remain implementation work: core/backend schema, Model/System integration, then padded mixed-composition stacking and its mapped pure-kernel test. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b.0's current focused execution used Python 3.12/Torch 2.14.1. |
+| C5-C9          | C5/C6/C7/C8a complete; C8b.1 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree and C8b.1 registers the production exact core plus selected PyTorch/libcint backend. Model remains unregistered pending C8b.2; C8b.3 owns padded mixed-composition stacking. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.1 execution used Python 3.12/Torch 2.14.1. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2086,23 +2086,25 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 
 ## C8b Model/System stackability
 
-C6 is accepted at the exact-core/legacy compatibility boundary. C8b.0 has
-completed a source inventory and executable schema preflight; it did not
-register or replace production `System`, `ExactSystemCore`, or `Model`.
-Current production outer `IntegralSetup` and `ExactSystemCore` remain opaque to
-standard pytree traversal, while their selected backend setup Nodes and
-ordered descriptor Nodes are registered and flattenable.
+C6 is accepted at the exact-core/legacy compatibility boundary. C8b.0
+completed the source inventory and executable schema preflight. C8b.1 now
+registers production `ExactSystemCore` and a selected-backend wrapper as
+tad-mctc Nodes. `Model` and the legacy `System` facade remain unchanged and
+unregistered; C8b.2 owns the Model parameter tree and facade integration.
 
-The test-local preflight tree stores dynamic children: atomic numbers with
-integer dtype preserved; optional `H0SetupNode`; one selected PyTorch or
-libcint backend Node; ordered classical and interaction descriptor tuples.
-Its context contains effective dtype, frozen `Config`, driver, integral
-level, and descriptor metadata. `index` is derived from
-`integral.backend.index`, so the selected backend owns the `CoreIndexData`
-mapping once. No full `IndexHelper`, component list, compatibility cache,
-driver, or per-call positions/charge/spin/field enters this tree. The
-test-local backend wrapper exposes the nested backend Node as a child rather
-than hiding it inside `IntegralSetup` static context.
+The production exact-core tree stores dynamic children: atomic numbers with
+integer dtype preserved; optional H0 setup; one selected PyTorch or libcint
+backend Node; and ordered classical and interaction descriptor tuples. Its
+context contains effective dtype and frozen `Config`. The backend wrapper
+contains driver, integral level, and the selected backend as a dynamic child.
+`index` is derived from `integral.backend.index`, so the selected backend owns
+the `CoreIndexData` mapping once. A logical System-device context on the
+wrapper preserves the supported libcint force-CPU arrangement under Node's
+device validation; CUDA validation remains outstanding because CUDA is not
+available in the current environment. No full `IndexHelper`, component list,
+compatibility cache, driver object, or per-call positions/charge/spin/field
+enters the core tree. The legacy `System.integral_setup` facade remains the
+evaluation adapter after backend identity has been validated.
 
 The configuration audit found frozen dataclass configuration composed of
 immutable scalar/tuple/path values and no tensor fields; it is suitable as
@@ -2130,8 +2132,9 @@ different-size compositions padded to a shared atom/shell/AO bucket remains
 implementation work. Do not satisfy it with dummy physical components.
 
 The implementation split is C8b.1 (registered exact-core/backend schema and
-conversion), C8b.2 (Model parameter tree and façade integration), and C8b.3
-(valid mixed-composition padding/partitioning and P9 stack/map acceptance).
+conversion; complete at its scoped boundary), C8b.2 (Model parameter
+tree and façade integration), and C8b.3 (valid mixed-composition
+padding/partitioning and P9 stack/map acceptance).
 The original “stacked padded systems run under `vmap`” wording is split by
 owner: C8b validates compatible structural stacking and a pure mapped energy
 kernel; E6a owns public whole-System `vmap(system.singlepoint)`; E6b owns
@@ -2699,8 +2702,8 @@ wait for B3b, C5/C8b, or E4.6a.
 
 B5.6 is complete and verified; C8a is complete. B6b-core and C5 are
 complete. C6 is complete at its exact-core/legacy boundary, and C7 is
-independently accepted. C8b.0 has completed the preflight; C8b.1-.3 remain
-implementation work. E3.1a, E3.1s and E3.1b are complete; full E3
+independently accepted. C8b.0 preflight and C8b.1 production core/backend
+registration are complete; C8b.2-.3 remain implementation work. E3.1a, E3.1s and E3.1b are complete; full E3
 end-to-end acceptance remains blocked by E1.3 for the DFT-D3-enabled GFN1 row.
 B6b-core removes mutable legacy index and interaction containers from the
 functional SCF core while preserving their legacy consumers; it does not
@@ -2958,8 +2961,9 @@ descriptor/model, packed/cache, interaction-family, and selected PySCF-backed
 libcint controls in Python 3.12/Torch 2.14.1. Focused current-source tests cover all family core Nodes, Calculator/result
 compatibility, packed mode energy/gradient parity, and selected libcint/System
 paths. Only this one of the five approved environments was available. C6 is
-complete at its exact-core/legacy boundary. C8b.0 has completed schema and
-stacking preflight; production C8b implementation remains open.
+complete at its exact-core/legacy boundary. C8b.0 completed schema and
+stacking preflight; C8b.1 registered the production exact core/backend. Model
+parameter migration and padded P9 stacking remain open.
 
 The C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
 scalar hardening, C6.4 D4SC, C6.4a setup-authority hardening, C6.4b
@@ -3002,9 +3006,9 @@ public tensor-valued SCF solver-status schema — is complete and verified.
 C7 setup acceptance and final B3b exact-core/compatibility acceptance are
 complete. B3b-Final.3 established ordered classical and interaction descriptors
 for exact built-ins, with legacy identity associations, extensions, and packed
-Calculator state kept at the compatibility boundary. C8b.0 has completed the
-schema/alias/partition/stacking preflight; C8b.1-.3 remain implementation
-work. B2, C5, C6, C7, and B3b are accepted prerequisites. C9 is deferred until
+Calculator state kept at the compatibility boundary. C8b.0 completed the
+schema/alias/partition/stacking preflight and C8b.1 registered the production
+exact core/backend; C8b.2-.3 remain implementation work. B2, C5, C6, C7, and B3b are accepted prerequisites. C9 is deferred until
 legacy-owner retirement through E4.6a/E4.6b.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies

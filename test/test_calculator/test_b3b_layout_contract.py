@@ -75,11 +75,17 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
     assert single.exact_core.numbers is single.numbers
     assert single.exact_core.config is single.config
     assert single.exact_core.effective_dtype is torch.float64
-    assert single.exact_core.integral_setup is single.integral_setup
+    assert single.exact_core.integral is not None
+    assert single.exact_core.integral.backend is (
+        single.integral_setup.pytorch
+        if single.integral_setup.pytorch is not None
+        else single.integral_setup.libcint
+    )
     assert single.exact_core.h0_setup is single.h0_setup
-    assert single.exact_core.index is single.integral_setup.pytorch.index
+    assert single.exact_core.index is single.exact_core.integral.backend.index
     assert not hasattr(single.exact_core, "batch_mode")
-    assert not hasattr(single.exact_core, "dd")
+    assert "dd" not in single.exact_core._child_names
+    assert "dd" not in single.exact_core._context_names
     assert not hasattr(single.exact_core, "ihelp")
     assert not hasattr(single.exact_core, "classicals")
     assert not hasattr(single.exact_core, "interactions")
@@ -516,17 +522,14 @@ def test_exact_core_floating_setup_device_and_dtype_are_prevalidated() -> None:
     )
 
     meta_h0 = system.h0_setup.to(device="meta")
-    meta_core = replace(system.exact_core, h0_setup=meta_h0)
-    meta_system = replace(system, h0_setup=meta_h0, exact_core=meta_core)
+    # An inconsistent mixed-device core is rejected during Node construction;
+    # the established facade validation still reports the early device error.
+    meta_system = replace(system, h0_setup=meta_h0, exact_core=None)
     with pytest.raises(DeviceError, match="System floating setup"):
         meta_system.singlepoint(positions)
 
-    float32_h0 = system.h0_setup.to(dtype=torch.float32)
-    mismatched_core = replace(system.exact_core, h0_setup=float32_h0)
-    mismatched_core = replace(mismatched_core, effective_dtype=torch.float64)
-    mismatched = replace(
-        system, h0_setup=float32_h0, exact_core=mismatched_core
-    )
+    mismatched_core = system.exact_core.replace(effective_dtype=torch.float32)
+    mismatched = replace(system, exact_core=mismatched_core)
     with pytest.raises(DtypeError, match="exact core declares"):
         mismatched.singlepoint(positions)
 
@@ -538,8 +541,11 @@ def test_device_mismatched_captured_index_uses_legacy_preparation() -> None:
     system = _model().setup(torch.tensor([1, 1]))
     assert system.exact_core is not None
     assert system.exact_core.index is not None
-    mismatched_index = system.exact_core.index.to(device="meta")
-    mismatched_core = replace(system.exact_core, index=mismatched_index)
+    mismatched_backend = system.exact_core.integral.backend.to(device="meta")
+    mismatched_integral = system.exact_core.integral.replace(
+        backend=mismatched_backend
+    )
+    mismatched_core = system.exact_core.replace(integral=mismatched_integral)
     fallback_system = replace(system, exact_core=mismatched_core)
     assert fallback_system._active_exact_core() is None
     positions = torch.tensor(
@@ -564,9 +570,8 @@ def test_active_core_index_device_mismatch_uses_public_solver(
     meta_backend = backend.to(device="meta")
     meta_index = meta_backend.index
     meta_integrals = replace(system.integral_setup, pytorch=meta_backend)
-    meta_core = replace(
-        system.exact_core, integral_setup=meta_integrals, index=meta_index
-    )
+    meta_integral = system.exact_core.integral.replace(backend=meta_backend)
+    meta_core = system.exact_core.replace(integral=meta_integral)
     mismatched = replace(
         system, integral_setup=meta_integrals, exact_core=meta_core
     )
