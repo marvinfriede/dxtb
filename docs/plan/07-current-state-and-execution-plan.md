@@ -2132,9 +2132,10 @@ The C8b.2 independent hardening review reproduced a race in overlapping
 `functional_call` substitutions through shared ParamModule owners.
 Model-mediated parameter-tree snapshots and ordinary/functional setup now
 share an owner-scoped reentrant lock. Metadata validation also rejects malformed ModuleNode state
-keys, shapes, and incompatible dtype categories before substitution while
-allowing real floating dtype conversion. Validation and substitution consume
-one shallow state mapping snapshot. New tests cover converted-tree
+keys, shapes, incompatible dtype categories, mixed floating dtypes, and mixed
+devices before substitution while allowing homogeneous real floating dtype
+conversion. Validation and substitution consume one shallow state mapping
+snapshot. New tests cover converted-tree
 float32 setup/energy/gradients, the GFN1 H0 `kpol` path, restoration after
 setup exceptions, concurrent calls across Model façades sharing one owner,
 mode-1 packed setup, and a custom classical extension. Concurrency tests
@@ -2159,6 +2160,20 @@ incompatible nested pair-plan and shell/AO dimensions even at equal atom
 count. Current exact setup has no padding adapter, so the required P9 case of
 different-size compositions padded to a shared atom/shell/AO bucket remains
 implementation work. Do not satisfy it with dummy physical components.
+
+The C8b.3 mixed-size audit also constructs independent GFN1/H2, GFN1/H3, and
+GFN1/H2O cores. H2/H3 differ in atom, shell, AO, pair-entry, index-map,
+Repulsion, D3 and ES2 setup shapes; their PairPlan class contexts match, but
+their pair-entry counts differ. H2/H2O additionally differs in unique-shell
+types, alpha/coefficient tuple arity, pair-plan class contexts, AO stride, H0
+unique-species data, and shell-resolved setup. Direct whole-core stacking
+rejects both pairs. There is no accepted padding implementation: current
+index Nodes have no validity masks, and PairClassNode flattened AO indices
+must be rebuilt for a common AO stride. The audit is recorded in the C8b
+schema preflight and a dedicated structural test. C8b.3 remains partial; the
+next bounded step is to define explicit validity-bearing padded index and
+pair-plan Nodes, prove H2/H3 real-index reconstruction, then extend canonical
+shell mapping and family setup remapping to H2/H2O.
 
 The implementation split is C8b.1 (registered exact-core/backend schema and
 conversion; complete at its scoped boundary), C8b.2 (registered Model

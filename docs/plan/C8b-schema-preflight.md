@@ -382,3 +382,70 @@ not represented by current C8b.2 execution.
 functional setup boundary while retaining the public Model/System/Calculator
 façades. C8b.3 still owns different-size P9 padding/partitioning and full
 structural stacking acceptance. C8b remains incomplete.
+
+## C8b.3 mixed-size structural audit — partial
+
+At base 3670ed1396f2b2d6ddcd3c322848ebdc67d1b783, the existing whole-core
+positive controls still pass: independently constructed GFN2/H2 cores stack,
+and GFN1/C2 plus GFN1/N2 cores stack and map the existing Repulsion energy and
+position-gradient kernel. The existing negative controls also pass: direct
+stacking rejects GFN1/H2 with GFN1/LiH, and rejects same-atom-count GFN2/H2
+with GFN2/LiH because their shell/AO and pair-plan structures differ.
+
+A new structural inventory constructs all fixtures independently through
+Model.setup() with GFN1, float64 and the selected PyTorch integral backend:
+
+| Fixture | Atoms | Shells | AOs | Unique shell types | Pair classes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H2 | 2 | 4 | 4 | 2 | 4 |
+| H3 | 3 | 6 | 6 | 2 | 4 |
+| H2O | 3 | 6 | 8 | 4 | 11 |
+
+H2 and H3 have the same ordered pair-class contexts, but pair-entry counts
+change from (3, 1, 3, 3) to (6, 3, 6, 6). Their backend shell maps,
+orbital maps, pair-plan atom maps, PairClassNode ib/jk/idx/weight, H0 atom
+and shell maps, atom-indexed classical setup tensors, and ES2 atom/shell masks
+also have different shapes. H2O additionally changes the alpha/coefficient
+tuple arity, PairPlanNode.unique_angular, pair-class count and pair-class
+context, H0 unique-species/shell tables, and AO capacity. Direct stacking of
+both H2/H3 and H2/H2O complete production cores is rejected by tad-mctc.
+The dedicated test is
+[test_c8b3_mixed_size_preflight.py](../../test/test_calculator/test_c8b3_mixed_size_preflight.py).
+The existing GFN2/H2 versus GFN2/LiH negative row is also structurally
+explained by the production backend inventory: both have two atoms, but H2
+has 2 shells, 2 AOs, one unique shell class and one pair class, while LiH has
+3 shells, 5 AOs, three unique shell classes and six pair classes.
+The mixed-size inventory plus the existing preflight tests reported 11
+passed in the libcint-enabled profile and 9 passed/2 skipped without libcint.
+Both runs used Python 3.12.10, Torch 2.14.1+cpu and tad-mctc 0.9.1. The
+enabled profile imports tad-libcint 0.3.0 and PySCF 2.14.0; CUDA is
+unavailable. These structural tests use the PyTorch integral backend.
+
+No padding implementation was accepted in this audit. The current registered
+schema has no independent atom/shell/AO or per-pair-entry validity children.
+No stable mixed-size compatibility key, capacity calculation, bucket
+partitioner, or original-order map is implemented; PyTree spec equality is
+only the current exact-shape stack check, not a bucket policy.
+CoreIndexData and H0IndexNode maps are typed as structural indices, not
+masked arrays. PairPlanNode.nao is static context, while idx stores
+flattened AO positions using that AO stride. Therefore, padding those leaves
+to matching shapes would not be sufficient: the AO indices must be rebuilt
+for the destination stride, and padded pair entries must be excluded through
+an explicit mask. Mixed H2/H2O also needs a canonical union of element/shell
+types and corresponding remapping of H0, integral and family setup data.
+Repulsion's existing kernel substitutes epsilon for inactive pair distances,
+but the existing exact setup does not provide a padded atom-validity mask or
+prove zero gradients for padded coordinates under coincident-coordinate
+inputs.
+
+C8b.3 remains open. The next implementation step is a narrowly defined
+registered padded-core representation with explicit atom, shell, AO, unique
+shell-type and pair-entry validity masks. Its first acceptance slice should
+canonicalize GFN1 H2/H3 and rebuild pair idx values using a common AO stride;
+then independently prove real-index reconstruction and zero padded
+contributions. That slice should also introduce a value-based static
+compatibility signature with capacities kept separate from configuration,
+then deterministic bucket ordering with an original-index map. Only after
+that schema is proven should H2/H2O family and unique-shell remapping be
+added. No production mixed-System SCF batching, whole-System vmap, E6a, E6b,
+or E7 work is included.

@@ -498,6 +498,20 @@ shapes despite equal atom count. Full padded mixed-size P9 support remains
 C8b.3 because current exact setup maps are unpadded. See the preflight report
 for exact tests and limitations.
 
+**C8b.3 status — partial.** A current-source audit adds independent GFN1/H2,
+GFN1/H3, and GFN1/H2O production cores and confirms that complete unpadded
+trees cannot stack. H2/H3 keep the same ordered pair-class contexts but have
+different pair-entry capacities, atom/shell/AO maps, and atom-indexed setup
+leaves. H2/H2O additionally changes the unique-shell layout, alpha/coefficient
+tuple structure, pair-class contexts, and AO stride. Safe padding therefore
+requires explicit atom/shell/AO/unique-type/pair-entry masks, structural index
+reconstruction, and rebuilt flattened AO indices. No production padding or
+mixed-size mapped acceptance, stable compatibility key, capacity policy, or
+bucket partitioner is implemented. The next bounded package should first
+define and validate a padded-core schema for H2/H3, then extend its canonical
+shell mapping to H2/H2O. C8b.3 remains open; E6a/E6b/E7 stay with their
+existing owners.
+
 **Needs.** B3b, C5, C6, C7, C8a, B2. **Unblocks.** E6bimpl after its other
 prerequisites; E6a remains separately owned. **Size.** M.
 
