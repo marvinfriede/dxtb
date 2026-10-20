@@ -125,6 +125,7 @@ from dxtb._src.integral.evaluation import (
 from dxtb._src.param import ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
+from dxtb._src.utils.tensors import normalize_device
 from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, setup_h0, setup_h0_core
 from dxtb.config import Config
 
@@ -212,6 +213,21 @@ class ExactSystemCore(Node):
     h0_setup: H0SetupNode | None = child()
     classical_terms: tuple[ClassicalTermDescriptor, ...] = child()
     interaction_terms: tuple[InteractionTermDescriptor, ...] = child()
+
+    def _convert_child(
+        self,
+        name: str,
+        value: object,
+        device: torch.device | str | None,
+        dtype: torch.dtype | None,
+    ) -> object:
+        converted = super()._convert_child(name, value, device, dtype)
+        if name == "integral" and converted is not None and device is not None:
+            assert isinstance(converted, IntegralBackendNode)
+            logical_device = normalize_device(device)
+            assert isinstance(logical_device, torch.device)
+            converted = converted.replace(logical_device=logical_device)
+        return converted
 
     @property
     def index(self) -> CoreIndexData | None:

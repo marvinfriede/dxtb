@@ -405,6 +405,23 @@ def test_candidate_core_flattens_backend_h0_and_descriptor_setup_nodes(
         else:
             assert converted_leaf.dtype is torch.float32
 
+    meta_core = production_core.to(device="meta")
+    assert meta_core.numbers.device.type == "meta"
+    assert meta_core.integral is not None
+    assert meta_core.integral.backend.index is meta_core.index
+    assert meta_core.integral.logical_device == meta_core.numbers.device
+    if driver == labels.INTDRIVER_LIBCINT:
+        assert meta_core.integral.backend.force_cpu is True
+        assert (
+            meta_core.integral.backend.basis_setups[0].numbers.device.type
+            == "cpu"
+        )
+    else:
+        assert all(
+            leaf.device.type == "meta"
+            for leaf in tree_flatten(meta_core.integral.backend)[0]
+        )
+
     proto = _prototype(system)
     leaves, spec = tree_flatten(proto)
     assert leaves and all(isinstance(leaf, torch.Tensor) for leaf in leaves)

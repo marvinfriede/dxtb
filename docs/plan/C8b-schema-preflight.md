@@ -206,9 +206,12 @@ The backend wrapper carries a logical System-device context so a force-CPU
 libcint Node can remain a CPU child while the core is on the requested System
 device. This is required by tad-mctc `Node`'s device-homogeneity validation;
 `ExactSystemCore.to()` synchronizes that logical context from converted
-`numbers`. CPU conversion is exercised. CUDA was unavailable, so construction
-and conversion with CUDA positions plus CPU libcint leaves remain unverified
-on hardware. The legacy libcint `force_cpu` setting itself is preserved.
+`numbers` before the enclosing Node is reconstructed. CPU and structural
+meta-device conversion are exercised; the latter confirms force-CPU backend
+leaves remain CPU while the enclosing core moves, without numerical meta
+execution. CUDA was unavailable, so construction and conversion with CUDA
+positions plus CPU libcint leaves remain unverified on hardware. The legacy
+libcint `force_cpu` setting itself is preserved.
 
 Current validation used Python 3.12.10/Torch 2.14.1 CPU. The focused schema,
 descriptor, and B3b layout selection passed 73 tests with libcint and 70
@@ -223,6 +226,9 @@ tolerances or XFAILs changed. The broad regression selection had 10 failures,
 all matching the already classified GFN1 parity family; no new failure was
 identified. One attempted combined map/root/E0/integral command was
 interrupted without a completed result and is not counted.
+The broad E3.0 diagnostics module was also interrupted during a long-running
+selection; it is not counted. The non-slow functional-root derivative
+selection above supplies the completed implicit-root transform controls.
 
 The libcint profile imported tad-libcint 0.3.0 and PySCF 2.14.0 successfully;
 the no-libcint profile reported both unavailable and raised
