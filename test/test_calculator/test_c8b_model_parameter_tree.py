@@ -645,6 +645,57 @@ def test_functional_parameter_tree_rejects_dtype_category_changes(
     _assert_state_snapshot(model.par, snapshot)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "parameter_tree.element.H.arep.param",
+        "dummy",
+    ],
+)
+def test_functional_parameter_tree_rejects_inconsistent_float_dtypes(
+    name: str,
+) -> None:
+    """Direct dict mutation cannot bypass the ModuleNode dtype invariant."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    assert tree.parameters.params[name].dtype is torch.float64
+    assert all(
+        not value.is_floating_point() or value.dtype is torch.float64
+        for value in tree.parameters.params.values()
+    )
+    snapshot = _state_snapshot(model.par)
+
+    # Deliberately mutate the existing child dictionary. Reconstructing the
+    # Node would reject this state before it reached setup_functional().
+    tree.parameters.params[name] = tree.parameters.params[name].to(
+        dtype=torch.float32
+    )
+
+    with pytest.raises(
+        TypeError, match="floating state tensors must share one dtype"
+    ):
+        model.setup_functional(torch.tensor([1, 1]), tree)
+    _assert_state_snapshot(model.par, snapshot)
+
+
+def test_functional_parameter_tree_rejects_inconsistent_state_devices() -> None:
+    """Device-mixed mappings fail metadata validation before setup."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    snapshot = _state_snapshot(model.par)
+
+    # Meta is used only to exercise the metadata guard; setup/evaluation is
+    # never attempted with a meta tensor and this is not CUDA evidence.
+    tree.parameters.params[name] = tree.parameters.params[name].to(
+        device=torch.device("meta")
+    )
+
+    with pytest.raises(ValueError, match="state tensors must share one device"):
+        model.setup_functional(torch.tensor([1, 1]), tree)
+    _assert_state_snapshot(model.par, snapshot)
+
+
 def test_functional_parameter_tree_accepts_structural_integer_dtype() -> None:
     """A structural integer leaf remains valid in its registered dtype."""
     model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))

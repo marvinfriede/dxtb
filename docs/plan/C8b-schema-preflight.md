@@ -302,12 +302,16 @@ float64-to-float32 trees remain supported while integer, Boolean, and complex
 substitutions for floating parameters are rejected before setup. State
 validation and `functional_call` share one shallow snapshot of the input
 mapping and its tensor references. These metadata-only checks precede
-`functional_call`; no tensor values are synchronized or compared. A float64
-parameter tree converted to float32 has a numerical acceptance control against
-a separately constructed float32 Model, including setup values, H2 energy,
-and a real parameter gradient. The GFN1 `hamiltonian.xtb.kpol` path similarly
-proves functional substitution through `H0SetupNode`, H2 energy, and gradients
-against a direct ParamModule reference.
+`functional_call`; no tensor values are synchronized or compared. The checks
+also preserve the `ModuleNode` invariant that all floating state leaves share
+one dtype and all tensor leaves share one device. This catches direct mutation
+of the child params dictionary that bypasses Node construction checks, while
+still accepting complete float64-to-float32 conversion. A float64 parameter
+tree converted to float32 has a numerical acceptance control against a
+separately constructed float32 Model, including setup values, H2 energy, and a
+real parameter gradient. The GFN1 `hamiltonian.xtb.kpol` path similarly proves
+functional substitution through `H0SetupNode`, H2 energy, and gradients against
+a direct ParamModule reference.
 
 Failure-path controls cover invalid batch mode after substitution begins,
 original parameter and buffer object/value restoration, subsequent ordinary

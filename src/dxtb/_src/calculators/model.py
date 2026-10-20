@@ -986,11 +986,26 @@ class Model:
                 "Functional parameter tree state keys do not match the "
                 f"ParamModule (missing={missing}, unexpected={unexpected})."
             )
+        state_device: torch.device | None = None
+        device_owner: str | None = None
+        floating_dtype: torch.dtype | None = None
+        dtype_owner: str | None = None
         for name, value in state_values.items():
             if not isinstance(value, Tensor):
                 raise TypeError(
                     f"Functional state entry '{name}' must be a Tensor."
                 )
+
+            if state_device is None:
+                state_device = value.device
+                device_owner = name
+            elif value.device != state_device:
+                raise ValueError(
+                    "Functional parameter tree state tensors must share one "
+                    f"device; '{device_owner}' is on {state_device}, but "
+                    f"'{name}' is on {value.device}."
+                )
+
             expected_shape, expected_dtype = expected_state[name]
             if tuple(value.shape) != expected_shape:
                 raise ValueError(
@@ -1002,6 +1017,17 @@ class Model:
                     raise TypeError(
                         f"Functional state entry '{name}' must have a real "
                         f"floating dtype, got {value.dtype}."
+                    )
+                if floating_dtype is None:
+                    floating_dtype = value.dtype
+                    dtype_owner = name
+                elif value.dtype != floating_dtype:
+                    raise TypeError(
+                        "Functional parameter tree floating state tensors "
+                        "must share one dtype; "
+                        f"'{dtype_owner}' has {floating_dtype}, but '{name}' "
+                        f"has {value.dtype}. Convert the complete tree "
+                        "instead of mutating an individual state entry."
                     )
             elif value.dtype != expected_dtype:
                 raise TypeError(
