@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a complete; C8b not started | C5 migrated `CoreIndexData`; C8a registered the public Result tree; C6.1-C6.11 migrated eligible single-System setup families to Nodes, including ES2/ES3, AES2, GeneralizedBorn, D4SC, Repulsion, ShortRangeBond, IES, Halogen, classical D4, and D3. C6.3a preserves supported CPU zero-dimensional tensor Born scalars at the Node boundary. C6.4a keeps functional D4SC model setup aligned with the owning System snapshot. C6.4b binds that setup authority to the selected interaction object by identity. C6.4c did not reproduce the reported worker-only NO2 third-derivative NaN in matched base/candidate runs; its cause remains unresolved and the issue is not fixed. See [`C6.4c diagnostic`](C6.4c-NO2-worker-investigation.md). C6.5 preserves first-occurrence input order. Legacy component/list/cache APIs remain for direct and packed compatibility. C6-Final.0 identified that persistent B3b classical/interaction descriptors hid setup Nodes from standard pytree traversal; C6-Final.1 registers those descriptors with setup Nodes as dynamic children. ExactSystemCore remains unregistered; C6-Final.2 cross-family acceptance and C6-Final.3 compatibility acceptance are complete at the documented single-System/legacy boundary; C8b may begin. C7.0-C7.4 complete scoped single-System setup Node acceptance; C7.4 kept outer `IntegralSetup` and validated `IntegralMatrices` as dataclasses because supported transforms capture setup and return tensor fields, while public singlepoint results use `Result`'s pytree. `tad-libcint` 0.3.0 maps and CPU conversion policy passed the five-environment C7.4 checks. The C6.7 historical broad-suite report remains incompletely classified because its complete failure list is unavailable. Ten inherited GFN1 density-parity failures, the GFN2 LiH NaN-H0/eigensolver issue, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. B3b-Final is complete at its staged compatibility boundary; B2, B3b, and C7 are complete C8b prerequisites. E6a/E6b and C9 remain separately open. |
+| C5-C9          | C5/C6/C7/C8a complete; C8b.0 preflight complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proves a test-local exact-core Node schema, selected PyTorch/libcint backend visibility, derived index aliasing, ModuleNode parameter partitioning, and compatible descriptor stacking. Production System/Model are still unregistered. C8b.1-.3 remain implementation work: core/backend schema, Model/System integration, then padded mixed-composition stacking and its mapped pure-kernel test. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b.0's current focused execution used Python 3.12/Torch 2.14.1. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -1999,7 +1999,12 @@ Add the `in_dims_like(node, **fields)` helper described by T0 when per-field bat
 
 ## C6 components
 
-Start after B6b-core/C5 core structural migration.
+Final status: C6 is complete at the core/legacy compatibility boundary, as
+accepted in C6-Final.3 and summarized in the current status above. The family
+paragraphs below retain their package-time sequence and evidence; earlier
+statements that broader C6 remained partial describe those historical review
+points, not current open work. Start-of-track prerequisite: B6b-core/C5 core
+structural migration.
 
 C6.1 is complete: `System` stores ES2/ES3 core setup Nodes for the eligible
 single-System path. C6.2 is complete: the same boundary stores an
@@ -2013,16 +2018,17 @@ tensor-valued settings dynamic. C6.4a is complete: functional FULL and
 implicit preparation use the same D4SC setup snapshot as the call-local
 matrix builder, while direct compatibility calls retain component-based
 setup capture. Legacy setup dataclasses, components, caches, and batch routes
-remain intact for these families. Broader C6 remains partial; migrate further
-component families in separate packages. C7 scoped setup Node acceptance is
-complete; broader C6 remains partial.
+remain intact for these families. At this package-time review point, broader
+C6 family migrations remained open. C7 scoped setup Node acceptance is
+complete. Later C6-Final.0-.3 packages closed the broader core descriptor and
+compatibility acceptance at its documented boundary.
 
 C6.4b is complete: `_interaction_data()` associates the System-owned D4SC
 setup only with the identical component in the resolved interaction list.
 An alternate exact D4SC component follows the existing compatibility setup
 path, and selections without the System-owned component carry no setup
-authority. Broader C6 remains partial; C7 scoped setup Node acceptance is
-complete.
+authority. C7 scoped setup Node acceptance is complete. Later C6-Final.0-.3
+closed the broader core descriptor and compatibility acceptance.
 
 Most components should now be small immutable term/setup nodes.
 
@@ -2080,52 +2086,58 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 
 ## C8b Model/System stackability
 
-C8b follows final B3b, B6b-core, C5, C6, C7, and B2. Final B3b establishes the
-layout, including removal of transitional `batch_mode`/`dd`, explicit setup
-for built-in DFT-D3, and the absence of persistent generic built-in
-`ClassicalListCache` ownership on single Systems. The on-demand
-`System.classical_cache` view is a compatibility adapter and may be retired
-only after its callers receive a separately accepted compatibility decision.
-The complete Model and live mutable integral container have already been
-removed; `integral_setup` and `h0_setup` are established. C8b migrates that
-already-correct built-in layout to stackable Nodes; it does not own
-setup/per-call physics refactoring or require arbitrary legacy custom
-classical extensions to become stackable. Its stackability is required for
-E6b mixed composition, not E6a mapping over one fixed System; Result pytree
-support is established separately by C8a.
+C6 is accepted at the exact-core/legacy compatibility boundary. C8b.0 has
+completed a source inventory and executable schema preflight; it did not
+register or replace production `System`, `ExactSystemCore`, or `Model`.
+Current production outer `IntegralSetup` and `ExactSystemCore` remain opaque to
+standard pytree traversal, while their selected backend setup Nodes and
+ordered descriptor Nodes are registered and flattenable.
 
-Before conversion, ensure the dataclass layouts already match the target architecture.
+The test-local preflight tree stores dynamic children: atomic numbers with
+integer dtype preserved; optional `H0SetupNode`; one selected PyTorch or
+libcint backend Node; ordered classical and interaction descriptor tuples.
+Its context contains effective dtype, frozen `Config`, driver, integral
+level, and descriptor metadata. `index` is derived from
+`integral.backend.index`, so the selected backend owns the `CoreIndexData`
+mapping once. No full `IndexHelper`, component list, compatibility cache,
+driver, or per-call positions/charge/spin/field enters this tree. The
+test-local backend wrapper exposes the nested backend Node as a child rather
+than hiding it inside `IntegralSetup` static context.
 
-Before C8b, remove `batch_mode` and `dd`; exact built-in DFT-D3 setup and direct
-single-System setup construction are complete under B6a-Cache.1. Any removal
-of the compatibility property itself must account for Calculator legacy and
-custom extension callers rather than reintroducing generic persistent setup
-ownership.
+The configuration audit found frozen dataclass configuration composed of
+immutable scalar/tuple/path values and no tensor fields; it is suitable as
+static context. The partition signature must combine configuration values,
+effective dtype, selected backend and force-CPU policy, ordered descriptor
+metadata and optional-child presence, plus dynamic leaf shape/dtype/device.
+It must not use `repr()` or object identities. Dtype conversion updates the
+effective-dtype metadata and preserves integer/Boolean structural leaves.
 
-The complete Model and live mutable integral container are already absent;
-`integral_setup` and `h0_setup` are setup-owned values. Arbitrary custom
-legacy classical extensions remain outside the stackable built-in core and
-follow the E6b compatibility policy.
+The Model parameter prototype uses one `ModuleNode.from_module(par)` child.
+Its `params` dictionary dynamically exposes named parameters and buffers and
+supports tad-mctc `partition`/`combine`; no Model parameter table is copied
+into each System. The ModuleNode's module architecture remains static
+context. Training work must retain one Model-level owner and ensure gradients
+reach original ParamModule leaves through setup and energy construction.
 
-Then convert Model/System to stackable Nodes while retaining C8a's Result
-pytree representation.
+Executable evidence is in [`C8b schema preflight`](C8b-schema-preflight.md).
+Independent GFN1/C2 and GFN1/N2 cores have compatible registered tree specs
+and stack; the existing Repulsion descriptor kernel maps to serial values and
+position gradients. Independently constructed GFN2/H2 trees provide a
+positive same-composition stack control. GFN2/H2 versus GFN2/LiH has
+incompatible nested pair-plan and shell/AO dimensions even at equal atom
+count. Current exact setup has no padding adapter, so the required P9 case of
+different-size compositions padded to a shared atom/shell/AO bucket remains
+implementation work. Do not satisfy it with dummy physical components.
 
-Required stacking test:
-
-1. build two Systems with different compositions;
-2. pad them to one size bucket;
-3. stack;
-4. confirm tree structures match;
-5. confirm model-wide parameter tables were not duplicated into each System;
-6. `vmap` one simple energy kernel over them.
-
-Required training test:
-
-```python
-params, rest = partition(model, selector)
-loss = ...
-grads = torch.func.grad(loss)(params)
-```
+The implementation split is C8b.1 (registered exact-core/backend schema and
+conversion), C8b.2 (Model parameter tree and façade integration), and C8b.3
+(valid mixed-composition padding/partitioning and P9 stack/map acceptance).
+The original “stacked padded systems run under `vmap`” wording is split by
+owner: C8b validates compatible structural stacking and a pure mapped energy
+kernel; E6a owns public whole-System `vmap(system.singlepoint)`; E6b owns
+production mixed-System SCF batching. The original “remove Calculator.type”
+step is reassigned to E4.6/E6b compatibility policy; C8b preserves the
+existing Calculator/System façade conversion contracts and known limitations.
 
 ## C9 final TensorLike/ModuleLike scaffold purge
 
@@ -2686,8 +2698,9 @@ finally tested. E6a + final B3b/C5/C6/C7/C8b unblock E6bimpl. E6a does not
 wait for B3b, C5/C8b, or E4.6a.
 
 B5.6 is complete and verified; C8a is complete. B6b-core and C5 are
-complete. C6.1 is complete; C6 remains partial, and C7 is independently
-unblocked. E3.1a, E3.1s and E3.1b are complete; full E3
+complete. C6 is complete at its exact-core/legacy boundary, and C7 is
+independently accepted. C8b.0 has completed the preflight; C8b.1-.3 remain
+implementation work. E3.1a, E3.1s and E3.1b are complete; full E3
 end-to-end acceptance remains blocked by E1.3 for the DFT-D3-enabled GFN1 row.
 B6b-core removes mutable legacy index and interaction containers from the
 functional SCF core while preserving their legacy consumers; it does not
@@ -2938,14 +2951,15 @@ public forwarding for arbitrary `core_index_owner` keywords while retaining
 the trusted internal map route, and validates setup coherence and floating
 device/dtype. The evidence and inherited GFN1 parity failures are recorded in
 [`B3b final layout inventory`](B3b-Final-layout-inventory.md). Final B3b is
-complete; C8b has not started. C6-Final.2 cross-family numerical/transform
+complete. C6-Final.2 cross-family numerical/transform
 acceptance passed the available family Node, functional-map, implicit-root,
 E0, and pure integral controls. C6-Final.3 exercised current-source
 descriptor/model, packed/cache, interaction-family, and selected PySCF-backed
 libcint controls in Python 3.12/Torch 2.14.1. Focused current-source tests cover all family core Nodes, Calculator/result
 compatibility, packed mode energy/gradient parity, and selected libcint/System
 paths. Only this one of the five approved environments was available. C6 is
-complete at its exact-core/legacy boundary and C8b may begin.
+complete at its exact-core/legacy boundary. C8b.0 has completed schema and
+stacking preflight; production C8b implementation remains open.
 
 The C6.1 ES2/ES3, C6.2 AES2, C6.3 GeneralizedBorn, C6.3a mixed-device
 scalar hardening, C6.4 D4SC, C6.4a setup-authority hardening, C6.4b
@@ -2975,9 +2989,9 @@ parameter and coordination-model tensor leaves; no C6.8 defect was found. The
 C6.7 broad-suite failures remain incompletely classified, and the E0
 intermittent gradcheck, ten GFN1 density-parity failures, and original NO2
 worker issue remain unresolved. See the
-[diagnostic note](C6.4c-NO2-worker-investigation.md). Broader C6 remains
-partial; the next work should review remaining C6 acceptance and integration
-requirements rather than claim completion of all component families.
+[diagnostic note](C6.4c-NO2-worker-investigation.md). C6 is complete at the
+accepted exact-core/legacy compatibility boundary; the unclassified C6.7
+broad-suite node manifest remains unavailable as recorded historical evidence.
 C8a — complete
 public Result pytree representation — is complete and its E6a output-container
 prerequisite is satisfied. E6a still requires its other listed prerequisites.
@@ -2988,9 +3002,10 @@ public tensor-valued SCF solver-status schema — is complete and verified.
 C7 setup acceptance and final B3b exact-core/compatibility acceptance are
 complete. B3b-Final.3 established ordered classical and interaction descriptors
 for exact built-ins, with legacy identity associations, extensions, and packed
-Calculator state kept at the compatibility boundary. C8b remains blocked by
-broader C6 acceptance; B2, C5, C7, and B3b are complete prerequisites. C9 is deferred until legacy-owner retirement through
-E4.6a/E4.6b.
+Calculator state kept at the compatibility boundary. C8b.0 has completed the
+schema/alias/partition/stacking preflight; C8b.1-.3 remain implementation
+work. B2, C5, C6, C7, and B3b are accepted prerequisites. C9 is deferred until
+legacy-owner retirement through E4.6a/E4.6b.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
 the historical failure at the complete finite-tolerance fixed-point response /
@@ -3009,9 +3024,10 @@ Whole-System transforms remain E6a scope.
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
-Still separately open: E1.3; broader C6 and C8b; E6 batch migration;
-broader B6a legacy component/cache lifecycle retirement and compatibility-owner
-purge. B6b-core and C5 are complete; C9 remains deferred.
+Still separately open: C8b.1-.3; E1.3; E6a/E6b; and broader B6a/E4.6 legacy
+component/cache lifecycle retirement and compatibility-owner purge. C6 is
+complete at its accepted core/legacy boundary. B6b-core and C5 are complete;
+C9 remains deferred.
 
 ## Historical package records
 

@@ -57,8 +57,7 @@ the System façade, outside `ExactSystemCore`. Packed modes and extension hooks
 remain on their legacy routes. The result is the accepted staged input layout
 for C8b, not a registered/stackable System Node. Evidence and the inherited
 Anderson gradient classification are in [`B3b final layout inventory`](B3b-Final-layout-inventory.md).
-Final B3b is complete at this compatibility boundary. Broader C6 remains
-partial and independently blocks C8b. C6-Final.0 found that persistent
+Final B3b is complete at this compatibility boundary. C6-Final.0 found that persistent
 ordered descriptors hid their nested setup Nodes from standard pytree
 traversal. C6-Final.1 registers those descriptors, making the existing setup
 Nodes dynamic children while leaving ExactSystemCore and the call-local
@@ -79,6 +78,12 @@ compatibility boundary; C8b may begin. B2, B3b, C6, and C7 are satisfied
 prerequisites.
 The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
+
+**Current C8b status.** C8b.0 has now established and tested a test-local
+registered exact-core wrapper, selected PyTorch/libcint backend visibility,
+derived index ownership, Model `ModuleNode` partitioning, and compatible
+descriptor stacking. Production `ExactSystemCore`, `System`, and `Model`
+remain unchanged and unregistered. See [`C8b schema preflight`](C8b-schema-preflight.md).
 
 ---
 
@@ -420,22 +425,59 @@ Tensor leaves: each gains one leading mapped dimension, reconstructs in
 can be composed and models partitioned. C8a separately establishes Result's
 transform-compatible pytree representation for E6a.
 
-**Precondition.** B3b must already have removed `model`, `batch_mode`, `dd`,
-live mutable integrals, and legacy Calculator state from the final System
-layout. C8b verifies that boundary and migrates it to Node; it does not own
-setup/per-call physics refactoring. Stacking a System must not stack complete
-Model parameter tables.
+**Preconditions.** B3b, C5, C6, C7, C8a, and B2 are accepted. C8b.0 records
+the source inventory and executable preflight in
+[`C8b schema preflight`](C8b-schema-preflight.md). The staged
+`ExactSystemCore` remains an opaque frozen dataclass; registered
+descriptor/setup Nodes are ready to be enclosed by a bounded core Node.
 
-**Steps.**
+**Schema and ownership contract.** The registered exact core exposes atomic
+numbers, optional H0 setup, one selected integral backend Node, and ordered
+classical/interaction descriptor Nodes as dynamic children. Effective dtype,
+immutable `Config`, selected driver/integral level, and ordered descriptor
+metadata are static context. The integral index is a derived alias of the
+selected backend's `CoreIndexData`; do not register it again. Family setup
+Nodes are owned by their descriptors; System façade setup fields and identity
+associations remain compatibility adapters. `IndexHelper`, component lists,
+drivers, caches, positions, charge, spin, and fields stay outside the core.
+`IntegralSetup` must be adapted through a registered wrapper with its selected
+backend as a child, not retained as opaque context.
 
-1. Model and System become `Node` subclasses; retain the Result representation
-   established by C8a.
-2. Verify stacking: two systems of different composition, padded to the same size bucket, have identical tree structure (P9).
-3. Remove `Calculator.type` and any remaining custom conversion; `.to()` comes from the base.
+**Model parameters.** Keep one Model-level `ParamModule` owner. A
+`ModuleNode.from_module(par)` exposes named parameters and buffers through its
+dynamic `params` child and supports tad-mctc `partition`/`combine`; the module
+architecture remains static context. Do not copy parameter tables into each
+System. The Model façade retains compatibility and custom component behavior
+outside the exact-core tree.
 
-**Done when.** A stacked batch of padded systems runs under `vmap`; `partition` of a model works for training; T0.2 reproduced.
+**Implementation split.** C8b.1 registers the exact-core and selected-backend
+wrapper schema and proves conversion/alias behavior. C8b.2 adds the Model
+parameter tree and integrates the Node core behind existing Model/System
+façades. C8b.3 implements compatible mixed-composition padding/partitioning
+and the different-composition P9 stack test. Each stage retains C8a `Result`.
 
-**Needs.** B3b, C5, C6, C7, B2. **Unblocks.** E6bimpl (stacked mixed-System batches), F2c. **Size.** M.
+**C8b completion boundary.** C8b registers the core and appropriate Model
+representation, partitions Model parameters without duplicating them, stacks
+different-composition Systems padded to a common valid shape bucket, and runs
+the accepted simple mapped energy kernel over that stack. This is structural
+and pure-kernel acceptance, not production mixed-System SCF batching (E6b) or
+public `vmap(system.singlepoint)` (E6a). `Calculator.type()` and legacy packed
+modes stay at their compatibility boundary; their retirement/replacement is
+owned by E4.6/E6b policy, not C8b.
+
+**Preflight result.** tad-mctc 0.9.1 supports Node, ModuleNode,
+partition/combine, stack, and conversion. A test-local core wrapper exposes
+the selected PyTorch/libcint setup Nodes without duplicating their tensors;
+production ExactSystemCore and outer IntegralSetup remain opaque. Independent
+GFN1/C2 and GFN1/N2 cores stack and map the existing Repulsion descriptor
+kernel with position-gradient parity. GFN2/H2 stacks as a same-composition
+control. GFN2/H2 and GFN2/LiH have incompatible pair-plan and shell/AO leaf
+shapes despite equal atom count. Full padded mixed-size P9 support remains
+C8b.3 because current exact setup maps are unpadded. See the preflight report
+for exact tests and limitations.
+
+**Needs.** B3b, C5, C6, C7, C8a, B2. **Unblocks.** E6bimpl after its other
+prerequisites; E6a remains separately owned. **Size.** M.
 
 ---
 
