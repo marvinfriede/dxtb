@@ -2128,6 +2128,17 @@ and supported position/mixed derivatives while restoring the original
 ParamModule state. The adapter is call-local; legacy extension objects do not
 enter the registered Model tree.
 
+The C8b.2 independent hardening review reproduced a race in overlapping
+`functional_call` substitutions through shared ParamModule owners.
+Model-mediated parameter-tree snapshots and ordinary/functional setup now
+share an owner-scoped reentrant lock. Metadata validation also rejects malformed ModuleNode state
+keys and tensor shapes before substitution. New tests cover converted-tree
+float32 setup/energy/gradients, the GFN1 H0 `kpol` path, restoration after
+setup exceptions, concurrent calls across Model façades sharing one owner,
+mode-1 packed setup, and a custom classical extension. This is a setup-only
+concurrency guarantee; direct ParamModule access and later System/extension
+evaluation are not synchronized.
+
 The C8b.1 selected-backend wrapper validates driver/backend concrete type, and
 the active-core boundary verifies the logical System-device invariant. This
 does not reject force-CPU libcint leaves: wrapper logical device remains

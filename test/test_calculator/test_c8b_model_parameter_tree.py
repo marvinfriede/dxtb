@@ -18,12 +18,14 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
+from threading import Event, Lock
 
 import pytest
 import torch
-from tad_mctc.tree import combine, partition
+from tad_mctc.tree import ModuleNode, combine, partition
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN1_XTB, ParamModule, labels
@@ -32,7 +34,9 @@ from dxtb._src.calculators.model import (
     Model,
     ModelParameterNode,
     System,
+    _ModelSetupAdapter,
 )
+from dxtb._src.components.classicals import Repulsion, new_repulsion
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
@@ -72,6 +76,46 @@ def _functional_energy(
         numbers, _replace_parameter(tree, name, value)
     )
     return system.singlepoint(positions).energy.sum(), system
+
+
+def _replace_tree_value(
+    tree: ModelParameterNode, name: str, value: torch.Tensor
+) -> ModelParameterNode:
+    selected, remainder = partition(tree, lambda path, _: ".params" in path)
+    path = next(key for key in selected if key.endswith(f"['{name}']"))
+    selected[path] = value
+    result = combine(selected, remainder)
+    assert isinstance(result, ModelParameterNode)
+    return result
+
+
+def _state_snapshot(par: ParamModule):
+    parameters = dict(par.named_parameters())
+    buffers = dict(par.named_buffers())
+    return (
+        {name: value for name, value in parameters.items()},
+        {name: value for name, value in buffers.items()},
+        {name: value.detach().clone() for name, value in parameters.items()},
+        {name: value.detach().clone() for name, value in buffers.items()},
+        par.dd,
+    )
+
+
+def _assert_state_snapshot(par: ParamModule, snapshot) -> None:
+    parameters, buffers, parameter_values, buffer_values, dd = snapshot
+    assert par.dd == dd
+    current_parameters = dict(par.named_parameters())
+    current_buffers = dict(par.named_buffers())
+    assert current_parameters.keys() == parameters.keys()
+    assert current_buffers.keys() == buffers.keys()
+    for name, original in parameters.items():
+        assert current_parameters[name] is original
+        torch.testing.assert_close(
+            current_parameters[name], parameter_values[name]
+        )
+    for name, original in buffers.items():
+        assert current_buffers[name] is original
+        torch.testing.assert_close(current_buffers[name], buffer_values[name])
 
 
 def test_model_parameter_node_exposes_named_parameters_and_buffers() -> None:
@@ -422,3 +466,480 @@ def test_functional_setup_preserves_explicit_dtype_override() -> None:
     assert system.exact_core.effective_dtype is torch.float32
     assert system.dd["dtype"] is torch.float32
     assert system.integral_setup is None
+
+
+def test_functional_parameter_tree_dtype_conversion_drives_numerics() -> None:
+    """A converted ModuleNode controls setup, energy, and gradients."""
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float32
+    )
+    model64 = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree64 = model64.parameter_tree
+    snapshot = _state_snapshot(model64.par)
+    tree32 = tree64.to(dtype=torch.float32)
+
+    system32 = model64.setup_functional(numbers, tree32)
+    assert system32.exact_core is not None
+    assert system32.exact_core.effective_dtype is torch.float32
+    assert system32.dd["dtype"] is torch.float32
+    assert system32.repulsion_setup is not None
+    assert system32.h0_setup is not None
+    assert system32.repulsion_setup.arep.dtype is torch.float32
+    assert system32.h0_setup.hscale.dtype is torch.float32
+    converted_parameter = tree32.parameters.params[
+        "parameter_tree.element.H.arep.param"
+    ]
+    torch.testing.assert_close(
+        system32.repulsion_setup.arep[0, 1], converted_parameter
+    )
+    functional_energy = system32.singlepoint(positions).energy.sum()
+
+    direct32 = _model(ParamModule(GFN1_XTB, dtype=torch.float32))
+    direct_tree = direct32.parameter_tree
+    direct_system = direct32.setup(numbers)
+    assert direct_system.repulsion_setup is not None
+    torch.testing.assert_close(
+        system32.repulsion_setup.arep, direct_system.repulsion_setup.arep
+    )
+    direct_energy = direct_system.singlepoint(positions).energy.sum()
+    torch.testing.assert_close(functional_energy, direct_energy)
+
+    name = "parameter_tree.element.H.arep.param"
+    differentiable = converted_parameter.detach().clone().requires_grad_()
+    tree32_differentiable = _replace_tree_value(tree32, name, differentiable)
+    functional_loss = (
+        model64.setup_functional(numbers, tree32_differentiable)
+        .singlepoint(positions)
+        .energy.sum()
+    )
+    (functional_gradient,) = torch.autograd.grad(
+        functional_loss, differentiable
+    )
+
+    direct_parameter = direct_tree.parameters.params[name]
+    direct_parameter = direct_parameter.detach().clone().requires_grad_()
+    direct_differentiable_tree = _replace_tree_value(
+        direct_tree, name, direct_parameter
+    )
+    direct_differentiable_system = direct32.setup_functional(
+        numbers, direct_differentiable_tree
+    )
+    direct_loss = direct_differentiable_system.singlepoint(
+        positions
+    ).energy.sum()
+    (direct_gradient,) = torch.autograd.grad(direct_loss, direct_parameter)
+    assert torch.isfinite(functional_gradient)
+    assert functional_gradient.abs() > 0
+    torch.testing.assert_close(functional_gradient, direct_gradient)
+    _assert_state_snapshot(model64.par, snapshot)
+
+
+@pytest.mark.parametrize("invalid_kind", ["config", "auto_int_level", "child"])
+def test_functional_parameter_tree_rejects_invalid_metadata(
+    invalid_kind: str,
+) -> None:
+    """Functional tree metadata must match the target Model."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    if invalid_kind == "config":
+        invalid = tree.replace(config=replace(model.config))
+    elif invalid_kind == "auto_int_level":
+        invalid = tree.replace(auto_int_level=not model.auto_int_level)
+    else:
+        invalid = tree.replace(parameters=object())
+    snapshot = _state_snapshot(model.par)
+
+    expected = TypeError if invalid_kind == "child" else ValueError
+    with pytest.raises(expected):
+        model.setup_functional(torch.tensor([1, 1]), invalid)
+    _assert_state_snapshot(model.par, snapshot)
+
+
+@pytest.mark.parametrize("state_error", ["missing", "unexpected", "shape"])
+def test_functional_parameter_tree_rejects_invalid_state(
+    state_error: str,
+) -> None:
+    """Malformed ModuleNode mappings fail before mutating module state."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    values = dict(tree.parameters.params)
+    name = "parameter_tree.element.H.arep.param"
+    if state_error == "missing":
+        values.pop(name)
+    elif state_error == "unexpected":
+        values["unexpected.parameter"] = torch.tensor(1.0, dtype=torch.float64)
+    else:
+        values[name] = values[name].reshape(1)
+    malformed = tree.replace(parameters=tree.parameters.replace(params=values))
+    snapshot = _state_snapshot(model.par)
+
+    with pytest.raises(ValueError):
+        model.setup_functional(torch.tensor([1, 1]), malformed)
+    _assert_state_snapshot(model.par, snapshot)
+
+
+def test_functional_parameter_tree_accepts_partition_reconstruction() -> None:
+    """A structurally valid partition/combine round-trip remains usable."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    selected, remainder = partition(tree, lambda path, _: ".params" in path)
+    rebuilt = combine(selected, remainder)
+    assert isinstance(rebuilt, ModelParameterNode)
+    system = model.setup_functional(torch.tensor([1, 1]), rebuilt)
+    assert system.repulsion_setup is not None
+
+
+def test_functional_setup_failure_restores_module_state() -> None:
+    """An exception from Model.setup restores parameters and buffers."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    replacement = tree.parameters.params[name] + 0.7
+    substituted = _replace_tree_value(tree, name, replacement)
+    snapshot = _state_snapshot(model.par)
+
+    with pytest.raises(ValueError, match="Invalid batch mode"):
+        model.setup_functional(numbers, substituted, batch_mode=99)
+
+    _assert_state_snapshot(model.par, snapshot)
+    ordinary = model.setup(numbers)
+    successful = model.setup_functional(numbers, substituted)
+    ordinary_again = model.setup(numbers)
+    assert ordinary.repulsion_setup is not None
+    assert successful.repulsion_setup is not None
+    assert ordinary_again.repulsion_setup is not None
+    torch.testing.assert_close(
+        ordinary.repulsion_setup.arep, ordinary_again.repulsion_setup.arep
+    )
+    torch.testing.assert_close(
+        ordinary.repulsion_setup.arep[0, 1], tree.parameters.params[name]
+    )
+    torch.testing.assert_close(
+        successful.repulsion_setup.arep[0, 1], replacement
+    )
+    _assert_state_snapshot(model.par, snapshot)
+
+
+def test_functional_setup_serializes_shared_parammodule_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent Model façades sharing one owner see their own values."""
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    first = _model(par)
+    second = _model(par)
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    name = "parameter_tree.element.H.arep.param"
+    first_tree = first.parameter_tree
+    second_tree = second.parameter_tree
+    base = first_tree.parameters.params[name]
+    first_value, second_value = base + 0.3, base + 0.9
+    first_substitution = _replace_tree_value(first_tree, name, first_value)
+    second_substitution = _replace_tree_value(second_tree, name, second_value)
+    sequential_first = first.setup_functional(numbers, first_substitution)
+    sequential_second = second.setup_functional(numbers, second_substitution)
+    assert sequential_first.repulsion_setup is not None
+    assert sequential_second.repulsion_setup is not None
+    expected_first = sequential_first.repulsion_setup.arep[0, 1].clone()
+    expected_second = sequential_second.repulsion_setup.arep[0, 1].clone()
+    ordinary_reference = first.setup(numbers)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    ordinary_reference_energy = ordinary_reference.singlepoint(positions).energy
+    snapshot = _state_snapshot(par)
+
+    first_entered = Event()
+    second_entered = Event()
+    second_started = Event()
+    release_first = Event()
+    original_forward = _ModelSetupAdapter.forward
+    call_count = 0
+    count_guard = Lock()
+
+    def overlapping_forward(adapter, *args, **kwargs):
+        nonlocal call_count
+        with count_guard:
+            call_count += 1
+            ordinal = call_count
+        if ordinal == 1:
+            first_entered.set()
+            # Bounded wait: the test always releases this call, even if a
+            # regression prevents the second call from entering.
+            release_first.wait(timeout=2.0)
+        elif ordinal == 2:
+            second_entered.set()
+        return original_forward(adapter, *args, **kwargs)
+
+    monkeypatch.setattr(_ModelSetupAdapter, "forward", overlapping_forward)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first_future = executor.submit(
+                first.setup_functional, numbers, first_substitution
+            )
+            assert first_entered.wait(timeout=2.0)
+
+            def second_setup():
+                second_started.set()
+                return second.setup_functional(numbers, second_substitution)
+
+            second_future = executor.submit(second_setup)
+            assert second_started.wait(timeout=2.0)
+            # A per-Model lock or no lock lets the second adapter enter here.
+            second_overlapped = second_entered.wait(timeout=0.15)
+            release_first.set()
+            first_system = first_future.result(timeout=10.0)
+            second_system = second_future.result(timeout=10.0)
+    finally:
+        release_first.set()
+
+    assert not second_overlapped
+    assert first_system.repulsion_setup is not None
+    assert second_system.repulsion_setup is not None
+    torch.testing.assert_close(
+        first_system.repulsion_setup.arep[0, 1], expected_first
+    )
+    torch.testing.assert_close(
+        second_system.repulsion_setup.arep[0, 1], expected_second
+    )
+    _assert_state_snapshot(par, snapshot)
+    ordinary = first.setup(numbers)
+    assert ordinary.repulsion_setup is not None
+    torch.testing.assert_close(ordinary.repulsion_setup.arep[0, 1], base)
+    torch.testing.assert_close(
+        ordinary.singlepoint(positions).energy, ordinary_reference_energy
+    )
+
+
+def test_ordinary_setup_waits_for_functional_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary Model.setup cannot read a shared temporary substitution."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    baseline = tree.parameters.params[name]
+    replacement = baseline + 0.6
+    substituted = _replace_tree_value(tree, name, replacement)
+    entered = Event()
+    release = Event()
+    ordinary_started = Event()
+    snapshot_started = Event()
+    original_forward = _ModelSetupAdapter.forward
+
+    def paused_forward(adapter, *args, **kwargs):
+        entered.set()
+        if not release.wait(timeout=2.0):
+            raise RuntimeError("bounded functional setup wait expired")
+        return original_forward(adapter, *args, **kwargs)
+
+    monkeypatch.setattr(_ModelSetupAdapter, "forward", paused_forward)
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            functional_future = executor.submit(
+                model.setup_functional, numbers, substituted
+            )
+            assert entered.wait(timeout=2.0)
+
+            def ordinary_setup():
+                ordinary_started.set()
+                return model.setup(numbers)
+
+            ordinary_future = executor.submit(ordinary_setup)
+            assert ordinary_started.wait(timeout=2.0)
+            ordinary_overlapped = ordinary_future.done()
+
+            def parameter_snapshot():
+                snapshot_started.set()
+                return model.parameter_tree
+
+            snapshot_future = executor.submit(parameter_snapshot)
+            assert snapshot_started.wait(timeout=2.0)
+            snapshot_overlapped = snapshot_future.done()
+            release.set()
+            functional_system = functional_future.result(timeout=10.0)
+            ordinary_system = ordinary_future.result(timeout=10.0)
+            restored_tree = snapshot_future.result(timeout=10.0)
+    finally:
+        release.set()
+
+    assert not ordinary_overlapped
+    assert not snapshot_overlapped
+    assert functional_system.repulsion_setup is not None
+    assert ordinary_system.repulsion_setup is not None
+    torch.testing.assert_close(
+        functional_system.repulsion_setup.arep[0, 1], replacement
+    )
+    torch.testing.assert_close(
+        ordinary_system.repulsion_setup.arep[0, 1], baseline
+    )
+    assert restored_tree.parameters.params[name] is baseline
+
+
+def test_functional_h0_parameter_reaches_setup_energy_and_gradient() -> None:
+    """The substituted GFN1 kpol parameter controls H0 setup and energy."""
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    tree = model.parameter_tree
+    name = "parameter_tree.hamiltonian.xtb.kpol.param"
+    parameter = tree.parameters.params[name]
+    initial = parameter.clone().requires_grad_()
+    changed = initial + 0.1
+    snapshot = _state_snapshot(model.par)
+
+    def evaluate(value: torch.Tensor):
+        candidate = _replace_tree_value(tree, name, value)
+        system = model.setup_functional(numbers, candidate)
+        assert system.h0_setup is not None
+        return system.singlepoint(positions).energy.sum(), system
+
+    energy_p, system_p = evaluate(initial)
+    energy_q, system_q = evaluate(changed)
+    energy_p2, system_p2 = evaluate(initial)
+    assert system_p.h0_setup is not None
+    assert system_q.h0_setup is not None
+    assert system_p2.h0_setup is not None
+    assert not torch.equal(system_p.h0_setup.hscale, system_q.h0_setup.hscale)
+    torch.testing.assert_close(
+        system_p2.h0_setup.hscale, system_p.h0_setup.hscale
+    )
+    assert not torch.equal(energy_p, energy_q)
+    torch.testing.assert_close(energy_p2, energy_p)
+
+    reference_par = deepcopy(model.par)
+    reference_parameter = torch.nn.Parameter(parameter.detach().clone())
+    reference_par.get("hamiltonian.xtb.kpol", unwrapped=False).param = (
+        reference_parameter
+    )
+    reference_model = _model(reference_par)
+    reference_system = reference_model.setup(numbers)
+    assert reference_system.h0_setup is not None
+    torch.testing.assert_close(
+        system_p.h0_setup.hscale, reference_system.h0_setup.hscale
+    )
+    reference_energy = reference_system.singlepoint(positions).energy.sum()
+    torch.testing.assert_close(energy_p, reference_energy)
+
+    changed_reference_par = deepcopy(model.par)
+    changed_reference_parameter = torch.nn.Parameter(
+        parameter.detach().clone() + 0.1
+    )
+    changed_reference_par.get("hamiltonian.xtb.kpol", unwrapped=False).param = (
+        changed_reference_parameter
+    )
+    changed_reference_system = _model(changed_reference_par).setup(numbers)
+    assert changed_reference_system.h0_setup is not None
+    torch.testing.assert_close(
+        system_q.h0_setup.hscale, changed_reference_system.h0_setup.hscale
+    )
+    changed_reference_energy = changed_reference_system.singlepoint(
+        positions
+    ).energy.sum()
+    torch.testing.assert_close(energy_q, changed_reference_energy)
+
+    functional_gradient = torch.func.grad(lambda value: evaluate(value)[0])(
+        initial
+    )
+    (reference_gradient,) = torch.autograd.grad(
+        reference_energy, reference_parameter
+    )
+    assert torch.isfinite(functional_gradient)
+    assert functional_gradient.abs() > 0
+    torch.testing.assert_close(functional_gradient, reference_gradient)
+    ordinary_after_gradient = model.setup(numbers)
+    assert ordinary_after_gradient.h0_setup is not None
+    torch.testing.assert_close(
+        ordinary_after_gradient.h0_setup.hscale, system_p.h0_setup.hscale
+    )
+    _assert_state_snapshot(model.par, snapshot)
+
+
+def test_functional_setup_preserves_packed_mode_compatibility() -> None:
+    """Functional parameters reach the existing mode-1 façade route."""
+    model = _model(ParamModule(GFN1_XTB, dtype=torch.float64))
+    numbers = torch.tensor([[1, 1], [1, 1]], dtype=torch.int64)
+    tree = model.parameter_tree
+    name = "parameter_tree.element.H.arep.param"
+    baseline = model.setup(numbers, batch_mode=1)
+    assert baseline.repulsion_setup is not None
+    parameter = tree.parameters.params[name]
+    replacement = parameter + 0.4
+    functional = model.setup_functional(
+        numbers,
+        _replace_tree_value(tree, name, replacement),
+        batch_mode=1,
+    )
+    assert functional.batch_mode == 1
+    assert functional.exact_core is None
+    assert functional._packed_classical_cache is not None
+    assert functional.classical_cache is functional._packed_classical_cache
+    assert functional.repulsion_setup is not None
+    expected_delta = torch.zeros_like(functional.repulsion_setup.arep)
+    expected_delta[..., 0, 1] = 0.4
+    expected_delta[..., 1, 0] = 0.4
+    torch.testing.assert_close(
+        functional.repulsion_setup.arep - baseline.repulsion_setup.arep,
+        expected_delta,
+    )
+    torch.testing.assert_close(
+        functional.repulsion_setup.arep[0, 0, 1], replacement
+    )
+    assert model.par.get("element.H.arep") is tree.parameters.params[name]
+
+
+def test_functional_setup_preserves_custom_classical_component() -> None:
+    """Functional setup retains legacy extension identity and cache hooks."""
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    base = new_repulsion(torch.tensor([1]), par, dtype=torch.float64)
+    assert base is not None
+    calls = []
+
+    class RepulsionExtension(Repulsion):
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            calls.append("get_cache")
+            return super().get_cache(numbers, ihelp=ihelp, **kwargs)
+
+    extension = RepulsionExtension(
+        base.arep,
+        base.zeff,
+        base.kexp,
+        base.klight,
+        base.cutoff,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+        en=base.en,
+        enscale=base.enscale,
+    )
+    model = Model(
+        par=par,
+        config=Config.create(
+            method=labels.GFN1_XTB,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            exclude="rep,disp",
+        ),
+        classical=(extension,),
+    )
+    tree = model.parameter_tree
+    h0_name = "parameter_tree.hamiltonian.xtb.kpol.param"
+    changed_h0 = tree.parameters.params[h0_name] + 0.1
+    system = model.setup_functional(
+        numbers,
+        _replace_tree_value(tree, h0_name, changed_h0),
+    )
+    assert any(
+        component is extension for component in system.classicals.components
+    )
+    assert system.classicals.components[-1] is extension
+    assert "get_cache" in calls
+    assert system.classical_cache[extension.label] is not None
+    assert system.exact_core is not None
+    assert all(
+        term.label != extension.label
+        for term in system.exact_core.classical_terms
+    )

@@ -42,7 +42,10 @@ leaves, i.e., it can be called inside a differentiated function.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from functools import wraps
+from threading import Lock, RLock
+from typing import TYPE_CHECKING, Any, Callable
+from weakref import WeakKeyDictionary
 
 import torch
 from tad_mctc.tree import ModuleNode, Node, child, context
@@ -135,6 +138,36 @@ if TYPE_CHECKING:
     from dxtb._src.scf.functional.core import CoreIndexData
 
 __all__ = ["Model", "ModelParameterNode", "System"]
+
+
+# ``functional_call`` temporarily installs state on the original ParamModule.
+# Keep one reentrant setup lock per owner so distinct Model façades that share
+# that module cannot observe another call's substituted values.  A weak-key
+# registry avoids making the lock part of either the parameter tree or System.
+_PARAM_SETUP_LOCKS: WeakKeyDictionary[ParamModule, RLock] = WeakKeyDictionary()
+_PARAM_SETUP_LOCKS_GUARD = Lock()
+
+
+def _parameter_setup_lock(par: ParamModule) -> RLock:
+    with _PARAM_SETUP_LOCKS_GUARD:
+        lock = _PARAM_SETUP_LOCKS.get(par)
+        if lock is None:
+            lock = RLock()
+            _PARAM_SETUP_LOCKS[par] = lock
+        return lock
+
+
+def _serialize_parameter_setup(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Serialize setup reads against functional parameter substitution."""
+
+    @wraps(function)
+    def wrapped(self: Model, *args: Any, **kwargs: Any) -> Any:
+        with _parameter_setup_lock(self.par):
+            return function(self, *args, **kwargs)
+
+    return wrapped
 
 
 CoreSetup = (
@@ -883,6 +916,7 @@ class Model:
             raise TypeError("The additional interactions must be a tuple.")
 
     @property
+    @_serialize_parameter_setup
     def parameter_tree(self) -> ModelParameterNode:
         """Return registered dynamic leaves for this Model's parameters."""
         return ModelParameterNode(
@@ -891,6 +925,7 @@ class Model:
             auto_int_level=self.auto_int_level,
         )
 
+    @_serialize_parameter_setup
     def setup_functional(
         self,
         numbers: Tensor,
@@ -904,17 +939,60 @@ class Model:
         ``parameter_tree`` must originate from this Model. Its dynamic
         parameter and buffer values are installed for the duration of the
         existing :meth:`setup` implementation, then restored by
-        ``torch.func.functional_call``.
+        ``torch.func.functional_call``. Model parameter-tree snapshots and
+        setup calls through façades sharing this ParamModule are serialized
+        during that interval; direct concurrent ParamModule access is outside
+        this synchronization boundary.
         """
-        if (
-            not isinstance(parameter_tree, ModelParameterNode)
-            or parameter_tree.parameters.module is not self.par
-            or parameter_tree.config is not self.config
-            or parameter_tree.auto_int_level != self.auto_int_level
-        ):
-            raise ValueError(
-                "Functional parameter tree does not belong to this Model."
+        if not isinstance(parameter_tree, ModelParameterNode):
+            raise TypeError(
+                "Functional parameter tree must be a ModelParameterNode."
             )
+        if not isinstance(parameter_tree.parameters, ModuleNode):
+            raise TypeError(
+                "Functional parameter tree parameters must be a ModuleNode."
+            )
+        if parameter_tree.parameters.module is not self.par:
+            raise ValueError(
+                "Functional parameter tree does not belong to this Model: "
+                "it uses a different ParamModule owner."
+            )
+        if parameter_tree.config is not self.config:
+            raise ValueError(
+                "Functional parameter tree uses a different Config object."
+            )
+        if parameter_tree.auto_int_level != self.auto_int_level:
+            raise ValueError(
+                "Functional parameter tree has incompatible auto_int_level."
+            )
+
+        state_values = parameter_tree.parameters.params
+        expected_shapes = {
+            name: tuple(value.shape)
+            for name, value in (
+                *self.par.named_parameters(),
+                *self.par.named_buffers(),
+            )
+        }
+        actual_names = set(state_values)
+        expected_names = set(expected_shapes)
+        missing = sorted(expected_names - actual_names)
+        unexpected = sorted(actual_names - expected_names)
+        if missing or unexpected:
+            raise ValueError(
+                "Functional parameter tree state keys do not match the "
+                f"ParamModule (missing={missing}, unexpected={unexpected})."
+            )
+        for name, value in state_values.items():
+            if not isinstance(value, Tensor):
+                raise TypeError(
+                    f"Functional state entry '{name}' must be a Tensor."
+                )
+            if tuple(value.shape) != expected_shapes[name]:
+                raise ValueError(
+                    f"Functional state entry '{name}' has shape "
+                    f"{tuple(value.shape)}, expected {expected_shapes[name]}."
+                )
 
         adapter = _ModelSetupAdapter(self)
         state = {
@@ -929,6 +1007,7 @@ class Model:
             strict=True,
         )
 
+    @_serialize_parameter_setup
     def setup(
         self,
         numbers: Tensor,

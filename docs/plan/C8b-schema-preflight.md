@@ -263,6 +263,48 @@ the call returns the usual legacy `System` façade, with its registered
 `functional_call` restores the original module state after the call. The
 adapter and Model façade are not stored in either registered Node.
 
+The C8b.2 hardening review reproduced a shared-module race on the reviewed
+implementation: two `Model` façades sharing one `ParamModule` could overlap
+`functional_call`, and a bounded interleaving captured call B's Repulsion
+parameter in call A's System while call B captured the original module value.
+For H2 in Python 3.12.10/Torch 2.14.1 CPU, the requested replacements were
+2.5097 and 3.1097: call A captured 3.1097 and call B captured the original
+2.2097. The original parameter was still listed but its object identity and
+value were not restored; named buffers retained their identities and values
+in this interleaving. A weak owner-keyed registry now supplies one `RLock`
+per `ParamModule`;
+`Model.parameter_tree`, `Model.setup_functional()`, and ordinary
+`Model.setup()` hold it. This makes Model-mediated tree snapshots and setup
+operations sharing an owner serial and supports nested Model-mediated setup
+calls through reentrancy. It does not synchronize direct concurrent mutation
+or reads through the raw `ParamModule` API. It does not claim thread safety
+for later System evaluation, Calculator cache operations, or arbitrary
+extension state. Existing `torch.func.grad` and mixed-derivative
+controls run with the lock in place; `torch.compile` is not an established
+setup execution contract and remains unverified. An optional setup-inclusive
+`torch.compile` smoke probe emitted the existing tensor-scalar graph-break
+and Node-recompile warnings, then was interrupted after more than two minutes
+without a result; it is not counted as passing or failing evidence. The
+repository's informational transform probe separates setup-inclusive
+compilation from compilation of an already-built System's per-call energy.
+
+The hardening also validates the `ModuleNode` child before dereferencing it,
+checks that its state keys and tensor shapes match the owning ParamModule, and
+preserves support for converted floating dtypes and non-Parameter tensor
+leaves. These metadata-only checks precede `functional_call`; no tensor values
+are synchronized or compared. A float64 parameter tree converted to float32
+now has a numerical acceptance control against a separately constructed
+float32 Model, including setup values, H2 energy, and a real parameter
+gradient. The GFN1 `hamiltonian.xtb.kpol` path similarly proves functional
+substitution through `H0SetupNode`, H2 energy, and gradients against a direct
+ParamModule reference.
+
+Failure-path controls cover invalid batch mode after substitution begins,
+original parameter and buffer object/value restoration, subsequent ordinary
+and functional setup, mode-1 packed setup, and a custom Repulsion subclass
+retaining its legacy cache hook and component identity. CUDA was unavailable;
+converted CUDA setup remains unverified.
+
 Executable proof uses the actual GFN1 `parameter_tree.element.H.arep.param`
 path. The replacement reaches `RepulsionCoreSetup.arep`, changes the full H2
 singlepoint energy, matches an independently evaluated Model whose
@@ -282,6 +324,21 @@ Node construction already rejects a wrapper logical device inconsistent
 with the core number tensor; the regression proves this through `Node.replace`.
 The logical device remains distinct from libcint force-CPU tensor placement.
 An absent integral setup remains represented by `core.integral is None`.
+
+**Independent hardening rerun.** The focused Model parameter-tree module
+passed 24 tests in the libcint-enabled profile. In the no-libcint profile,
+the module plus schema tests reported 29 passed and 4 libcint-specific skips.
+C8b schema plus B3b layout contracts reported 84 passed. Model/singlepoint
+controls reported 74 passed and the same ten GFN1 production/legacy parity
+failures already listed below. Non-slow functional-map, implicit-root and E0
+controls reported 95 passed and one deselected. PyTorch/H0/libcint setup-node
+plus PyTorch integral controls reported 68 passed; libcint overlap,
+overlap-gradient, multipole and integral controls reported 217 passed; packed
+acceptance and B3b layout controls reported 52 passed. All execution used
+Python 3.12.10/Torch 2.14.1+cpu and tad-mctc 0.9.1. The enabled profile had
+importable tad-libcint 0.3.0 and PySCF 2.14.0; neither is installed in the
+no-libcint profile. CUDA and the other four approved Python/Torch combinations
+were unavailable.
 
 Focused C8b.2 execution on Python 3.12.10/Torch 2.14.1 CPU with
 tad-mctc 0.9.1 passed the new Model parameter-tree and setup tests plus the

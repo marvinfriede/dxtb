@@ -458,6 +458,13 @@ The public Model/System/Calculator façades and custom component ownership
 remain outside this parameter Node, and no parameter tables are copied into
 Systems.
 
+Since `functional_call` temporarily substitutes values on that shared
+`ParamModule`, Model-mediated `parameter_tree`, `setup()`, and
+`setup_functional()` calls using the same owner are serialized by a shared
+reentrant lock. This protects parameter snapshots, setup reads, and
+restoration. Direct concurrent `ParamModule` access and later evaluation
+involving mutable legacy extension state remain outside this guarantee.
+
 **Implementation split.** C8b.1 registers the exact-core and selected-backend
 wrapper schema and proves conversion/alias behavior. C8b.2 registers the
 Model parameter tree and integrates genuine functional parameter substitution
