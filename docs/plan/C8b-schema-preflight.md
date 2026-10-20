@@ -241,3 +241,67 @@ This closes only C8b.1's exact-core/backend schema scope. Model parameter
 partition and façade migration remain C8b.2; different-size P9 padding and
 partition acceptance remain C8b.3. Whole-System `vmap` and production mixed
 System batching remain E6a and E6b, respectively.
+
+## C8b.2 production Model parameter tree and functional setup
+
+`Model.parameter_tree` now returns a registered `ModelParameterNode` with a
+single `ModuleNode.from_module(self.par)` dynamic child, frozen `Config` and
+`auto_int_level` static metadata. The ModuleNode's `params` mapping exposes
+all `ParamModule.named_parameters()` and `named_buffers()` by their real
+module paths. Construction preserves the original tensor identities; no
+parameter table is copied into `ExactSystemCore` or any System.
+
+`Model.setup_functional(numbers, parameter_tree, ...)` is the explicit
+functional boundary. It validates that the tree's ModuleNode architecture,
+configuration and auto-integral-level metadata belong to that Model, then
+uses `torch.func.functional_call` with a short-lived `nn.Module` adapter. The
+adapter registers the same existing `ParamModule` object and delegates to the
+existing `Model.setup()` implementation. Substituted parameter and buffer
+values therefore remain active while numbers-only setup Nodes are gathered;
+the call returns the usual legacy `System` façade, with its registered
+`ExactSystemCore` containing the captured replacement-derived setup Nodes.
+`functional_call` restores the original module state after the call. The
+adapter and Model façade are not stored in either registered Node.
+
+Executable proof uses the actual GFN1 `parameter_tree.element.H.arep.param`
+path. The replacement reaches `RepulsionCoreSetup.arep`, changes the full H2
+singlepoint energy, matches an independently evaluated Model whose
+`ParamModule.get("element.H.arep")` value was updated, and supports
+`torch.func.grad`, autograd, position gradients and a mixed
+position/parameter derivative. The `p`, `p + delta`, `p` sequence recovers the
+initial setup and energy without mutating the source module. A separate GFN1
+ES2 `charge.effective.gexp` replacement reaches `ES2CoreSetup.gexp`, changes
+the H2O singlepoint energy, and has a nonzero parameter gradient. These tests
+exercise the existing Model setup and numerical evaluation paths; they do not
+establish whole-System `vmap` or mixed-System batching.
+
+The C8b.1 wrapper now checks that a present backend Node has the concrete type
+selected by its driver. `_active_exact_core()` also requires a non-absent
+selected backend and matching logical System device before trusting the core.
+Node construction already rejects a wrapper logical device inconsistent
+with the core number tensor; the regression proves this through `Node.replace`.
+The logical device remains distinct from libcint force-CPU tensor placement.
+An absent integral setup remains represented by `core.integral is None`.
+
+Focused C8b.2 execution on Python 3.12.10/Torch 2.14.1 CPU with
+tad-mctc 0.9.1 passed the new Model parameter-tree and setup tests plus the
+C8b schema and B3b layout contracts: **70 passed**. The no-libcint profile
+passed the new Model tests and schema preflight: **15 passed, 4 skipped**;
+the skips are the existing libcint-only and cross-backend cases. The
+Calculator/Model/singlepoint and C7 setup-node selection completed with
+**124 passed and 10 failed**; all ten failures are the previously classified
+GFN1 production/legacy density-orbital parity cases, with no new failure.
+Non-slow functional-map, implicit-root derivative and E0 iteration controls
+completed with **119 passed, 4 deselected**. The selected libcint integral,
+overlap, overlap-gradient, and multipole controls completed with **239
+passed**; packed legacy acceptance passed **1** test. The libcint profile had
+tad-libcint 0.3.0 and PySCF 2.14.0 installed and importable; CUDA was
+unavailable. These are two dependency profiles of one Python/Torch
+combination, not two of the five approved Python/Torch combinations. The
+other four approved combinations are unavailable in this checkout and are
+not represented by current C8b.2 execution.
+
+**Disposition:** C8b.2 is implemented at the Model parameter ownership and
+functional setup boundary while retaining the public Model/System/Calculator
+façades. C8b.3 still owns different-size P9 padding/partitioning and full
+structural stacking acceptance. C8b remains incomplete.

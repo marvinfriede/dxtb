@@ -80,11 +80,11 @@ The Anderson gradient discrepancy remains inherited and unresolved; no
 numerical policy was changed.
 
 **Current C8b status.** C8b.0 established and tested the schema, alias,
-parameter-partition, and stacking preflight. C8b.1 has registered production
-`ExactSystemCore` and its selected integral backend wrapper. The legacy
-`System` façade and `Model` remain unchanged; C8b.2 owns Model parameter
-partition/facade integration, and C8b.3 owns padded mixed-size P9 stacking.
-See [`C8b schema preflight`](C8b-schema-preflight.md) for prototype and
+parameter-partition, and stacking preflight. C8b.1 registered production
+`ExactSystemCore` and its selected integral backend wrapper. C8b.2 now exposes
+the Model-owned registered parameter tree and functional setup boundary while
+retaining the public `Model` and `System` façades. C8b.3 owns padded mixed-size
+P9 stacking. See [`C8b schema preflight`](C8b-schema-preflight.md) for
 production evidence. CUDA validation of mixed-device libcint core trees is
 still unavailable in the current environment.
 
@@ -446,18 +446,24 @@ drivers, caches, positions, charge, spin, and fields stay outside the core.
 `IntegralSetup` must be adapted through a registered wrapper with its selected
 backend as a child, not retained as opaque context.
 
-**Model parameters.** Keep one Model-level `ParamModule` owner. A
-`ModuleNode.from_module(par)` exposes named parameters and buffers through its
-dynamic `params` child and supports tad-mctc `partition`/`combine`; the module
-architecture remains static context. Do not copy parameter tables into each
-System. The Model façade retains compatibility and custom component behavior
-outside the exact-core tree.
+**Model parameters.** Keep one Model-level `ParamModule` owner. The production
+`Model.parameter_tree` is a registered `ModelParameterNode` containing one
+`ModuleNode.from_module(par)` child; named parameters and buffers are dynamic
+leaves, while module architecture is static context. The additive
+`Model.setup_functional()` boundary applies replacement values through
+`torch.func.functional_call` around the existing `Model.setup()` code. Tests
+prove that Repulsion and ES2 replacements reach captured setup Nodes and
+change singlepoint energies while the original ParamModule remains unchanged.
+The public Model/System/Calculator façades and custom component ownership
+remain outside this parameter Node, and no parameter tables are copied into
+Systems.
 
 **Implementation split.** C8b.1 registers the exact-core and selected-backend
-wrapper schema and proves conversion/alias behavior. C8b.2 adds the Model
-parameter tree and integrates the Node core behind existing Model/System
-façades. C8b.3 implements compatible mixed-composition padding/partitioning
-and the different-composition P9 stack test. Each stage retains C8a `Result`.
+wrapper schema and proves conversion/alias behavior. C8b.2 registers the
+Model parameter tree and integrates genuine functional parameter substitution
+behind the existing Model/System façades. C8b.3 implements compatible
+mixed-composition padding/partitioning and the different-composition P9 stack
+test. Each stage retains C8a `Result`.
 
 **C8b completion boundary.** C8b registers the core and appropriate Model
 representation, partitions Model parameters without duplicating them, stacks

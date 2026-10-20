@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a complete; C8b.1 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree and C8b.1 registers the production exact core plus selected PyTorch/libcint backend. Model remains unregistered pending C8b.2; C8b.3 owns padded mixed-composition stacking. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.1 execution used Python 3.12/Torch 2.14.1. |
+| C5-C9          | C5/C6/C7/C8a/C8b.1/.2 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree, C8b.1 registered the production exact core plus selected PyTorch/libcint backend, and C8b.2 registered the Model parameter tree with functional setup substitution through the existing Model API. C8b.3 owns padded mixed-composition stacking. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.2 execution used Python 3.12/Torch 2.14.1. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2087,10 +2087,11 @@ exists; do not use an SCF-excluded or `maxiter=0` shortcut in C8a.
 ## C8b Model/System stackability
 
 C6 is accepted at the exact-core/legacy compatibility boundary. C8b.0
-completed the source inventory and executable schema preflight. C8b.1 now
-registers production `ExactSystemCore` and a selected-backend wrapper as
-tad-mctc Nodes. `Model` and the legacy `System` facade remain unchanged and
-unregistered; C8b.2 owns the Model parameter tree and facade integration.
+completed the source inventory and executable schema preflight. C8b.1
+registered production `ExactSystemCore` and its selected-backend wrapper as
+tad-mctc Nodes. C8b.2 adds a Model-owned registered parameter tree and
+functional setup integration; public `Model` and legacy `System` remain
+unregistered compatibility façades.
 
 The production exact-core tree stores dynamic children: atomic numbers with
 integer dtype preserved; optional H0 setup; one selected PyTorch or libcint
@@ -2114,12 +2115,25 @@ metadata and optional-child presence, plus dynamic leaf shape/dtype/device.
 It must not use `repr()` or object identities. Dtype conversion updates the
 effective-dtype metadata and preserves integer/Boolean structural leaves.
 
-The Model parameter prototype uses one `ModuleNode.from_module(par)` child.
-Its `params` dictionary dynamically exposes named parameters and buffers and
-supports tad-mctc `partition`/`combine`; no Model parameter table is copied
-into each System. The ModuleNode's module architecture remains static
-context. Training work must retain one Model-level owner and ensure gradients
-reach original ParamModule leaves through setup and energy construction.
+The production `Model.parameter_tree` is a registered
+`ModelParameterNode` with one `ModuleNode.from_module(par)` child. Its `params`
+dictionary dynamically exposes named parameters and buffers and supports
+tad-mctc `partition`/`combine`; no Model parameter table is copied into each
+System. The ModuleNode's module architecture remains static context.
+`Model.setup_functional()` applies a supplied tree through
+`torch.func.functional_call` around the existing `Model.setup()` method. The
+Repulsion H2 and ES2 H2O controls prove that substituted values reach captured
+family setup Nodes and alter full singlepoint energies, parameter gradients,
+and supported position/mixed derivatives while restoring the original
+ParamModule state. The adapter is call-local; legacy extension objects do not
+enter the registered Model tree.
+
+The C8b.1 selected-backend wrapper validates driver/backend concrete type, and
+the active-core boundary verifies the logical System-device invariant. This
+does not reject force-CPU libcint leaves: wrapper logical device remains
+separate from physical backend tensor devices. C8b.2 is complete at the
+parameter-tree and functional setup boundary; C8b.3 owns different-size P9
+padding/partitioning. C8b overall remains open.
 
 Executable evidence is in [`C8b schema preflight`](C8b-schema-preflight.md).
 Independent GFN1/C2 and GFN1/N2 cores have compatible registered tree specs
@@ -2132,9 +2146,10 @@ different-size compositions padded to a shared atom/shell/AO bucket remains
 implementation work. Do not satisfy it with dummy physical components.
 
 The implementation split is C8b.1 (registered exact-core/backend schema and
-conversion; complete at its scoped boundary), C8b.2 (Model parameter
-tree and façade integration), and C8b.3 (valid mixed-composition
-padding/partitioning and P9 stack/map acceptance).
+conversion; complete at its scoped boundary), C8b.2 (registered Model
+parameter tree and functional setup integration; complete at its scoped
+boundary), and C8b.3 (valid mixed-composition padding/partitioning and P9
+stack/map acceptance).
 The original “stacked padded systems run under `vmap`” wording is split by
 owner: C8b validates compatible structural stacking and a pure mapped energy
 kernel; E6a owns public whole-System `vmap(system.singlepoint)`; E6b owns
@@ -2702,8 +2717,10 @@ wait for B3b, C5/C8b, or E4.6a.
 
 B5.6 is complete and verified; C8a is complete. B6b-core and C5 are
 complete. C6 is complete at its exact-core/legacy boundary, and C7 is
-independently accepted. C8b.0 preflight and C8b.1 production core/backend
-registration are complete; C8b.2-.3 remain implementation work. E3.1a, E3.1s and E3.1b are complete; full E3
+independently accepted. C8b.0 preflight, C8b.1 production core/backend
+registration, and C8b.2 Model parameter-tree integration are complete at
+their scoped boundaries; C8b.3 owns mixed-size P9 padding and acceptance.
+E3.1a, E3.1s and E3.1b are complete; full E3
 end-to-end acceptance remains blocked by E1.3 for the DFT-D3-enabled GFN1 row.
 B6b-core removes mutable legacy index and interaction containers from the
 functional SCF core while preserving their legacy consumers; it does not
@@ -3007,8 +3024,10 @@ C7 setup acceptance and final B3b exact-core/compatibility acceptance are
 complete. B3b-Final.3 established ordered classical and interaction descriptors
 for exact built-ins, with legacy identity associations, extensions, and packed
 Calculator state kept at the compatibility boundary. C8b.0 completed the
-schema/alias/partition/stacking preflight and C8b.1 registered the production
-exact core/backend; C8b.2-.3 remain implementation work. B2, C5, C6, C7, and B3b are accepted prerequisites. C9 is deferred until
+schema/alias/partition/stacking preflight; C8b.1 registered the production
+exact core/backend, and C8b.2 added the Model parameter tree and functional
+setup boundary. C8b.3 remains implementation work. B2, C5, C6, C7, and B3b
+are accepted prerequisites. C9 is deferred until
 legacy-owner retirement through E4.6a/E4.6b.
 
 E3.0 diagnosis-only spectral/NO2 preflight is complete. Its report identifies
@@ -3028,7 +3047,7 @@ Whole-System transforms remain E6a scope.
 Already complete for this path: E0; E1.1/E1.2; E2-core; E4core through
 E4.5b; B4/B5; B6a-SCF-core and B6a-SCF-validation; B7.
 
-Still separately open: C8b.1-.3; E1.3; E6a/E6b; and broader B6a/E4.6 legacy
+Still separately open: C8b.3; E1.3; E6a/E6b; and broader B6a/E4.6 legacy
 component/cache lifecycle retirement and compatibility-owner purge. C6 is
 complete at its accepted core/legacy boundary. B6b-core and C5 are complete;
 C9 remains deferred.

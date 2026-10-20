@@ -45,7 +45,8 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import torch
-from tad_mctc.tree import Node, child, context
+from tad_mctc.tree import ModuleNode, Node, child, context
+from torch import nn
 
 from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
@@ -133,7 +134,7 @@ if TYPE_CHECKING:
     from dxtb._src.calculators.result import Result
     from dxtb._src.scf.functional.core import CoreIndexData
 
-__all__ = ["Model", "System"]
+__all__ = ["Model", "ModelParameterNode", "System"]
 
 
 CoreSetup = (
@@ -191,6 +192,25 @@ class IntegralBackendNode(Node):
     backend: PytorchIntegralSetupNode | LibcintIntegralSetupNode | None = (
         child()
     )
+
+    def _validate(self) -> None:
+        """Require the selected backend Node to match its driver."""
+        expected_backend = {
+            labels.INTDRIVER_PYTORCH: PytorchIntegralSetupNode,
+            labels.INTDRIVER_LIBCINT: LibcintIntegralSetupNode,
+        }.get(self.driver_type)
+        if expected_backend is None:
+            raise ValueError(
+                f"Unsupported integral driver '{self.driver_type}'."
+            )
+        if (
+            self.backend is not None
+            and type(self.backend) is not expected_backend
+        ):
+            raise TypeError(
+                "Integral backend Node does not match driver "
+                f"'{self.driver_type}'."
+            )
 
     @property
     def device(self) -> torch.device:
@@ -311,6 +331,33 @@ class ExactSystemCompatibility:
     index_helper_identity: int
     classical_setups: tuple[CoreSetupRef, ...]
     interaction_setups: tuple[CoreSetupRef, ...]
+
+
+class ModelParameterNode(Node):
+    """Registered Model-level parameter and buffer tree."""
+
+    parameters: ModuleNode = child()
+    config: Config = context()
+    auto_int_level: bool = context()
+
+
+class _ModelSetupAdapter(nn.Module):
+    """Temporarily apply functional ParamModule values during Model.setup."""
+
+    def __init__(self, model: Model) -> None:
+        super().__init__()
+        self.par = model.par
+        # Keep the compatibility façade outside the registered module tree.
+        object.__setattr__(self, "_model", model)
+
+    def forward(
+        self,
+        numbers: Tensor,
+        *,
+        batch_mode: int | None = None,
+        dd: DD | None = None,
+    ) -> System:
+        return self._model.setup(numbers, batch_mode=batch_mode, dd=dd)
 
 
 def _classical_term_kind(
@@ -585,13 +632,21 @@ class System:
         if core.integral is None:
             if self.integral_setup is not None:
                 return None
-        elif (
-            self.integral_setup is None
-            or core.integral.driver_type != self.integral_setup.driver_type
-            or core.integral.intlevel != self.integral_setup.intlevel
-            or core.integral.backend is not backend_setup
-        ):
-            return None
+        else:
+            expected_backend = {
+                labels.INTDRIVER_PYTORCH: PytorchIntegralSetupNode,
+                labels.INTDRIVER_LIBCINT: LibcintIntegralSetupNode,
+            }.get(core.integral.driver_type)
+            if (
+                self.integral_setup is None
+                or core.integral.backend is None
+                or expected_backend is None
+                or type(core.integral.backend) is not expected_backend
+                or core.integral.driver_type != self.integral_setup.driver_type
+                or core.integral.intlevel != self.integral_setup.intlevel
+                or core.integral.backend is not backend_setup
+            ):
+                return None
 
         d3_components = tuple(
             component
@@ -826,6 +881,53 @@ class Model:
             raise TypeError("The additional classicals must be a tuple.")
         if not isinstance(self.interaction, tuple):
             raise TypeError("The additional interactions must be a tuple.")
+
+    @property
+    def parameter_tree(self) -> ModelParameterNode:
+        """Return registered dynamic leaves for this Model's parameters."""
+        return ModelParameterNode(
+            parameters=ModuleNode.from_module(self.par),
+            config=self.config,
+            auto_int_level=self.auto_int_level,
+        )
+
+    def setup_functional(
+        self,
+        numbers: Tensor,
+        parameter_tree: ModelParameterNode,
+        *,
+        batch_mode: int | None = None,
+        dd: DD | None = None,
+    ) -> System:
+        """Build a System while substituted Model parameter leaves are active.
+
+        ``parameter_tree`` must originate from this Model. Its dynamic
+        parameter and buffer values are installed for the duration of the
+        existing :meth:`setup` implementation, then restored by
+        ``torch.func.functional_call``.
+        """
+        if (
+            not isinstance(parameter_tree, ModelParameterNode)
+            or parameter_tree.parameters.module is not self.par
+            or parameter_tree.config is not self.config
+            or parameter_tree.auto_int_level != self.auto_int_level
+        ):
+            raise ValueError(
+                "Functional parameter tree does not belong to this Model."
+            )
+
+        adapter = _ModelSetupAdapter(self)
+        state = {
+            f"par.{name}": value
+            for name, value in parameter_tree.parameters.params.items()
+        }
+        return torch.func.functional_call(
+            adapter,
+            state,
+            (numbers,),
+            {"batch_mode": batch_mode, "dd": dd},
+            strict=True,
+        )
 
     def setup(
         self,
