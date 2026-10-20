@@ -280,13 +280,18 @@ calls through reentrancy. It does not synchronize direct concurrent mutation
 or reads through the raw `ParamModule` API. It does not claim thread safety
 for later System evaluation, Calculator cache operations, or arbitrary
 extension state. Existing `torch.func.grad` and mixed-derivative
-controls run with the lock in place; `torch.compile` is not an established
-setup execution contract and remains unverified. An optional setup-inclusive
-`torch.compile` smoke probe emitted the existing tensor-scalar graph-break
-and Node-recompile warnings, then was interrupted after more than two minutes
-without a result; it is not counted as passing or failing evidence. The
-repository's informational transform probe separates setup-inclusive
-compilation from compilation of an already-built System's per-call energy.
+controls run with the lock in place. A small setup-inclusive
+`torch.compile(..., backend="eager")` probe (integral-free Repulsion setup)
+succeeded on both the reviewed base and candidate with the same value
+4.4194; both emitted graph-break warnings from the existing
+`IndexHelper.from_numbers(...number.item())` and `Parameter.expand()` paths.
+This shows no additional failure in that probe, but is not fullgraph evidence.
+A separate full H2 singlepoint compile probe emitted the same tensor-scalar
+graph-break and Node-recompile warnings, then was interrupted after more than
+two minutes without a result; it is not counted as passing or failing
+evidence. The repository's informational transform probe separates
+setup-inclusive compilation from compilation of an already-built System's
+per-call energy.
 
 The hardening also validates the `ModuleNode` child before dereferencing it,
 checks that its state keys and tensor shapes match the owning ParamModule, and
