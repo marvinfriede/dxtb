@@ -57,7 +57,7 @@ Current state:
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
 | E3             | acceptance blocked by E1.3      | E3.1b is complete. Full end-to-end GFN1/GFN2 transform acceptance remains blocked on full E1, including E1.3 DFT-D3/tad-dftd3 forward-mode support where that outer term is active; E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | not done                        | E6a tests B1's public `vmap(system.singlepoint)` transform guarantee with the canonical PyTorch driver and requires B6b-core, full E1 term support, E2-core, the private fixed-trip boundary, B5.6 status schema, and C8a Result pytree support. E6bcompat-policy must decide retain/retire for every legacy FULL batch-facing case before E6bimpl scope is frozen; E6bcompat then validates the chosen replacements or retirement contracts. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, defined padding, and that policy. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6/E7/E8       | policy done; implementation not done | E6a separately tests B1's public `vmap(system.singlepoint)` contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md): it fixes the observed public Calculator versus low-level SCF option contracts and assigns retain/replace/retire owners. E6bimpl may now freeze its scope from that policy; E6bcompat validates the replacements or explicit migrations. E6bimpl also requires E6a, B3b, C5-C7/C8b, E2-core, E4core, and defined padding. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -2305,6 +2305,11 @@ the class.
 Separate conformer mapping over one fixed System from heterogeneous mixed-
 System batching. The former does not require `Node.stack`; the latter does.
 
+The E6bcompat-policy gate is complete; its binding, test-backed batch and
+legacy FULL contract is in [`E6bcompat-policy.md`](E6bcompat-policy.md).
+E6bimpl owns replacements, E6bcompat owns replacement validation, and
+E6broute owns activation/packed-route retirement after its independent gates.
+
 ## Transform-safe single-System entrypoint (E6a prerequisite)
 
 The canonical public conformer call remains the B1 contract:
@@ -2450,28 +2455,24 @@ authoritative PyTorch path. Delete driver-internal batch construction/physics
 loops in both PyTorch and libcint drivers; this does not prohibit a separate
 outer libcint compatibility API loop over independent single-System calls.
 
-E6bcompat-policy is a required step before E6bimpl scope is frozen. It consumes
-the accepted B1 public batch API contract and E4.5b legacy FULL dispatch
-contract. Inventory every legacy FULL batch-facing case currently routed to
-the packed legacy engine: standard PyTorch and libcint batches;
-custom/unsupported interactions; unknown/arbitrary keywords including
-`unexpected_option`, `solver_options`, and any other nonempty `**kwargs`;
-positional engine extras; `fwd_options`, `bck_options`, and `eigen_options`;
-negative configured electronic temperature; negative Fermi `maxiter`;
-negative outer SCF `maxiter`; and missing or malformed `hcore`/overlap. For
-each, record current
-behavior, whether it is retained or retired as a batch API, its replacement
-owner, an acceptance test, and the migration/error contract if retired.
-Retained compatibility may use an outer composition of independent
-single-System legacy FULL calls until E4.6b decides the final single-System
-fallback policy. Forward every nonempty `*args`/`**kwargs` unchanged to each
-retained single-System legacy call; never filter, normalize, or silently
-discard arbitrary keywords. Preserve the characterized `TypeError` family for
-unsupported keywords and the constructor semantics of supported options. Tests
-cover batch+`unexpected_option`, batch+`solver_options`, a positional extra,
-and batch+each of `fwd_options`, `bck_options`, and `eigen_options`. This does
-not make E6broute responsible for resolving final single-System fallback
-semantics.
+The completed [`E6bcompat-policy.md`](E6bcompat-policy.md) consumes the
+accepted B1 public batch API and E4.5b low-level FULL dispatch contracts. It
+records the public `Calculator.singlepoint(**kwargs)` behavior separately from
+direct `scf.iterator.solve(*args, **kwargs)`: public packed Calculator options
+are selected Calculator controls and do not forward engine overrides, while
+direct low-level nonempty extras force legacy FULL and reach its constructor.
+In particular, public packed unknown kwargs are currently ignored; this is
+not advertised as engine-option support, and the new route must reject unknown
+public options rather than silently imply they were applied. Low-level unknown
+keywords retain their constructor `TypeError`; named legacy option dictionaries
+retain their `BaseSCF` constructor semantics. The policy inventories PyTorch
+and libcint batches, custom interactions/classicals, positional extras,
+temperature and iteration edge cases, incomplete integrals, charge/spin,
+fields, and non-SCF/classical-only routes, with a future owner and test for
+each. E6bimpl scope is frozen from that policy; E6bcompat validates the
+selected replacements or explicit migrations. Retained compatibility may use
+an outer composition of independent single-System legacy calls. That does not
+make E6broute responsible for final single-System fallback semantics.
 
 E6bimpl owns PyTorch mixed-System construction, stacking/vmap composition,
 and correctness, plus any replacement composition required by
@@ -2798,7 +2799,7 @@ B5 ──> F0 bounded training/state-history invariant
 
 B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
   + B5.6 + C8a ──> E6a conformer vmap ──> E6c1-W2
-B1 batch API + E4.5b ──> E6bcompat-policy (may run early)
+B1 batch API + E4.5b ──> E6bcompat-policy (complete; see policy document)
 E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
   + E6bcompat-policy + defined padding ──> E6bimpl mixed-System composition
 E6bimpl ──> E6bcompat validation
