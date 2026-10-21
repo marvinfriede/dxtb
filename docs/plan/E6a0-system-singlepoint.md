@@ -50,8 +50,12 @@ new conformer function.
 Static legacy-owned configurations (including negative temperature,
 negative Fermi `maxiter`, and unsupported custom interaction routes) retain
 their existing legacy path. These configurations are outside the accepted
-vmap slice. Non-SCF calculations retain their existing non-iterative solver
-path. No libcint device policy or packed Calculator route changed.
+vmap slice. Route eligibility is resolved before constructing the
+transform-only initial guess. A legacy-owned route delegates directly to the
+established eager adapter, which constructs and validates its own guess; it
+does not first compute and discard a `validate=False` guess. Non-SCF
+calculations retain their existing non-iterative solver path. No libcint
+device policy or packed Calculator route changed.
 
 Direct `System.singlepoint` behavior intentionally changes for eligible FULL
 configurations: it now executes the fixed configured trips, returns tensor
@@ -138,3 +142,40 @@ a no-libcint environment were unavailable. A separate supported Python/Torch
 matrix beyond the five listed environments was not available. Ruff and mypy
 were unavailable; formatting and compilation checks are recorded in the
 package delivery report.
+
+## E6a.0a fallback hardening
+
+At E6a.0's accepted base `76db242734eb94d57c9d4577b5333724d5c9efee`,
+instrumenting `get_guess` on an independently built GFN1/PyTorch H2 System
+with negative electronic temperature observed calls with `validate=False`
+and then `validate=True`. The route was legacy-owned and the first guess was
+unused; the eager FULL adapter then constructed the guess it needed. The
+regression test executes the real eager fallback and records that behavior.
+
+`run_system_fixed_trip` now resolves eligibility before any iterative guess
+construction. Legacy routes immediately use `run_functional_full_eager` and
+retain its eager charge-conservation validation and error behavior. Eligible
+functional routes compute reference occupations and one initial guess with
+`validate=False`, then use the same fixed-trip solver path as before. No SCF
+map, formula, convergence criterion, or public API changed.
+
+The new regressions verify one eager-validated guess for a real negative-
+temperature fallback and one transform-safe guess for an eligible functional
+System call. The complete E6a.0a suite, including exact public vmap, Result and
+SCFStatus parity, position gradients, fields, Calculator eager policy,
+`maxiter=0`, legacy-owned negative-temperature/Fermi/non-FULL dispatch,
+strict-mixer validation order, and the explicit E1.3 blocker characterization,
+passed 14 tests
+in each of the five CPU environments listed above. On Python 3.14/Torch
+2.14.1, E4.5a/eager compatibility, E0, and direct System/Calculator controls
+passed 160 tests; Result pytree, public status/trajectory, and E6bcompat-policy
+controls passed 56 tests. A broader combined selection was interrupted after
+one failure appeared at 88%; it is not counted as a pass. The same isolated
+Anderson node,
+`test_scf/test_functional_anderson.py::test_anderson_solver_real_position_parameter_and_field_gradients`,
+reproduced the established maximum absolute discrepancy
+`2.5006982595776606e-11` against the `2e-13` tolerance. It was previously
+matched against the E6a.0 package base and is not caused by this route-order
+change. E1.3 remains open; its blocker-characterization test must become a
+positive `jacfwd` regression after upstream `AtomicC6` JVP support is
+available.

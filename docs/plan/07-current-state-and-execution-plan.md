@@ -2310,11 +2310,13 @@ legacy FULL contract is in [`E6bcompat-policy.md`](E6bcompat-policy.md).
 E6bimpl owns replacements, E6bcompat owns replacement validation, and
 E6broute owns activation/packed-route retirement after its independent gates.
 
-E6a.0's first implementation slice is recorded in
+E6a.0 and its E6a.0a legacy-guess fallback hardening are recorded in
 [`E6a0-system-singlepoint.md`](E6a0-system-singlepoint.md). It establishes
 the exact public GFN1/PyTorch H2 conformer-vmap call and the separate eager
-Calculator adapter. E6a remains open: full E1 is incomplete at E1.3, and the
-remaining method, component, status, and derivative rows have not passed.
+Calculator adapter; legacy-owned routes are resolved before the transform-only
+guess, preserving one eager-validated fallback guess. E6a remains open: full
+E1 is incomplete at E1.3, and the remaining method, component, status, and
+derivative rows have not passed.
 
 ## Transform-safe single-System entrypoint (E6a prerequisite)
 

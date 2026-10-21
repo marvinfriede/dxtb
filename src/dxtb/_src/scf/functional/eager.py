@@ -572,9 +572,6 @@ def run_system_fixed_trip(
             occupation,
         )
 
-    guess = get_guess(
-        numbers, positions, chrg, ihelp, config.guess, validate=False
-    )
     route = resolve_full_scf_route(
         config, interactions, ihelp, numbers, integrals
     )
@@ -597,10 +594,16 @@ def run_system_fixed_trip(
             )
         return eager_result.legacy
 
+    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
+    guess = get_guess(
+        numbers, positions, chrg, ihelp, config.guess, validate=False
+    )
     result = run_prepared_functional_full(
         numbers,
         guess,
-        *get_refocc(refocc, chrg, spin, ihelp),
+        n0,
+        occupation,
+        nel,
         interactions,
         cache,
         ihelp,

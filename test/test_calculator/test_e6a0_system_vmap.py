@@ -33,6 +33,10 @@ def _system(
     temperature: float = 0.0,
     intlevel: int | None = None,
     force_convergence: bool = False,
+    scf_mode: int = labels.SCF_MODE_FULL,
+    mixer: int = labels.MIXER_LINEAR,
+    strict: bool = False,
+    fermi_maxiter: int | None = None,
 ):
     """Construct an independent PyTorch-backed GFN1/H2 System."""
     positions = torch.tensor(
@@ -42,12 +46,15 @@ def _system(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=(labels.INTLEVEL_HCORE if intlevel is None else intlevel),
-        mixer=labels.MIXER_LINEAR,
+        mixer=mixer,
+        strict=strict,
+        scf_mode=scf_mode,
         maxiter=maxiter,
         force_convergence=force_convergence,
         fermi_etemp=temperature,
         x_atol=0.0,
         x_atol_max=0.0,
+        **({} if fermi_maxiter is None else {"fermi_maxiter": fermi_maxiter}),
     )
     return Model(
         par=ParamModule(GFN1_XTB, dtype=positions.dtype), config=config
@@ -224,6 +231,114 @@ def test_system_fixed_trip_and_calculator_eager_force_policy() -> None:
 
     with pytest.raises(SCFConvergenceError):
         calculator.singlepoint(positions)
+
+
+def test_system_legacy_fallback_constructs_only_eager_guess(
+    monkeypatch,
+) -> None:
+    """Legacy-owned temperature routes do not build an unused fixed guess."""
+    import dxtb._src.scf.functional.eager as eager
+
+    system = _system(maxiter=1, temperature=-1.0)
+    positions = _positions()[0]
+    original_get_guess = eager.get_guess
+    original_eager_runner = eager.run_functional_full_eager
+    guess_validation: list[bool] = []
+    eager_calls = 0
+
+    def tracked_get_guess(*args, validate: bool = True, **kwargs):
+        guess_validation.append(validate)
+        return original_get_guess(*args, validate=validate, **kwargs)
+
+    def tracked_eager_runner(*args, **kwargs):
+        nonlocal eager_calls
+        eager_calls += 1
+        return original_eager_runner(*args, **kwargs)
+
+    monkeypatch.setattr(eager, "get_guess", tracked_get_guess)
+    monkeypatch.setattr(
+        eager, "run_functional_full_eager", tracked_eager_runner
+    )
+
+    result = system.singlepoint(positions)
+
+    assert eager_calls == 1
+    assert guess_validation == [True]
+    assert result.status is None
+
+
+def test_system_functional_fixed_trip_constructs_one_transform_guess(
+    monkeypatch,
+) -> None:
+    """Eligible System execution builds exactly one non-eagerly-validated guess."""
+    import dxtb._src.scf.functional.eager as eager
+
+    system = _system(maxiter=1)
+    original_get_guess = eager.get_guess
+    guess_validation: list[bool] = []
+
+    def tracked_get_guess(*args, validate: bool = True, **kwargs):
+        guess_validation.append(validate)
+        return original_get_guess(*args, validate=validate, **kwargs)
+
+    monkeypatch.setattr(eager, "get_guess", tracked_get_guess)
+    result = system.singlepoint(_positions()[0])
+
+    assert guess_validation == [False]
+    assert result.status is not None
+
+
+@pytest.mark.parametrize(
+    "route_options",
+    [
+        {"fermi_maxiter": -1},
+        {"scf_mode": labels.SCF_MODE_EXPERIMENTAL},
+    ],
+    ids=["negative-fermi-maxiter", "non-full-mode"],
+)
+def test_system_static_legacy_routes_skip_transform_guess(
+    monkeypatch, route_options
+) -> None:
+    """Legacy Fermi and SCF-mode routes dispatch before fixed-trip guessing."""
+    import dxtb._src.scf.functional.eager as eager
+
+    class LegacyRouteReached(Exception):
+        pass
+
+    system = _system(maxiter=1, **route_options)
+    eager_calls = 0
+
+    def unexpected_guess(*args, **kwargs):
+        pytest.fail("legacy route must not build the transform-only guess")
+
+    def legacy_adapter(*args, **kwargs):
+        nonlocal eager_calls
+        eager_calls += 1
+        raise LegacyRouteReached
+
+    monkeypatch.setattr(eager, "get_guess", unexpected_guess)
+    monkeypatch.setattr(eager, "run_functional_full_eager", legacy_adapter)
+
+    with pytest.raises(LegacyRouteReached):
+        system.singlepoint(_positions()[0])
+    assert eager_calls == 1
+
+
+def test_system_strict_mixer_error_precedes_initial_guess(monkeypatch) -> None:
+    """Static strict configuration errors do not construct any SCF guess."""
+    import dxtb._src.scf.functional.eager as eager
+
+    system = _system(mixer=labels.MIXER_BROYDEN, strict=True)
+
+    def unexpected_guess(*args, **kwargs):
+        pytest.fail("invalid static configuration must fail before guessing")
+
+    monkeypatch.setattr(eager, "get_guess", unexpected_guess)
+
+    with pytest.raises(
+        NotImplementedError, match="Broyden mixer is not implemented"
+    ):
+        system.singlepoint(_positions()[0])
 
 
 def test_public_system_jacfwd_reports_e1_3_d3_blocker() -> None:
