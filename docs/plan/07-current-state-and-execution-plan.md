@@ -3070,7 +3070,21 @@ Success means measured speed/memory improves without creating a second semantics
 
 ---
 
-# 30. Immediate next action
+# 30. Roadmap handoff after C8b
+
+**Current status and ownership.** C8b is complete at its documented P9
+structural and pure-kernel boundary. No C8b blocker remains. E6a owns the
+public whole-System transform contract; E6b owns production mixed-System
+batching and numerical route integration; E7 owns the broader padding-safety
+and derivative audit; E4.6 owns legacy compatibility retirement. These remain
+separate open packages and must validate their own consumers before using
+padded cores numerically. The dependency DAG in section 25 remains the source
+for selecting and ordering downstream work. E6bcompat-policy may proceed
+early as specified there; E6a and E6b implementation remain subject to their
+listed prerequisites. Do not treat the historical C8b status below as a
+current blocker or prerequisite.
+
+### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
 boundary. The C6-Final.0 audit found that persistent classical/interaction
