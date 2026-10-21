@@ -685,6 +685,7 @@ def _solve_map_control(
         map_fn=map_fn,
         mix_fn=mix_fn,
         state_projection=state_projection,
+        record_initial_status=maxiter > 0,
     )
 
     if maxiter == 0:
@@ -777,10 +778,15 @@ def _initialize_solver_control(
     ],
     state_projection: Callable[[Tensor], Tensor] | None,
     initial_result: SCFMapResult | None = None,
+    record_initial_status: bool = True,
 ) -> _SolverControlState:
     """Initialize shared solver state and the optional first mix transition."""
     initial = map_fn(guess) if initial_result is None else initial_result
-    trajectory_status = trajectory_status_from_map(initial.fermi_status)
+    trajectory_status = (
+        trajectory_status_from_map(initial.fermi_status)
+        if record_initial_status
+        else None
+    )
     initial_residual = _residual(initial.mapped_x - guess).as_tensor()
     active = torch.ones((), dtype=torch.bool, device=guess.device)
     damping = DampingState(

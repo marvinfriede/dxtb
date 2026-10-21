@@ -2427,6 +2427,19 @@ temperature and negative Fermi `maxiter` remain legacy-owned pending the
 global E4.6b configuration-policy decision; E6a does not migrate either
 configuration or change Calculator behavior.
 
+E6a.2 has added public status integration for valid GFN1/GFN2 solves,
+positive-budget outer nonconvergence, `maxiter=0`, finite-temperature Fermi
+nonconvergence, and a lane-local too-many-electrons failure. A zero-budget
+fixed-trip call has no trajectory status; its final spectrum status remains
+separate. The eager Calculator controller retains its prior failure ordering.
+`ELECTRON_COUNT`, trajectory-only failures, and invalid-temperature status
+remain covered at their existing lower-level projection boundary where no
+stable supported public System fixture was established. See
+[`E6a.2 public status integration`](E6a2-public-status.md) for exact fixtures,
+classifications, and validation. This closes only E6a.2's scoped status
+integration; overall E6a remains open for E1.3 and the remaining
+method/component/derivative acceptance matrix.
+
 ## E6b mixed composition
 
 For the authoritative PyTorch production route, mixed-System batching is
@@ -2806,7 +2819,7 @@ B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
 
 B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
-  + B5.6 + C8a ──> E6a conformer vmap (E6a.0 slice complete; full E6a open)
+  + B5.6 + C8a ──> E6a conformer vmap (E6a.0/.0a/.1/.1a/.2 slices complete; full E6a open)
   ──> E6c1-W2
 B1 batch API + E4.5b ──> E6bcompat-policy (complete; see policy document)
 E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
