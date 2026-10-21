@@ -449,3 +449,74 @@ then deterministic bucket ordering with an original-index map. Only after
 that schema is proven should H2/H2O family and unique-shell remapping be
 added. No production mixed-System SCF batching, whole-System vmap, E6a, E6b,
 or E7 work is included.
+
+## C8b.3a implementation update — H2/H3 slice
+
+In C8b.3a, an internal adapter was added in
+`src/dxtb/_src/calculators/padding.py`. Ordinary `ExactSystemCore` remains
+unchanged. `PaddedExactSystemCore` wraps the complete production core and a
+registered `PaddedCoreValidity` child containing atom, shell, orbital, unique
+element, unique shell-type, and per-pair-class validity tensors. These masks
+are dynamic bool leaves and survive flatten/unflatten and `tad_mctc.tree.stack`.
+
+The value-based compatibility signature includes the frozen Config, method,
+effective dtype/device, integral driver/level/logical device, selected backend
+type and algorithm, unique angular classes, ordered pair-class contexts,
+basis leaf shape/dtype/device metadata, optional H0 metadata, ordered term
+kind/label/position/geometry metadata, family setup type, and documented
+callable/setup static metadata. It excludes atom/shell/AO/pair-entry
+capacities and numerical setup values. Buckets retain first-seen ordering and
+original indices; capacities are the per-axis maxima. The current adapter
+requires one representative core to realize all bucket maxima.
+
+For GFN1/H2 + independent GFN1/H3, H2 is padded to 3 atoms, 6 shells, 6 AOs,
+and pair-class entry capacities `(6, 3, 6, 6)`. Real index mappings are retained
+as prefixes; invalid shell/orbital mappings use the H3 structural tail and are
+identified by masks. H0 numbers/maps, atom-indexed Halogen/D3/Repulsion data,
+and ES2/ES3 setup leaves are padded role-by-role. Repulsion's pair mask is
+false for every pair involving the padded atom. For each PairClassNode, source
+`(ib, jk)` entries are matched by ordered shell-pair key. Real flattened AO
+indices are reconstructed as `row * padded_nao + col`; missing entries use
+the larger pair plan's structural values. The adapter verifies that real AO
+destinations are unique, padded destinations are unique and disjoint from
+real destinations, and every padded destination lies outside the source real
+AO submatrix. This allows the existing overlap assembler to reproduce the
+real H2 AO submatrix exactly; padded AO outputs remain invalid.
+
+The dedicated test
+`test/test_calculator/test_c8b3a_mixed_size_padding.py` proves complete padded
+core stacking, valid mask tree reconstruction, backend/index ownership,
+real PairPlan reconstruction and overlap parity, Repulsion energy and
+position-gradient parity for independent serial versus `vmap` execution,
+zero padded-atom contribution/gradient for both coincident and zero padding
+coordinates, and continuity of the H2 Repulsion parameter gradient. Same-size
+GFN1/C2 and GFN1/N2 remain in a compatible bucket; H2O is separated by its
+different shell/pair structure. The unpadded H2/H3 and H2/H2O rejection tests
+remain intact.
+
+This is deliberately not an SCF-ready padded core. Existing H0 gather/scatter,
+non-Repulsion family kernels, and padded integral consumers do not yet accept
+the validity child. Only Repulsion evaluation and the real AO overlap
+submatrix have been exercised; callers must not run padded `System`/SCF or
+unmasked D3, H0, interaction, or integral-matrix reductions. Mixed-size
+different-element H2/H2O still needs canonical unique-element/shell remapping,
+family-setup remapping, and complete mapped-kernel acceptance. C8b.3a is
+complete at its limited GFN1/H2-H3 structural and Repulsion boundary; C8b.3
+remains open. E6a/E6b/E7 and production mixed-System SCF batching remain
+separate work.
+
+The combined padding, mixed-size audit, and schema-preflight selection passed
+16 tests in each of the five approved CPU environments: Python 3.10/Torch
+2.6.0, Python 3.11/Torch 2.8.0, Python 3.12/Torch 2.11.0, Python 3.12/Torch
+2.13.0, and Python 3.14/Torch 2.14.1. After the final padding-test additions,
+the dedicated five-test padding module also passed in all five environments.
+All use tad-mctc 0.9.1; all five import tad-libcint 0.3.0 and PySCF 2.14.0.
+CUDA is unavailable. No separate no-libcint environment is installed. In the
+primary environment, the broader C8b/model/singlepoint,
+C7, functional-map, E0, family/list, packed, Result-pytree, implicit-root,
+PyTorch-integral, and libcint overlap/gradient/multipole selections reported
+258 passed plus the 10 inherited GFN1 FULL parity failures in one selection,
+and 313 passed in the other. The ten failures were all the established
+`test_production_singlepoint_matches_legacy_full` cases; no other failure was
+observed. Black, isort, compileall, and diff checks pass. Mypy and Ruff are
+not installed in the approved primary environment.

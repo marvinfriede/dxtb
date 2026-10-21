@@ -512,6 +512,21 @@ define and validate a padded-core schema for H2/H3, then extend its canonical
 shell mapping to H2/H2O. C8b.3 remains open; E6a/E6b/E7 stay with their
 existing owners.
 
+**C8b.3a implementation update — complete at scoped boundary.** A separate registered padded-core
+wrapper now carries the complete `ExactSystemCore` plus dynamic atom, shell,
+orbital, unique-type, and pair-entry validity masks. A value-based bucket key
+and deterministic max-capacity policy accept GFN1/H2 + GFN1/H3. The adapter
+retains real index mappings, reconstructs flattened PairPlan AO indices for
+the padded stride, and verifies padded pair destinations cannot collide with
+the real AO block. Complete wrapped cores stack; the existing overlap
+assembler reproduces the real AO submatrix, and mapped Repulsion values,
+position gradients, zero-padding gradients, and a parameter gradient match
+serial references. Same-size GFN1/C2 and GFN1/N2 remain compatible. This is
+not an SCF-ready padded tree: H0 gather/scatter and non-Repulsion family
+consumers do not apply the wrapper masks. GFN1/H2 + GFN1/H2O still requires
+canonical unique-element/shell and setup remapping. C8b.3a is complete at this
+limited GFN1/H2-H3 structural and Repulsion boundary; C8b.3 remains open.
+
 **Needs.** B3b, C5, C6, C7, C8a, B2. **Unblocks.** E6bimpl after its other
 prerequisites; E6a remains separately owned. **Size.** M.
 
