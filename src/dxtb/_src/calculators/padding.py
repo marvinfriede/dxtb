@@ -34,7 +34,7 @@ import torch
 from tad_dftd3.damping.rational import rational_damping
 from tad_dftd3.model.weights import gaussian_weight
 from tad_mctc.tree import Node, child
-from torch.utils._pytree import tree_flatten
+from torch.utils._pytree import tree_flatten, tree_flatten_with_path
 
 from dxtb._src.calculators.model import ExactSystemCore
 from dxtb._src.components.classicals.dispersion.d3 import (
@@ -169,6 +169,116 @@ def _setup_static_signature(setup: Node) -> tuple[object, ...]:
     raise TypeError(f"Unsupported exact-core setup {type(setup).__name__}.")
 
 
+def _path_parts(path: tuple[object, ...]) -> tuple[str | int, ...]:
+    """Convert registered pytree path keys to stable attribute/index values."""
+    parts: list[str | int] = []
+    for key in path:
+        name = getattr(key, "name", None)
+        index = getattr(key, "idx", None)
+        if isinstance(name, str):
+            parts.append(name)
+        elif isinstance(index, int):
+            parts.append(index)
+        else:
+            raise TypeError(
+                "Padding compatibility cannot canonicalize pytree path "
+                f"key {type(key).__name__}."
+            )
+    return tuple(parts)
+
+
+def _is_padding_normalized_path(parts: tuple[str | int, ...]) -> bool:
+    """Whether the adapter explicitly changes this tensor's shape."""
+    if parts == ("numbers",):
+        return True
+    if parts in (
+        ("integral", "backend", "index", "shells_to_atom"),
+        ("integral", "backend", "index", "orbitals_to_shell"),
+        ("integral", "backend", "pair_plan", "atom"),
+        ("h0_setup", "numbers"),
+        ("h0_setup", "index", "atom_to_unique"),
+        ("h0_setup", "index", "shells_to_ushell"),
+        ("h0_setup", "index", "shells_to_atom"),
+        ("h0_setup", "index", "orbitals_to_shell"),
+    ):
+        return True
+    if (
+        len(parts) == 6
+        and parts[:4] == ("integral", "backend", "pair_plan", "classes")
+        and isinstance(parts[4], int)
+        and parts[5] in {"ib", "jk", "idx", "weight"}
+    ):
+        return True
+    if len(parts) != 4 or not isinstance(parts[1], int) or parts[2] != "setup":
+        return False
+
+    if parts[0] == "classical_terms":
+        normalized_fields = {
+            "numbers",
+            "xbond",
+            "atomic_radii",
+            "halogen_mask",
+            "base_mask",
+            "valid_atom_mask",
+            "pair_type_mask",
+            "neighbor_type_mask",
+            "setup_numbers",
+            "component_numbers",
+            "rcov",
+            "r4r2",
+            "rvdw",
+            "arep",
+            "zeff",
+            "kexp",
+            "mask",
+        }
+    elif parts[0] == "interaction_terms":
+        normalized_fields = {
+            "atom_pair_mask",
+            "atom_mask",
+            "atom_hubbard",
+            "shell_pair_mask",
+            "shell_mask",
+            "shell_hubbard",
+            "shells_to_atom",
+            "hubbard_derivs",
+        }
+    else:
+        return False
+    return parts[3] in normalized_fields
+
+
+def _retained_tensor_shapes(core: ExactSystemCore) -> tuple[object, ...]:
+    """Describe dynamic leaf shapes that padding leaves unchanged.
+
+    Unknown or newly registered leaves are constrained by their original
+    shapes unless this adapter explicitly handles their shape by role.
+    """
+    return tuple(
+        (parts, tuple(leaf.shape))
+        for path, leaf in tree_flatten_with_path(core)[0]
+        if isinstance(leaf, torch.Tensor)
+        and not _is_padding_normalized_path(parts := _path_parts(path))
+    )
+
+
+def _validate_d3_reference_shapes(setup: DispersionD3CoreSetup) -> None:
+    """Reject internally inconsistent D3 reference-table dimensions."""
+    cn_shape = tuple(setup.reference_cn.shape)
+    c6_shape = tuple(setup.reference_c6.shape)
+    valid = (
+        len(cn_shape) == 2
+        and len(c6_shape) == 4
+        and c6_shape[:2] == (cn_shape[0], cn_shape[0])
+        and c6_shape[2:] == (cn_shape[1], cn_shape[1])
+    )
+    if not valid:
+        raise ValueError(
+            "D3 reference_cn and reference_c6 have incompatible table "
+            f"shapes: {cn_shape} and {c6_shape}."
+        )
+
+
 def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
     """Return a value-based structural signature, excluding capacities."""
     backend = _backend(core)
@@ -209,6 +319,9 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
 
     natoms = core.numbers.numel()
     nshells = backend.index.shells_to_atom.numel()
+    for term in core.classical_terms:
+        if isinstance(term.setup, DispersionD3CoreSetup):
+            _validate_d3_reference_shapes(term.setup)
     for term in core.interaction_terms:
         if isinstance(term.setup, ES3CoreSetup):
             expected = nshells if term.setup.shell_resolved else natoms
@@ -239,6 +352,7 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
         tuple((tuple(a.shape), a.dtype, a.device) for a in backend.alphas),
         tuple((tuple(c.shape), c.dtype, c.device) for c in backend.coeffs),
         tensor_policy,
+        _retained_tensor_shapes(core),
         (
             None
             if core.h0_setup is None

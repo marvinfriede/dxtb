@@ -565,3 +565,40 @@ The broader primary-environment selection passed 710 tests and reproduced
 only the 10 inherited GFN1 production/legacy parity failures listed above.
 No no-libcint profile or CUDA device was available; mypy and Ruff are not
 installed.
+
+## C8b.3a bucket-realizability verification
+
+An independent review reproduced a second signature false positive by
+extending the GFN1/H2 D3 `reference_cn` leaf from `(104, 7)` to `(105, 7)`.
+Before correction, capacities and `compatibility_signature()` were unchanged,
+both cores entered one bucket, and padding succeeded, but `tad_mctc.tree.stack`
+failed because the retained reference-table shapes differed. The adapter now
+validates the coupled D3 reference-table dimensions and rejects an internally
+inconsistent `reference_cn`/`reference_c6` pair. For structurally valid leaves,
+the signature includes path-qualified shapes for every dynamic tensor whose
+shape the current adapter does not rewrite. Shapes are omitted only for the
+explicitly role-padded atom, shell, AO, and pair-entry fields. Unknown or newly
+registered leaves default to an equal-shape requirement. Thus buckets remain
+capacity-independent for supported padding dimensions while retained D3
+reference tables, parameter tensors, H0 tables, and other unchanged leaves
+must agree in shape. A shape-consistent but differently shaped D3 reference
+table is placed in a separate bucket.
+
+The shell-resolved ES3 test now pads and stacks both complete H2 and H3 cores.
+It verifies the selected PyTorch backend, H0 setup, ES3 descriptor, stacked
+`hubbard_derivs` shell-capacity shape, original H2 entries, and false validity
+for the H2 shell tail. This is structural evidence only; ES3 evaluation on a
+padded wrapper remains unsupported. H2/H3 Repulsion and real-AO overlap
+acceptance is unchanged. No H2/H2O canonical remapping or additional padded
+numerical consumer is introduced.
+
+The final focused selection (padding, mixed-size preflight, and schema
+preflight) passed 22 tests in each available approved CPU environment:
+Python 3.10/Torch 2.6.0, Python 3.11/Torch 2.8.0, Python 3.12/Torch 2.11.0,
+Python 3.12/Torch 2.13.0, and Python 3.14/Torch 2.14.1. In the primary
+Python 3.14/Torch 2.14.1 environment, the related C8b/C6/C7/Model/Repulsion/
+D3/interaction/functional-map/H0/integral and non-slow E0/implicit selection
+reported 562 passed, 10 inherited GFN1 production/legacy parity failures,
+and 1 deselected test. CUDA remains unavailable; the environment has
+tad-libcint 0.3.0 and PySCF 2.14.0. Black, isort, compileall, and diff checks
+pass; mypy and Ruff are unavailable.

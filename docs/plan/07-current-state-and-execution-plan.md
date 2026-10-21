@@ -2208,6 +2208,17 @@ production mixed-System SCF batching. The original “remove Calculator.type”
 step is reassigned to E4.6/E6b compatibility policy; C8b preserves the
 existing Calculator/System façade conversion contracts and known limitations.
 
+The final C8b.3a bucket check found and fixed one remaining realizability
+false positive: a malformed GFN1 D3 `reference_cn` leaf could vary in shape
+without affecting the signature, although the adapter retained that tensor
+unchanged and `tree.stack` rejected the padded outputs. The adapter now checks
+the coupled D3 reference-table shape invariant and keys all dynamic shapes
+that padding does not explicitly normalize. Supported padded dimensions stay
+capacity-independent. A complete shell-resolved ES3 H2/H3 stack is covered as
+structural evidence only. H2/H3 Repulsion values, gradients, and real AO
+overlap evidence remain unchanged; padded H0/integral/ES2/ES3/D3/SCF consumers,
+H2/H2O canonical remapping, E6a, E6b, E7, and E4.6 remain outside this slice.
+
 ## C9 final TensorLike/ModuleLike scaffold purge
 
 C9 is the final repository-wide scaffold deletion, not a prerequisite for E6b.

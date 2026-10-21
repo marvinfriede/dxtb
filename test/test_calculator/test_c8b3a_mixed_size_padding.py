@@ -36,6 +36,9 @@ from dxtb._src.calculators.padding import (
     pad_positions,
 )
 from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
+from dxtb._src.components.classicals.dispersion.d3 import (
+    DispersionD3CoreSetup,
+)
 from dxtb._src.components.interactions.coulomb.average import arithmetic_average
 from dxtb._src.components.interactions.coulomb.thirdorder import (
     ES3CoreSetup,
@@ -506,6 +509,33 @@ def test_es3_atom_and_shell_resolved_dimensions_pad_correctly() -> None:
     assert id(source.hubbard_derivs) == source_identity
     torch.testing.assert_close(source.hubbard_derivs, source_values)
 
+    padded_shell_h3 = pad_exact_core(shell_h3, shell_bucket, shell_h3)
+    stacked_shell = stack((padded_shell, padded_shell_h3))
+    assert isinstance(stacked_shell, PaddedExactSystemCore)
+    assert type(stacked_shell.core) is type(shell_h2)
+    assert stacked_shell.core.integral is not None
+    assert stacked_shell.core.integral.backend is not None
+    assert stacked_shell.core.h0_setup is not None
+    assert any(
+        term.kind == "es3" for term in stacked_shell.core.interaction_terms
+    )
+    stacked_es3 = next(
+        term.setup
+        for term in stacked_shell.core.interaction_terms
+        if term.kind == "es3"
+    )
+    assert isinstance(stacked_es3, ES3CoreSetup)
+    assert stacked_es3.hubbard_derivs.shape == (2, 6)
+    torch.testing.assert_close(stacked_es3.hubbard_derivs[0, :4], source_values)
+    torch.testing.assert_close(
+        stacked_es3.hubbard_derivs[0, 4:],
+        torch.zeros(2, dtype=source_values.dtype),
+    )
+    assert stacked_shell.validity.shells.shape == (2, 6)
+    assert stacked_shell.validity.shells[0].tolist() == [True] * 4 + [False] * 2
+    assert stacked_shell.validity.shells[1].all()
+    torch.testing.assert_close(source.hubbard_derivs, source_values)
+
     malformed = source.replace(hubbard_derivs=source.hubbard_derivs[:-1])
     bad_core = shell_h2.replace(
         interaction_terms=tuple(
@@ -515,6 +545,52 @@ def test_es3_atom_and_shell_resolved_dimensions_pad_correctly() -> None:
     )
     with pytest.raises(ValueError, match="shell-resolved"):
         bucket_exact_cores((bad_core, shell_h3))
+
+
+def test_bucket_signature_tracks_retained_dynamic_leaf_shapes() -> None:
+    """Only dimensions normalized by padding may vary within a bucket."""
+    _, core = _system((1, 1))
+    term = next(item for item in core.classical_terms if item.kind == "d3")
+    setup = term.setup
+    assert isinstance(setup, DispersionD3CoreSetup)
+    assert tuple(setup.reference_cn.shape) == (104, 7)
+    assert tuple(setup.reference_c6.shape) == (104, 104, 7, 7)
+
+    malformed_setup = setup.replace(
+        reference_cn=torch.cat((setup.reference_cn, setup.reference_cn[:1]))
+    )
+    malformed = core.replace(
+        classical_terms=tuple(
+            item.replace(setup=malformed_setup) if item.kind == "d3" else item
+            for item in core.classical_terms
+        )
+    )
+    assert malformed.numbers.shape == core.numbers.shape
+    with pytest.raises(ValueError, match="D3 reference_cn and reference_c6"):
+        compatibility_signature(malformed)
+    with pytest.raises(ValueError, match="D3 reference_cn and reference_c6"):
+        bucket_exact_cores((core, malformed))
+
+    # A shape-consistent alternate table is not malformed, but it is not a
+    # stack-compatible dynamic state because the adapter leaves it unchanged.
+    alternate_setup = setup.replace(
+        reference_cn=setup.reference_cn[:, :-1],
+        reference_c6=setup.reference_c6[:, :, :-1, :-1],
+    )
+    alternate = core.replace(
+        classical_terms=tuple(
+            item.replace(setup=alternate_setup) if item.kind == "d3" else item
+            for item in core.classical_terms
+        )
+    )
+    assert compatibility_signature(core) != compatibility_signature(alternate)
+    alternate_buckets = bucket_exact_cores((core, alternate))
+    assert tuple(bucket.indices for bucket in alternate_buckets) == ((0,), (1,))
+    for bucket, value in zip(alternate_buckets, (core, alternate)):
+        assert bucket.template_index == bucket.indices[0]
+        padded = pad_exact_core(value, bucket, value)
+        stacked = stack((padded,))
+        assert isinstance(stacked, PaddedExactSystemCore)
 
 
 def test_descriptor_static_metadata_and_callable_policy_are_in_signature() -> (

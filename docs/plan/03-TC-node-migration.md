@@ -535,6 +535,17 @@ Bucket capacities equal an input representative's dimensions. The key includes
 atom- versus shell-resolved ES3 extents. Position padding accepts only prefix
 validity masks. The wrapper remains outside ordinary System/SCF dispatch.
 
+The final bucket-realizability check reproduced a malformed D3
+`reference_cn` shape retaining the same signature although padding leaves the
+reference table unchanged; complete-tree stacking then failed. Compatibility
+now validates the coupled D3 `reference_cn`/`reference_c6` dimensions and
+includes path-qualified shapes for every dynamic leaf the adapter does not
+explicitly normalize. Only implemented atom/shell/AO/pair-entry fields omit
+their original sizes. A shell-resolved ES3 control also pads and stacks full
+H2/H3 cores, preserving the backend, H0, descriptor, real ES3 entries, and
+shell validity. This proves structural stackability only, not padded ES3
+evaluation.
+
 **Needs.** B3b, C5, C6, C7, C8a, B2. **Unblocks.** E6bimpl after its other
 prerequisites; E6a remains separately owned. **Size.** M.
 
