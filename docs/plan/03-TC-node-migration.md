@@ -609,3 +609,34 @@ PairPlan destinations before padding. H2O real AO overlap-block parity is
 covered in both source atom orderings. Five GFN2 PyTorch integral failures
 were matched against the C8b.3b base and reproduce there; their numerical
 failures remain outside this padding slice.
+
+**Final C8b acceptance — complete at the documented P9 boundary.** The
+original C8b completion contract above requires a registered exact core and
+selected backend, a Model parameter representation with partition/combine
+and one authoritative parameter owner, compatible different-composition
+padding and stacking, a genuine mixed-size P9 case, and one pure mapped
+physical energy kernel with value and derivative parity. Evidence is the
+production `ExactSystemCore`/backend and `ModelParameterNode` controls in
+`test_c8b_schema_preflight.py` and
+`test_c8b_model_parameter_tree.py`; independent GFN1 H2/H3 and H2/H2O
+complete-core stack/mask/mapping tests in
+`test_c8b3a_mixed_size_padding.py` and
+`test_c8b3b_canonical_padding.py`; and mapped Repulsion value, real-position
+gradient, padded-coordinate gradient, and parameter-gradient controls in
+those padding tests. H2O overlap-block diagnostics cover both atom orderings.
+Legacy/packed and custom-component compatibility remains at the established
+Model/System/Calculator boundary. These criteria close C8b.3a, C8b.3b, C8b.3
+at its P9 structural/pure-kernel boundary, and overall C8b.
+
+This closure does not accept general padded numerical consumers. Padded H0
+evaluation, complete padded integral matrices, general padded D3/ES2/ES3,
+full padded SCF, public mapped `System.singlepoint`, and production
+mixed-System batching remain unsupported. The proven canonical mixed-element
+case is GFN1 with the PyTorch backend; this does not accept GFN2, arbitrary
+custom families, mixed-element libcint padding, or CUDA numerical execution.
+E6a owns public whole-System transforms, E6b owns production mixed-System
+batching, E7 owns the broader padding-safety and derivative audit, and E4.6
+owns legacy compatibility retirement. None of those packages is closed by
+C8b. The ten GFN1 legacy-parity failures and five GFN2 force/Hessian failures
+remain separately tracked; the latter were reproduced at both the C8b.3b
+base and reviewed head.

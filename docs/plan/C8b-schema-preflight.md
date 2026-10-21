@@ -734,3 +734,49 @@ matched-base GFN2 failures above. Black, isort, compileall, and diff checks
 pass; mypy and Ruff are unavailable. The C8b.3b boundary remains structural
 padding, Repulsion mapped value/gradient evaluation, and real AO overlap-block
 diagnostics only.
+
+## Final C8b acceptance decision
+
+At the documented C8b boundary, C8b is complete. The original criteria and
+their production evidence are:
+
+| Criterion | Evidence |
+| --- | --- |
+| Registered exact core and selected backend | `test_production_exact_core_and_backend_are_registered`, `test_optional_integral_and_h0_children_round_trip_as_none`, and `test_candidate_core_flattens_backend_h0_and_descriptor_setup_nodes` in `test_c8b_schema_preflight.py`; production definitions are `ExactSystemCore` and `IntegralBackendNode` in `calculators/model.py`. |
+| Model parameter partition/combine and one owner | `test_model_module_partition_keeps_one_parameter_owner_and_gradients`, `test_parameter_to_setup_gradient_survives_core_wrapping`, and `test_functional_parameter_tree_accepts_partition_reconstruction`; functional setup tests demonstrate substituted parameter-to-setup-to-energy gradients without placing a parameter table in System. |
+| Compatible different-composition padding and P9 structure | `test_h2_h3_complete_cores_pad_and_stack_with_validity`, `test_h2_h2o_canonical_complete_core_stack`, `test_canonical_bucket_is_input_order_independent_for_schema`, and `test_three_independent_sources_share_canonical_core_schema`; they use independent production Systems and retain backend, H0, descriptors, and validity-bearing maps. |
+| Mapped physical kernel and derivative parity | `test_mapped_repulsion_energy_and_position_gradients` and the mapped Repulsion controls in `test_c8b3b_canonical_padding.py` verify serial energy, real-coordinate gradient, zero padded-coordinate gradient, and parameter-gradient parity. |
+| Compatibility boundary | C8b.2 parameter-tree controls cover direct/packed setup and custom extensions; `test_padded_core_remains_outside_ordinary_system_dispatch` protects the separate padded wrapper boundary. Existing public Model/System/Calculator and packed routes remain intact. |
+| Mixed AO diagnostic | `test_h2o_real_ao_overlap_block_matches_source` checks both supported H2O atom orderings after explicit AO remapping. This accepts the real AO submatrix diagnostic only. |
+
+These results close C8b.3a, C8b.3b, C8b.3 at its original P9
+structural/pure-kernel boundary, and overall C8b. They do not establish
+general numerical padding safety. Padded H0 evaluation, complete padded
+integral matrices, general padded D3/ES2/ES3, padded full SCF, public mapped
+`System.singlepoint`, and production mixed-System batching remain unsupported.
+The mixed-element canonical demonstration is GFN1/PyTorch; GFN2, arbitrary
+custom families, mixed-element libcint padding, and CUDA numerical execution
+are not accepted by this evidence. E6a owns public whole-System transforms,
+E6b owns production mixed-System batching, E7 owns the broader padding-safety
+and derivative audit, and E4.6 owns legacy compatibility retirement. All
+remain open under their existing contracts.
+
+The broad numerical failures remain outside this structural package. Ten
+established GFN1 production/legacy parity cases remain tracked. Five GFN2
+force/Hessian failures were matched against base `2ac3b81` using the same
+Python/PyTorch and dependency environment and reproduced with the same
+outcomes; they remain inherited. No references, tolerances, XFAILs, or
+production numerical code were changed for this acceptance decision.
+
+The final focused command, including the C8b.3b canonical tests, C8b.3a
+padding tests, mixed-size preflight, schema preflight, and Model parameter-tree
+tests, passed 76 tests on Python 3.14.8 / Torch 2.14.1+cpu. Earlier focused
+padding, mixed-size, and schema selections passed in all five approved CPU
+configurations documented above. CUDA and a no-libcint profile were
+unavailable. `compileall` and `git diff --check` pass. Full-tree Black and
+isort checks report formatting issues in untouched existing Python files;
+Ruff and mypy are not installed in this environment. No production or test
+Python files changed in this acceptance update. This final status supersedes
+the package-time statements above that described C8b.3 or overall C8b as
+still open; those statements remain historical reports of their respective
+package stages.

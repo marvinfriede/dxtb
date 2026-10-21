@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a/C8b.1/.2 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree, C8b.1 registered the production exact core plus selected PyTorch/libcint backend, and C8b.2 registered the Model parameter tree with functional setup substitution through the existing Model API. C8b.3b adds a canonical GFN1/PyTorch H2+H2O complete-core stack and mapped Repulsion slice, including H2O atom-order remapping; overall C8b.3 remains open because padded H0/integral/D3/ES2/ES3/SCF consumers are not accepted. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.3b focused execution covered five CPU configurations. |
+| C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b is complete at its documented structural/P9 pure-kernel boundary; this does not accept padded H0/integral/D3/ES2/ES3/SCF or production mixed-System execution. E6a whole-System `vmap`, E6b production packed/mixed-System batching, E7 broader padding safety, and E4.6 legacy retirement remain independently owned. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2148,8 +2148,9 @@ The C8b.1 selected-backend wrapper validates driver/backend concrete type, and
 the active-core boundary verifies the logical System-device invariant. This
 does not reject force-CPU libcint leaves: wrapper logical device remains
 separate from physical backend tensor devices. C8b.2 is complete at the
-parameter-tree and functional setup boundary; C8b.3 owns different-size P9
-padding/partitioning. C8b overall remains open.
+parameter-tree and functional setup boundary. C8b.3a and C8b.3b complete the
+different-size P9 structural/pure-kernel boundary, so overall C8b is complete
+at the original documented acceptance scope.
 
 Executable evidence is in [`C8b schema preflight`](C8b-schema-preflight.md).
 Independent GFN1/C2 and GFN1/N2 cores have compatible registered tree specs
@@ -2207,6 +2208,29 @@ kernel; E6a owns public whole-System `vmap(system.singlepoint)`; E6b owns
 production mixed-System SCF batching. The original “remove Calculator.type”
 step is reassigned to E4.6/E6b compatibility policy; C8b preserves the
 existing Calculator/System façade conversion contracts and known limitations.
+
+**Final C8b status.** The documented completion criteria are met: production
+registered `ExactSystemCore` and selected-backend Nodes; a single Model-level
+`ModuleNode` parameter owner with partition/combine and functional replacement
+gradients; complete-core structural padding/stacking for independent GFN1 H2/H3
+and H2/H2O (including both H2O atom orderings); and mapped Repulsion energy,
+real-position gradient, padded-coordinate zero-gradient, and parameter-gradient
+parity. C2/N2 remains a compatible equal-size different-composition control,
+while C2/N3 is separated when the existing representative cannot realize the
+prefix layout. The evidence and node IDs are listed in
+[`C8b schema preflight`](C8b-schema-preflight.md). C8b.3 is complete at this
+P9 structural/pure-kernel boundary; overall C8b is closed.
+
+The scope remains deliberately bounded. Padded H0 numerical evaluation,
+complete padded integral matrices, general padded D3/ES2/ES3, full padded SCF,
+public mapped `System.singlepoint`, and production mixed-System batching are
+not accepted. The demonstrated mixed-element path is GFN1/PyTorch only; no
+claim is made for GFN2, arbitrary custom families, mixed-element libcint, or
+CUDA numerical execution. E6a owns public whole-System transforms, E6b owns
+production mixed-System batching, E7 owns the broader padding-safety audit,
+and E4.6 owns legacy compatibility retirement. These packages remain open.
+The ten GFN1 parity failures and five matched-base GFN2 force/Hessian failures
+remain inherited numerical issues and were not changed by C8b.
 
 The final C8b.3a bucket check found and fixed one remaining realizability
 false positive: a malformed GFN1 D3 `reference_cn` leaf could vary in shape
