@@ -23,6 +23,20 @@ other value-dependent checks, callers of transformed System evaluation must
 provide physically consistent charge/spin values; the fixed-trip transform
 path does not raise eager Python exceptions for invalid tensor contents.
 
+The non-self-consistent branch is outside that transform contract. GFN0-xTB
+does not require SCF iterations, so `System.singlepoint` uses the existing
+one-shot solver and retains eager spin/electron validation. A regression in
+the initial E6a.1 implementation passed `validate_spin=False` to this branch
+as well. On the E6a.1 starting commit, a production PyTorch GFN0/H2 System
+accepted `spin=1` at zero charge and produced the same public occupation as
+the valid singlet. The same call on the pre-E6a.1 base
+`4702e20823e77260580a414eabd16b7b02754737` raised the established parity
+`ValueError`. The non-SCF call now uses `get_refocc`'s default validation;
+the functional FULL path still disables value-dependent validation because
+its supported inputs must be physically consistent under transforms. Eager
+Calculator validation is unchanged. GFN0 public conformer mapping is not
+claimed by this correction.
+
 The broader tests exposed a D3 `AtomicC6` vmap alignment issue: atomic
 numbers were constant while reference weights carried the conformer batch
 dimension. The D3 adapter now adds a zero-valued integer tensor with the
@@ -138,6 +152,78 @@ OMP_NUM_THREADS=1 python -m pytest -q -n logical --dist worksteal --tb=short \
   test/test_integrals/test_pytorch_setup_node.py \
   test/test_integrals/test_multipole_options.py
 ```
+
+## E6a.1a — GFN0 non-SCF spin validation
+
+The GFN0/H2 regression tests cover a valid neutral singlet, a neutral
+two-electron/one-unpaired-electron parity mismatch, and an excessive
+unpaired-electron count for the one-electron charged system. They also check
+that the eager Calculator rejects the parity mismatch. The existing E6a.0 and
+E6a.1 public conformer tests remain the controls for GFN1/GFN2 fixed-trip
+mapping, mapped charge/spin inputs, Result/SCFStatus structure, and the D3
+batch-axis fix.
+
+At `be705b90c24514adb41d78c56e90cec9acd57902`, the public GFN0/H2 call
+`system.singlepoint(positions, chrg=0.0, spin=1.0)` returned successfully with
+the same occupation as the valid singlet. Repeating the identical production
+construction and call at `4702e20823e77260580a414eabd16b7b02754737` raised
+`ValueError: Odd (even) number of unpaired electrons ... but even (odd) number
+of electrons ... given.` Removing the `validate_spin=False` override only from
+the non-SCF branch restores that behavior without changing the functional
+FULL transform path.
+
+The focused regression command is:
+
+```bash
+OMP_NUM_THREADS=1 python -m pytest -q \
+  test/test_calculator/test_e6a1a_gfn0_spin_validation.py \
+  test/test_calculator/test_e6a0_system_vmap.py \
+  test/test_calculator/test_e6a1_conformer.py
+```
+
+The focused command passed 29 tests in each of the five available CPU
+environments listed above, including the new GFN0 regressions and the
+existing GFN1/GFN2 conformer tests. The adjacent controls were run with:
+
+```bash
+OMP_NUM_THREADS=1 python -m pytest -q -n logical --dist worksteal --tb=short \
+  test/test_scf/test_nonselfconsistent.py \
+  test/test_wavefunction/test_filling.py \
+  test/test_wavefunction/test_functional_filling.py \
+  test/test_wavefunction/test_fermi_derivatives.py \
+  test/test_scf/test_fermi_derivatives.py \
+  test/test_scf/test_e0_iteration_compat.py \
+  test/test_scf/test_functional_eager_compatibility.py \
+  test/test_scf/test_e6bcompat_policy.py \
+  test/test_scf/test_public_scf_status.py \
+  test/test_calculator/test_result_pytree.py \
+  test/test_calculator/test_singlepoint_core.py \
+  test/test_classical/test_dispersion/test_d3.py \
+  test/test_classical/test_dispersion/test_d3_core_node.py \
+  test/test_classical/test_dispersion/test_grad_pos.py \
+  test/test_classical/test_dispersion/test_grad_param.py
+```
+
+That selection reported 614 passed, 2 skipped, and the 10 established
+GFN1 production/legacy parity failures below. There were no additional
+failures. D3 numerical, position-gradient, and parameter-gradient controls
+were included and passed. The failures are the known zero-K cases
+`zero-k-charge-simple`, `zero-k-fock-anderson`,
+`zero-k-potential-anderson`, `zero-k-charge-anderson`, `zero-k-fock-simple`,
+and `zero-k-potential-simple`, plus the known 300-K cases
+`300-k-charge-simple`, `300-k-potential-anderson`, `300-k-fock-anderson`, and
+`300-k-charge-anderson` from
+`test_production_singlepoint_matches_legacy_full`.
+
+The environment matrix for the focused 29-test run was Python 3.10.22 / Torch
+2.6.0+cpu, Python 3.11.15 / Torch 2.8.0+cpu, Python 3.12.10 / Torch
+2.11.0+cpu, Python 3.12.10 / Torch 2.13.0+cpu, and Python 3.14.8 / Torch
+2.14.1+cpu. All had tad-mctc 0.9.1, tad-libcint 0.3.0, and PySCF 2.14.0;
+CUDA was unavailable in all five. The no-libcint profile was unavailable.
+
+Black, isort, compileall, and `git diff --check` passed for this change.
+Ruff and mypy were unavailable. E6a remains open for the outstanding method,
+status, derivative, and E1.3 acceptance gates.
 
 The independent C8b/parameter-tree and D3 numerical regression group passed
 141 tests:
