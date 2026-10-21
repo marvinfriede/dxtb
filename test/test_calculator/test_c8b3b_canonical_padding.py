@@ -12,7 +12,7 @@ import torch
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
-from dxtb import GFN1_XTB, ParamModule, labels
+from dxtb import GFN1_XTB, IndexHelper, ParamModule, labels
 from dxtb._src.calculators.canonical_padding import (
     bucket_canonical_exact_cores,
     canonicalize_positions,
@@ -21,6 +21,11 @@ from dxtb._src.calculators.canonical_padding import (
 from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import ExactSystemCore, Model
 from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
+from dxtb._src.components.interactions.coulomb.secondorder import (
+    core_es2_setup,
+    new_es2,
+    setup_es2,
+)
 from dxtb._src.integral.driver.pytorch.impls.kernels import get_kernel
 from dxtb._src.integral.driver.pytorch.impls.pairs import assemble_matrix
 
@@ -72,6 +77,37 @@ def _repulsion(core: ExactSystemCore, positions: torch.Tensor) -> torch.Tensor:
     return _evaluate_classical_descriptor(
         descriptor, positions, positions.new_zeros(())
     ).sum()
+
+
+def _with_es2_resolution(
+    model: Model, core: ExactSystemCore, shell_resolved: bool
+) -> ExactSystemCore:
+    """Install a production-derived ES2 setup at the requested resolution."""
+    es2 = new_es2(
+        torch.unique(core.numbers),
+        model.par,
+        shell_resolved=shell_resolved,
+        dtype=core.effective_dtype,
+        device=core.numbers.device,
+    )
+    assert es2 is not None
+    ihelp = IndexHelper.from_numbers(core.numbers, GFN1_XTB)
+    legacy = setup_es2(
+        core.numbers,
+        es2.hubbard,
+        ihelp,
+        lhubbard=es2.lhubbard,
+        gexp=es2.gexp,
+        average=es2.average,
+        shell_resolved=shell_resolved,
+    )
+    setup = core_es2_setup(legacy)
+    terms = tuple(
+        term.replace(setup=setup) if term.kind.lower() == "es2" else term
+        for term in core.interaction_terms
+    )
+    assert any(term.setup is setup for term in terms)
+    return core.replace(interaction_terms=terms)
 
 
 @pytest.mark.parametrize(
@@ -505,3 +541,219 @@ def test_unsupported_integral_algorithm_is_rejected() -> None:
     bad_core = core.replace(integral=core.integral.replace(backend=bad_backend))
     with pytest.raises((KeyError, ValueError)):
         bucket_canonical_exact_cores((bad_core,))
+
+
+@pytest.mark.parametrize("shell_resolved", [False, True])
+def test_es2_optional_children_are_preserved_when_canonicalized(
+    shell_resolved: bool,
+) -> None:
+    """Preserve production ES2 optional-child contracts through padding."""
+    model_h2, h2 = _system((1, 1))
+    model_water, water = _system((8, 1, 1))
+    parameter_snapshots = tuple(
+        (
+            tuple(id(value) for value in model.par.parameters()),
+            tuple(value.detach().clone() for value in model.par.parameters()),
+        )
+        for model in (model_h2, model_water)
+    )
+    h2 = _with_es2_resolution(model_h2, h2, shell_resolved)
+    water = _with_es2_resolution(model_water, water, shell_resolved)
+    source_setups = tuple(
+        next(
+            term.setup
+            for term in core.interaction_terms
+            if term.kind.lower() == "es2"
+        )
+        for core in (h2, water)
+    )
+
+    if shell_resolved:
+        assert all(setup.shell_resolved for setup in source_setups)
+        assert all(setup.shells_to_atom is not None for setup in source_setups)
+        assert all(setup.shell_pair_mask is not None for setup in source_setups)
+        assert all(setup.shell_mask is not None for setup in source_setups)
+        assert all(setup.shell_hubbard is not None for setup in source_setups)
+        assert all(setup.atom_hubbard is None for setup in source_setups)
+    else:
+        assert all(not setup.shell_resolved for setup in source_setups)
+        assert all(setup.shells_to_atom is None for setup in source_setups)
+        assert all(setup.shell_pair_mask is None for setup in source_setups)
+        assert all(setup.shell_mask is None for setup in source_setups)
+        assert all(setup.shell_hubbard is None for setup in source_setups)
+        assert all(setup.atom_hubbard is not None for setup in source_setups)
+
+    bucket = bucket_canonical_exact_cores((h2, water))
+    if shell_resolved:
+        source_map = source_setups[0].shells_to_atom.clone()
+        source_map[0] = 1
+        bad_setup = source_setups[0].replace(shells_to_atom=source_map)
+        bad_core = h2.replace(
+            interaction_terms=tuple(
+                (
+                    term.replace(setup=bad_setup)
+                    if term.setup is source_setups[0]
+                    else term
+                )
+                for term in h2.interaction_terms
+            )
+        )
+        with pytest.raises(ValueError, match="ES2 shell-to-atom mapping"):
+            pad_canonical_exact_core(bad_core, bucket, 0)
+    padded = tuple(
+        pad_canonical_exact_core(core, bucket, index)
+        for index, core in enumerate((h2, water))
+    )
+    stacked = stack(padded)
+    assert isinstance(stacked.core, ExactSystemCore)
+    assert stacked.core.integral is not None
+    assert stacked.core.h0_setup is not None
+    assert len(stacked.core.interaction_terms) == len(h2.interaction_terms)
+
+    padded_setups = tuple(
+        next(
+            term.setup
+            for term in padded_core.core.interaction_terms
+            if term.kind.lower() == "es2"
+        )
+        for padded_core in padded
+    )
+    if shell_resolved:
+        for setup in padded_setups:
+            assert setup.shells_to_atom is not None
+            assert setup.shells_to_atom.shape == (bucket.shells,)
+            assert setup.shell_mask is not None
+            assert setup.shell_pair_mask is not None
+            assert setup.shell_hubbard is not None
+            assert torch.equal(
+                setup.shells_to_atom,
+                padded[0].core.integral.backend.index.shells_to_atom,
+            )
+    else:
+        assert all(setup.shells_to_atom is None for setup in padded_setups)
+        assert all(setup.shell_pair_mask is None for setup in padded_setups)
+        assert all(setup.shell_mask is None for setup in padded_setups)
+        assert all(setup.shell_hubbard is None for setup in padded_setups)
+        assert all(setup.atom_hubbard is not None for setup in padded_setups)
+
+    for core, source_setup in zip((h2, water), source_setups):
+        current_setup = next(
+            term.setup
+            for term in core.interaction_terms
+            if term.kind.lower() == "es2"
+        )
+        assert current_setup is source_setup
+    for model, snapshot in zip((model_h2, model_water), parameter_snapshots):
+        parameters = tuple(model.par.parameters())
+        identities, values = snapshot
+        assert tuple(id(value) for value in parameters) == identities
+        for value, original in zip(parameters, values):
+            torch.testing.assert_close(value, original)
+
+
+def test_retained_dynamic_shapes_are_validated_before_bucket_creation() -> None:
+    """Reject malformed fixed-shape leaves while allowing value updates."""
+    _, h2 = _system((1, 1))
+    _, water = _system((8, 1, 1))
+    assert h2.h0_setup is not None
+    malformed_h0 = h2.replace(
+        h0_setup=h2.h0_setup.replace(enscale=h2.h0_setup.enscale.reshape(1))
+    )
+    with pytest.raises(ValueError, match="scalar H0 enscale"):
+        bucket_canonical_exact_cores((malformed_h0, water))
+
+    model_h2, h2 = _system((1, 1))
+    model_water, water = _system((8, 1, 1))
+    h2 = _with_es2_resolution(model_h2, h2, False)
+    water = _with_es2_resolution(model_water, water, False)
+    descriptor = next(
+        term for term in h2.interaction_terms if term.kind.lower() == "es2"
+    )
+    malformed_setup = descriptor.setup.replace(
+        gexp=descriptor.setup.gexp.reshape(1)
+    )
+    malformed_es2 = h2.replace(
+        interaction_terms=tuple(
+            term.replace(setup=malformed_setup) if term is descriptor else term
+            for term in h2.interaction_terms
+        )
+    )
+    with pytest.raises(ValueError, match="scalar ES2 gexp"):
+        bucket_canonical_exact_cores((malformed_es2, water))
+
+    bucket = bucket_canonical_exact_cores((h2, water))
+    updated_value = descriptor.setup.gexp + 0.25
+    updated_setup = descriptor.setup.replace(gexp=updated_value)
+    updated_core = h2.replace(
+        interaction_terms=tuple(
+            term.replace(setup=updated_setup) if term is descriptor else term
+            for term in h2.interaction_terms
+        )
+    )
+    padded = pad_canonical_exact_core(updated_core, bucket, 0)
+    updated_descriptor = next(
+        term
+        for term in padded.core.interaction_terms
+        if term.kind.lower() == "es2"
+    )
+    torch.testing.assert_close(updated_descriptor.setup.gexp, updated_value)
+
+
+def test_stale_bucket_revalidates_source_pairplan() -> None:
+    """Do not replace changed source pair data with captured bucket values."""
+    _, h2 = _system((1, 1))
+    _, water = _system((8, 1, 1))
+    bucket = bucket_canonical_exact_cores((h2, water))
+    assert h2.integral is not None and h2.integral.backend is not None
+    backend = h2.integral.backend
+    first = backend.pair_plan.classes[0]
+    changed_idx = first.idx.clone()
+    changed_idx[0, 0, 0] += 1
+    changed_class = first.replace(idx=changed_idx)
+    changed_plan = backend.pair_plan.replace(
+        classes=(changed_class, *backend.pair_plan.classes[1:])
+    )
+    changed_core = h2.replace(
+        integral=h2.integral.replace(
+            backend=backend.replace(pair_plan=changed_plan)
+        )
+    )
+    with pytest.raises(ValueError, match="Mapped PairPlan AO destinations"):
+        pad_canonical_exact_core(changed_core, bucket, 0)
+
+
+@pytest.mark.parametrize("numbers", [(8, 1, 1), (1, 1, 8)])
+def test_h2o_real_ao_overlap_block_matches_source(
+    numbers: tuple[int, ...],
+) -> None:
+    """Compare the physical H2O AO block in both source atom orderings."""
+    _, h2 = _system((1, 1))
+    _, water = _system(numbers)
+    bucket = bucket_canonical_exact_cores((h2, water))
+    padded = pad_canonical_exact_core(water, bucket, 1)
+    source_backend = water.integral.backend
+    padded_backend = padded.core.integral.backend
+    assert source_backend is not None and padded_backend is not None
+    source_positions = _coordinates(numbers)
+    canonical_positions = canonicalize_positions(source_positions, bucket, 1)
+    source_overlap = assemble_matrix(
+        get_kernel(source_backend.algorithm),
+        None,
+        list(source_backend.alphas),
+        list(source_backend.coeffs),
+        source_positions,
+        plan=source_backend.pair_plan,
+    )
+    padded_overlap = assemble_matrix(
+        get_kernel(padded_backend.algorithm),
+        None,
+        list(padded_backend.alphas),
+        list(padded_backend.coeffs),
+        canonical_positions,
+        plan=padded_backend.pair_plan,
+    )
+    ao_map = torch.tensor(
+        dict(bucket.source_maps)[1].orbitals, dtype=torch.int64
+    )
+    real_block = padded_overlap.index_select(1, ao_map).index_select(2, ao_map)
+    torch.testing.assert_close(real_block, source_overlap)

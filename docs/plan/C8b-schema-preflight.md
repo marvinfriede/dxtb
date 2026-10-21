@@ -680,3 +680,57 @@ padded wrappers, public whole-System `vmap`, and production mixed-System
 batching remain unsupported. E6a, E6b, E7, and E4.6 retain their existing
 ownership; overall C8b.3 remains open for broader family/consumer safety and
 the remaining acceptance matrix.
+
+### C8b.3b correctness hardening
+
+Independent review reproduced three issues at `46c1d06`: atom-resolved ES2
+padding invented a `shells_to_atom` child that production `setup_es2()` leaves
+absent; malformed one-element-vector `H0SetupNode.enscale` and
+`ES2CoreSetup.gexp` leaves were admitted into buckets and failed later in
+`tree.stack`; and a previously captured bucket could overwrite a subsequently
+altered source PairPlan without checking the current AO destinations. The
+adapter now preserves ES2 optional-field presence and validates the
+source-specific shell-to-atom map. It validates scalar contracts for retained
+H0/ES2 and classical cutoff/damping values, includes path-qualified shapes for
+every dynamic tensor not explicitly remapped, and re-runs source PairPlan
+class/index/stride/destination/weight checks when applying a bucket. Same-shape
+parameter value updates remain accepted.
+
+The pre-fix reproductions were concrete: atom-resolved ES2 changed
+`shells_to_atom` from `None` to present; `(1,)` `enscale` and `gexp` tensors
+were accepted and then caused `tree.stack` to report `[1]` versus `[]`; and an
+altered source AO destination `1` was accepted while the old bucket emitted
+destination `0`. The new tests assert early errors for malformed shapes and
+stale pair data, while retaining same-shape parameter value substitution.
+
+The regressions construct atom- and shell-resolved ES2 using
+`setup_es2()`/`core_es2_setup()` for independent H2 and H2O Systems. Both
+complete padded trees stack; atom-resolved ES2 keeps all shell-only children
+`None`, while shell-resolved ES2 retains its shell maps and masks. Additional
+tests reject malformed retained scalar shapes and stale altered AO indices,
+and confirm that a valid same-shape ES2 parameter update still pads. H2O real
+AO overlap submatrix parity now passes for both `(8,1,1)` and `(1,1,8)` source
+ordering. The complete padded matrix remains diagnostic only.
+
+The five GFN2 failures from the earlier broad selection were rerun as exact
+node IDs at the required base `2ac3b81` and reviewed head `46c1d06`, using the
+same Python 3.14.8 / Torch 2.14.1 CPU environment, tad-mctc 0.9.1,
+tad-libcint 0.3.0, PySCF 2.14.0, `OMP_NUM_THREADS=1`,
+`MKL_NUM_THREADS=1`, and `pytest -q --tb=short`. All five failed on both
+revisions: LiH md/os and the LiH Hessian reach the same `torch.linalg.eigh`
+non-convergence on a NaN Hamiltonian; SiH4 md/os fail the unchanged `1e-11`
+force comparison with the same displayed force values. These are matched-base
+inherited failures, not C8b.3b regressions.
+
+The final focused selection (canonical C8b.3b, C8b.3a padding, mixed-size
+preflight, and schema preflight) passed 38 tests in each of the five approved
+CPU environments: Python 3.10/Torch 2.6.0, Python 3.11/Torch 2.8.0, Python
+3.12/Torch 2.11.0, Python 3.12/Torch 2.13.0, and Python 3.14/Torch 2.14.1.
+All used tad-mctc 0.9.1, tad-libcint 0.3.0, and PySCF 2.14.0. CUDA was
+unavailable in every profile, and no no-libcint profile was available. The
+updated broad non-slow selection reported 715 passed, 15 failed, and 1
+deselected: the 10 established GFN1 legacy-parity failures and the five
+matched-base GFN2 failures above. Black, isort, compileall, and diff checks
+pass; mypy and Ruff are unavailable. The C8b.3b boundary remains structural
+padding, Repulsion mapped value/gradient evaluation, and real AO overlap-block
+diagnostics only.

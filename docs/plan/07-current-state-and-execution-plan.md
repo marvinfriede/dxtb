@@ -2237,6 +2237,18 @@ Padded H0/integral/D3/ES2/ES3/SCF evaluation remains outside this adapter's
 accepted numerical boundary; C8b.3, E6a, E6b, E7, and E4.6 remain open under
 their existing scope.
 
+C8b.3b correctness hardening preserves production ES2 optional-child
+structure, includes retained dynamic leaf shapes in compatibility checks,
+and revalidates source PairPlan destinations when applying a bucket. H2O
+real AO overlap-submatrix parity is verified for both atom orderings. The
+updated broad non-slow selection reported 715 passed, 15 failed, and 1
+deselected; all five GFN2 PyTorch force/Hessian failures were reproduced at
+base `2ac3b81` with the same outcomes and displayed numerical values. The
+focused C8b.3b/C8b.3a/schema selection passed 38 tests in each of the five
+available approved CPU environments. The padded numerical boundary remains
+Repulsion values/gradients and real AO overlap-block diagnostics; C8b.3 overall
+remains open.
+
 ## C9 final TensorLike/ModuleLike scaffold purge
 
 C9 is the final repository-wide scaffold deletion, not a prerequisite for E6b.

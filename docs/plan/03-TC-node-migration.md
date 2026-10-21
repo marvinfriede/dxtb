@@ -602,3 +602,10 @@ family setup data while retaining the complete registered core. Full-core
 stacking and mapped Repulsion value/position/parameter-gradient parity are
 tested. C8b.3 remains open: padded H0/integral/D3/ES2/ES3 and SCF consumers are
 not accepted, and E6a/E6b/E7/E4.6 retain their separate ownership.
+
+The C8b.3b hardening follow-up preserves optional atom-/shell-resolved ES2
+children, checks retained dynamic tensor shapes and revalidates current source
+PairPlan destinations before padding. H2O real AO overlap-block parity is
+covered in both source atom orderings. Five GFN2 PyTorch integral failures
+were matched against the C8b.3b base and reproduce there; their numerical
+failures remain outside this padding slice.
