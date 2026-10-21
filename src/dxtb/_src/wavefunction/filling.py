@@ -44,8 +44,8 @@ from dataclasses import dataclass
 from numbers import Integral
 
 import torch
-from torch.utils import _pytree
 from tad_mctc.convert import any_to_tensor
+from torch.utils import _pytree
 
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Tensor
@@ -262,7 +262,10 @@ def _diff_steps(diff_order: int) -> int:
 
 
 def get_alpha_beta_occupation(
-    nel: Tensor, uhf: Tensor | float | int | list[int] | None = None
+    nel: Tensor,
+    uhf: Tensor | float | int | list[int] | None = None,
+    *,
+    validate: bool = True,
 ) -> Tensor:
     """
     Generate alpha and beta electrons from total number of electrons.
@@ -274,6 +277,10 @@ def get_alpha_beta_occupation(
     uhf : Tensor | int | list[int] | None
         Number of unpaired electrons. If ``None``, spin is figured out
         automatically.
+    validate : bool, optional
+        Whether to check spin/electron consistency using eager tensor-value
+        validation. Disable only when the caller guarantees a consistent
+        transform-compatible input contract.
 
     Returns
     -------
@@ -307,21 +314,22 @@ def get_alpha_beta_occupation(
                 f"number of electrons ({nel.shape})."
             )
 
-        if (uhf > torch.floor(nel + 0.5)).any():
-            raise ValueError(
-                f"Number of unpaired electrons ({uhf}) larger than "
-                f"number of electrons ({nel})."
-            )
+        if validate:
+            if (uhf > torch.floor(nel + 0.5)).any():
+                raise ValueError(
+                    f"Number of unpaired electrons ({uhf}) larger than "
+                    f"number of electrons ({nel})."
+                )
 
-        # odd/even spin and even/odd number of electrons
-        if (
-            torch.remainder(uhf, 2)
-            != torch.remainder(torch.floor(nel + 0.5), 2)
-        ).any():
-            raise ValueError(
-                f"Odd (even) number of unpaired electrons ({uhf}) but even "
-                f"(odd) number of electrons ({nel}) given."
-            )
+            # odd/even spin and even/odd number of electrons
+            if (
+                torch.remainder(uhf, 2)
+                != torch.remainder(torch.floor(nel + 0.5), 2)
+            ).any():
+                raise ValueError(
+                    f"Odd (even) number of unpaired electrons ({uhf}) but "
+                    f"even (odd) number of electrons ({nel}) given."
+                )
     else:
         # set to zero and figure out via remainder
         uhf = torch.zeros_like(nel)

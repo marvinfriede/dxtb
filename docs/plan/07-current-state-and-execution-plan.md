@@ -57,7 +57,7 @@ Current state:
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
 | E3             | acceptance blocked by E1.3      | E3.1b is complete. Full end-to-end GFN1/GFN2 transform acceptance remains blocked on full E1, including E1.3 DFT-D3/tad-dftd3 forward-mode support where that outer term is active; E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | E6a.0 slice done; E6a open | E6a.0 implements and tests the exact B1 public `vmap(system.singlepoint, in_dims=(0,))(positions)` call for an initial GFN1/PyTorch H2 configuration, with tensor-valued Result/SCFStatus and mapped reverse position gradients. See [`E6a0-system-singlepoint.md`](E6a0-system-singlepoint.md). E1.3 DFT-D3 forward AD and the remaining E6a method/status/derivative matrix remain open. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md); E6bimpl may freeze replacement scope from that policy, and E6bcompat validates replacements or explicit migrations. E6bimpl also requires full E6a, B3b, C5-C7/C8b, E2-core, E4core, and defined padding. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6/E7/E8       | E6a.1 slice done; E6a open | E6a.0/0a established the public fixed-trip System boundary and route-first fallback. E6a.1 adds serial/vmap Result and status parity for selected GFN1/PyTorch H2/H2O and GFN2/PyTorch H2/H2O configurations, valid mapped charge/spin, reverse position/Jacobian independence, and parameter-gradient evidence; see [`E6a1-conformer-acceptance.md`](E6a1-conformer-acceptance.md). Full E6a remains open for the complete method/status/family/derivative matrix, including E1.3 DFT-D3 forward AD. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md); E6bimpl may freeze replacement scope from that policy, and E6bcompat validates replacements or explicit migrations. E6bimpl also requires full E6a, B3b, C5-C7/C8b, E2-core, E4core, and defined padding. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -2311,12 +2311,12 @@ E6bimpl owns replacements, E6bcompat owns replacement validation, and
 E6broute owns activation/packed-route retirement after its independent gates.
 
 E6a.0 and its E6a.0a legacy-guess fallback hardening are recorded in
-[`E6a0-system-singlepoint.md`](E6a0-system-singlepoint.md). It establishes
-the exact public GFN1/PyTorch H2 conformer-vmap call and the separate eager
-Calculator adapter; legacy-owned routes are resolved before the transform-only
-guess, preserving one eager-validated fallback guess. E6a remains open: full
-E1 is incomplete at E1.3, and the remaining method, component, status, and
-derivative rows have not passed.
+[`E6a0-system-singlepoint.md`](E6a0-system-singlepoint.md). E6a.1's selected
+GFN1/GFN2 public conformer, Result/status, charge/spin, and reverse-derivative
+evidence is recorded in [`E6a1-conformer-acceptance.md`](E6a1-conformer-acceptance.md).
+E6a remains open: full E1 is incomplete at E1.3, public integration coverage
+does not yet exercise every status-failure category, and the complete method,
+component, and derivative matrix has not passed.
 
 ## Transform-safe single-System entrypoint (E6a prerequisite)
 

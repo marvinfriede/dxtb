@@ -328,7 +328,12 @@ def _solve_impl(
 
 
 def get_refocc(
-    refs: Tensor, chrg: Tensor, spin: Tensor | None, ihelp: IndexHelper
+    refs: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    ihelp: IndexHelper,
+    *,
+    validate_spin: bool = True,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """
     Obtain reference occupation and total number of electrons.
@@ -343,6 +348,8 @@ def get_refocc(
         Number of unpaired electrons.
     ihelp : IndexHelper
         Helper for indexing.
+    validate_spin : bool, optional
+        Whether to perform eager value checks for spin/electron consistency.
 
     Returns
     -------
@@ -369,7 +376,7 @@ def get_refocc(
     nel = torch.sum(shell_occ, -1, keepdim=True) - chrg
 
     # get alpha and beta electrons and occupation
-    nab = filling.get_alpha_beta_occupation(nel, spin)
+    nab = filling.get_alpha_beta_occupation(nel, spin, validate=validate_spin)
     occupation = filling.get_aufbau_occupation(
         torch.tensor(ihelp.nao, device=refs.device, dtype=torch.int64),
         nab,

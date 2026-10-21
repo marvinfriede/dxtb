@@ -560,7 +560,9 @@ def run_system_fixed_trip(
 ) -> FunctionalCoreResult | dict[str, object]:
     """Run fixed trips when eligible; retain legacy-owned System routes."""
     if not config.requires_iterations:
-        n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
+        n0, occupation, nel = get_refocc(
+            refocc, chrg, spin, ihelp, validate_spin=False
+        )
         return solve_nonselfconsistent(
             numbers,
             interactions,
@@ -594,7 +596,9 @@ def run_system_fixed_trip(
             )
         return eager_result.legacy
 
-    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
+    n0, occupation, nel = get_refocc(
+        refocc, chrg, spin, ihelp, validate_spin=False
+    )
     guess = get_guess(
         numbers, positions, chrg, ihelp, config.guess, validate=False
     )

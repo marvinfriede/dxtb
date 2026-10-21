@@ -244,7 +244,14 @@ def dispersion_d3_energy(
     chunk_size: int | None = None,
 ) -> Tensor:
     """Evaluate D3 using only captured setup values and call-local geometry."""
-    numbers = setup.component_numbers
+    # Keep the fixed atomic numbers aligned with geometry batch dimensions.
+    # The upstream AtomicC6 vmap rule expects its numbers input to carry the
+    # same mapped axis as its reference weights; without this zero-valued
+    # structural broadcast, conformer vmap can mistake the atom axis for the
+    # conformer axis (or reject the call when the dimensions differ).
+    numbers = setup.component_numbers + torch.zeros_like(
+        positions[..., 0], dtype=setup.component_numbers.dtype
+    )
     # Reference is a lightweight view over immutable captured tensor tables;
     # the upstream weighting/C6 routines only read these values.
     reference = d3.reference.Reference(
