@@ -32,6 +32,7 @@ from dxtb._src import scf
 from dxtb._src.calculators.singlepoint import (
     _call_tensor,
     _normalize_scf_output,
+    _singlepoint_eager,
 )
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
@@ -376,8 +377,8 @@ class EnergyCalculator(BaseCalculator):
             "cuda_sync_in_scf", False if self.device.type == "cpu" else True
         )
         try:
-            result = self.system.singlepoint(
-                positions, charge, spin, field, field_grad
+            result = _singlepoint_eager(
+                self.system, positions, charge, spin, field, field_grad
             )
         finally:
             timer.cuda_sync = old_cuda_sync

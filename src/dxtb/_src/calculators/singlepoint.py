@@ -478,7 +478,40 @@ def singlepoint(
     field: Tensor | None = None,
     field_grad: Tensor | None = None,
 ) -> Result:
-    """Evaluate one System without Calculator or legacy integral state."""
+    """Run the internal eager singlepoint adapter retained for compatibility."""
+    return _singlepoint_impl(
+        system, positions, chrg, spin, field, field_grad, fixed_trip=False
+    )
+
+
+def system_singlepoint(
+    system: System,
+    positions: Tensor,
+    chrg: Tensor | float | int = defaults.CHRG,
+    spin: Tensor | float | int | None = defaults.SPIN,
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
+) -> Result:
+    """Evaluate one System with fixed trips and tensor-valued status."""
+    return _singlepoint_impl(
+        system, positions, chrg, spin, field, field_grad, fixed_trip=True
+    )
+
+
+_singlepoint_eager = singlepoint
+
+
+def _singlepoint_impl(
+    system: System,
+    positions: Tensor,
+    chrg: Tensor | float | int,
+    spin: Tensor | float | int | None,
+    field: Tensor | None,
+    field_grad: Tensor | None,
+    *,
+    fixed_trip: bool,
+) -> Result:
+    """Share setup, physical kernels, and Result construction by controller."""
     core = system._active_exact_core()
     numbers = core.numbers if core is not None else system.numbers
     config = core.config if core is not None else system.config
@@ -790,19 +823,37 @@ def singlepoint(
         if core is not None and core_index is not None
         else {}
     )
-    scf_results = scf_solve(
-        numbers,
-        positions,
-        charge,
-        spin_tensor,
-        call_interactions,
-        interaction_data,
-        system.ihelp,
-        config.scf,
-        matrices,
-        refocc,
-        **scf_kwargs,
-    )
+    if fixed_trip:
+        from dxtb._src.scf.functional.eager import run_system_fixed_trip
+
+        scf_results = run_system_fixed_trip(
+            numbers,
+            positions,
+            charge,
+            spin_tensor,
+            call_interactions,
+            interaction_data,
+            system.ihelp,
+            config.scf,
+            matrices,
+            refocc,
+            core_index=core_index,
+            core_index_owner=(system if core_index is not None else None),
+        )
+    else:
+        scf_results = scf_solve(
+            numbers,
+            positions,
+            charge,
+            spin_tensor,
+            call_interactions,
+            interaction_data,
+            system.ihelp,
+            config.scf,
+            matrices,
+            refocc,
+            **scf_kwargs,
+        )
     scf_output = _normalize_scf_output(scf_results, positions)
 
     total_energy = classical_energy + scf_output.energy + scf_output.fenergy

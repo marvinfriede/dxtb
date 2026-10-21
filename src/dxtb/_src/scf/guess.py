@@ -38,6 +38,8 @@ def get_guess(
     chrg: Tensor,
     ihelp: IndexHelper,
     name: int | str = labels.GUESS_EEQ,
+    *,
+    validate: bool = True,
 ) -> Tensor:
     """
     Obtain initial guess for charges.
@@ -58,6 +60,9 @@ def get_guess(
         Helper class for indexing.
     name : str | int, optional
         Name of guess method, by default EEQ (:attr:`dxtb.labels.GUESS_EEQ`).
+    validate : bool, optional
+        Check charge conservation eagerly after spreading. Transform-safe
+        fixed-trip execution disables only this tensor-valued assertion.
 
     Returns
     -------
@@ -86,7 +91,7 @@ def get_guess(
     else:
         raise ValueError(f"Unknown guess method '{name}'.")
 
-    return spread_charges_atomic_to_orbital(charges, ihelp)
+    return spread_charges_atomic_to_orbital(charges, ihelp, validate=validate)
 
 
 def get_eeq_guess(
@@ -117,8 +122,9 @@ def get_eeq_guess(
     # pylint: disable=import-outside-toplevel
     from tad_mctc import Structure
     from tad_mctc.ncoord import cn_eeq
-    from dxtb._src.utils.tensors import structure_charge
     from tad_multicharge import get_eeq_charges
+
+    from dxtb._src.utils.tensors import structure_charge
 
     structure = Structure(
         numbers=numbers,
@@ -130,7 +136,7 @@ def get_eeq_guess(
 
 
 def spread_charges_atomic_to_orbital(
-    charges: Tensor, ihelp: IndexHelper
+    charges: Tensor, ihelp: IndexHelper, *, validate: bool = True
 ) -> Tensor:
     """
     Spread atomic charges to orbital charges, while conserving total charge.
@@ -141,6 +147,8 @@ def spread_charges_atomic_to_orbital(
         Atomic charges.
     ihelp : IndexHelper
         Helper class for indexing.
+    validate : bool, optional
+        Whether to perform the eager charge-conservation check.
 
     Returns
     -------
@@ -182,7 +190,9 @@ def spread_charges_atomic_to_orbital(
 
     tot_chrg_old = charges.sum(-1)
     tot_chrg_new = orb_charges.sum(-1)
-    if torch.any(torch.abs(tot_chrg_new - tot_chrg_old) > torch.sqrt(eps)):
+    if validate and torch.any(
+        torch.abs(tot_chrg_new - tot_chrg_old) > torch.sqrt(eps)
+    ):
         raise RuntimeError(
             "Total charge changed during spreading from atomic to orbital "
             f"charges ({tot_chrg_old:.6f} -> {tot_chrg_new:.6f})."

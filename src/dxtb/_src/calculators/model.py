@@ -595,10 +595,12 @@ class System:
         field: Tensor | None = None,
         field_grad: Tensor | None = None,
     ) -> Result:
-        """Evaluate this single system through the pure calculator core."""
-        from dxtb._src.calculators.singlepoint import singlepoint
+        """Evaluate this System through the fixed-trip transform-safe core."""
+        from dxtb._src.calculators.singlepoint import system_singlepoint
 
-        return singlepoint(self, positions, chrg, spin, field, field_grad)
+        return system_singlepoint(
+            self, positions, chrg, spin, field, field_grad
+        )
 
     @property
     def d3_setup(self) -> DispersionD3CoreSetup | None:

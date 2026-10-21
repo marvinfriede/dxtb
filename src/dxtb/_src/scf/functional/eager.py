@@ -101,6 +101,7 @@ __all__ = [
     "functional_core_result",
     "run_functional_full_eager",
     "run_prepared_functional_implicit",
+    "run_system_fixed_trip",
 ]
 
 
@@ -513,6 +514,7 @@ def run_prepared_functional_full(
     *,
     core_index: CoreIndexData | None = None,
     core_index_owner: object | None = None,
+    eager: bool = True,
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
     if route.kind != "functional":
@@ -538,7 +540,78 @@ def run_prepared_functional_full(
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    return _solve_representation(guess, inputs, effective_config)
+    return _solve_representation(guess, inputs, effective_config, eager=eager)
+
+
+def run_system_fixed_trip(
+    numbers: Tensor,
+    positions: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    refocc: Tensor,
+    *,
+    core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
+) -> FunctionalCoreResult | dict[str, object]:
+    """Run fixed trips when eligible; retain legacy-owned System routes."""
+    if not config.requires_iterations:
+        n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
+        return solve_nonselfconsistent(
+            numbers,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            n0,
+            occupation,
+        )
+
+    guess = get_guess(
+        numbers, positions, chrg, ihelp, config.guess, validate=False
+    )
+    route = resolve_full_scf_route(
+        config, interactions, ihelp, numbers, integrals
+    )
+    if route.kind != "functional":
+        eager_result = run_functional_full_eager(
+            numbers,
+            positions,
+            chrg,
+            spin,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            refocc,
+        )
+        if eager_result.legacy is None:
+            raise RuntimeError(
+                "Legacy System fallback did not return a result."
+            )
+        return eager_result.legacy
+
+    result = run_prepared_functional_full(
+        numbers,
+        guess,
+        *get_refocc(refocc, chrg, spin, ihelp),
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+        route,
+        core_index=core_index,
+        core_index_owner=core_index_owner,
+        eager=False,
+    )
+    return functional_core_result(result)
 
 
 def run_prepared_functional_implicit(
