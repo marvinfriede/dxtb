@@ -23,6 +23,9 @@ The DFT-D3 dispersion model.
 
 from __future__ import annotations
 
+import inspect
+import warnings
+
 import tad_dftd3 as d3
 import torch
 from tad_mctc.data import radii
@@ -43,6 +46,41 @@ __all__ = [
     "core_dispersion_d3_setup",
     "dispersion_d3_energy",
 ]
+
+_ATOMIC_C6_SUPPORTS_CHUNK_SIZE = (
+    "chunk_size" in inspect.signature(d3.model.atomic_c6).parameters
+)
+
+
+def _atomic_c6(
+    numbers: Tensor,
+    weights: Tensor,
+    reference: d3.reference.Reference,
+    *,
+    chunk_size: int | None,
+) -> Tensor:
+    """Call the installed tad-dftd3 atomic C6 API compatibly.
+
+    tad-dftd3 0.6 exposes explicit chunking for its pair/reference
+    intermediate. The 0.7 composite implementation replaces that large
+    intermediate with an element-grouped contraction and removes the option.
+    Keep accepting the legacy keyword during migration, but make its changed
+    semantics visible when a caller supplies a value on the new API.
+    """
+    atomic_c6 = d3.model.atomic_c6
+    if _ATOMIC_C6_SUPPORTS_CHUNK_SIZE:
+        return atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
+
+    if chunk_size is not None:
+        warnings.warn(
+            "tad-dftd3 no longer accepts chunk_size; its grouped atomic-C6 "
+            "algorithm bounds the former pair/reference intermediate, so "
+            "the requested chunk_size is not applied",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return atomic_c6(numbers, weights, reference)
+
 
 LABEL_DISPERSIOND3 = "DispersionD3"
 
@@ -268,7 +306,7 @@ def dispersion_d3_energy(
     weights = d3.model.weight_references(
         numbers, cn, reference, setup.weighting_function
     )
-    c6 = d3.model.atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
+    c6 = _atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
     return d3.disp.dispersion(
         numbers,
         positions,
@@ -383,9 +421,7 @@ class DispersionD3(Dispersion):
         )
 
         chunk_size = kwargs.pop("chunk_size", None)
-        c6 = d3.model.atomic_c6(
-            self.numbers, weights, cache.ref, chunk_size=chunk_size
-        )
+        c6 = _atomic_c6(self.numbers, weights, cache.ref, chunk_size=chunk_size)
 
         return d3.disp.dispersion(
             self.numbers,

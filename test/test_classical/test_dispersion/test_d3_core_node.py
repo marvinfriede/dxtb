@@ -28,6 +28,41 @@ from dxtb._src.param import ParamModule
 from .samples import samples
 
 
+def test_removed_atomic_c6_chunk_size_is_explicitly_deprecated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The v0.7 atomic-C6 API warns instead of silently dropping chunking."""
+    from importlib import import_module
+
+    component_module = import_module(
+        "dxtb._src.components.classicals.dispersion.d3"
+    )
+    calls: list[tuple[torch.Tensor, torch.Tensor, object]] = []
+
+    def atomic_c6(numbers, weights, reference):
+        calls.append((numbers, weights, reference))
+        return torch.ones((2, 2), dtype=weights.dtype, device=weights.device)
+
+    monkeypatch.setattr(
+        component_module, "_ATOMIC_C6_SUPPORTS_CHUNK_SIZE", False
+    )
+    monkeypatch.setattr(d3.model, "atomic_c6", atomic_c6)
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    weights = torch.ones((2, 7), dtype=torch.double)
+    reference = object()
+
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        result = component_module._atomic_c6(
+            numbers, weights, reference, chunk_size=1
+        )
+
+    assert result.shape == (2, 2)
+    assert len(calls) == 1
+    assert calls[0][0] is numbers
+    assert calls[0][1] is weights
+    assert calls[0][2] is reference
+
+
 def _component(numbers: torch.Tensor):
     component = new_dispersion(numbers, GFN1_XTB, dtype=torch.double)
     assert component is not None

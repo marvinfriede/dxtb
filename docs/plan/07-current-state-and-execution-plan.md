@@ -51,7 +51,7 @@ Current state:
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b is complete at its documented structural/P9 pure-kernel boundary; this does not accept padded H0/integral/D3/ES2/ES3/SCF or production mixed-System execution. E6a whole-System `vmap`, E6b production packed/mixed-System batching, E7 broader padding safety, and E4.6 legacy retirement remain independently owned. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
-| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
+| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3-U1 verified the v0.7 composite AtomicC6 path and public GFN1 forward AD under a tested upstream compatibility patch; the published tag still has an incompatible tad-mctc pin/API surface and drops the trainable `s9=0` derivative. The exact upstream patch and results are in [`E1.3-U1-dftd3-v070.md`](E1.3-U1-dftd3-v070.md). E1.3 and E1 remain open until that upstream correction is merged/released and the complete derivative matrix passes on the supported package configuration. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. The inherited frozen-spectral-density third-order diagnostic also had an undefined local `calculator` in both driver rows; it now derives the equivalent effective mixer configuration from the prepared System and selected interactions and verifies matching Fermi settings. |
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
@@ -775,11 +775,21 @@ interaction.get_cache(numbers, positions, ihelp)
 
 ## E1.3 DFT-D3/tad-dftd3 external blocker
 
-GFN1 forward mode currently stops inside tad-dftd3.
+The installed tad-dftd3 0.6.0 baseline still raises the missing-custom-JVP
+`NotImplementedError` in public GFN1/PyTorch `System.singlepoint` jacfwd.
+Candidate v0.7.0 replaces `AtomicC6` with composite operations; under the
+tested E1.3-U1 upstream compatibility patch, public GFN1/H2 and H2O JVP,
+jacfwd, vmap, mixed derivatives, and higher reverse derivatives pass. The
+published v0.7.0 tag is not directly installable with dxtb's required
+tad-mctc 0.9.1: its metadata pins 0.8.0 and its source uses removed names.
+The local upstream patch also fixes the missing derivative of ATM energy at
+differentiable `s9=0`. See [`E1.3-U1-dftd3-v070.md`](E1.3-U1-dftd3-v070.md)
+for the tag/hash, exact compatibility findings, patch commit, and validation.
 
-Treat this as a required upstream/subproject fix.
-
-Do not hide the problem by excluding dispersion from forward-mode acceptance.
+Do not treat this candidate result as a released dependency integration.
+Do not hide the remaining blocker by excluding dispersion from forward-mode
+acceptance. E1.3 remains open pending upstream acceptance/release and the full
+supported dependency/method matrix.
 
 The required tad-dftd3 component tests are:
 

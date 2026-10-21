@@ -341,16 +341,24 @@ def test_system_strict_mixer_error_precedes_initial_guess(monkeypatch) -> None:
         system.singlepoint(_positions()[0])
 
 
-def test_public_system_jacfwd_reports_e1_3_d3_blocker() -> None:
-    """The public transform reaches the known DFT-D3 custom-JVP blocker."""
+def test_public_system_jacfwd_d3_depends_on_upstream_atomic_c6_api() -> None:
+    """The old C6 custom Function blocks JVP; composite upstream passes."""
     system = _system(maxiter=2)
     positions = _positions()[0]
 
     def energy(value: torch.Tensor) -> torch.Tensor:
         return system.singlepoint(value).energy.sum()
 
-    with pytest.raises(NotImplementedError, match="jvp function"):
-        torch.func.jacfwd(energy)(positions)
+    from dxtb._src.components.classicals.dispersion import d3 as d3_component
+
+    if d3_component._ATOMIC_C6_SUPPORTS_CHUNK_SIZE:
+        with pytest.raises(NotImplementedError, match="jvp function"):
+            torch.func.jacfwd(energy)(positions)
+    else:
+        forward = torch.func.jacfwd(energy)(positions)
+        reverse = torch.func.jacrev(energy)(positions)
+        assert torch.isfinite(forward).all()
+        torch.testing.assert_close(forward, reverse)
 
 
 def test_calculator_retains_eager_single_system_adapter() -> None:
