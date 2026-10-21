@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. Whole-System `vmap` remains a generic SCF/Fermi-search limitation deferred to E4core/E6a. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a/C8b.1/.2 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree, C8b.1 registered the production exact core plus selected PyTorch/libcint backend, and C8b.2 registered the Model parameter tree with functional setup substitution through the existing Model API. C8b.3a adds a validity-bearing GFN1/H2+H3 complete-core padding/stacking and mapped Repulsion slice; C8b.3 remains partial pending mixed-element H2/H2O remapping and acceptance of all masked consumers. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.2 execution used Python 3.12/Torch 2.14.1. |
+| C5-C9          | C5/C6/C7/C8a/C8b.1/.2 complete | C6 is accepted at the exact-core/legacy boundary; C6-Final.3 records that public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.0 proved the candidate tree, C8b.1 registered the production exact core plus selected PyTorch/libcint backend, and C8b.2 registered the Model parameter tree with functional setup substitution through the existing Model API. C8b.3b adds a canonical GFN1/PyTorch H2+H2O complete-core stack and mapped Repulsion slice, including H2O atom-order remapping; overall C8b.3 remains open because padded H0/integral/D3/ES2/ES3/SCF consumers are not accepted. E6a whole-System `vmap`, E6b production packed/mixed-System batching, and E4.6 legacy retirement remain independently owned. Historical C6.7 broad-suite failures remain incompletely classified; the ten inherited GFN1 density-parity failures, GFN2 LiH NaN-H0/eigensolver issue, Anderson discrepancies, intermittent E0 small-gap gradcheck, NO2 worker-mode NaN, and E1.3 DFT-D3 forward-AD blocker remain separately tracked. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; current C8b.3b focused execution covered five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3 DFT-D3/tad-dftd3 forward AD remains blocked upstream. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -2218,6 +2218,24 @@ capacity-independent. A complete shell-resolved ES3 H2/H3 stack is covered as
 structural evidence only. H2/H3 Repulsion values, gradients, and real AO
 overlap evidence remain unchanged; padded H0/integral/ES2/ES3/D3/SCF consumers,
 H2/H2O canonical remapping, E6a, E6b, E7, and E4.6 remain outside this slice.
+
+The C8b.3b implementation now provides a separate canonical GFN1/PyTorch
+adapter for independently constructed H2 and H2O exact cores. The canonical
+element order is atomic-number order; shell identity is `(Z, local ordinal,
+angular momentum)`. It maps atoms, shells, AOs, unique elements, unique shell
+types, H0 tables, basis tuples, ordered pair-class unions, flattened AO
+destinations, and the supported classical/interaction setup leaves. Pair
+destinations are checked for unique occupancy, and per-input validity masks
+identify absent pair entries. Complete registered cores stack, and the
+existing Repulsion kernel matches serial energy and real-position gradients;
+parameter-gradient continuity and the real AO overlap submatrix diagnostic
+also pass. The dedicated C8b.3b tests and the C8b.3a/schema preflights pass in
+all five available approved CPU environments. The broad primary selection
+reported 674 passes, 15 known numerical failures (10 GFN1 legacy parity,
+four LiH/SiH4 force discrepancies, and the LiH Hessian eigensolver issue).
+Padded H0/integral/D3/ES2/ES3/SCF evaluation remains outside this adapter's
+accepted numerical boundary; C8b.3, E6a, E6b, E7, and E4.6 remain open under
+their existing scope.
 
 ## C9 final TensorLike/ModuleLike scaffold purge
 

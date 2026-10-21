@@ -602,3 +602,81 @@ reported 562 passed, 10 inherited GFN1 production/legacy parity failures,
 and 1 deselected test. CUDA remains unavailable; the environment has
 tad-libcint 0.3.0 and PySCF 2.14.0. Black, isort, compileall, and diff checks
 pass; mypy and Ruff are unavailable.
+
+## C8b.3b canonical H2/H2O structural padding — implemented slice
+
+The new internal `canonical_padding.py` adapter accepts independent GFN1
+exact cores with the PyTorch backend and constructs a deterministic canonical
+union. Elements sort by atomic number. A shell identity is `(Z, local shell
+ordinal, l)`, so equal angular momenta belonging to different elements remain
+distinct. Atoms are grouped by element while preserving their within-element
+source order. `CanonicalCoreMap` records explicit source-to-canonical atom,
+shell, AO, unique-element, and unique-shell indices; the original geometry
+ordering is recovered through this map.
+
+Capacities are derived as the per-element maximum atom multiplicity across the
+bucket, then expanded through each element's validated shell pattern and
+angular widths. Pair classes are the sorted union of canonical ordered shell
+type pairs and angular contexts. Pair entries are the sorted union of actual
+canonical shell pairs for each class. Missing setup values are represented by
+finite zero-filled structural tables and marked invalid in the registered
+`PaddedCoreValidity` masks; absent basis tuples use finite one placeholders
+and the `unique_shell_types` mask. No placeholder is represented as a real
+atom, shell, AO, or pair.
+
+The adapter explicitly remaps `CoreIndexData`, H0 atom/element/shell/AO maps,
+H0 shell and element tables, PyTorch alpha/coeff tuples, pair classes, and the
+supported Repulsion, D3, Halogen, ES2, and ES3 family setup fields. PairPlan
+AO destinations are decoded with the source AO stride, mapped on both axes,
+and re-flattened with the canonical stride. If canonical shell ordering flips
+a pair, the flattened row and column coordinates are transposed as well as the
+block axes. Pair entries are validated against their shell/element types,
+weights, complete lower-triangular source pair count, and destination range.
+The union destination list is unique; per-core validity masks distinguish
+real from absent entries, and tests verify these sets are disjoint. Existing
+PyTorch assembly can therefore produce the expected real AO overlap block;
+only the real AO submatrix is accepted as evidence.
+
+The canonical API rejects non-GFN1 methods, non-PyTorch or incomplete
+integral setups, unknown algorithms, optional H0 layouts, unsupported setup
+families, inconsistent H0/backend maps, incompatible static configuration,
+nonhomogeneous floating dtype, mixed devices, and noncanonical pair maps.
+It does not split an arbitrary collection into multiple buckets: callers
+request one supported bucket and receive a precise rejection when the whole
+collection cannot share it. The existing C8b.3a representative/prefix API is
+unchanged. Arbitrary custom callables remain rejected by the existing stable
+callable policy.
+
+`test_c8b3b_canonical_padding.py` constructs H2 and H2O independently through
+`Model.setup()` in both `(8,1,1)` and `(1,1,8)` order. It also stacks a
+three-core H2/H2O/reordered-H2O collection. Complete padded cores retain the
+selected backend, H0, classical and interaction descriptors and all dynamic
+setup leaves; `core.index` remains the selected backend's index. The tests
+check H0 unique-element/shell tables, canonical pair destinations, masks,
+flatten/unflatten, dtype conversion, source-core/ParamModule immutability,
+Repulsion parameter-gradient connectivity, and input ordering. `vmap` of the
+existing Repulsion evaluator matches unpadded serial H2/H2O energies and real
+coordinate gradients; padding-coordinate gradients are exactly zero. The H2
+padding position is zero and coincides with a real H atom, exercising the
+singular-padding control. The padded PyTorch overlap diagnostic matches the
+source AO block after applying the explicit AO map.
+
+The new focused tests plus C8b.3a padding, mixed-size preflight, and schema
+preflight passed 32 tests in each approved CPU environment. The dedicated
+C8b.3b module passed 10 tests on
+Python 3.14/Torch 2.14.1. A broader non-slow primary selection reported 674
+passed, 15 failed, and 1 deselected: the 10 established GFN1 legacy-parity
+failures plus LiH/SiH4 PyTorch force discrepancies and the known LiH Hessian
+eigensolver failure. Separate D3, interaction, libcint overlap/gradient/
+multipole, and packed controls passed 280 tests. The five focused CPU
+configurations are Python 3.10/Torch 2.6.0, Python 3.11/Torch 2.8.0, Python
+3.12/Torch 2.11.0, Python 3.12/Torch 2.13.0, and Python 3.14/Torch 2.14.1;
+all use tad-mctc 0.9.1. CUDA and a no-libcint profile were unavailable.
+
+This is the H2/H2O canonical structural and mapped Repulsion slice, not full
+C8b.3 closure. Padded H0 numerical evaluation, complete padded integral
+matrices, D3/ES2/ES3 numerical evaluation, full SCF, `System.singlepoint()` on
+padded wrappers, public whole-System `vmap`, and production mixed-System
+batching remain unsupported. E6a, E6b, E7, and E4.6 retain their existing
+ownership; overall C8b.3 remains open for broader family/consumer safety and
+the remaining acceptance matrix.

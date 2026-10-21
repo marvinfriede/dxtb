@@ -593,3 +593,12 @@ owners must first be retired or migrated under E4.6a/E4.6b.
 | C8a | Result pytree representation | B5, B5.6, C1 | M |
 | C8b | Model/System stackability of the final System layout | B3b, C5, C6, C7, B2 | M |
 | C9 | Final repository-wide `TensorLike`/`ModuleLike` purge | C2–C4, C8a/C8b, E4.6a, E4.6b | S |
+
+**C8b.3b implementation note.** The bounded canonical padding adapter now
+constructs a deterministic GFN1/PyTorch union layout for independent H2 and
+H2O exact cores, including either H2O atom ordering. It remaps atom, shell,
+AO, unique-element, unique-shell, H0, basis tuple, pair-plan, and supported
+family setup data while retaining the complete registered core. Full-core
+stacking and mapped Repulsion value/position/parameter-gradient parity are
+tested. C8b.3 remains open: padded H0/integral/D3/ES2/ES3 and SCF consumers are
+not accepted, and E6a/E6b/E7/E4.6 retain their separate ownership.
