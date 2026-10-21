@@ -520,3 +520,48 @@ and 313 passed in the other. The ten failures were all the established
 `test_production_singlepoint_matches_legacy_full` cases; no other failure was
 observed. Black, isort, compileall, and diff checks pass. Mypy and Ruff are
 not installed in the approved primary environment.
+
+## C8b.3a compatibility hardening
+
+The initial signature grouping could combine C2 and N3 even though neither
+atom sequence is a prefix of the other. The observed GFN1 production cores
+have equal compatibility signatures, so the signature alone is not a
+realizability proof. `bucket_exact_cores()` now partitions each signature
+group into deterministic prefix-realizable subgroups. Each `CoreBucket`
+records an input `template_index`; its capacities are exactly those of that
+existing representative, rather than synthetic per-axis maxima. Equal-sized
+compatible compositions such as C2/N2 remain stackable without atom-prefix
+remapping. C2/N3 now separate, in either input order. Multi-input groups are
+exercised through padding and complete-tree stacking; original indices are
+retained, and every input appears exactly once.
+
+The compatibility signature now includes the classical descriptor's
+`charge_dependent` static context. ES3 source dimensions are checked during
+signature/bucket formation: atom-resolved `hubbard_derivs` must match atom
+count, and shell-resolved data must match shell count. Padding uses the
+matching atom or shell capacity. Tests construct shell-resolved setups with
+the production `setup_es3()` resolver and verify the source values remain
+unchanged.
+
+Static callable compatibility is restricted to the stateless built-ins used
+by this slice (the ES2 averaging functions, GFN1 counting function, and
+default D3 weighting/damping functions). Closures and other custom or
+stateful callables are rejected before bucketing; module/qualified names
+alone no longer establish equivalence. The default GFN1 H2/H3 ES2 route
+remains accepted.
+
+`pad_positions()` now requires atom validity to be a true prefix followed by
+false padding. It rejects non-prefix masks and atom-count mismatches before
+appending coordinate rows, preserving the input position graph. The padded
+wrapper remains separate from ordinary `ExactSystemCore` and `System`
+dispatch. Supported numerical evidence is unchanged: Repulsion and its
+position/parameter gradients, plus the real AO overlap submatrix. General H0,
+integral matrices, D3/ES2/ES3 evaluation, padded SCF, and production mixed
+batching still do not consume the validity masks and remain unsupported.
+
+After this hardening, the combined C8b.3a padding module, mixed-size preflight,
+and schema preflight passed 21 tests in each of the same five CPU environments.
+The broader primary-environment selection passed 710 tests and reproduced
+only the 10 inherited GFN1 production/legacy parity failures listed above.
+No no-libcint profile or CUDA device was available; mypy and Ruff are not
+installed.

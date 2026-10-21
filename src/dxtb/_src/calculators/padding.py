@@ -17,11 +17,13 @@
 """Validity-bearing structural padding for compatible exact cores.
 
 This first padding slice supports same-method PyTorch GFN1 cores whose
-shell-class and descriptor structures agree. It intentionally does not alter
-ordinary ``ExactSystemCore`` values or claim that padded SCF/integral
-evaluation is supported. The padded pair plan uses the larger core's ordered
-shell-pair structure; entries absent from a smaller source are identified by
-the accompanying validity masks and occupy padded AO rows or columns only.
+shell-class and descriptor structures agree. Different-size cores are grouped
+only when an existing representative can pad them using the supported prefix
+mapping. It intentionally does not alter ordinary ``ExactSystemCore`` values
+or claim that padded SCF/integral evaluation is supported. The padded pair
+plan uses the larger core's ordered shell-pair structure; entries absent from
+a smaller source are identified by validity masks and occupy padded AO rows
+or columns only.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+from tad_dftd3.damping.rational import rational_damping
+from tad_dftd3.model.weights import gaussian_weight
 from tad_mctc.tree import Node, child
 from torch.utils._pytree import tree_flatten
 
@@ -38,6 +42,11 @@ from dxtb._src.components.classicals.dispersion.d3 import (
 )
 from dxtb._src.components.classicals.halogen.hal import HalogenCoreSetup
 from dxtb._src.components.classicals.repulsion.base import RepulsionCoreSetup
+from dxtb._src.components.interactions.coulomb.average import (
+    arithmetic_average,
+    geometric_average,
+    harmonic_average,
+)
 from dxtb._src.components.interactions.coulomb.secondorder import ES2CoreSetup
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
 from dxtb._src.constants import labels
@@ -46,6 +55,7 @@ from dxtb._src.integral.driver.pytorch.impls.pairs import (
     PairPlanNode,
 )
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
+from dxtb._src.ncoord import exp_count
 from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
 from dxtb._src.xtb.h0 import H0IndexNode
@@ -84,6 +94,7 @@ class CoreBucket:
     """A deterministic group of compatible input cores and its capacities."""
 
     indices: tuple[int, ...]
+    template_index: int
     signature: tuple[object, ...]
     atoms: int
     shells: int
@@ -103,12 +114,30 @@ def _backend(core: ExactSystemCore) -> PytorchIntegralSetupNode:
     return core.integral.backend
 
 
+_SUPPORTED_CALLABLES = (
+    arithmetic_average,
+    geometric_average,
+    harmonic_average,
+    exp_count,
+    gaussian_weight,
+    rational_damping,
+)
+
+
 def _callable_signature(value: object) -> tuple[str, str]:
-    function = getattr(value, "function", value)
+    function = value
     module = getattr(function, "__module__", None)
     name = getattr(function, "__qualname__", None)
-    if not isinstance(module, str) or not isinstance(name, str):
-        raise TypeError("Unsupported opaque callable in exact-core metadata.")
+    if (
+        not isinstance(module, str)
+        or not isinstance(name, str)
+        or getattr(function, "__closure__", None)
+        or not any(function is supported for supported in _SUPPORTED_CALLABLES)
+    ):
+        raise TypeError(
+            "Padding compatibility is unsupported for custom or stateful "
+            "callable metadata."
+        )
     return module, name
 
 
@@ -178,6 +207,18 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
             "This padding slice currently supports GFN1 cores only."
         )
 
+    natoms = core.numbers.numel()
+    nshells = backend.index.shells_to_atom.numel()
+    for term in core.interaction_terms:
+        if isinstance(term.setup, ES3CoreSetup):
+            expected = nshells if term.setup.shell_resolved else natoms
+            if term.setup.hubbard_derivs.shape != (expected,):
+                resolution = "shell" if term.setup.shell_resolved else "atom"
+                raise ValueError(
+                    f"ES3 {resolution}-resolved data must have shape "
+                    f"({expected},), got {tuple(term.setup.hubbard_derivs.shape)}."
+                )
+
     leaves, _ = tree_flatten(core)
     tensor_policy = tuple(
         (leaf.dtype, leaf.device, leaf.layout)
@@ -216,6 +257,7 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
                 term.label,
                 term.position,
                 term.geometry_inputs,
+                term.charge_dependent,
                 type(term.setup),
                 _setup_static_signature(term.setup),
             )
@@ -249,34 +291,163 @@ def _capacities(
     )
 
 
+def _padding_layout_error(
+    core: ExactSystemCore, template: ExactSystemCore
+) -> str | None:
+    """Return why one core cannot use another core's prefix template."""
+    source_caps = _capacities(core)
+    template_caps = _capacities(template)
+    if source_caps == template_caps:
+        return None
+    if any(a > b for a, b in zip(source_caps[:5], template_caps[:5])) or any(
+        a > b for a, b in zip(source_caps[5], template_caps[5])
+    ):
+        return "source dimensions exceed template capacities"
+
+    source_backend = _backend(core)
+    template_backend = _backend(template)
+    nreal = core.numbers.numel()
+    nshells = source_backend.index.shells_to_atom.numel()
+    naos = source_backend.index.orbitals_to_shell.numel()
+    if not torch.equal(core.numbers, template.numbers[:nreal]):
+        return "atom numbers are not a prefix of the representative"
+    if not torch.equal(
+        source_backend.index.shells_to_atom,
+        template_backend.index.shells_to_atom[:nshells],
+    ):
+        return "shell-to-atom mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.orbitals_to_shell,
+        template_backend.index.orbitals_to_shell[:naos],
+    ):
+        return "orbital-to-shell mapping is not a representative prefix"
+    if core.h0_setup is None or template.h0_setup is None:
+        if core.h0_setup is not template.h0_setup:
+            return "optional H0 setup differs"
+    else:
+        source_h0 = core.h0_setup
+        template_h0 = template.h0_setup
+        if not torch.equal(source_h0.unique, template_h0.unique):
+            return "H0 unique-element mapping differs"
+        if not torch.equal(
+            source_h0.index.atom_to_unique,
+            template_h0.index.atom_to_unique[:nreal],
+        ):
+            return "H0 atom-to-unique mapping is not a prefix"
+        if not torch.equal(
+            source_h0.index.shells_to_ushell,
+            template_h0.index.shells_to_ushell[:nshells],
+        ):
+            return "H0 shell-to-unique mapping is not a prefix"
+        if not torch.equal(
+            source_h0.index.unique_angular,
+            template_h0.index.unique_angular,
+        ):
+            return "H0 unique angular classes differ"
+
+    source_plan = source_backend.pair_plan
+    template_plan = template_backend.pair_plan
+    if (
+        source_plan.unique_angular != template_plan.unique_angular
+        or source_plan.nao > template_plan.nao
+        or tuple((c.ub, c.uk, c.lb, c.lk) for c in source_plan.classes)
+        != tuple((c.ub, c.uk, c.lb, c.lk) for c in template_plan.classes)
+    ):
+        return "ordered pair-plan class metadata differs"
+    for source_class, template_class in zip(
+        source_plan.classes, template_plan.classes
+    ):
+        pairs = {
+            (int(i), int(j))
+            for i, j in zip(template_class.ib, template_class.jk)
+        }
+        if any(
+            (int(i), int(j)) not in pairs
+            for i, j in zip(source_class.ib, source_class.jk)
+        ):
+            return "source pair entries are not contained in template"
+        pair_positions = {
+            (int(i), int(j)): position
+            for position, (i, j) in enumerate(
+                zip(template_class.ib, template_class.jk)
+            )
+        }
+        for position, (i, j) in enumerate(
+            zip(source_class.ib, source_class.jk)
+        ):
+            template_position = pair_positions[(int(i), int(j))]
+            old_idx = source_class.idx[position]
+            row = torch.div(old_idx, source_plan.nao, rounding_mode="floor")
+            col = old_idx.remainder(source_plan.nao)
+            new_idx = row * template_plan.nao + col
+            if not torch.equal(new_idx, template_class.idx[template_position]):
+                return "PairPlan AO-stride reconstruction is incompatible"
+    return None
+
+
+def _stable_core_key(core: ExactSystemCore) -> tuple[object, ...]:
+    """Order candidate templates without using object identity or parameters."""
+    backend = _backend(core)
+    return (
+        tuple(-size for size in _capacities(core)[:5]),
+        tuple(-size for size in _capacities(core)[5]),
+        tuple(int(value) for value in core.numbers),
+        tuple(int(value) for value in backend.index.shells_to_atom),
+        tuple(int(value) for value in backend.index.orbitals_to_shell),
+    )
+
+
 def bucket_exact_cores(
     cores: tuple[ExactSystemCore, ...],
 ) -> tuple[CoreBucket, ...]:
-    """Partition cores deterministically by structure and report max capacity."""
+    """Partition cores into deterministic, realizable prefix-padding buckets."""
     groups: dict[tuple[object, ...], list[int]] = {}
     for i, core in enumerate(cores):
         groups.setdefault(compatibility_signature(core), []).append(i)
 
-    result = []
-    for signature, indices in groups.items():
-        sizes = [_capacities(cores[i]) for i in indices]
-        nclass = len(sizes[0][5])
-        if any(len(size[5]) != nclass for size in sizes):
-            raise ValueError("Compatible cores disagree on pair-class count.")
-        result.append(
-            CoreBucket(
-                indices=tuple(indices),
-                signature=signature,
-                atoms=max(size[0] for size in sizes),
-                shells=max(size[1] for size in sizes),
-                orbitals=max(size[2] for size in sizes),
-                unique_elements=max(size[3] for size in sizes),
-                unique_shell_types=max(size[4] for size in sizes),
-                pair_entries=tuple(
-                    max(size[5][j] for size in sizes) for j in range(nclass)
+    result: list[CoreBucket] = []
+    for signature, grouped_indices in groups.items():
+        remaining = set(grouped_indices)
+        partitions: list[CoreBucket] = []
+        while remaining:
+            templates = sorted(
+                remaining, key=lambda index: _stable_core_key(cores[index])
+            )
+            candidates: list[tuple[int, tuple[int, ...]]] = []
+            for template_index in templates:
+                compatible = tuple(
+                    index
+                    for index in templates
+                    if _padding_layout_error(
+                        cores[index], cores[template_index]
+                    )
+                    is None
+                )
+                candidates.append((template_index, compatible))
+            template_index, members = min(
+                candidates,
+                key=lambda candidate: (
+                    -len(candidate[1]),
+                    _stable_core_key(cores[candidate[0]]),
                 ),
             )
-        )
+            template_sizes = _capacities(cores[template_index])
+            partitions.append(
+                CoreBucket(
+                    indices=tuple(sorted(members)),
+                    template_index=template_index,
+                    signature=signature,
+                    atoms=template_sizes[0],
+                    shells=template_sizes[1],
+                    orbitals=template_sizes[2],
+                    unique_elements=template_sizes[3],
+                    unique_shell_types=template_sizes[4],
+                    pair_entries=template_sizes[5],
+                )
+            )
+            remaining.difference_update(members)
+        result.extend(partitions)
+    result.sort(key=lambda bucket: min(bucket.indices))
     return tuple(result)
 
 
@@ -434,6 +605,12 @@ def _pad_pair_plan(
 def _pad_core(
     core: ExactSystemCore, template: ExactSystemCore
 ) -> tuple[ExactSystemCore, PaddedCoreValidity]:
+    incompatibility = _padding_layout_error(core, template)
+    if incompatibility is not None:
+        raise ValueError(
+            "Core cannot use the selected padding representative: "
+            f"{incompatibility}."
+        )
     backend = _backend(core)
     template_backend = _backend(template)
     nreal = core.numbers.numel()
@@ -625,8 +802,17 @@ def _pad_core(
                 shells_to_atom=shells_to_atom,
             )
         elif isinstance(setup, ES3CoreSetup):
+            source_size = nshell if setup.shell_resolved else nreal
+            target_size = nshell_target if setup.shell_resolved else ntarget
+            if setup.hubbard_derivs.shape != (source_size,):
+                resolution = "shell" if setup.shell_resolved else "atom"
+                raise ValueError(
+                    f"ES3 {resolution}-resolved data must have shape "
+                    f"({source_size},), got "
+                    f"{tuple(setup.hubbard_derivs.shape)}."
+                )
             setup = setup.replace(
-                hubbard_derivs=_pad_vector(setup.hubbard_derivs, ntarget)
+                hubbard_derivs=_pad_vector(setup.hubbard_derivs, target_size)
             )
         else:
             raise TypeError(
@@ -726,9 +912,20 @@ def pad_positions(positions: Tensor, validity: PaddedCoreValidity) -> Tensor:
     """Append zero coordinate rows for invalid atoms without breaking graphs."""
     if positions.ndim != 2 or positions.shape[-1] != 3:
         raise ValueError("Expected unbatched positions with shape (nat, 3).")
-    if int(validity.atoms.sum()) != positions.shape[0]:
+    nreal = positions.shape[0]
+    if validity.atoms.ndim != 1 or nreal > validity.atoms.numel():
         raise ValueError("Position count disagrees with atom validity.")
-    missing = validity.atoms.numel() - positions.shape[0]
+    if int(validity.atoms.sum()) != nreal:
+        raise ValueError("Position count disagrees with atom validity.")
+    expected = (
+        torch.arange(validity.atoms.numel(), device=validity.atoms.device)
+        < nreal
+    )
+    if not torch.equal(validity.atoms, expected):
+        raise ValueError(
+            "Position padding requires a prefix atom-validity mask."
+        )
+    missing = validity.atoms.numel() - nreal
     if missing == 0:
         return positions
     return torch.cat((positions, positions.new_zeros((missing, 3))))

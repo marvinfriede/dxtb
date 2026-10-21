@@ -527,6 +527,14 @@ consumers do not apply the wrapper masks. GFN1/H2 + GFN1/H2O still requires
 canonical unique-element/shell and setup remapping. C8b.3a is complete at this
 limited GFN1/H2-H3 structural and Repulsion boundary; C8b.3 remains open.
 
+The follow-up hardening partitions signature-equal cores only when an
+existing representative realizes the supported prefix mapping; C2/N3
+separate in either input order while C2/N2 and H2/H3 remain supported.
+Bucket capacities equal an input representative's dimensions. The key includes
+`charge_dependent`, rejects custom/stateful callable metadata, and validates
+atom- versus shell-resolved ES3 extents. Position padding accepts only prefix
+validity masks. The wrapper remains outside ordinary System/SCF dispatch.
+
 **Needs.** B3b, C5, C6, C7, C8a, B2. **Unblocks.** E6bimpl after its other
 prerequisites; E6a remains separately owned. **Size.** M.
 

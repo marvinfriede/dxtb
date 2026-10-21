@@ -2189,6 +2189,13 @@ H2/H2O requires canonical mixed-element/shell and setup remapping. C8b.3a is
 complete at its scoped GFN1/H2-H3 structural and Repulsion boundary; C8b.3
 remains open.
 
+The C8b.3a hardening pass split signature-equal layouts when no input core
+realizes the prefix mapping (including C2/N3 in either order), records an
+actual template index and its exact capacities, keys `charge_dependent`,
+restricts callable contexts to known stateless built-ins, pads shell-resolved
+ES3 by shell count, and rejects non-prefix position masks. Padded trees remain
+structural wrappers; ordinary H0/integral/SCF dispatch is not enabled.
+
 The implementation split is C8b.1 (registered exact-core/backend schema and
 conversion; complete at its scoped boundary), C8b.2 (registered Model
 parameter tree and functional setup integration; complete at its scoped

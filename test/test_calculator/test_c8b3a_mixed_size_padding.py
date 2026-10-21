@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace as dataclass_replace
+
 import pytest
 import torch
 from tad_mctc.tree import stack
@@ -29,10 +31,17 @@ from dxtb._src.calculators.model import ExactSystemCore, Model
 from dxtb._src.calculators.padding import (
     PaddedExactSystemCore,
     bucket_exact_cores,
+    compatibility_signature,
     pad_exact_core,
     pad_positions,
 )
 from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
+from dxtb._src.components.interactions.coulomb.average import arithmetic_average
+from dxtb._src.components.interactions.coulomb.thirdorder import (
+    ES3CoreSetup,
+    core_es3_setup,
+    setup_es3,
+)
 from dxtb._src.integral.driver.pytorch.impls.kernels import get_kernel
 from dxtb._src.integral.driver.pytorch.impls.pairs import assemble_matrix
 
@@ -57,6 +66,34 @@ def _system(
     system = model.setup(torch.tensor(numbers, dtype=torch.int64))
     assert system.exact_core is not None
     return model, system.exact_core
+
+
+def _shell_resolved_es3_core(
+    numbers: tuple[int, ...],
+) -> tuple[Model, ExactSystemCore]:
+    """Create an exact core with ES3 setup from the production resolver."""
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    model = Model(
+        par=par,
+        config=Config.create(
+            method=labels.GFN1_XTB,
+            int_driver=labels.INTDRIVER_PYTORCH,
+        ),
+    )
+    system = model.setup(torch.tensor(numbers, dtype=torch.int64))
+    assert system.exact_core is not None and system.h0_setup is not None
+    gam3 = par.get_elem_param(system.h0_setup.unique, "gam3")
+    shell_scale = torch.ones_like(
+        system.h0_setup.index.unique_angular, dtype=gam3.dtype
+    )
+    resolved = core_es3_setup(
+        setup_es3(gam3, system.ihelp, shell_scale=shell_scale)
+    )
+    terms = tuple(
+        term.replace(setup=resolved) if term.kind == "es3" else term
+        for term in system.exact_core.interaction_terms
+    )
+    return model, system.exact_core.replace(interaction_terms=terms)
 
 
 def _repulsion(core: ExactSystemCore, positions: torch.Tensor) -> torch.Tensor:
@@ -333,3 +370,279 @@ def test_buckets_are_stable_and_keep_incompatible_structures() -> None:
     dtype_cores = (_system((1, 1))[1], _system((1, 1), dtype=torch.float32)[1])
     dtype_buckets = bucket_exact_cores(dtype_cores)
     assert tuple(bucket.indices for bucket in dtype_buckets) == ((0,), (1,))
+
+
+def _realize_buckets(
+    cores: tuple[ExactSystemCore, ...],
+) -> tuple[frozenset[tuple[int, ...]], ...]:
+    """Pad and stack every bucket returned by the partitioner."""
+    buckets = bucket_exact_cores(cores)
+    recovered: list[int] = []
+    memberships = []
+    for bucket in buckets:
+        assert bucket.template_index in bucket.indices
+        template = cores[bucket.template_index]
+        padded = tuple(
+            pad_exact_core(cores[index], bucket, template)
+            for index in bucket.indices
+        )
+        stacked = stack(padded)
+        assert isinstance(stacked, PaddedExactSystemCore)
+        assert stacked.core.numbers.shape[1] == bucket.atoms
+        assert stacked.core.integral is not None
+        assert stacked.core.integral.backend is not None
+        assert stacked.core.integral.backend.pair_plan.nao == bucket.orbitals
+        assert (
+            stacked.core.integral.backend.index.shells_to_atom.shape[-1]
+            == bucket.shells
+        )
+        assert (
+            stacked.core.integral.backend.index.orbitals_to_shell.shape[-1]
+            == bucket.orbitals
+        )
+        assert (
+            tuple(
+                pair.ib.shape[-1]
+                for pair in stacked.core.integral.backend.pair_plan.classes
+            )
+            == bucket.pair_entries
+        )
+        assert (
+            0
+            if stacked.core.h0_setup is None
+            else stacked.core.h0_setup.unique.shape[-1]
+        ) == bucket.unique_elements
+        assert (
+            len(stacked.core.integral.backend.pair_plan.unique_angular)
+            == bucket.unique_shell_types
+        )
+        recovered.extend(bucket.indices)
+        memberships.append(
+            frozenset(
+                tuple(int(value) for value in cores[i].numbers)
+                for i in bucket.indices
+            )
+        )
+    assert sorted(recovered) == list(range(len(cores)))
+    return tuple(memberships)
+
+
+def test_buckets_separate_unrealizable_c2_n3_layouts_independent_of_order() -> (
+    None
+):
+    """Buckets only promise layouts that their representative can realize."""
+    c2, n3, c3, n2 = tuple(
+        _system(numbers)[1]
+        for numbers in ((6, 6), (7, 7, 7), (6, 6, 6), (7, 7))
+    )
+    assert compatibility_signature(c2) == compatibility_signature(n3)
+    forward = (c2, n3)
+    reverse = (n3, c2)
+    forward_groups = _realize_buckets(forward)
+    reverse_groups = _realize_buckets(reverse)
+    assert (
+        set(forward_groups)
+        == set(reverse_groups)
+        == {
+            frozenset({(6, 6)}),
+            frozenset({(7, 7, 7)}),
+        }
+    )
+
+    mixed = (c2, c3, n2, n3)
+    reverse_mixed = tuple(reversed(mixed))
+    mixed_groups = _realize_buckets(mixed)
+    reverse_groups = _realize_buckets(reverse_mixed)
+    assert set(mixed_groups) == set(reverse_groups)
+    assert set().union(*mixed_groups) == {
+        (6, 6),
+        (6, 6, 6),
+        (7, 7),
+        (7, 7, 7),
+    }
+
+
+def test_es3_atom_and_shell_resolved_dimensions_pad_correctly() -> None:
+    """ES3 follows its registered atom- or shell-resolved extent."""
+    _, atom_h2 = _system((1, 1))
+    _, atom_h3 = _system((1, 1, 1))
+    atom_bucket = bucket_exact_cores((atom_h2, atom_h3))[0]
+    atom_setup = next(
+        term.setup for term in atom_h2.interaction_terms if term.kind == "es3"
+    )
+    padded_atom = pad_exact_core(atom_h2, atom_bucket, atom_h3)
+    padded_atom_setup = next(
+        term.setup
+        for term in padded_atom.core.interaction_terms
+        if term.kind == "es3"
+    )
+    assert isinstance(atom_setup, ES3CoreSetup)
+    assert atom_setup.shell_resolved is False
+    assert atom_setup.hubbard_derivs.shape == (2,)
+    assert padded_atom_setup.hubbard_derivs.shape == (3,)
+    torch.testing.assert_close(
+        padded_atom_setup.hubbard_derivs[:2], atom_setup.hubbard_derivs
+    )
+
+    _, shell_h2 = _shell_resolved_es3_core((1, 1))
+    _, shell_h3 = _shell_resolved_es3_core((1, 1, 1))
+    shell_bucket = bucket_exact_cores((shell_h2, shell_h3))[0]
+    source = next(
+        term.setup for term in shell_h2.interaction_terms if term.kind == "es3"
+    )
+    assert isinstance(source, ES3CoreSetup)
+    assert source.shell_resolved is True
+    assert source.hubbard_derivs.shape == (4,)
+    source_identity = id(source.hubbard_derivs)
+    source_values = source.hubbard_derivs.clone()
+    padded_shell = pad_exact_core(shell_h2, shell_bucket, shell_h3)
+    actual = next(
+        term.setup
+        for term in padded_shell.core.interaction_terms
+        if term.kind == "es3"
+    )
+    assert actual.hubbard_derivs.shape == (6,)
+    torch.testing.assert_close(actual.hubbard_derivs[:4], source_values)
+    assert id(source.hubbard_derivs) == source_identity
+    torch.testing.assert_close(source.hubbard_derivs, source_values)
+
+    malformed = source.replace(hubbard_derivs=source.hubbard_derivs[:-1])
+    bad_core = shell_h2.replace(
+        interaction_terms=tuple(
+            term.replace(setup=malformed) if term.kind == "es3" else term
+            for term in shell_h2.interaction_terms
+        )
+    )
+    with pytest.raises(ValueError, match="shell-resolved"):
+        bucket_exact_cores((bad_core, shell_h3))
+
+
+def test_descriptor_static_metadata_and_callable_policy_are_in_signature() -> (
+    None
+):
+    """Static descriptor context is keyed and custom closures are rejected."""
+    _, core = _system((1, 1))
+    term = core.classical_terms[0]
+    altered_term = term.replace(charge_dependent=not term.charge_dependent)
+    altered = core.replace(
+        classical_terms=tuple(
+            altered_term if item is term else item
+            for item in core.classical_terms
+        )
+    )
+    assert compatibility_signature(core) != compatibility_signature(altered)
+    assert tree_flatten(core)[1] != tree_flatten(altered)[1]
+
+    def make_average(scale: float):
+        def average(hubbard: torch.Tensor) -> torch.Tensor:
+            return scale * hubbard.unsqueeze(-1) * hubbard.unsqueeze(-2)
+
+        return average
+
+    average_a = make_average(1.0)
+    average_b = make_average(2.0)
+    assert average_a.__module__ == average_b.__module__
+    assert average_a.__qualname__ == average_b.__qualname__
+    assert average_a is not average_b
+    probe = torch.tensor([2.0], dtype=torch.float64)
+    assert not torch.equal(average_a(probe), average_b(probe))
+    es2 = next(
+        item.setup for item in core.interaction_terms if item.kind == "es2"
+    )
+    core_a = core.replace(
+        interaction_terms=tuple(
+            (
+                item.replace(setup=es2.replace(average_context=average_a))
+                if item.kind == "es2"
+                else item
+            )
+            for item in core.interaction_terms
+        )
+    )
+    core_b = core.replace(
+        interaction_terms=tuple(
+            (
+                item.replace(setup=es2.replace(average_context=average_b))
+                if item.kind == "es2"
+                else item
+            )
+            for item in core.interaction_terms
+        )
+    )
+    with pytest.raises(TypeError, match="custom or stateful callable"):
+        compatibility_signature(core_a)
+    with pytest.raises(TypeError, match="custom or stateful callable"):
+        bucket_exact_cores((core_a, core_b))
+
+    built_in_average = es2.replace(average_context=arithmetic_average)
+    alternate_average_core = core.replace(
+        interaction_terms=tuple(
+            item.replace(setup=built_in_average) if item.kind == "es2" else item
+            for item in core.interaction_terms
+        )
+    )
+    assert compatibility_signature(core) != compatibility_signature(
+        alternate_average_core
+    )
+    assert tuple(
+        bucket.indices
+        for bucket in bucket_exact_cores((core, alternate_average_core))
+    ) == ((0,), (1,))
+
+    assert core.integral is not None and core.integral.backend is not None
+    alternate_algorithm = core.integral.backend.replace(
+        algorithm=f"{core.integral.backend.algorithm}-other"
+    )
+    alternate_backend_core = core.replace(
+        integral=core.integral.replace(backend=alternate_algorithm)
+    )
+    assert compatibility_signature(core) != compatibility_signature(
+        alternate_backend_core
+    )
+    assert tuple(
+        bucket.indices
+        for bucket in bucket_exact_cores((core, alternate_backend_core))
+    ) == ((0,), (1,))
+    alternate_method_core = core.replace(
+        config=dataclass_replace(core.config, method=labels.GFN2_XTB)
+    )
+    with pytest.raises(TypeError, match="GFN1 cores only"):
+        compatibility_signature(alternate_method_core)
+
+
+def test_pad_positions_requires_prefix_validity_and_preserves_gradients() -> (
+    None
+):
+    """Position rows map only to a prefix of the padded atom dimension."""
+    _, h2 = _system((1, 1))
+    _, h3 = _system((1, 1, 1))
+    bucket = bucket_exact_cores((h2, h3))[0]
+    padded = pad_exact_core(h2, bucket, h3)
+    positions = _coordinates(2)
+    output = pad_positions(positions, padded.validity)
+    assert output.shape == (3, 3)
+    torch.testing.assert_close(output[:2], positions)
+    torch.testing.assert_close(output[2], torch.zeros(3, dtype=positions.dtype))
+    assert pad_positions(
+        _coordinates(3), pad_exact_core(h3, bucket, h3).validity
+    ).shape == (3, 3)
+
+    loss = output.square().sum()
+    gradient = torch.autograd.grad(loss, positions)[0]
+    torch.testing.assert_close(gradient, 2 * positions)
+    malformed = padded.validity.replace(atoms=torch.tensor([True, False, True]))
+    with pytest.raises(ValueError, match="prefix atom-validity"):
+        pad_positions(positions, malformed)
+    with pytest.raises(ValueError, match="Position count"):
+        pad_positions(_coordinates(1), padded.validity)
+
+
+def test_padded_core_remains_outside_ordinary_system_dispatch() -> None:
+    """The padding adapter is not an ordinary System or exact core."""
+    _, h2 = _system((1, 1))
+    _, h3 = _system((1, 1, 1))
+    bucket = bucket_exact_cores((h2, h3))[0]
+    padded = pad_exact_core(h2, bucket, h3)
+    assert isinstance(padded, PaddedExactSystemCore)
+    assert not isinstance(padded, ExactSystemCore)
+    assert not hasattr(padded, "singlepoint")
