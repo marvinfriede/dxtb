@@ -23,6 +23,8 @@ PyTorch-based overlap implementations.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from tad_mctc.convert import symmetrize
 
 from dxtb._src.basis.bas import Basis
@@ -64,6 +66,8 @@ def setup_overlap(
 def build_overlap(
     setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
+    *,
+    pair_validity: Sequence[Tensor] | None = None,
 ) -> Tensor:
     """Build an overlap matrix from immutable setup data and current positions."""
     ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
@@ -73,6 +77,7 @@ def build_overlap(
         list(setup.alphas),
         list(setup.coeffs),
         positions,
+        pair_validity=pair_validity,
         plan=setup.pair_plan,
     )[0]
     return raw

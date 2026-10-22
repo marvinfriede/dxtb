@@ -25,6 +25,8 @@ from the interchangeable ``compute_1d`` kernels (see
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import torch
 
 from dxtb._src.constants import defaults
@@ -44,6 +46,7 @@ def _build_multipole(
     setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
     components: tuple[tuple[int, int, int], ...],
+    pair_validity: Sequence[Tensor] | None = None,
 ) -> Tensor:
     """Build a raw multipole matrix from setup data and current positions."""
     ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
@@ -54,6 +57,7 @@ def _build_multipole(
         list(setup.coeffs),
         positions,
         components,
+        pair_validity=pair_validity,
         plan=setup.pair_plan,
     )
 
@@ -61,17 +65,25 @@ def _build_multipole(
 def build_dipole(
     setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
+    *,
+    pair_validity: Sequence[Tensor] | None = None,
 ) -> Tensor:
     """Build the raw, origin-centered three-component dipole matrix."""
-    return _build_multipole(setup, positions, DIPOLE_COMPONENTS)
+    return _build_multipole(
+        setup, positions, DIPOLE_COMPONENTS, pair_validity=pair_validity
+    )
 
 
 def build_quadrupole(
     setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
+    *,
+    pair_validity: Sequence[Tensor] | None = None,
 ) -> Tensor:
     """Build the raw, origin-centered nine-component quadrupole matrix."""
-    return _build_multipole(setup, positions, QUADRUPOLE_COMPONENTS)
+    return _build_multipole(
+        setup, positions, QUADRUPOLE_COMPONENTS, pair_validity=pair_validity
+    )
 
 
 class MultipolePytorch(IntegralPytorch):

@@ -67,11 +67,20 @@ def twice_remove_negative_index(
         *args: str,
     ) -> Tensor:
         mask = idx >= 0
+        if func is torch.gather:
+            # Gathering in two dimensions requires expanding the mask. Keep
+            # this path tensor-only so mapped structural indices are legal.
+            return torch.where(
+                mask.unsqueeze(-1) * mask.unsqueeze(-2),
+                fcn(func, x, dim0, dim1, torch.where(mask, idx, 0), *args),
+                torch.tensor(0.0, device=x.device, dtype=x.dtype),
+            )
 
+        # Scatter reductions can change the output dimensions, so the input
+        # mask cannot be applied to their result. Retain the established
+        # all-valid fast path and masked-index behavior for this operation.
         if torch.all(mask):
             return fcn(func, x, dim0, dim1, idx, *args)
-
-        # gathering in two dimensions requires expanding the mask
         return torch.where(
             mask.unsqueeze(-1) * mask.unsqueeze(-2),
             fcn(func, x, dim0, dim1, torch.where(mask, idx, 0), *args),
@@ -246,9 +255,9 @@ def gather_remove_negative_index(func: Gather) -> Gather:
     @wraps(func)
     def wrapper(x: Tensor, dim: int, idx: Tensor, *args: str) -> Tensor:
         mask = idx >= 0
-        if torch.all(mask):
-            return func(x, dim, idx, *args)
-
+        # Keep the validity mask in tensor space.  Reducing it to a Python
+        # branch is not supported when structural indices are themselves
+        # mapped (for example, stacked canonical System cores under vmap).
         return torch.where(
             mask,
             func(x, dim, torch.where(mask, idx, 0), *args),

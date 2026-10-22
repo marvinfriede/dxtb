@@ -270,6 +270,7 @@ def assemble_matrix(
     chunk_size: int | None = None,
     checkpoint: bool = False,
     pairs: Sequence[Tensor] | None = None,
+    pair_validity: Sequence[Tensor] | None = None,
     plan: PairPlan | PairPlanNode | None = None,
 ) -> Tensor:
     """
@@ -314,6 +315,10 @@ def assemble_matrix(
         indices are constants, so everything is static and the function works
         under ``vmap`` and ``torch.compile`` as well. The error bound of the
         screening only holds for the geometries the selection was made for.
+    pair_validity : Sequence[Tensor] | None
+        Per-entry structural validity masks, one Boolean tensor per pair
+        class. Invalid entries are evaluated with benign geometry and removed
+        before AO assembly, retaining fixed shapes under ``vmap``.
     plan : PairPlan | PairPlanNode | None
         Structural plan of `ihelp` from :func:`prepare`. Built on the fly if
         not given (not possible inside ``torch.compile``).
@@ -343,7 +348,24 @@ def assemble_matrix(
                 f"Expected {len(plan.classes)} pair selections (one per "
                 f"class), got {len(pairs)}."
             )
-    elif screening_threshold is not None and torch.compiler.is_compiling():
+    if pair_validity is not None:
+        if len(pair_validity) != len(plan.classes):
+            raise ValueError(
+                "Expected one validity mask per pair-plan class, got "
+                f"{len(pair_validity)} masks for {len(plan.classes)} classes."
+            )
+        if any(
+            mask.shape != cls.ib.shape
+            for mask, cls in zip(pair_validity, plan.classes)
+        ):
+            raise ValueError(
+                "Pair validity masks must match their pair-plan entries."
+            )
+    if (
+        pairs is None
+        and screening_threshold is not None
+        and torch.compiler.is_compiling()
+    ):
         raise RuntimeError(
             "`screening_threshold` selects pairs depending on the data, which "
             "`torch.compile` cannot trace. Select the pairs eagerly with "
@@ -394,6 +416,14 @@ def assemble_matrix(
 
             pos_a = positions[atom[ib]]
             vec = positions[atom[jk]] - pos_a  # B - A
+            valid = None if pair_validity is None else pair_validity[k][sel]
+            if valid is not None:
+                # Invalid structural pairs can include coincident placeholders.
+                # Replace their geometry before the Gaussian kernel, then mask
+                # the resulting blocks before they enter the AO scatter.
+                zero_vec = torch.zeros_like(vec)
+                pos_a = torch.where(valid.unsqueeze(-1), pos_a, zero_vec)
+                vec = torch.where(valid.unsqueeze(-1), vec, zero_vec)
 
             args = (
                 vec,
@@ -426,6 +456,10 @@ def assemble_matrix(
 
             # same-shell blocks are complete: halve them for the symmetrization
             blocks = blocks * cl.weight[sel].to(dt)[:, None, None, None]
+            if valid is not None:
+                blocks = torch.where(
+                    valid[:, None, None, None], blocks, torch.zeros_like(blocks)
+                )
 
             all_idx.append(cl.idx[sel].reshape(-1))
             all_val.append(blocks.permute(1, 0, 2, 3).reshape(ncomp, -1))

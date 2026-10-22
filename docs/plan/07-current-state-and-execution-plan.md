@@ -49,7 +49,7 @@ Current state:
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. The full original E6a GFN1/GFN2 PyTorch method/component/derivative boundary is now accepted; see [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
-| C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b is complete at its documented structural/P9 pure-kernel boundary; this does not accept padded H0/integral/D3/ES2/ES3/SCF or production mixed-System execution. E6a whole-System `vmap`, E6b production packed/mixed-System batching, E7 broader padding safety, and E4.6 legacy retirement remain independently owned. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
+| C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b remains complete at its documented structural/P9 pure-kernel boundary. Padded H0/integral numerical evaluation is now separately owned by E6bimpl.0; no mixed-System SCF or production route is accepted yet. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
 | E1             | complete                        | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure remain accepted. E1.3's official tad-dftd3 0.7.0 integration passes the original numerical/derivative acceptance, including trainable s9=0 and D3-enabled public GFN1 transforms. The 4,990-node non-slow broad selection has 4,886 passed, 64 inherited failures, 30 skipped, 9 xfailed, and 1 documented non-strict XPASS; focused D3/E6a tests pass in five CPU environments. The known wheel metadata mismatch is accepted under the documented official-release `--no-deps` development/test policy; ordinary resolver compatibility is not claimed. See [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md) for the final audit and decisions. U1/U2 reports are historical only. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
@@ -57,7 +57,8 @@ Current state:
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
 | E3             | acceptance open                 | E3.1b is complete and E1.3 is now accepted. The E3-specific end-to-end reference/derivative matrix remains to be rerun under its own package gate; this E1/E6a closure does not close E3. E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | E6a complete; downstream E6/E7/E8 open | E6a.0–E6a.4 satisfy the documented GFN1/GFN2 PyTorch public conformer, Result/status, built-in component, and derivative boundary. The final E1.3/E6a audit and five-environment official-D3 matrix are in [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). GFN0 IES/SRB vmap, whole-System libcint transforms, mixed-System batching, and arbitrary custom callback transforms are outside the original E6a contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md); E6bimpl is the next implementation package, subject to its separate prerequisites; E6bcompat validates replacements or explicit migrations. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6/E7/E8       | E6a complete; downstream E6/E7/E8 open | E6a.0–E6a.4 satisfy the documented GFN1/GFN2 PyTorch public conformer, Result/status, built-in component, and derivative boundary. The final E1.3/E6a audit and five-environment official-D3 matrix are in [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). GFN0 IES/SRB vmap, whole-System libcint transforms, mixed-System batching, and arbitrary custom callback transforms are outside the original E6a contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md). E6bimpl.0 now provides a private mapped GFN1/PyTorch padded H0/integral foundation; full mixed-System SCF remains open. See [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md). E6bcompat validates replacements or explicit migrations. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6bimpl        | open — E6bimpl.0 foundation delivered | Canonical mapped GFN1/PyTorch integral and H0 evaluation matches independent H2/H3 and H2/H2O sources, including dipole/quadrupole levels and selected derivatives. GFN2 canonical padding, padded SCF/eigensolver semantics, padded interaction/classical evaluation, and production batching remain open. E6bimpl.0 does not activate Calculator routing. See [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md). |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -2317,6 +2318,13 @@ The E6bcompat-policy gate is complete; its binding, test-backed batch and
 legacy FULL contract is in [`E6bcompat-policy.md`](E6bcompat-policy.md).
 E6bimpl owns replacements, E6bcompat owns replacement validation, and
 E6broute owns activation/packed-route retirement after its independent gates.
+E6bimpl.0 adds the first internal numerical consumer: registered canonical
+padding feeds the existing PyTorch overlap/multipole and H0 kernels through a
+mapped evaluator. Its H2/H3 and H2/H2O parity, derivative evidence, GFN2
+readiness boundary, and remaining SCF work are recorded in
+[`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md).
+This staged foundation does not change Calculator dispatch or accept
+mixed-System SCF.
 
 E6a.0 and its E6a.0a legacy-guess fallback hardening are recorded in
 [`E6a0-system-singlepoint.md`](E6a0-system-singlepoint.md). E6a.1's selected
@@ -2843,7 +2851,9 @@ B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
   ──> E6c1-W2
 B1 batch API + E4.5b ──> E6bcompat-policy (complete; see policy document)
 E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
-  + E6bcompat-policy + defined padding ──> E6bimpl mixed-System composition
+  + E6bcompat-policy + defined padding
+  ──> E6bimpl.0 mapped padded integral/H0 foundation (GFN1/PyTorch)
+  ──> E6bimpl.1 mixed-System fixed-trip SCF and component consumers
 E6bimpl ──> E6bcompat validation
 E6bimpl + batch-critical E7 ──> E7 batch-safety gate
 E6bimpl + T0.8 W3 ──> E6c1-W3
@@ -3126,6 +3136,15 @@ for selecting and ordering downstream work. E6bcompat-policy may proceed
 early as specified there; E6a and E6b implementation remain subject to their
 listed prerequisites. Do not treat the historical C8b status below as a
 current blocker or prerequisite.
+
+E6bimpl.0 has now established a private, mapped GFN1/PyTorch padded
+integral/H0 evaluator using the existing physical kernels. It passes
+source-to-canonical physical AO block parity for H2/H3 and H2/H2O, optional
+multipole levels, and selected position/parameter derivatives in five CPU
+environments. This begins numerical consumption downstream of C8b; it does
+not change C8b's acceptance boundary, add mixed-System SCF, or activate
+Calculator batching. See
+[`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md).
 
 ### Historical implementation/status record
 
