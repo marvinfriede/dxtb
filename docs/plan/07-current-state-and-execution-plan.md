@@ -51,7 +51,7 @@ Current state:
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b is complete at its documented structural/P9 pure-kernel boundary; this does not accept padded H0/integral/D3/ES2/ES3/SCF or production mixed-System execution. E6a whole-System `vmap`, E6b production packed/mixed-System batching, E7 broader padding safety, and E4.6 legacy retirement remain independently owned. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
-| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3-L2 now uses only official tad-dftd3 0.7.0 with the local mctc 0.9.1 compatibility shim and local differentiable-zero-s9 adapter; focused D3 and E6a.0–E6a.4 public transform selections passed in five CPU environments. The official wheel still declares tad-mctc 0.8.0, so controlled --no-deps installation is required and pip check reports the known exact-pin conflict. E1.3 remains open for its broader component/derivative gate and dependency-policy decision. See [`E1.3-L2-official-d3.md`](E1.3-L2-official-d3.md); U1/U2 candidate reports are historical only. |
+| E1             | partial                         | E1.1 RepulsionAG and E1.2 CoulombMatrixAG/ES2 setup ownership closure are done. E1.3-L2a hardens the official tad-dftd3 0.7.0 integration: cutoff and s9=0 derivative regressions pass, the original 4,990-node non-slow manifest was partitioned and completed, and its 64 failures were observed at the package starting SHA. The two later L2a regression nodes also pass in the focused matrix. The official wheel still declares tad-mctc 0.8.0, so controlled --no-deps installation is required and pip check reports the known exact-pin conflict. E1.3 remains open for its full component/derivative gate and dependency-policy decision. See [`E1.3-L2a-hardening.md`](E1.3-L2a-hardening.md) and [`E1.3-L2-official-d3.md`](E1.3-L2-official-d3.md); U1/U2 candidate reports are historical only. |
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. The inherited frozen-spectral-density third-order diagnostic also had an undefined local `calculator` in both driver rows; it now derives the equivalent effective mixer configuration from the prepared System and selected interactions and verifies matching Fermi settings. |
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
@@ -780,8 +780,12 @@ and passes the selected public GFN1 D3-enabled JVP/jacfwd/vmap tests. dxtb
 adds the missing tad-mctc 0.9.1 import alias locally and routes both legacy
 and exact D3 energy paths through the official two-body and ATM kernels so
 tensor-valued trainable `s9=0` retains its derivative. The focused D3 and
-E6a.0–E6a.4 selections passed in all five supported CPU environments. Exact
-test counts and official wheel identity are in
+E6a.0–E6a.4 selections, including L2a cutoff and s9=0 regressions, passed
+146 tests in each of the five supported CPU environments. The selected
+non-slow broad regression set completed with 4,886 passed, 64 failed,
+30 skipped, 9 xfailed, and 1 xpassed; all failures were observed at the L2a
+starting SHA. Exact test nodes, environment, and wheel identity are in
+[`E1.3-L2a-hardening.md`](E1.3-L2a-hardening.md) and
 [`E1.3-L2-official-d3.md`](E1.3-L2-official-d3.md).
 
 The release metadata still requires tad-mctc 0.8.0, conflicting with dxtb's
@@ -792,7 +796,7 @@ historical only. E1.3 remains open pending its broader component/derivative
 acceptance and the dependency-policy decision. Do not exclude D3 from
 full-method transform acceptance.
 
-The required tad-dftd3 component tests are:
+The E1.3 acceptance matrix includes:
 
 - reverse third order;
 - `jvp`;
@@ -801,7 +805,11 @@ The required tad-dftd3 component tests are:
 - parameter gradient for all active DFT-D3 parameters;
 - gradient from `s9=0` when the three-body term is made trainable.
 
-Until the dependency satisfies these tests, G1 is not done for GFN1.
+The released upstream kernels pass the covered focused transforms and
+parameter cases. Full E1.3 remains open until the complete component,
+derivative, and supported dependency-policy gates are accepted; G1 remains
+blocked on that package-level decision, not on the historical AtomicC6
+custom-autograd failure.
 
 ## E1 acceptance
 

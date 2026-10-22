@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 import tad_dftd3 as d3
 import torch
@@ -53,11 +55,136 @@ def test_removed_atomic_c6_chunk_size_is_explicitly_deprecated(
             numbers, weights, reference, chunk_size=1
         )
 
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        component_module._atomic_c6(
+            numbers, weights, reference, chunk_size=None
+        )
+    assert not recorded
+
     assert result.shape == (2, 2)
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0][0] is numbers
     assert calls[0][1] is weights
     assert calls[0][2] is reference
+    assert calls[1][0] is numbers
+    assert calls[1][1] is weights
+    assert calls[1][2] is reference
+
+
+def test_chunk_size_warning_covers_legacy_and_exact_energy_paths() -> None:
+    """Both D3 entrypoints make the removed chunking option explicit."""
+    numbers = samples["LiH"]["numbers"]
+    positions = samples["LiH"]["positions"].double()
+    component, cache, core = _core(numbers)
+
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        core_energy = dispersion_d3_energy(core, positions, chunk_size=1)
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        legacy_energy = component.get_energy(positions, cache, chunk_size=1)
+    torch.testing.assert_close(core_energy, legacy_energy)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        dispersion_d3_energy(core, positions, chunk_size=None)
+        component.get_energy(positions, cache, chunk_size=None)
+    assert not recorded
+
+
+def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
+    """The local D3 adapter keeps its shared 50-bohr pre-migration limit."""
+    numbers = torch.tensor([8, 1, 1], dtype=torch.int64)
+    component, cache, core = _core(numbers)
+    component.param["s9"] = torch.tensor(1.0, dtype=torch.double)
+    core = core_dispersion_d3_setup(
+        cache, numbers, component.numbers, component.param
+    )
+    parameters = core.as_param()
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [45.0, 0.0, 0.0], [22.5, 38.97114317, 0.0]],
+        dtype=torch.double,
+    ).requires_grad_(True)
+
+    cn = d3.ncoord.coordination_number(
+        numbers,
+        positions,
+        counting_function=cache.counting_function,
+        rcov=cache.rcov,
+        cutoff=cache.cutoff,
+    )
+    weights = d3.model.weight_references(numbers, cn, cache.ref)
+    c6 = d3.model.atomic_c6(numbers, weights, cache.ref)
+    expected = d3.disp.dispersion(
+        numbers,
+        positions,
+        parameters,
+        c6,
+        cache.rvdw,
+        cache.r4r2,
+        cache.damping_function,
+        cutoff=d3.Cutoff(disp2=50.0, disp3=50.0, dtype=positions.dtype),
+    )
+    actual = dispersion_d3_energy(core, positions)
+    torch.testing.assert_close(actual, expected, rtol=1.0e-12, atol=1.0e-24)
+    actual_gradient = torch.autograd.grad(actual.sum(), positions)[0]
+    expected_gradient = torch.autograd.grad(expected.sum(), positions)[0]
+    torch.testing.assert_close(
+        actual_gradient, expected_gradient, rtol=1.0e-12, atol=1.0e-24
+    )
+
+    default_positions = positions.detach().clone().requires_grad_(True)
+    released_default = d3.disp.dispersion(
+        numbers,
+        default_positions,
+        parameters,
+        c6,
+        cache.rvdw,
+        cache.r4r2,
+        cache.damping_function,
+        cutoff=d3.Cutoff(dtype=positions.dtype),
+    )
+    assert not torch.equal(actual, released_default)
+    default_gradient = torch.autograd.grad(
+        released_default.sum(), default_positions
+    )[0]
+    assert not torch.equal(actual_gradient, default_gradient)
+
+    custom_positions = positions.detach().clone().requires_grad_(True)
+    custom_cutoff = d3.Cutoff(disp2=42.0, disp3=48.0, dtype=positions.dtype)
+    custom_combined = d3.disp.dispersion(
+        numbers,
+        custom_positions,
+        parameters,
+        c6,
+        cache.rvdw,
+        cache.r4r2,
+        cache.damping_function,
+        cutoff=custom_cutoff,
+    )
+    custom_split = d3.disp.dispersion2(
+        numbers,
+        custom_positions,
+        parameters,
+        c6,
+        cache.r4r2,
+        cache.damping_function,
+        custom_cutoff.disp2,
+    ) + d3.disp.dispersion3(
+        numbers,
+        custom_positions,
+        parameters,
+        c6,
+        cache.rvdw,
+        custom_cutoff.disp3,
+    )
+    torch.testing.assert_close(custom_combined, custom_split)
+    custom_combined_gradient = torch.autograd.grad(
+        custom_combined.sum(), custom_positions, retain_graph=True
+    )[0]
+    custom_split_gradient = torch.autograd.grad(
+        custom_split.sum(), custom_positions
+    )[0]
+    torch.testing.assert_close(custom_combined_gradient, custom_split_gradient)
 
 
 def _component(numbers: torch.Tensor):

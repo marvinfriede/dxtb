@@ -281,6 +281,12 @@ def test_official_atomic_c6_supports_nested_transforms() -> None:
     assert torch.isfinite(jacobian).all()
     assert torch.isfinite(hessian).all()
 
+    mapped_jacfwd = torch.func.vmap(torch.func.jacfwd(scalar))(positions)
+    serial_jacfwd = torch.stack(
+        [torch.func.jacfwd(scalar)(geometry) for geometry in positions]
+    )
+    torch.testing.assert_close(mapped_jacfwd, serial_jacfwd)
+
     nested = torch.func.vmap(
         torch.func.jacrev(
             lambda geometry: geometry * float(is_batched(geometry))
@@ -344,9 +350,35 @@ def test_zero_trainable_s9_derivative_matches_finite_difference() -> None:
             core.replace(parameter_entries=entries), positions
         ).sum()
 
+    static_zero_python = exact_energy(0.0)
+    static_zero_tensor = exact_energy(torch.tensor(0.0, dtype=positions.dtype))
+    torch.testing.assert_close(static_zero_python, static_zero_tensor)
+
+    nonzero_s9 = exact_energy(torch.tensor(0.25, dtype=positions.dtype))
+    negative_s9 = exact_energy(torch.tensor(-0.25, dtype=positions.dtype))
+    torch.testing.assert_close(
+        nonzero_s9 + negative_s9,
+        2.0 * static_zero_python,
+        atol=1.0e-12,
+        rtol=1.0e-10,
+    )
+
     forward_s9 = torch.func.jacfwd(exact_energy)(
         torch.tensor(0.0, dtype=positions.dtype)
+    )
+    _, tangent_s9 = torch.func.jvp(
+        exact_energy,
+        (torch.tensor(0.0, dtype=positions.dtype),),
+        (torch.tensor(1.0, dtype=positions.dtype),),
     )
     torch.testing.assert_close(
         forward_s9, exact_gradient, atol=1.0e-10, rtol=1.0e-6
     )
+    torch.testing.assert_close(
+        tangent_s9, exact_gradient, atol=1.0e-10, rtol=1.0e-6
+    )
+
+    s9_batch = torch.tensor([0.0, 0.25, -0.25], dtype=positions.dtype)
+    mapped_s9 = torch.func.vmap(exact_energy)(s9_batch)
+    serial_s9 = torch.stack([exact_energy(value) for value in s9_batch])
+    torch.testing.assert_close(mapped_s9, serial_s9)
