@@ -158,6 +158,7 @@ def test_public_system_differentiable_zero_s9_has_three_body_derivative() -> (
     positions = _positions((8, 1, 1)).requires_grad_()
     s9 = model.par.get("dispersion.d3.s9", unwrapped=False).param
     assert s9 is not None and s9.requires_grad
+    torch.testing.assert_close(s9.detach(), torch.zeros_like(s9))
     energy = system.singlepoint(positions).energy.sum()
     gradient = torch.autograd.grad(energy, s9, create_graph=True)[0]
     assert torch.isfinite(gradient)

@@ -46,7 +46,7 @@ Current state:
 | B6a-SCF-validation | done | Seven parameterized family rows plus a separate all-seven integration test pass in all five environments; reused-System state is checked before and after fresh-System setup/evaluation. The intermittent PySCF loader failure family was reproduced on pre-package base `3f41f7f280a3c6df364cf7639360ca602b945118`. Broader B6a remains partial for legacy component/cache API retirement and upstream D3 forward-AD support. |
 | B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, B6b-core, B6a-D3.1, B6a-D3.1a, and B6a-Cache.1 are complete. Exact single-System classical families now own their captured setup values directly; normal setup does not call `ClassicalList.get_cache()`, and no persistent generic built-in cache is stored. `System.classical_cache` is an on-demand compatibility view; packed systems and explicit custom-extension data retain legacy ownership. Single-System setup rejects ambiguous duplicate classical labels without changing direct or packed `ClassicalList` policy. Broader B6a remains open for retirement of legacy Component/Cache lifecycle APIs and the separately owned compatibility purge. C5 is complete and unblocks C6/C7. |
 | B6a-Cache.1   | done                            | Exact single-System Repulsion, SRB, IES, Halogen, classical D4, and D3 setups are captured directly through their family builders. The stored generic cache was replaced by explicit custom-extension data and packed-only legacy storage. The `System.classical_cache` compatibility property assembles an ordered view over family Nodes and stored extension data on demand. The System boundary rejects duplicate active labels and multiple exact instances of the singular-setup families; D3 supports multiple identity-associated setups. |
-| B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. E6a.0 now maps the public fixed-System `System.singlepoint` path for its initial GFN1/PyTorch slice; full E6a method/component/derivative acceptance remains open. |
+| B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. E6a.4's candidate-backed checks extend public fixed-System `System.singlepoint` transform evidence to selected GFN1/GFN2 configurations; full release-based E6a acceptance remains open. |
 | B8             | not done                        | Remaining later-track work remains open.                                                            |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b is complete at its documented structural/P9 pure-kernel boundary; this does not accept padded H0/integral/D3/ES2/ES3/SCF or production mixed-System execution. E6a whole-System `vmap`, E6b production packed/mixed-System batching, E7 broader padding safety, and E4.6 legacy retirement remain independently owned. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
@@ -57,7 +57,7 @@ Current state:
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
 | E3             | acceptance blocked by E1.3      | E3.1b is complete. Full end-to-end GFN1/GFN2 transform acceptance remains blocked on full E1, including E1.3 DFT-D3/tad-dftd3 forward-mode support where that outer term is active; E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | E6a.0-.3 scoped slices done; E6a open | E6a.0/0a established the public fixed-trip System boundary and route-first fallback; E6a.1/1a established selected GFN1/GFN2 public conformer mapping and GFN0 spin-validation behavior; E6a.2 added public status integration. E6a.3 accepts public GFN1/GFN2 built-in aggregates, ALPB, active halogen, reverse position/parameter gradients, conformer independence, and a selected reverse-over-reverse Hessian; see [`E6a3-component-derivatives.md`](E6a3-component-derivatives.md). Overall E6a remains open for the complete method/component/derivative matrix, GFN0 IES/SRB transform support, and E1.3 DFT-D3 forward AD. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md); E6bimpl may freeze replacement scope from that policy, and E6bcompat validates replacements or explicit migrations. E6bimpl also requires full E6a, B3b, C5-C7/C8b, E2-core, E4core, and defined padding. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
+| E6/E7/E8       | E6a.0-.4 scoped slices done; E6a open | E6a.0/0a established the public fixed-trip System boundary and route-first fallback; E6a.1/1a established selected GFN1/GFN2 public conformer mapping and preserved GFN0 spin validation; E6a.2 added public status integration; E6a.3 accepted built-in aggregates and reverse derivatives. E6a.4 passes selected candidate-backed GFN1/GFN2 forward, mapped, Hessian-accuracy, and third-directional-accuracy checks across five CPU environments; see [`E6a4-transform-acceptance.md`](E6a4-transform-acceptance.md). The candidate D3 wheel is unreleased, so E6a remains open pending release-based E1.3 and complete project method/component/derivative acceptance. GFN0 IES/SRB vmap is outside the original GFN1/GFN2 E6a gate and remains separately scoped. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md); E6bimpl may freeze replacement scope from that policy, and E6bcompat validates replacements or explicit migrations. E6bimpl also requires full E6a, B3b, C5-C7/C8b, E2-core, E4core, and defined padding. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -2335,11 +2335,14 @@ of the default GFN1/GFN2 built-in aggregate families, active Halogen and
 explicit ALPB, position and parameter gradients, conformer independence, and
 a selected reverse-over-reverse Hessian; its method/family matrix and
 limitations are recorded in
-[`E6a3-component-derivatives.md`](E6a3-component-derivatives.md). These are
-scoped slices, not full E6a closure. E6a remains open for GFN0 IES/SRB public
-transform support, remaining method/component/derivative configurations, and
-E1.3 DFT-D3 forward AD. No libcint whole-System mapping or mixed-System
-execution is accepted.
+[`E6a3-component-derivatives.md`](E6a3-component-derivatives.md). E6a.4's
+candidate-backed forward and derivative evidence is recorded in
+[`E6a4-transform-acceptance.md`](E6a4-transform-acceptance.md). These remain
+scoped slices, not full E6a closure. GFN0 IES/SRB whole-System mapping is
+outside the original mandatory GFN1/GFN2 boundary and remains separately
+scoped. Overall E6a remains open pending released E1.3 and complete
+method/component/derivative acceptance. No libcint whole-System mapping or
+mixed-System execution is accepted.
 
 ## Transform-safe single-System entrypoint (E6a prerequisite)
 
@@ -2842,7 +2845,7 @@ B7 ──> B8a; B8a + full E3 ──> B8b; B8b + full E3 ──> E8
 B5 ──> F0 bounded training/state-history invariant
 
 B6b-core + full E1 + E2-core + E4core + private fixed-trip boundary
-  + B5.6 + C8a ──> E6a conformer vmap (E6a.0/.0a/.1/.1a/.2 slices complete; full E6a open)
+  + B5.6 + C8a ──> E6a conformer vmap (E6a.0-.4 scoped slices complete; full E6a open)
   ──> E6c1-W2
 B1 batch API + E4.5b ──> E6bcompat-policy (complete; see policy document)
 E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
