@@ -341,24 +341,18 @@ def test_system_strict_mixer_error_precedes_initial_guess(monkeypatch) -> None:
         system.singlepoint(_positions()[0])
 
 
-def test_public_system_jacfwd_d3_depends_on_upstream_atomic_c6_api() -> None:
-    """The old C6 custom Function blocks JVP; composite upstream passes."""
+def test_public_system_jacfwd_with_official_d3_release() -> None:
+    """Official tad-dftd3 composite C6 supports public GFN1 jacfwd."""
     system = _system(maxiter=2)
     positions = _positions()[0]
 
     def energy(value: torch.Tensor) -> torch.Tensor:
         return system.singlepoint(value).energy.sum()
 
-    from dxtb._src.components.classicals.dispersion import d3 as d3_component
-
-    if d3_component._D3_COMPOSITE_C6:
-        forward = torch.func.jacfwd(energy)(positions)
-        reverse = torch.func.jacrev(energy)(positions)
-        assert torch.isfinite(forward).all()
-        torch.testing.assert_close(forward, reverse)
-    else:
-        with pytest.raises(NotImplementedError, match="jvp function"):
-            torch.func.jacfwd(energy)(positions)
+    forward = torch.func.jacfwd(energy)(positions)
+    reverse = torch.func.jacrev(energy)(positions)
+    assert torch.isfinite(forward).all()
+    torch.testing.assert_close(forward, reverse)
 
 
 def test_calculator_retains_eager_single_system_adapter() -> None:

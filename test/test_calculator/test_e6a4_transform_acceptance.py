@@ -24,7 +24,6 @@ from torch.utils import _pytree
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
-from dxtb._src.components.classicals.dispersion.d3 import _D3_COMPOSITE_C6
 from dxtb.config import Config
 
 
@@ -243,10 +242,6 @@ def test_public_hessian_matches_finite_difference_of_gradients(
     )
 
 
-@pytest.mark.skipif(
-    not _D3_COMPOSITE_C6,
-    reason="candidate-only full-method D3 derivative acceptance",
-)
 def test_gfn1_d3_public_third_directional_derivative_matches_finite_difference() -> (
     None
 ):

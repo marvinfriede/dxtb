@@ -20,18 +20,17 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc.autograd import is_batched
 
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals.dispersion.d3 import (
-    _D3_COMPOSITE_C6,
+    DispersionD3,
+    _D3ParameterValue,
+    core_dispersion_d3_setup,
+    dispersion_d3_energy,
 )
 from dxtb.config import Config
-
-pytestmark = pytest.mark.skipif(
-    not _D3_COMPOSITE_C6,
-    reason="requires tad-dftd3 composite atomic_c6 API (v0.7+)",
-)
 
 
 def _system(
@@ -235,3 +234,119 @@ def test_public_system_vmap_jacfwd_has_one_conformer_axis() -> None:
                     atol=1.0e-12,
                     rtol=0.0,
                 )
+
+
+def test_official_atomic_c6_supports_nested_transforms() -> None:
+    """The released composite C6 path handles padding and nested transforms."""
+    import tad_dftd3 as d3
+    from tad_mctc.data import radii
+
+    numbers = torch.tensor([8, 1, 1, 0], dtype=torch.int64)
+    base = _positions((8, 1, 1))
+    padded = torch.cat((base, torch.zeros((1, 3), dtype=base.dtype)), dim=0)
+    positions = torch.stack((padded, padded + 0.03, padded - 0.02))
+    reference = d3.reference.Reference(dtype=positions.dtype)
+    rcov = radii.COV_D3(dtype=positions.dtype)[numbers]
+
+    def atomic_c6(geometry: torch.Tensor) -> torch.Tensor:
+        aligned_numbers = numbers + torch.zeros_like(
+            geometry[..., 0], dtype=numbers.dtype
+        )
+        cn = d3.ncoord.coordination_number(
+            aligned_numbers,
+            geometry,
+            counting_function=d3.ncoord.exp_count,
+            rcov=rcov,
+            cutoff=positions.new_tensor(25.0),
+        )
+        weights = d3.model.weight_references(aligned_numbers, cn, reference)
+        return d3.model.atomic_c6(aligned_numbers, weights, reference)
+
+    mapped = torch.func.vmap(atomic_c6)(positions)
+    assert mapped.shape == (3, 4, 4)
+    torch.testing.assert_close(
+        mapped[:, 3, :], torch.zeros_like(mapped[:, 3, :])
+    )
+    torch.testing.assert_close(
+        mapped[:, :, 3], torch.zeros_like(mapped[:, :, 3])
+    )
+
+    def scalar(geometry: torch.Tensor) -> torch.Tensor:
+        return atomic_c6(geometry).sum()
+
+    jacobian = torch.func.jacfwd(scalar)(padded)
+    hessian = torch.func.jacrev(torch.func.jacrev(scalar))(padded)
+    assert jacobian.shape == padded.shape
+    assert hessian.shape == (4, 3, 4, 3)
+    assert torch.isfinite(jacobian).all()
+    assert torch.isfinite(hessian).all()
+
+    nested = torch.func.vmap(
+        torch.func.jacrev(
+            lambda geometry: geometry * float(is_batched(geometry))
+        )
+    )(positions)
+    eye = torch.eye(12, dtype=positions.dtype).reshape(4, 3, 4, 3)
+    torch.testing.assert_close(nested, eye.expand(3, -1, -1, -1, -1))
+
+
+def test_zero_trainable_s9_derivative_matches_finite_difference() -> None:
+    """Both legacy and System-owned D3 routes retain ATM dE/ds9 at zero."""
+    numbers = torch.tensor([8, 1, 1], dtype=torch.int64)
+    positions = _positions((8, 1, 1))
+    dd = {"dtype": positions.dtype, "device": positions.device}
+    params = {
+        "s6": torch.tensor(1.0, **dd),
+        "s8": torch.tensor(0.78981345, **dd),
+        "a1": torch.tensor(0.49484001, **dd),
+        "a2": torch.tensor(5.73083694, **dd),
+        "s9": torch.tensor(0.0, requires_grad=True, **dd),
+    }
+    dispersion = DispersionD3(numbers, params, **dd)
+    cache = dispersion.get_cache(numbers)
+    core = core_dispersion_d3_setup(cache, numbers, numbers, params)
+
+    legacy = dispersion.get_energy(positions, cache).sum()
+    exact = dispersion_d3_energy(core, positions).sum()
+    legacy_gradient = torch.autograd.grad(
+        legacy, params["s9"], create_graph=True, retain_graph=True
+    )[0]
+    exact_gradient = torch.autograd.grad(
+        exact, params["s9"], create_graph=True
+    )[0]
+    assert legacy_gradient.abs() > 1.0e-12
+    torch.testing.assert_close(legacy_gradient, exact_gradient)
+
+    step = 1.0e-4
+    with torch.no_grad():
+        params["s9"].fill_(step)
+    plus = dispersion.get_energy(positions, cache).sum()
+    with torch.no_grad():
+        params["s9"].fill_(-step)
+    minus = dispersion.get_energy(positions, cache).sum()
+    with torch.no_grad():
+        params["s9"].zero_()
+    finite_difference = (plus - minus) / (2.0 * step)
+    torch.testing.assert_close(
+        legacy_gradient, finite_difference, atol=1.0e-10, rtol=1.0e-6
+    )
+
+    def exact_energy(s9: torch.Tensor) -> torch.Tensor:
+        entries = tuple(
+            (
+                entry.replace(value=_D3ParameterValue.encode(s9))
+                if entry.name == "s9"
+                else entry
+            )
+            for entry in core.parameter_entries
+        )
+        return dispersion_d3_energy(
+            core.replace(parameter_entries=entries), positions
+        ).sum()
+
+    forward_s9 = torch.func.jacfwd(exact_energy)(
+        torch.tensor(0.0, dtype=positions.dtype)
+    )
+    torch.testing.assert_close(
+        forward_s9, exact_gradient, atol=1.0e-10, rtol=1.0e-6
+    )

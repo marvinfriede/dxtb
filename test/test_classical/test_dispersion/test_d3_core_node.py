@@ -43,9 +43,6 @@ def test_removed_atomic_c6_chunk_size_is_explicitly_deprecated(
         calls.append((numbers, weights, reference))
         return torch.ones((2, 2), dtype=weights.dtype, device=weights.device)
 
-    monkeypatch.setattr(
-        component_module, "_ATOMIC_C6_SUPPORTS_CHUNK_SIZE", False
-    )
     monkeypatch.setattr(d3.model, "atomic_c6", atomic_c6)
     numbers = torch.tensor([1, 1], dtype=torch.int64)
     weights = torch.ones((2, 7), dtype=torch.double)

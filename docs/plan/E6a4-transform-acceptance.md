@@ -1,8 +1,15 @@
 # E6a.4 — Public conformer transform and derivative acceptance
 
-Status: candidate-backed acceptance preparation passes for the tested
-GFN1/GFN2 PyTorch configurations. Overall E6a remains open pending a released
-DFT-D3 dependency and completion of the full E1/method matrix.
+Status: the selected GFN1/GFN2 PyTorch transforms pass with official
+`tad-dftd3==0.7.0` under the controlled `--no-deps` installation and local
+tad-mctc compatibility shim. E1.3-L2 adds the trainable-zero-`s9` correction
+and official-release validation. Overall E6a remains open for its remaining
+method/component/derivative obligations.
+
+The candidate-backed runs below are historical comparison evidence only.
+The candidate branch and wheel are no longer supported or used; current
+official-release test results are recorded in
+[`E1.3-L2-official-d3.md`](E1.3-L2-official-d3.md).
 
 Local starting commit: `9cc581d6deeef8bf5675d90b533222f16b4c69aa`.
 The complete E1.3-U2 change from the reviewed pre-integration baseline was

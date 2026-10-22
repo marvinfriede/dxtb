@@ -26,13 +26,11 @@ from __future__ import annotations
 import pytest
 import tad_dftd3 as d3
 import torch
-from tad_mctc import Structure
 from tad_mctc.batch import pack
 from tad_mctc.data import radii
 
 from dxtb import GFN1_XTB
 from dxtb._src.components.classicals.dispersion.d3 import (
-    _D3_USES_STRUCTURE_API,
     _DXTB_D3_DISPERSION_CUTOFF,
 )
 from dxtb._src.typing import DD, Tensor
@@ -85,29 +83,20 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         "a2": torch.tensor(5.73083694, **dd),
     }
 
-    if _D3_USES_STRUCTURE_API:
-        energy = d3.disp.dispersion_with_atom_values(
-            Structure(numbers=numbers, positions=positions),
-            param,
-            c6,
-            rvdw_values=rvdw,
-            r4r2_values=r4r2,
-            damping_function=d3.damping.rational_damping,
-            cutoff=d3.Cutoff(
-                disp2=_DXTB_D3_DISPERSION_CUTOFF,
-                disp3=_DXTB_D3_DISPERSION_CUTOFF,
-            ),
-        )
-    else:
-        energy = d3.disp.dispersion(
-            numbers,
-            positions,
-            param,
-            c6,
-            rvdw,
-            r4r2,
-            d3.damping.rational_damping,
-        )
+    energy = d3.disp.dispersion(
+        numbers,
+        positions,
+        param,
+        c6,
+        rvdw,
+        r4r2,
+        d3.damping.rational_damping,
+        cutoff=d3.Cutoff(
+            disp2=_DXTB_D3_DISPERSION_CUTOFF,
+            disp3=_DXTB_D3_DISPERSION_CUTOFF,
+            **dd,
+        ),
+    )
     assert energy.dtype == dtype
     assert pytest.approx(ref.cpu()) == energy.cpu()
 

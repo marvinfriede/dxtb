@@ -37,16 +37,14 @@ To test specific environments, use the `-e` flag.
 Development dependency setup
 ----------------------------
 
-The restructuring branch currently pins ``tad-mctc==0.9.1`` and
-``tad-multicharge==0.7.0``. The currently required legacy releases
-``tad-dftd3==0.6.0`` and ``tad-dftd4==0.8.0`` are installed with
-``pip install --no-deps`` in the restructuring development/test environments,
-including tox and the pinned Track-0 baseline CI environment, so
-``tad-mctc==0.9.1`` remains authoritative despite conflicting published
-dependency metadata. Tox smoke-imports dxtb and both dispersion packages
-before running tests. This is a controlled development/baseline-testing
-workaround, not the ordinary installation or supported release dependency
-model. Do not publish while an ordinary installation still depends on this
-external no-deps workaround; restore normal runtime dependencies and remove
-``mctc_shim.py``, ``ncoord/legacy.py`` and the workaround after compatible
-upstream releases are available.
+The development/test environments pin ``tad-mctc==0.9.1`` and
+``tad-multicharge==0.7.0``. The official ``tad-dftd3==0.7.0`` release
+declares ``tad-mctc==0.8.0``; ``tad-dftd4==0.8.0`` also requires older
+packages. After installing dxtb's pinned dependencies, install them from
+PyPI with ``python -m pip install --no-deps --index-url
+https://pypi.org/simple tad-dftd3==0.7.0 tad-dftd4==0.8.0``. The local
+``dxtb._src.mctc_shim`` restores the removed names used by those releases.
+This controlled environment setup does not resolve the published metadata
+conflict: ``pip check`` is expected to report the tad-dftd3/mctc mismatch.
+The shim keeps the dxtb 0.9.1 API authoritative and must remain until
+compatible dispersion releases are available.

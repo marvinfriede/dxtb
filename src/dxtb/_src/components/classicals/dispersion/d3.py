@@ -23,12 +23,11 @@ The DFT-D3 dispersion model.
 
 from __future__ import annotations
 
-import inspect
 import warnings
 
 import tad_dftd3 as d3
 import torch
-from tad_mctc import Structure
+from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.data import radii
 from tad_mctc.tree import Node, child, context
 
@@ -48,18 +47,7 @@ __all__ = [
     "dispersion_d3_energy",
 ]
 
-_ATOMIC_C6_SUPPORTS_CHUNK_SIZE = (
-    "chunk_size" in inspect.signature(d3.model.atomic_c6).parameters
-)
-_D3_COMPOSITE_C6 = tuple(
-    int(part) for part in d3.__version__.split(".")[:2]
-) >= (0, 7)
-_D3_USES_STRUCTURE_API = (
-    "structure" in inspect.signature(d3.disp.dispersion).parameters
-)
-_DXTB_D3_CN_CUTOFF = (
-    25.0 if _D3_USES_STRUCTURE_API else d3.defaults.D3_CN_CUTOFF
-)
+_DXTB_D3_CN_CUTOFF = getattr(d3.defaults, "D3_CN_CUTOFF", 25.0)
 _DXTB_D3_DISPERSION_CUTOFF = getattr(d3.defaults, "D3_DISP_CUTOFF", 50.0)
 
 
@@ -72,16 +60,11 @@ def _atomic_c6(
 ) -> Tensor:
     """Call the installed tad-dftd3 atomic C6 API compatibly.
 
-    tad-dftd3 0.6 exposes explicit chunking for its pair/reference
-    intermediate. The 0.7 composite implementation replaces that large
-    intermediate with an element-grouped contraction and removes the option.
-    Keep accepting the legacy keyword during migration, but make its changed
-    semantics visible when a caller supplies a value on the new API.
+    The supported tad-dftd3 0.7 release uses an element-grouped contraction
+    and no longer exposes explicit chunking. Keep accepting the legacy
+    keyword, but make its changed semantics visible when a caller supplies a
+    value.
     """
-    atomic_c6 = d3.model.atomic_c6
-    if _ATOMIC_C6_SUPPORTS_CHUNK_SIZE:
-        return atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
-
     if chunk_size is not None:
         warnings.warn(
             "tad-dftd3 no longer accepts chunk_size; its grouped atomic-C6 "
@@ -90,7 +73,7 @@ def _atomic_c6(
             DeprecationWarning,
             stacklevel=2,
         )
-    return atomic_c6(numbers, weights, reference)
+    return d3.model.atomic_c6(numbers, weights, reference)
 
 
 def _dispersion(
@@ -102,32 +85,41 @@ def _dispersion(
     r4r2: Tensor,
     damping_function: Any,
 ) -> Tensor:
-    """Call the installed D3 dispersion API with the captured dxtb setup."""
-    if not _D3_USES_STRUCTURE_API:
-        return d3.disp.dispersion(
+    """Evaluate both D3 terms without disconnecting a trainable zero s9."""
+    cutoff = positions.new_tensor(_DXTB_D3_DISPERSION_CUTOFF)
+    energy = d3.disp.dispersion2(
+        numbers,
+        positions,
+        parameters,
+        c6,
+        r4r2,
+        damping_function,
+        cutoff,
+    )
+
+    s9 = parameters.get("s9")
+    # The released tad-dftd3 0.7.0 wrapper branches on ``s9 != 0``. A
+    # differentiable or transformed tensor at zero still has a derivative
+    # through the ATM term. For an ordinary non-trainable tensor, inspecting
+    # its scalar value is safe and avoids cubic work for constant zero s9.
+    if isinstance(s9, Tensor):
+        use_atm = s9.requires_grad or is_functorch_tensor(s9)
+        if not use_atm:
+            use_atm = bool(s9 != 0.0)
+    else:
+        use_atm = s9 is not None and s9 != 0.0
+
+    if use_atm:
+        energy = energy + d3.disp.dispersion3(
             numbers,
             positions,
             parameters,
             c6,
             rvdw,
-            r4r2,
-            damping_function,
+            cutoff,
         )
 
-    structure = Structure(numbers=numbers, positions=positions)
-    cutoff = d3.Cutoff(
-        disp2=_DXTB_D3_DISPERSION_CUTOFF,
-        disp3=_DXTB_D3_DISPERSION_CUTOFF,
-    )
-    return d3.disp.dispersion_with_atom_values(
-        structure,
-        parameters,
-        c6,
-        rvdw_values=rvdw,
-        r4r2_values=r4r2,
-        damping_function=damping_function,
-        cutoff=cutoff,
-    )
+    return energy
 
 
 LABEL_DISPERSIOND3 = "DispersionD3"
