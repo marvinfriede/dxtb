@@ -351,14 +351,14 @@ def test_public_system_jacfwd_d3_depends_on_upstream_atomic_c6_api() -> None:
 
     from dxtb._src.components.classicals.dispersion import d3 as d3_component
 
-    if d3_component._ATOMIC_C6_SUPPORTS_CHUNK_SIZE:
-        with pytest.raises(NotImplementedError, match="jvp function"):
-            torch.func.jacfwd(energy)(positions)
-    else:
+    if d3_component._D3_COMPOSITE_C6:
         forward = torch.func.jacfwd(energy)(positions)
         reverse = torch.func.jacrev(energy)(positions)
         assert torch.isfinite(forward).all()
         torch.testing.assert_close(forward, reverse)
+    else:
+        with pytest.raises(NotImplementedError, match="jvp function"):
+            torch.func.jacfwd(energy)(positions)
 
 
 def test_calculator_retains_eager_single_system_adapter() -> None:

@@ -24,12 +24,12 @@ import torch
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals.dispersion.d3 import (
-    _ATOMIC_C6_SUPPORTS_CHUNK_SIZE,
+    _D3_COMPOSITE_C6,
 )
 from dxtb.config import Config
 
 pytestmark = pytest.mark.skipif(
-    _ATOMIC_C6_SUPPORTS_CHUNK_SIZE,
+    not _D3_COMPOSITE_C6,
     reason="requires tad-dftd3 composite atomic_c6 API (v0.7+)",
 )
 

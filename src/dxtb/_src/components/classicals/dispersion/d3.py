@@ -28,6 +28,7 @@ import warnings
 
 import tad_dftd3 as d3
 import torch
+from tad_mctc import Structure
 from tad_mctc.data import radii
 from tad_mctc.tree import Node, child, context
 
@@ -50,6 +51,16 @@ __all__ = [
 _ATOMIC_C6_SUPPORTS_CHUNK_SIZE = (
     "chunk_size" in inspect.signature(d3.model.atomic_c6).parameters
 )
+_D3_COMPOSITE_C6 = tuple(
+    int(part) for part in d3.__version__.split(".")[:2]
+) >= (0, 7)
+_D3_USES_STRUCTURE_API = (
+    "structure" in inspect.signature(d3.disp.dispersion).parameters
+)
+_DXTB_D3_CN_CUTOFF = (
+    25.0 if _D3_USES_STRUCTURE_API else d3.defaults.D3_CN_CUTOFF
+)
+_DXTB_D3_DISPERSION_CUTOFF = getattr(d3.defaults, "D3_DISP_CUTOFF", 50.0)
 
 
 def _atomic_c6(
@@ -80,6 +91,43 @@ def _atomic_c6(
             stacklevel=2,
         )
     return atomic_c6(numbers, weights, reference)
+
+
+def _dispersion(
+    numbers: Tensor,
+    positions: Tensor,
+    parameters: dict[str, Any],
+    c6: Tensor,
+    rvdw: Tensor,
+    r4r2: Tensor,
+    damping_function: Any,
+) -> Tensor:
+    """Call the installed D3 dispersion API with the captured dxtb setup."""
+    if not _D3_USES_STRUCTURE_API:
+        return d3.disp.dispersion(
+            numbers,
+            positions,
+            parameters,
+            c6,
+            rvdw,
+            r4r2,
+            damping_function,
+        )
+
+    structure = Structure(numbers=numbers, positions=positions)
+    cutoff = d3.Cutoff(
+        disp2=_DXTB_D3_DISPERSION_CUTOFF,
+        disp3=_DXTB_D3_DISPERSION_CUTOFF,
+    )
+    return d3.disp.dispersion_with_atom_values(
+        structure,
+        parameters,
+        c6,
+        rvdw_values=rvdw,
+        r4r2_values=r4r2,
+        damping_function=damping_function,
+        cutoff=cutoff,
+    )
 
 
 LABEL_DISPERSIOND3 = "DispersionD3"
@@ -307,7 +355,7 @@ def dispersion_d3_energy(
         numbers, cn, reference, setup.weighting_function
     )
     c6 = _atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
-    return d3.disp.dispersion(
+    return _dispersion(
         numbers,
         positions,
         setup.as_param(),
@@ -369,7 +417,7 @@ class DispersionD3(Dispersion):
 
         cutoff = kwargs.pop(
             "cutoff",
-            torch.tensor(d3.defaults.D3_CN_CUTOFF, **self.dd),
+            torch.tensor(_DXTB_D3_CN_CUTOFF, **self.dd),
         ).to(**self.dd)
 
         cf = kwargs.pop("counting_function", exp_count)
@@ -423,7 +471,7 @@ class DispersionD3(Dispersion):
         chunk_size = kwargs.pop("chunk_size", None)
         c6 = _atomic_c6(self.numbers, weights, cache.ref, chunk_size=chunk_size)
 
-        return d3.disp.dispersion(
+        return _dispersion(
             self.numbers,
             positions,
             self.param,
