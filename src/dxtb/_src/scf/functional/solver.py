@@ -19,12 +19,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import ClassVar
+from dataclasses import dataclass, fields, is_dataclass
+from typing import ClassVar, cast
 
 import torch
 from tad_mctc.batch import real_atoms
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
@@ -110,6 +111,30 @@ class SCFSolverDiagnostics:
     dynamic_damping_switched: Tensor
 
 
+class SCFSolverTrace(Node):
+    """Optional tensor trace of the shared fixed-trip solver transitions."""
+
+    initial_guess: Tensor = child()
+    map_inputs: Tensor = child()
+    raw_mapped: Tensor = child()
+    iterates: Tensor = child()
+    hamiltonians: Tensor = child()
+    densities: Tensor = child()
+    charges: Tensor = child()
+    driving_potentials: Tensor | None = child()
+    residuals: Tensor = child()
+    active_before: Tensor = child(keep_dtype=True)
+    active_after: Tensor = child(keep_dtype=True)
+    iterations: Tensor = child()
+    damping: Tensor = child()
+    fermi_converged: Tensor | None = child(keep_dtype=True)
+    fermi_electron_count_ok: Tensor | None = child(keep_dtype=True)
+    fermi_invalid_temperature: Tensor | None = child(keep_dtype=True)
+    fermi_too_many_electrons: Tensor | None = child(keep_dtype=True)
+    fermi_residual: Tensor | None = child()
+    mixer_state: tuple[Tensor, ...] = child()
+
+
 @dataclass(frozen=True, eq=False)
 class SCFSolverSettings:
     """Static root-finding settings for the E4.1 simple solver."""
@@ -154,6 +179,7 @@ class SCFSolveResult:
     residual: Tensor
     trajectory_status: SCFTrajectoryStatus | None
     diagnostics: SCFSolverDiagnostics | None = None
+    trace: SCFSolverTrace | None = None
 
     @property
     def hamiltonian(self) -> Tensor:
@@ -371,6 +397,7 @@ class _SolverOutcome:
     residual: Tensor
     trajectory_status: SCFTrajectoryStatus | None
     damping_state: DampingState
+    trace: SCFSolverTrace | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -443,7 +470,12 @@ def _update_damping(
     )
 
 
-def _residual(delta: Tensor) -> SCFResidual:
+def _residual(
+    delta: Tensor,
+    projection: Callable[[Tensor], Tensor] | None = None,
+) -> SCFResidual:
+    if projection is not None:
+        delta = projection(delta)
     return SCFResidual(
         l2=torch.linalg.vector_norm(delta),
         max_abs=torch.amax(torch.abs(delta)),
@@ -640,11 +672,13 @@ def _solve_map(
     state_projection: Callable[[Tensor], Tensor] | None = None,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> _SolverOutcome:
     """Run simple mixing through fixed-trip or eager single-System control."""
     controller = _solve_map_control_eager if eager else _solve_map_control
-    return controller(
-        guess,
+    common = dict(
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,
         x_atol=settings.x_atol,
@@ -657,6 +691,25 @@ def _solve_map(
             simple_mix(old, mapped, damp),
             None,
         ),
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
+    )
+    if eager:
+        if (
+            record_trace
+            or residual_projection is not None
+            or project_initial_state
+        ):
+            raise ValueError(
+                "Solver trace/projection requires fixed-trip execution."
+            )
+        common.pop("residual_projection")
+        common.pop("project_initial_state")
+        return controller(guess, **common)
+    return controller(
+        guess,
+        **common,
+        record_trace=record_trace,
     )
 
 
@@ -675,6 +728,9 @@ def _solve_map_control(
     initial_damp: float = 0.4,
     damping_settings: DynamicDampingSettings = DynamicDampingSettings(),
     state_projection: Callable[[Tensor], Tensor] | None = None,
+    record_trace: bool = False,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> _SolverOutcome:
     """Run transform-compatible fixed-trip control around a raw map."""
     state = _initialize_solver_control(
@@ -686,12 +742,42 @@ def _solve_map_control(
         mix_fn=mix_fn,
         state_projection=state_projection,
         record_initial_status=maxiter > 0,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
+    )
+
+    observations = (
+        (
+            (
+                state.map_input_x,
+                state.map_result,
+                state.current_x,
+                state.residual,
+                state.active,
+                state.active,
+                state.iterations,
+                state.damping_state.value,
+                state.mixer_state,
+            ),
+        )
+        if record_trace
+        else ()
     )
 
     if maxiter == 0:
-        return _solver_outcome(state, converged=torch.zeros_like(state.active))
+        return _solver_outcome(
+            state,
+            converged=torch.zeros_like(state.active),
+            trace=(
+                _materialize_solver_trace(guess, observations)
+                if record_trace
+                else None
+            ),
+        )
 
     for index in range(maxiter):
+        map_input = state.current_x
+        active_before = state.active
         candidate = map_fn(state.current_x)
         state = _solver_control_step(
             state,
@@ -702,9 +788,33 @@ def _solve_map_control(
             x_atol_max=x_atol_max,
             damping_settings=damping_settings,
             state_projection=state_projection,
+            residual_projection=residual_projection,
+            project_initial_state=project_initial_state,
         )
+        if record_trace:
+            observations += (
+                (
+                    map_input,
+                    candidate,
+                    state.current_x,
+                    state.residual,
+                    active_before,
+                    state.active,
+                    state.iterations,
+                    state.damping_state.value,
+                    state.mixer_state,
+                ),
+            )
 
-    return _solver_outcome(state, converged=~state.active)
+    return _solver_outcome(
+        state,
+        converged=~state.active,
+        trace=(
+            _materialize_solver_trace(guess, observations)
+            if record_trace
+            else None
+        ),
+    )
 
 
 def _solve_map_control_eager(
@@ -760,6 +870,8 @@ def _solve_map_control_eager(
             x_atol_max=x_atol_max,
             damping_settings=damping_settings,
             state_projection=state_projection,
+            residual_projection=None,
+            project_initial_state=False,
         )
 
     return _solver_outcome(state, converged=~state.active)
@@ -779,31 +891,47 @@ def _initialize_solver_control(
     state_projection: Callable[[Tensor], Tensor] | None,
     initial_result: SCFMapResult | None = None,
     record_initial_status: bool = True,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> _SolverControlState:
     """Initialize shared solver state and the optional first mix transition."""
-    initial = map_fn(guess) if initial_result is None else initial_result
+    initial_guess = (
+        state_projection(guess)
+        if project_initial_state and state_projection is not None
+        else guess
+    )
+    initial = (
+        map_fn(initial_guess) if initial_result is None else initial_result
+    )
     trajectory_status = (
         trajectory_status_from_map(initial.fermi_status)
         if record_initial_status
         else None
     )
-    initial_residual = _residual(initial.mapped_x - guess).as_tensor()
+    initial_x = (
+        state_projection(initial.mapped_x)
+        if project_initial_state and state_projection is not None
+        else initial.mapped_x
+    )
+    initial_residual = _residual(
+        initial_x - initial_guess, residual_projection
+    ).as_tensor()
     active = torch.ones((), dtype=torch.bool, device=guess.device)
     damping = DampingState(
         guess.new_tensor(initial_damp),
         torch.zeros((), dtype=torch.bool, device=guess.device),
     )
     mixer_state: object | None = None
-    current_x = initial.mapped_x
+    current_x = initial_x
     if maxiter > 0 and mix_guess:
         current_x, mixer_state = mix_fn(
-            guess, initial.mapped_x, mixer_state, 1, active, damping.value
+            initial_guess, initial_x, mixer_state, 1, active, damping.value
         )
         if state_projection is not None:
             current_x = state_projection(current_x)
     return _SolverControlState(
         current_x=current_x,
-        map_input_x=guess,
+        map_input_x=initial_guess,
         mixer_state=mixer_state,
         damping_state=damping,
         map_result=initial,
@@ -827,12 +955,21 @@ def _solver_control_step(
     x_atol_max: float,
     damping_settings: DynamicDampingSettings,
     state_projection: Callable[[Tensor], Tensor] | None,
+    residual_projection: Callable[[Tensor], Tensor] | None,
+    project_initial_state: bool,
 ) -> _SolverControlState:
     """Advance one raw map using canonical result/mixer/status ordering."""
     trajectory_status = accumulate_trajectory_status(
         state.trajectory_status, candidate.fermi_status, state.active
     )
-    candidate_residual = _residual(candidate.mapped_x - state.current_x)
+    candidate_x = (
+        state_projection(candidate.mapped_x)
+        if project_initial_state and state_projection is not None
+        else candidate.mapped_x
+    )
+    candidate_residual = _residual(
+        candidate_x - state.current_x, residual_projection
+    )
     is_converged = (candidate_residual.l2 < x_atol) & (
         candidate_residual.max_abs < x_atol_max
     )
@@ -846,7 +983,7 @@ def _solver_control_step(
     transition_active = state.active & ~is_converged
     mixed_x, mixer_state = mix_fn(
         state.current_x,
-        candidate.mapped_x,
+        candidate_x,
         state.mixer_state,
         mixer_step,
         transition_active,
@@ -877,7 +1014,10 @@ def _solver_control_step(
 
 
 def _solver_outcome(
-    state: _SolverControlState, *, converged: Tensor
+    state: _SolverControlState,
+    *,
+    converged: Tensor,
+    trace: SCFSolverTrace | None = None,
 ) -> _SolverOutcome:
     """Materialize solver status from shared controller state."""
     return _SolverOutcome(
@@ -888,6 +1028,94 @@ def _solver_outcome(
         residual=state.residual,
         trajectory_status=state.trajectory_status,
         damping_state=state.damping_state,
+        trace=trace,
+    )
+
+
+def _mixer_tensors(state: object | None) -> tuple[Tensor, ...]:
+    """Flatten tensor-valued mixer history in its stable dataclass order."""
+    if state is None:
+        return ()
+    if isinstance(state, Tensor):
+        return (state,)
+    if isinstance(state, tuple):
+        return tuple(value for item in state for value in _mixer_tensors(item))
+    if is_dataclass(state):
+        return tuple(
+            value
+            for item in fields(state)
+            for value in _mixer_tensors(getattr(state, item.name))
+        )
+    return ()
+
+
+def _materialize_solver_trace(
+    initial_guess: Tensor,
+    observations: tuple[tuple[object, ...], ...],
+) -> SCFSolverTrace:
+    """Stack optional observations from the existing solver transitions."""
+    map_inputs = tuple(cast(Tensor, row[0]) for row in observations)
+    mapped = tuple(cast(SCFMapResult, row[1]) for row in observations)
+    iterates = tuple(cast(Tensor, row[2]) for row in observations)
+    statuses = tuple(item.spectral.fermi_status for item in mapped)
+
+    def stack_optional(name: str) -> Tensor | None:
+        values = tuple(
+            None if status is None else getattr(status, name)
+            for status in statuses
+        )
+        if values[0] is None:
+            return None
+        return torch.stack(cast(tuple[Tensor, ...], values))
+
+    mixer_rows = tuple(_mixer_tensors(row[8]) for row in observations)
+    if mixer_rows and mixer_rows[0]:
+        mixer_state = tuple(
+            torch.stack(tuple(row[index] for row in mixer_rows))
+            for index in range(len(mixer_rows[0]))
+        )
+    else:
+        mixer_state = ()
+    driving = tuple(item.driving_potential for item in mapped)
+    driving_mono = tuple(
+        None if item is None else item.mono for item in driving
+    )
+    return SCFSolverTrace(
+        initial_guess=initial_guess,
+        map_inputs=torch.stack(map_inputs),
+        raw_mapped=torch.stack(tuple(item.mapped_x for item in mapped)),
+        iterates=torch.stack(iterates),
+        hamiltonians=torch.stack(
+            tuple(item.spectral.hamiltonian for item in mapped)
+        ),
+        densities=torch.stack(tuple(item.spectral.density for item in mapped)),
+        charges=torch.stack(tuple(item.charges.mono for item in mapped)),
+        driving_potentials=(
+            None
+            if driving_mono[0] is None
+            else torch.stack(cast(tuple[Tensor, ...], driving_mono))
+        ),
+        residuals=torch.stack(
+            tuple(cast(Tensor, row[3]) for row in observations)
+        ),
+        active_before=torch.stack(
+            tuple(cast(Tensor, row[4]) for row in observations)
+        ),
+        active_after=torch.stack(
+            tuple(cast(Tensor, row[5]) for row in observations)
+        ),
+        iterations=torch.stack(
+            tuple(cast(Tensor, row[6]) for row in observations)
+        ),
+        damping=torch.stack(
+            tuple(cast(Tensor, row[7]) for row in observations)
+        ),
+        fermi_converged=stack_optional("converged"),
+        fermi_electron_count_ok=stack_optional("electron_count_ok"),
+        fermi_invalid_temperature=stack_optional("invalid_temperature"),
+        fermi_too_many_electrons=stack_optional("too_many_electrons"),
+        fermi_residual=stack_optional("residual"),
+        mixer_state=mixer_state,
     )
 
 
@@ -906,6 +1134,7 @@ def finalize_scf(
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
+    trace: SCFSolverTrace | None = None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -942,6 +1171,7 @@ def finalize_scf(
                 else damping_state.switched
             ),
         ),
+        trace=trace,
     )
 
 
@@ -1004,6 +1234,7 @@ def finalize_scf_potential(
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
+    trace: SCFSolverTrace | None = None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra representation conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -1040,6 +1271,7 @@ def finalize_scf_potential(
                 else damping_state.switched
             ),
         ),
+        trace=trace,
     )
 
 
@@ -1051,6 +1283,7 @@ def finalize_scf_fock(
     residual: Tensor,
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
+    trace: SCFSolverTrace | None = None,
 ) -> SCFSolveResult:
     """Finalize Fock mode from one spectrum of the selected mapped matrix."""
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
@@ -1086,6 +1319,7 @@ def finalize_scf_fock(
                 else damping_state.switched
             ),
         ),
+        trace=trace,
     )
 
 
@@ -1095,10 +1329,21 @@ def solve_scf_simple(
     settings: SCFSolverSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve charge mode with simple mixing and selected eager/fixed control."""
     outcome = _solve_map(
-        guess, settings, lambda x: scf_map(x, inputs), eager=eager
+        guess,
+        settings,
+        lambda x: scf_map(x, inputs),
+        state_projection=state_projection,
+        eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf(
         outcome.map_result,
@@ -1108,6 +1353,7 @@ def solve_scf_simple(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )
 
 
@@ -1118,14 +1364,26 @@ def solve_scf_potential_simple(
     settings: SCFSolverSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve potential mode with selected simple-mixing control."""
+    project = lambda value: _project_potential_padding(value, layout)
+    if state_projection is not None:
+        project = lambda value: state_projection(
+            _project_potential_padding(value, layout)
+        )
     outcome = _solve_map(
         guess,
         settings,
         lambda x: potential_map(x, inputs, layout),
-        state_projection=lambda x: _project_potential_padding(x, layout),
+        state_projection=project,
         eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -1136,6 +1394,7 @@ def solve_scf_potential_simple(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )
 
 
@@ -1145,10 +1404,21 @@ def solve_scf_fock_simple(
     settings: SCFSolverSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve Fock mode with simple mixing and selected eager/fixed control."""
     outcome = _solve_map(
-        guess, settings, lambda x: fock_map(x, inputs), eager=eager
+        guess,
+        settings,
+        lambda x: fock_map(x, inputs),
+        state_projection=state_projection,
+        eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf_fock(
         outcome.map_result,
@@ -1158,4 +1428,5 @@ def solve_scf_fock_simple(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )

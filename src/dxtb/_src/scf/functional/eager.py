@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import torch
@@ -57,7 +58,9 @@ from .data import (
     SCFPotential,
     functional_scf_interactions_eligible,
     pack_charges,
+    pack_potential,
     setup_scf_inputs,
+    unpack_charges,
 )
 from .implicit import _prepare_scf_root, _SCFMapTensorTree
 from .map import (
@@ -341,10 +344,14 @@ def _solve_representation(
     config: ConfigSCF,
     *,
     eager: bool = True,
+    record_trace: bool = False,
+    padded: bool = False,
 ) -> SCFSolveResult:
     """Run one representation with eager or transform-fixed control."""
     settings = _solver_settings(config, guess.dtype)
     mode = config.scp_mode
+    padded_state: Callable[[Tensor], Tensor] | None = None
+    padded_residual: Callable[[Tensor], Tensor] | None = None
     if mode == labels.SCP_MODE_CHARGE:
         x = pack_charges(
             SCFCharges(
@@ -362,9 +369,29 @@ def _solve_representation(
             ),
             inputs.charge_layout,
         )
+        if padded:
+            padded_state, padded_residual = _padded_charge_projections(inputs)
         if isinstance(settings, SCFSolverSettings):
-            return solve_scf_simple(x, inputs, settings, eager=eager)
-        return solve_scf_anderson(x, inputs, settings, eager=eager)
+            return solve_scf_simple(
+                x,
+                inputs,
+                settings,
+                eager=eager,
+                record_trace=record_trace,
+                state_projection=padded_state,
+                residual_projection=padded_residual,
+                project_initial_state=padded,
+            )
+        return solve_scf_anderson(
+            x,
+            inputs,
+            settings,
+            eager=eager,
+            record_trace=record_trace,
+            state_projection=padded_state,
+            residual_projection=padded_residual,
+            project_initial_state=padded,
+        )
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -380,19 +407,206 @@ def _solve_representation(
     )
     if mode == labels.SCP_MODE_POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
+        if padded:
+            padded_state, padded_residual = _padded_potential_projections(
+                inputs, layout
+            )
         if isinstance(settings, SCFSolverSettings):
             return solve_scf_potential_simple(
-                packed, inputs, layout, settings, eager=eager
+                packed,
+                inputs,
+                layout,
+                settings,
+                eager=eager,
+                record_trace=record_trace,
+                state_projection=padded_state,
+                residual_projection=padded_residual,
+                project_initial_state=padded,
             )
         return solve_scf_potential_anderson(
-            packed, inputs, layout, settings, eager=eager
+            packed,
+            inputs,
+            layout,
+            settings,
+            eager=eager,
+            record_trace=record_trace,
+            state_projection=padded_state,
+            residual_projection=padded_residual,
+            project_initial_state=padded,
         )
     if mode == labels.SCP_MODE_FOCK:
         fock = fock_initial_guess(charges, inputs)
+        if padded:
+            matrix_mask = inputs.orbital_mask.unsqueeze(
+                -1
+            ) & inputs.orbital_mask.unsqueeze(-2)
+            padded_state = lambda value: torch.where(
+                matrix_mask, value, inputs.integrals.hcore
+            )
+            padded_residual = lambda value: torch.where(matrix_mask, value, 0.0)
         if isinstance(settings, SCFSolverSettings):
-            return solve_scf_fock_simple(fock, inputs, settings, eager=eager)
-        return solve_scf_fock_anderson(fock, inputs, settings, eager=eager)
+            return solve_scf_fock_simple(
+                fock,
+                inputs,
+                settings,
+                eager=eager,
+                record_trace=record_trace,
+                state_projection=padded_state,
+                residual_projection=padded_residual,
+                project_initial_state=padded,
+            )
+        return solve_scf_fock_anderson(
+            fock,
+            inputs,
+            settings,
+            eager=eager,
+            record_trace=record_trace,
+            state_projection=padded_state,
+            residual_projection=padded_residual,
+            project_initial_state=padded,
+        )
     raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
+
+
+def _padded_potential_projections(
+    inputs: SCFInputs, layout: PotentialLayout
+) -> tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]:
+    """Mask fictitious orbital/atom potential entries and PADNZ residuals."""
+    orbital_mask = inputs.orbital_mask
+    atom_mask = inputs.numbers != 0
+    component_masks = [orbital_mask.reshape(-1)]
+    component_masks.extend(
+        mask
+        for mask in (
+            (
+                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 3).reshape(-1)
+                if layout.dipole_shape is not None
+                else None
+            ),
+            (
+                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 6).reshape(-1)
+                if layout.quadrupole_shape is not None
+                else None
+            ),
+        )
+        if mask is not None
+    )
+    width = max(_shape_numel(shape) for shape in layout.shapes)
+    packed_mask = torch.stack(
+        tuple(
+            torch.cat(
+                (
+                    mask,
+                    torch.zeros(
+                        width - mask.numel(),
+                        dtype=torch.bool,
+                        device=mask.device,
+                    ),
+                )
+            )
+            for mask in component_masks
+        )
+    )
+
+    def project_state(value: Tensor) -> Tensor:
+        potential = unpack_potential(value, layout)
+        return pack_potential(
+            SCFPotential(
+                mono=torch.where(orbital_mask, potential.mono, 0.0),
+                dipole=(
+                    None
+                    if potential.dipole is None
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), potential.dipole, 0.0
+                    )
+                ),
+                quad=(
+                    None
+                    if potential.quad is None
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), potential.quad, 0.0
+                    )
+                ),
+            ),
+            layout,
+        )
+
+    def project_residual(value: Tensor) -> Tensor:
+        return torch.where(packed_mask, value, 0.0)
+
+    return project_state, project_residual
+
+
+def _padded_charge_projections(
+    inputs: SCFInputs,
+) -> tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]:
+    """Mask inactive orbital and atom multipoles in charge-SCP state."""
+    orbital_mask = inputs.orbital_mask
+    atom_mask = inputs.numbers != 0
+    component_masks = [orbital_mask.reshape(-1)]
+    component_masks.extend(
+        mask
+        for mask in (
+            (
+                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 3).reshape(-1)
+                if inputs.charge_layout.dipole_shape is not None
+                else None
+            ),
+            (
+                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 6).reshape(-1)
+                if inputs.charge_layout.quadrupole_shape is not None
+                else None
+            ),
+        )
+        if mask is not None
+    )
+    width = max(_shape_numel(shape) for shape in inputs.charge_layout.shapes)
+    packed_mask = torch.stack(
+        tuple(
+            torch.cat(
+                (
+                    mask,
+                    torch.zeros(
+                        width - mask.numel(),
+                        dtype=torch.bool,
+                        device=mask.device,
+                    ),
+                )
+            )
+            for mask in component_masks
+        )
+    )
+
+    def project_state(value: Tensor) -> Tensor:
+        charges = unpack_charges(value, inputs.charge_layout)
+        return pack_charges(
+            SCFCharges(
+                mono=torch.where(orbital_mask, charges.mono, 0.0),
+                dipole=(
+                    None
+                    if charges.dipole is None
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), charges.dipole, 0.0
+                    )
+                ),
+                quad=(
+                    None
+                    if charges.quad is None
+                    else torch.where(atom_mask.unsqueeze(-1), charges.quad, 0.0)
+                ),
+            ),
+            inputs.charge_layout,
+        )
+
+    return project_state, lambda value: torch.where(packed_mask, value, 0.0)
+
+
+def _shape_numel(shape: tuple[int, ...]) -> int:
+    """Return a statically known component size."""
+    result = 1
+    for size in shape:
+        result *= size
+    return result
 
 
 def run_functional_full_eager(

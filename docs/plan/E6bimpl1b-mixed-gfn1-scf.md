@@ -186,3 +186,27 @@ retirement remain separately scoped. The next implementation work should
 complete the GFN1 trajectory and component matrix while retaining the private
 boundary; only a later authorized E6broute package may activate Calculator
 batch routing. **Overall E6bimpl remains OPEN.**
+
+## E6bimpl.1b-F final acceptance addendum
+
+The follow-up acceptance package closes the original private GFN1/PyTorch
+mixed-System boundary. The earlier status above is retained as the historical
+partial-package report. The final trace and padding regressions cover initial
+guess/map, intermediate states, residuals, damping, mixer history, and
+lane-local convergence. Shared electric-field and field-gradient paths are
+also compared to independent serial calls, including response derivatives.
+Source identifiers `(4, 19)` and `(19, 4)` confirm that result order follows
+the input sequence rather than treating IDs as dense tensor positions.
+
+The final focused acceptance module passed 51 tests in each of the five
+approved CPU profiles. A completed broader primary selection reported 360
+passed and one failed. The sole Anderson position/parameter/field-gradient
+node reproduces on the required starting SHA with identical dependencies and
+the same `2.5006982595776606e-11` maximum absolute discrepancy against
+`2e-13`; it is inherited. See
+[`E6bimpl1b-final-acceptance.md`](E6bimpl1b-final-acceptance.md) for exact
+scope and validation results.
+
+E6bimpl.1b is complete at its private GFN1 numerical boundary. Overall
+E6bimpl remains open for GFN2 mixed execution and remaining component,
+compatibility, and route acceptance. No Calculator batch dispatch changed.

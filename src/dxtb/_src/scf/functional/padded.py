@@ -37,6 +37,14 @@ from dxtb._src.components.interactions.coulomb.secondorder import (
     build_es2_coulomb,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
+from dxtb._src.components.interactions.field.efield import (
+    LABEL_EFIELD,
+    build_electric_field_data,
+)
+from dxtb._src.components.interactions.field.efieldgrad import (
+    LABEL_EFIELD_GRAD,
+    build_electric_field_grad_data,
+)
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
@@ -55,7 +63,9 @@ from dxtb._src.scf.functional.eager import (
     public_scf_status,
 )
 from dxtb._src.scf.functional.map import evaluate_hamiltonian
+from dxtb._src.scf.functional.solver import SCFSolverTrace
 from dxtb._src.typing import Tensor
+from dxtb._src.typing.exceptions import DeviceError, DtypeError
 from dxtb._src.utils import wrap_gather
 from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import _aufbau_occupation
@@ -211,6 +221,8 @@ def setup_padded_scf_inputs(
     positions: Tensor,
     charge: Tensor,
     spin: Tensor | None = None,
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
 ) -> SCFInputs:
     """Prepare mask-aware SCF and interaction inputs without a System."""
     core = padded_core.core
@@ -344,7 +356,9 @@ def setup_padded_scf_inputs(
     charge_layout: ChargeLayout = _single_system_layout(
         core.numbers, padded_integrals
     )
-    interactions = _prepare_padded_interactions(padded_core, positions)
+    interactions = _prepare_padded_interactions(
+        padded_core, positions, field, field_grad
+    )
     return SCFInputs(
         numbers=core.numbers,
         index=index,
@@ -363,13 +377,31 @@ def setup_padded_scf_inputs(
 def _prepare_padded_interactions(
     padded_core: PaddedExactSystemCore,
     positions: Tensor,
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
 ) -> FunctionalInteractionSet:
     """Prepare exact supported interaction descriptors from captured setup.
 
     ES2's geometry-dependent matrix is built at the numerical call boundary.
     """
+    descriptors = padded_core.core.interaction_terms
+    if field is not None and any(
+        descriptor.label == LABEL_EFIELD for descriptor in descriptors
+    ):
+        raise ValueError(
+            "Explicit field= cannot be combined with a custom interaction "
+            f"using the '{LABEL_EFIELD}' label."
+        )
+    if field_grad is not None and any(
+        descriptor.label == LABEL_EFIELD_GRAD for descriptor in descriptors
+    ):
+        raise ValueError(
+            "Explicit field_grad= cannot be combined with a custom "
+            f"interaction using the '{LABEL_EFIELD_GRAD}' label."
+        )
+
     entries: list[FunctionalInteractionEntry] = []
-    for descriptor in padded_core.core.interaction_terms:
+    for descriptor in descriptors:
         if descriptor.kind == "es2" and isinstance(
             descriptor.setup, ES2CoreSetup
         ):
@@ -396,6 +428,38 @@ def _prepare_padded_interactions(
                 "Padded fixed-trip SCF does not support captured interaction "
                 f"'{descriptor.kind}'."
             )
+    if field is not None:
+        if padded_core.core.config.ints.level < labels.INTLEVEL_DIPOLE:
+            raise RuntimeError(
+                "An electric field requires dipole integrals. Construct the "
+                "System with an integral level of at least "
+                f"{labels.INTLEVEL_DIPOLE}."
+            )
+        call_data = build_electric_field_data(positions, field)
+        entries.append(
+            FunctionalInteractionEntry(
+                "electric_field",
+                (("vat", call_data.vat), ("vdp", call_data.vdp)),
+            )
+        )
+    if field_grad is not None:
+        if padded_core.core.config.ints.level < labels.INTLEVEL_QUADRUPOLE:
+            raise RuntimeError(
+                "An electric field gradient requires quadrupole integrals. "
+                "Construct the System with an integral level of at least "
+                f"{labels.INTLEVEL_QUADRUPOLE}."
+            )
+        call_data = build_electric_field_grad_data(positions, field_grad)
+        entries.append(
+            FunctionalInteractionEntry(
+                "electric_field_grad",
+                (
+                    ("vat", call_data.vat),
+                    ("vdp", call_data.vdp),
+                    ("vqp", call_data.vqp),
+                ),
+            )
+        )
     return FunctionalInteractionSet(tuple(entries))
 
 
@@ -476,11 +540,13 @@ def evaluate_padded_scf_spectrum(
     positions: Tensor,
     charge: Tensor,
     spin: Tensor | None = None,
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
 ) -> PaddedSCFSpectralResult:
     """Evaluate mapped padded H0 integrals and the shared spectral primitive."""
     integrals = evaluate_padded_integrals(padded_core, positions, charge)
     inputs = setup_padded_scf_inputs(
-        padded_core, integrals, positions, charge, spin
+        padded_core, integrals, positions, charge, spin, field, field_grad
     )
     return evaluate_padded_spectrum(inputs)
 
@@ -532,7 +598,11 @@ def evaluate_padded_fixed_trip(
     positions: Tensor,
     charge: Tensor,
     spin: Tensor,
-) -> Result:
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
+    *,
+    record_trace: bool = False,
+) -> Result | tuple[Result, SCFSolverTrace]:
     """Evaluate one padded GFN1 System using the shared fixed-trip solver.
 
     The function consumes only registered exact-core setup, explicit call
@@ -556,16 +626,43 @@ def evaluate_padded_fixed_trip(
         )
     if core.config.scf.maxiter < 0:
         raise ValueError("Padded fixed-trip evaluation requires maxiter >= 0.")
+    for name, value, shape in (
+        ("field", field, (3,)),
+        ("field_grad", field_grad, (3, 3)),
+    ):
+        if value is None:
+            continue
+        if value.shape != shape:
+            raise ValueError(
+                f"{name} must have shape {shape}, got {tuple(value.shape)}."
+            )
+        if value.device != positions.device:
+            raise DeviceError(
+                f"Device mismatch: positions are on '{positions.device}', "
+                f"but {name} is on '{value.device}'."
+            )
+        if value.dtype != positions.dtype:
+            raise DtypeError(
+                f"Dtype mismatch: positions are of type '{positions.dtype}', "
+                f"but {name} is of type '{value.dtype}'."
+            )
 
     integrals = evaluate_padded_integrals(padded_core, positions, charge)
     inputs = setup_padded_scf_inputs(
-        padded_core, integrals, positions, charge, spin
+        padded_core, integrals, positions, charge, spin, field, field_grad
     )
     # The input-preparation spectrum carries the same orbital seed and filling
     # contract as the ordinary fixed-System path. The shared solver owns every
     # subsequent map, mixer transition, residual and finalization.
     guess = _padded_initial_guess(padded_core, positions, charge, inputs)
-    solved = _solve_representation(guess, inputs, core.config.scf, eager=False)
+    solved = _solve_representation(
+        guess,
+        inputs,
+        core.config.scf,
+        eager=False,
+        record_trace=record_trace,
+        padded=True,
+    )
 
     classical = tuple(
         (
@@ -587,7 +684,7 @@ def evaluate_padded_fixed_trip(
     charges = solved.final_charges
     potential = solved.final_potential
     fenergy = solved.fenergy
-    return Result.snapshot(
+    result = Result.snapshot(
         energy=classical_total + solved.energy + fenergy,
         scf=solved.energy,
         classical=classical,
@@ -609,6 +706,10 @@ def evaluate_padded_fixed_trip(
         residual=solved.residual,
         status=status,
     )
+    if record_trace:
+        assert solved.trace is not None
+        return result, solved.trace
+    return result
 
 
 def evaluate_padded_systems(
@@ -617,6 +718,8 @@ def evaluate_padded_systems(
     positions: tuple[Tensor, ...],
     charges: tuple[Tensor, ...],
     spins: tuple[Tensor, ...],
+    field: Tensor | None = None,
+    field_grad: Tensor | None = None,
 ) -> tuple[Result, tuple[Result, ...]]:
     """Map a bucket-ordered core sequence and decode physical Results.
 
@@ -639,14 +742,58 @@ def evaluate_padded_systems(
         raise ValueError(
             "Padded lane count does not match the canonical bucket."
         )
-    for core, position, charge, spin in zip(
-        padded_cores, positions, charges, spins
+    if len(set(bucket.indices)) != count:
+        raise ValueError("Canonical bucket source identifiers must be unique.")
+    source_map_items = tuple(bucket.source_maps)
+    source_map_ids = tuple(source_id for source_id, _ in source_map_items)
+    if len(set(source_map_ids)) != len(source_map_ids):
+        raise ValueError("Canonical bucket source maps must be unique.")
+    source_maps = dict(source_map_items)
+    if set(source_maps) != set(bucket.indices):
+        raise ValueError(
+            "Canonical bucket source maps must match its source identifiers."
+        )
+    for core, position, charge, spin, source_id in zip(
+        padded_cores, positions, charges, spins, bucket.indices
     ):
         validate_padded_charge_spin(core, charge, spin)
         if position.shape != (core.core.numbers.numel(), 3):
             raise ValueError("Padded positions do not match their exact core.")
+        if position.device != core.core.numbers.device:
+            raise DeviceError("Padded positions and exact core devices differ.")
+        if position.dtype != core.core.effective_dtype:
+            raise DtypeError("Padded positions and exact core dtypes differ.")
+        mapping = source_maps[source_id]
+        for map_name, mask_name in (
+            ("atoms", "atoms"),
+            ("shells", "shells"),
+            ("orbitals", "orbitals"),
+        ):
+            indices = tuple(getattr(mapping, map_name))
+            mask = getattr(core.validity, mask_name)
+            if len(set(indices)) != len(indices) or any(
+                index < 0 or index >= mask.numel() for index in indices
+            ):
+                raise ValueError(
+                    f"Canonical source {map_name} map is malformed."
+                )
+            index_tensor = torch.tensor(
+                indices, dtype=torch.int64, device=mask.device
+            )
+            expected_mask = torch.zeros_like(mask).index_fill(
+                0, index_tensor, True
+            )
+            if not torch.equal(mask, expected_mask):
+                raise ValueError(
+                    f"Canonical source map for {source_id} does not match "
+                    f"its padded {map_name} validity mask."
+                )
     stacked_core = stack(padded_cores)
-    mapped = torch.func.vmap(evaluate_padded_fixed_trip)(
+    mapped = torch.func.vmap(
+        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
+            core, position, charge, spin, field=field, field_grad=field_grad
+        )
+    )(
         stacked_core,
         torch.stack(positions),
         torch.stack(charges),

@@ -198,6 +198,9 @@ def _solve_map_anderson(
     state_projection: Callable[[Tensor], Tensor] | None = None,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> _SolverOutcome:
     """Run Anderson with transform-fixed or eager single-System control."""
 
@@ -221,8 +224,7 @@ def _solve_map_anderson(
         return mixed, next_state
 
     controller = _solve_map_control_eager if eager else _solve_map_control
-    return controller(
-        guess,
+    common = dict(
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,
         x_atol=settings.x_atol,
@@ -232,6 +234,25 @@ def _solve_map_anderson(
         state_projection=state_projection,
         initial_damp=settings.damp,
         damping_settings=settings.dynamic_damping,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
+    )
+    if eager:
+        if (
+            record_trace
+            or residual_projection is not None
+            or project_initial_state
+        ):
+            raise ValueError(
+                "Solver trace/projection requires fixed-trip execution."
+            )
+        common.pop("residual_projection")
+        common.pop("project_initial_state")
+        return controller(guess, **common)
+    return controller(
+        guess,
+        **common,
+        record_trace=record_trace,
     )
 
 
@@ -241,10 +262,21 @@ def solve_scf_anderson(
     settings: AndersonSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve charge mode with Anderson and selected eager/fixed control."""
     outcome = _solve_map_anderson(
-        guess, settings, lambda x: scf_map(x, inputs), eager=eager
+        guess,
+        settings,
+        lambda x: scf_map(x, inputs),
+        state_projection=state_projection,
+        eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf(
         outcome.map_result,
@@ -254,6 +286,7 @@ def solve_scf_anderson(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )
 
 
@@ -264,14 +297,26 @@ def solve_scf_potential_anderson(
     settings: AndersonSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve potential mode with Anderson and selected eager/fixed control."""
+    project = lambda value: _project_potential_padding(value, layout)
+    if state_projection is not None:
+        project = lambda value: state_projection(
+            _project_potential_padding(value, layout)
+        )
     outcome = _solve_map_anderson(
         guess,
         settings,
         lambda x: potential_map(x, inputs, layout),
-        state_projection=lambda x: _project_potential_padding(x, layout),
+        state_projection=project,
         eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -282,6 +327,7 @@ def solve_scf_potential_anderson(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )
 
 
@@ -291,10 +337,21 @@ def solve_scf_fock_anderson(
     settings: AndersonSettings,
     *,
     eager: bool = False,
+    record_trace: bool = False,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
 ) -> SCFSolveResult:
     """Solve Fock mode with Anderson and selected eager/fixed control."""
     outcome = _solve_map_anderson(
-        guess, settings, lambda x: fock_map(x, inputs), eager=eager
+        guess,
+        settings,
+        lambda x: fock_map(x, inputs),
+        state_projection=state_projection,
+        eager=eager,
+        record_trace=record_trace,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
     )
     return finalize_scf_fock(
         outcome.map_result,
@@ -304,4 +361,5 @@ def solve_scf_fock_anderson(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        outcome.trace,
     )

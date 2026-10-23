@@ -588,11 +588,26 @@ def test_padded_full_fixed_trip_result_matches_serial_systems(
         torch.stack(spin_values),
     )
     if numbers == ((8, 1, 1), (1, 1)):
+        source_ids = (19, 4)
         source_maps = dict(bucket.source_maps)
         bucket = replace(
             bucket,
-            indices=(1, 3),
-            source_maps=((1, source_maps[0]), (3, source_maps[1])),
+            indices=source_ids,
+            source_maps=tuple(
+                (source_id, source_maps[lane_index])
+                for lane_index, source_id in enumerate(source_ids)
+            ),
+        )
+    elif numbers == ((1, 1), (8, 1, 1)):
+        source_ids = (4, 19)
+        source_maps = dict(bucket.source_maps)
+        bucket = replace(
+            bucket,
+            indices=source_ids,
+            source_maps=tuple(
+                (source_id, source_maps[lane_index])
+                for lane_index, source_id in enumerate(source_ids)
+            ),
         )
     mapped, decoded = evaluate_padded_systems(
         padded, bucket, positions, charge_values, spin_values
@@ -686,6 +701,197 @@ def test_padded_full_fixed_trip_result_matches_serial_systems(
 
 
 @pytest.mark.parametrize(
+    ("numbers", "charges", "spins", "mixer", "fermi_etemp"),
+    [
+        (
+            ((1, 1), (1, 1, 1)),
+            (0.0, 1.0),
+            (0.0, 0.0),
+            labels.MIXER_LINEAR,
+            0.0,
+        ),
+        (
+            ((1, 1), (8, 1, 1)),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            labels.MIXER_LINEAR,
+            0.0,
+        ),
+        (
+            ((1, 1), (8, 1, 1)),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            labels.MIXER_ANDERSON,
+            0.0,
+        ),
+        (
+            ((1, 1), (8, 1, 1)),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            labels.MIXER_LINEAR,
+            300.0,
+        ),
+    ],
+    ids=(
+        "h2-h3-plus-linear",
+        "h2-water-linear",
+        "h2-water-anderson",
+        "h2-water-finite-temperature",
+    ),
+)
+def test_padded_solver_trace_matches_independent_serial_systems(
+    numbers: tuple[tuple[int, ...], ...],
+    charges: tuple[float, ...],
+    spins: tuple[float, ...],
+    mixer: int,
+    fermi_etemp: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same fixed-trip solver transitions match independent serial calls."""
+    from dxtb._src.scf.functional import eager as eager_functional
+
+    _, systems = _systems(
+        numbers, mixer=mixer, maxiter=5, fermi_etemp=fermi_etemp
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charge_values = tuple(torch.tensor(item, dtype=DTYPE) for item in charges)
+    spin_values = tuple(torch.tensor(item, dtype=DTYPE) for item in spins)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charge_values),
+        torch.stack(spin_values),
+    )
+
+    original_solve = eager_functional._solve_representation
+    serial_traces = []
+
+    def traced_serial_solve(*args, **kwargs):
+        solved = original_solve(*args, record_trace=True, **kwargs)
+        serial_traces.append(solved.trace)
+        return solved
+
+    monkeypatch.setattr(
+        eager_functional, "_solve_representation", traced_serial_solve
+    )
+    serial = tuple(
+        system.singlepoint(position, chrg=charge, spin=spin)
+        for system, position, charge, spin in zip(
+            systems, source_positions, charge_values, spin_values
+        )
+    )
+
+    from tad_mctc.tree import stack as tree_stack
+
+    stacked_core = tree_stack(padded)
+    mapped_results, mapped_traces = torch.func.vmap(
+        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
+            core, position, charge, spin, record_trace=True
+        )
+    )(
+        stacked_core,
+        torch.stack(positions),
+        torch.stack(charge_values),
+        torch.stack(spin_values),
+    )
+    if numbers == ((1, 1), (8, 1, 1)):
+        assert torch.any(
+            mapped_traces.active_after[0] != mapped_traces.active_after[1]
+        )
+    assert len(serial_traces) == len(systems)
+    assert all(trace is not None for trace in serial_traces)
+    for lane, (system, serial_result, serial_trace) in enumerate(
+        zip(systems, serial, serial_traces)
+    ):
+        assert serial_trace is not None
+        source_map = dict(bucket.source_maps)[lane]
+        atom_indices = torch.tensor(source_map.atoms, dtype=torch.int64)
+        orbital_indices = torch.tensor(source_map.orbitals, dtype=torch.int64)
+        mapped_trace = mapped_traces
+        torch.testing.assert_close(
+            mapped_results.energy[lane].index_select(0, atom_indices),
+            serial_result.energy,
+        )
+
+        def physical_vector(name: str) -> torch.Tensor:
+            mapped_value = getattr(mapped_trace, name)[lane]
+            serial_value = getattr(serial_trace, name)
+            indices = (
+                atom_indices
+                if serial_value.shape[-1] == len(source_map.atoms)
+                else orbital_indices
+            )
+            return mapped_value.index_select(-1, indices)
+
+        for name in ("initial_guess", "map_inputs", "raw_mapped", "iterates"):
+            torch.testing.assert_close(
+                physical_vector(name),
+                getattr(serial_trace, name),
+                atol=2.0e-9,
+                rtol=2.0e-9,
+            )
+        for name in ("charges",):
+            mapped_value = physical_vector(name)
+            torch.testing.assert_close(
+                mapped_value,
+                getattr(serial_trace, name),
+                atol=2.0e-9,
+                rtol=2.0e-9,
+            )
+        for name in ("hamiltonians", "densities"):
+            mapped_value = getattr(mapped_trace, name)[lane]
+            mapped_value = mapped_value.index_select(
+                -2, orbital_indices
+            ).index_select(-1, orbital_indices)
+            torch.testing.assert_close(
+                mapped_value,
+                getattr(serial_trace, name),
+                atol=2.0e-8,
+                rtol=2.0e-8,
+            )
+        for name in (
+            "residuals",
+            "active_before",
+            "active_after",
+            "iterations",
+            "damping",
+        ):
+            torch.testing.assert_close(
+                getattr(mapped_trace, name)[lane],
+                getattr(serial_trace, name),
+                atol=2.0e-10,
+                rtol=2.0e-10,
+            )
+        for name in (
+            "fermi_converged",
+            "fermi_electron_count_ok",
+            "fermi_invalid_temperature",
+            "fermi_too_many_electrons",
+            "fermi_residual",
+        ):
+            mapped_status = getattr(mapped_trace, name)
+            serial_status = getattr(serial_trace, name)
+            assert (mapped_status is None) == (serial_status is None)
+            if mapped_status is not None and serial_status is not None:
+                torch.testing.assert_close(
+                    mapped_status[lane],
+                    serial_status,
+                    atol=2.0e-10,
+                    rtol=2.0e-10,
+                )
+        assert len(mapped_trace.mixer_state) == len(serial_trace.mixer_state)
+        for mapped_history, serial_history in zip(
+            mapped_trace.mixer_state, serial_trace.mixer_state
+        ):
+            torch.testing.assert_close(
+                mapped_history[lane].index_select(-1, orbital_indices),
+                serial_history,
+                atol=2.0e-9,
+                rtol=2.0e-9,
+            )
+
+
+@pytest.mark.parametrize(
     ("int_level", "has_dipole", "has_quadrupole"),
     [
         (labels.INTLEVEL_DIPOLE, True, False),
@@ -744,6 +950,444 @@ def test_padded_full_fixed_trip_optional_integrals_match_serial(
         else:
             assert actual.quadrupole_integrals is None
             assert expected.quadrupole_integrals is None
+
+
+@pytest.mark.parametrize(
+    "numbers",
+    [((1, 1), (8, 1, 1)), ((8, 1, 1), (1, 1))],
+    ids=("h2-water", "water-h2"),
+)
+def test_padded_full_shared_field_matches_serial_and_derivatives(
+    numbers: tuple[tuple[int, ...], ...],
+) -> None:
+    """A shared electric field retains energy and response in both lane orders."""
+    model, systems = _systems(
+        numbers,
+        mixer=labels.MIXER_LINEAR,
+        maxiter=3,
+        int_level=labels.INTLEVEL_DIPOLE,
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    field = torch.tensor([0.015, -0.01, 0.025], dtype=DTYPE, requires_grad=True)
+    mapped, decoded = evaluate_padded_systems(
+        padded, bucket, positions, charges, spins, field=field
+    )
+    serial = tuple(
+        system.singlepoint(position, chrg=charge, spin=spin, field=field)
+        for system, position, charge, spin in zip(
+            systems, source_positions, charges, spins
+        )
+    )
+    for actual, expected in zip(decoded, serial):
+        torch.testing.assert_close(
+            actual.energy, expected.energy, atol=4e-7, rtol=4e-7
+        )
+        torch.testing.assert_close(
+            actual.density, expected.density, atol=4e-7, rtol=4e-7
+        )
+        torch.testing.assert_close(
+            actual.charges.mono, expected.charges.mono, atol=4e-7, rtol=4e-7
+        )
+        assert actual.dipole_integrals is not None
+        assert expected.dipole_integrals is not None
+    mapped_field_gradient = torch.autograd.grad(mapped.energy.sum(), field)[0]
+    serial_field_gradient = torch.autograd.grad(
+        sum(result.energy.sum() for result in serial), field
+    )[0]
+    torch.testing.assert_close(
+        mapped_field_gradient, serial_field_gradient, atol=4e-6, rtol=4e-6
+    )
+    assert torch.isfinite(mapped_field_gradient).all()
+    assert torch.count_nonzero(mapped_field_gradient) > 0
+    mapped_field_jacobian = torch.func.jacfwd(
+        lambda value: evaluate_padded_systems(
+            padded, bucket, positions, charges, spins, field=value
+        )[0].energy.sum(-1)
+    )(field)
+    serial_field_jacobian = torch.func.jacfwd(
+        lambda value: torch.stack(
+            tuple(
+                system.singlepoint(
+                    position, chrg=charge, spin=spin, field=value
+                ).energy.sum()
+                for system, position, charge, spin in zip(
+                    systems, source_positions, charges, spins
+                )
+            )
+        )
+    )(field)
+    torch.testing.assert_close(
+        mapped_field_jacobian,
+        serial_field_jacobian,
+        atol=5e-6,
+        rtol=5e-6,
+    )
+
+    zero_field = torch.zeros(3, dtype=DTYPE)
+    zero_mapped, _ = evaluate_padded_systems(
+        padded, bucket, positions, charges, spins, field=zero_field
+    )
+    no_field, _ = evaluate_padded_systems(
+        padded, bucket, positions, charges, spins
+    )
+    torch.testing.assert_close(zero_mapped.energy, no_field.energy)
+
+
+@pytest.mark.parametrize(
+    "numbers",
+    [((1, 1), (8, 1, 1)), ((8, 1, 1), (1, 1))],
+    ids=("h2-water", "water-h2"),
+)
+def test_padded_full_shared_field_gradient_matches_serial_and_derivatives(
+    numbers: tuple[tuple[int, ...], ...],
+) -> None:
+    """A shared field gradient uses quadrupoles and matches serial response."""
+    _, systems = _systems(
+        numbers,
+        mixer=labels.MIXER_LINEAR,
+        maxiter=3,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    field_grad = torch.tensor(
+        [
+            [0.012, 0.003, -0.002],
+            [0.003, -0.006, 0.001],
+            [-0.002, 0.001, -0.006],
+        ],
+        dtype=DTYPE,
+        requires_grad=True,
+    )
+    mapped, decoded = evaluate_padded_systems(
+        padded, bucket, positions, charges, spins, field_grad=field_grad
+    )
+    serial = tuple(
+        system.singlepoint(
+            position, chrg=charge, spin=spin, field_grad=field_grad
+        )
+        for system, position, charge, spin in zip(
+            systems, source_positions, charges, spins
+        )
+    )
+    for actual, expected in zip(decoded, serial):
+        torch.testing.assert_close(
+            actual.energy, expected.energy, atol=4e-7, rtol=4e-7
+        )
+        torch.testing.assert_close(
+            actual.density, expected.density, atol=4e-7, rtol=4e-7
+        )
+        assert actual.quadrupole_integrals is not None
+        assert expected.quadrupole_integrals is not None
+        assert actual.charges.quadrupole is not None
+        assert expected.charges.quadrupole is not None
+        torch.testing.assert_close(
+            actual.charges.quadrupole,
+            expected.charges.quadrupole,
+            atol=4e-7,
+            rtol=4e-7,
+        )
+    mapped_response = torch.autograd.grad(mapped.energy.sum(), field_grad)[0]
+    serial_response = torch.autograd.grad(
+        sum(result.energy.sum() for result in serial), field_grad
+    )[0]
+    torch.testing.assert_close(
+        mapped_response, serial_response, atol=5e-6, rtol=5e-6
+    )
+    assert torch.isfinite(mapped_response).all()
+    assert torch.count_nonzero(mapped_response) > 0
+    mapped_response_jacobian = torch.func.jacfwd(
+        lambda value: evaluate_padded_systems(
+            padded, bucket, positions, charges, spins, field_grad=value
+        )[0].energy.sum(-1)
+    )(field_grad)
+    serial_response_jacobian = torch.func.jacfwd(
+        lambda value: torch.stack(
+            tuple(
+                system.singlepoint(
+                    position, chrg=charge, spin=spin, field_grad=value
+                ).energy.sum()
+                for system, position, charge, spin in zip(
+                    systems, source_positions, charges, spins
+                )
+            )
+        )
+    )(field_grad)
+    torch.testing.assert_close(
+        mapped_response_jacobian,
+        serial_response_jacobian,
+        atol=7e-6,
+        rtol=7e-6,
+    )
+
+
+def test_padded_field_inputs_reject_bad_shapes_and_integral_levels() -> None:
+    """Padded field validation matches single-System integral requirements."""
+    numbers = ((1, 1), (8, 1, 1))
+    _, systems = _systems(numbers, mixer=labels.MIXER_LINEAR, maxiter=1)
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    with pytest.raises(ValueError, match="field must have shape"):
+        evaluate_padded_systems(
+            padded,
+            bucket,
+            positions,
+            charges,
+            spins,
+            field=torch.zeros(2, dtype=DTYPE),
+        )
+    with pytest.raises(RuntimeError, match="requires dipole integrals"):
+        evaluate_padded_systems(
+            padded,
+            bucket,
+            positions,
+            charges,
+            spins,
+            field=torch.zeros(3, dtype=DTYPE),
+        )
+    with pytest.raises(RuntimeError, match="requires quadrupole integrals"):
+        evaluate_padded_systems(
+            padded,
+            bucket,
+            positions,
+            charges,
+            spins,
+            field_grad=torch.zeros((3, 3), dtype=DTYPE),
+        )
+
+
+def test_padded_shared_field_and_gradient_combine_without_double_counting() -> (
+    None
+):
+    """Dipole and quadrupole field terms compose as in serial Systems."""
+    numbers = ((1, 1), (8, 1, 1))
+    _, systems = _systems(
+        numbers,
+        mixer=labels.MIXER_LINEAR,
+        maxiter=2,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    field = torch.tensor([0.01, -0.02, 0.005], dtype=DTYPE)
+    field_grad = torch.tensor(
+        [[0.01, 0.0, 0.0], [0.0, -0.005, 0.0], [0.0, 0.0, -0.005]],
+        dtype=DTYPE,
+    )
+    _, decoded = evaluate_padded_systems(
+        padded,
+        bucket,
+        positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+    )
+    serial = tuple(
+        system.singlepoint(
+            position,
+            chrg=charge,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+        for system, position, charge, spin in zip(
+            systems, source_positions, charges, spins
+        )
+    )
+    for actual, expected in zip(decoded, serial):
+        torch.testing.assert_close(actual.energy, expected.energy)
+        torch.testing.assert_close(actual.density, expected.density)
+
+
+@pytest.mark.parametrize("defect", ("duplicate", "missing", "association"))
+def test_padded_evaluator_rejects_invalid_source_maps(defect: str) -> None:
+    """Malformed bucket identities fail before mapped numerical execution."""
+    numbers = ((1, 1), (8, 1, 1))
+    _, systems = _systems(numbers, mixer=labels.MIXER_LINEAR, maxiter=1)
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems, source_positions, torch.stack(charges), torch.stack(spins)
+    )
+    maps = tuple(bucket.source_maps)
+    if defect == "duplicate":
+        bucket = replace(bucket, indices=(4, 4))
+        expected = "source identifiers must be unique"
+    elif defect == "missing":
+        bucket = replace(bucket, indices=(4, 99))
+        expected = "source maps must match"
+    else:
+        bucket = replace(
+            bucket,
+            indices=(4, 19),
+            source_maps=((4, maps[1][1]), (19, maps[0][1])),
+        )
+        expected = "does not match its padded"
+    with pytest.raises(ValueError, match=expected):
+        evaluate_padded_systems(padded, bucket, positions, charges, spins)
+
+
+@pytest.mark.parametrize(
+    "scp_mode",
+    (labels.SCP_MODE_CHARGE, labels.SCP_MODE_POTENTIAL, labels.SCP_MODE_FOCK),
+    ids=("charge", "potential", "fock"),
+)
+def test_padded_solver_projects_adversarial_inactive_state(
+    scp_mode: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Large inactive charge/potential/Fock entries cannot change SCF control."""
+    from dxtb._src.scf.functional import eager as eager_functional
+    from dxtb._src.scf.functional import padded as padded_module
+    from dxtb._src.scf.functional.data import pack_potential, unpack_potential
+
+    numbers = ((1, 1), (8, 1, 1))
+    _, systems = _systems(
+        numbers,
+        mixer=labels.MIXER_ANDERSON,
+        maxiter=4,
+        scp_mode=scp_mode,
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charges = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    spins = tuple(torch.tensor(0.0, dtype=DTYPE) for _ in numbers)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    stacked_core = stack(padded)
+    position_batch = torch.stack(positions)
+    charge_batch = torch.stack(charges)
+    spin_batch = torch.stack(spins)
+
+    def run():
+        return torch.func.vmap(
+            lambda core, position, charge, spin: evaluate_padded_fixed_trip(
+                core, position, charge, spin, record_trace=True
+            )
+        )(stacked_core, position_batch, charge_batch, spin_batch)
+
+    expected_result, expected_trace = run()
+    monkeypatch_context = monkeypatch.context()
+    with monkeypatch_context as scoped:
+        if scp_mode == labels.SCP_MODE_CHARGE:
+            original = padded_module._padded_initial_guess
+
+            def corrupt_guess(core, position, charge, inputs):
+                value = original(core, position, charge, inputs)
+                return torch.where(core.validity.orbitals, value, value + 999.0)
+
+            scoped.setattr(
+                padded_module, "_padded_initial_guess", corrupt_guess
+            )
+        elif scp_mode == labels.SCP_MODE_POTENTIAL:
+            original = eager_functional.potential_initial_guess
+
+            def corrupt_potential(charges_value, inputs):
+                packed, layout = original(charges_value, inputs)
+                potential = unpack_potential(packed, layout)
+                atoms = inputs.numbers != 0
+                potential = type(potential)(
+                    mono=torch.where(
+                        inputs.orbital_mask,
+                        potential.mono,
+                        potential.mono + 999.0,
+                    ),
+                    dipole=(
+                        None
+                        if potential.dipole is None
+                        else torch.where(
+                            atoms.unsqueeze(-1),
+                            potential.dipole,
+                            potential.dipole + 999.0,
+                        )
+                    ),
+                    quad=(
+                        None
+                        if potential.quad is None
+                        else torch.where(
+                            atoms.unsqueeze(-1),
+                            potential.quad,
+                            potential.quad + 999.0,
+                        )
+                    ),
+                )
+                return pack_potential(potential, layout), layout
+
+            scoped.setattr(
+                eager_functional, "potential_initial_guess", corrupt_potential
+            )
+        else:
+            original = eager_functional.fock_initial_guess
+
+            def corrupt_fock(charges_value, inputs):
+                value = original(charges_value, inputs)
+                mask = inputs.orbital_mask.unsqueeze(
+                    -1
+                ) & inputs.orbital_mask.unsqueeze(-2)
+                return torch.where(mask, value, value + 999.0)
+
+            scoped.setattr(eager_functional, "fock_initial_guess", corrupt_fock)
+        actual_result, actual_trace = run()
+
+    torch.testing.assert_close(actual_result.energy, expected_result.energy)
+    torch.testing.assert_close(actual_result.residual, expected_result.residual)
+    torch.testing.assert_close(
+        actual_result.iterations, expected_result.iterations
+    )
+    torch.testing.assert_close(
+        actual_result.converged, expected_result.converged
+    )
+    torch.testing.assert_close(actual_result.density, expected_result.density)
+    for name in (
+        "map_inputs",
+        "raw_mapped",
+        "iterates",
+        "residuals",
+        "active_before",
+        "active_after",
+        "iterations",
+        "damping",
+    ):
+        torch.testing.assert_close(
+            getattr(actual_trace, name), getattr(expected_trace, name)
+        )
+    for actual, expected in zip(
+        actual_trace.mixer_state, expected_trace.mixer_state
+    ):
+        torch.testing.assert_close(actual, expected)
 
 
 def test_padded_full_fixed_trip_position_and_parameter_derivatives() -> None:
