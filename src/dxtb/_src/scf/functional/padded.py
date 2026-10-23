@@ -32,11 +32,20 @@ from dxtb._src.calculators.padded_integrals import (
 )
 from dxtb._src.calculators.padding import PaddedExactSystemCore
 from dxtb._src.calculators.result import Result
+from dxtb._src.components.interactions.coulomb.multipole import (
+    AES2CoreSetup,
+    build_aes2_data,
+)
 from dxtb._src.components.interactions.coulomb.secondorder import (
     ES2CoreSetup,
     build_es2_coulomb,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
+from dxtb._src.components.interactions.dispersion.d4sc import (
+    D4SCCoreSetup,
+    _d4sc_setup_view,
+    build_d4sc_data,
+)
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
     build_electric_field_data,
@@ -230,9 +239,14 @@ def setup_padded_scf_inputs(
         raise ValueError(
             "Padded SCF input preparation requires H0/integral setup."
         )
-    if core.h0_setup.method != "gfn1":
+    expected_method = {
+        labels.GFN1_XTB: "gfn1",
+        labels.GFN2_XTB: "gfn2",
+    }.get(core.config.method)
+    if expected_method is None or core.h0_setup.method != expected_method:
         raise TypeError(
-            "Padded SCF input preparation currently supports GFN1 only."
+            "Padded SCF input preparation requires matching GFN1/GFN2 "
+            "configuration and H0 metadata."
         )
     if core.integral.driver_type != labels.INTDRIVER_PYTORCH:
         raise TypeError(
@@ -423,6 +437,36 @@ def _prepare_padded_interactions(
                     (("shell_resolved", descriptor.setup.shell_resolved),),
                 )
             )
+        elif descriptor.kind == "aes2" and isinstance(
+            descriptor.setup, AES2CoreSetup
+        ):
+            cache = build_aes2_data(descriptor.setup, positions)
+            entries.append(
+                FunctionalInteractionEntry(
+                    "aes2",
+                    tuple(
+                        (name, getattr(cache, name))
+                        for name in (
+                            "dkernel",
+                            "qkernel",
+                            "amat_sd",
+                            "amat_dd",
+                            "amat_sq",
+                        )
+                    ),
+                )
+            )
+        elif descriptor.kind == "d4sc" and isinstance(
+            descriptor.setup, D4SCCoreSetup
+        ):
+            cache = build_d4sc_data(descriptor.setup, positions)
+            entries.append(
+                FunctionalInteractionEntry(
+                    "d4sc",
+                    (("cn", cache.cn), ("dispmat", cache.dispmat)),
+                    (("setup", _d4sc_setup_view(descriptor.setup)),),
+                )
+            )
         else:
             raise TypeError(
                 "Padded fixed-trip SCF does not support captured interaction "
@@ -602,8 +646,9 @@ def evaluate_padded_fixed_trip(
     field_grad: Tensor | None = None,
     *,
     record_trace: bool = False,
+    d4_eeq_cutoff: float | None = None,
 ) -> Result | tuple[Result, SCFSolverTrace]:
-    """Evaluate one padded GFN1 System using the shared fixed-trip solver.
+    """Evaluate one padded GFN1/GFN2 System using the shared solver.
 
     The function consumes only registered exact-core setup, explicit call
     tensors and the existing functional solver. It does not construct a
@@ -614,9 +659,9 @@ def evaluate_padded_fixed_trip(
     from dxtb._src.scf.functional.eager import public_scf_status
 
     core = padded_core.core
-    if core.config.method != labels.GFN1_XTB:
+    if core.config.method not in (labels.GFN1_XTB, labels.GFN2_XTB):
         raise TypeError(
-            "Padded fixed-trip evaluation currently supports GFN1 only."
+            "Padded fixed-trip evaluation supports GFN1 and GFN2 only."
         )
     if core.config.scf.scf_mode != labels.SCF_MODE_FULL:
         raise TypeError("Padded fixed-trip evaluation requires FULL SCF mode.")
@@ -664,13 +709,26 @@ def evaluate_padded_fixed_trip(
         padded=True,
     )
 
-    classical = tuple(
-        (
-            descriptor.label,
-            _evaluate_classical_descriptor(descriptor, positions, charge),
-        )
-        for descriptor in core.classical_terms
-    )
+    classical_values = []
+    for descriptor in core.classical_terms:
+        if descriptor.kind == "d4" and d4_eeq_cutoff is not None:
+            from dxtb._src.scf.guess import get_eeq_guess
+
+            eeq = get_eeq_guess(
+                descriptor.setup.numbers,
+                positions,
+                charge,
+                cutoff=d4_eeq_cutoff,
+            )
+            value = _evaluate_classical_descriptor(
+                descriptor, positions, charge, q=eeq
+            )
+        else:
+            value = _evaluate_classical_descriptor(
+                descriptor, positions, charge
+            )
+        classical_values.append((descriptor.label, value))
+    classical = tuple(classical_values)
     classical_total = (
         torch.stack(tuple(value for _, value in classical)).sum(0)
         if classical
@@ -789,9 +847,28 @@ def evaluate_padded_systems(
                     f"its padded {map_name} validity mask."
                 )
     stacked_core = stack(padded_cores)
+    d4_cutoffs = tuple(
+        float(descriptor.setup.cutoff.cn_eeq)
+        for core in padded_cores
+        for descriptor in core.core.classical_terms
+        if descriptor.kind == "d4"
+    )
+    d4_eeq_cutoff = None
+    if d4_cutoffs:
+        if any(value != d4_cutoffs[0] for value in d4_cutoffs[1:]):
+            raise ValueError(
+                "A canonical bucket requires one shared classical D4 EEQ cutoff."
+            )
+        d4_eeq_cutoff = d4_cutoffs[0]
     mapped = torch.func.vmap(
         lambda core, position, charge, spin: evaluate_padded_fixed_trip(
-            core, position, charge, spin, field=field, field_grad=field_grad
+            core,
+            position,
+            charge,
+            spin,
+            field=field,
+            field_grad=field_grad,
+            d4_eeq_cutoff=d4_eeq_cutoff,
         )
     )(
         stacked_core,

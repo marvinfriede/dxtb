@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
 import numpy as np
+import torch
 
 from dxtb._src.typing import Tensor
 
@@ -188,11 +188,15 @@ def fermi_density_matrix(
     )
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    structural_mask = state.orbital_mask
-    if structural_mask is not None and structural_mask.ndim == h.ndim:
-        structural_mask = structural_mask.select(-2, 0)
+    # The Fermi core's mask indexes sorted orbital energies. ``mask`` indexes
+    # the AO basis and may be noncontiguous in a canonical padded layout.
+    # Matrix operations must use the latter; the former remains in ``state``
+    # for filling and status calculations.
+    structural_mask = mask
     if structural_mask is None:
-        structural_mask = mask
+        structural_mask = state.orbital_mask
+        if structural_mask is not None and structural_mask.ndim == h.ndim:
+            structural_mask = structural_mask.select(-2, 0)
     h, spectral, active = _prepare_matrix(h, li, structural_mask)
 
     h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
@@ -305,11 +309,14 @@ def fermi_free_energy_matrix(
     work_dtype = torch.float64
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    structural_mask = state.orbital_mask
-    if structural_mask is not None and structural_mask.ndim == h.ndim:
-        structural_mask = structural_mask.select(-2, 0)
+    # Keep the Fermi-energy mask (state.orbital_mask) separate from the AO
+    # basis mask supplied by the SCF input. Canonical AO validity can be
+    # noncontiguous even though padded eigenvalues sort to a valid prefix.
+    structural_mask = mask
     if structural_mask is None:
-        structural_mask = mask
+        structural_mask = state.orbital_mask
+        if structural_mask is not None and structural_mask.ndim == h.ndim:
+            structural_mask = structural_mask.select(-2, 0)
     h, spectral, active = _prepare_matrix(h, li, structural_mask)
 
     h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
@@ -492,8 +499,17 @@ def _projector(
     e_hi = torch.where(rank == active_count, e_last + span, e_hi)
     mu = (0.5 * (e_lo + e_hi)).detach()
 
+    # ``active`` indexes basis functions, while ``evals`` is sorted by energy.
+    # A canonical padded layout can place physical orbitals at noncontiguous
+    # AO indices, so the basis mask cannot be applied directly to eigenvalues.
+    eigenvalue_active = torch.arange(
+        n, device=matrix.device
+    ) < active_count.unsqueeze(-1)
     scale = torch.maximum(
-        (evals - mu.unsqueeze(-1)).abs().masked_fill(~active, 0.0).amax(-1),
+        (evals - mu.unsqueeze(-1))
+        .abs()
+        .masked_fill(~eigenvalue_active, 0.0)
+        .amax(-1),
         span * 0.5,
     ).clamp_min(torch.finfo(matrix.dtype).tiny)
     pad = torch.where(active, 0.0, (mu + 2.0 * scale).unsqueeze(-1))

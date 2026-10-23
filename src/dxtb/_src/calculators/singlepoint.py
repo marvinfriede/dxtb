@@ -175,6 +175,8 @@ def _evaluate_classical_descriptor(
     descriptor: ClassicalTermDescriptor,
     positions: Tensor,
     charge: Tensor,
+    *,
+    q: Tensor | None = None,
 ) -> Tensor:
     """Evaluate a captured built-in term without component dispatch."""
     setup = descriptor.setup
@@ -201,7 +203,7 @@ def _evaluate_classical_descriptor(
     if descriptor.kind == "d4":
         if not isinstance(setup, DispersionD4CoreSetup):
             raise TypeError("D4 descriptor has an invalid setup value.")
-        return dispersion_d4_energy(setup, positions, charge)
+        return dispersion_d4_energy(setup, positions, charge, q=q)
     if descriptor.kind == "ies":
         if not isinstance(setup, IESCoreSetup):
             raise TypeError("IES descriptor has an invalid setup value.")

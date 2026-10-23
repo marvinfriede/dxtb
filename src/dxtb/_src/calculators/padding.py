@@ -184,6 +184,10 @@ def _setup_static_signature(setup: Node) -> tuple[object, ...]:
                 (entry.name, entry.value.kind, entry.value.static_value)
                 for entry in setup.parameter_entries
             ),
+            tuple(
+                (name, float(getattr(setup.cutoff, name)))
+                for name in ("disp2", "disp3", "cn", "cn_eeq")
+            ),
             tuple(setup.model_rc6.shape[2:]),
         )
     if isinstance(setup, AES2CoreSetup):

@@ -26,6 +26,7 @@ from dxtb import labels
 from dxtb._src.typing import Tensor
 
 from ...wavefunction import filling
+from .core import CoreIndexData
 from .data import (
     PotentialLayout,
     SCFCharges,
@@ -39,7 +40,6 @@ from .data import (
     unpack_charges,
     unpack_potential,
 )
-from .core import CoreIndexData
 from .interactions import potential_from_charges as _core_potential_from_charges
 from .spectral import aufbau_density_matrix, fermi_density_matrix
 
@@ -160,9 +160,11 @@ def evaluate_hamiltonian(
         channel_energies = emo.unsqueeze(-2).expand(
             *inputs.nel.shape, emo.shape[-1]
         )
-        channel_mask = inputs.orbital_mask.unsqueeze(-2).expand_as(
-            channel_energies
-        )
+        active_count = inputs.orbital_mask.sum(-1)
+        spectral_mask = torch.arange(
+            emo.shape[-1], device=emo.device
+        ) < active_count.unsqueeze(-1)
+        channel_mask = spectral_mask.unsqueeze(-2).expand_as(channel_energies)
         fermi_state = filling._get_fermi_occupation_core_state(
             inputs.nel,
             channel_energies,
