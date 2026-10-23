@@ -3190,6 +3190,32 @@ matrix. See [`E6bimpl2b-final-acceptance.md`](E6bimpl2b-final-acceptance.md)
 and the historical implementation record
 [`E6bimpl2b-mixed-gfn2-scf.md`](E6bimpl2b-mixed-gfn2-scf.md).
 
+E6bimpl.2c completes the private numerical acceptance review for the
+supported mixed GFN1/GFN2 PyTorch paths. It records the 16 frozen numerical
+requirements against owning code/tests, cross-method Results and status,
+padding/order invariance, component coverage, derivative isolation, and a
+GFN2 full-energy Hessian-vector comparison. The GFN1 51-case and GFN2
+41-case mixed execution suites pass in all five CPU profiles; the added GFN2
+HVP control also passes in all five. The completed primary focused selection
+contains 431 unique nodes with 425 passing and six previously matched
+functional SCF baseline failures. A stale C8b test that expected canonical
+padding to reject GFN2 was corrected to assert method-specific bucket
+separation. No production code or public Calculator route changed.
+
+The **private E6bimpl numerical implementation is complete**. Overall
+E6bimpl remains **open** because the frozen E6bcompat policy assigns an
+ordered retained-legacy composition to E6bimpl for cases that cannot use the
+mapped PyTorch bucket, including libcint compatibility when packed
+replacement is unavailable and retained custom extension behavior. That
+composition and its serial/order/option/cache tests are not implemented or
+accepted. E6bcompat may begin differential tests for the supported PyTorch
+replacement and the unchanged legacy route, but cannot close the complete
+policy matrix yet. E6broute remains blocked on overall E6bimpl, E6bcompat,
+E7 batch safety and E6c1 W2/W3 gates. See
+[`E6bimpl2c-final-numerical-acceptance.md`](E6bimpl2c-final-numerical-acceptance.md)
+and the exact completed node inventory in
+[`E6bimpl2c-acceptance-manifest.txt`](E6bimpl2c-acceptance-manifest.txt).
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

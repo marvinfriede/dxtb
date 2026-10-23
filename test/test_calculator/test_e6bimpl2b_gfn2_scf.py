@@ -1309,6 +1309,70 @@ def test_gfn2_mixed_position_es2_parameter_derivative_matches_serial() -> None:
     assert torch.count_nonzero(mapped_mixed) > 0
 
 
+def test_gfn2_mixed_energy_hessian_vector_matches_serial() -> None:
+    """A full mixed-GFN2 energy HVP matches independent serial Systems."""
+    compositions = ((1, 1), (3, 1))
+    systems, bucket, padded, source_positions, positions, charges = _prepare(
+        _model(maxiter=2), compositions
+    )
+    spins = tuple(torch.zeros((), dtype=DTYPE) for _ in systems)
+
+    def mapped_energy(batch_positions):
+        result, _ = evaluate_padded_systems(
+            padded, bucket, batch_positions, charges, spins
+        )
+        return result.energy.sum()
+
+    directions = []
+    source_directions = []
+    mappings = dict(bucket.source_maps)
+    for lane, (position, source_position) in enumerate(
+        zip(positions, source_positions)
+    ):
+        source_direction = torch.linspace(
+            -0.3, 0.4, source_position.numel(), dtype=DTYPE
+        ).reshape_as(source_position)
+        source_directions.append(source_direction)
+        padded_direction = torch.zeros_like(position)
+        atom_indices = torch.tensor(
+            mappings[bucket.indices[lane]].atoms, dtype=torch.int64
+        )
+        padded_direction = padded_direction.index_copy(
+            0, atom_indices, source_direction
+        )
+        directions.append(padded_direction)
+
+    _, mapped_hvp = torch.func.jvp(
+        torch.func.grad(mapped_energy), (positions,), (tuple(directions),)
+    )
+    for lane, (system, source_position, source_direction) in enumerate(
+        zip(systems, source_positions, source_directions)
+    ):
+
+        def serial_energy(position):
+            return system.singlepoint(
+                position,
+                chrg=charges[lane],
+                spin=spins[lane],
+            ).energy.sum()
+
+        _, serial_hvp = torch.func.jvp(
+            torch.func.grad(serial_energy),
+            (source_position,),
+            (source_direction,),
+        )
+        atom_indices = torch.tensor(
+            mappings[bucket.indices[lane]].atoms, dtype=torch.int64
+        )
+        torch.testing.assert_close(
+            mapped_hvp[lane].index_select(0, atom_indices),
+            serial_hvp,
+            atol=2e-12,
+            rtol=2e-12,
+        )
+        assert torch.linalg.vector_norm(serial_hvp) > 0
+
+
 @pytest.mark.parametrize("mixer", ["linear", "anderson"])
 @pytest.mark.parametrize("scp_mode", ["charge", "potential", "fock"])
 def test_gfn2_supported_scp_mixer_pairs_match_serial(

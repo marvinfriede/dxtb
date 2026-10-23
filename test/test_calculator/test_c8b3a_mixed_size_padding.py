@@ -682,8 +682,17 @@ def test_descriptor_static_metadata_and_callable_policy_are_in_signature() -> (
     alternate_method_core = core.replace(
         config=dataclass_replace(core.config, method=labels.GFN2_XTB)
     )
-    with pytest.raises(TypeError, match="GFN1 cores only"):
-        compatibility_signature(alternate_method_core)
+    # Canonical padding supports both methods, but method identity remains a
+    # static bucket property.  A method-edited core is intentionally not a
+    # valid GFN2 fixture (its H0 metadata is still GFN1); production GFN2
+    # setup and numerical acceptance live in the dedicated E6bimpl.2a tests.
+    assert compatibility_signature(core) != compatibility_signature(
+        alternate_method_core
+    )
+    assert tuple(
+        bucket.indices
+        for bucket in bucket_exact_cores((core, alternate_method_core))
+    ) == ((0,), (1,))
 
 
 def test_pad_positions_requires_prefix_validity_and_preserves_gradients() -> (
