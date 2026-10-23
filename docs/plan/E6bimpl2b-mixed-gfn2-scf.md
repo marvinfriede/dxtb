@@ -173,3 +173,27 @@ available in the primary environment.
 
 `AGENTS.md` remains untouched and untracked. The final local SHA is recorded
 with the package commit.
+
+## E6bimpl.2b-F final acceptance addendum
+
+The original report above remains the implementation-stage record. The
+follow-up acceptance in [`E6bimpl2b-final-acceptance.md`](E6bimpl2b-final-acceptance.md)
+closes its remaining interaction-reference, cutoff, component-gradient,
+charged/open-shell, and lane-local failure-status gates. The focused module
+now has 41 cases and passes in all five approved CPU environments. Added
+independent unpadded interaction call-data and potential/energy references,
+custom EEQ cutoff forwarding and bucket rejection controls, active Model
+parameter gradients for ES2/ES3/AES2/D4SC/D4/Repulsion, mixed position/ES2
+parameter response, charged/open-shell lanes, and a lane-local
+too-many-electrons status case.
+
+No production change was needed in E6bimpl.2b-F. The spectral mask remains
+split between AO-index validity and energy-sorted Fermi validity. The D4 EEQ
+policy is one shared static cutoff per bucket. The primary combined
+regression selection reproduces six existing functional SCF failures on the
+exact `f675c9d` package base; the individual nodes and the measured Torch
+2.14 discrepancy are listed in the final acceptance report. These failures
+are not attributed to the GFN2 mixed-System work. E6bimpl.2b is complete at
+its private numerical boundary; E6bimpl.2c retains the broader
+cross-method/component and derivative acceptance. Public Calculator routing
+remains unchanged.

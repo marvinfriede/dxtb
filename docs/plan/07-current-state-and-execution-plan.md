@@ -58,7 +58,7 @@ Current state:
 | E3             | acceptance open                 | E3.1b is complete and E1.3 is now accepted. The E3-specific end-to-end reference/derivative matrix remains to be rerun under its own package gate; this E1/E6a closure does not close E3. E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | E6a complete; downstream E6/E7/E8 open | E6a.0–E6a.4 satisfy the documented GFN1/GFN2 PyTorch public conformer, Result/status, built-in component, and derivative boundary. The final E1.3/E6a audit and five-environment official-D3 matrix are in [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). GFN0 IES/SRB vmap, whole-System libcint transforms, mixed-System batching, and arbitrary custom callback transforms are outside the original E6a contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md). E6bimpl.0 now provides a private mapped GFN1/PyTorch padded H0/integral foundation; full mixed-System SCF remains open. See [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md). E6bcompat validates replacements or explicit migrations. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
-| E6bimpl        | open — E6bimpl.2b partial | E6bimpl.0/1a/1b-F retain private mixed GFN1 numerical and SCF boundaries. E6bimpl.2a accepts canonical GFN2 core setup and integral/H0 mapping. E6bimpl.2b now prepares the default GFN2 ES2/ES3/AES2/D4SC interaction data, includes Repulsion and D4, and runs the shared fixed-trip solver across canonical mixed GFN2 cores. Mixed serial parity covers H2/H2, H2/LiH, H2/H2O, reversed H2O/H2, and H2O/CH4, with a solver trace, finite-temperature and one-shot cases, SCP/mixer controls, position derivatives and an H0 parameter derivative. A noncontiguous AO/Fermi mask defect and a D4 EEQ `vmap` scalar-conversion failure were fixed. Remaining independent subterm references, component parameter-gradient coverage, charged/open-shell and failure-lane matrices, and broader GFN2 validation remain open for E6bimpl.2c. No public Calculator route is activated. See [`E6bimpl2b-mixed-gfn2-scf.md`](E6bimpl2b-mixed-gfn2-scf.md). |
+| E6bimpl        | open — E6bimpl.2b complete | E6bimpl.0/1a/1b-F retain private mixed GFN1 numerical and SCF boundaries. E6bimpl.2a accepts canonical GFN2 core setup and integral/H0 mapping. E6bimpl.2b now passes its private mixed-GFN2 fixed-trip acceptance: default ES2/ES3/AES2/D4SC, Repulsion and D4 are retained; H2/H2, H2/LiH, H2/H2O, reversed H2O/H2 and H2O/CH4 match independent serial Systems; finite-temperature Fermi masks and occupations, shared-static EEQ cutoff behavior, independent interaction references, six component parameter gradients, charged/open-shell lanes, lane-local too-many-electrons status, mixed position/parameter derivatives, and solver traces are covered. The 41-case package suite passes in all five CPU profiles. Six existing functional SCF tests still fail in the broader primary selection and reproduce on the exact package base. No public Calculator route is activated. E6bimpl.2c owns the remaining cross-method/component and derivative matrix. See [`E6bimpl2b-final-acceptance.md`](E6bimpl2b-final-acceptance.md). |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -3176,18 +3176,18 @@ unchanged. See
 [`E6bimpl1b-mixed-gfn1-scf.md`](E6bimpl1b-mixed-gfn1-scf.md).
 
 E6bimpl.2b extends the private fixed-trip path to default mixed GFN2/PyTorch
-Systems. It retains ES2, ES3, AES2, D4SC, Repulsion and classical D4, reusing
-the shared solver and physical kernels. Mapped serial Results pass for H2/H2,
-H2/LiH, H2/H2O, reversed H2O/H2, and H2O/CH4; a separate nonzero trial
-multipole check covers all four default GFN2 interactions. The GFN2 solver
-trace matches serial Hamiltonians, density matrices, residuals, active masks,
-damping and Fermi status. Selected position and Model-owned H0 parameter
-derivatives pass, as do the supported charge/potential/Fock and linear/Anderson
-fixture combinations. This package also fixes the mixed-GFN2 noncontiguous-AO
-Fermi mask defect and makes D4 EEQ charge generation transform-safe by
-resolving its static cutoff before `vmap`. The broader GFN2 subterm and
-component-parameter derivative matrix remains open for E6bimpl.2c; public
-Calculator batching is unchanged. See
+Systems. Its original implementation and the E6bimpl.2b-F final acceptance
+record together establish independent ES2/ES3/AES2/D4SC references, Repulsion
+and classical D4 parity, the shared static EEQ cutoff rule, all six supported
+component-gradient controls, charged/open-shell lanes, lane-local
+too-many-electrons status, finite-temperature mask/free-energy parity, and
+mixed position/parameter response. The 41-case package suite passes in all
+five CPU environments. Six unrelated functional SCF failures in the broader
+primary selection reproduce on the exact package base. No public Calculator
+batch route is activated. E6bimpl.2c owns the remaining cross-method,
+component-combination, derivative-accuracy, and compatibility-readiness
+matrix. See [`E6bimpl2b-final-acceptance.md`](E6bimpl2b-final-acceptance.md)
+and the historical implementation record
 [`E6bimpl2b-mixed-gfn2-scf.md`](E6bimpl2b-mixed-gfn2-scf.md).
 
 ### Historical implementation/status record
