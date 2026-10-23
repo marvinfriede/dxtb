@@ -58,7 +58,7 @@ Current state:
 | E3             | acceptance open                 | E3.1b is complete and E1.3 is now accepted. The E3-specific end-to-end reference/derivative matrix remains to be rerun under its own package gate; this E1/E6a closure does not close E3. E2-core and E4core are complete. |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
 | E6/E7/E8       | E6a complete; downstream E6/E7/E8 open | E6a.0–E6a.4 satisfy the documented GFN1/GFN2 PyTorch public conformer, Result/status, built-in component, and derivative boundary. The final E1.3/E6a audit and five-environment official-D3 matrix are in [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). GFN0 IES/SRB vmap, whole-System libcint transforms, mixed-System batching, and arbitrary custom callback transforms are outside the original E6a contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md). E6bimpl.0 now provides a private mapped GFN1/PyTorch padded H0/integral foundation; full mixed-System SCF remains open. See [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md). E6bcompat validates replacements or explicit migrations. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
-| E6bimpl        | open — E6bimpl.2b complete | E6bimpl.0/1a/1b-F retain private mixed GFN1 numerical and SCF boundaries. E6bimpl.2a accepts canonical GFN2 core setup and integral/H0 mapping. E6bimpl.2b now passes its private mixed-GFN2 fixed-trip acceptance: default ES2/ES3/AES2/D4SC, Repulsion and D4 are retained; H2/H2, H2/LiH, H2/H2O, reversed H2O/H2 and H2O/CH4 match independent serial Systems; finite-temperature Fermi masks and occupations, shared-static EEQ cutoff behavior, independent interaction references, six component parameter gradients, charged/open-shell lanes, lane-local too-many-electrons status, mixed position/parameter derivatives, and solver traces are covered. The 41-case package suite passes in all five CPU profiles. Six existing functional SCF tests still fail in the broader primary selection and reproduce on the exact package base. No public Calculator route is activated. E6bimpl.2c owns the remaining cross-method/component and derivative matrix. See [`E6bimpl2b-final-acceptance.md`](E6bimpl2b-final-acceptance.md). |
+| E6bimpl        | complete at private implementation boundary | E6bimpl.0/1a/1b-F, 2a/2b-F and 2c accept the private mixed GFN1/GFN2 PyTorch numerical paths. E6bimpl.3 adds ordered retained legacy composition for libcint and custom extensions without changing public Calculator routing. Its 24 focused tests pass in all five CPU profiles; actual CPU libcint calculations, fields, custom contributions/caches, low-level options, error parity, ordering and gradients are covered. The six matched functional SCF failures and interrupted 601-node run remain recorded baseline evidence; no new failure was found in completed selections. E6bcompat is the next differential acceptance package. E6broute remains blocked on E6bcompat, E7 batch safety and E6c1 W2/W3 clearance. See [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md). |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 
@@ -3202,18 +3202,25 @@ functional SCF baseline failures. A stale C8b test that expected canonical
 padding to reject GFN2 was corrected to assert method-specific bucket
 separation. No production code or public Calculator route changed.
 
-The **private E6bimpl numerical implementation is complete**. Overall
-E6bimpl remains **open** because the frozen E6bcompat policy assigns an
-ordered retained-legacy composition to E6bimpl for cases that cannot use the
-mapped PyTorch bucket, including libcint compatibility when packed
-replacement is unavailable and retained custom extension behavior. That
-composition and its serial/order/option/cache tests are not implemented or
-accepted. E6bcompat may begin differential tests for the supported PyTorch
-replacement and the unchanged legacy route, but cannot close the complete
-policy matrix yet. E6broute remains blocked on overall E6bimpl, E6bcompat,
-E7 batch safety and E6c1 W2/W3 gates. See
+The **private E6bimpl numerical implementation and its retained composition
+obligation are complete**. E6bimpl.3 uses independent existing single-System
+setup/evaluation, explicitly selects the legacy SCF engine for
+libcint/extensions/engine overrides, returns heterogeneous physical Results
+in source order, and rejects mapped-eligible systems instead of acting as a
+fallback. Its 24 focused tests pass in all five approved CPU profiles. They
+cover real CPU libcint H2/H2O, custom interaction and classical contributions,
+cache refresh, fields, option identity/merge and malformed-option behavior,
+heterogeneous classical labels, serial error parity, ordering and gradients.
+The broader primary completed selections pass; the six functional-SCF
+failures match their previously recorded baseline, and the interrupted
+601-node run is not counted. **E6bimpl.3 and overall E6bimpl are COMPLETE.**
+E6bcompat is READY for independent differential validation but is not
+complete. Public Calculator routing remains unchanged. E6broute remains
+blocked on E6bcompat, E7 batch safety and E6c1 W2/W3 gates. See
+[`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md),
+[`E6bcompat-policy.md`](E6bcompat-policy.md),
 [`E6bimpl2c-final-numerical-acceptance.md`](E6bimpl2c-final-numerical-acceptance.md)
-and the exact completed node inventory in
+and the exact E6bimpl.2c acceptance node inventory in
 [`E6bimpl2c-acceptance-manifest.txt`](E6bimpl2c-acceptance-manifest.txt).
 
 ### Historical implementation/status record

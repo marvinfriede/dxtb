@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 if TYPE_CHECKING:
     from .functional.eager import FunctionalCoreResult
 
-__all__ = ["solve"]
+__all__ = ["solve", "solve_legacy"]
 
 
 def _use_functional_implicit_route(
@@ -167,6 +167,7 @@ def solve_with_core_index(
     core_index_owner: object,
     args: tuple[Any, ...] = (),
     kwargs: dict[str, Any] | None = None,
+    force_legacy: bool = False,
 ) -> SCFResult | FunctionalCoreResult:
     """Run SCF with an internally trusted captured structural map."""
     return _solve_impl(
@@ -184,6 +185,43 @@ def solve_with_core_index(
         core_index,
         core_index_owner,
         {} if kwargs is None else kwargs,
+        force_legacy,
+    )
+
+
+def solve_legacy(
+    numbers: Tensor,
+    positions: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    refocc: Tensor,
+    *args: Any,
+    core_index: CoreIndexData | None = None,
+    core_index_owner: object | None = None,
+    **kwargs: Any,
+) -> SCFResult | FunctionalCoreResult:
+    """Run the established legacy engine without functional route selection."""
+    return _solve_impl(
+        numbers,
+        positions,
+        chrg,
+        spin,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+        refocc,
+        args,
+        core_index,
+        core_index_owner,
+        kwargs,
+        True,
     )
 
 
@@ -202,6 +240,7 @@ def _solve_impl(
     core_index: CoreIndexData | None,
     core_index_owner: object | None,
     kwargs: dict[str, Any],
+    force_legacy: bool = False,
 ) -> SCFResult | FunctionalCoreResult:
     """Share numerical dispatch while preserving the public kwargs mapping."""
     n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
@@ -234,13 +273,16 @@ def _solve_impl(
         # The transform-compatible route has an explicit eligibility gate.
         # Unsupported legacy options, extensions and batches retain their
         # established xitorch compatibility implementation.
-        functional_implicit = _use_functional_implicit_route(
-            config,
-            interactions,
-            ihelp,
-            numbers,
-            integrals,
-            legacy_engine_overrides=bool(args) or bool(kwargs),
+        functional_implicit = (
+            _use_functional_implicit_route(
+                config,
+                interactions,
+                ihelp,
+                numbers,
+                integrals,
+                legacy_engine_overrides=bool(args) or bool(kwargs),
+            )
+            and not force_legacy
         )
         if functional_implicit:
             from .functional.eager import (
@@ -277,15 +319,19 @@ def _solve_impl(
         )
 
         legacy_engine_overrides = bool(args) or bool(kwargs)
-        route = resolve_full_scf_route(
-            config,
-            interactions,
-            ihelp,
-            numbers,
-            integrals,
-            legacy_engine_overrides,
+        route = (
+            resolve_full_scf_route(
+                config,
+                interactions,
+                ihelp,
+                numbers,
+                integrals,
+                legacy_engine_overrides,
+            )
+            if not force_legacy
+            else None
         )
-        if route.kind == "functional":
+        if route is not None and route.kind == "functional":
             if route.warning is not None:
                 OutputHandler.warn(route.warning)
             result = run_prepared_functional_full(

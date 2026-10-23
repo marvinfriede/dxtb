@@ -512,6 +512,10 @@ def _singlepoint_impl(
     field_grad: Tensor | None,
     *,
     fixed_trip: bool,
+    force_legacy_scf: bool = False,
+    legacy_scf_args: tuple[Any, ...] = (),
+    legacy_scf_kwargs: dict[str, Any] | None = None,
+    refresh_extension_caches: bool = False,
 ) -> Result:
     """Share setup, physical kernels, and Result construction by controller."""
     core = system._active_exact_core()
@@ -668,7 +672,19 @@ def _singlepoint_impl(
                     (component.label, halogen_energy(halogen_setup, positions))
                 )
             else:
-                if isinstance(captured_setup, RepulsionCoreSetup):
+                if refresh_extension_caches and not isinstance(
+                    captured_setup,
+                    (
+                        RepulsionCoreSetup,
+                        ShortRangeBondCoreSetup,
+                        DispersionD3CoreSetup,
+                        DispersionD4CoreSetup,
+                        IESCoreSetup,
+                        HalogenCoreSetup,
+                    ),
+                ):
+                    setup = component.get_cache(system.numbers, system.ihelp)
+                elif isinstance(captured_setup, RepulsionCoreSetup):
                     setup = captured_setup
                 elif isinstance(captured_setup, ShortRangeBondCoreSetup):
                     setup = captured_setup
@@ -843,19 +859,43 @@ def _singlepoint_impl(
             core_index_owner=(system if core_index is not None else None),
         )
     else:
-        scf_results = scf_solve(
-            numbers,
-            positions,
-            charge,
-            spin_tensor,
-            call_interactions,
-            interaction_data,
-            system.ihelp,
-            config.scf,
-            matrices,
-            refocc,
-            **scf_kwargs,
-        )
+        legacy_args = legacy_scf_args
+        legacy_kwargs = {} if legacy_scf_kwargs is None else legacy_scf_kwargs
+        if force_legacy_scf:
+            scf_results = scf.solve_legacy(
+                numbers,
+                positions,
+                charge,
+                spin_tensor,
+                call_interactions,
+                interaction_data,
+                system.ihelp,
+                config.scf,
+                matrices,
+                refocc,
+                *legacy_args,
+                core_index=core_index,
+                core_index_owner=system if core_index is not None else None,
+                **legacy_kwargs,
+            )
+        else:
+            if legacy_args or legacy_kwargs:
+                raise ValueError(
+                    "Legacy SCF options require the explicit legacy route."
+                )
+            scf_results = scf_solve(
+                numbers,
+                positions,
+                charge,
+                spin_tensor,
+                call_interactions,
+                interaction_data,
+                system.ihelp,
+                config.scf,
+                matrices,
+                refocc,
+                **scf_kwargs,
+            )
     scf_output = _normalize_scf_output(scf_results, positions)
 
     total_energy = classical_energy + scf_output.energy + scf_output.fenergy
