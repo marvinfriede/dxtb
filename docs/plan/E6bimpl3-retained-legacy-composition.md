@@ -10,7 +10,9 @@ single-System evaluations. It does not change `Calculator` dispatch, activate
 public batching, or replace the accepted mapped PyTorch GFN1/GFN2 path.
 
 Starting SHA: `9a9864b4aa6a19a0fde6f0d21b8bbc24d93bb488`.
-Final SHA: recorded in the delivery commit and roadmap.
+Implementation commit: `0a0352dda55c56ef36000c294269dfb15a95bb55`.
+The final package SHA is reported in the delivery summary after the
+documentation update.
 
 ## Implementation and route ownership
 
@@ -118,6 +120,10 @@ was observed in the completed selections.
 
 Black, isort, compileall, and `git diff --check` pass. Ruff and mypy are not
 installed in the primary environment. No public Calculator route changed.
+The required independent read-only review found no remaining blocker or
+major issue after the added forwarding, heterogeneous-label, and error-parity
+tests. The requested reviewer was Luna/high; actual model identity is not
+exposed by the runtime.
 
 ## Frozen policy coverage and remaining boundary
 
