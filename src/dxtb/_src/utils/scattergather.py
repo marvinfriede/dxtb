@@ -346,6 +346,7 @@ def scatter_reduce(
     idx: Tensor,
     *args: str,
     fill_value: float | int | None = 0,
+    output_size: int | None = None,
 ) -> Tensor:  # pragma: no cover
     """
     Thin wrapper for pytorch's `scatter_reduce` function that allows to fill
@@ -362,6 +363,10 @@ def scatter_reduce(
     fill_value : float | int | None
         Value with which the output is inititally filled (reduction units for
         indices not scattered to). Defaults to `0`.
+    output_size : int | None
+        Explicit size of the reduced dimension. Supplying this avoids
+        converting a tensor-derived index maximum to a Python integer and is
+        therefore required when indices are mapped by ``torch.func.vmap``.
 
     Returns
     -------
@@ -370,7 +375,9 @@ def scatter_reduce(
     """
 
     out_shape = list(x.shape)
-    out_shape[dim] = t2int(idx.max()) + 1
+    out_shape[dim] = (
+        t2int(idx.max()) + 1 if output_size is None else output_size
+    )
 
     # filling the output is only necessary if indices that are not scattered to
     # should hold a defined value
@@ -390,6 +397,7 @@ def wrap_scatter_reduce(
     idx: Tensor,
     reduce: str,
     extra: bool = False,
+    output_size: int | tuple[int, int] | None = None,
 ) -> Tensor:
     """
     Wrapper for `torch.scatter_reduce` that removes negative indices.
@@ -411,6 +419,9 @@ def wrap_scatter_reduce(
         has to be modified. This feature is only tested for the aforementioned
         gradient tensors and does only work for one dimension.
         Defaults to ``False``.
+    output_size : int | tuple[int, int] | None
+        Explicit reduced extent for one-axis or two-axis reductions. This
+        allows mapped structural indices to retain a static output shape.
 
     Returns
     -------
@@ -420,9 +431,48 @@ def wrap_scatter_reduce(
     if extra is True:
         idx = adapt_indexer_extra(x, dim, idx)
 
+    # Negative structural indices are redirected to zero for scatter. For
+    # sums, exclude their source values first so padded entries cannot
+    # contaminate physical destination zero. Other reduction modes retain
+    # their established behavior because they need different neutral values
+    # or counting semantics.
+    if reduce == "sum":
+        if isinstance(dim, int):
+            x = torch.where(idx >= 0, x, torch.zeros_like(x))
+        else:
+            valid = (idx >= 0).unsqueeze(-1) & (idx >= 0).unsqueeze(-2)
+            x = torch.where(valid, x, torch.zeros_like(x))
+
     idx = torch.where(idx >= 0, idx, 0)
-    return (
-        scatter_reduce(x, dim, idx, reduce)
-        if isinstance(dim, int)
-        else twice(scatter_reduce, x, *dim, idx, reduce)
+    if isinstance(dim, int):
+        if output_size is not None and not isinstance(output_size, int):
+            raise ValueError("One-axis output_size must be an integer.")
+        return scatter_reduce(
+            x,
+            dim,
+            idx,
+            reduce,
+            output_size=output_size,
+        )
+
+    if output_size is None:
+        return twice(scatter_reduce, x, *dim, idx, reduce)
+
+    sizes = (
+        (output_size, output_size)
+        if isinstance(output_size, int)
+        else output_size
+    )
+    if len(sizes) != 2:
+        raise ValueError("Two-axis output_size must contain two dimensions.")
+
+    dim0, dim1 = dim
+    shape0 = list(x.shape)
+    first_index = idx.unsqueeze(dim0).expand(*shape0)
+    first = scatter_reduce(x, dim1, first_index, reduce, output_size=sizes[1])
+
+    shape1 = list(first.shape)
+    second_index = idx.unsqueeze(dim1).expand(*shape1)
+    return scatter_reduce(
+        first, dim0, second_index, reduce, output_size=sizes[0]
     )

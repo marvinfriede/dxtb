@@ -2853,7 +2853,8 @@ B1 batch API + E4.5b ──> E6bcompat-policy (complete; see policy document)
 E6a + final B3b + C5/C6/C7/C8b + E2-core + E4core
   + E6bcompat-policy + defined padding
   ──> E6bimpl.0 mapped padded integral/H0 foundation (GFN1/PyTorch)
-  ──> E6bimpl.1 mixed-System fixed-trip SCF and component consumers
+  ──> E6bimpl.1a padded GFN1 SCF inputs and masked spectral evaluation
+  ──> E6bimpl.1b mixed-System fixed-trip SCF and component consumers
 E6bimpl ──> E6bcompat validation
 E6bimpl + batch-critical E7 ──> E7 batch-safety gate
 E6bimpl + T0.8 W3 ──> E6c1-W3
@@ -3145,6 +3146,19 @@ environments. This begins numerical consumption downstream of C8b; it does
 not change C8b's acceptance boundary, add mixed-System SCF, or activate
 Calculator batching. See
 [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md).
+
+E6bimpl.1a adds a private GFN1/PyTorch padded SCF-input and masked spectral
+boundary over the registered canonical core. The existing spectral/Fermi,
+density, charge, and inverse-Cholesky primitives are reused. A reproduced
+negative-index sum-scatter contamination was fixed by excluding invalid
+sources before reduction; optional static output extents keep padded mapping
+free of tensor-to-Python size inference. The new boundary passes source/mapped
+spectral parity and selected value/derivative/status tests for H2/H3+,
+H2/H2O, reversed input order, and a noncontiguous canonical AO layout. It does
+not implement the SCF trajectory, interactions, public Result/status
+finalization, mixed-System public routing, or GFN2 padding. See
+[`E6bimpl1a-padded-spectral.md`](E6bimpl1a-padded-spectral.md). E6bimpl remains
+open; E6bimpl.1b owns those next steps.
 
 ### Historical implementation/status record
 
