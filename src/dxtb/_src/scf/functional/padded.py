@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from tad_mctc import storch
 from tad_mctc.tree import Node, child, context
@@ -29,9 +31,16 @@ from dxtb._src.calculators.padded_integrals import (
     evaluate_padded_integrals,
 )
 from dxtb._src.calculators.padding import PaddedExactSystemCore
+from dxtb._src.calculators.result import Result
+from dxtb._src.components.interactions.coulomb.secondorder import (
+    ES2CoreSetup,
+    build_es2_coulomb,
+)
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
+    FunctionalInteractionEntry,
     FunctionalInteractionSet,
 )
 from dxtb._src.scf.functional.data import (
@@ -40,6 +49,10 @@ from dxtb._src.scf.functional.data import (
     SCFInputs,
     SCFSpectralResult,
     _single_system_layout,
+)
+from dxtb._src.scf.functional.eager import (
+    _solve_representation,
+    public_scf_status,
 )
 from dxtb._src.scf.functional.map import evaluate_hamiltonian
 from dxtb._src.typing import Tensor
@@ -52,7 +65,10 @@ __all__ = [
     "PaddedCoreIndexData",
     "PaddedSCFSpectralResult",
     "evaluate_padded_scf_spectrum",
+    "evaluate_padded_fixed_trip",
     "evaluate_padded_spectrum",
+    "evaluate_padded_systems",
+    "decode_padded_result",
     "setup_padded_scf_inputs",
     "validate_padded_charge_spin",
 ]
@@ -68,6 +84,61 @@ class PaddedCoreIndexData(CoreIndexData):
 
     atom_count: int = context()
     shell_count: int = context()
+    valid_shells: Tensor = child(keep_dtype=True)
+    valid_orbitals: Tensor = child(keep_dtype=True)
+
+    def _validate(self) -> None:
+        if self.valid_shells.shape != self.shells_to_atom.shape:
+            raise ValueError("Padded shell validity does not match its map.")
+        if self.valid_orbitals.shape != self.orbitals_to_shell.shape:
+            raise ValueError("Padded orbital validity does not match its map.")
+        for name, mask in (
+            ("shell", self.valid_shells),
+            ("orbital", self.valid_orbitals),
+        ):
+            if mask.dtype != torch.bool:
+                raise TypeError(f"Padded {name} validity must be Boolean.")
+            if mask.device != self.shells_to_atom.device:
+                raise ValueError(
+                    f"Padded {name} validity is on the wrong device."
+                )
+
+    def spread_atom_to_shell(
+        self,
+        values: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        result = super().spread_atom_to_shell(values, dim=dim, extra=extra)
+        return torch.where(self._shell_mask_for(result, dim), result, 0.0)
+
+    def spread_shell_to_orbital(
+        self,
+        values: Tensor,
+        dim: int | tuple[int, int] = -1,
+        extra: bool = False,
+    ) -> Tensor:
+        result = super().spread_shell_to_orbital(values, dim=dim, extra=extra)
+        return torch.where(self._orbital_mask_for(result, dim), result, 0.0)
+
+    def _shell_mask_for(self, values: Tensor, dim: int | tuple[int, int]):
+        return self._broadcast_mask(self.valid_shells, values, dim)
+
+    def _orbital_mask_for(self, values: Tensor, dim: int | tuple[int, int]):
+        return self._broadcast_mask(self.valid_orbitals, values, dim)
+
+    @staticmethod
+    def _broadcast_mask(
+        mask: Tensor, values: Tensor, dim: int | tuple[int, int]
+    ) -> Tensor:
+        dims = (dim,) if isinstance(dim, int) else dim
+        result = torch.ones_like(values, dtype=torch.bool)
+        for axis in dims:
+            axis = axis % values.ndim
+            shape = [1] * values.ndim
+            shape[axis] = mask.shape[0]
+            result = result & mask.reshape(shape)
+        return result
 
     def reduce_orbital_to_shell(
         self,
@@ -137,15 +208,11 @@ class PaddedSCFSpectralResult(Node):
 def setup_padded_scf_inputs(
     padded_core: PaddedExactSystemCore,
     integrals: PaddedIntegralEvaluation,
+    positions: Tensor,
     charge: Tensor,
     spin: Tensor | None = None,
 ) -> SCFInputs:
-    """Prepare mask-aware SCF values without a System or IndexHelper.
-
-    This boundary prepares the core-Hamiltonian spectral input only. The next
-    mixed-System SCF stage owns immutable interaction preparation and the
-    fixed-trip controller.
-    """
+    """Prepare mask-aware SCF and interaction inputs without a System."""
     core = padded_core.core
     if core.h0_setup is None or core.integral is None:
         raise ValueError(
@@ -197,6 +264,8 @@ def setup_padded_scf_inputs(
         orbitals_to_shell=backend.index.orbitals_to_shell,
         atom_count=validity.atoms.shape[-1],
         shell_count=validity.shells.shape[-1],
+        valid_shells=validity.shells,
+        valid_orbitals=validity.orbitals,
     )
 
     h0_index = core.h0_setup.index
@@ -275,6 +344,7 @@ def setup_padded_scf_inputs(
     charge_layout: ChargeLayout = _single_system_layout(
         core.numbers, padded_integrals
     )
+    interactions = _prepare_padded_interactions(padded_core, positions)
     return SCFInputs(
         numbers=core.numbers,
         index=index,
@@ -282,12 +352,51 @@ def setup_padded_scf_inputs(
         n0=n0,
         nel=nel,
         occupation=occupation,
-        interactions=FunctionalInteractionSet(entries=()),
+        interactions=interactions,
         charge_layout=charge_layout,
         inverse_cholesky=inverse_cholesky,
         orbital_mask=orbital_mask,
         fermi_settings=fermi_settings,
     )
+
+
+def _prepare_padded_interactions(
+    padded_core: PaddedExactSystemCore,
+    positions: Tensor,
+) -> FunctionalInteractionSet:
+    """Prepare exact supported interaction descriptors from captured setup.
+
+    ES2's geometry-dependent matrix is built at the numerical call boundary.
+    """
+    entries: list[FunctionalInteractionEntry] = []
+    for descriptor in padded_core.core.interaction_terms:
+        if descriptor.kind == "es2" and isinstance(
+            descriptor.setup, ES2CoreSetup
+        ):
+            matrix = build_es2_coulomb(descriptor.setup, positions)
+            entries.append(
+                FunctionalInteractionEntry(
+                    "es2",
+                    (("mat", matrix),),
+                    (("shell_resolved", descriptor.setup.shell_resolved),),
+                )
+            )
+        elif descriptor.kind == "es3" and isinstance(
+            descriptor.setup, ES3CoreSetup
+        ):
+            entries.append(
+                FunctionalInteractionEntry(
+                    "es3",
+                    (("hd", descriptor.setup.hubbard_derivs),),
+                    (("shell_resolved", descriptor.setup.shell_resolved),),
+                )
+            )
+        else:
+            raise TypeError(
+                "Padded fixed-trip SCF does not support captured interaction "
+                f"'{descriptor.kind}'."
+            )
+    return FunctionalInteractionSet(tuple(entries))
 
 
 def validate_padded_charge_spin(
@@ -370,5 +479,309 @@ def evaluate_padded_scf_spectrum(
 ) -> PaddedSCFSpectralResult:
     """Evaluate mapped padded H0 integrals and the shared spectral primitive."""
     integrals = evaluate_padded_integrals(padded_core, positions, charge)
-    inputs = setup_padded_scf_inputs(padded_core, integrals, charge, spin)
+    inputs = setup_padded_scf_inputs(
+        padded_core, integrals, positions, charge, spin
+    )
     return evaluate_padded_spectrum(inputs)
+
+
+def _padded_initial_guess(
+    padded_core: PaddedExactSystemCore,
+    positions: Tensor,
+    charge: Tensor,
+    inputs: SCFInputs,
+) -> Tensor:
+    """Construct the production EEQ/SAD guess using padded index maps."""
+    from dxtb import labels
+    from dxtb._src.scf.guess import get_eeq_guess
+
+    kind = padded_core.core.config.scf.guess
+    if kind == labels.GUESS_SAD:
+        atomic = torch.zeros_like(
+            padded_core.core.numbers, dtype=positions.dtype
+        )
+    elif kind == labels.GUESS_EEQ:
+        atomic = get_eeq_guess(padded_core.core.numbers, positions, charge)
+    else:
+        raise ValueError(f"Unsupported padded SCF guess '{kind}'.")
+
+    shell_count = inputs.index.reduce_shell_to_atom(
+        padded_core.validity.shells.to(dtype=positions.dtype)
+    )
+    shell_denominator = inputs.index.spread_atom_to_shell(shell_count)
+    shell_values = torch.where(
+        padded_core.validity.shells,
+        inputs.index.spread_atom_to_shell(atomic)
+        / shell_denominator.clamp_min(1.0),
+        0.0,
+    )
+    orbital_count = inputs.index.reduce_orbital_to_shell(
+        padded_core.validity.orbitals.to(dtype=positions.dtype)
+    )
+    orbital_denominator = inputs.index.spread_shell_to_orbital(orbital_count)
+    return torch.where(
+        padded_core.validity.orbitals,
+        inputs.index.spread_shell_to_orbital(shell_values)
+        / orbital_denominator.clamp_min(1.0),
+        0.0,
+    )
+
+
+def evaluate_padded_fixed_trip(
+    padded_core: PaddedExactSystemCore,
+    positions: Tensor,
+    charge: Tensor,
+    spin: Tensor,
+) -> Result:
+    """Evaluate one padded GFN1 System using the shared fixed-trip solver.
+
+    The function consumes only registered exact-core setup, explicit call
+    tensors and the existing functional solver. It does not construct a
+    mutable System, IndexHelper, InteractionList or persistent cache.
+    """
+    from dxtb import labels
+    from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
+    from dxtb._src.scf.functional.eager import public_scf_status
+
+    core = padded_core.core
+    if core.config.method != labels.GFN1_XTB:
+        raise TypeError(
+            "Padded fixed-trip evaluation currently supports GFN1 only."
+        )
+    if core.config.scf.scf_mode != labels.SCF_MODE_FULL:
+        raise TypeError("Padded fixed-trip evaluation requires FULL SCF mode.")
+    if not core.config.scf.requires_iterations:
+        raise TypeError(
+            "Padded fixed-trip evaluation requires an iterative method."
+        )
+    if core.config.scf.maxiter < 0:
+        raise ValueError("Padded fixed-trip evaluation requires maxiter >= 0.")
+
+    integrals = evaluate_padded_integrals(padded_core, positions, charge)
+    inputs = setup_padded_scf_inputs(
+        padded_core, integrals, positions, charge, spin
+    )
+    # The input-preparation spectrum carries the same orbital seed and filling
+    # contract as the ordinary fixed-System path. The shared solver owns every
+    # subsequent map, mixer transition, residual and finalization.
+    guess = _padded_initial_guess(padded_core, positions, charge, inputs)
+    solved = _solve_representation(guess, inputs, core.config.scf, eager=False)
+
+    classical = tuple(
+        (
+            descriptor.label,
+            _evaluate_classical_descriptor(descriptor, positions, charge),
+        )
+        for descriptor in core.classical_terms
+    )
+    classical_total = (
+        torch.stack(tuple(value for _, value in classical)).sum(0)
+        if classical
+        else torch.zeros_like(core.numbers, dtype=positions.dtype)
+    )
+    status = public_scf_status(
+        solved.trajectory_status,
+        solved.final_evaluation.fermi_status,
+        like=solved.converged,
+    )
+    charges = solved.final_charges
+    potential = solved.final_potential
+    fenergy = solved.fenergy
+    return Result.snapshot(
+        energy=classical_total + solved.energy + fenergy,
+        scf=solved.energy,
+        classical=classical,
+        fenergy=fenergy,
+        iterations=solved.iterations,
+        charges=charges,
+        density=solved.density,
+        coefficients=solved.coefficients,
+        emo=solved.emo,
+        occupation=solved.occupation,
+        potential=potential,
+        hamiltonian=solved.hamiltonian,
+        overlap=integrals.overlap,
+        hcore=integrals.hcore,
+        dipole_integrals=integrals.dipole,
+        quadrupole_integrals=integrals.quadrupole,
+        overlap_norm=integrals.overlap_norm,
+        converged=solved.converged,
+        residual=solved.residual,
+        status=status,
+    )
+
+
+def evaluate_padded_systems(
+    padded_cores: tuple[PaddedExactSystemCore, ...],
+    bucket,
+    positions: tuple[Tensor, ...],
+    charges: tuple[Tensor, ...],
+    spins: tuple[Tensor, ...],
+) -> tuple[Result, tuple[Result, ...]]:
+    """Map a bucket-ordered core sequence and decode physical Results.
+
+    The core and explicit-input tuples must follow ``bucket.indices`` order.
+    Source indices identify outputs but are not required to be contiguous.
+    """
+    from tad_mctc.tree import stack
+
+    count = len(padded_cores)
+    if (
+        count == 0
+        or len(positions) != count
+        or len(charges) != count
+        or len(spins) != count
+    ):
+        raise ValueError(
+            "Padded Systems and explicit inputs must have equal nonzero lengths."
+        )
+    if len(bucket.indices) != count:
+        raise ValueError(
+            "Padded lane count does not match the canonical bucket."
+        )
+    for core, position, charge, spin in zip(
+        padded_cores, positions, charges, spins
+    ):
+        validate_padded_charge_spin(core, charge, spin)
+        if position.shape != (core.core.numbers.numel(), 3):
+            raise ValueError("Padded positions do not match their exact core.")
+    stacked_core = stack(padded_cores)
+    mapped = torch.func.vmap(evaluate_padded_fixed_trip)(
+        stacked_core,
+        torch.stack(positions),
+        torch.stack(charges),
+        torch.stack(spins),
+    )
+    decoded = tuple(
+        decode_padded_result(
+            mapped, bucket, source_index, lane_index=lane_index
+        )
+        for lane_index, source_index in enumerate(bucket.indices)
+    )
+    return mapped, decoded
+
+
+def decode_padded_result(
+    result: Result,
+    bucket,
+    source_index: int,
+    *,
+    lane_index: int | None = None,
+) -> Result:
+    """Restore one source's physical tensor extents and canonical ordering."""
+    from dataclasses import replace as dataclass_replace
+
+    maps = dict(bucket.source_maps)
+    if source_index not in maps:
+        raise ValueError(f"No canonical map for source System {source_index}.")
+    mapping = maps[source_index]
+    device = result.energy.device
+    lane_index = source_index if lane_index is None else lane_index
+
+    def vector(tensor: Tensor | None, indices: tuple[int, ...]):
+        if tensor is None:
+            return None
+        lane = tensor.select(0, lane_index)
+        axis = lane.ndim - 1
+        idx = torch.tensor(indices, dtype=torch.int64, device=device)
+        return lane.index_select(axis, idx)
+
+    def atom_tensor(tensor: Tensor | None):
+        if tensor is None:
+            return None
+        lane = tensor.select(0, lane_index)
+        if lane.ndim >= 2 and lane.shape[-2] == bucket.atoms:
+            indices = torch.tensor(
+                mapping.atoms, dtype=torch.int64, device=device
+            )
+            return lane.index_select(-2, indices)
+        if lane.ndim >= 1 and lane.shape[-1] == bucket.atoms:
+            indices = torch.tensor(
+                mapping.atoms, dtype=torch.int64, device=device
+            )
+            return lane.index_select(-1, indices)
+        return lane
+
+    def matrix(tensor: Tensor | None, axes: tuple[int, int] = (-2, -1)):
+        if tensor is None:
+            return None
+        lane = tensor.select(0, lane_index)
+        idx = torch.tensor(mapping.orbitals, dtype=torch.int64, device=device)
+        return lane.index_select(axes[0], idx).index_select(axes[1], idx)
+
+    def coefficients(tensor: Tensor | None):
+        if tensor is None:
+            return None
+        lane = tensor.select(0, lane_index)
+        rows = torch.tensor(mapping.orbitals, dtype=torch.int64, device=device)
+        columns = torch.arange(len(mapping.orbitals), device=device)
+        return lane.index_select(-2, rows).index_select(-1, columns)
+
+    atom = tuple(mapping.atoms)
+    orbital = tuple(mapping.orbitals)
+    molecular_orbitals = tuple(range(len(mapping.orbitals)))
+    charges = result.charges
+    if charges is not None:
+        charges = dataclass_replace(
+            charges,
+            mono=vector(charges.mono, orbital),
+            dipole=atom_tensor(charges.dipole),
+            quadrupole=atom_tensor(charges.quadrupole),
+        )
+    potential = result.potential
+    if potential is not None:
+        potential = dataclass_replace(
+            potential,
+            mono=vector(potential.mono, orbital),
+            dipole=atom_tensor(potential.dipole),
+            quadrupole=atom_tensor(potential.quadrupole),
+        )
+    classical = tuple(
+        (name, vector(value, atom)) for name, value in result.classical
+    )
+    status = result.status
+    if status is not None:
+        status = dataclass_replace(
+            status,
+            trajectory_failure=status.trajectory_failure.select(0, lane_index),
+            final_failure=status.final_failure.select(0, lane_index),
+        )
+    return dataclass_replace(
+        result,
+        energy=vector(result.energy, atom),
+        scf=vector(result.scf, atom),
+        classical=classical,
+        fenergy=vector(result.fenergy, atom),
+        iterations=result.iterations.select(0, lane_index),
+        charges=charges,
+        density=matrix(result.density),
+        coefficients=coefficients(result.coefficients),
+        emo=vector(result.emo, molecular_orbitals),
+        occupation=vector(result.occupation, molecular_orbitals),
+        potential=potential,
+        hamiltonian=matrix(result.hamiltonian),
+        overlap=matrix(result.overlap),
+        hcore=matrix(result.hcore),
+        dipole_integrals=(
+            None
+            if result.dipole_integrals is None
+            else matrix(result.dipole_integrals)
+        ),
+        quadrupole_integrals=(
+            None
+            if result.quadrupole_integrals is None
+            else matrix(result.quadrupole_integrals)
+        ),
+        overlap_norm=vector(result.overlap_norm, orbital),
+        converged=(
+            None
+            if result.converged is None
+            else result.converged.select(0, lane_index)
+        ),
+        residual=(
+            None
+            if result.residual is None
+            else result.residual.select(0, lane_index)
+        ),
+        status=status,
+    )

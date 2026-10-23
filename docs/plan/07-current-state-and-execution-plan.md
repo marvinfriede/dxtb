@@ -3154,11 +3154,26 @@ negative-index sum-scatter contamination was fixed by excluding invalid
 sources before reduction; optional static output extents keep padded mapping
 free of tensor-to-Python size inference. The new boundary passes source/mapped
 spectral parity and selected value/derivative/status tests for H2/H3+,
-H2/H2O, reversed input order, and a noncontiguous canonical AO layout. It does
-not implement the SCF trajectory, interactions, public Result/status
-finalization, mixed-System public routing, or GFN2 padding. See
-[`E6bimpl1a-padded-spectral.md`](E6bimpl1a-padded-spectral.md). E6bimpl remains
-open; E6bimpl.1b owns those next steps.
+H2/H2O, reversed input order, and a noncontiguous canonical AO layout. See
+[`E6bimpl1a-padded-spectral.md`](E6bimpl1a-padded-spectral.md).
+
+E6bimpl.1b adds a private mapped fixed-trip GFN1 evaluator that reuses the
+existing charge/potential/Fock representation solvers and linear/Anderson
+mixers, prepares captured ES2/ES3 descriptors, evaluates the exact-System
+classical descriptors, and returns a registered padded `Result` with public
+`SCFStatus`. Decoding uses canonical AO maps separately from the
+energy-ordered molecular-orbital columns. Its 35-test padded SCF/spectral
+module passes in all five approved CPU environments. It covers mixed
+H2/H3+, open-shell H2/H3, H2/H2O, reversed H2O/H2, H2O/CH4, dipole and
+quadrupole integral results, all supported GFN1 SCP/mixer pairings, finite
+temperature, one-shot evaluation, lane-local Fermi failure, and position,
+parameter, JVP/jacfwd/jacrev/vmap-grad checks. The primary-environment
+combined E6bimpl.0/1a, C8b, E6a, solver/status, padding-safe-scatter, and
+E6bcompat-policy selection passes 248 tests. Explicit intermediate-trajectory
+instrumentation and remaining component/negative-case coverage are still
+open; E6bimpl and E6bimpl.1b remain open. Public Calculator batching is
+unchanged. See
+[`E6bimpl1b-mixed-gfn1-scf.md`](E6bimpl1b-mixed-gfn1-scf.md).
 
 ### Historical implementation/status record
 

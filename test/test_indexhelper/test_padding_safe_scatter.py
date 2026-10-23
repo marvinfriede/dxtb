@@ -30,6 +30,8 @@ def test_sum_excludes_invalid_orbital_to_shell_sources() -> None:
         orbitals_to_shell=torch.tensor([0, -1, 1]),
         atom_count=2,
         shell_count=2,
+        valid_shells=torch.tensor([True, True]),
+        valid_orbitals=torch.tensor([True, False, True]),
     )
     values = torch.tensor([3.0, 999.0, 4.0])
     torch.testing.assert_close(
@@ -43,6 +45,8 @@ def test_sum_excludes_invalid_shell_to_atom_sources() -> None:
         orbitals_to_shell=torch.tensor([0, 1, 2]),
         atom_count=2,
         shell_count=3,
+        valid_shells=torch.tensor([True, False, True]),
+        valid_orbitals=torch.tensor([True, True, True]),
     )
     values = torch.tensor([3.0, 999.0, 4.0])
     torch.testing.assert_close(
