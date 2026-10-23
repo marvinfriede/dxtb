@@ -62,9 +62,14 @@ def _validate_inputs(
         raise ValueError("Padded PyTorch integral backend is missing.")
     if core.h0_setup is None:
         raise ValueError("Padded integral evaluation requires H0 setup.")
-    if core.h0_setup.method != "gfn1":
+    expected_method = {
+        labels.GFN1_XTB: "gfn1",
+        labels.GFN2_XTB: "gfn2",
+    }.get(core.config.method)
+    if expected_method is None or core.h0_setup.method != expected_method:
         raise TypeError(
-            "Canonical padded integral evaluation currently supports GFN1 only."
+            "Padded integral evaluation requires matching GFN1/GFN2 "
+            "configuration and H0 metadata."
         )
 
     validity = padded_core.validity

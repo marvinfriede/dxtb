@@ -398,8 +398,8 @@ def test_padded_integral_evaluator_rejects_invalid_inputs():
         )
 
 
-def test_gfn2_canonical_integral_readiness_is_explicitly_gfn1_only():
-    """The current canonical adapter rejects GFN2 instead of implying support."""
+def test_gfn2_canonical_integral_path_builds_the_registered_core():
+    """GFN2 exact cores enter the canonical numerical setup path."""
     model = Model(
         par=ParamModule(GFN2_XTB, dtype=DTYPE),
         config=Config.create(
@@ -415,5 +415,19 @@ def test_gfn2_canonical_integral_readiness_is_explicitly_gfn1_only():
     )
     cores = tuple(system.exact_core for system in systems)
     assert all(core is not None for core in cores)
-    with pytest.raises(TypeError, match="supports GFN1 only"):
-        bucket_canonical_exact_cores(cores)
+    bucket = bucket_canonical_exact_cores(cores)
+    padded = tuple(
+        pad_canonical_exact_core(core, bucket, index)
+        for index, core in enumerate(cores)
+    )
+    positions = tuple(_positions(numbers) for numbers in ((1, 1), (8, 1, 1)))
+    canonical = torch.stack(
+        tuple(
+            canonicalize_positions(position, bucket, index)
+            for index, position in enumerate(positions)
+        )
+    )
+    result = torch.func.vmap(evaluate_padded_integrals)(
+        stack(padded), canonical, torch.zeros(2, dtype=DTYPE)
+    )
+    assert result.hcore.shape[-1] == bucket.orbitals

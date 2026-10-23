@@ -16,14 +16,14 @@
 # limitations under the License.
 """Validity-bearing structural padding for compatible exact cores.
 
-This first padding slice supports same-method PyTorch GFN1 cores whose
-shell-class and descriptor structures agree. Different-size cores are grouped
-only when an existing representative can pad them using the supported prefix
-mapping. It intentionally does not alter ordinary ``ExactSystemCore`` values
-or claim that padded SCF/integral evaluation is supported. The padded pair
-plan uses the larger core's ordered shell-pair structure; entries absent from
-a smaller source are identified by validity masks and occupy padded AO rows
-or columns only.
+This padding layer supports same-method PyTorch GFN1 and GFN2 cores whose
+method-specific shell-class and descriptor structures agree. Different-size
+cores are grouped only when the canonical mapper can pad them using its
+source-to-canonical maps. It intentionally does not alter ordinary
+``ExactSystemCore`` values or imply public batch-route activation. The padded
+pair plan uses the bucket's ordered shell-pair structure; entries absent from
+a source are identified by validity masks and occupy padded AO rows or
+columns only.
 """
 
 from __future__ import annotations
@@ -40,6 +40,9 @@ from dxtb._src.calculators.model import ExactSystemCore
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3CoreSetup,
 )
+from dxtb._src.components.classicals.dispersion.d4 import (
+    DispersionD4CoreSetup,
+)
 from dxtb._src.components.classicals.halogen.hal import HalogenCoreSetup
 from dxtb._src.components.classicals.repulsion.base import RepulsionCoreSetup
 from dxtb._src.components.interactions.coulomb.average import (
@@ -47,15 +50,17 @@ from dxtb._src.components.interactions.coulomb.average import (
     geometric_average,
     harmonic_average,
 )
+from dxtb._src.components.interactions.coulomb.multipole import AES2CoreSetup
 from dxtb._src.components.interactions.coulomb.secondorder import ES2CoreSetup
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
+from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
 from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch.impls.pairs import (
     PairClassNode,
     PairPlanNode,
 )
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
-from dxtb._src.ncoord import exp_count
+from dxtb._src.ncoord import erf_count, exp_count, gfn2_count
 from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
 from dxtb._src.xtb.h0 import H0IndexNode
@@ -119,6 +124,8 @@ _SUPPORTED_CALLABLES = (
     geometric_average,
     harmonic_average,
     exp_count,
+    erf_count,
+    gfn2_count,
     gaussian_weight,
     rational_damping,
 )
@@ -164,9 +171,56 @@ def _setup_static_signature(setup: Node) -> tuple[object, ...]:
         )
     if isinstance(setup, ES3CoreSetup):
         return (setup.shell_resolved,)
+    if isinstance(setup, DispersionD4CoreSetup):
+        return (
+            setup.model_ga,
+            setup.model_gc,
+            setup.model_ref_charges,
+            setup.ref_charges,
+            setup.damping_type.__module__,
+            setup.damping_type.__qualname__,
+            _callable_signature(setup.counting_function),
+            tuple(
+                (entry.name, entry.value.kind, entry.value.static_value)
+                for entry in setup.parameter_entries
+            ),
+            tuple(setup.model_rc6.shape[2:]),
+        )
+    if isinstance(setup, AES2CoreSetup):
+        return ()
+    if isinstance(setup, D4SCCoreSetup):
+        return (
+            setup.model_type.__module__,
+            setup.model_type.__qualname__,
+            setup.model_ga,
+            setup.model_gc,
+            setup.model_ref_charges,
+            _callable_signature(setup.counting_function),
+            tuple(
+                (entry.name, entry.value.kind, entry.value.metadata)
+                for entry in setup.parameter_entries
+            ),
+            tuple(
+                (entry.name, _d4sc_value_signature(entry.value))
+                for entry in setup.model_extra_entries
+            ),
+            tuple(setup.model_rc6.shape[2:]),
+        )
     if isinstance(setup, (HalogenCoreSetup, RepulsionCoreSetup)):
         return ()
     raise TypeError(f"Unsupported exact-core setup {type(setup).__name__}.")
+
+
+def _d4sc_value_signature(value: object) -> tuple[object, ...]:
+    """Describe static D4SC metadata while dynamic leaves use shape checks."""
+    kind = getattr(value, "kind", None)
+    metadata = getattr(value, "metadata", None)
+    items = getattr(value, "items", ())
+    return (
+        kind,
+        metadata,
+        tuple(_d4sc_value_signature(item) for item in items),
+    )
 
 
 def _path_parts(path: tuple[object, ...]) -> tuple[str | int, ...]:
@@ -231,7 +285,11 @@ def _is_padding_normalized_path(parts: tuple[str | int, ...]) -> bool:
             "zeff",
             "kexp",
             "mask",
+            "model_numbers",
+            "compatibility_q",
         }
+        if parts[3] == "model_rc6":
+            return True
     elif parts[0] == "interaction_terms":
         normalized_fields = {
             "atom_pair_mask",
@@ -242,7 +300,18 @@ def _is_padding_normalized_path(parts: tuple[str | int, ...]) -> bool:
             "shell_hubbard",
             "shells_to_atom",
             "hubbard_derivs",
+            "numbers",
+            "dkernel",
+            "qkernel",
+            "rad",
+            "vcn",
+            "pair_mask",
+            "rcov",
+            "r4r2",
+            "pair_weight",
         }
+        if parts[3] == "model_rc6":
+            return True
     else:
         return False
     return parts[3] in normalized_fields
@@ -313,9 +382,10 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
     ):
         raise ValueError("H0 mappings disagree with the selected backend.")
     if core.config.method != labels.GFN1_XTB:
-        raise TypeError(
-            "This padding slice currently supports GFN1 cores only."
-        )
+        if core.config.method != labels.GFN2_XTB:
+            raise TypeError(
+                "Canonical padding supports only GFN1 and GFN2 cores."
+            )
 
     natoms = core.numbers.numel()
     nshells = backend.index.shells_to_atom.numel()

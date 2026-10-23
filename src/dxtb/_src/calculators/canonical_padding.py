@@ -16,10 +16,10 @@
 # limitations under the License.
 """Canonical structural padding for mixed-element exact-core buckets.
 
-This bounded extension constructs a canonical union of element and shell
-types for independently captured GFN1/PyTorch exact cores. Its padded values
-remain outside ordinary System and SCF evaluation; the accepted numerical
-consumer is the validity-aware Repulsion kernel.
+The canonical layout constructs a union of element and angular-shell types
+for independently captured GFN1 or GFN2 PyTorch exact cores. Padded numerical
+consumers remain private; this module does not activate public Calculator
+batch evaluation.
 """
 
 from __future__ import annotations
@@ -40,10 +40,16 @@ from dxtb._src.calculators.padding import (
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3CoreSetup,
 )
+from dxtb._src.components.classicals.dispersion.d4 import (
+    DispersionD4CoreSetup,
+)
 from dxtb._src.components.classicals.halogen.hal import HalogenCoreSetup
 from dxtb._src.components.classicals.repulsion.base import RepulsionCoreSetup
+from dxtb._src.components.interactions.coulomb.multipole import AES2CoreSetup
 from dxtb._src.components.interactions.coulomb.secondorder import ES2CoreSetup
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3CoreSetup
+from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
+from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch.impls.kernels import get_kernel
 from dxtb._src.integral.driver.pytorch.impls.pairs import (
     PairClassNode,
@@ -249,9 +255,14 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
             "Canonical padding requires scalar H0 enscale, got shape "
             f"{tuple(h0.enscale.shape)}."
         )
-    if h0.method != "gfn1":
+    expected_method = {
+        labels.GFN1_XTB: "gfn1",
+        labels.GFN2_XTB: "gfn2",
+    }.get(core.config.method)
+    if expected_method is None or h0.method != expected_method:
         raise TypeError(
-            "Canonical mixed-element padding currently supports GFN1 only."
+            "Canonical padding requires matching GFN1/GFN2 configuration "
+            "and H0 method metadata."
         )
     optional_h0 = (
         "kq",
@@ -268,9 +279,17 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
     )
     if any(getattr(h0, name) is not None for name in optional_h0):
         raise TypeError(
-            "Canonical GFN1 padding does not support optional H0 data."
+            f"Canonical {h0.method.upper()} padding does not support "
+            "optional H0 data in this package."
         )
     for term in core.classical_terms:
+        if isinstance(term.setup, DispersionD4CoreSetup):
+            if term.setup.model_numbers.shape != core.numbers.shape or not (
+                torch.equal(term.setup.model_numbers, core.numbers)
+            ):
+                raise ValueError(
+                    "D4 model numbers must match the exact source atoms."
+                )
         if isinstance(term.setup, DispersionD3CoreSetup):
             _validate_d3_reference_shapes(term.setup)
             if term.setup.cutoff.ndim != 0:
@@ -288,6 +307,14 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
     for term in core.interaction_terms:
         if isinstance(term.setup, ES2CoreSetup) and term.setup.gexp.ndim != 0:
             raise ValueError("Canonical padding requires scalar ES2 gexp.")
+        if (
+            isinstance(term.setup, D4SCCoreSetup)
+            and term.setup.model_extra_entries
+        ):
+            raise TypeError(
+                "Canonical GFN2 padding does not support custom D4SC model "
+                "extra entries."
+            )
     h0_optional = tuple(
         getattr(h0, name) is not None
         for name in (
@@ -464,6 +491,8 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
         return False
     field = parts[3]
     if parts[0] == "classical_terms":
+        if field == "model_rc6":
+            return True
         return field in {
             "numbers",
             "xbond",
@@ -482,8 +511,12 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
             "zeff",
             "kexp",
             "mask",
+            "model_numbers",
+            "compatibility_q",
         }
     if parts[0] == "interaction_terms":
+        if field == "model_rc6":
+            return True
         return field in {
             "atom_pair_mask",
             "atom_mask",
@@ -493,6 +526,15 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
             "shell_hubbard",
             "shells_to_atom",
             "hubbard_derivs",
+            "numbers",
+            "dkernel",
+            "qkernel",
+            "rad",
+            "vcn",
+            "pair_mask",
+            "rcov",
+            "r4r2",
+            "pair_weight",
         }
     return False
 
@@ -709,7 +751,7 @@ def _mapped_pair_class(
 def bucket_canonical_exact_cores(
     cores: tuple[ExactSystemCore, ...],
 ) -> tuple[CanonicalCoreBucket, ...]:
-    """Build one deterministic canonical GFN1/PyTorch element-union bucket."""
+    """Build a method-specific canonical PyTorch element-union bucket."""
     if not cores:
         return ()
     signatures = tuple(_base_signature(core) for core in cores)
@@ -910,13 +952,34 @@ def _scatter_square(
     return output.index_copy(1, indices, rows)
 
 
+def _scatter_square_leading(
+    value: Tensor,
+    mapping: tuple[int, ...],
+    size: int,
+    *,
+    fill: int | float | bool = 0,
+) -> Tensor:
+    """Scatter atom-pair leading axes and retain reference-table axes."""
+    if value.ndim < 2 or value.shape[:2] != (len(mapping), len(mapping)):
+        raise ValueError(
+            "Source tensor leading axes do not match its atom-pair map."
+        )
+    indices = torch.tensor(mapping, dtype=torch.int64, device=value.device)
+    rows = value.new_full((size, *value.shape[1:]), fill).index_copy(
+        0, indices, value
+    )
+    return rows.new_full((size, size, *value.shape[2:]), fill).index_copy(
+        1, indices, rows
+    )
+
+
 def _remap_h0(
     h0: H0SetupNode,
     core: ExactSystemCore,
     bucket: CanonicalCoreBucket,
     mapping: CanonicalCoreMap,
 ) -> H0SetupNode:
-    """Remap the supported GFN1 H0 element and shell tables explicitly."""
+    """Remap method-specific H0 element and shell tables explicitly."""
     optional = (
         "kq",
         "kqat",
@@ -932,7 +995,8 @@ def _remap_h0(
     )
     if any(getattr(h0, name) is not None for name in optional):
         raise TypeError(
-            "Canonical GFN1 padding does not support optional H0 data."
+            f"Canonical {h0.method.upper()} padding does not support "
+            "optional H0 data in this package."
         )
 
     n_elements = len(bucket.elements)
@@ -1035,6 +1099,36 @@ def _remap_family_setup(
             kexp=_scatter_square(setup.kexp, mapping.atoms, n_atoms),
             mask=_scatter_square(
                 setup.mask, mapping.atoms, n_atoms, fill=False
+            ),
+        )
+    if isinstance(setup, DispersionD4CoreSetup):
+        if setup.model_numbers.shape != (len(mapping.atoms),):
+            raise ValueError("D4 model numbers do not match source atoms.")
+        if setup.rcov.shape != (len(mapping.atoms),) or setup.r4r2.shape != (
+            len(mapping.atoms),
+        ):
+            raise ValueError("D4 atom tables do not match source atoms.")
+        if (
+            setup.compatibility_q is not None
+            and setup.compatibility_q.shape != (len(mapping.atoms),)
+        ):
+            raise ValueError("D4 compatibility charges do not match atoms.")
+        return setup.replace(
+            numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
+            model_numbers=_scatter_vector(
+                setup.model_numbers, mapping.atoms, n_atoms
+            ),
+            model_rc6=_scatter_square_leading(
+                setup.model_rc6, mapping.atoms, n_atoms
+            ),
+            rcov=_scatter_vector(setup.rcov, mapping.atoms, n_atoms),
+            r4r2=_scatter_vector(setup.r4r2, mapping.atoms, n_atoms),
+            compatibility_q=(
+                None
+                if setup.compatibility_q is None
+                else _scatter_vector(
+                    setup.compatibility_q, mapping.atoms, n_atoms
+                )
             ),
         )
     if isinstance(setup, ES2CoreSetup):
@@ -1148,6 +1242,39 @@ def _remap_family_setup(
             hubbard_derivs=_scatter_vector(
                 setup.hubbard_derivs, mapping.atoms, n_atoms
             )
+        )
+    if isinstance(setup, AES2CoreSetup):
+        for name in ("numbers", "dkernel", "qkernel", "rad", "vcn"):
+            if getattr(setup, name).shape != (len(mapping.atoms),):
+                raise ValueError(f"AES2 {name} does not match source atoms.")
+        if setup.pair_mask.shape != (len(mapping.atoms), len(mapping.atoms)):
+            raise ValueError("AES2 pair mask does not match source atoms.")
+        return setup.replace(
+            numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
+            dkernel=_scatter_vector(setup.dkernel, mapping.atoms, n_atoms),
+            qkernel=_scatter_vector(setup.qkernel, mapping.atoms, n_atoms),
+            rad=_scatter_vector(setup.rad, mapping.atoms, n_atoms),
+            vcn=_scatter_vector(setup.vcn, mapping.atoms, n_atoms),
+            pair_mask=_scatter_square(
+                setup.pair_mask, mapping.atoms, n_atoms, fill=False
+            ),
+        )
+    if isinstance(setup, D4SCCoreSetup):
+        for name in ("numbers", "rcov", "r4r2"):
+            if getattr(setup, name).shape != (len(mapping.atoms),):
+                raise ValueError(f"D4SC {name} does not match source atoms.")
+        if setup.pair_weight.shape != (len(mapping.atoms), len(mapping.atoms)):
+            raise ValueError("D4SC pair weights do not match source atoms.")
+        return setup.replace(
+            numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
+            rcov=_scatter_vector(setup.rcov, mapping.atoms, n_atoms),
+            r4r2=_scatter_vector(setup.r4r2, mapping.atoms, n_atoms),
+            pair_weight=_scatter_square(
+                setup.pair_weight, mapping.atoms, n_atoms
+            ),
+            model_rc6=_scatter_square_leading(
+                setup.model_rc6, mapping.atoms, n_atoms
+            ),
         )
     raise TypeError(
         f"Canonical padding does not support {type(setup).__name__}."

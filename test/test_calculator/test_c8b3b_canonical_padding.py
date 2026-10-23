@@ -457,7 +457,7 @@ def test_source_index_cannot_be_reused_for_another_core() -> None:
         pad_canonical_exact_core(n2, bucket, 0)
 
 
-def test_unsupported_method_is_rejected() -> None:
+def test_different_methods_cannot_share_a_canonical_bucket() -> None:
     from dxtb import GFN2_XTB
 
     par = ParamModule(GFN2_XTB, dtype=torch.float64)
@@ -470,8 +470,9 @@ def test_unsupported_method_is_rejected() -> None:
     )
     system = model.setup(torch.tensor([1, 1], dtype=torch.int64))
     assert system.exact_core is not None
-    with pytest.raises(TypeError):
-        bucket_canonical_exact_cores((system.exact_core,))
+    _, gfn1 = _system((1, 1))
+    with pytest.raises(TypeError, match="matching static configuration"):
+        bucket_canonical_exact_cores((gfn1, system.exact_core))
 
 
 def test_malformed_structural_and_dtype_metadata_is_rejected() -> None:
