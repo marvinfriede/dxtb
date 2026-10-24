@@ -2563,6 +2563,21 @@ batch-critical safety gate remains separate. Broadly unacceptable performance
 blocks retirement pending explicit review; it cannot silently authorize a
 second permanent batched physics core.
 
+E6c1-W2 was measured on the recorded `tmpda` 69-atom, eight-conformer
+workload at `ee96ffb85ddb8b8e86fcc1fb212d40eab2f860cf`. The current legacy
+`Calculator(batch_mode=2)` median energy-plus-force time was 36.215 s at one
+thread and 16.998 s at four threads, with process-isolated peak RSS near 8.16
+GiB. The historical T0.8 values remain unchanged in the original JSON. A
+finite-temperature GFN1 spectral Cholesky failure was corrected and covered
+by a dense-spectrum regression. However, the mapped E6a one-conformer,
+one-trip energy-plus-force diagnostic did not finish within about 90 s at one
+thread or 120 s at four threads; snapshots localized the time to the
+512-point matrix entropy quadrature in `_binary_entropy_matrix`. No mapped
+parity, full W2 timing, or mapped peak-memory result is available. W2 is
+therefore OPEN / BLOCKED pending an approved optimization or performance
+disposition; see [`E6c1-W2-conformer-performance.md`](E6c1-W2-conformer-performance.md)
+and [`benchmarks/results/E6c1-W2-cpu.json`](../../benchmarks/results/E6c1-W2-cpu.json).
+
 ## E6c2 final performance acceptance
 
 Record complete W2/W3 results, parameter-gradient timing when available, and

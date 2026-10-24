@@ -18,13 +18,14 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
-from torch.func import jacfwd, jvp
+import torch
 from tad_mctc import storch
 from tad_mctc.units import KELVIN2AU
+from torch.func import jacfwd, jacrev, jvp
 
 from dxtb._src.scf.functional.spectral import (
+    _matrix_fermi,
     _projector,
     aufbau_density_matrix,
     fermi_density_matrix,
@@ -603,6 +604,80 @@ def test_fermi_small_gap_density_is_continuous_in_temperature(
             atol=2.0e-10,
             rtol=2.0e-10,
         )
+
+
+def test_fermi_matrix_handles_large_positive_core_spectrum() -> None:
+    """Large unoccupied core levels do not break the SPD matrix solve."""
+    generator = torch.Generator().manual_seed(61)
+    n_orbitals = 32
+    rotation, _ = torch.linalg.qr(
+        torch.randn(
+            n_orbitals, n_orbitals, dtype=torch.float64, generator=generator
+        )
+    )
+    energies = torch.cat(
+        (
+            torch.linspace(-1.24, -0.01, 15, dtype=torch.float64),
+            torch.tensor([-5.0e-4, 5.0e-4], dtype=torch.float64),
+            torch.linspace(0.01, 70.1, 15, dtype=torch.float64),
+        )
+    )
+    hamiltonian = rotation @ torch.diag(energies) @ rotation.mT
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    active = torch.ones(n_orbitals, dtype=torch.bool)
+
+    density = _matrix_fermi(
+        hamiltonian,
+        torch.tensor(0.0, dtype=torch.float64),
+        kt,
+        active,
+    )
+    expected = (
+        rotation @ torch.diag(torch.sigmoid(-energies / kt)) @ rotation.mT
+    )
+
+    assert torch.isfinite(density).all()
+    torch.testing.assert_close(density, expected, atol=5.0e-11, rtol=2.0e-10)
+
+    direction_eigen = torch.linspace(-0.2, 0.2, n_orbitals, dtype=torch.float64)
+    weight_eigen = torch.linspace(0.2, 0.9, n_orbitals, dtype=torch.float64)
+    direction = rotation @ torch.diag(direction_eigen) @ rotation.mT
+    weight = rotation @ torch.diag(weight_eigen) @ rotation.mT
+
+    def response(parameter: torch.Tensor) -> torch.Tensor:
+        matrix = hamiltonian + parameter * direction
+        result = _matrix_fermi(
+            matrix,
+            torch.tensor(0.0, dtype=torch.float64),
+            kt,
+            active,
+        )
+        return torch.sum(weight * result)
+
+    parameter = torch.zeros((), dtype=torch.float64)
+    reverse = torch.func.grad(response)(parameter)
+    forward = jacfwd(response)(parameter)
+    reverse_jacobian = jacrev(response)(parameter)
+    _, tangent = jvp(response, (parameter,), (torch.ones_like(parameter),))
+    occupations = torch.sigmoid(-energies / kt)
+    expected_derivative = torch.sum(
+        weight_eigen
+        * (-occupations * (1.0 - occupations) / kt)
+        * direction_eigen
+    )
+    assert torch.abs(expected_derivative) > 0.0
+    torch.testing.assert_close(
+        reverse, expected_derivative, atol=2.0e-10, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        forward, expected_derivative, atol=2.0e-10, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        reverse_jacobian, expected_derivative, atol=2.0e-10, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        tangent, expected_derivative, atol=2.0e-10, rtol=2.0e-10
+    )
 
 
 def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:

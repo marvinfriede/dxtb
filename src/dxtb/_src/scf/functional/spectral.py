@@ -86,30 +86,26 @@ def _matrix_fermi(
     shift: Tensor,
     kt: Tensor,
     active: Tensor,
-    low_temperature: Tensor,
 ) -> Tensor:
     """Evaluate the symmetric matrix Fermi function with fixed scaling."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     exponent = (matrix - shift[..., None, None] * eye) / kt
-    # For relative spectral distances up to 200 Eh, the ordinary-temperature
-    # branch (kt >= 5e-4 Eh) keeps the initial matrix_exp argument below 391.
-    # At lower smearing, use scale 2**22 and 21 doublings; with the supported
-    # kt floor of 3e-7 Eh this also keeps the argument below 318. Both branches
-    # evaluate the same matrix function, selected by a tensor mask and fixed
-    # trip arithmetic without host control.
-    scale = torch.where(low_temperature, 4_194_304.0, 2048.0)
-    scaled = exponent / scale[..., None, None]
+    # Large positive core levels can make exp(2 * matrix / kt / 2048) so
+    # ill-conditioned that roundoff loses positive definiteness before the
+    # Cholesky solve below. Scaling by 2**22 keeps the W2 spectral exponential
+    # near the identity and matches the established low-temperature scaling;
+    # 21 doubling steps recover tanh(matrix / (2 * kt)) at either temperature.
+    scale = 4_194_304.0
+    scaled = exponent / scale
     exp_scaled = torch.matrix_exp(2.0 * scaled)
     tangent = _solve_positive_definite(exp_scaled + eye, exp_scaled - eye)
-    for index in range(21):
-        doubled = (
+    for _ in range(21):
+        tangent = (
             2.0
             * tangent
             @ _solve_positive_definite(eye + tangent @ tangent, eye)
         )
-        update = low_temperature | (index < 10)
-        tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
     density = 0.5 * (density + density.transpose(-2, -1))
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -233,7 +229,6 @@ def fermi_density_matrix(
     active_channel = state.active.to(device=h.device)
     gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
     below = state.below.to(device=h.device, dtype=torch.bool)
-    low_temperature = kt < 5.0e-4
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
@@ -242,7 +237,6 @@ def fermi_density_matrix(
             shift,
             safe_kt,
             active,
-            low_temperature,
         )
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
         slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
@@ -259,7 +253,6 @@ def fermi_density_matrix(
         shift,
         safe_kt,
         active,
-        low_temperature,
     )
     eye_channel = eye * active.unsqueeze(-1).to(h.dtype)
     density = torch.where(empty[..., None, None], 0.0, density)
@@ -292,9 +285,8 @@ def _binary_entropy_matrix(
     scaled = nodes.reshape(-1, 1, 1, 1) * x.unsqueeze(0)
     active_q = active.unsqueeze(0).expand_as(scaled[..., 0, :])
     kt_one = x.new_ones(())
-    low = torch.ones((), dtype=torch.bool, device=x.device)
     thermal = _matrix_fermi(
-        scaled, torch.zeros_like(nodes).reshape(-1, 1), kt_one, active_q, low
+        scaled, torch.zeros_like(nodes).reshape(-1, 1), kt_one, active_q
     )
     tanh_nodes = identity.unsqueeze(0) - 2.0 * thermal
     integral = (weights.reshape(-1, 1, 1, 1) * tanh_nodes).sum(0)
@@ -355,14 +347,10 @@ def fermi_free_energy_matrix(
     active_channel = state.active.to(device=h.device)
     gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
     below = state.below.to(device=h.device, dtype=torch.bool)
-    low_temperature = kt < 5.0e-4
-
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
-        density = _matrix_fermi(
-            relative, shift, safe_kt, active, low_temperature
-        )
+        density = _matrix_fermi(relative, shift, safe_kt, active)
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
         slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
             -1
@@ -376,9 +364,7 @@ def fermi_free_energy_matrix(
     x = (relative - shift[..., None, None] * eye) / safe_kt
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     x = torch.where(pair, x, torch.zeros_like(x))
-    occupation = _matrix_fermi(
-        relative, shift, safe_kt, active, low_temperature
-    )
+    occupation = _matrix_fermi(relative, shift, safe_kt, active)
     entropy = _binary_entropy_matrix(x, occupation, active)
     q = safe_kt * entropy
     identity = torch.diag_embed(active.to(work_dtype))

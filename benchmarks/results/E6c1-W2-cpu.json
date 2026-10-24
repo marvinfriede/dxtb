@@ -1,0 +1,228 @@
+{
+  "package": "E6c1-W2",
+  "status": "BLOCKED",
+  "starting_sha": "ee96ffb85ddb8b8e86fcc1fb212d40eab2f860cf",
+  "measurement_date": "2026-10-24",
+  "workload": {
+    "molecule": "tmpda",
+    "atoms": 69,
+    "conformers": 8,
+    "displacement_sigma_bohr": 0.1,
+    "seed": 0,
+    "method": "GFN1-xTB",
+    "integral_driver": "pytorch",
+    "dtype": "float64",
+    "scf_mode": "full",
+    "mixer": "anderson",
+    "maxiter": 300,
+    "fermi_temperature_kelvin": 300.0,
+    "f_atol": 1e-08,
+    "x_atol": 1e-08,
+    "classical_labels": [
+      "Halogen",
+      "DispersionD3",
+      "Repulsion"
+    ]
+  },
+  "environment": {
+    "hostname": "m199",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "physical_cores": 128,
+    "logical_cpus": 128,
+    "ram_total_gib": 503.7,
+    "os": "Linux 6.4.0-150600.23.103-default x86_64, glibc 2.38",
+    "python": "3.14.8",
+    "torch": "2.14.1+cpu",
+    "tad_mctc": "0.9.1",
+    "tad_dftd3": {
+      "version": "0.7.0",
+      "wheel_sha256": "44bb0ddec5fdce42f4c50f0f8270a52a996390a25db827ef2e370110bd1bde7e"
+    },
+    "tad_dftd4": "0.8.0",
+    "cpu_affinity": "0-127",
+    "interop_threads": 1,
+    "thread_env": {
+      "one_thread": {
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      },
+      "four_threads": {
+        "OMP_NUM_THREADS": "4",
+        "MKL_NUM_THREADS": "4",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    }
+  },
+  "current_legacy_batch_mode_2": {
+    "controller": "legacy eager early-stop",
+    "completed": true,
+    "runs": {
+      "1_thread": {
+        "setup_seconds": 0.1331,
+        "cold_setup_plus_energy_force_seconds": 38.0911,
+        "forward_seconds": [
+          18.1552,
+          18.5617,
+          18.4081,
+          18.0007,
+          18.191
+        ],
+        "forward_median_seconds": 18.191,
+        "backward_seconds": [
+          17.9182,
+          17.8951,
+          17.9016,
+          17.9646,
+          18.0239
+        ],
+        "backward_median_seconds": 17.9182,
+        "energy_plus_force_seconds": [
+          36.0734,
+          36.4568,
+          36.3097,
+          35.9653,
+          36.2148
+        ],
+        "energy_plus_force_median_seconds": 36.2148,
+        "energy_plus_force_iqr_seconds": 0.2362,
+        "energy_plus_force_min_seconds": 35.9653,
+        "energy_plus_force_max_seconds": 36.4568,
+        "starting_rss_mb": 351.93,
+        "peak_rss_mb": 8157.31,
+        "incremental_peak_rss_mb": 7805.38
+      },
+      "4_threads": {
+        "setup_seconds": 0.132,
+        "cold_setup_plus_energy_force_seconds": 18.1596,
+        "forward_seconds": [
+          10.3798,
+          10.5385,
+          10.4671,
+          11.4542,
+          10.448
+        ],
+        "forward_median_seconds": 10.4671,
+        "backward_seconds": [
+          6.4921,
+          6.3969,
+          6.5311,
+          7.1692,
+          6.5793
+        ],
+        "backward_median_seconds": 6.5311,
+        "energy_plus_force_seconds": [
+          16.8719,
+          16.9354,
+          16.9983,
+          18.6234,
+          17.0273
+        ],
+        "energy_plus_force_median_seconds": 16.9983,
+        "energy_plus_force_iqr_seconds": 0.092,
+        "energy_plus_force_min_seconds": 16.8719,
+        "energy_plus_force_max_seconds": 18.6234,
+        "starting_rss_mb": 354.77,
+        "peak_rss_mb": 8162.14,
+        "incremental_peak_rss_mb": 7807.37
+      }
+    },
+    "iterations_per_conformer": 205,
+    "lane_total_energies_hartree": [
+      -29.75843746217635,
+      -11.31264270383576,
+      -21.69298142196782,
+      -33.76232103072933,
+      -32.87042088664807,
+      -18.8864855257783,
+      -16.61109475677674,
+      -16.44118622572585
+    ],
+    "sum_energy_hartree": -181.3355700136383,
+    "thread_count_max_energy_difference_hartree": 6.4e-14,
+    "thread_count_max_force_difference_hartree_per_bohr": 6.14e-11,
+    "status_fields": "legacy Result has no tensor SCFStatus/converged fields"
+  },
+  "mapped_e6a": {
+    "entrypoint": "torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)",
+    "completed_full_workload": false,
+    "completed_one_trip_diagnostic": false,
+    "attempts": [
+      {
+        "threads": 1,
+        "conformers": 1,
+        "maxiter": 1,
+        "operation": "finite-temperature fixed-trip System.singlepoint plus position gradient",
+        "outcome": "did not return within approximately 90 seconds; interrupted; repeated Python stack snapshots remained in _binary_entropy_matrix -> _matrix_fermi -> _solve_positive_definite during final free-energy finalization",
+        "numerical_output": null,
+        "peak_memory": null
+      },
+      {
+        "threads": 4,
+        "conformers": 1,
+        "maxiter": 1,
+        "operation": "finite-temperature fixed-trip System.singlepoint plus position gradient",
+        "outcome": "did not return within approximately 120 seconds; interrupted",
+        "numerical_output": null,
+        "peak_memory": null
+      }
+    ],
+    "full_300_trip_w2_not_attempted": "A single one-trip mapped diagnostic did not complete within the bounded run."
+  },
+  "serial_functional": {
+    "completed": false,
+    "reason": "The same fixed-trip functional Fermi path failed before the spectral scaling correction; it was not timed after the correction because the mapped one-trip run was already incomplete."
+  },
+  "historical_t0_8": {
+    "legacy_batch_seconds": {
+      "1_thread": 32.487,
+      "4_threads": 17.274
+    },
+    "serial_loop_seconds": {
+      "1_thread": 40.655,
+      "4_threads": 31.241
+    },
+    "reported_peak_rss_mb": 5532.9,
+    "rss_note": "Peak was recorded after multiple approaches in one process and is not an isolated per-route peak.",
+    "historical_environment": "dxtb 0.4.0, torch 2.14.0+cu130, tad-mctc 0.9.1; CPU model and exact affinity were not recorded."
+  },
+  "profiler_legacy_one_conformer_4_threads": {
+    "energy_force_seconds": 2.8047,
+    "top_self_cpu_operations_seconds": {
+      "aten::bmm": 0.7352,
+      "aten::_linalg_eigh": 0.5366,
+      "aten::mul": 0.1237,
+      "aten::where": 0.112,
+      "aten::add": 0.0692,
+      "aten::sub": 0.0493,
+      "aten::add_": 0.0379,
+      "aten::copy_": 0.0369
+    },
+    "note": "Profiler is diagnostic only and is excluded from timing summaries."
+  },
+  "mapped_bottleneck_trace": {
+    "phase": "finalize_scf -> free_energy_from_spectral -> fermi_free_energy_matrix -> _binary_entropy_matrix -> _matrix_fermi -> _solve_positive_definite",
+    "entropy_quadrature_points": 512,
+    "spectral_matrix_order": 255,
+    "matrix_fermi_doubling_steps_per_quadrature_node": 21,
+    "evidence": "Repeated faulthandler snapshots at 30-second intervals during a one-trip, one-conformer mapped call."
+  },
+  "correctness": {
+    "fixed_trip_bug_found_and_fixed": "Ordinary-temperature matrix Fermi initialization used insufficient exponential scaling for W2's approximately -1.24 to +70.10 Eh initial spectrum. exp_scaled + I lost positive definiteness and Cholesky failed. Scaling by 2**22 with 21 doubling steps preserves the matrix function and passes an analytic dense-spectrum regression.",
+    "legacy_thread_comparison": "All eight lane energies and forces agree between one and four threads; max errors are 6.40e-14 Eh and 6.14e-11 Eh/bohr.",
+    "primary_suites": "86 spectral/free-energy/E7a tests passed; 27 E6a conformer/transform tests passed.",
+    "five_profile_spectral_regression": "Large-spectrum analytic matrix-Fermi value and derivative regression (grad, JVP, jacfwd, jacrev), plus existing nested third-order Fermi test; both nodes passed in all five supported Python/PyTorch profiles.",
+    "five_profile_harness_smoke": "The harness imported and regenerated the exact deterministic (69,) numbers and (8,69,3) positions fixture in each profile; positions sum was 4.2499804454906 in all profiles."
+  },
+  "historical_comparison": {
+    "note": "Historical timings included setup; current cold values are the closest comparison. Current warm values are also shown but exclude setup.",
+    "current_cold_vs_historical_legacy_percent": {
+      "1_thread": 17.3,
+      "4_threads": 5.1
+    },
+    "current_warm_vs_historical_legacy_percent": {
+      "1_thread": 11.5,
+      "4_threads": -1.6
+    }
+  }
+}
