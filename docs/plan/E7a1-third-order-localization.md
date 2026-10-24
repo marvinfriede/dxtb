@@ -3,7 +3,7 @@
 ## Scope and baseline
 
 - Starting SHA: `6b95898d8efdd8ca0431ee75670f4b683f6097bc`.
-- Final implementation SHA: `e433341` (the production/test acceptance commit;
+- Final implementation SHA: `e4333417bbb8dc9bc80dd2a1b8efe6809ce95a22` (the production/test acceptance commit;
   this report's SHA-only follow-up commit is recorded in delivery).
 - Scope: private mapped GFN1/GFN2 third-order energy derivatives. Public
   Calculator routing, broader E7, performance work, and legacy retirement are
