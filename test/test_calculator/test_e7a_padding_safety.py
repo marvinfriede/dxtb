@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 import pytest
 import torch
+from torch.utils._pytree import tree_flatten
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.canonical_padding import (
@@ -24,6 +25,7 @@ from dxtb._src.scf.functional.padded import (
     _prepare_padded_interactions,
     evaluate_padded_systems,
 )
+from dxtb._src.scf.functional.spectral import _solve_positive_definite
 
 DTYPE = torch.float64
 
@@ -83,14 +85,78 @@ def _direction(position: torch.Tensor) -> torch.Tensor:
     return values.reshape_as(position) / values.norm()
 
 
-def _third_directional(function, point, direction):
-    def first(value):
-        return torch.func.jvp(function, (value,), (direction,))[1]
+def _third_directional(function, point, first, second=None, third=None):
+    second = first if second is None else second
+    third = first if third is None else third
 
-    def second(value):
-        return torch.func.jvp(first, (value,), (direction,))[1]
+    def hessian_contraction(value):
+        hessian_vector = torch.func.jvp(
+            torch.func.grad(function), (value,), (second,)
+        )[1]
+        hessian_leaves, _ = tree_flatten(hessian_vector)
+        direction_leaves, _ = tree_flatten(third)
+        return torch.stack(
+            [
+                (hessian * tangent).sum()
+                for hessian, tangent in zip(hessian_leaves, direction_leaves)
+            ]
+        ).sum()
 
-    return torch.func.jvp(second, (point,), (direction,))[1]
+    return torch.func.jvp(hessian_contraction, (point,), (first,))[1]
+
+
+def _third_directional_forward(function, point, first, second, third):
+    def first_derivative(value):
+        return torch.func.jvp(function, (value,), (third,))[1]
+
+    def second_derivative(value):
+        return torch.func.jvp(first_derivative, (value,), (second,))[1]
+
+    return torch.func.jvp(second_derivative, (point,), (first,))[1]
+
+
+def test_spectral_positive_definite_solve_supports_forward_second_derivatives() -> (
+    None
+):
+    """The Cholesky solve keeps forward and reverse Hessians consistent."""
+    dtype = DTYPE
+    matrix = torch.tensor(
+        [[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]],
+        dtype=dtype,
+    )
+    direction = torch.tensor(
+        [[0.1, 0.2, -0.1], [0.2, -0.15, 0.05], [-0.1, 0.05, 0.08]],
+        dtype=dtype,
+    )
+    rhs = torch.tensor([[1.0], [-0.5], [0.25]], dtype=dtype)
+    weight = torch.tensor([[0.5], [1.25], [-0.75]], dtype=dtype)
+
+    def function(value):
+        solved = _solve_positive_definite(matrix + value * direction, rhs)
+        return (solved * weight).sum()
+
+    zero = torch.zeros((), dtype=dtype)
+    tangent = torch.ones_like(zero)
+    forward_second = torch.func.jvp(
+        lambda value: torch.func.jvp(function, (value,), (tangent,))[1],
+        (zero,),
+        (tangent,),
+    )[1]
+    reverse_second = torch.func.jvp(
+        torch.func.grad(function), (zero,), (tangent,)
+    )[1]
+    step = 1.0e-3
+    finite_difference = (
+        torch.func.grad(function)(zero + step)
+        - torch.func.grad(function)(zero - step)
+    ) / (2.0 * step)
+
+    torch.testing.assert_close(
+        forward_second, reverse_second, atol=1.0e-12, rtol=1.0e-12
+    )
+    torch.testing.assert_close(
+        forward_second, finite_difference, atol=1.0e-6, rtol=1.0e-6
+    )
 
 
 @pytest.mark.parametrize(
@@ -226,15 +292,35 @@ def test_mixed_full_energy_third_directional_derivative_is_lane_local(
         mapped_third = _third_directional(
             lane_function, positions, lane_directions
         )
+        mapped_forward = _third_directional_forward(
+            lane_function,
+            positions,
+            lane_directions,
+            lane_directions,
+            lane_directions,
+        )
         serial_function = lambda value: system.singlepoint(
             value, chrg=charges[lane], spin=spins[lane]
         ).energy.sum()
         serial_third = _third_directional(
             serial_function, source_position, source_direction
         )
+        serial_forward = _third_directional_forward(
+            serial_function,
+            source_position,
+            source_direction,
+            source_direction,
+            source_direction,
+        )
         assert torch.isfinite(mapped_third)
         assert torch.isfinite(serial_third)
         assert torch.abs(serial_third) > 1.0e-8
+        torch.testing.assert_close(
+            mapped_forward, mapped_third, atol=3e-5, rtol=3e-5
+        )
+        torch.testing.assert_close(
+            serial_forward, serial_third, atol=3e-5, rtol=3e-5
+        )
         if not torch.isclose(mapped_third, serial_third, atol=3e-5, rtol=3e-5):
             mismatches.append(
                 (lane, mapped_third.detach(), serial_third.detach())
@@ -242,44 +328,194 @@ def test_mixed_full_energy_third_directional_derivative_is_lane_local(
 
         # Directional derivatives involving only another System's geometry
         # or this lane's inactive coordinates must be exactly absent.
-        if lane == 0:
-            other_directions = tuple(
-                _direction(value) if index != lane else torch.zeros_like(value)
-                for index, value in enumerate(positions)
-            )
-            cross_third = _third_directional(
-                lane_function, positions, other_directions
-            )
-            torch.testing.assert_close(
-                cross_third,
-                torch.zeros_like(cross_third),
-                atol=1e-10,
-                rtol=0,
-            )
-            inactive = ~padded[lane].validity.atoms
-            inactive_directions = tuple(
-                (
-                    torch.where(
-                        core.validity.atoms.unsqueeze(-1),
-                        torch.zeros_like(value),
-                        _direction(value),
-                    )
-                    if index == lane
-                    else torch.zeros_like(value)
+        other_directions = tuple(
+            _direction(value) if index != lane else torch.zeros_like(value)
+            for index, value in enumerate(positions)
+        )
+        cross_third = _third_directional(
+            lane_function, positions, other_directions
+        )
+        torch.testing.assert_close(
+            cross_third,
+            torch.zeros_like(cross_third),
+            atol=1e-10,
+            rtol=0,
+        )
+        inactive_directions = tuple(
+            (
+                torch.where(
+                    core.validity.atoms.unsqueeze(-1),
+                    torch.zeros_like(value),
+                    _direction(value),
                 )
-                for index, (value, core) in enumerate(zip(positions, padded))
+                if index == lane
+                else torch.zeros_like(value)
             )
-            inactive_third = _third_directional(
-                lane_function, positions, inactive_directions
-            )
-            torch.testing.assert_close(
-                inactive_third,
-                torch.zeros_like(inactive_third),
-                atol=1e-10,
-                rtol=0,
-            )
+            for index, (value, core) in enumerate(zip(positions, padded))
+        )
+        inactive_third = _third_directional(
+            lane_function, positions, inactive_directions
+        )
+        torch.testing.assert_close(
+            inactive_third,
+            torch.zeros_like(inactive_third),
+            atol=1e-10,
+            rtol=0,
+        )
 
     assert not mismatches, (
         f"{method=} third-directional derivative mismatch by lane: "
         f"{mismatches}"
     )
+
+
+@pytest.mark.parametrize(
+    "method,compositions,reverse",
+    [
+        (labels.GFN1_XTB, ((1, 1), (8, 1, 1)), False),
+        (labels.GFN1_XTB, ((8, 1, 1), (1, 1)), True),
+        (labels.GFN2_XTB, ((1, 1), (3, 1)), False),
+        (labels.GFN2_XTB, ((3, 1), (1, 1)), True),
+    ],
+    ids=["gfn1", "gfn1-reversed", "gfn2", "gfn2-reversed"],
+)
+def test_mixed_full_energy_third_derivative_uses_distinct_directions(
+    method: int, compositions: tuple[tuple[int, ...], ...], reverse: bool
+) -> None:
+    """Mixed third derivatives match serial evaluation for three directions."""
+    systems, bucket, padded, source, positions, charges, spins = _build_systems(
+        method, compositions
+    )
+    lane = 0 if reverse else 1
+    source_map = dict(bucket.source_maps)[bucket.indices[lane]]
+    atom_index = torch.tensor(source_map.atoms, dtype=torch.int64)
+    source_position = source[lane]
+
+    first = _direction(source_position)
+    second = _direction(torch.flip(source_position, dims=(0,)))
+    third = _direction(torch.roll(source_position, shifts=1, dims=1))
+    source_directions = (first, second, third)
+    padded_directions = tuple(
+        torch.zeros_like(positions[lane]).index_copy(0, atom_index, value)
+        for value in source_directions
+    )
+    for source_direction, padded_direction in zip(
+        source_directions, padded_directions
+    ):
+        torch.testing.assert_close(
+            padded_direction.index_select(0, atom_index), source_direction
+        )
+        assert (
+            torch.count_nonzero(padded_direction[~padded[lane].validity.atoms])
+            == 0
+        )
+
+    def mapped_energy(values):
+        result, _ = evaluate_padded_systems(
+            padded, bucket, values, charges, spins
+        )
+        return result.energy.sum(-1)[lane]
+
+    mapped_directions = tuple(
+        tuple(
+            direction if index == lane else torch.zeros_like(position)
+            for index, position in enumerate(positions)
+        )
+        for direction in padded_directions
+    )
+    mapped_third = _third_directional(
+        mapped_energy, positions, *mapped_directions
+    )
+    mapped_forward = _third_directional_forward(
+        mapped_energy, positions, *mapped_directions
+    )
+
+    def serial_energy(value):
+        return (
+            systems[lane]
+            .singlepoint(value, chrg=charges[lane], spin=spins[lane])
+            .energy.sum()
+        )
+
+    serial_third = _third_directional(
+        serial_energy, source_position, *source_directions
+    )
+    serial_forward = _third_directional_forward(
+        serial_energy, source_position, *source_directions
+    )
+    assert torch.isfinite(mapped_third)
+    assert torch.isfinite(serial_third)
+    assert torch.abs(serial_third) > 1.0e-8
+    torch.testing.assert_close(
+        mapped_forward, mapped_third, atol=3e-5, rtol=3e-5
+    )
+    torch.testing.assert_close(
+        serial_forward, serial_third, atol=3e-5, rtol=3e-5
+    )
+    torch.testing.assert_close(mapped_third, serial_third, atol=3e-5, rtol=3e-5)
+
+
+@pytest.mark.parametrize(
+    "method,compositions",
+    [
+        (labels.GFN1_XTB, ((1, 1), (8, 1, 1))),
+        (labels.GFN2_XTB, ((1, 1), (3, 1))),
+    ],
+    ids=["gfn1", "gfn2"],
+)
+def test_mixed_full_energy_third_derivative_has_both_lane_tangents(
+    method: int, compositions: tuple[tuple[int, ...], ...]
+) -> None:
+    """Combined directions perturb both independent physical Systems."""
+    systems, bucket, padded, source, positions, charges, spins = _build_systems(
+        method, compositions
+    )
+    source_maps = dict(bucket.source_maps)
+    source_direction_sets = []
+    padded_direction_sets = []
+    for transform in (
+        lambda value: value,
+        lambda value: torch.flip(value, dims=(0,)),
+        lambda value: torch.roll(value, shifts=1, dims=1),
+    ):
+        physical_directions = []
+        lane_directions = []
+        for lane, source_position in enumerate(source):
+            source_map = source_maps[bucket.indices[lane]]
+            atom_index = torch.tensor(source_map.atoms, dtype=torch.int64)
+            physical_direction = _direction(transform(source_position))
+            assert torch.count_nonzero(physical_direction) > 0
+            physical_directions.append(physical_direction)
+            lane_directions.append(
+                torch.zeros_like(positions[lane]).index_copy(
+                    0, atom_index, physical_direction
+                )
+            )
+        source_direction_sets.append(tuple(physical_directions))
+        padded_direction_sets.append(tuple(lane_directions))
+    for lane_directions in zip(*padded_direction_sets):
+        assert all(torch.count_nonzero(value) > 0 for value in lane_directions)
+
+    def mapped_energy(values):
+        result, _ = evaluate_padded_systems(
+            padded, bucket, values, charges, spins
+        )
+        return result.energy.sum()
+
+    def serial_energy(values):
+        return torch.stack(
+            [
+                system.singlepoint(value, chrg=charge, spin=spin).energy.sum()
+                for system, value, charge, spin in zip(
+                    systems, values, charges, spins
+                )
+            ]
+        ).sum()
+
+    mapped_third = _third_directional(
+        mapped_energy, positions, *padded_direction_sets
+    )
+    serial_third = _third_directional(
+        serial_energy, source, *source_direction_sets
+    )
+    torch.testing.assert_close(mapped_third, serial_third, atol=3e-5, rtol=3e-5)

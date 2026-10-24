@@ -2605,14 +2605,18 @@ Important areas:
 
 The padding test should deliberately use zeros and coincident padded coordinates that would produce NaN without correct masking.
 
-### E7a batch-critical acceptance — in progress
+### E7a batch-critical acceptance — complete at the tested boundary
 
 E7a audits the mapped private GFN1/GFN2 execution boundary, without changing
-public Calculator routing. The focused first-order safety selection passed
-120 tests in each of the five supported CPU environments. It includes
-coincident/displaced inactive coordinates, structural masks, GFN1/GFN2
-integral and spectral behavior, GFN2 interactions, scatter reductions,
-position/HVP/parameter controls, and the retained padding-ghost regression.
+public Calculator routing. The original first-order safety selection passed
+in all five supported CPU environments. E7a.1 then localized and resolved
+both inherited GFN1/GFN2 third-directional discrepancies. It replaced
+triangular overlap orthogonalization with a smooth symmetric inverse square
+root for the functional SCF boundary and replaced higher-order `torch.linalg.solve`
+uses in symmetric positive-definite spectral systems with Cholesky solves.
+The correction report records the four-path comparison, derivative values,
+and test matrix in
+[`E7a1-third-order-localization.md`](E7a1-third-order-localization.md).
 
 The audit found and fixed an AES2 invalid-pair defect: padded dipole-dipole
 entries could be nonzero because only the displacement was masked while the
@@ -2621,14 +2625,19 @@ now made nonsingular before the norm and reciprocal powers, and all invalid
 AES2 pair outputs are cleared. The padded fixed-trip boundary also sanitizes
 inactive coordinates before interaction, guess, and classical preparation.
 
-E7a remains open. A new float64 full-energy third-directional derivative
-comparison disagrees between mapped and independent serial GFN1/GFN2 results
-on PyTorch 2.6 and 2.14; the first divergent SCF operation has not been
-isolated. Details and exact test nodes are in
+The original AES2 invalid-pair fix remains covered, and the complete 12-node
+E7a module passes in the primary CPU profile. Same-direction and
+distinct-direction third derivatives, reversed input order, both-lane
+cross-System derivatives, inactive-coordinate derivatives, and aggregate
+directions that perturb both lanes pass in all five supported CPU profiles.
+The exact acceptance nodes are in
 [`E7a-batch-critical-padding-safety.md`](E7a-batch-critical-padding-safety.md)
-and [`E7a-acceptance-manifest.txt`](E7a-acceptance-manifest.txt). E7a does not
-implement the public packed Result adapter and does not activate a public
-route. Broader E7 remains open.
+and [`E7a-acceptance-manifest.txt`](E7a-acceptance-manifest.txt). The primary
+broader affected selection completed as 391 passed with five matched
+starting-SHA functional-SCF failures; exact nodes and values are recorded in
+the E7a.1 report. E7a does not implement the public packed Result adapter and
+does not activate a public route. Broader E7 remains open. E6broute remains
+blocked by E6c1-W2/W3 and the public packed Result adapter.
 
 ---
 

@@ -1394,11 +1394,24 @@ def _assert_potential_raw_parity(
         ("hamiltonian", legacy.engine._data.hamiltonian),
         ("density", legacy.engine._data.density),
         ("emo", legacy.engine._data.evals),
-        ("coefficients", legacy.engine._data.evecs),
         ("occupation", legacy.engine._data.occupation),
         ("orbital_energy", legacy.engine._data.energy),
     ):
         _assert_tensor_equal(getattr(expected, attr), value)
+    # Eigenvector columns have an arbitrary sign. The symmetric orthogonalizer
+    # can choose a different sign from the legacy Cholesky factor while
+    # representing the same physical occupied subspace.
+    expected_projector = (
+        expected.coefficients
+        @ torch.diag_embed(expected.occupation.sum(-2))
+        @ expected.coefficients.mT
+    )
+    legacy_projector = (
+        legacy.engine._data.evecs
+        @ torch.diag_embed(legacy.engine._data.occupation.sum(-2))
+        @ legacy.engine._data.evecs.mT
+    )
+    _assert_tensor_equal(expected_projector, legacy_projector)
     expected_charges = _legacy_density_charges(legacy)
     _assert_tensor_equal(expected.charges.mono, expected_charges.mono)
     if expected.charges.dipole is not None:

@@ -321,9 +321,7 @@ def setup_scf_inputs(
     padding_diagonal = (~orbital_mask).to(dtype=integrals.overlap.dtype)
     overlap = integrals.overlap + torch.diag_embed(padding_diagonal)
 
-    from tad_mctc import storch
-
-    inverse_cholesky = storch.inv_cholesky_factor(overlap, is_posdef=True)
+    inverse_cholesky = _symmetric_inverse_sqrt(overlap)
     from .interactions import prepare_functional_interactions
 
     core_interactions = prepare_functional_interactions(
@@ -379,6 +377,32 @@ def setup_scf_inputs(
         orbital_mask=orbital_mask,
         fermi_settings=fermi_settings,
     )
+
+
+def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
+    """Return a smooth, permutation-covariant overlap orthogonalizer.
+
+    A triangular Cholesky orthogonalizer depends on AO ordering. Its third
+    derivatives can therefore differ after a physically equivalent AO
+    permutation, even when the generalized spectrum and first two derivatives
+    agree. The fixed Newton--Schulz matrix iteration computes the symmetric
+    inverse square root without eigenvector derivatives. Frobenius scaling
+    puts every positive overlap spectrum in the convergence interval.
+    """
+    overlap = 0.5 * (overlap + overlap.transpose(-2, -1))
+    size = overlap.shape[-1]
+    identity = torch.eye(
+        size, dtype=overlap.dtype, device=overlap.device
+    ).expand_as(overlap)
+    scale = torch.linalg.matrix_norm(overlap, ord="fro", dim=(-2, -1))
+    y = overlap / scale[..., None, None]
+    z = identity
+    for _ in range(24):
+        correction = 0.5 * (3.0 * identity - z @ y)
+        y = y @ correction
+        z = correction @ z
+    inverse_root = z / scale.sqrt()[..., None, None]
+    return 0.5 * (inverse_root + inverse_root.transpose(-2, -1))
 
 
 def validate_functional_scf_interactions(

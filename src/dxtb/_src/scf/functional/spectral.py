@@ -50,6 +50,13 @@ def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
     )
 
 
+def _solve_positive_definite(matrix: Tensor, rhs: Tensor) -> Tensor:
+    """Use Cholesky solves for transform-consistent higher derivatives."""
+    matrix = 0.5 * (matrix + matrix.transpose(-2, -1))
+    factor = torch.linalg.cholesky(matrix)
+    return torch.cholesky_solve(rhs, factor)
+
+
 def _prepare_matrix(
     matrix: Tensor, l_inv: Tensor | None, mask: Tensor | None
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -94,10 +101,12 @@ def _matrix_fermi(
     scale = torch.where(low_temperature, 4_194_304.0, 2048.0)
     scaled = exponent / scale[..., None, None]
     exp_scaled = torch.matrix_exp(2.0 * scaled)
-    tangent = torch.linalg.solve(exp_scaled + eye, exp_scaled - eye)
+    tangent = _solve_positive_definite(exp_scaled + eye, exp_scaled - eye)
     for index in range(21):
         doubled = (
-            2.0 * tangent @ torch.linalg.solve(eye + tangent @ tangent, eye)
+            2.0
+            * tangent
+            @ _solve_positive_definite(eye + tangent @ tangent, eye)
         )
         update = low_temperature | (index < 10)
         tangent = torch.where(update[..., None, None], doubled, tangent)
@@ -530,9 +539,11 @@ def _projector(
     # Newton-Schulz sign iteration. The fixed iteration count avoids
     # data-dependent control flow. The detached spectral-gap preconditioner
     # balances the smallest and largest magnitudes before the iteration,
-    # keeping both the matrix solves and their higher derivatives well scaled.
+    # keeping the inverse systems nonsingular. Since x is symmetric and
+    # invertible, solve (x @ x) y = x for y = x**-1; the coefficient matrix is
+    # positive definite and can use the transform-safe Cholesky solve above.
     for _ in range(14):
-        inverse = torch.linalg.solve(x, eye)
+        inverse = _solve_positive_definite(x @ x, x)
         x = 0.5 * (x + inverse)
     result = 0.5 * (eye - x)
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -553,7 +564,8 @@ def aufbau_density_matrix(
     frontier projector, preserving dxtb's fractional-electron convention.
     An exact degeneracy across differently occupied states is outside the
     differentiable contract: the matrix-sign projector becomes singular and
-    its ``torch.linalg.solve`` raises rather than manufacturing a response.
+    its positive-definite factorization raises rather than manufacturing a
+    response.
     """
     work_dtype = (
         torch.float64

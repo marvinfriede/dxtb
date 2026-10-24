@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import torch
-from tad_mctc import storch
 from tad_mctc.tree import Node, child, context
 from tad_mctc.units.energy import KELVIN2AU
 
@@ -66,6 +65,7 @@ from dxtb._src.scf.functional.data import (
     SCFInputs,
     SCFSpectralResult,
     _single_system_layout,
+    _symmetric_inverse_sqrt,
 )
 from dxtb._src.scf.functional.eager import (
     _solve_representation,
@@ -334,7 +334,7 @@ def setup_padded_scf_inputs(
     safe_overlap = safe_overlap + torch.diag_embed(
         (~orbital_mask).to(hcore.dtype)
     )
-    inverse_cholesky = storch.inv_cholesky_factor(safe_overlap, is_posdef=True)
+    inverse_cholesky = _symmetric_inverse_sqrt(safe_overlap)
     padded_hcore = torch.where(matrix_mask, hcore, torch.zeros_like(hcore))
     padded_hcore = padded_hcore + torch.diag_embed(
         (~orbital_mask).to(hcore.dtype) * PADDED_ORBITAL_ENERGY

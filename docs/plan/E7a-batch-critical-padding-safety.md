@@ -140,6 +140,23 @@ PyTorch 2.6.0 and 2.14.1. Higher-order tests in the other three profiles have
 not been run. The six inherited functional-SCF failures tracked in the
 E6bimpl reports were not part of this focused selection. CUDA was not run.
 
+### E7a.1 follow-up
+
+The inherited third-order failures were localized and resolved in
+[`E7a1-third-order-localization.md`](E7a1-third-order-localization.md). The
+old values and open status above are retained as the original E7a baseline
+record. E7a.1 replaces that status for the tested batch-critical boundary:
+the symmetric overlap orthogonalizer removes the AO-order-dependent GFN1
+higher derivative, and the symmetric positive-definite solves in the spectral
+projector/Fermi routines make nested-forward derivatives agree with
+reverse-over-forward derivatives. The complete E7a module now passes in the
+primary profile, and the same-direction, distinct-direction, reversed-order,
+cross-lane, and inactive-coordinate third-order checks pass in all five CPU
+profiles. Distinct directions, reversed source order, and directions with
+nonzero physical components in both lanes also pass in all five CPU profiles.
+E7a's broader route-critical boundary remains distinct from the broader E7
+audit.
+
 ## Completion decisions
 
 - **E7a batch-critical gate: OPEN.** First-order padding safety passed, but the
