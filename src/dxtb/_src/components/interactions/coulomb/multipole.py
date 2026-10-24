@@ -668,9 +668,20 @@ def _build_atom_coulomb_matrix(
     mask: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Construct atom-resolved AES2 matrices from explicit tensor inputs."""
-    eps = positions.new_tensor(torch.finfo(positions.dtype).eps)
-
-    dist = storch.cdist(positions, positions, p=2)
+    # Invalid atom pairs include padded atoms and the physical diagonal. Make
+    # those displacement vectors nonsingular before taking a norm. Masking a
+    # zero distance after ``cdist`` is too late for higher derivatives at
+    # coincident padded coordinates.
+    pair_mask = mask.to(dtype=torch.bool, device=positions.device)
+    displacement = positions.unsqueeze(-2) - positions.unsqueeze(-3)
+    safe_displacement = torch.zeros_like(displacement) + positions.new_tensor(
+        (1.0, 0.0, 0.0)
+    )
+    displacement = torch.where(
+        pair_mask.unsqueeze(-1), displacement, safe_displacement
+    )
+    dist = torch.linalg.vector_norm(displacement, dim=-1)
+    dist = torch.where(pair_mask, dist, torch.ones_like(dist))
 
     # (nb, nat, nat)
     g1 = storch.safe_reciprocal(dist)
@@ -683,11 +694,7 @@ def _build_atom_coulomb_matrix(
     fdmp5 = 1.0 / (1.0 + 6.0 * rr**dmp5)
 
     # (nb, nat, nat, 3)
-    rij = torch.where(
-        mask.unsqueeze(-1),
-        positions.unsqueeze(-2) - positions.unsqueeze(-3),
-        eps,
-    )
+    rij = torch.where(pair_mask.unsqueeze(-1), displacement, 0.0)
 
     # Monopole / Dipole
 
@@ -735,6 +742,13 @@ def _build_atom_coulomb_matrix(
 
     # (nb, nat, nat, 6) * (nb, nat, nat, 1) -> (nb, nat, nat, 6)
     sq = sq * g5_fdmp5
+
+    # Explicitly clear every invalid pair. In particular, the isotropic part
+    # of ``dd`` is nonzero even when ``rij`` is zero, so masking only the
+    # displacement does not suppress padded dipole couplings.
+    sd = torch.where(pair_mask.unsqueeze(-1), sd, 0.0)
+    dd = torch.where(pair_mask[..., None, None], dd, 0.0)
+    sq = torch.where(pair_mask.unsqueeze(-1), sq, 0.0)
 
     return sd, dd, sq
 

@@ -2605,6 +2605,31 @@ Important areas:
 
 The padding test should deliberately use zeros and coincident padded coordinates that would produce NaN without correct masking.
 
+### E7a batch-critical acceptance — in progress
+
+E7a audits the mapped private GFN1/GFN2 execution boundary, without changing
+public Calculator routing. The focused first-order safety selection passed
+120 tests in each of the five supported CPU environments. It includes
+coincident/displaced inactive coordinates, structural masks, GFN1/GFN2
+integral and spectral behavior, GFN2 interactions, scatter reductions,
+position/HVP/parameter controls, and the retained padding-ghost regression.
+
+The audit found and fixed an AES2 invalid-pair defect: padded dipole-dipole
+entries could be nonzero because only the displacement was masked while the
+isotropic reciprocal-distance term remained active. Invalid pair geometry is
+now made nonsingular before the norm and reciprocal powers, and all invalid
+AES2 pair outputs are cleared. The padded fixed-trip boundary also sanitizes
+inactive coordinates before interaction, guess, and classical preparation.
+
+E7a remains open. A new float64 full-energy third-directional derivative
+comparison disagrees between mapped and independent serial GFN1/GFN2 results
+on PyTorch 2.6 and 2.14; the first divergent SCF operation has not been
+isolated. Details and exact test nodes are in
+[`E7a-batch-critical-padding-safety.md`](E7a-batch-critical-padding-safety.md)
+and [`E7a-acceptance-manifest.txt`](E7a-acceptance-manifest.txt). E7a does not
+implement the public packed Result adapter and does not activate a public
+route. Broader E7 remains open.
+
 ---
 
 # 19. B8: split property API from final derivative validation

@@ -398,6 +398,9 @@ def _prepare_padded_interactions(
 
     ES2's geometry-dependent matrix is built at the numerical call boundary.
     """
+    positions = torch.where(
+        padded_core.validity.atoms.unsqueeze(-1), positions, 0.0
+    )
     descriptors = padded_core.core.interaction_terms
     if field is not None and any(
         descriptor.label == LABEL_EFIELD for descriptor in descriptors
@@ -691,6 +694,20 @@ def evaluate_padded_fixed_trip(
                 f"Dtype mismatch: positions are of type '{positions.dtype}', "
                 f"but {name} is of type '{value.dtype}'."
             )
+
+    # Keep arbitrary inactive coordinates out of every geometry-dependent
+    # preparation path (interactions, initial guess and classical terms).
+    # Integrals apply the same mask at their own narrow evaluation boundary.
+    atom_mask = padded_core.validity.atoms
+    if positions.shape != (core.numbers.numel(), 3):
+        raise ValueError("Padded positions do not match the exact-core layout.")
+    if atom_mask.shape != core.numbers.shape:
+        raise ValueError("Padded atom validity does not match positions.")
+    if atom_mask.dtype != torch.bool:
+        raise TypeError("Padded atom validity must be Boolean.")
+    if atom_mask.device != positions.device:
+        raise DeviceError("Padded atom validity and positions devices differ.")
+    positions = torch.where(atom_mask.unsqueeze(-1), positions, 0.0)
 
     integrals = evaluate_padded_integrals(padded_core, positions, charge)
     inputs = setup_padded_scf_inputs(

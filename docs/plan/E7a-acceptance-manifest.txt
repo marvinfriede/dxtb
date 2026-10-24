@@ -1,0 +1,28 @@
+# E7a dedicated test nodes (collected from test_calculator/test_e7a_padding_safety.py)
+test/test_calculator/test_e7a_padding_safety.py::test_inactive_coordinate_perturbation_is_safe_through_full_scf[gfn1]
+test/test_calculator/test_e7a_padding_safety.py::test_inactive_coordinate_perturbation_is_safe_through_full_scf[gfn2]
+test/test_calculator/test_e7a_padding_safety.py::test_aes2_invalid_pairs_are_zero_before_multipole_contraction
+test/test_calculator/test_e7a_padding_safety.py::test_mixed_full_energy_third_directional_derivative_is_lane_local[gfn1]
+test/test_calculator/test_e7a_padding_safety.py::test_mixed_full_energy_third_directional_derivative_is_lane_local[gfn2]
+
+# First-order acceptance selection; the third-order nodes above are excluded
+# only for this passing matrix. The unfiltered E7a module must retain their
+# failing status until the mapped/serial discrepancy is resolved.
+export OMP_NUM_THREADS=1
+python -m pytest -q -n logical --dist worksteal \
+  -k 'not third_directional' \
+  test/test_calculator/test_e7a_padding_safety.py \
+  test/test_calculator/test_e6bimpl1a_padded_spectral.py \
+  test/test_calculator/test_e6bimpl2a_gfn2_canonical.py \
+  test/test_calculator/test_e6bimpl2b_gfn2_scf.py \
+  test/test_indexhelper/test_padding_safe_scatter.py \
+  test/test_scf/test_padding_ghosts.py
+
+# Unfiltered higher-order blocker selection. PyTorch 2.6.0 and 2.14.1 both
+# report the two node failures documented in E7a-batch-critical-padding-safety.md.
+python -m pytest -q -n logical --dist worksteal \
+  test/test_calculator/test_e7a_padding_safety.py::test_mixed_full_energy_third_directional_derivative_is_lane_local
+
+# Focused mapped/padding modules passed 120 tests in the first-order command
+# in each prescribed environment: Python/Torch 3.10/2.6, 3.11/2.8,
+# 3.12/2.11, 3.12/2.13, and 3.14/2.14.
