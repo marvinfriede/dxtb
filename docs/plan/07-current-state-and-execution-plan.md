@@ -3214,9 +3214,17 @@ heterogeneous classical labels, serial error parity, ordering and gradients.
 The broader primary completed selections pass; the six functional-SCF
 failures match their previously recorded baseline, and the interrupted
 601-node run is not counted. **E6bimpl.3 and overall E6bimpl are COMPLETE.**
-E6bcompat is READY for independent differential validation but is not
-complete. Public Calculator routing remains unchanged. E6broute remains
-blocked on E6bcompat, E7 batch safety and E6c1 W2/W3 gates. See
+E6bcompat now completes the independent differential review of mapped and
+retained execution. Its public GFN1 mode-1/mode-2 and GFN2 Fock controls compare
+the unchanged packed Calculator with independent serial Systems and the
+private mapped evaluator; retained libcint/custom-composition, option/error,
+charge/spin and shared-field contracts are separately exercised. The frozen
+policy matrix and exact acceptance nodes are recorded in
+[`E6bcompat-final-acceptance.md`](E6bcompat-final-acceptance.md) and
+[`E6bcompat-acceptance-manifest.txt`](E6bcompat-acceptance-manifest.txt).
+Public Calculator dispatch remains unchanged. E6broute is still blocked on
+its public packed Result adapter, E7 batch-critical safety, and E6c1 W2/W3
+performance gates. See
 [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md),
 [`E6bcompat-policy.md`](E6bcompat-policy.md),
 [`E6bimpl2c-final-numerical-acceptance.md`](E6bimpl2c-final-numerical-acceptance.md)
