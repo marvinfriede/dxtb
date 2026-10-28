@@ -154,6 +154,8 @@ converged.
   assertion fails with maximum relative error `9.53e-8`. The inactive-input
   test passes separately (1 passed in 46.50 s).
 - E6bcompat remains accepted at its prior tested boundary. No public routing,
-  fixed-trip controller, or physical term changed.
+  fixed-trip controller, or physical term changed. The focused differential
+  and policy selection was rerun on the final code: Python 3.11 / PyTorch 2.8,
+  40 passed in 35.70 s.
 - E6c1-W2 and W3 remain OPEN. No 300-trip result, completed eight-conformer
   result, or performance clearance exists.
