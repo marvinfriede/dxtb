@@ -21,6 +21,7 @@ from dxtb._src.calculators.canonical_padding import (
 )
 from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import Model
+from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional.padded import (
     _prepare_padded_interactions,
     evaluate_padded_systems,
@@ -40,7 +41,13 @@ _POSITIONS = {
 }
 
 
-def _build_systems(method: int, compositions: Sequence[tuple[int, ...]]):
+def _build_systems(
+    method: int,
+    compositions: Sequence[tuple[int, ...]],
+    *,
+    maxiter: int = 1,
+    temperature: float = 0.0,
+):
     is_gfn2 = method == labels.GFN2_XTB
     parameters = ParamModule(GFN2_XTB if is_gfn2 else GFN1_XTB, dtype=DTYPE)
     model = Model(
@@ -52,7 +59,9 @@ def _build_systems(method: int, compositions: Sequence[tuple[int, ...]]):
                 labels.INTLEVEL_QUADRUPOLE if is_gfn2 else labels.INTLEVEL_HCORE
             ),
             mixer=labels.MIXER_LINEAR,
-            maxiter=1,
+            maxiter=maxiter,
+            fermi_etemp=temperature,
+            fermi_partition=labels.FERMI_PARTITION_EQUAL,
         ),
         auto_int_level=False,
     )
@@ -205,6 +214,169 @@ def test_inactive_coordinate_perturbation_is_safe_through_full_scf(
         assert torch.isfinite(value).all()
         assert torch.count_nonzero(value[~core.validity.atoms]) == 0
         assert torch.count_nonzero(value[core.validity.atoms]) > 0
+
+
+def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The equal-partition trace path composes with canonical SCF padding."""
+    compositions = ((1, 1), (8, 1, 1))
+    systems, bucket, padded, source, positions, charges, spins = _build_systems(
+        labels.GFN1_XTB, compositions, maxiter=2, temperature=300.0
+    )
+    positions = tuple(value.requires_grad_() for value in positions)
+
+    trace_calls = 0
+    trace = functional_solver.fermi_free_energy_trace
+
+    def record_trace(*args, **kwargs):
+        nonlocal trace_calls
+        trace_calls += 1
+        return trace(*args, **kwargs)
+
+    monkeypatch.setattr(
+        functional_solver, "fermi_free_energy_trace", record_trace
+    )
+
+    def mapped_energies(values):
+        result, _ = evaluate_padded_systems(
+            padded, bucket, values, charges, spins
+        )
+        return result.energy.sum(-1) + result.fenergy.sum(-1)
+
+    mapped, decoded = evaluate_padded_systems(
+        padded, bucket, positions, charges, spins
+    )
+    serial = tuple(
+        system.singlepoint(position, chrg=charge, spin=spin)
+        for system, position, charge, spin in zip(
+            systems, source, charges, spins
+        )
+    )
+    mapped_energy = mapped.energy.sum(-1) + mapped.fenergy.sum(-1)
+    assert torch.isfinite(mapped_energy).all()
+    assert torch.isfinite(mapped.fenergy).all()
+    assert trace_calls > 0
+    assert all(
+        system.config.scf.fermi.partition == labels.FERMI_PARTITION_EQUAL
+        for system in systems
+    )
+
+    source_maps = dict(bucket.source_maps)
+    has_noncontiguous_orbitals = False
+    for lane, (actual, expected, core) in enumerate(
+        zip(decoded, serial, padded)
+    ):
+        torch.testing.assert_close(
+            actual.energy.sum() + actual.fenergy.sum(),
+            expected.energy.sum() + expected.fenergy.sum(),
+            atol=3e-9,
+            rtol=3e-9,
+        )
+        assert torch.isfinite(actual.energy).all()
+        assert torch.isfinite(actual.fenergy).all()
+        atom_indices = torch.tensor(
+            source_maps[bucket.indices[lane]].atoms, dtype=torch.int64
+        )
+        orbital_indices = torch.tensor(
+            source_maps[bucket.indices[lane]].orbitals, dtype=torch.int64
+        )
+        has_noncontiguous_orbitals |= not torch.equal(
+            orbital_indices, torch.arange(orbital_indices.numel())
+        )
+        assert (
+            torch.count_nonzero(mapped.energy[lane, ~core.validity.atoms]) == 0
+        )
+        assert (
+            torch.count_nonzero(mapped.fenergy[lane, ~core.validity.atoms]) == 0
+        )
+        assert mapped.occupation is not None
+        valid_orbitals = int(core.validity.orbitals.sum())
+        assert (
+            torch.count_nonzero(mapped.occupation[lane, ..., valid_orbitals:])
+            == 0
+        )
+    assert has_noncontiguous_orbitals
+
+    jacobian = torch.func.jacrev(mapped_energies)(positions)
+    for output_lane, (system, source_position, core) in enumerate(
+        zip(systems, source, padded)
+    ):
+        source_map = source_maps[bucket.indices[output_lane]]
+        atom_indices = torch.tensor(source_map.atoms, dtype=torch.int64)
+
+        def serial_lane_energy(value):
+            result = system.singlepoint(
+                value,
+                chrg=charges[output_lane],
+                spin=spins[output_lane],
+            )
+            return result.energy.sum() + result.fenergy.sum()
+
+        serial_gradient = torch.func.grad(serial_lane_energy)(source_position)
+        torch.testing.assert_close(
+            jacobian[output_lane][output_lane].index_select(0, atom_indices),
+            serial_gradient,
+            atol=3e-8,
+            rtol=3e-8,
+        )
+        torch.testing.assert_close(
+            jacobian[output_lane][output_lane][~core.validity.atoms],
+            torch.zeros_like(
+                jacobian[output_lane][output_lane][~core.validity.atoms]
+            ),
+            atol=0,
+            rtol=0,
+        )
+        other_lane = 1 - output_lane
+        torch.testing.assert_close(
+            jacobian[other_lane][output_lane],
+            torch.zeros_like(jacobian[other_lane][output_lane]),
+            atol=0,
+            rtol=0,
+        )
+
+    lane = 0
+    source_direction = _direction(source[lane])
+    atom_indices = torch.tensor(
+        source_maps[bucket.indices[lane]].atoms, dtype=torch.int64
+    )
+    padded_direction = torch.zeros_like(positions[lane]).index_copy(
+        0, atom_indices, source_direction
+    )
+    directions = (padded_direction, torch.zeros_like(positions[1]))
+
+    def lane_energy(values):
+        return mapped_energies(values)[lane]
+
+    _, mapped_hvp = torch.func.jvp(
+        torch.func.grad(lane_energy), (positions,), (directions,)
+    )
+
+    def serial_energy(value):
+        result = systems[lane].singlepoint(
+            value, chrg=charges[lane], spin=spins[lane]
+        )
+        return result.energy.sum() + result.fenergy.sum()
+
+    _, serial_hvp = torch.func.jvp(
+        torch.func.grad(serial_energy),
+        (source[lane],),
+        (source_direction,),
+    )
+    assert torch.isfinite(mapped_hvp[0]).all()
+    torch.testing.assert_close(
+        mapped_hvp[0].index_select(0, atom_indices),
+        serial_hvp,
+        atol=2e-6,
+        rtol=2e-6,
+    )
+    torch.testing.assert_close(
+        mapped_hvp[0][~padded[0].validity.atoms],
+        torch.zeros_like(mapped_hvp[0][~padded[0].validity.atoms]),
+        atol=0,
+        rtol=0,
+    )
 
 
 def test_aes2_invalid_pairs_are_zero_before_multipole_contraction() -> None:

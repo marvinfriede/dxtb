@@ -30,6 +30,7 @@ from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional.map import evaluate_hamiltonian
 from dxtb._src.scf.functional.solver import free_energy_from_spectral
 from dxtb._src.scf.functional.spectral import (
+    _prepare_matrix,
     aufbau_free_energy_matrix,
     fermi_free_energy_matrix,
     fermi_free_energy_trace,
@@ -882,6 +883,89 @@ def test_fermi_free_energy_trace_matches_matrix_to_third_order(
     batched = vmap(jacfwd(jacrev(trace_path)))(points)
     looped = torch.stack([jacfwd(jacrev(trace_path))(p) for p in points])
     torch.testing.assert_close(batched, looped, atol=1.0e-12, rtol=1.0e-10)
+
+
+def test_fermi_trace_matches_masked_noncontiguous_ao_matrix_response() -> None:
+    """Trace and matrix paths agree with noncontiguous physical AO indices."""
+    dtype = torch.float64
+    ao_mask = torch.tensor([True, False, True, True])
+    spectral_mask = torch.tensor([True, True, True, False])
+    h0 = torch.tensor(
+        [
+            [-0.2, 81.0, 0.01, 0.0],
+            [81.0, 72.0, -63.0, 45.0],
+            [0.01, -63.0, 0.03, 0.02],
+            [0.0, 45.0, 0.02, 0.2],
+        ],
+        dtype=dtype,
+    )
+    dh = torch.tensor(
+        [
+            [0.04, 13.0, -0.03, 0.01],
+            [13.0, 17.0, -19.0, 23.0],
+            [-0.03, -19.0, -0.02, 0.015],
+            [0.01, 23.0, 0.015, 0.03],
+        ],
+        dtype=dtype,
+    )
+    li0 = torch.eye(4, dtype=dtype)
+    dli = torch.zeros_like(li0)
+    dli[0, 0], dli[2, 0], dli[2, 2], dli[3, 2], dli[3, 3] = (
+        0.01,
+        -0.006,
+        -0.008,
+        0.004,
+        0.012,
+    )
+    electrons = torch.tensor([1.0, 1.0], dtype=dtype)
+    kt = torch.tensor(9.5e-4, dtype=dtype)
+    _, spectral, _ = _prepare_matrix(h0, li0, ao_mask)
+    state = _fermi_state(spectral, electrons, kt, spectral_mask)
+
+    def matrix_path(value: torch.Tensor) -> torch.Tensor:
+        h, li = h0 + value * dh, li0 + value * dli
+        overlap = torch.linalg.inv(li) @ torch.linalg.inv(li).mT
+        free_energy = fermi_free_energy_matrix(
+            h,
+            electrons,
+            kt,
+            state,
+            l_inv=li,
+            mask=ao_mask,
+            diff_steps=2,
+        )
+        return torch.trace(overlap @ free_energy)
+
+    def trace_path(value: torch.Tensor) -> torch.Tensor:
+        return fermi_free_energy_trace(
+            h0 + value * dh,
+            electrons,
+            kt,
+            state,
+            l_inv=li0 + value * dli,
+            mask=ao_mask,
+            diff_steps=2,
+        )
+
+    point = torch.tensor(0.01, dtype=dtype)
+    directions = torch.ones_like(point)
+    matrix_value, trace_value = matrix_path(point), trace_path(point)
+    matrix_gradient = torch.func.grad(matrix_path)(point)
+    trace_gradient = torch.func.grad(trace_path)(point)
+    _, matrix_hvp = torch.func.jvp(
+        torch.func.grad(matrix_path), (point,), (directions,)
+    )
+    _, trace_hvp = torch.func.jvp(
+        torch.func.grad(trace_path), (point,), (directions,)
+    )
+    torch.testing.assert_close(trace_value, matrix_value, atol=2e-8, rtol=2e-8)
+    torch.testing.assert_close(
+        trace_gradient, matrix_gradient, atol=2e-7, rtol=2e-7
+    )
+    torch.testing.assert_close(trace_hvp, matrix_hvp, atol=2e-6, rtol=2e-6)
+    assert torch.isfinite(
+        torch.stack((trace_value, trace_gradient, trace_hvp))
+    ).all()
 
 
 @pytest.mark.parametrize("name", list(_trace_cases()))

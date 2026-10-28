@@ -2566,7 +2566,9 @@ blocks retirement pending explicit review; it cannot silently authorize a
 second permanent batched physics core.
 
 E6c1-W2 was measured on the recorded `tmpda` 69-atom, eight-conformer
-workload at `ee96ffb85ddb8b8e86fcc1fb212d40eab2f860cf`. The current legacy
+workload at `ee96ffb85ddb8b8e86fcc1fb212d40eab2f860cf`. That measurement
+predates the merged adaptive trace-based finite-temperature free-energy path.
+The current legacy
 `Calculator(batch_mode=2)` median energy-plus-force time was 36.215 s at one
 thread and 16.998 s at four threads, with process-isolated peak RSS near 8.16
 GiB. The historical T0.8 values remain unchanged in the original JSON. A
@@ -2574,11 +2576,16 @@ finite-temperature GFN1 spectral Cholesky failure was corrected and covered
 by a dense-spectrum regression. However, the mapped E6a one-conformer,
 one-trip energy-plus-force diagnostic did not finish within about 90 s at one
 thread or 120 s at four threads; snapshots localized the time to the
-512-point matrix entropy quadrature in `_binary_entropy_matrix`. No mapped
-parity, full W2 timing, or mapped peak-memory result is available. W2 is
-therefore OPEN / BLOCKED pending an approved optimization or performance
-disposition; see [`E6c1-W2-conformer-performance.md`](E6c1-W2-conformer-performance.md)
-and [`benchmarks/results/E6c1-W2-cpu.json`](../../benchmarks/results/E6c1-W2-cpu.json).
+512-point matrix entropy quadrature in `_binary_entropy_matrix`. The merged
+equal-partition route now uses `fermi_free_energy_trace()` instead. A bounded
+post-merge one-conformer/one-trip diagnostic timed out at 300 s without
+returning benchmark results. M1.1 verifies the trace route with a mixed
+finite-temperature calculation, but does not establish W2 workload runtime,
+serial parity, or memory. A separately scoped W2 acceptance rerun is still
+required. W2 remains OPEN; see
+[`E6c1-W2-conformer-performance.md`](E6c1-W2-conformer-performance.md)
+and [`benchmarks/results/E6c1-W2-cpu.json`](../../benchmarks/results/E6c1-W2-cpu.json),
+and the [M1.1 post-merge audit](M1.1-post-merge-audit.md).
 
 ## E6c2 final performance acceptance
 

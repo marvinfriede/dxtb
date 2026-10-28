@@ -700,7 +700,8 @@ def aufbau_density_matrix(
     frontier projector, preserving dxtb's fractional-electron convention.
     An exact degeneracy across differently occupied states is outside the
     differentiable contract: the matrix-sign projector becomes singular and
-    its ``torch.linalg.solve`` raises rather than manufacturing a response.
+    its positive-definite Cholesky factorization raises rather than
+    manufacturing a response.
     """
     work_dtype = (
         torch.float64

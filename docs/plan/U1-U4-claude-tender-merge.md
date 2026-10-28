@@ -60,3 +60,10 @@ Independent review initially identified the stale baseline constraints; they wer
 **Public release readiness: BLOCKED** by the separate D3/D4 metadata and release gates.
 
 The next package is E6bcompat, using the merged target branch as its baseline. Do not activate E6broute before E6bcompat, batch-critical E7 and E6c1-W2/W3 acceptance.
+
+The post-merge audit corrected the baseline pytest constraint and added a
+cross-boundary masked-AO/Fermi-trace regression. Its focused results and the
+bounded W2 diagnostic are recorded in
+[`M1.1-post-merge-audit.md`](M1.1-post-merge-audit.md). The mapped W2
+one-conformer diagnostic did not complete within 300 seconds; W2 remains
+open, and this does not change the U1–U4 merge acceptance.
