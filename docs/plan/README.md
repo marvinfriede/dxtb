@@ -19,6 +19,7 @@ API.
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
 | `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
 | `08-scf-redesign-overview.md` | Architectural roadmap for the SCF solver/convergence redesign, including Broyden retention, DIIS/SOSCF strategies, convergence certification, and xitorch retirement |
+| `09-scf-s0-audit.md` | S0 baseline classification, functional/legacy architecture inventory, and the synchronization gate before S1 |
 
 The design review referenced by the plan is not in the repository.
 
