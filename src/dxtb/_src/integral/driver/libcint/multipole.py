@@ -41,10 +41,10 @@ __all__ = ["MultipoleLibcint", "build_multipole_libcint"]
 def build_multipole_libcint(
     call_data: LibcintCallData, intstring: str
 ) -> Tensor:
-    """Build a raw origin-centered libcint multipole matrix."""
+    """Build a raw libcint multipole matrix for the requested center."""
     from dxtb._src.exlibs import libcint
 
-    allowed_mps = ("j", "jj", "jjj")
+    allowed_mps = ("r0", "j", "r0r0", "jj", "jjj")
     if intstring not in allowed_mps:
         raise ValueError(
             f"Unknown integral string '{intstring}' provided. "

@@ -130,8 +130,8 @@ def _build_pyscf_mol(numbers: torch.Tensor, positions: torch.Tensor):
 
 
 @pytest.mark.parametrize("name", ["LiH", "SiH4"])
-def test_overlap_matches_pyscf_via_libcint_order(name: str) -> None:
-    """PySCF's own AO order matches dxtb's libcint driver directly."""
+def test_overlap_matches_pyscf_after_ao_reorder(name: str) -> None:
+    """PySCF overlap matches libcint after reference-only p-shell reordering."""
     dd: DD = {"dtype": torch.double, "device": DEVICE}
     sample = samples[name]
     numbers = sample["numbers"].to(DEVICE)
@@ -144,6 +144,19 @@ def test_overlap_matches_pyscf_via_libcint_order(name: str) -> None:
         DEVICE
     )
     s_lib = s_lib.detach().cpu().numpy()
+
+    ihelp = IndexHelper.from_numbers(numbers.cpu(), par)
+    permutation = torch.zeros((s_lib.shape[0], s_lib.shape[0]), **dd)
+    offset = 0
+    for momentum, n_orbitals in zip(
+        ihelp.angular.tolist(), ihelp.orbitals_per_shell.tolist()
+    ):
+        local = PERM_BY_L[momentum]
+        for target, source in enumerate(local):
+            permutation[offset + target, offset + source] = 1.0
+        offset += n_orbitals
+
+    s_pyscf = permutation.cpu().numpy() @ s_pyscf @ permutation.cpu().numpy().T
 
     assert np.abs(s_pyscf - s_lib).max() < 1e-13
 
@@ -179,7 +192,9 @@ def test_pytorch_matches_libcint_and_pyscf() -> None:
     s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
         DEVICE
     )
-    s_lib_reordered = p @ s_lib @ p.mT
+    # tad-libcint 0.4 and the PyTorch backend both use py, pz, px. Only the
+    # PySCF reference uses px, py, pz and receives this permutation.
+    s_lib_reordered = s_lib
 
     diff_vs_pyscf = (s_pt - s_pyscf_reordered).abs()
     diff_vs_libcint = (s_pt - s_lib_reordered).abs()

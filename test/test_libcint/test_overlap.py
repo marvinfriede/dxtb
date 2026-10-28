@@ -43,6 +43,7 @@ if has_pyscf is True:
 
 from ..conftest import DEVICE
 from ..utils import get_param_module
+from .ao_order import reorder_pyscf_ao
 from .samples import samples
 
 slist = ["H2", "LiH", "Li2", "H2O", "S", "SiH4"]
@@ -117,7 +118,9 @@ def run_single(dtype: torch.dtype, name: str) -> None:
 
     # pyscf reference overlap ("sph" needed, implicit in dxtb)
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
-    pyscf_overlap = numpy_to_tensor(mol.intor("int1e_ovlp"), **dd)
+    pyscf_overlap = reorder_pyscf_ao(
+        numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
+    )
 
     assert dxtb_overlap.shape == pyscf_overlap.shape
     assert pytest.approx(pyscf_overlap.cpu(), abs=tol) == dxtb_overlap.cpu()
@@ -193,7 +196,9 @@ def run_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
 
     # pyscf reference overlap ("sph" needed, implicit in dxtb)
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
-    pyscf_overlap = numpy_to_tensor(mol.intor("int1e_ovlp"), **dd)
+    pyscf_overlap = reorder_pyscf_ao(
+        numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
+    )
 
     assert dxtb_overlap.shape == pyscf_overlap.shape
     assert pytest.approx(pyscf_overlap.cpu(), abs=tol) == dxtb_overlap.cpu()
@@ -261,7 +266,9 @@ def run_grad(dtype: torch.dtype, name: str) -> None:
     int1 = libcint.int1e("ipovlp", libcint_basis, structure)
 
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
-    int2 = numpy_to_tensor(mol.intor("int1e_ipovlp"), **dd)
+    int2 = reorder_pyscf_ao(
+        numpy_to_tensor(mol.intor("int1e_ipovlp"), **dd), ihelp
+    )
 
     assert int1.shape == int2.shape
     assert pytest.approx(int2.cpu(), abs=tol) == int1.cpu()

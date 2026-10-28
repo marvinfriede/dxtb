@@ -37,7 +37,7 @@ from dxtb._src.integral.driver.manager import DriverManager
 from dxtb._src.integral.types.quadrupole import _reduce_9_to_6
 from dxtb._src.typing import DD, Tensor
 from dxtb.integrals import Integrals
-from dxtb.integrals.factories import new_dipint, new_overlap, new_quadint
+from dxtb.integrals.factories import new_quadint
 
 if has_pyscf is True:
     from dxtb._src.exlibs.pyscf.mol import M
@@ -46,6 +46,7 @@ if has_libcint is True:
 
 from ..conftest import DEVICE
 from ..utils import get_param_module
+from .ao_order import reorder_pyscf_ao
 from .samples import samples
 
 slist = ["H2", "LiH", "Li2", "H2O", "S"]
@@ -102,7 +103,9 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
         # pyscf reference integral
         assert M is not False
         mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
-        pyscf_mpint = numpy_to_tensor(mol.intor(f"int1e_{i*'r'}_origj"), **dd)
+        pyscf_mpint = reorder_pyscf_ao(
+            numpy_to_tensor(mol.intor(f"int1e_{i*'r'}_origj"), **dd), ihelp
+        )
 
         assert dxtb_mpint.shape == pyscf_mpint.shape
         assert pytest.approx(pyscf_mpint.cpu(), abs=atol) == dxtb_mpint.cpu()
@@ -142,59 +145,27 @@ def test_shift_r0_rj(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Setup the driver
     mgr = DriverManager(labels.INTDRIVER_LIBCINT, **dd)
     mgr.create_driver(numbers, par, ihelp)
-    driver_data = mgr.setup_driver(positions)
+    i = Integrals(mgr, intlevel=labels.INTLEVEL_DIPOLE, **dd)
+    i.build_dipole(positions, shift=True)
+    assert i.dipole is not None
+    assert i.overlap is not None
 
-    # Setup, build and normalize OVERLAP integral
-    ovlpint = new_overlap(**dd)
-    ovlpint.build(driver_data)
-    ovlpint.normalize()
-    ovlpint = ovlpint.to(DEVICE)
-
-    # Setup, build and normalize DIPOLE integral
-    dipint = new_dipint(**dd)
-    dipint.build(driver_data)
-    dipint = dipint.to(DEVICE)
-    dipint.normalize(ovlpint.norm)
-
-    ##########################################################################
-
-    # PySCF reference integral, centered at r0 (overlap still on CPU)
-    assert M is not False
-    mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
-    pyscf_r0 = einsum(
-        "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_r"), **dd),
-        ovlpint.norm,
-        ovlpint.norm,
-    )
-
-    # Compare with PySCF reference
-    assert pyscf_r0.shape == dipint.matrix.shape
-    # pytest.approx converts tensors through NumPy, which rejects this
-    # autograd-connected integral. Keep its default 1e-6 relative tolerance.
-    torch.testing.assert_close(
-        dipint.matrix.cpu(), pyscf_r0.cpu(), atol=tol, rtol=1e-6
-    )
-
-    ##########################################################################
-
-    # Shift r0->rj
-    pos = ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)
-    dipint.shift_r0_rj(ovlpint.matrix, pos)
-
-    # PySCF reference integral, centered at rj
+    # Native libcint j is already centered at the ket atom.
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
     pyscf_rj = einsum(
         "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_r_origj"), **dd),
-        ovlpint.norm,
-        ovlpint.norm,
+        reorder_pyscf_ao(
+            numpy_to_tensor(mol.intor("int1e_r_origj"), **dd), ihelp
+        ),
+        i.overlap.norm,
+        i.overlap.norm,
     )
 
-    # Compare with PySCF reference
-    assert pyscf_rj.shape == dipint.matrix.shape
-    assert pytest.approx(pyscf_rj.cpu(), abs=tol) == dipint.matrix.cpu()
+    assert i.dipole.matrix is not None
+    torch.testing.assert_close(
+        i.dipole.matrix.cpu(), pyscf_rj.cpu(), atol=tol, rtol=1e-6
+    )
 
 
 @pytest.mark.skipif(
@@ -222,7 +193,6 @@ def test_no_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
     mgr.create_driver(numbers, par, ihelp)
 
     i = Integrals(mgr, intlevel=labels.INTLEVEL_QUADRUPOLE, **dd)
-    i.setup_driver(positions)
     i.build_quadrupole(positions, shift=False, traceless=False)
     assert i.quadrupole is not None
 
@@ -236,10 +206,11 @@ def test_no_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
     pyscf_r0r0 = einsum(
         "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_rr"), **dd),
+        reorder_pyscf_ao(numpy_to_tensor(mol.intor("int1e_rr"), **dd), ihelp),
         i.overlap.norm,
         i.overlap.norm,
     )
+    pyscf_r0r0 = _reduce_9_to_6(pyscf_r0r0)
 
     # Compare with PySCF reference
     assert pyscf_r0r0.shape == i.quadrupole.matrix.shape
@@ -269,66 +240,28 @@ def test_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Setup the driver
     mgr = DriverManager(labels.INTDRIVER_LIBCINT, **dd)
     mgr.create_driver(numbers, par, ihelp)
-    driver_data = mgr.setup_driver(positions)
+    i = Integrals(mgr, intlevel=labels.INTLEVEL_QUADRUPOLE, **dd)
+    i.build_quadrupole(positions, shift=True, traceless=False)
+    assert i.quadrupole is not None
+    assert i.overlap is not None
 
-    # Setup, build and normalize OVERLAP integral
-    ovlpint = new_overlap(**dd)
-    ovlpint.build(driver_data)
-    ovlpint = ovlpint.to(DEVICE)
-    ovlpint.normalize()
-
-    # Setup, build and normalize QUADRUPOLE integral
-    quadint = new_quadint(**dd)
-    quadint.build(driver_data)
-    quadint = quadint.to(DEVICE)
-    quadint.normalize(ovlpint.norm)
-
-    ##########################################################################
-
-    # PySCF reference integral, centered at r0
-    assert M is not False
-    mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
-    pyscf_r0r0 = einsum(
-        "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_rr"), **dd),
-        ovlpint.norm,
-        ovlpint.norm,
-    )
-
-    # Compare with PySCF reference
-    assert pyscf_r0r0.shape == quadint.matrix.shape
-    assert pytest.approx(pyscf_r0r0.cpu(), abs=tol) == quadint.matrix.cpu()
-
-    ##########################################################################
-
-    # Setup, build and normalize DIPOLE integral
-    dipint = new_dipint(**dd)
-    dipint.build(driver_data)
-    dipint = dipint.to(DEVICE)
-    dipint.normalize(ovlpint.norm)
-
-    # Coverage for both reducing before and inside the shift
-    if dtype == torch.float:
-        quadint.reduce_9_to_6()
-
-    # Shift r0->rj, always 6 cartesian components
-    pos = ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)
-    quadint.shift_r0r0_rjrj(dipint.matrix, ovlpint.matrix, pos)
-
-    # PySCF reference integral, centered at rj
+    # Native libcint jj is already packed and centered at the ket atom.
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
     pyscf_qpint = einsum(
         "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_rr_origj"), **dd),
-        ovlpint.norm,
-        ovlpint.norm,
+        reorder_pyscf_ao(
+            numpy_to_tensor(mol.intor("int1e_rr_origj"), **dd), ihelp
+        ),
+        i.overlap.norm,
+        i.overlap.norm,
     )
     pyscf_qpint = _reduce_9_to_6(pyscf_qpint)
 
-    # Compare with PySCF reference
-    assert pyscf_qpint.shape == quadint.matrix.shape
-    assert pytest.approx(pyscf_qpint.cpu(), abs=tol) == quadint.matrix.cpu()
+    assert i.quadrupole.matrix is not None
+    torch.testing.assert_close(
+        i.quadrupole.matrix.cpu(), pyscf_qpint.cpu(), atol=tol, rtol=0.0
+    )
 
 
 @pytest.mark.skipif(
@@ -372,7 +305,9 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
     pyscf_qp = einsum(
         "xij,i,j->xij",
-        numpy_to_tensor(mol.intor("int1e_rr_origj"), **dd),
+        reorder_pyscf_ao(
+            numpy_to_tensor(mol.intor("int1e_rr_origj"), **dd), ihelp
+        ),
         i.overlap.norm,
         i.overlap.norm,
     )
@@ -400,7 +335,7 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_integrals_rebuild_multipole_inputs_for_new_geometry() -> None:
-    """Repeated multipole builds use overlap and dipole from the current geometry."""
+    """Repeated quadrupole builds use overlap from the current geometry."""
     dd: DD = {"dtype": torch.double, "device": DEVICE}
     sample = samples["H2"]
     numbers = sample["numbers"].to(DEVICE)
@@ -421,18 +356,15 @@ def test_integrals_rebuild_multipole_inputs_for_new_geometry() -> None:
 
     reused = make_integrals()
     reused.build_quadrupole(positions_a)
-    reused_dipole, reused_quadrupole = reused.dipole, reused.quadrupole
-    assert reused_dipole is not None and reused_quadrupole is not None
-    dipole_a = reused_dipole.matrix.clone()
+    reused_quadrupole = reused.quadrupole
+    assert reused_quadrupole is not None
     quadrupole_a = reused_quadrupole.matrix.clone()
 
     reused.build_quadrupole(positions_b)
     fresh = make_integrals()
     fresh.build_quadrupole(positions_b)
-    assert fresh.dipole is not None and fresh.quadrupole is not None
-    assert torch.allclose(reused.dipole.matrix, fresh.dipole.matrix)
+    assert fresh.quadrupole is not None
     assert torch.allclose(reused.quadrupole.matrix, fresh.quadrupole.matrix)
-    assert not torch.allclose(dipole_a, reused.dipole.matrix)
     assert not torch.allclose(quadrupole_a, reused.quadrupole.matrix)
 
 

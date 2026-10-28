@@ -43,7 +43,9 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
     Quadrupole integral from atomic orbitals.
     """
 
-    def build(self, call_data: LibcintCallData) -> Tensor:
+    def build(
+        self, call_data: LibcintCallData, *, intstring: str = "jj"
+    ) -> Tensor:
         """
         Calculation of quadrupole integral using libcint.
 
@@ -57,7 +59,7 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
         Tensor
             Quadrupole integral.
         """
-        return self.multipole(call_data, "jj")
+        return self.multipole(call_data, intstring)
 
     def get_gradient(self, driver: IntDriver, **kwargs: Any) -> Tensor:
         """

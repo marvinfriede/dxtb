@@ -330,8 +330,13 @@ class Integrals(IntegralContainer):
         self.build_overlap(positions, **kwargs)
         assert self.overlap is not None
 
-        # build (with overlap norm)
-        self.dipole.build(driver_data)
+        # libcint 0.4 can build either origin-centered or native ket-centered
+        # moments. The public shift flag selects the corresponding operator.
+        native_ket_moments = self.mgr.driver_type == labels.INTDRIVER_LIBCINT
+        if native_ket_moments:
+            self.dipole.build(driver_data, intstring="j" if shift else "r0")
+        else:
+            self.dipole.build(driver_data)
         self.dipole.normalize(self.overlap.norm)
         logger.debug("Dipole integral: Finished building matrix.")
 
@@ -342,14 +347,14 @@ class Integrals(IntegralContainer):
         # requires the r0-centered dipole integral.
 
         # If higher moment integrals are required, everything will be deferred.
-        if self.intlevel > labels.INTLEVEL_DIPOLE:
+        if self.intlevel > labels.INTLEVEL_DIPOLE and not native_ket_moments:
             logger.debug("Dipole integral: All finished (r0).")
             return self.dipole.matrix
 
         # If not, we have to move all integrals calculated so far and
         # potentially shift the dipole integral. We shift first, because
         # the `positions` are on CPU if `force_cpu_for_libcint=True`.
-        if shift is True:
+        if shift is True and not native_ket_moments:
             logger.debug("Dipole integral: Start shifting operator (r0->rj).")
 
             # shift to rj if required (requires overlap integral)
@@ -467,8 +472,13 @@ class Integrals(IntegralContainer):
         self.build_overlap(positions, **kwargs)
         assert self.overlap is not None
 
-        # build
-        self.quadrupole.build(driver_data)
+        native_ket_moments = self.mgr.driver_type == labels.INTDRIVER_LIBCINT
+        if native_ket_moments:
+            self.quadrupole.build(
+                driver_data, intstring="jj" if shift else "r0r0"
+            )
+        else:
+            self.quadrupole.build(driver_data)
         self.quadrupole.normalize(self.overlap.norm)
         logger.debug("Quad integral: Finished building matrix.")
 
@@ -485,7 +495,7 @@ class Integrals(IntegralContainer):
         # If not, we have to move all integrals calculated so far and
         # potentially shift all integrals. We shift first, because
         # the `positions` are still on CPU if `force_cpu_for_libcint=True`.
-        if shift is True:
+        if shift is True and not native_ket_moments:
             # Build dipole integral if not already done, but NO shift yet (r0)!
             # The r0-centered dipole used for the quadrupole shift must also
             # be from this geometry.

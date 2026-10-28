@@ -139,18 +139,22 @@ class LibcintBasisNode(Node):
                 continue
             element_shells = []
             for _ in range(int(count)):
+                # ``slater_to_gauss`` already supplies dxtb-normalized
+                # coefficients; Shell.normalized() would normalize twice.
                 element_shells.append(
                     libcint.Shell(
                         angmom=int(angular[shell]),
                         alphas=alphas[shell],
                         coeffs=coeffs[shell],
-                    ).normalized()
+                    )
                 )
                 shell += 1
             if number > 0:
                 shells_by_element[number] = element_shells
             elif element_shells:
-                raise ValueError("Padding atomic number zero cannot own shells.")
+                raise ValueError(
+                    "Padding atomic number zero cannot own shells."
+                )
 
         return (
             libcint.Basis(shells=shells_by_element),

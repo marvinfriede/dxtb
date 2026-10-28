@@ -42,7 +42,9 @@ class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
     Dipole integral from atomic orbitals.
     """
 
-    def build(self, call_data: LibcintCallData) -> Tensor:
+    def build(
+        self, call_data: LibcintCallData, *, intstring: str = "j"
+    ) -> Tensor:
         """
         Calculation of dipole integral using libcint.
 
@@ -56,7 +58,7 @@ class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
         Tensor
             Dipole integral.
         """
-        return self.multipole(call_data, "j")
+        return self.multipole(call_data, intstring)
 
     def get_gradient(self, call_data: LibcintCallData) -> Tensor:
         """
