@@ -3289,6 +3289,24 @@ performance gates. See
 and the exact E6bimpl.2c acceptance node inventory in
 [`E6bimpl2c-acceptance-manifest.txt`](E6bimpl2c-acceptance-manifest.txt).
 
+After the M1.1 merge, E6bcompat's frozen 64-node differential selection and
+the 119-node private GFN1/GFN2 mapped selection were rerun with the merged
+mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.7.0 and D4 0.8.0 stack
+in four supported CPU profiles (Python 3.11/Torch 2.8, Python 3.12/Torch
+2.11 and 2.13, and Python 3.14/Torch 2.14.1); every selection passed. The
+M1.1 mixed finite-temperature regression now compares atom energy and free
+energy separately and proves the mapped evaluation itself takes the trace
+route; it passes in all four profiles. A fresh baseline-constrained
+installation also executed representative implicit-root, D3, libcint,
+masked-spectral and Result/status tests (9 passed), with only the documented
+D3/D4 metadata conflicts. See
+[`E6bcompat-differential-acceptance.md`](E6bcompat-differential-acceptance.md)
+for the requirement matrix and test evidence. This revalidation does not
+change public dispatch: E6broute remains blocked on its Result adapter and
+the independent E7 and E6c1-W2/W3 gates. The one-conformer W2 diagnostic
+timed out at its existing 300-second bound; W2 remains open and requires
+stage-level performance localization.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
