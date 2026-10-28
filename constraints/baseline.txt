@@ -22,7 +22,7 @@
 #
 #   pip install torch==2.14.0 -c constraints/baseline.txt
 #   pip install -e ".[tox,libcint,pyscf]" -c constraints/baseline.txt
-#   pip install --no-deps tad-dftd3==0.6.0 tad-dftd4==0.8.0
+#   pip install --no-deps tad-dftd3==0.7.0 tad-dftd4==0.8.0
 #
 # Python 3.11. The baseline was recorded on CPU with the PyPI wheel of torch
 # 2.14.0 (build 2.14.0+cu130, CUDA 13.0, cuDNN 9.24; no GPU present). CI
@@ -52,9 +52,6 @@ pydantic-core==2.46.5
 tomli==2.4.1
 tomli-w==1.2.0
 typing-extensions==4.16.0
-# Used by the temporary mctc shim for tad-dftd3's CPU memory estimate.
-psutil==7.2.2
-
 # test
 covdefaults==2.3.0
 coverage==7.16.2

@@ -74,26 +74,6 @@ def _atomic_c6(
             stacklevel=2,
         )
 
-    # tad-dftd3 0.6.0's custom AtomicC6 vmap rule fails when it indexes the
-    # captured reference table from a nested mapped call. Use the same direct
-    # reference contraction in that case; eager calls retain its memory-saving
-    # custom backward.
-    if str(getattr(d3, "__version__", "")).startswith("0.6.") and (
-        is_functorch_tensor(numbers) or is_functorch_tensor(weights)
-    ):
-        from tad_mctc.math import einsum
-
-        reference_c6 = reference.c6[
-            numbers.unsqueeze(-1), numbers.unsqueeze(-2)
-        ]
-        return einsum(
-            "...ijab,...ia,...jb->...ij",
-            reference_c6,
-            weights,
-            weights,
-            optimize=[(0, 1), (0, 1)],
-        )
-
     return d3.model.atomic_c6(numbers, weights, reference)
 
 

@@ -18,10 +18,10 @@
 Compatibility shim for published dispersion packages
 =====================================================
 
-The supported tad-dftd3 0.6.0 release requires tad-mctc 0.7.0, while dxtb
-requires tad-mctc 0.11.3. The separately installed tad-dftd4 0.8.0 also uses
-names removed from tad-mctc 0.9. These published packages are installed with
---no-deps in development environments; the minimal names they need are
+The supported tad-dftd3 0.7.0 release requires older tad-mctc APIs, while
+dxtb requires tad-mctc 0.11.3. The separately installed tad-dftd4 0.8.0 also
+uses names removed from tad-mctc 0.9. These published packages are installed
+with --no-deps in development environments; the minimal names they need are
 restored here before either dispersion package is imported.
 
 This does not make the package metadata conflict resolver-compatible. Remove
@@ -35,41 +35,14 @@ import typing as _t
 import tad_mctc.autograd as _autograd
 import tad_mctc.ncoord as _ncoord
 import tad_mctc.storch as _storch
-import tad_mctc.tools.memory as _memory
 import tad_mctc.typing as _typing
-import torch
 
 __all__: list[str] = []
 
 
-def _memory_device(device: torch.device) -> tuple[float, float]:
-    """Available and total memory of the device in MB (removed in 0.8)."""
-    if not isinstance(device, torch.device):
-        raise TypeError(
-            f"Device should be a `torch.device` object, but is a {type(device)}."
-        )
-
-    if device.type == "cpu":
-        from psutil import virtual_memory  # pylint: disable=C0415
-
-        mem = virtual_memory()
-        free, total = mem.available, mem.total
-    elif device.type == "cuda":
-        free, total = torch.cuda.mem_get_info()
-    else:
-        raise ValueError(f"Unsupported device: {device}")
-
-    return free / (1024**2), total / (1024**2)
-
-
 def _apply() -> None:
-    if not hasattr(_memory, "memory_device"):
-        _memory.memory_device = _memory_device  # type: ignore[attr-defined]
-
-    # tad-dftd3 0.6.0 imports this name from tad-mctc 0.7. The current mctc
-    # equivalent asks whether any vmap layer is active, including one below a
-    # grad-tracking wrapper. This avoids data-dependent ``unique`` operations
-    # in the D3 C6 routine.
+    # tad-dftd3 0.7.0 imports this legacy name. The current mctc equivalent
+    # asks whether a vmap layer is active, including nested transforms.
     if not hasattr(_autograd, "is_batched"):
         _autograd.is_batched = _autograd.is_vmapped  # type: ignore[attr-defined]
 
@@ -79,7 +52,7 @@ def _apply() -> None:
             setattr(_typing, name, getattr(_t, name))
 
     # tad-mctc 0.8 prefixed the safe operations (``divide`` -> ``safe_divide``)
-    for name in ("divide", "pow", "reciprocal", "sqrt"):
+    for name in ("divide", "sqrt"):
         if not hasattr(_storch, name):
             setattr(_storch, name, getattr(_storch, f"safe_{name}"))
 

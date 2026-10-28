@@ -20,17 +20,19 @@ channels:
   - defaults
   - conda-forge
 dependencies:
+  # Create the core development environment here. After activation, install
+  # dxtb editable, then run:
+  # python -m pip install --no-deps tad-dftd3==0.7.0 tad-dftd4==0.8.0
+  # See docs/source/03_for_developers/installation.rst.
   - numpy
   - pydantic
   - python>=3.10,<3.13
-  - pytorch>=2.5.0,<3
+  - pytorch>=2.7.0,<3
   - scipy # for xitorch
   - pytest
   - tomli
   - tomli-w
-  - tad-mctc
-  - tad-multicharge
-  - tad-dftd3
-  - tad-dftd4
+  - tad-mctc=0.11.3
+  - tad-multicharge=0.8.0
   - pip:
-      - tad-libcint
+      - tad-libcint==0.4.0
