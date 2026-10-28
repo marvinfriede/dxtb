@@ -223,6 +223,147 @@ were changed. Public routing was not touched. E1.3 remains separately open.
    wheel, and broader derivative requirements were not completed.
 
 The next action is to resolve the official dependency metadata/runtime policy
-without upstream source edits, then complete the remaining environment and
-libcint matrix. Do not publish or describe this branch as a clean, accepted
-consolidation yet.
+
+## Development-integration follow-up
+
+This follow-up uses the task's accepted policy: published D3/D4 metadata
+conflicts may remain in controlled development installs. That does not make
+the environment resolver-clean for public release. The current candidate is
+based on target branch `f8297423a363305d0233307bc92d1c6c947b63a8`; the four
+earlier U1–U4 commits remain intact above that base.
+
+The specified upstream runtime set was installed in five isolated CPU
+profiles:
+
+| Python / Torch | NumPy | mctc | multicharge | libcint | D3 / D4 | pytest |
+|---|---:|---:|---:|---:|---:|---:|
+| 3.10.22 / 2.7.0+cpu | 2.2.6 | 0.11.3 | 0.8.0 | 0.4.0 | 0.6.0 / 0.8.0 | 8.4.2 |
+| 3.11.15 / 2.8.0+cpu | 1.26.4 | 0.11.3 | 0.8.0 | 0.4.0 | 0.6.0 / 0.8.0 | 9.1.1 |
+| 3.12.10 / 2.11.0+cpu | 2.5.4 | 0.11.3 | 0.8.0 | 0.4.0 | 0.6.0 / 0.8.0 | 9.1.1 |
+| 3.12.10 / 2.13.0+cpu | 2.5.4 | 0.11.3 | 0.8.0 | 0.4.0 | 0.6.0 / 0.8.0 | 9.1.1 |
+| 3.14.8 / 2.14.1+cpu | 2.5.3 | 0.11.3 | 0.8.0 | 0.4.0 | 0.6.0 / 0.8.0 | 9.1.1 |
+
+The clean Python 3.10 environment uses the tox-supported minimum profile
+(Python 3.10 / Torch 2.7), not the old Torch 2.6 profile that is below the new
+`torch>=2.7` contract. Its first clean install exposed that the local D3 memory
+shim imports `psutil`, which was not a declared runtime dependency. `psutil`
+is now explicit in `install_requires` and docs requirements. A pytest 9.2
+trial also failed the existing scalar-Tensor `pytest.approx` comparisons under
+Torch 2.7; pytest 8.4.2 passed. Development extras now pin `pytest<9` to keep
+the supported current test contract reproducible.
+
+The controlled development install is:
+
+```text
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install 'torch==2.7.0'  # select CPU/CUDA wheel for the profile
+python -m pip install -e '.[dev,libcint]'
+python -m pip install --no-deps --index-url https://pypi.org/simple \
+    tad-dftd3==0.6.0 tad-dftd4==0.8.0
+python -c 'import dxtb; import tad_dftd3, tad_dftd4; print(dxtb.__version__)'
+python -m pip check
+```
+
+Import `dxtb` before D3/D4 so the compatibility shim runs. Importing the new
+`tad-mctc`, `tad-multicharge`, or `tad-libcint` modules first is supported.
+Direct D3 import before dxtb bypasses the shim and is not supported. The
+remaining shim supplies removed compatibility names (`memory_device`,
+`is_batched`, old safe-operation aliases, legacy typing names, and legacy
+coordination-number callables). The coordination-number implementation
+remains local to dxtb; no upstream files or scientific routines were changed.
+
+`pip check` in all five profiles reported only the accepted D3/D4 metadata
+conflicts: D3 0.6.0 requires NumPy `<2` and mctc `==0.7.0`; D4 0.8.0 requires
+NumPy `<2`, mctc `==0.7.0`, and multicharge `==0.5.0`. Python 3.11 uses NumPy
+1.26.4 and therefore reported only mctc/multicharge conflicts. The other
+profiles also reported the declared D3/D4 NumPy conflicts. No unrelated
+`pip check` issue remained. For Python 3.14 / Torch 2.14.1, the exact output
+was:
+
+```text
+tad-dftd3 0.6.0 has requirement numpy<2, but you have numpy 2.5.3.
+tad-dftd3 0.6.0 has requirement tad-mctc==0.7.0, but you have tad-mctc 0.11.3.
+tad-dftd4 0.8.0 has requirement numpy<2, but you have numpy 2.5.3.
+tad-dftd4 0.8.0 has requirement tad-mctc==0.7.0, but you have tad-mctc 0.11.3.
+tad-dftd4 0.8.0 has requirement tad-multicharge==0.5.0, but you have tad-multicharge 0.8.0.
+```
+
+### Completed focused validation
+
+The focused command below completed in all five profiles with **82 passed,
+2 skipped** per environment:
+
+```text
+pytest -q -n logical --dist worksteal -m 'not large' \
+  test/test_classical/test_dispersion/test_d3.py \
+  test/test_classical/test_dispersion/test_d4.py \
+  test/test_classical/test_dispersion/test_d4_2b.py \
+  test/test_classical/test_ies \
+  test/test_integrals/test_libcint_setup_node.py::test_libcint_full_singlepoint_matches_pytorch
+```
+
+This covers D3/D4 execution, IES Schur and optional-mode parity, and
+representative GFN1 H2O / GFN2 H2 and H2O libcint-versus-PyTorch energy/force
+controls. The Python 3.10 / Torch 2.7 run followed a fresh editable install and
+installation of the specified official D3/D4 wheels with `--no-deps`.
+
+The broader libcint selection completed with **316 passed** under Python 3.10
+/ Torch 2.7 and Python 3.14 / Torch 2.14.1:
+
+```text
+pytest -q -n logical --dist worksteal -m 'not large' \
+  test/test_integrals/test_libcint_setup_node.py \
+  test/test_integrals/test_libcint.py \
+  test/test_integrals/test_pyscf_reference.py \
+  test/test_libcint/test_overlap.py \
+  test/test_libcint/test_overlap_grad.py \
+  test/test_libcint/test_multipole.py \
+  test/test_libcint/test_coeff_grad.py \
+  test/test_libcint/test_gradcheck.py
+```
+
+The PySCF reference helper now reorders only the AO axes from its
+`px,py,pz` convention to the dxtb/tad-libcint 0.4 `py,pz,px` convention; it
+does not reorder Cartesian derivative axes. Native ket-centered `j` and
+already-packed `jj` are checked directly at the integral level. The libcint
+container uses `r0` and `r0r0` only when origin-centered moments are requested,
+avoiding a redundant shift or six-component reduction. Existing full energy
+and force parity controls remain active. The D3 0.6 reference test uses its
+tensor cutoff API; the production D3 calculation and cutoff were not changed.
+
+The two former implicit-SCF failures were invalid test expectations, not an
+integration regression. `System.singlepoint()` keeps the legacy implicit
+engine; its dictionary result intentionally reports `None` for `converged`,
+`residual`, and `status` under the B5.6 rule that legacy routes may have
+`status=None`. The tests expected fixed-trip FULL-mode status on that legacy
+route. They now assert the three `None` fields and still run their energy/field
+response and mixed finite-difference checks. Both corrected tests pass in
+isolation. No production SCF or status code changed. Reproducing from the
+original `4546417` archive was blocked at import because its source requests
+`tad_mctc.autograd.attach_gradient`, absent from the available mctc 0.9.1
+environment; source and policy inspection confirm the result normalization
+and B5.6 rule are unchanged by this integration.
+
+### Remaining validation boundary
+
+The primary `not large and not slow and not baseline` suite was attempted in
+Python 3.14 / Torch 2.14.1 but did not complete: the distributed run reached
+about 99% with numerous failures and stalled before a pytest summary, so it is
+not counted as passing. A single-worker `-x` diagnostic stopped at
+`test/test_a_memory_leak/test_scf.py::test_xitorch[False-False-dtype0]` after
+20 passed and 2 skipped. The failure reports two retained 512-byte tensors
+across iterations. Comparing this test against the pre-integration target
+source was blocked because the old source imports removed
+`tad_libcint 0.3` names (`AtomCGTOBasis`/`CGTOBasis`) while the candidate
+environment contains 0.4. This memory-leak failure remains unclassified
+against an executable pre-integration environment. The broad selection must
+be rerun in disjoint groups with supported baseline dependencies before
+claiming broad regression clearance.
+
+Black, isort, compileall, and `git diff --check` pass for the follow-up
+changes. CUDA and Windows/macOS were unavailable. Resolver-clean public
+installation remains blocked until compatible official D3/D4 metadata is
+published. The integration is **focused-development validated, but overall
+U1–U4 acceptance remains open pending classification and completion of the
+broader regression matrix**. The branch has not been pushed.
