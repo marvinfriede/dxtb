@@ -27,6 +27,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import torch
+from tad_mctc.storch.implicit import implicit_fixed_point
+from tad_mctc.storch.linsolve import STATUS_CONVERGED
+from tad_mctc.storch.linsolve import LinearSolveResult as SolveResult
+from tad_mctc.storch.linsolve import bicgstab
 
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
@@ -37,7 +41,8 @@ __all__ = ["LinearSolveResult", "implicit_root", "solve_linear"]
 
 RawMap = Callable[..., Tensor]
 
-_LINEAR_SOLVE_EPS_MULTIPLIER = 10.0
+_LINEAR_SOLVE_RTOL = 1.0e-10
+_LINEAR_SOLVE_ATOL = 1.0e-12
 
 
 @dataclass(frozen=True, eq=False)
@@ -50,16 +55,18 @@ class LinearSolveResult:
     converged: Tensor
 
 
-def _dot(left: Tensor, right: Tensor) -> Tensor:
-    return torch.sum(left.reshape(-1) * right.reshape(-1))
+def _vector(value: Tensor) -> Tensor:
+    """The whole state is one vector; a scalar becomes a 1-vector."""
+    return value.reshape(1) if value.ndim == 0 else value
 
 
-def _safe_divide(numerator: Tensor, denominator: Tensor) -> Tensor:
-    tiny = torch.finfo(denominator.dtype).tiny
-    safe = torch.where(
-        denominator.abs() > tiny, denominator, torch.ones_like(denominator)
-    )
-    return numerator / safe
+def _on_vector(function: Callable[..., Tensor], shape: torch.Size):
+    """Operator on the state shape, applied to `_vector` values."""
+
+    def apply(value: Tensor, *args: Tensor) -> Tensor:
+        return function(value.reshape(shape), *args).reshape(value.shape)
+
+    return apply
 
 
 def solve_linear(
@@ -67,74 +74,41 @@ def solve_linear(
     rhs: Tensor,
     *,
     maxiter: int | None = None,
-    rtol: float = 1.0e-10,
-    atol: float = 1.0e-12,
+    rtol: float = _LINEAR_SOLVE_RTOL,
+    atol: float = _LINEAR_SOLVE_ATOL,
 ) -> LinearSolveResult:
-    """Solve a nonsymmetric system with a fixed-trip matrix-free BiCGSTAB.
+    """Solve a nonsymmetric system with a matrix-free BiCGSTAB.
 
-    The iteration count depends only on the static tensor shape. Convergence
-    and breakdown handling use tensor masks, so this routine composes with
-    ``torch.func`` transforms and can be vmapped over prepared roots.
+    The whole tensor is one vector. Convergence and breakdown handling use
+    tensor masks (``tad_mctc.storch.linsolve.bicgstab``), so this routine
+    composes with ``torch.func`` transforms and can be vmapped over
+    prepared roots. Its relative threshold is ``max(rtol, 10 eps)``.
     """
     size = rhs.numel()
     steps = 2 * size if maxiter is None else maxiter
     if steps < 1:
         raise ValueError("A matrix-free linear solve requires maxiter >= 1.")
 
-    x = torch.zeros_like(rhs)
-    residual = rhs - operator(x)
-    shadow = residual
-    direction = torch.zeros_like(rhs)
-    image = torch.zeros_like(rhs)
-    rho_previous = torch.ones((), dtype=rhs.dtype, device=rhs.device)
-    alpha_previous = torch.ones_like(rho_previous)
-    omega_previous = torch.ones_like(rho_previous)
-    rhs_norm = torch.linalg.vector_norm(rhs)
-    # A requested tolerance below roundoff can reject a useful low-precision
-    # solution. Keep the float64 threshold unchanged while imposing a modest
-    # dtype-relative floor for lower-precision solves.
-    effective_rtol = max(
-        rtol,
-        _LINEAR_SOLVE_EPS_MULTIPLIER * torch.finfo(rhs.dtype).eps,
+    vector = _vector(rhs)
+    result = bicgstab(
+        _on_vector(operator, rhs.shape),
+        vector,
+        rtol=rtol,
+        atol=atol,
+        maxiter=steps,
+        vdims=vector.ndim,
     )
-    target = atol + effective_rtol * rhs_norm
-    active = torch.linalg.vector_norm(residual) > target
-    iterations = torch.zeros((), dtype=torch.int64, device=rhs.device)
-
-    for _ in range(steps):
-        rho = _dot(shadow, residual)
-        beta = _safe_divide(rho * alpha_previous, rho_previous * omega_previous)
-        trial_direction = residual + beta * (direction - omega_previous * image)
-        direction = torch.where(active, trial_direction, direction)
-        image_new = operator(direction)
-        alpha = _safe_divide(rho, _dot(shadow, image_new))
-        intermediate = residual - alpha * image_new
-        correction = operator(intermediate)
-        omega = _safe_divide(
-            _dot(correction, intermediate), _dot(correction, correction)
-        )
-        trial_x = x + alpha * direction + omega * intermediate
-        trial_residual = intermediate - omega * correction
-        x = torch.where(active, trial_x, x)
-        residual = torch.where(active, trial_residual, residual)
-        image = torch.where(active, image_new, image)
-        rho_previous = torch.where(active, rho, rho_previous)
-        alpha_previous = torch.where(active, alpha, alpha_previous)
-        omega_previous = torch.where(active, omega, omega_previous)
-        next_active = torch.linalg.vector_norm(residual) > target
-        iterations = iterations + active.to(torch.int64)
-        active = next_active
-
-    residual_norm = torch.linalg.vector_norm(rhs - operator(x))
     return LinearSolveResult(
-        solution=x,
-        residual=residual_norm,
-        iterations=iterations,
-        converged=residual_norm <= target,
+        solution=result.solution.reshape(rhs.shape),
+        residual=result.residual,
+        iterations=result.iterations,
+        converged=result.status == STATUS_CONVERGED,
     )
 
 
-def _require_linear_convergence(result: LinearSolveResult) -> Tensor:
+def _require_linear_convergence(
+    result: LinearSolveResult | SolveResult,
+) -> Tensor:
     """Make a failed transformed solve observable without host inspection.
 
     Primal SCF convergence is checked eagerly before entering this module.
@@ -147,72 +121,6 @@ def _require_linear_convergence(result: LinearSolveResult) -> Tensor:
     return torch.where(result.converged, result.solution, nan)
 
 
-class _ImplicitRoot(torch.autograd.Function):
-    """Attach derivatives defined by the raw fixed-point equation."""
-
-    generate_vmap_rule = True
-
-    @staticmethod
-    def forward(root_x: Tensor, *args: object) -> Tensor:
-        return root_x.view_as(root_x)
-
-    @staticmethod
-    def setup_context(ctx: object, inputs: tuple, output: Tensor) -> None:
-        _, *args = inputs
-        *parameters, raw_map = args
-        ctx.raw_map = raw_map
-        tensors = (*parameters, output)
-        ctx.save_for_backward(*tensors)
-        ctx.save_for_forward(*tensors)
-
-    @staticmethod
-    def backward(ctx: object, cotangent: Tensor) -> tuple:
-        saved = ctx.saved_tensors
-        parameters, output = saved[:-1], saved[-1]
-        raw_map = ctx.raw_map
-
-        _, pullback_x = torch.func.vjp(
-            lambda x: raw_map(x, *parameters), output
-        )
-
-        def adjoint_operator(value: Tensor) -> Tensor:
-            return value - pullback_x(value)[0]
-
-        adjoint = _require_linear_convergence(
-            solve_linear(adjoint_operator, cotangent)
-        )
-        _, pullback_parameters = torch.func.vjp(
-            lambda *values: raw_map(output, *values), *parameters
-        )
-        parameter_cotangents = pullback_parameters(adjoint)
-        return (torch.zeros_like(output), *parameter_cotangents, None)
-
-    @staticmethod
-    def jvp(ctx: object, root_tangent: Tensor | None, *args: object) -> Tensor:
-        del root_tangent
-        *parameter_tangents, raw_map_tangent = args
-        del raw_map_tangent
-        saved = ctx.saved_tensors
-        parameters, output = saved[:-1], saved[-1]
-        raw_map = ctx.raw_map
-
-        _, parameter_response = torch.func.jvp(
-            lambda *values: raw_map(output, *values),
-            tuple(parameters),
-            tuple(parameter_tangents),
-        )
-
-        def tangent_operator(value: Tensor) -> Tensor:
-            _, mapped_tangent = torch.func.jvp(
-                lambda x: raw_map(x, *parameters), (output,), (value,)
-            )
-            return value - mapped_tangent
-
-        return _require_linear_convergence(
-            solve_linear(tangent_operator, parameter_response)
-        )
-
-
 def implicit_root(
     root_x: Tensor, *parameters: Tensor, raw_map: RawMap
 ) -> Tensor:
@@ -222,10 +130,23 @@ def implicit_root(
     All differentiable map inputs are explicit tensor arguments in
     ``parameters``; ``raw_map`` is static context and may contain only static
     SCF structure. The returned value is not finalized into an observable.
+
+    The response equations ``(I - G_x) x_dot = G_p p_dot`` and
+    ``(I - G_x)^T lambda = x_bar`` are solved matrix-free with BiCGSTAB by
+    ``tad_mctc.storch.implicit.implicit_fixed_point``, whose nested
+    derivatives are those of the linear systems, not of the iterations. A
+    response solve that does not converge gives NaN.
     """
     # The solver trajectory selects a primal value only. Its derivatives are
-    # replaced by the explicit IFT response from ``parameters`` below.
-    return _ImplicitRoot.apply(root_x.detach(), *parameters, raw_map)
+    # replaced by the explicit IFT response from ``parameters``.
+    return implicit_fixed_point(
+        raw_map,
+        root_x,
+        *parameters,
+        method="bicgstab",
+        rtol=_LINEAR_SOLVE_RTOL,
+        atol=_LINEAR_SOLVE_ATOL,
+    )
 
 
 @dataclass(frozen=True, eq=False)
