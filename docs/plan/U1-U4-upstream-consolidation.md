@@ -367,3 +367,115 @@ installation remains blocked until compatible official D3/D4 metadata is
 published. The integration is **focused-development validated, but overall
 U1–U4 acceptance remains open pending classification and completion of the
 broader regression matrix**. The branch has not been pushed.
+
+## U1–U4.1 final-regression follow-up
+
+### Graph and review boundary
+
+The local target `f8297423a363305d0233307bc92d1c6c947b63a8` is 21 commits
+after the common ancestor `fbf4531dc11b284a8e25829dd661e4eedb7ce4c1`.
+The original U1–U4 branch at `6ef27fd` and this advanced target are sibling
+histories. The target-based branch re-applies the four original U1–U4 work
+areas as `887f09b`, `b06eea5`, `2e3e5ea`, and `59cc08c`; the exact `bdd102a`,
+`ee116f8`, `4713b28`, and `6ef27fd` commits are not ancestors of this branch.
+The four final follow-ups are `026024a`, `f2b77e9`, `b0eeddd`, and `8b087fa`.
+Thus eight target-based U1–U4 commits are present, while the older original
+branch remains available separately as `integration/u1-u4-4546417`.
+
+Independent source review found no blocking implementation issue in the
+dependency installation, shim import order, libcint 0.4 basis construction,
+AO ordering, `j`/`jj` centering, packed quadrupole handling, or Schur-default
+IES configuration. Production SCF/status code was not changed by this
+follow-up. Direct PySCF `origj` dipole and quadrupole references, uncentered
+`r0`/`r0r0` references, reordered AO axes, and the existing energy/force
+controls exercise the new libcint conventions independently. Removed libcint
+wrapper names are absent from production sources.
+
+The status changes in `b0eeddd` are route-specific. `System.singlepoint()`
+uses the fixed-trip System boundary; an implicit configuration that resolves
+to the retained legacy engine has `converged=None`, `residual=None`, and
+`status=None`. The public eager `singlepoint(system, positions)` test now
+exercises the eligible functional implicit path and asserts populated
+convergence/status fields. The D4SC custom-model test remains on its retained
+legacy route and still checks nonzero model-scale gradients and call-local
+setup behavior. Functional FULL status, public `Result` pytree, and mapped
+status controls pass in the focused selection. No functional status assertion
+was removed.
+
+The B3b captured-index test now calls the eager entrypoint it is intended to
+exercise; the custom D4SC test documents that `System.singlepoint` keeps
+legacy status semantics. The resulting selected status/Result set reported
+**21 passed** on Python 3.14 / Torch 2.14.1. The full B3b plus D4SC
+setup-authority files reported **56 passed, 1 failed**. The one failure,
+`test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding`, expects a
+Cholesky factor from a helper after the accepted E7a symmetric overlap
+transformation. It has the identical 189/289 element discrepancy and
+0.46961479309258913 maximum absolute difference on the pre-integration target
+`f8297423`; it is an inherited E7a test mismatch, not a U1–U4 regression.
+
+### Memory-test characterization
+
+The exact primary candidate command was:
+
+```text
+OMP_NUM_THREADS=1 python -X faulthandler -m pytest \
+  'test/test_a_memory_leak/test_scf.py::test_xitorch[False-False-dtype0]' \
+  -vv -s --tb=long -x
+```
+
+On Python 3.14.8 / Torch 2.14.1+cpu / pytest 9.1.1 it completed in 6.41 s
+with an assertion failure, process exit 1, and peak RSS 438228 KiB. It was not
+a timeout, hang, or OOM. The helper printed 524 bytes in two storages after
+the first evaluation and the same totals for all five repeated evaluations.
+An object-level probe showed those storages were a `float32[119]` (476 bytes)
+and an `int64[6]` (48 bytes); the set and total remained unchanged through
+seven complete calls. The baseline has the same stable `float32[119]` storage
+without the additional 48-byte `int64[6]` tensor. No repeated per-call growth
+was observed. The owner of that additional small tensor is not identified,
+so the allocation difference remains a risk, but the memory test's unbounded
+leak interpretation is not supported by repeated measurements.
+
+The separate complete memory module results were:
+
+| Source / environment | Result | Exact failures |
+|---|---:|---|
+| Target `f8297423`, historical stack, Python 3.10.22 / Torch 2.7.0+cpu, mctc 0.9.1, multicharge 0.7.0, libcint 0.3.0 | 2 failed, 14 passed | `test_xitorch[False-False-dtype0]`, `test_xitorch[False-False-dtype1]` |
+| Candidate, upgraded stack, Python 3.10.22 / Torch 2.7.0+cpu | 3 failed, 13 passed | The same two nodes plus `test_xitorch_pure[False-False-dtype0]` |
+| Candidate, upgraded stack, Python 3.14.8 / Torch 2.14.1+cpu | 3 failed, 13 passed | The same three nodes |
+
+The first two failures are reproduced on the executable target with the same
+Python/Torch profile and historical dependency pins. The additional pure
+SiH4 float32 no-GC node plateaus at one 136-byte storage after its first call
+on both candidate profiles, with no growth over the helper's five repeated
+calls; it passes on the target's Python 3.10/Torch 2.7 historical stack. The
+same node appears in older historical failure records, but its difference
+against target `f8297423` has not been isolated to source versus upgraded
+dependency behavior. The family is classified **historical with a small
+candidate-only one-time allocation difference; exact allocation ownership
+unresolved, no continuing growth observed**. It is not evidence that the
+broad suite passes.
+
+### Broad suite and verdict
+
+The general non-memory selection was run on Python 3.14 / Torch 2.14.1 with
+two workers, `--dist loadfile`, and only `test/test_a_memory_leak` excluded.
+It reached approximately 82% and showed numerous failures before it was
+interrupted after review of the runtime cost. It produced no final pytest
+summary and is **interrupted**, not passing. A bounded serial `-x` probe
+initially found the known B5.6 legacy-status assertion in
+`test_implicit_singlepoint_reuses_captured_scf_index`; the target reproduces
+that failure exactly. The test now uses the eager entrypoint it intends to
+exercise, and the selected status controls pass. The next failure in the
+affected module set is the inherited E7a overlap-factor assertion above. The
+entire broad selection has not been rerun after those test corrections, and
+the remaining failures from the interrupted run have no node identifiers;
+they remain unclassified.
+
+The general suite therefore has no final summary or complete baseline/current
+failure comparison. U1–U4 development acceptance remains **OPEN** pending that
+bounded regression classification. The accepted D3/D4 metadata exceptions
+are not the blocker. The SSH fetch attempt could not refresh remote refs
+because the host rejected permissions on
+`/etc/ssh/ssh_config.d/50-suse.conf`. No push was attempted. Public release
+readiness remains **BLOCKED** pending official D3/D4 metadata and separate
+release gates.
