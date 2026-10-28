@@ -1,14 +1,14 @@
 numpy
 pydantic>=2.0.0
 scipy
-tad-mctc==0.7.0
-tad-dftd3==0.6.0
-tad-multicharge==0.5.0
-tad-dftd4==0.8.0
-tad-libcint==0.3.0
+tad-mctc==0.11.3
+tad-multicharge==0.8.0
+tad-libcint==0.4.0
+# Install the accepted official D3/D4 wheels separately with --no-deps; see
+# docs/source/03_for_developers/installation.rst.
 tomli
 tomli-w
-torch>=2.10.0
+torch>=2.7.0,<3
 sphinx
 sphinx-book-theme
 sphinx-copybutton
