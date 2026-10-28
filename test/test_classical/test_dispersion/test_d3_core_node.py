@@ -114,6 +114,11 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
     )
     weights = d3.model.weight_references(numbers, cn, cache.ref)
     c6 = d3.model.atomic_c6(numbers, weights, cache.ref)
+    cutoff_50 = (
+        d3.Cutoff(disp2=50.0, disp3=50.0, dtype=positions.dtype)
+        if hasattr(d3, "Cutoff")
+        else positions.new_tensor(50.0)
+    )
     expected = d3.disp.dispersion(
         numbers,
         positions,
@@ -122,7 +127,7 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         cache.rvdw,
         cache.r4r2,
         cache.damping_function,
-        cutoff=d3.Cutoff(disp2=50.0, disp3=50.0, dtype=positions.dtype),
+        cutoff=cutoff_50,
     )
     actual = dispersion_d3_energy(core, positions)
     torch.testing.assert_close(actual, expected, rtol=1.0e-12, atol=1.0e-24)
@@ -132,25 +137,34 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         actual_gradient, expected_gradient, rtol=1.0e-12, atol=1.0e-24
     )
 
-    default_positions = positions.detach().clone().requires_grad_(True)
-    released_default = d3.disp.dispersion(
+    narrower_positions = positions.detach().clone().requires_grad_(True)
+    cutoff_40 = (
+        d3.Cutoff(disp2=40.0, disp3=40.0, dtype=positions.dtype)
+        if hasattr(d3, "Cutoff")
+        else narrower_positions.new_tensor(40.0)
+    )
+    narrower = d3.disp.dispersion(
         numbers,
-        default_positions,
+        narrower_positions,
         parameters,
         c6,
         cache.rvdw,
         cache.r4r2,
         cache.damping_function,
-        cutoff=d3.Cutoff(dtype=positions.dtype),
+        cutoff=cutoff_40,
     )
-    assert not torch.equal(actual, released_default)
-    default_gradient = torch.autograd.grad(
-        released_default.sum(), default_positions
-    )[0]
-    assert not torch.equal(actual_gradient, default_gradient)
+    assert not torch.equal(actual, narrower)
+    narrower_gradient = torch.autograd.grad(narrower.sum(), narrower_positions)[
+        0
+    ]
+    assert not torch.equal(actual_gradient, narrower_gradient)
 
     custom_positions = positions.detach().clone().requires_grad_(True)
-    custom_cutoff = d3.Cutoff(disp2=42.0, disp3=48.0, dtype=positions.dtype)
+    custom_cutoff = (
+        d3.Cutoff(disp2=42.0, disp3=48.0, dtype=positions.dtype)
+        if hasattr(d3, "Cutoff")
+        else custom_positions.new_tensor(42.0)
+    )
     custom_combined = d3.disp.dispersion(
         numbers,
         custom_positions,
@@ -161,6 +175,10 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         cache.damping_function,
         cutoff=custom_cutoff,
     )
+    if hasattr(d3, "Cutoff"):
+        cutoff_2, cutoff_3 = custom_cutoff.disp2, custom_cutoff.disp3
+    else:
+        cutoff_2 = cutoff_3 = custom_cutoff
     custom_split = d3.disp.dispersion2(
         numbers,
         custom_positions,
@@ -168,14 +186,14 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         c6,
         cache.r4r2,
         cache.damping_function,
-        custom_cutoff.disp2,
+        cutoff_2,
     ) + d3.disp.dispersion3(
         numbers,
         custom_positions,
         parameters,
         c6,
         cache.rvdw,
-        custom_cutoff.disp3,
+        cutoff_3,
     )
     torch.testing.assert_close(custom_combined, custom_split)
     custom_combined_gradient = torch.autograd.grad(

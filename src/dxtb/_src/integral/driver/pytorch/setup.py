@@ -116,7 +116,7 @@ def core_pytorch_integral_setup(
                     ib=cls.ib.clone(),
                     jk=cls.jk.clone(),
                     idx=cls.idx.clone(),
-                    weight=cls.weight.clone(),
+                    weight=cls.weight.to(dtype=setup.alphas[0].dtype).clone(),
                 )
                 for cls in setup.pair_plan.classes
             ),

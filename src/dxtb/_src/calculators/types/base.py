@@ -589,8 +589,10 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.integrals = self.integrals.type(dtype)
 
         # Keep the system consistent with the converted components where
-        # supported. Classical and ES2/ES3 setup data are not converted;
-        # evaluating after `type` is a known issue (see known_issues.rst).
+        # supported. Legacy System classical and ES2/ES3 setup objects are
+        # not converted; evaluating those legacy snapshots after `type` is a
+        # known issue (see known_issues.rst). The separate exact core below is
+        # converted because it owns functional setup snapshots.
         integral_setup = (
             None
             if self.system.integral_setup is None
@@ -603,6 +605,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         )
         exact_core = self.system.exact_core
         if exact_core is not None:
+            exact_core = exact_core.to(dtype=dtype)
             backend_setup = (
                 integral_setup.pytorch
                 if integral_setup is not None

@@ -479,3 +479,100 @@ because the host rejected permissions on
 `/etc/ssh/ssh_config.d/50-suse.conf`. No push was attempted. Public release
 readiness remains **BLOCKED** pending official D3/D4 metadata and separate
 release gates.
+
+## U1–U4.2 bounded regression triage and closure
+
+The target-based integration is `bcf3e3f67255aa99c3dacdc3be77d2bc2e6399cb`
+on `integration/u1-u4-current`, ten integration commits above
+`f8297423a363305d0233307bc92d1c6c947b63a8`. This is the source comparator;
+the old `4546417` integration line is a sibling history. Candidate and target
+dependency environments differ as documented above. The collected selection
+is `not large and not slow and not baseline`, excluding only
+`test/test_a_memory_leak`: 5,145 unique node IDs in 262 files. The exact,
+sorted node manifest and the bounded shard record are in
+[`U1-U4.2-acceptance-manifest.txt`](U1-U4.2-acceptance-manifest.txt).
+Collection ran on Linux/Python 3.14.8/Torch 2.14.1 CPU with one OpenMP thread.
+The main candidate shards ran on Python 3.11.15/Torch 2.8.0 CPU; candidate
+dependencies were mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.6.0,
+and D4 0.8.0. Target comparisons used Python 3.10.22/Torch 2.7.0 CPU and the
+historical mctc 0.9.1/multicharge 0.7.0/libcint 0.3.0 stack with D3 0.7.0
+and D4 0.8.0. Pytest random ordering used seed 104729. Each bounded run has
+its own complete XML and log in `/tmp1/friede/tmp/u1-u4.2-artifacts`.
+
+The request to avoid another unbounded run was followed. High-risk shards ran
+serially with one OpenMP thread and completed with JUnit summaries. The
+general collection is accounted for but was **not** fully executed. Direct
+results:
+
+| Shard | Candidate result | Target comparison / classification |
+|---|---:|---|
+| Status and eager compatibility | 145: 136 passed, 9 failed | Eight small 300 K mixer/Broyden parity failures reproduce on target; the remaining float32 setup dtype failure was integration-specific and fixed. Its targeted regression passes on Torch 2.8 and 2.14.1. |
+| Functional solver and map | 122: 104 passed, 18 failed | The same 18 finite-temperature/reference nodes fail on target `f8297423`; inherited functional SCF numerical/reference failures, not waived as passes. |
+| Calculator, Result, integrals | 84: 83 passed, 1 failed | The 189/289 orbital-conditioning assertion and 0.4696147931 maximum discrepancy reproduce on target; tracked to E7a. |
+| Calculator mixed, mode 1/2, fields, singlepoint core | 143: 131 passed, 12 failed | All 12 fixed-trip versus legacy FULL parity nodes reproduce on target `test_singlepoint_core.py` (61 nodes, 49 passed, same 12 failures). The mapped mode/field failures seen before the D3 fix no longer reproduce. |
+| Coulomb and IES | 327: 321 passed, 6 skipped | No failure. |
+| Classical dispersion | 78: 78 passed | The earlier D3 0.7-only cutoff test assumption was corrected to exercise the installed D3 0.6 API and retain cutoff/gradient sensitivity. |
+
+Exact target-reproduced failure groups:
+
+- Functional finite-temperature nodes: `test_finite_temperature_simple_budget_matrix[True-2]`, `[True-1]`, `[False-2]`, `[True-0]`, `[False-1]`, `[False-0]`; `test_finite_temperature_simple_normal_convergence`; `test_finite_temperature_simple_solver_matches_legacy[True-1]`, `[True-0]`, `[False-0]`, `[False-1]`; `test_finite_temperature_raw_map_matches_full_engine[open-shell]`, `[gfn2-multipoles]`, `[gfn2-no2-doublet]`, `[small-gap-fractional]`, `[gfn1-300K]`, `[fractional-charge]`; and `test_potential_map_matches_legacy_physical_evaluation[method3-0.5-0.0-None-300.0]`.
+- Fixed-trip/legacy FULL nodes: all 12 `test_production_singlepoint_matches_legacy_full[...]` cases in `test/test_calculator/test_singlepoint_core.py`; target rerun produced the same 12 failures.
+- Eager mixer/status parity nodes: `test_eager_representation_mixer_budget_parity[300-k-simple-potential]`, `[300-k-simple-charge]`, `[300-k-anderson-potential]`, `[300-k-simple-fock]`, `[300-k-anderson-fock]`, `[300-k-anderson-charge]`, plus `test_default_broyden_adapter_matches_legacy[gfn1]` and `[gfn2]`; target probes reproduce these legacy comparisons. The candidate-only sibling failure `test_float32_damping_warning_uses_configured_decimal` passed after the PairPlan dtype correction.
+- E7a inherited node: `test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding`; target and candidate both report a 189/289 tensor comparison with maximum absolute difference 0.46961479309258913.
+
+Focused follow-ups passed: candidate float32 integral setup and conversion
+controls (3/3 on Python 3.11/Torch 2.8 and 3/3 on Python 3.14/Torch 2.14.1),
+the final Calculator type/C8b core-conversion controls (3/3 on both profiles),
+mapped GFN1 mode-1 (3/3 on both profiles), mode-2/field behavior (2/2 on
+Torch 2.8 and 3/3 combined mapped controls on Torch 2.14.1), and D3 cutoff
+sensitivity (1/1). The earlier five-environment focused acceptance and
+316-test expanded libcint selections on Python 3.10/Torch 2.7 and Python
+3.14/Torch 2.14.1 remain applicable because the final changes do not alter
+libcint code.
+
+Two candidate-only issues were fixed without changing scientific formulas:
+the pair-plan structural weight is converted to the captured integral dtype
+and cloned, satisfying the upgraded `Node` dtype invariant while preserving
+conversion isolation; and the D3 0.6 custom `AtomicC6` autograd wrapper is
+bypassed only for functorch-wrapped inputs, using its equivalent direct
+reference gather/contraction. Eager D3 remains on the upstream custom
+backward. The D3 cutoff regression now covers both D3 0.6's scalar cutoff and
+D3 0.7's structured cutoff API. `Calculator.type()` converts its separate
+functional `ExactSystemCore` snapshots while legacy `System` ES2/ES3 setup
+objects retain their established behavior.
+
+The candidate-only mixed mapped D3 failures disappeared after the targeted
+fix. The failures still present in directly affected shards are classified
+as target-reproduced: 18 finite-temperature functional expectations; 12
+fixed-trip/legacy FULL comparisons; eight short-budget mixer/Broyden parity
+checks; and the E7a orbital-mask conditioning assertion. The exact nodes and
+per-run XML/log names are indexed in the manifest and retained in the task
+artifact directory. The candidate-only 136-byte SiH4 float32 allocation in
+the separately run legacy memory module plateaus after initialization and
+does not grow over repeated calls; that legacy family remains 13 passed,
+3 failed on candidate, versus 14 passed, 2 failed on target. It is not
+reported as passing.
+
+Independent source review by `u1u4_independent_review` found no blocking
+source issue. It checked dependency/shim boundaries, final D3 fallback
+equivalence, native libcint moment conventions and test controls, IES default
+Schur behavior, route-specific status tests, and the final `ExactSystemCore`
+conversion. One nearby comment was clarified to distinguish legacy setup
+objects from functional exact-core snapshots.
+
+Final source checks passed: Black, isort, `compileall`, and `git diff --check`.
+Ruff and mypy executables are not installed in the available environment.
+No reference values, tolerances, or XFAIL policies were changed.
+
+The 5,145-node collection is complete, but lower-priority unrelated files
+were not all executed in this bounded package; there is no claim of a full
+broad-suite pass. This residual is acceptable for development integration
+closure because all direct dependency/API risk groups were exercised, their
+failures were classified against the target, the two candidate-only defects
+were corrected and retested, the prior five-environment focused matrix and
+expanded libcint evidence remain valid, and no new unclassified direct
+integration failure remains. The legacy memory family and inherited SCF/E7a
+failures remain separately tracked. Development integration is recommended
+**ACCEPTED**; public release readiness remains **BLOCKED** pending compatible
+official D3/D4 releases and its independent release gates. This status does
+not claim CUDA acceptance or complete execution of the general collection.
