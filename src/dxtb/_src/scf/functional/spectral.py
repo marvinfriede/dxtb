@@ -90,7 +90,7 @@ def _matrix_fermi(
     kt: Tensor,
     active: Tensor,
 ) -> Tensor:
-    """Evaluate the symmetric matrix Fermi function with fixed scaling."""
+    """Evaluate the symmetric matrix Fermi function with adaptive scaling."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     exponent = (matrix - shift[..., None, None] * eye) / kt
@@ -100,8 +100,8 @@ def _matrix_fermi(
     # This prevents wide finite-temperature spectra from overflowing during
     # the matrix exponential while leaving the physical derivative unchanged.
     active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
-    active_exponent = torch.where(active_pair, exponent, 0.0)
-    exponent_bound = active_exponent.detach().abs().sum(-1).amax(-1)
+    exponent = torch.where(active_pair, exponent, torch.zeros_like(exponent))
+    exponent_bound = exponent.detach().abs().sum(-1).amax(-1)
     required_power = torch.ceil(
         torch.log2(exponent_bound.clamp_min(1.0) / 4.0)
     ).to(torch.long)

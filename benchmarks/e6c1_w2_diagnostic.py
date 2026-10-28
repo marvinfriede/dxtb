@@ -45,6 +45,7 @@ SEQUENCE = 0
 RUN_START = time.perf_counter()
 ROUTE = "unknown"
 BACKWARD_REQUESTED = False
+GRAD_MODE_REQUESTED = "enabled"
 DETAILS = False
 JSON_STREAM = sys.stdout
 
@@ -67,6 +68,7 @@ def emit(stage: str, event: str, **fields: Any) -> None:
         "elapsed_from_process_start_s": time.perf_counter() - RUN_START,
         "route": ROUTE,
         "backward_requested": BACKWARD_REQUESTED,
+        "grad_mode_requested": GRAD_MODE_REQUESTED,
         "stage": stage,
         "event": event,
         **_memory(),
@@ -311,7 +313,7 @@ def _finite_stats(value: torch.Tensor) -> dict[str, Any]:
 
 
 def main() -> None:
-    global BACKWARD_REQUESTED, DETAILS, ROUTE, torch
+    global BACKWARD_REQUESTED, DETAILS, GRAD_MODE_REQUESTED, ROUTE, torch
 
     with measured("python_and_torch_import"):
         import torch
@@ -333,10 +335,14 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--maxiter", type=int, default=1)
     parser.add_argument("--backward", action="store_true")
+    parser.add_argument("--no-grad", action="store_true")
     parser.add_argument("--details", action="store_true")
     args = parser.parse_args()
+    if args.no_grad and args.backward:
+        parser.error("--backward cannot be combined with --no-grad")
     ROUTE = args.route
     BACKWARD_REQUESTED = args.backward
+    GRAD_MODE_REQUESTED = "disabled" if args.no_grad else "enabled"
     DETAILS = args.details
 
     torch.set_num_threads(args.threads)
@@ -398,8 +404,9 @@ def main() -> None:
             system = Model(par=parameters, config=config).setup(numbers)
 
     position_input = positions.detach().clone().requires_grad_(args.backward)
+    grad_context = torch.no_grad() if args.no_grad else torch.enable_grad()
     with production_instrumentation(), contextlib.redirect_stdout(sys.stderr):
-        with torch.enable_grad():
+        with grad_context:
             with measured(
                 "singlepoint_forward",
                 positions_shape=list(position_input.shape),

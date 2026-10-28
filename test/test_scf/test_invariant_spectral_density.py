@@ -776,6 +776,125 @@ def test_fermi_matrix_scaling_is_lane_local_under_vmap() -> None:
     torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
 
 
+def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:
+    """Values and derivatives remain stable across every scale boundary."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    active = torch.ones(2, dtype=torch.bool)
+    high_energies = []
+    # The accepted 70.1-Eh spectrum at 300 K selects at most power 15.
+    # The low-temperature wide-spectrum oracle follows the fixed power-22
+    # schedule and is covered separately below.
+    for power in range(12, 15):
+        threshold = float(2 ** (power + 2)) * float(kt)
+        delta = threshold * 1.0e-10
+        high_energies.extend((threshold - delta, threshold, threshold + delta))
+    high = torch.tensor(high_energies, dtype=torch.float64)
+    parameters = torch.zeros_like(high)
+
+    def response(parameter: torch.Tensor, upper: torch.Tensor) -> torch.Tensor:
+        energies = torch.stack((frontier + parameter, upper))
+        matrix = torch.diag(energies)
+        density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+        return density[0, 0]
+
+    first_reverse = torch.func.grad(response, argnums=0)
+    second_reverse = torch.func.grad(first_reverse, argnums=0)
+    third_reverse = torch.func.grad(second_reverse, argnums=0)
+    first_forward = jacfwd(response, argnums=0)
+    second_forward = jacfwd(first_forward, argnums=0)
+    third_forward = jacfwd(second_forward, argnums=0)
+    third_reverse_forward = jacrev(second_forward, argnums=0)
+
+    actual_value = torch.func.vmap(response)(parameters, high)
+    actual_first_reverse = torch.func.vmap(first_reverse)(parameters, high)
+    actual_first_forward = torch.func.vmap(first_forward)(parameters, high)
+    actual_second_reverse = torch.func.vmap(second_reverse)(parameters, high)
+    actual_third_reverse = torch.func.vmap(third_reverse)(parameters, high)
+    actual_third_forward = torch.func.vmap(third_forward)(parameters, high)
+    actual_third_reverse_forward = torch.func.vmap(third_reverse_forward)(
+        parameters, high
+    )
+
+    occupation = torch.sigmoid(-frontier / kt)
+    product = occupation * (1.0 - occupation)
+    expected_value = occupation.expand_as(high)
+    expected_first = (-product / kt).expand_as(high)
+    expected_second = (
+        product * (1.0 - 2.0 * occupation) / kt.square()
+    ).expand_as(high)
+    expected_third = (
+        -product
+        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
+        / kt.pow(3)
+    ).expand_as(high)
+
+    torch.testing.assert_close(
+        actual_value, expected_value, atol=5.0e-11, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        actual_first_reverse, expected_first, atol=2.0e-9, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        actual_first_forward, expected_first, atol=2.0e-9, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        actual_second_reverse, expected_second, atol=2.0e-7, rtol=2.0e-8
+    )
+    torch.testing.assert_close(
+        actual_third_reverse, expected_third, atol=2.0e-4, rtol=2.0e-8
+    )
+    torch.testing.assert_close(
+        actual_third_forward, expected_third, atol=2.0e-4, rtol=2.0e-8
+    )
+    torch.testing.assert_close(
+        actual_third_reverse_forward,
+        expected_third,
+        atol=2.0e-4,
+        rtol=2.0e-8,
+    )
+
+
+def test_fermi_matrix_masks_inactive_inputs_before_matrix_exponential() -> None:
+    """Inactive noncontiguous orbital values cannot destabilize the kernel."""
+    matrix = torch.diag(
+        torch.tensor([0.2, 1.0e8, -0.3, -1.0e8], dtype=torch.float64)
+    )
+    active = torch.tensor([True, False, True, False])
+    kt = torch.tensor(0.1, dtype=torch.float64)
+
+    density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+    expected = torch.zeros_like(matrix)
+    expected[0, 0] = torch.sigmoid(-matrix[0, 0] / kt)
+    expected[2, 2] = torch.sigmoid(-matrix[2, 2] / kt)
+
+    def active_trace(value: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(value, torch.zeros_like(kt), kt, active).trace()
+
+    gradient = torch.func.grad(active_trace)(matrix)
+
+    inactive_direction = torch.diag(
+        torch.tensor([0.0, 1.0e8, 0.0, -1.0e8], dtype=torch.float64)
+    )
+
+    def inactive_response(parameter: torch.Tensor) -> torch.Tensor:
+        perturbed = matrix + parameter * inactive_direction
+        return active_trace(perturbed)
+
+    first = torch.func.grad(inactive_response)
+    second = torch.func.grad(first)
+    third = torch.func.grad(second)
+    parameter = torch.zeros((), dtype=torch.float64)
+
+    assert torch.isfinite(density).all()
+    torch.testing.assert_close(density, expected, atol=2.0e-12, rtol=2.0e-12)
+    assert torch.count_nonzero(gradient[~active, :]) == 0
+    assert torch.count_nonzero(gradient[:, ~active]) == 0
+    assert first(parameter) == 0.0
+    assert second(parameter) == 0.0
+    assert third(parameter) == 0.0
+
+
 def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:
     """jacfwd shares the physical density response at an xTB-scale gap."""
     h0 = torch.diag(torch.tensor([-5.0e-4, 5.0e-4], dtype=torch.float64))
