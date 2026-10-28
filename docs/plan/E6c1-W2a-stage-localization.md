@@ -180,7 +180,7 @@ routing or E6bcompat implementation was modified.
 The independent review initially identified per-operation flushed logging and
 misnamed backward metadata. The harness now aggregates hot operator timings
 and reports `backward_requested` separately from actual `requires_grad`
-properties. Final review found no blocking issue in the scaling math or
+properties. The initial review found no issue in the scaling math or
 transform connectivity. It confirmed the scale ceiling is finite and that
 the new wide-spectrum schedule uses more doubling steps than the prior
 normal-temperature schedule; the report does not claim that the numerical fix
@@ -199,3 +199,35 @@ E6c1-W2 remains OPEN pending completed, parity-checked full workload and an
 explicit performance disposition. W2a does not close W2 or W3. E6bcompat
 remains accepted, E6broute remains blocked, and public Calculator dispatch is
 unchanged.
+
+## W2a.1 / W2b follow-up
+
+The independent W2a review found no issue in the adaptive schedule algebra and
+requested explicit transition coverage. A new scalar-oracle regression now
+tests values immediately below, at, and above the adaptive transitions used
+within the accepted room-temperature spectrum envelope, with reverse,
+forward, mixed, and nested third derivatives under `vmap`. At the p14→p15
+transition, the value error is `1.34e-11`, but reverse third order differs
+from the analytic scalar Fermi-Dirac reference by `1.43e-7` relative and
+reverse-over-forward by `1.91e-7` relative. Forward third order differs by
+`4.70e-11` relative. The accepted third-order tolerance is `2e-8` relative,
+so this boundary is not accepted. A trial schedule remap did not pass and was
+discarded. W2a's numerical correction remains unverified at this boundary;
+the defect is recorded in
+[`E6c1-W2b-fixed-trip-memory.md`](E6c1-W2b-fixed-trip-memory.md).
+The independent reviewer confirmed that this blocks higher-order acceptance
+and advised keeping W2a open until transform-composition error is localized
+and corrected; tolerances must remain unchanged.
+
+Inactive exponent entries are now zeroed before both scale-bound estimation
+and `torch.matrix_exp`. The direct helper regression with noncontiguous
+inactive values of ±1e8 passes and confirms finite values plus zero inactive
+derivatives through third order. This change does not resolve the active-spectrum
+higher-order mismatch above.
+
+Fresh-process fixed-trip measurements identify saved autograd state as the
+dominant memory owner: serial eight-trip forward/backward peaks at 6.90 GiB,
+versus 0.37 GiB for the same eight-trip `no_grad` forward. At sixteen trips,
+peak RSS is 12.05 GiB under a 16 GiB process limit. Serial and mapped four-trip
+peaks are similar. W2 remains OPEN, and no checkpointing or solver-policy
+change was made.

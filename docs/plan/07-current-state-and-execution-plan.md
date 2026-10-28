@@ -3312,9 +3312,20 @@ evaluations in 300 seconds and peaked at 106.4 GiB before termination. It did
 not produce a full Result or reach backward. Thus the earlier one-trip timeout
 was not reproduced after the numerical correction, but W2 remains OPEN on
 measured full-workload runtime and memory. The entropy-quadrature diagnosis in
-the historical W2 report predates the current equal-partition trace path. See
-[`E6c1-W2a-stage-localization.md`](E6c1-W2a-stage-localization.md) and its
-captured JSONL stages under `benchmarks/results/e6c1-w2a/`.
+the historical W2 report predates the current equal-partition trace path. The
+follow-up fixed-trip memory diagnosis found differentiated RSS grows by about
+0.64 GiB per trip between 2 and 16 trips; the eight-trip no-grad run peaks at
+0.37 GiB versus 6.90 GiB with backward. This points to saved unrolled SCF
+autograd state, not vmap-specific retention. The W2a adaptive schedule also
+has an unresolved scalar-oracle reverse third-derivative mismatch at its
+upper supported room-temperature transition (relative error `1.43e-7` versus
+the established `2e-8` tolerance); no schedule workaround passed, so the
+unpublished numerical correction is not accepted. W2 remains OPEN and no
+full workload or performance clearance is claimed. See
+[`E6c1-W2a-stage-localization.md`](E6c1-W2a-stage-localization.md),
+[`E6c1-W2b-fixed-trip-memory.md`](E6c1-W2b-fixed-trip-memory.md), and the
+captured JSONL stages under `benchmarks/results/e6c1-w2a/` and
+`benchmarks/results/e6c1-w2b/`.
 
 ### Historical implementation/status record
 
