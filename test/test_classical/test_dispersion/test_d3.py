@@ -91,9 +91,11 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         rvdw,
         r4r2,
         d3.damping.rational_damping,
-        # tad-dftd3 0.6 takes one tensor cutoff for the two-body and ATM
-        # terms. The production adapter passes this same fixed cutoff to both.
-        cutoff=torch.tensor(_DXTB_D3_DISPERSION_CUTOFF, **dd),
+        cutoff=d3.Cutoff(
+            disp2=_DXTB_D3_DISPERSION_CUTOFF,
+            disp3=_DXTB_D3_DISPERSION_CUTOFF,
+            **dd,
+        ),
     )
     assert energy.dtype == dtype
     assert pytest.approx(ref.cpu()) == energy.cpu()
