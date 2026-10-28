@@ -178,4 +178,4 @@ the only source change in this package is test hardening.
   and E6c1 gates.
 - **Public Calculator routing: UNCHANGED.**
 - **Public release readiness: BLOCKED** by separate release/dependency gates.
-- **Remote publication: pending final documentation commit and push.**
+- **Remote publication: pushed and verified on `origin/claude/tender-dijkstra-cda42s`;** the exact published SHA is in the delivery summary.
