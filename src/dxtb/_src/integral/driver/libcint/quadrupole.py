@@ -34,8 +34,8 @@ __all__ = ["QuadrupoleLibcint", "build_quadrupole_libcint"]
 
 
 def build_quadrupole_libcint(call_data: LibcintCallData) -> Tensor:
-    """Build a raw origin-centered quadrupole matrix from call-local wrappers."""
-    return build_multipole_libcint(call_data, "r0r0")
+    """Build native packed ket-centered quadrupoles from call-local inputs."""
+    return build_multipole_libcint(call_data, "jj")
 
 
 class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
@@ -57,7 +57,7 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
         Tensor
             Quadrupole integral.
         """
-        return self.multipole(call_data, "r0r0")
+        return self.multipole(call_data, "jj")
 
     def get_gradient(self, driver: IntDriver, **kwargs: Any) -> Tensor:
         """

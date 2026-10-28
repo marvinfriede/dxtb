@@ -33,8 +33,8 @@ __all__ = ["DipoleLibcint", "build_dipole_libcint"]
 
 
 def build_dipole_libcint(call_data: LibcintCallData) -> Tensor:
-    """Build a raw origin-centered dipole matrix from call-local wrappers."""
-    return build_multipole_libcint(call_data, "r0")
+    """Build native ket-centered dipoles from call-local inputs."""
+    return build_multipole_libcint(call_data, "j")
 
 
 class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
@@ -56,7 +56,7 @@ class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
         Tensor
             Dipole integral.
         """
-        return self.multipole(call_data, "r0")
+        return self.multipole(call_data, "j")
 
     def get_gradient(self, call_data: LibcintCallData) -> Tensor:
         """

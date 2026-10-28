@@ -31,7 +31,6 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -54,15 +53,12 @@ def explicit(name: str, dd: DD, tol: float) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
-
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    s = libcint.overlap(wrapper)
+    libcint_basis, structure = bas.create_libcint(positions)
+    s = libcint.overlap(libcint_basis, structure)
     norm = torch.pow(s.diagonal(dim1=-1, dim2=-2), -0.5)
 
     # (3, norb, norb)
-    grad = libcint.int1e("ipovlp", wrapper)
+    grad = libcint.int1e("ipovlp", libcint_basis, structure)
 
     # normalize and move xyz dimension to last, which is required for
     # the reduction (only works with extra dimension in last)
@@ -107,11 +103,8 @@ def autograd(name: str, dd: DD, tol: float) -> None:
 
     # variable to be differentiated
     pos = positions.clone().requires_grad_(True)
-    atombases = bas.create_libcint(pos)
-    assert is_basis_list(atombases)
-
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    s = libcint.overlap(wrapper)
+    libcint_basis, structure = bas.create_libcint(pos)
+    s = libcint.overlap(libcint_basis, structure)
     norm = torch.pow(s.diagonal(dim1=-1, dim2=-2), -0.5)
     s = einsum("...ij,...i,...j->...ij", s, norm, norm)
 
@@ -148,11 +141,8 @@ def num_grad(bas: Basis, ihelp: IndexHelper, positions: Tensor) -> torch.Tensor:
     positions = positions.clone().detach()
 
     def compute_overlap(positions: torch.Tensor) -> torch.Tensor:
-        atombases = bas.create_libcint(positions)
-        assert is_basis_list(atombases)
-
-        wrapper = libcint.LibcintWrapper(atombases, ihelp)
-        return libcint.overlap(wrapper)
+        libcint_basis, structure = bas.create_libcint(positions)
+        return libcint.overlap(libcint_basis, structure)
 
     delta = 1e-6
 

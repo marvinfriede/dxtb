@@ -35,7 +35,6 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -111,12 +110,10 @@ def run_single(dtype: torch.dtype, name: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
+    libcint_basis, structure = bas.create_libcint(positions)
 
     # dxtb's libcint overlap
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    dxtb_overlap = libcint.overlap(wrapper)
+    dxtb_overlap = libcint.overlap(libcint_basis, structure)
 
     # pyscf reference overlap ("sph" needed, implicit in dxtb)
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
@@ -189,12 +186,10 @@ def run_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
+    libcint_basis, structure = bas.create_libcint(positions)
 
     # dxtb's libcint overlap
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    dxtb_overlap = libcint.overlap(wrapper)
+    dxtb_overlap = libcint.overlap(libcint_basis, structure)
 
     # pyscf reference overlap ("sph" needed, implicit in dxtb)
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
@@ -262,11 +257,8 @@ def run_grad(dtype: torch.dtype, name: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
-
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    int1 = libcint.int1e("ipovlp", wrapper)
+    libcint_basis, structure = bas.create_libcint(positions)
+    int1 = libcint.int1e("ipovlp", libcint_basis, structure)
 
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
     int2 = numpy_to_tensor(mol.intor("int1e_ipovlp"), **dd)

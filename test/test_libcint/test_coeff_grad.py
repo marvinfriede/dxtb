@@ -35,7 +35,6 @@ from dxtb._src.integral.driver.libcint.driver import (
     LibcintCallData,
 )
 from dxtb._src.typing import DD, Callable, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -76,11 +75,8 @@ def gradchecker(name: str, gfn: Param) -> tuple[
         bas = Basis(numbers, par, ihelp, **dd)
 
         # variable to be differentiated
-        atombases = bas.create_libcint(positions)
-        assert is_basis_list(atombases)
-
-        wrapper = libcint.LibcintWrapper(atombases, ihelp)
-        return libcint.overlap(wrapper)
+        libcint_basis, structure = bas.create_libcint(positions)
+        return libcint.overlap(libcint_basis, structure)
 
     return func, slater
 
@@ -118,12 +114,11 @@ def test_gradgradcheck(name: str, gfn: Param) -> None:
 
 def overlap(call_data: LibcintCallData) -> Tensor:
     """Overlap wrapper for single and batched mode."""
-    # batched mode
-    if call_data.batch_mode > 0:
-        return pack([libcint.overlap(d) for d in call_data.drivers])
-
-    # single mode
-    return libcint.overlap(call_data.drivers[0])
+    matrices = [
+        libcint.overlap(item.basis, item.structure)
+        for item in call_data.inputs
+    ]
+    return pack(matrices) if call_data.batch_mode > 0 else matrices[0]
 
 
 def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[

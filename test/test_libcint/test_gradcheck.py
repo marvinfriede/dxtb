@@ -30,7 +30,6 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import IntDriverLibcint, OverlapLibcint
 from dxtb._src.typing import DD, Callable, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -63,11 +62,9 @@ def gradchecker(
     pos = positions.clone().requires_grad_(True)
 
     def func(pos: Tensor) -> Tensor:
-        atombases = bas.create_libcint(pos)
-        assert is_basis_list(atombases)
-
-        wrapper = libcint.LibcintWrapper(atombases, ihelp, spherical=False)
-        return libcint.int1e(intstr, wrapper)
+        libcint_basis, structure = bas.create_libcint(pos)
+        libcint_basis = libcint_basis.replace(spherical=False)
+        return libcint.int1e(intstr, libcint_basis, structure)
 
     return func, pos
 

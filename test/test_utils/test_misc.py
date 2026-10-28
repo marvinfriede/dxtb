@@ -22,12 +22,9 @@ Test additional utility functions.
 from __future__ import annotations
 
 import pytest
-import torch
 
-from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing.exceptions import SCFConvergenceError
 from dxtb._src.utils import (
-    is_basis_list,
     is_float,
     is_float_list,
     is_int_list,
@@ -100,24 +97,6 @@ def test_float() -> None:
     assert is_float([1, 2]) is False
     assert is_float(None) is False
     assert is_float(False) is False
-
-
-@pytest.mark.skipif(not has_libcint, reason="libcint not available")
-def test_is_basis_list() -> None:
-    """Test if the input is a list of AtomCGTOBasis."""
-    from dxtb._src.exlibs import libcint  # type: ignore
-
-    basis = libcint.AtomCGTOBasis(
-        1,
-        [libcint.CGTOBasis(1, torch.tensor([1.0]), torch.tensor([1.0]))],
-        torch.tensor([0.0, 0.0, 0.0]),
-    )
-
-    assert is_basis_list([basis, basis]) is True
-    assert is_basis_list([basis, "a"]) is False
-    assert is_basis_list([]) is True
-    assert is_basis_list("basis") is False
-    assert is_basis_list(None) is False
 
 
 def test_exceptions() -> None:

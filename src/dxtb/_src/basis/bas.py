@@ -333,8 +333,8 @@ class Basis(TensorLike):
 
     def create_libcint(
         self, positions: Tensor, mask: Tensor | None = None
-    ) -> list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]:
-        """Create the geometry-local libcint basis wrappers."""
+    ) -> tuple[libcint.Basis, libcint.Structure]:
+        """Create call-local new-API basis and structure values."""
         return self.setup_data().create_libcint(positions, mask=mask)
 
     def setup_data(self) -> BasisSetup:
@@ -387,87 +387,56 @@ class BasisSetup:
 
     def create_libcint(
         self, positions: Tensor, mask: Tensor | None = None
-    ) -> list[libcint.AtomCGTOBasis] | list[list[libcint.AtomCGTOBasis]]:
-        """Create libcint wrappers for the supplied current geometry."""
-        if self.unique.ndim > 1:
-            raise NotImplementedError("Batch mode not implemented.")
+    ) -> tuple[libcint.Basis, libcint.Structure]:
+        """Create a call-local basis and structure for current positions."""
 
         from dxtb._src.exlibs import libcint
 
+        if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
+            raise NotImplementedError(
+                "Libcint BasisSetup conversion is per structure; packed "
+                "systems are converted independently by the integral driver."
+            )
+
         alphas, coeffs = self.create_libcint_cgtos()
-        if self.ihelp.batch_mode == 0:
-            atom_basis: list[libcint.AtomCGTOBasis] = []
-            shell = 0
-            for i, number in enumerate(self.numbers):
-                bases = []
-                for _ in range(self.ihelp.shells_per_atom[i]):
-                    index = self.ihelp.shells_to_ushell[shell]
-                    bases.append(
-                        libcint.CGTOBasis(
-                            angmom=int(self.ihelp.angular[shell]),
-                            alphas=alphas[index],
-                            coeffs=coeffs[index],
-                            normalized=True,
-                        )
-                    )
-                    shell += 1
-                atom_basis.append(
-                    libcint.AtomCGTOBasis(
-                        atomz=number, bases=bases, pos=positions[i, :]
-                    )
+        shells_by_element: dict[int, list[libcint.Shell]] = {}
+        shell = 0
+        unique_numbers = self.unique.detach().cpu().tolist()
+        shell_counts = self.ihelp.ushells_per_unique.detach().cpu().tolist()
+        angular = self.ihelp.unique_angular.detach().cpu().tolist()
+        for number, count in zip(unique_numbers, shell_counts):
+            number = int(number)
+            if int(count) == 0:
+                shell += 1  # keep the zero-shell placeholder alignment
+                continue
+            element_shells = []
+            for _ in range(int(count)):
+                element_shells.append(
+                    libcint.Shell(
+                        angmom=int(angular[shell]),
+                        alphas=alphas[shell],
+                        coeffs=coeffs[shell],
+                    ).normalized()
                 )
-            return atom_basis
+                shell += 1
+            if number > 0:
+                shells_by_element[number] = element_shells
+            elif element_shells:
+                raise ValueError("Padding atomic number zero cannot own shells.")
 
-        batches: list[list[libcint.AtomCGTOBasis]] = []
-        for batch_index in range(self.numbers.shape[0]):
-            shell = 0
-            atom_basis = []
-            shell_indices = self.ihelp.shells_to_ushell[batch_index]
-            shells_per_atom = self.ihelp.shells_per_atom[batch_index]
-            angular = tensor_to_numpy(self.ihelp.angular[batch_index])
-            batch_positions = positions[batch_index]
+        physical_numbers = self.numbers
+        physical_positions = positions
+        if mask is not None:
+            physical_numbers = torch.masked_select(physical_numbers, mask)
+            physical_positions = torch.masked_select(
+                physical_positions, mask.unsqueeze(-1)
+            ).reshape((-1, 3))
 
-            for atom_index, number in enumerate(self.numbers[batch_index]):
-                if number == 0:
-                    continue
-                bases = []
-                for _ in range(shells_per_atom[atom_index]):
-                    index = shell_indices[shell]
-                    bases.append(
-                        libcint.CGTOBasis(
-                            angmom=angular[shell],
-                            alphas=alphas[index],
-                            coeffs=coeffs[index],
-                            normalized=True,
-                        )
-                    )
-                    shell += 1
-
-                if self.ihelp.batch_mode == 1:
-                    if mask is None:
-                        from tad_mctc.batch import deflate
-
-                        atom_positions = deflate(batch_positions, value=float("nan"))
-                    else:
-                        atom_positions = torch.masked_select(
-                            batch_positions, mask[batch_index]
-                        ).reshape((-1, 3))
-                elif self.ihelp.batch_mode == 2:
-                    atom_positions = batch_positions
-                else:
-                    raise ValueError(
-                        f"Unknown batch mode '{self.ihelp.batch_mode}'."
-                    )
-
-                atom_basis.append(
-                    libcint.AtomCGTOBasis(
-                        atomz=number,
-                        bases=bases,
-                        pos=atom_positions[atom_index, :],
-                    )
-                )
-            batches.append(atom_basis)
-        return batches
+        basis = libcint.Basis(shells=shells_by_element)
+        structure = libcint.Structure(
+            numbers=physical_numbers, positions=physical_positions
+        )
+        return basis, structure
 
     def create_libcint_cgtos(
         self,

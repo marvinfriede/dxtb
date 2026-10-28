@@ -27,10 +27,7 @@ Collection of miscellaneous utility functions containing:
 
 from __future__ import annotations
 
-from dxtb._src.typing import TYPE_CHECKING, Any, TypeGuard
-
-if TYPE_CHECKING:
-    from dxtb._src.exlibs import libcint
+from dxtb._src.typing import Any, TypeGuard
 
 __all__ = [
     "get_all_slots",
@@ -40,7 +37,6 @@ __all__ = [
     "is_numeric",
     "is_int_list",
     "is_float_list",
-    "is_basis_list",
 ]
 
 
@@ -93,26 +89,3 @@ def is_int_list(lst: Any) -> TypeGuard[list[int]]:
 def is_float_list(lst: Any) -> TypeGuard[list[float]]:
     """Return ``True`` if *lst* is a list of flaot values."""
     return isinstance(lst, list) and all(is_float(x) for x in lst)
-
-
-def is_basis_list(x: Any) -> TypeGuard[list[libcint.AtomCGTOBasis]]:
-    """
-    Determines whether all objects in the list are `AtomCGTOBasis`.
-
-    Parameters
-    ----------
-    x : list[Any]
-        List to check.
-
-    Returns
-    -------
-    TypeGuard[list[AtomCGTOBasis]]
-        ``True`` if all objects are `AtomCGTOBasis`, ``False`` otherwise.
-    """
-    if not isinstance(x, list):
-        return False
-
-    # pylint: disable=import-outside-toplevel
-    from dxtb._src.exlibs import libcint
-
-    return all(isinstance(i, libcint.AtomCGTOBasis) for i in x)

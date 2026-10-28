@@ -198,6 +198,7 @@ def build_integral_matrices(
 ) -> tuple[IntegralMatrices, Tensor, Tensor]:
     """Build all requested matrices from explicit setup and current inputs."""
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
+        native_ket_moments = False
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
         integral_setup = setup.pytorch
@@ -226,6 +227,7 @@ def build_integral_matrices(
             raise ValueError(
                 "Pair-entry validity is supported only by the PyTorch driver."
             )
+        native_ket_moments = True
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
         call_data = setup_libcint(setup.libcint, positions)
@@ -259,20 +261,33 @@ def build_integral_matrices(
             raw_quadrupole = normalize_integral_matrix(
                 build_quadrupole(), backend_norm
             )
-            quadrupole = reduce_quadrupole_9_to_6(raw_quadrupole)
-            orbital_positions = ihelp.spread_atom_to_orbital(
-                integral_positions, dim=-2, extra=True
-            )
-            quadrupole = shift_quadrupole_origin(
-                quadrupole, raw_dipole, overlap, orbital_positions
-            )
-            dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
+            if native_ket_moments:
+                # tad-libcint 0.4 returns native ket-centered j/jj moments;
+                # jj is already packed as xx, yx, yy, zx, zy, zz.
+                quadrupole = raw_quadrupole
+                dipole = raw_dipole
+            else:
+                quadrupole = reduce_quadrupole_9_to_6(raw_quadrupole)
+                orbital_positions = ihelp.spread_atom_to_orbital(
+                    integral_positions, dim=-2, extra=True
+                )
+                quadrupole = shift_quadrupole_origin(
+                    quadrupole, raw_dipole, overlap, orbital_positions
+                )
+                dipole = shift_dipole_origin(
+                    raw_dipole, overlap, orbital_positions
+                )
             quadrupole = make_quadrupole_traceless(quadrupole)
         else:
-            orbital_positions = ihelp.spread_atom_to_orbital(
-                integral_positions, dim=-2, extra=True
-            )
-            dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
+            if native_ket_moments:
+                dipole = raw_dipole
+            else:
+                orbital_positions = ihelp.spread_atom_to_orbital(
+                    integral_positions, dim=-2, extra=True
+                )
+                dipole = shift_dipole_origin(
+                    raw_dipole, overlap, orbital_positions
+                )
 
     target_device = positions.device
     overlap_norm = backend_norm.to(device=target_device)

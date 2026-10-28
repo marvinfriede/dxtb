@@ -24,13 +24,12 @@ from itertools import permutations
 
 import pytest
 import torch
-from tad_mctc.batch import deflate, pack
+from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -88,14 +87,11 @@ def test_single(dtype: torch.dtype, intstr: str, name: str) -> None:
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
 
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
+    libcint_basis, structure = bas.create_libcint(positions)
+    i = libcint.int1e(intstr, libcint_basis, structure, packed=False)
 
-    wrapper = libcint.LibcintWrapper(atombases, ihelp, spherical=True)
-    i = libcint.int1e(intstr, wrapper)
-
-    nao = wrapper.nao()
-    mpdims = len(intstr) * (3,)
+    nao = ihelp.nao
+    mpdims = (3, 3)
     i = i.reshape((*mpdims, nao, nao))
 
     assert i.shape == torch.Size((*mpdims, ihelp.nao, ihelp.nao))
@@ -112,46 +108,19 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str, intstr: str) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     sample1, sample2 = samples[name1], samples[name2]
-    numbers = pack(
-        [
-            sample1["numbers"].to(DEVICE),
-            sample2["numbers"].to(DEVICE),
-        ]
-    )
-    positions = pack(
-        [
-            sample1["positions"].to(**dd),
-            sample2["positions"].to(**dd),
-        ]
-    )
-
     par = get_param_module("gfn1", **dd)
-    _ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, _ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-
-    # batched IndexHelper does not yet work with LibcintWrapper
-    ihelp = [
-        IndexHelper.from_numbers(deflate(number), par) for number in numbers
-    ]
-
-    wrappers = [
-        libcint.LibcintWrapper(ab, ihelp)
-        for ab, ihelp in zip(atombases, ihelp)
-        if is_basis_list(ab)
-    ]
-
-    mpdims = len(intstr) * (3,)
-
     int_list = []
-    for wrapper in wrappers:
-        i = libcint.int1e(intstr, wrapper)
-
-        nao = wrapper.nao()
-        i = i.reshape((*mpdims, nao, nao))
-
-        int_list.append(i)
+    ao_counts = []
+    for sample in (sample1, sample2):
+        numbers = sample["numbers"].to(DEVICE)
+        positions = sample["positions"].to(**dd)
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        bas = Basis(numbers, par, ihelp, **dd)
+        libcint_basis, structure = bas.create_libcint(positions)
+        i = libcint.int1e(intstr, libcint_basis, structure, packed=False)
+        int_list.append(i.reshape((3, 3, ihelp.nao, ihelp.nao)))
+        ao_counts.append(ihelp.nao)
 
     i = pack(int_list)
 
-    assert i.shape == torch.Size((2, *mpdims, _ihelp.nao, _ihelp.nao))
+    assert i.shape == torch.Size((2, 3, 3, max(ao_counts), max(ao_counts)))

@@ -27,7 +27,6 @@ from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils import is_basis_list
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -61,11 +60,8 @@ def num_grad(
             dtype=positions.dtype,
             device=positions.device,
         )
-        atombases = bas.create_libcint(pos)
-        assert is_basis_list(atombases)
-
-        wrapper = libcint.LibcintWrapper(atombases, ihelp)
-        return libcint.int1e(intstr, wrapper)
+        basis, structure = bas.create_libcint(pos)
+        return libcint.int1e(intstr, basis, structure)
 
     # Loop over all atoms and their x, y, z coordinates
     for atom in range(positions.shape[0] - 1):
@@ -103,16 +99,14 @@ def test_grad(dtype: torch.dtype, name: str):
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
     bas = Basis(numbers, GFN1_XTB, ihelp, **dd)
 
-    atombases = bas.create_libcint(pos)
-    assert is_basis_list(atombases)
+    basis, structure = bas.create_libcint(pos)
 
     INTSTR = "r0"
 
-    wrapper = libcint.LibcintWrapper(atombases, ihelp)
-    i = libcint.int1e(INTSTR, wrapper)
+    i = libcint.int1e(INTSTR, basis, structure)
     assert isinstance(i, torch.Tensor)
     print()
-    igrad = libcint.int1e(f"ip{INTSTR}", wrapper)
+    igrad = libcint.int1e(f"ip{INTSTR}", basis, structure)
     igrad = igrad + igrad.mT
     print("igrad\n", igrad)
     # assert False

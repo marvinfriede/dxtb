@@ -38,7 +38,6 @@ from dxtb._src.basis.slater import slater_to_gauss
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Any, Tensor
-from dxtb._src.utils import is_basis_list
 
 from ...base import IntDriver
 from .base import LibcintImplementation
@@ -121,32 +120,42 @@ class LibcintBasisNode(Node):
                 shell += 1
         return tuple(alphas), tuple(coeffs)
 
-    def create_libcint(self, positions: Tensor) -> list[libcint.AtomCGTOBasis]:
-        """Create ordered, geometry-local atom basis wrappers."""
+    def create_libcint(
+        self, positions: Tensor
+    ) -> tuple[libcint.Basis, libcint.Structure]:
+        """Create a call-local basis and structure from captured data."""
         from dxtb._src.exlibs import libcint
 
         alphas, coeffs = self.create_libcint_cgtos()
-        atom_basis: list[libcint.AtomCGTOBasis] = []
+        shells_by_element: dict[int, list[libcint.Shell]] = {}
         shell = 0
-        for atom, number in enumerate(self.numbers):
-            bases = []
-            for _ in range(self.shells_per_atom[atom]):
-                index = self.shells_to_ushell[shell]
-                bases.append(
-                    libcint.CGTOBasis(
-                        angmom=int(self.angular[shell]),
-                        alphas=alphas[index],
-                        coeffs=coeffs[index],
-                        normalized=True,
-                    )
+        unique_numbers = self.unique.detach().cpu().tolist()
+        shell_counts = self.ushells_per_unique.detach().cpu().tolist()
+        angular = self.unique_angular.detach().cpu().tolist()
+        for number, count in zip(unique_numbers, shell_counts):
+            number = int(number)
+            if int(count) == 0:
+                shell += 1  # preserve the setup's zero-shell placeholder
+                continue
+            element_shells = []
+            for _ in range(int(count)):
+                element_shells.append(
+                    libcint.Shell(
+                        angmom=int(angular[shell]),
+                        alphas=alphas[shell],
+                        coeffs=coeffs[shell],
+                    ).normalized()
                 )
                 shell += 1
-            atom_basis.append(
-                libcint.AtomCGTOBasis(
-                    atomz=number, bases=bases, pos=positions[atom, :]
-                )
-            )
-        return atom_basis
+            if number > 0:
+                shells_by_element[number] = element_shells
+            elif element_shells:
+                raise ValueError("Padding atomic number zero cannot own shells.")
+
+        return (
+            libcint.Basis(shells=shells_by_element),
+            libcint.Structure(numbers=self.numbers, positions=positions),
+        )
 
 
 class LibcintIntegralSetupNode(Node):
@@ -241,10 +250,18 @@ class LegacyLibcintSetup:
 
 
 @dataclass(frozen=True, eq=False)
-class LibcintCallData:
-    """Call-local libcint wrappers for one set of positions."""
+class LibcintInput:
+    """One call-local new-API basis/structure pair."""
 
-    drivers: tuple[Any, ...]
+    basis: Any
+    structure: Any
+
+
+@dataclass(frozen=True, eq=False)
+class LibcintCallData:
+    """Call-local libcint inputs for one or more independent structures."""
+
+    inputs: tuple[LibcintInput, ...]
     ihelp: IndexHelper | CoreIndexData
 
     @property
@@ -269,9 +286,9 @@ def setup_libcint(
         if len(setup.basis_setups) != 1:
             raise RuntimeError("Single-system setup needs one basis value.")
         basis = setup.basis_setups[0]
-        atom_basis = basis.create_libcint(positions)
+        libcint_basis, structure = basis.create_libcint(positions)
         return LibcintCallData(
-            drivers=(libcint.LibcintWrapper(atom_basis),),
+            inputs=(LibcintInput(libcint_basis, structure),),
             ihelp=setup.index,
         )
 
@@ -279,9 +296,9 @@ def setup_libcint(
         if len(setup.basis_setups) != 1:
             raise RuntimeError("Single-system setup needs one basis value.")
         basis = setup.basis_setups[0]
-        atom_basis = basis.create_libcint(positions, mask=mask)
+        libcint_basis, structure = basis.create_libcint(positions, mask=mask)
         return LibcintCallData(
-            drivers=(libcint.LibcintWrapper(atom_basis, basis.ihelp),),
+            inputs=(LibcintInput(libcint_basis, structure),),
             ihelp=setup.ihelp,
         )
 
@@ -290,7 +307,7 @@ def setup_libcint(
     if len(setup.basis_setups) != positions.shape[0]:
         raise RuntimeError("Batched setup count does not match positions.")
 
-    drivers = []
+    inputs = []
     for batch_index, basis in enumerate(setup.basis_setups):
         if setup.ihelp.batch_mode == 1:
             if mask is not None:
@@ -301,10 +318,10 @@ def setup_libcint(
                 position = positions[batch_index, : basis.numbers.shape[-1]]
         else:
             position = positions[batch_index]
-        atom_basis = basis.create_libcint(position)
-        drivers.append(libcint.LibcintWrapper(atom_basis, basis.ihelp))
+        libcint_basis, structure = basis.create_libcint(position)
+        inputs.append(LibcintInput(libcint_basis, structure))
 
-    return LibcintCallData(drivers=tuple(drivers), ihelp=setup.ihelp)
+    return LibcintCallData(inputs=tuple(inputs), ihelp=setup.ihelp)
 
 
 def setup_libcint_legacy(
@@ -330,18 +347,16 @@ def setup_libcint_legacy(
             device=positions.device,
             dtype=positions.dtype,
         )
-        atombases = basis.create_libcint(positions)
-        if not is_basis_list(atombases):
-            raise RuntimeError("Single-system libcint basis is not a list.")
+        libcint_basis, structure = basis.create_libcint(positions)
         return LibcintCallData(
-            drivers=(libcint.LibcintWrapper(atombases, setup.ihelp),),
+            inputs=(LibcintInput(libcint_basis, structure),),
             ihelp=setup.ihelp,
         )
 
     if setup.ihelp.batch_mode not in (1, 2):
         raise ValueError(f"Unknown batch mode '{setup.ihelp.batch_mode}'.")
 
-    drivers = []
+    inputs = []
     for batch_index, numbers in enumerate(setup.numbers):
         if setup.ihelp.batch_mode == 1:
             numbers = deflate(numbers)
@@ -362,12 +377,10 @@ def setup_libcint_legacy(
             device=positions.device,
             dtype=positions.dtype,
         )
-        atombases = basis.create_libcint(position)
-        if not is_basis_list(atombases):
-            raise RuntimeError("Batched libcint basis entry is not a list.")
-        drivers.append(libcint.LibcintWrapper(atombases, ihelp))
+        libcint_basis, structure = basis.create_libcint(position)
+        inputs.append(LibcintInput(libcint_basis, structure))
 
-    return LibcintCallData(drivers=tuple(drivers), ihelp=setup.ihelp)
+    return LibcintCallData(inputs=tuple(inputs), ihelp=setup.ihelp)
 
 
 class BaseIntDriverLibcint(LibcintImplementation, IntDriver):

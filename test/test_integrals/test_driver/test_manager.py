@@ -230,8 +230,14 @@ def test_libcint_batched_basis_preserves_repeated_atoms() -> None:
         system_call = system_manager.setup_driver(system_positions)
         assert isinstance(system_call, LibcintCallData)
         assert torch.allclose(
-            libcint.overlap(batch_call.drivers[index]),
-            libcint.overlap(system_call.drivers[0]),
+            libcint.overlap(
+                batch_call.inputs[index].basis,
+                batch_call.inputs[index].structure,
+            ),
+            libcint.overlap(
+                system_call.inputs[0].basis,
+                system_call.inputs[0].structure,
+            ),
             atol=1e-13,
             rtol=0.0,
         )

@@ -36,7 +36,6 @@ from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.manager import DriverManager
 from dxtb._src.integral.types.quadrupole import _reduce_9_to_6
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils import is_basis_list
 from dxtb.integrals import Integrals
 from dxtb.integrals.factories import new_dipint, new_overlap, new_quadint
 
@@ -91,13 +90,14 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    atombases = bas.create_libcint(positions)
-    assert is_basis_list(atombases)
+    libcint_basis, structure = bas.create_libcint(positions)
 
     def _run(i: int, atol: float) -> None:
-        # dxtb's libcint integral
-        wrapper = libcint.LibcintWrapper(atombases, ihelp)
-        dxtb_mpint = libcint.int1e(i * "j", wrapper)
+        # Native j/jj integrals are already ket-centered. Keep all nine
+        # quadrupole components here for direct comparison with PySCF.
+        dxtb_mpint = libcint.int1e(
+            i * "j", libcint_basis, structure, packed=False
+        )
 
         # pyscf reference integral
         assert M is not False
@@ -108,7 +108,7 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
         assert pytest.approx(pyscf_mpint.cpu(), abs=atol) == dxtb_mpint.cpu()
 
         # normalize
-        norm = snorm(libcint.overlap(wrapper))
+        norm = snorm(libcint.overlap(libcint_basis, structure))
         dxtb_mpint = einsum("xij,i,j->xij", dxtb_mpint, norm, norm)
         pyscf_mpint = einsum("xij,i,j->xij", pyscf_mpint, norm, norm)
 

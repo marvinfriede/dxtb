@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -294,46 +295,26 @@ def test_libcint_node_preserves_higher_angular_shell_order() -> None:
 
 @pytest.mark.parametrize("name", ["H2", "LiH", "H2O", "SiH4", "CH4"])
 def test_libcint_node_wrapper_maps_match_legacy(name: str) -> None:
-    """The wrapper-derived contracted and backward maps retain exact order."""
+    """New Basis layout preserves dxtb's shell and AO structural order."""
     numbers = samples[name]["numbers"]
     positions = samples[name]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
     legacy = _legacy_setup(numbers, par, force_cpu=True)
-    atom_basis = legacy.basis_setups[0].create_libcint(positions)
-    legacy_wrapper = libcint.LibcintWrapper(atom_basis, legacy.ihelp)
-    core_wrapper = libcint.LibcintWrapper(atom_basis)
-
-    for name in ("full_ao_to_atom", "full_ao_to_shell"):
-        torch.testing.assert_close(
-            getattr(core_wrapper, name), getattr(legacy_wrapper, name)
-        )
+    libcint_basis, structure = legacy.basis_setups[0].create_libcint(
+        positions
+    )
+    layout = libcint_basis.layout(structure.numbers)
     np.testing.assert_array_equal(
-        core_wrapper.full_shell_to_aoloc,
-        legacy_wrapper.full_shell_to_aoloc,
+        layout.shell_atom, legacy.ihelp.shells_to_atom.detach().cpu().numpy()
     )
-    assert core_wrapper.nao() == legacy_wrapper.nao()
-    assert core_wrapper.shell_idxs == legacy_wrapper.shell_idxs
-    assert core_wrapper.ao_idxs() == legacy_wrapper.ao_idxs()
-    assert core_wrapper.ngauss_at_shell == legacy_wrapper.ngauss_at_shell
-    torch.testing.assert_close(
-        core_wrapper.ao_to_atom(), legacy_wrapper.ao_to_atom()
-    )
-    torch.testing.assert_close(
-        core_wrapper.ao_to_shell(), legacy_wrapper.ao_to_shell()
-    )
-
-    core_uncontracted, core_map = core_wrapper.get_uncontracted_wrapper()
-    legacy_uncontracted, legacy_map = legacy_wrapper.get_uncontracted_wrapper()
-    torch.testing.assert_close(core_map, legacy_map)
-    for name in ("full_ao_to_atom", "full_ao_to_shell"):
-        torch.testing.assert_close(
-            getattr(core_uncontracted, name),
-            getattr(legacy_uncontracted, name),
-        )
     np.testing.assert_array_equal(
-        core_uncontracted.full_shell_to_aoloc,
-        legacy_uncontracted.full_shell_to_aoloc,
+        layout.shell_angmom, legacy.ihelp.angular.detach().cpu().numpy()
     )
+    np.testing.assert_array_equal(
+        layout.ao_loc[1:] - layout.ao_loc[:-1],
+        legacy.ihelp.orbitals_per_shell.detach().cpu().numpy(),
+    )
+    assert layout.nao == legacy.ihelp.nao
 
 
 def test_core_libcint_setup_rejects_non_cpu_force_cpu_source() -> None:
@@ -347,7 +328,7 @@ def test_core_libcint_setup_rejects_non_cpu_force_cpu_source() -> None:
 
 
 def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:
-    """Single-System setup owns a Node while wrappers remain call-local."""
+    """Single-System setup owns a Node while new API data remain call-local."""
     numbers = samples["H2"]["numbers"]
     positions = samples["H2"]["positions"].to(dtype=torch.float64)
     calc = Calculator(
@@ -362,7 +343,8 @@ def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:
     call1 = setup_libcint(setup.libcint, positions)
     call2 = setup_libcint(setup.libcint, positions)
     assert call1 is not call2
-    assert call1.drivers[0] is not call2.drivers[0]
+    assert call1.inputs[0].basis is not call2.inputs[0].basis
+    assert call1.inputs[0].structure is not call2.inputs[0].structure
     assert call1.ihelp is setup.libcint.index
     assert call1.batch_mode == 0
 
@@ -398,3 +380,114 @@ def test_libcint_singlepoint_matches_legacy_setup() -> None:
             getattr(core_result, name), getattr(legacy_result, name)
         )
     torch.testing.assert_close(core_result.occupation, legacy_result.occupation)
+
+
+@pytest.mark.parametrize("name", ["H2O", "SiH4"])
+def test_libcint_native_ket_moments_match_pytorch(name: str) -> None:
+    """New j/jj values match the established shifted PyTorch moments."""
+    numbers = samples[name]["numbers"]
+    positions = samples[name]["positions"].to(dtype=torch.float64)
+    outputs = []
+    gradients = []
+    for driver in (labels.INTDRIVER_PYTORCH, labels.INTDRIVER_LIBCINT):
+        calc = Calculator(
+            numbers,
+            GFN1_XTB,
+            dtype=positions.dtype,
+            opts={
+                "verbosity": 0,
+                "int_driver": driver,
+                "int_level": labels.INTLEVEL_QUADRUPOLE,
+            },
+        )
+        assert calc.system.integral_setup is not None
+        assert calc.system.h0_setup is not None
+        outputs.append(
+            build_integral_matrices(
+                calc.system.integral_setup,
+                calc.system.h0_setup,
+                positions,
+                0.0,
+            )[0]
+        )
+        variable_positions = positions.clone().requires_grad_(True)
+        matrices = build_integral_matrices(
+            calc.system.integral_setup,
+            calc.system.h0_setup,
+            variable_positions,
+            0.0,
+        )[0]
+        assert matrices.dipole is not None
+        assert matrices.quadrupole is not None
+        dipole_probe = torch.linspace(
+            -0.3, 0.4, matrices.dipole.numel(), dtype=positions.dtype
+        ).reshape_as(matrices.dipole)
+        quad_probe = torch.linspace(
+            -0.2, 0.5, matrices.quadrupole.numel(), dtype=positions.dtype
+        ).reshape_as(matrices.quadrupole)
+        scalar = (matrices.dipole * dipole_probe).sum() + (
+            matrices.quadrupole * quad_probe
+        ).sum()
+        gradients.append(torch.autograd.grad(scalar, variable_positions)[0])
+
+    torch_reference, libcint_result = outputs
+    for field in ("overlap", "dipole", "quadrupole", "hcore"):
+        torch.testing.assert_close(
+            getattr(libcint_result, field),
+            getattr(torch_reference, field),
+            atol=2.0e-11,
+            rtol=2.0e-11,
+        )
+    torch.testing.assert_close(gradients[1], gradients[0], atol=2.0e-9, rtol=2.0e-9)
+
+
+@pytest.mark.parametrize(
+    ("method", "name"),
+    [(GFN1_XTB, "H2O"), (GFN2_XTB, "H2"), (GFN2_XTB, "H2O")],
+    ids=["gfn1-h2o", "gfn2-h2", "gfn2-h2o"],
+)
+def test_libcint_full_singlepoint_matches_pytorch(
+    method: Any, name: str
+) -> None:
+    """New libcint preserves full functional energies and forces."""
+    sample = samples[name]
+    numbers = sample["numbers"]
+    positions = sample["positions"].to(dtype=torch.float64)
+    results = []
+
+    for driver in (labels.INTDRIVER_PYTORCH, labels.INTDRIVER_LIBCINT):
+        calculator = Calculator(
+            numbers,
+            method,
+            dtype=positions.dtype,
+            opts={
+                "verbosity": 0,
+                "int_driver": driver,
+                "int_level": labels.INTLEVEL_QUADRUPOLE,
+            },
+        )
+        variable_positions = positions.clone().requires_grad_(True)
+        result = calculator.system.singlepoint(variable_positions)
+        forces = torch.autograd.grad(result.energy.sum(), variable_positions)[0]
+        results.append((result, forces))
+
+    torch_reference, libcint_result = results
+    for field in ("energy", "scf", "density", "hcore", "overlap"):
+        torch.testing.assert_close(
+            getattr(libcint_result[0], field),
+            getattr(torch_reference[0], field),
+            atol=2.0e-9,
+            rtol=2.0e-9,
+        )
+    torch.testing.assert_close(
+        libcint_result[0].charges.mono,
+        torch_reference[0].charges.mono,
+        atol=2.0e-9,
+        rtol=2.0e-9,
+    )
+    torch.testing.assert_close(
+        libcint_result[1],
+        torch_reference[1],
+        atol=2.0e-8,
+        rtol=2.0e-8,
+    )

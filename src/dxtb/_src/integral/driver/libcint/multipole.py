@@ -44,7 +44,7 @@ def build_multipole_libcint(
     """Build a raw origin-centered libcint multipole matrix."""
     from dxtb._src.exlibs import libcint
 
-    allowed_mps = ("r0", "r0r0", "r0r0r0")
+    allowed_mps = ("j", "jj", "jjj")
     if intstring not in allowed_mps:
         raise ValueError(
             f"Unknown integral string '{intstring}' provided. "
@@ -52,7 +52,8 @@ def build_multipole_libcint(
         )
 
     matrices = [
-        libcint.int1e(intstring, driver) for driver in call_data.drivers
+        libcint.int1e(intstring, item.basis, item.structure)
+        for item in call_data.inputs
     ]
     if call_data.batch_mode > 0:
         return pack(matrices)

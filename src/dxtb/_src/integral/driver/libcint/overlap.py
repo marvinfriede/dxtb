@@ -45,12 +45,16 @@ def build_overlap_libcint(call_data: LibcintCallData) -> Tensor:
     # pylint: disable=import-outside-toplevel
     from dxtb._src.exlibs import libcint
 
+    matrices = [
+        libcint.overlap(item.basis, item.structure)
+        for item in call_data.inputs
+    ]
     if call_data.batch_mode > 0:
-        return pack([libcint.overlap(driver) for driver in call_data.drivers])
+        return pack(matrices)
 
-    if len(call_data.drivers) != 1:
-        raise RuntimeError("Single-system libcint setup needs one wrapper.")
-    return libcint.overlap(call_data.drivers[0])
+    if len(matrices) != 1:
+        raise RuntimeError("Single-system libcint setup needs one input.")
+    return matrices[0]
 
 
 class OverlapLibcint(OverlapIntegral, IntegralLibcint):
@@ -84,8 +88,14 @@ class OverlapLibcint(OverlapIntegral, IntegralLibcint):
         if call_data.batch_mode > 0:
             self.norm = pack(
                 [
-                    snorm(self.matrix[i, : driver.nao(), : driver.nao()])
-                    for i, driver in enumerate(call_data.drivers)
+                    snorm(
+                        self.matrix[
+                            i,
+                            : item.basis.layout(item.structure.numbers).nao,
+                            : item.basis.layout(item.structure.numbers).nao,
+                        ]
+                    )
+                    for i, item in enumerate(call_data.inputs)
                 ]
             )
         else:
@@ -115,9 +125,9 @@ class OverlapLibcint(OverlapIntegral, IntegralLibcint):
         if self.norm is None:
             self.build(call_data)
 
-        def fcn(driver: libcint.LibcintWrapper) -> Tensor:
+        def fcn(item: Any) -> Tensor:
             # (3, norb, norb)
-            grad = libcint.int1e("ipovlp", driver)
+            grad = libcint.int1e("ipovlp", item.basis, item.structure)
 
             # Move xyz dimension to last, which is required for the
             # reduction (only works with extra dimension in last)
@@ -126,18 +136,20 @@ class OverlapLibcint(OverlapIntegral, IntegralLibcint):
         # batched mode
         if call_data.batch_mode > 0:
             if call_data.batch_mode == 1:
-                self.gradient = pack([fcn(d) for d in call_data.drivers])
+                self.gradient = pack([fcn(item) for item in call_data.inputs])
                 return self.gradient
 
             if call_data.batch_mode == 2:
-                self.gradient = torch.stack([fcn(d) for d in call_data.drivers])
+                self.gradient = torch.stack(
+                    [fcn(item) for item in call_data.inputs]
+                )
                 return self.gradient
 
             raise ValueError(f"Unknown batch mode '{call_data.batch_mode}'.")
 
         # single mode
-        if len(call_data.drivers) != 1:
-            raise RuntimeError("Single-system libcint setup needs one wrapper.")
+        if len(call_data.inputs) != 1:
+            raise RuntimeError("Single-system libcint setup needs one input.")
 
-        self.gradient = fcn(call_data.drivers[0])
+        self.gradient = fcn(call_data.inputs[0])
         return self.gradient
