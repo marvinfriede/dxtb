@@ -22,6 +22,7 @@ from dataclasses import fields
 
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.tree import Node, stack
 from tad_multicharge.model.eeq import EEQModel
 from torch.utils import _pytree
@@ -35,6 +36,7 @@ from dxtb._src.components.classicals import (
     ies_energy,
     setup_ies,
 )
+from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb.config import Config
 
 from .samples import samples
@@ -233,6 +235,59 @@ def test_ies_core_energy_charge_and_parameter_gradient_parity() -> None:
     assert torch.isfinite(core_charge_grad)
     assert torch.isfinite(core_param_grad).all()
     assert torch.count_nonzero(core_param_grad) > 0
+
+
+def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
+    """Characterize new upstream CG modes without changing IES defaults."""
+    numbers, positions = _inputs()
+    positions = positions.clone().requires_grad_(True)
+    model_system = _model().setup(numbers)
+    setup = model_system.ies_setup
+    charge = torch.tensor(0.23, **DD)
+    cn = coordination_number(
+        numbers,
+        positions,
+        counting_function=erf_count,
+        rcov=setup.rcov,
+        cutoff=setup.cutoff,
+        cn_max=setup.cn_max,
+        kcn=setup.cn_kcn,
+    )
+    structure = Structure(
+        numbers=numbers,
+        positions=positions,
+        charge=charge,
+    )
+
+    references = {}
+    for mode in ("schur", "cg", "matrix-free"):
+        charges, energy = setup.eeq.solve(
+            structure,
+            cn,
+            return_energy=True,
+            solve_mode=mode,
+        )
+        position_gradient = torch.autograd.grad(
+            energy.sum(), positions, retain_graph=True
+        )[0]
+        references[mode] = (charges, energy, position_gradient)
+
+    expected_charges, expected_energy, expected_gradient = references["schur"]
+    torch.testing.assert_close(
+        expected_charges.sum(), charge, atol=2.0e-12, rtol=2.0e-12
+    )
+    assert torch.count_nonzero(expected_charges) > 0
+    for mode in ("cg", "matrix-free"):
+        charges, energy, gradient = references[mode]
+        torch.testing.assert_close(
+            charges, expected_charges, atol=1.0e-10, rtol=1.0e-10
+        )
+        torch.testing.assert_close(
+            energy, expected_energy, atol=1.0e-10, rtol=1.0e-10
+        )
+        torch.testing.assert_close(
+            gradient, expected_gradient, atol=1.0e-9, rtol=1.0e-9
+        )
 
 
 def test_ies_get_energy_accepts_core_and_rejects_unrelated_cache() -> None:
