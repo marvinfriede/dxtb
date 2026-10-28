@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 from dxtb._src.scf.functional.implicit import (
     _require_linear_convergence,
@@ -362,8 +362,8 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
         _run_root,
     )
 
-    from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
     from dxtb import GFN1_XTB, labels
+    from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
 
     case = _case(
         "H2",
@@ -473,7 +473,6 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     representation: int,
 ) -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -556,7 +555,6 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -619,7 +617,6 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
 
 def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -670,7 +667,6 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
 ):
     """The explicit model-derived n0 input keeps its IFT response."""
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case, _run_root
 
     from dxtb import GFN1_XTB, labels
@@ -731,9 +727,9 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
 
 def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
     from dataclasses import replace
+    from test.test_scf.test_functional_root_derivatives import _case
 
     import pytest
-    from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
@@ -808,9 +804,8 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
         )
 
 
-def test_public_singlepoint_routes_eligible_implicit_mode() -> None:
+def test_public_singlepoint_keeps_implicit_mode_on_legacy_route() -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -836,7 +831,12 @@ def test_public_singlepoint_routes_eligible_implicit_mode() -> None:
     positions = case.positions.clone().requires_grad_(True)
     field = torch.zeros(3, **_DD, requires_grad=True)
     result = system.singlepoint(positions, field=field)
-    assert result.converged is not None and bool(result.converged)
+    # System.singlepoint uses the fixed-trip boundary only for FULL mode.
+    # The implicit compatibility engine returns the legacy mapping, whose
+    # optional convergence metadata remains None under the B5.6 contract.
+    assert result.converged is None
+    assert result.residual is None
+    assert result.status is None
     field_gradient = torch.autograd.grad(
         result.energy.sum(), field, create_graph=True, retain_graph=True
     )[0]
@@ -873,7 +873,6 @@ def test_public_singlepoint_routes_eligible_implicit_mode() -> None:
 def test_public_functional_implicit_h2_float32_response() -> None:
     """Check a public float32 implicit response against functional unrolling."""
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -906,7 +905,12 @@ def test_public_functional_implicit_h2_float32_response() -> None:
             [0.0, 1.0e-2, 0.0], dtype=torch.float32, requires_grad=True
         )
         result = system.singlepoint(case.positions, field=field)
-        assert result.converged is not None and bool(result.converged)
+        if mode == labels.SCF_MODE_IMPLICIT:
+            assert result.converged is None
+            assert result.residual is None
+            assert result.status is None
+        else:
+            assert result.converged is not None and bool(result.converged)
         response = torch.autograd.grad(result.energy.sum(), field)[0][1]
         assert torch.isfinite(result.energy).all()
         assert torch.isfinite(response)
@@ -930,14 +934,13 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
+    from test.test_scf.test_functional_root_derivatives import _case
     from types import SimpleNamespace
 
-    from test.test_scf.test_functional_root_derivatives import _case
-
     from dxtb import GFN1_XTB, labels
-    from dxtb.config import ConfigSCF
-    from dxtb._src.scf.iterator import _use_functional_implicit_route
     from dxtb._src.scf.functional import data as functional_data
+    from dxtb._src.scf.iterator import _use_functional_implicit_route
+    from dxtb.config import ConfigSCF
 
     case = _case("H2", method=GFN1_XTB, temperature=0.0)
     base = replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT)
@@ -1058,7 +1061,6 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
     None
 ):
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -1130,7 +1132,6 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
 
 def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import (
         _case,
         _run_root,
@@ -1208,7 +1209,6 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
-
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
@@ -1266,8 +1266,8 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
 ):
     from test.test_scf.test_functional_root_derivatives import (
         _case,
-        _inputs_at_field,
         _initial_state,
+        _inputs_at_field,
         _run_root,
     )
 
