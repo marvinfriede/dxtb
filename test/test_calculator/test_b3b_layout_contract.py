@@ -823,8 +823,10 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
     )
-    result = system.singlepoint(positions)
+    result = singlepoint(system, positions)
     assert result.converged is not None and bool(result.converged)
+    assert result.residual is not None
+    assert result.status is not None
     assert len(prepared) == 1
     assert prepared[0].index is expected_index
 

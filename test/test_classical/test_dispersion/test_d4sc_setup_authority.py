@@ -20,13 +20,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import tad_dftd4 as d4
 import pytest
+import tad_dftd4 as d4
 import torch
 
+import dxtb._src.calculators.singlepoint as singlepoint_module
 from dxtb import GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
-import dxtb._src.calculators.singlepoint as singlepoint_module
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
@@ -314,7 +314,7 @@ def test_functional_d4sc_uses_system_owned_model_snapshot() -> None:
 
 
 def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
-    """Implicit functional roots use the same snapshot and graph edges."""
+    """Implicit legacy evaluation keeps its System setup and graph edges."""
     numbers, positions = _sample()
     calculator, component, source_scale = _system_with_custom_model(
         numbers, scf_mode=labels.SCF_MODE_IMPLICIT
@@ -322,8 +322,11 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     system = calculator.setup(numbers)
     positions = positions.clone().requires_grad_(True)
     before = system.singlepoint(positions)
-    assert before.status is not None
-    assert bool(before.converged)
+    # System.singlepoint's implicit compatibility engine returns the legacy
+    # mapping, whose optional convergence fields remain absent.
+    assert before.status is None
+    assert before.converged is None
+    assert before.residual is None
     position_gradient, scale_gradient = torch.autograd.grad(
         before.energy.sum(), (positions, source_scale), retain_graph=True
     )
