@@ -247,6 +247,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
     mapped, decoded = evaluate_padded_systems(
         padded, bucket, positions, charges, spins
     )
+    mapped_trace_calls = trace_calls
     serial = tuple(
         system.singlepoint(position, chrg=charge, spin=spin)
         for system, position, charge, spin in zip(
@@ -256,7 +257,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
     mapped_energy = mapped.energy.sum(-1) + mapped.fenergy.sum(-1)
     assert torch.isfinite(mapped_energy).all()
     assert torch.isfinite(mapped.fenergy).all()
-    assert trace_calls > 0
+    assert mapped_trace_calls > 0
     assert all(
         system.config.scf.fermi.partition == labels.FERMI_PARTITION_EQUAL
         for system in systems
@@ -267,6 +268,18 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
     for lane, (actual, expected, core) in enumerate(
         zip(decoded, serial, padded)
     ):
+        torch.testing.assert_close(
+            actual.energy,
+            expected.energy,
+            atol=3e-9,
+            rtol=3e-9,
+        )
+        torch.testing.assert_close(
+            actual.fenergy,
+            expected.fenergy,
+            atol=3e-9,
+            rtol=3e-9,
+        )
         torch.testing.assert_close(
             actual.energy.sum() + actual.fenergy.sum(),
             expected.energy.sum() + expected.fenergy.sum(),
@@ -291,6 +304,9 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
             torch.count_nonzero(mapped.fenergy[lane, ~core.validity.atoms]) == 0
         )
         assert mapped.occupation is not None
+
+        # Occupations are energy-sorted molecular-orbital values. Canonical AO
+        # masks can be noncontiguous and must not index this sorted spectrum.
         valid_orbitals = int(core.validity.orbitals.sum())
         assert (
             torch.count_nonzero(mapped.occupation[lane, ..., valid_orbitals:])
