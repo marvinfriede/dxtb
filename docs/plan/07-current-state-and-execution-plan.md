@@ -61,7 +61,7 @@ Current state:
 | E6bimpl        | complete at private implementation boundary | E6bimpl.0/1a/1b-F, 2a/2b-F and 2c accept the private mixed GFN1/GFN2 PyTorch numerical paths. E6bimpl.3 adds ordered retained legacy composition for libcint and custom extensions without changing public Calculator routing. Its 24 focused tests pass in all five CPU profiles; actual CPU libcint calculations, fields, custom contributions/caches, low-level options, error parity, ordering and gradients are covered. The six matched functional SCF failures and interrupted 601-node run remain recorded baseline evidence; no new failure was found in completed selections. E6bcompat is the next differential acceptance package. E6broute remains blocked on E6bcompat, E7 batch safety and E6c1 W2/W3 clearance. See [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md). |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
-| U1–U4 dependency/API integration | development integration accepted; public release blocked | Target-based branch `integration/u1-u4-current` is ten commits above `f8297423a363305d0233307bc92d1c6c947b63a8`; the original `4546417` line is a sibling history. Five isolated CPU profiles use mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.6.0 and D4 0.8.0; only the accepted D3/D4 metadata conflicts remain. Focused D3/D4/IES/libcint checks passed 82 tests (2 skipped) per profile; expanded libcint passed 316 tests on Python 3.10/Torch 2.7 and Python 3.14/Torch 2.14.1. The bounded 5,145-node general collection was fully inventoried but only direct-risk shards were executed; target-reproduced finite-temperature, fixed-trip parity and E7a orbital-conditioning failures remain separately classified. The legacy xitorch memory family remains non-passing on both target and candidate, with one stable 136-byte candidate allocation and no repeated growth observed. Two integration-specific D3/dtype defects were fixed and targeted across Torch 2.8/2.14.1. Independent source review found no blocker. See [`U1-U4.2-acceptance-manifest.txt`](U1-U4.2-acceptance-manifest.txt) and [`U1-U4-upstream-consolidation.md`](U1-U4-upstream-consolidation.md). This acceptance is for development only; ordinary public dependency resolution and public release remain blocked on compatible official D3/D4 releases and independent release gates. |
+| U1–U4 dependency/API integration | development integration accepted; public release blocked | Target-based branch `integration/u1-u4-current` is ten commits above `f8297423a363305d0233307bc92d1c6c947b63a8`; original `4546417` is a sibling history. Supported development versions are mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.7.0 and D4 0.8.0; development installs use `--no-deps` only for the accepted D3/D4 metadata conflicts. The bounded 5,145-node general collection was inventoried with direct-risk shards executed; target-reproduced SCF parity and E7a orbital-conditioning failures remain classified. Legacy xitorch memory tests remain non-passing on both target and candidate, with a stable 136-byte candidate allocation and no repeated growth observed. D3 0.7 is restored as the sole supported release by U1–U4.3; its E1.3/E6a transform matrix is recorded in [`U1-U4.3-D3-0.7-integration.md`](U1-U4.3-D3-0.7-integration.md). The prior U1–U4 closure evidence is in [`U1-U4.2-acceptance-manifest.txt`](U1-U4.2-acceptance-manifest.txt) and [`U1-U4-upstream-consolidation.md`](U1-U4-upstream-consolidation.md). Public release remains blocked by published D3/D4 metadata conflicts and separate release gates. |
 
 Do not mark B3 complete until its original P3 requirement is actually true.
 
@@ -202,11 +202,12 @@ No code change belongs in this subpackage.
 
 ## R0.2 Make a clean development environment reproducible
 
-The restructuring branch currently uses:
+The current development integration uses:
 
-- tad-mctc 0.9.1;
-- tad-multicharge 0.7.0;
-- tad-dftd3 0.6.0 and tad-dftd4 0.8.0 installed with `--no-deps`;
+- tad-mctc 0.11.3;
+- tad-multicharge 0.8.0;
+- tad-libcint 0.4.0;
+- tad-dftd3 0.7.0 and tad-dftd4 0.8.0 installed with `--no-deps`;
 - `dxtb._src.mctc_shim`;
 - `dxtb._src.ncoord.legacy`.
 

@@ -37,14 +37,16 @@ To test specific environments, use the `-e` flag.
 Development dependency setup
 ----------------------------
 
-The development/test environments pin ``tad-mctc==0.9.1`` and
-``tad-multicharge==0.7.0``. The official ``tad-dftd3==0.7.0`` release
+The development/test environments pin ``tad-mctc==0.11.3``,
+``tad-multicharge==0.8.0``, and ``tad-libcint==0.4.0``. The official
+``tad-dftd3==0.7.0`` release
 declares ``tad-mctc==0.8.0``; ``tad-dftd4==0.8.0`` also requires older
 packages. After installing dxtb's pinned dependencies, install them from
 PyPI with ``python -m pip install --no-deps --index-url
 https://pypi.org/simple tad-dftd3==0.7.0 tad-dftd4==0.8.0``. The local
 ``dxtb._src.mctc_shim`` restores the removed names used by those releases.
 This controlled environment setup does not resolve the published metadata
-conflict: ``pip check`` is expected to report the tad-dftd3/mctc mismatch.
-The shim keeps the dxtb 0.9.1 API authoritative and must remain until
+conflicts: ``pip check`` reports their declared older mctc/multicharge and
+NumPy constraints; these specific development conflicts are accepted.
+The shim keeps the dxtb 0.11.3 API authoritative and must remain until
 compatible dispersion releases are available.

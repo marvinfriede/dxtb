@@ -103,7 +103,7 @@ Compiling is used where measurements show a benefit (TD). It is not a goal in it
 - **Torch.** torch ≥ 2.7 for the current upstream integration baseline. The
   minimum version for compiled use is decided in TD.
 - **Current tad stack.** The development integration uses tad-mctc 0.11.3,
-  tad-multicharge 0.8.0 and tad-libcint 0.4.0. The supported D3 0.6.0 and D4
+  tad-multicharge 0.8.0 and tad-libcint 0.4.0, with tad-dftd3 0.7.0 and D4
   0.8.0 wheels still declare incompatible older utility-package and NumPy
   requirements, so controlled development installs use `--no-deps` with the
   dxtb compatibility shims. This is not a resolver-clean public release

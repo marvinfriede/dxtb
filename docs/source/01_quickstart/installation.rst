@@ -101,7 +101,6 @@ The following dependencies are required
 
 - `numpy <https://numpy.org/>`__
 - `opt_einsum <https://optimized-einsum.readthedocs.io/en/stable/>`__
-- `psutil <https://psutil.readthedocs.io/en/latest/>`__
 - `scipy <https://www.scipy.org/>`__
 - `tad-mctc <https://github.com/tad-mctc/tad-mctc>`__
 - `tad-multicharge <https://github.com/tad-mctc/tad-multicharge>`__
