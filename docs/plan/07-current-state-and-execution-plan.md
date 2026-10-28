@@ -3303,9 +3303,18 @@ D3/D4 metadata conflicts. See
 [`E6bcompat-differential-acceptance.md`](E6bcompat-differential-acceptance.md)
 for the requirement matrix and test evidence. This revalidation does not
 change public dispatch: E6broute remains blocked on its Result adapter and
-the independent E7 and E6c1-W2/W3 gates. The one-conformer W2 diagnostic
-timed out at its existing 300-second bound; W2 remains open and requires
-stage-level performance localization.
+the independent E7 and E6c1-W2/W3 gates. The post-M1.1 W2a stage audit
+reproduced an inherited wide-spectrum matrix-Fermi scaling defect on the
+current starting SHA and corrected it with a detached adaptive scaling
+schedule. One- and two-trip tmpda serial/mapped values and gradients now agree,
+but a bounded 300-trip mapped run still reached only 179 completed spectral
+evaluations in 300 seconds and peaked at 106.4 GiB before termination. It did
+not produce a full Result or reach backward. Thus the earlier one-trip timeout
+was not reproduced after the numerical correction, but W2 remains OPEN on
+measured full-workload runtime and memory. The entropy-quadrature diagnosis in
+the historical W2 report predates the current equal-partition trace path. See
+[`E6c1-W2a-stage-localization.md`](E6c1-W2a-stage-localization.md) and its
+captured JSONL stages under `benchmarks/results/e6c1-w2a/`.
 
 ### Historical implementation/status record
 

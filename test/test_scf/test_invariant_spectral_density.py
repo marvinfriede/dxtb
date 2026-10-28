@@ -660,10 +660,9 @@ def test_fermi_matrix_handles_large_positive_core_spectrum() -> None:
     reverse_jacobian = jacrev(response)(parameter)
     _, tangent = jvp(response, (parameter,), (torch.ones_like(parameter),))
     occupations = torch.sigmoid(-energies / kt)
+    sigmoid_product = occupations * (1.0 - occupations)
     expected_derivative = torch.sum(
-        weight_eigen
-        * (-occupations * (1.0 - occupations) / kt)
-        * direction_eigen
+        weight_eigen * (-sigmoid_product / kt) * direction_eigen
     )
     assert torch.abs(expected_derivative) > 0.0
     torch.testing.assert_close(
@@ -678,6 +677,103 @@ def test_fermi_matrix_handles_large_positive_core_spectrum() -> None:
     torch.testing.assert_close(
         tangent, expected_derivative, atol=2.0e-10, rtol=2.0e-10
     )
+
+    first = torch.func.grad(response)
+    second = torch.func.grad(first)
+    third = torch.func.grad(second)
+    expected_second = torch.sum(
+        weight_eigen
+        * sigmoid_product
+        * (1.0 - 2.0 * occupations)
+        / kt.square()
+        * direction_eigen.square()
+    )
+    expected_third = torch.sum(
+        -weight_eigen
+        * sigmoid_product
+        * (1.0 - 6.0 * occupations + 6.0 * occupations.square())
+        / kt.pow(3)
+        * direction_eigen.pow(3)
+    )
+    actual_second = second(parameter)
+    actual_third = third(parameter)
+    torch.testing.assert_close(
+        actual_second, expected_second, atol=2.0e-7, rtol=2.0e-8
+    )
+    torch.testing.assert_close(
+        actual_third, expected_third, atol=2.0e-4, rtol=2.0e-8
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum_energy", "temperature"),
+    ((2.0, 9.5e-4), (12.0, 9.5e-4), (70.1, 9.5e-4), (70.1, 2.0e-4)),
+)
+def test_fermi_matrix_scaling_matches_spectral_oracle(
+    maximum_energy: float, temperature: float
+) -> None:
+    """Adaptive scaling preserves Fermi values across spectral widths."""
+    generator = torch.Generator().manual_seed(73)
+    n_orbitals = 12
+    rotation, _ = torch.linalg.qr(
+        torch.randn(
+            n_orbitals, n_orbitals, dtype=torch.float64, generator=generator
+        )
+    )
+    energies = torch.linspace(
+        -0.8, maximum_energy, n_orbitals, dtype=torch.float64
+    )
+    hamiltonian = rotation @ torch.diag(energies) @ rotation.mT
+    kt = torch.tensor(temperature, dtype=torch.float64)
+    active = torch.ones(n_orbitals, dtype=torch.bool)
+    density = _matrix_fermi(hamiltonian, torch.zeros_like(kt), kt, active)
+    occupations = torch.sigmoid(-energies / kt)
+    expected = rotation @ torch.diag(occupations) @ rotation.mT
+
+    assert torch.isfinite(density).all()
+    torch.testing.assert_close(density, density.mT, atol=2.0e-13, rtol=0.0)
+    torch.testing.assert_close(density, expected, atol=5.0e-11, rtol=2.0e-10)
+    torch.testing.assert_close(
+        density.trace(), occupations.sum(), atol=5.0e-11, rtol=2.0e-10
+    )
+
+
+def test_fermi_matrix_scaling_is_lane_local_under_vmap() -> None:
+    """Batched Fermi scaling selects independent lane schedules."""
+    generator = torch.Generator().manual_seed(79)
+    n_orbitals = 10
+    rotation, _ = torch.linalg.qr(
+        torch.randn(
+            n_orbitals, n_orbitals, dtype=torch.float64, generator=generator
+        )
+    )
+    energies = torch.stack(
+        (
+            torch.linspace(-0.8, 1.2, n_orbitals, dtype=torch.float64),
+            torch.linspace(-0.8, 70.1, n_orbitals, dtype=torch.float64),
+        )
+    )
+    hamiltonians = rotation @ torch.diag_embed(energies) @ rotation.mT
+    temperatures = torch.full((2,), 9.5e-4, dtype=torch.float64)
+    active = torch.ones(n_orbitals, dtype=torch.bool)
+
+    def evaluate(
+        matrix: torch.Tensor, temperature: torch.Tensor
+    ) -> torch.Tensor:
+        return _matrix_fermi(
+            matrix, torch.zeros_like(temperature), temperature, active
+        )
+
+    batched = torch.func.vmap(evaluate)(hamiltonians, temperatures)
+    explicit = torch.stack(
+        [
+            evaluate(hamiltonians[index], temperatures[index])
+            for index in range(2)
+        ]
+    )
+
+    assert torch.isfinite(batched).all()
+    torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
 
 
 def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:

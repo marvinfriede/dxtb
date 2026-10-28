@@ -95,13 +95,26 @@ def _matrix_fermi(
     eye = eye.expand(matrix.shape)
     exponent = (matrix - shift[..., None, None] * eye) / kt
     low_temperature = kt < 5.0e-4
-    scale = torch.where(low_temperature, 4_194_304.0, 2048.0)
+
+    # Select a scaling schedule from a detached bound on the active spectrum.
+    # This prevents wide finite-temperature spectra from overflowing during
+    # the matrix exponential while leaving the physical derivative unchanged.
+    active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    active_exponent = torch.where(active_pair, exponent, 0.0)
+    exponent_bound = active_exponent.detach().abs().sum(-1).amax(-1)
+    required_power = torch.ceil(
+        torch.log2(exponent_bound.clamp_min(1.0) / 4.0)
+    ).to(torch.long)
+
+    base_power = torch.where(low_temperature, 22, 11)
+    scale_power = torch.maximum(base_power, required_power).clamp_max(22)
+    scale = torch.pow(exponent.new_tensor(2.0), scale_power)
     scaled = exponent / scale[..., None, None]
     exp_scaled = torch.matrix_exp(2.0 * scaled)
     tangent = dense_solve(exp_scaled + eye, exp_scaled - eye)
     for index in range(21):
         doubled = 2.0 * tangent @ dense_solve(eye + tangent @ tangent, eye)
-        update = low_temperature | (index < 10)
+        update = index < (scale_power - 1)
         tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
     density = 0.5 * (density + density.transpose(-2, -1))
