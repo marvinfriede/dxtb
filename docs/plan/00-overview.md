@@ -100,10 +100,14 @@ Compiling is used where measurements show a benefit (TD). It is not a goal in it
 
 - **Precision.** Float64 throughout the physics. ML components run in float64, or cast internally and return float64.
 - **Python.** Python ≥ 3.10 once `Node` lands (frozen `kw_only` dataclasses).
-- **Torch.** torch ≥ 2.4 for eager use. The minimum version for compiled use is decided in TD.
-- **Current tad stack.** The restructuring branch runs on tad-mctc 0.9.1 and
-  tad-multicharge 0.7.0. Node, ModuleNode and the tree helpers required by TC
-  are therefore already available.
+- **Torch.** torch ≥ 2.7 for the current upstream integration baseline. The
+  minimum version for compiled use is decided in TD.
+- **Current tad stack.** The development integration uses tad-mctc 0.11.3,
+  tad-multicharge 0.8.0 and tad-libcint 0.4.0. The supported D3 0.6.0 and D4
+  0.8.0 wheels still declare incompatible older utility-package and NumPy
+  requirements, so controlled development installs use `--no-deps` with the
+  dxtb compatibility shims. This is not a resolver-clean public release
+  environment.
 - **Temporary dispersion compatibility.** The currently used tad-dftd3 and
   tad-dftd4 releases still target older tad-mctc APIs. The branch temporarily
   bridges them with `dxtb._src.mctc_shim` and `dxtb._src.ncoord.legacy`, and

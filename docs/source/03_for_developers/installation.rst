@@ -34,7 +34,7 @@ shim must load before importing either dispersion package.
 .. code-block:: shell
 
     python -m pip install -e ".[dev,libcint]"
-    python -m pip install --no-deps --index-url https://pypi.org/simple tad-dftd3==0.7.0 tad-dftd4==0.8.0
+    python -m pip install --no-deps --index-url https://pypi.org/simple tad-dftd3==0.6.0 tad-dftd4==0.8.0
     python -c "import dxtb; import tad_dftd3, tad_dftd4; print(dxtb.__version__)"
 
 This is a controlled development/test installation only. The published D3/D4

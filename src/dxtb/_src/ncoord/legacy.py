@@ -20,9 +20,9 @@ Legacy coordination number functions (temporary shim)
 
 tad-mctc 0.8 replaced the functional coordination number API
 (``coordination_number(numbers, positions, ...)``, ``cn_d3``, ``cn_d3_gradient``,
-...) by ``CNModel`` objects acting on a ``Structure``. dxtb and the not yet
-released tad-dftd3/tad-dftd4 still use the old call signatures, so they are
-vendored here from tad-mctc 0.7.0 (including the analytical derivatives).
+...) by ``CNModel`` objects acting on a ``Structure``. dxtb and the supported
+published tad-dftd3/tad-dftd4 releases still use the old call signatures, so
+they are vendored here from tad-mctc 0.7.0 (including analytical derivatives).
 
 This module is temporary: it goes away once dxtb moves to the ``CNModel``
 interface.

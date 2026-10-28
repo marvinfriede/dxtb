@@ -18,14 +18,14 @@
 Compatibility shim for published dispersion packages
 =====================================================
 
-The supported tad-dftd3 0.7.0 release requires tad-mctc 0.8.0, while dxtb
-requires tad-mctc 0.9.1. The separately installed tad-dftd4 0.8.0 also uses
+The supported tad-dftd3 0.6.0 release requires tad-mctc 0.7.0, while dxtb
+requires tad-mctc 0.11.3. The separately installed tad-dftd4 0.8.0 also uses
 names removed from tad-mctc 0.9. These published packages are installed with
 --no-deps in development environments; the minimal names they need are
 restored here before either dispersion package is imported.
 
 This does not make the package metadata conflict resolver-compatible. Remove
-the shim only after the supported dispersion releases accept tad-mctc 0.9.1.
+the shim only after supported dispersion releases accept tad-mctc 0.11.3.
 """
 
 from __future__ import annotations
@@ -66,10 +66,10 @@ def _apply() -> None:
     if not hasattr(_memory, "memory_device"):
         _memory.memory_device = _memory_device  # type: ignore[attr-defined]
 
-    # tad-dftd3 0.7.0 imports this name from tad-mctc 0.8.  The 0.9
-    # equivalent asks whether any vmap layer is active, including one below
-    # a grad-tracking wrapper.  That is the conservative condition required
-    # to avoid data-dependent ``unique`` operations in its C6 routine.
+    # tad-dftd3 0.6.0 imports this name from tad-mctc 0.7. The current mctc
+    # equivalent asks whether any vmap layer is active, including one below a
+    # grad-tracking wrapper. This avoids data-dependent ``unique`` operations
+    # in the D3 C6 routine.
     if not hasattr(_autograd, "is_batched"):
         _autograd.is_batched = _autograd.is_vmapped  # type: ignore[attr-defined]
 
