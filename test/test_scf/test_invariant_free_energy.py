@@ -20,18 +20,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import torch
 import pytest
-from torch.func import jacfwd, jvp
+import torch
+from torch.func import jacfwd, jacrev, jvp, vmap
 from torch.utils import _pytree
-import dxtb._src.scf.functional.map as functional_map
 
+import dxtb._src.scf.functional.map as functional_map
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional.map import evaluate_hamiltonian
 from dxtb._src.scf.functional.solver import free_energy_from_spectral
 from dxtb._src.scf.functional.spectral import (
     aufbau_free_energy_matrix,
     fermi_free_energy_matrix,
+    fermi_free_energy_trace,
 )
 from dxtb._src.wavefunction import filling, mulliken
 
@@ -763,3 +764,150 @@ def test_fermi_free_energy_vmap_preserves_lane_specific_masks() -> None:
         (h_direction, li_direction),
     )
     assert torch.equal(tangent, torch.zeros_like(tangent))
+
+
+def _trace_cases():
+    dtype = torch.float64
+    li0 = torch.tensor(
+        [[1.02, 0.0, 0.0], [0.04, 0.96, 0.0], [-0.02, 0.03, 1.04]],
+        dtype=dtype,
+    )
+    dli = torch.tensor(
+        [[0.03, 0.0, 0.0], [-0.02, -0.01, 0.0], [0.01, 0.04, -0.03]],
+        dtype=dtype,
+    )
+    h3 = torch.tensor(
+        [[-0.08, 0.012, 0.0], [0.012, 0.01, 0.006], [0.0, 0.006, 0.09]],
+        dtype=dtype,
+    )
+    dh3 = torch.tensor(
+        [[0.2, -0.03, 0.01], [-0.03, -0.1, 0.02], [0.01, 0.02, 0.07]],
+        dtype=dtype,
+    )
+    d4 = torch.tensor(
+        [
+            [0.0, 0.1, 0.2, 0.0],
+            [0.1, 0.1, 0.3, 0.0],
+            [0.2, 0.3, -0.1, 0.0],
+            [0.0, 0.0, 0.0, 0.2],
+        ],
+        dtype=dtype,
+    )
+    eye4, eye2 = torch.eye(4, dtype=dtype), torch.eye(2, dtype=dtype)
+    t = lambda *v: torch.tensor(v, dtype=dtype)  # noqa: E731
+    return {
+        "degenerate": (
+            torch.diag(t(-0.2, 0.0, 0.0, 0.4)),
+            d4,
+            eye4,
+            None,
+            t(1.5, 1.5),
+            t(0.02),
+        ),
+        "small_gap_300K": (
+            torch.diag(t(-0.2, -5.0e-5, 5.0e-5, 0.4)),
+            d4,
+            eye4,
+            None,
+            t(1.5, 1.5),
+            t(9.5e-4),
+        ),
+        "overlap": (h3, dh3, li0, dli, t(1.25, 0.0), t(2.0e-2)),
+        "saturated": (
+            torch.diag(t(2.0, 3.0)),
+            eye2,
+            eye2,
+            None,
+            t(2.0),
+            t(2.0e-2),
+        ),
+        "wide_gap": (
+            torch.diag(t(-0.5, 0.5)),
+            t(0.0, 0.1, 0.1, 0.05).reshape(2, 2),
+            eye2,
+            None,
+            t(1.0),
+            t(1.0e-5),
+        ),
+    }
+
+
+@pytest.mark.parametrize("name", list(_trace_cases()))
+def test_fermi_free_energy_trace_matches_matrix_to_third_order(
+    name: str,
+) -> None:
+    """The trace path reproduces the overlap-weighted matrix trace."""
+    h0, dh, li0, dli, electrons, kt = _trace_cases()[name]
+    dli = torch.zeros_like(li0) if dli is None else dli
+    state = _fermi_state(li0 @ h0 @ li0.mT, electrons, kt)
+
+    def matrix_path(p: torch.Tensor) -> torch.Tensor:
+        h, li = h0 + p * dh, li0 + p * dli
+        s = torch.linalg.inv(li) @ torch.linalg.inv(li).mT
+        matrix = fermi_free_energy_matrix(
+            h, electrons, kt, state, l_inv=li, diff_steps=2
+        )
+        return torch.trace(s @ matrix)
+
+    def trace_path(p: torch.Tensor) -> torch.Tensor:
+        return fermi_free_energy_trace(
+            h0 + p * dh,
+            electrons,
+            kt,
+            state,
+            l_inv=li0 + p * dli,
+            diff_steps=2,
+        )
+
+    def reverse(f, p):
+        p = p.detach().requires_grad_(True)
+        out = [f(p)]
+        for order in range(3):
+            out.append(
+                torch.autograd.grad(out[-1], p, create_graph=order < 2)[0]
+            )
+        return torch.stack([o.detach() for o in out])
+
+    p0 = torch.tensor(0.01, dtype=torch.float64)
+    old, new = reverse(matrix_path, p0), reverse(trace_path, p0)
+    scale = float(old.abs().max().clamp_min(kt))
+    torch.testing.assert_close(new, old, atol=1.0e-10 * scale, rtol=1.0e-8)
+
+    fwd3 = jacfwd(jacfwd(jacfwd(trace_path)))(p0)
+    mixed = jacfwd(jacrev(jacfwd(trace_path)))(p0)
+    torch.testing.assert_close(fwd3, new[3], atol=1.0e-9 * scale, rtol=1e-9)
+    torch.testing.assert_close(mixed, new[3], atol=1.0e-9 * scale, rtol=1e-9)
+
+    points = torch.stack((p0, -p0))
+    batched = vmap(jacfwd(jacrev(trace_path)))(points)
+    looped = torch.stack([jacfwd(jacrev(trace_path))(p) for p in points])
+    torch.testing.assert_close(batched, looped, atol=1.0e-12, rtol=1.0e-10)
+
+
+@pytest.mark.parametrize("name", list(_trace_cases()))
+def test_fermi_free_energy_trace_electron_count_response(name: str) -> None:
+    """Electron-count derivatives, including the gap response, agree."""
+    h0, _, li0, _, electrons, kt = _trace_cases()[name]
+    state = _fermi_state(li0 @ h0 @ li0.mT, electrons, kt)
+    s = torch.linalg.inv(li0) @ torch.linalg.inv(li0).mT
+
+    def matrix_path(nel: torch.Tensor) -> torch.Tensor:
+        matrix = fermi_free_energy_matrix(
+            h0, nel, kt, state, l_inv=li0, diff_steps=2
+        )
+        return torch.trace(s @ matrix)
+
+    def trace_path(nel: torch.Tensor) -> torch.Tensor:
+        return fermi_free_energy_trace(
+            h0, nel, kt, state, l_inv=li0, diff_steps=2
+        )
+
+    old = torch.func.hessian(matrix_path)(electrons)
+    new = torch.func.hessian(trace_path)(electrons)
+    first_old = torch.func.grad(matrix_path)(electrons)
+    first_new = torch.func.grad(trace_path)(electrons)
+    scale = float(first_old.abs().max().clamp_min(kt))
+    torch.testing.assert_close(
+        first_new, first_old, atol=1.0e-10 * scale, rtol=1.0e-8
+    )
+    torch.testing.assert_close(new, old, atol=1.0e-10 * scale, rtol=1.0e-8)

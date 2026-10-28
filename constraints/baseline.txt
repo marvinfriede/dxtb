@@ -29,14 +29,14 @@
 # installs the CPU wheel (2.14.0+cpu) of the same release; both satisfy the
 # pin below.
 
-# coordinated tad-* releases (pinned exactly in setup.cfg). The reference data
-# was recorded with tad-mctc 0.7.0 / tad-multicharge 0.5.0; the migration to
-# 0.9.1 / 0.7.0 reproduces it (test/test_baseline/test_reference.py). The two
-# dispersion packages are installed with `--no-deps` (they pin older tad-mctc
-# releases) and are therefore not constrained here.
-tad-mctc==0.9.1
-tad-multicharge==0.7.0
-tad-libcint==0.3.0
+# Coordinated tad-* versions are pinned exactly in setup.cfg. The historic
+# reference data was recorded with older releases; baseline tests validate
+# that the current supported releases reproduce those references. Dispersion
+# wheels are installed separately with `--no-deps` because their published
+# metadata still requires older tad-mctc/NumPy versions.
+tad-mctc==0.11.3
+tad-multicharge==0.8.0
+tad-libcint==0.4.0
 
 # numerics
 torch==2.14.0

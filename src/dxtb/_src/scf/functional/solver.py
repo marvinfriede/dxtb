@@ -59,7 +59,11 @@ from .map import (
     potential_map,
     scf_map,
 )
-from .spectral import aufbau_free_energy_matrix, fermi_free_energy_matrix
+from .spectral import (
+    aufbau_free_energy_matrix,
+    fermi_free_energy_matrix,
+    fermi_free_energy_trace,
+)
 
 __all__ = [
     "DynamicDampingSettings",
@@ -1182,12 +1186,27 @@ def free_energy_from_spectral(
     if inputs.fermi_settings is None:
         return inputs.integrals.hcore.new_zeros(inputs.numbers.shape)
     settings = inputs.fermi_settings
+    if settings.smear and spectral._fermi_state is None:
+        raise RuntimeError(
+            "A smeared spectral result must retain its authoritative "
+            "Fermi state for free-energy evaluation."
+        )
+    if settings.smear and settings.partition == labels.FERMI_PARTITION_EQUAL:
+        # The equal partition needs only the overlap-weighted trace, whose
+        # derivatives avoid the entropy quadrature (fermi_free_energy_trace).
+        total = fermi_free_energy_trace(
+            spectral.hamiltonian,
+            inputs.nel,
+            settings.kt,
+            spectral._fermi_state,
+            l_inv=inputs.inverse_cholesky,
+            mask=inputs.orbital_mask,
+            diff_steps=filling._diff_steps(settings.diff_order),
+        ).unsqueeze(-1)
+        real = real_atoms(inputs.numbers)
+        count = real.count_nonzero(dim=-1).unsqueeze(-1)
+        return torch.where(real, (total / count).expand_as(real), 0.0)
     if settings.smear:
-        if spectral._fermi_state is None:
-            raise RuntimeError(
-                "A smeared spectral result must retain its authoritative "
-                "Fermi state for free-energy evaluation."
-            )
         entropy_matrix = fermi_free_energy_matrix(
             spectral.hamiltonian,
             inputs.nel,

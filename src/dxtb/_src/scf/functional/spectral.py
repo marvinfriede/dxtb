@@ -18,10 +18,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, NamedTuple
 
 import numpy as np
 import torch
+from tad_mctc.autograd import attach_gradient
+from tad_mctc.storch.linsolve import dense_solve
 
 from dxtb._src.typing import Tensor
 
@@ -33,6 +35,7 @@ __all__ = [
     "aufbau_free_energy_matrix",
     "fermi_density_matrix",
     "fermi_free_energy_matrix",
+    "fermi_free_energy_trace",
 ]
 
 _GL_NODES_NP, _GL_WEIGHTS_NP = np.polynomial.legendre.leggauss(512)
@@ -91,21 +94,15 @@ def _matrix_fermi(
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     exponent = (matrix - shift[..., None, None] * eye) / kt
-    # Large positive core levels can make exp(2 * matrix / kt / 2048) so
-    # ill-conditioned that roundoff loses positive definiteness before the
-    # Cholesky solve below. Scaling by 2**22 keeps the W2 spectral exponential
-    # near the identity and matches the established low-temperature scaling;
-    # 21 doubling steps recover tanh(matrix / (2 * kt)) at either temperature.
-    scale = 4_194_304.0
-    scaled = exponent / scale
+    low_temperature = kt < 5.0e-4
+    scale = torch.where(low_temperature, 4_194_304.0, 2048.0)
+    scaled = exponent / scale[..., None, None]
     exp_scaled = torch.matrix_exp(2.0 * scaled)
-    tangent = _solve_positive_definite(exp_scaled + eye, exp_scaled - eye)
-    for _ in range(21):
-        tangent = (
-            2.0
-            * tangent
-            @ _solve_positive_definite(eye + tangent @ tangent, eye)
-        )
+    tangent = dense_solve(exp_scaled + eye, exp_scaled - eye)
+    for index in range(21):
+        doubled = 2.0 * tangent @ dense_solve(eye + tangent @ tangent, eye)
+        update = low_temperature | (index < 10)
+        tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
     density = 0.5 * (density + density.transpose(-2, -1))
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -193,10 +190,8 @@ def fermi_density_matrix(
     )
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    # The Fermi core's mask indexes sorted orbital energies. ``mask`` indexes
-    # the AO basis and may be noncontiguous in a canonical padded layout.
-    # Matrix operations must use the latter; the former remains in ``state``
-    # for filling and status calculations.
+    # The explicit mask indexes the AO basis; state.orbital_mask indexes the
+    # energy-sorted spectrum. Canonical AO validity may be noncontiguous.
     structural_mask = mask
     if structural_mask is None:
         structural_mask = state.orbital_mask
@@ -232,12 +227,7 @@ def fermi_density_matrix(
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
-        density = _matrix_fermi(
-            relative,
-            shift,
-            safe_kt,
-            active,
-        )
+        density = _matrix_fermi(relative, shift, safe_kt, active)
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
         slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
             -1
@@ -248,12 +238,7 @@ def fermi_density_matrix(
         correction = torch.where(diff_mask, (target - count) / safe_slope, 0.0)
         shift = shift + correction
 
-    density = _matrix_fermi(
-        relative,
-        shift,
-        safe_kt,
-        active,
-    )
+    density = _matrix_fermi(relative, shift, safe_kt, active)
     eye_channel = eye * active.unsqueeze(-1).to(h.dtype)
     density = torch.where(empty[..., None, None], 0.0, density)
     density = torch.where(too_many[..., None, None], 0.0, density)
@@ -296,23 +281,51 @@ def _binary_entropy_matrix(
     return torch.where(pair, entropy, torch.zeros_like(entropy))
 
 
-def fermi_free_energy_matrix(
+def _trace_logcosh(matrix: Tensor) -> Tensor:
+    """``Tr ln cosh(X/2)`` from the rotation-invariant eigenvalues of ``X``."""
+    magnitude = torch.linalg.eigvalsh(matrix).abs()
+    return (
+        0.5 * magnitude
+        + torch.log1p(torch.exp(-magnitude))
+        - float(np.log(2.0))
+    ).sum(-1)
+
+
+class _FermiFreeEnergySetup(NamedTuple):
+    """Per-channel quantities shared by the free-energy matrix and trace."""
+
+    h: Tensor
+    spectral: Tensor
+    active: Tensor
+    li: Tensor | None
+    safe_kt: Tensor
+    ref: Tensor
+    offset: Tensor
+    shift: Tensor
+    target: Tensor
+    empty: Tensor
+    full: Tensor
+    too_many: Tensor
+    gap_mask: Tensor
+    below: Tensor
+    x: Tensor
+    occupation: Tensor
+
+
+def _fermi_free_energy_setup(
     hamiltonian: Tensor,
     nel: Tensor,
     kt: Tensor,
     state: _FermiCoreState,
-    *,
-    l_inv: Tensor | None = None,
-    mask: Tensor | None = None,
-    diff_steps: int = 2,
-) -> Tensor:
-    """Build the invariant finite-temperature free-energy spectral matrix."""
+    l_inv: Tensor | None,
+    mask: Tensor | None,
+    diff_steps: int,
+) -> _FermiFreeEnergySetup:
     work_dtype = torch.float64
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    # Keep the Fermi-energy mask (state.orbital_mask) separate from the AO
-    # basis mask supplied by the SCF input. Canonical AO validity can be
-    # noncontiguous even though padded eigenvalues sort to a valid prefix.
+    # The explicit mask indexes the AO basis; state.orbital_mask indexes the
+    # energy-sorted spectrum. Canonical AO validity may be noncontiguous.
     structural_mask = mask
     if structural_mask is None:
         structural_mask = state.orbital_mask
@@ -347,6 +360,7 @@ def fermi_free_energy_matrix(
     active_channel = state.active.to(device=h.device)
     gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
     below = state.below.to(device=h.device, dtype=torch.bool)
+
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
@@ -365,50 +379,190 @@ def fermi_free_energy_matrix(
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     x = torch.where(pair, x, torch.zeros_like(x))
     occupation = _matrix_fermi(relative, shift, safe_kt, active)
-    entropy = _binary_entropy_matrix(x, occupation, active)
-    q = safe_kt * entropy
-    identity = torch.diag_embed(active.to(work_dtype))
-    spectral_bound = x.abs().sum(-1).masked_fill(~active, 0.0).amax(-1)
-    resolved_gap_tail = gap_mask & (spectral_bound > 1.0e4)
-    q = torch.where(resolved_gap_tail[..., None, None], 0.0, q)
+    return _FermiFreeEnergySetup(
+        h=h,
+        spectral=spectral,
+        active=active,
+        li=li,
+        safe_kt=safe_kt,
+        ref=ref,
+        offset=offset,
+        shift=shift,
+        target=target,
+        empty=empty,
+        full=full,
+        too_many=too_many,
+        gap_mask=gap_mask,
+        below=below,
+        x=x,
+        occupation=occupation,
+    )
+
+
+def _fermi_free_energy_closure(
+    q: Tensor,
+    gap_term: Tensor,
+    identity: Tensor,
+    setup: _FermiFreeEnergySetup,
+    state: _FermiCoreState,
+    dtype: torch.dtype,
+    channel: Callable[[Tensor], Tensor],
+) -> Tensor:
+    """
+    Apply the gap, saturation and validity rules to an entropy term ``q``.
+
+    ``q``, ``gap_term`` (the ``(mu - epsilon)``-weighted gap response) and
+    ``identity`` are either channel matrices or their traces; ``channel``
+    broadcasts a per-channel mask or scalar onto them.
+    """
+    work_dtype = torch.float64
+    device = setup.x.device
+    spectral_bound = (
+        setup.x.abs().sum(-1).masked_fill(~setup.active, 0.0).amax(-1)
+    )
+    resolved_gap_tail = setup.gap_mask & (spectral_bound > 1.0e4)
+    q = torch.where(channel(resolved_gap_tail), 0.0, q)
     # The Fermi occupation helper retains a linear electron-count response in
     # wide gaps where the thermal tails are below the derivative floor. Apply
     # the corresponding (mu - epsilon) weighted response to this matrix too.
-    gap_response = _gap_electron_response(
-        h, spectral, active, below, gap_mask, safe_kt
-    )
-    mu_gap = ref + offset + shift
-    relative_mu = (mu_gap[..., None, None] * identity - spectral) / safe_kt
-    count_delta = target - target.detach()
-    q = q + safe_kt * count_delta[..., None, None] * (
-        relative_mu @ gap_response
-    )
+    count_delta = setup.target - setup.target.detach()
+    q = q + channel(setup.safe_kt * count_delta) * gap_term
     status = state.result.status
     valid_channel = (
-        status.converged.to(device=h.device)
-        & status.electron_count_ok.to(device=h.device)
-        & ~status.invalid_temperature.to(device=h.device)
-        & ~status.too_many_electrons.to(device=h.device)
+        status.converged.to(device=device)
+        & status.electron_count_ok.to(device=device)
+        & ~status.invalid_temperature.to(device=device)
+        & ~status.too_many_electrons.to(device=device)
     )
-    entropy_floor = torch.finfo(hamiltonian.dtype).eps
+    entropy_floor = torch.finfo(dtype).eps
     floor_weight = (
-        safe_kt
+        setup.safe_kt
         * entropy_floor
         * torch.log(
-            torch.tensor(entropy_floor, dtype=work_dtype, device=h.device)
+            torch.tensor(entropy_floor, dtype=work_dtype, device=device)
         )
     )
-    q = torch.where((~valid_channel | too_many)[..., None, None], 0.0, q)
-    saturated = valid_channel & (empty | full)
-    q = torch.where(saturated[..., None, None], floor_weight * identity, q)
-    gap_value = q - q.detach() + floor_weight * identity
-    valid_gap = gap_mask & valid_channel & ~empty & ~full & ~too_many
-    q = torch.where(valid_gap[..., None, None], gap_value, q)
-    if li is not None:
-        q = li.transpose(-2, -1) @ q @ li
+    q = torch.where(channel(~valid_channel | setup.too_many), 0.0, q)
+    saturated = valid_channel & (setup.empty | setup.full)
+    q = torch.where(channel(saturated), channel(floor_weight) * identity, q)
+    gap_value = q - q.detach() + channel(floor_weight) * identity
+    valid_gap = (
+        setup.gap_mask
+        & valid_channel
+        & ~setup.empty
+        & ~setup.full
+        & ~setup.too_many
+    )
+    return torch.where(channel(valid_gap), gap_value, q)
+
+
+def _gap_relative_mu(setup: _FermiFreeEnergySetup, identity: Tensor) -> Tensor:
+    mu_gap = setup.ref + setup.offset + setup.shift
+    return (mu_gap[..., None, None] * identity - setup.spectral) / setup.safe_kt
+
+
+def fermi_free_energy_matrix(
+    hamiltonian: Tensor,
+    nel: Tensor,
+    kt: Tensor,
+    state: _FermiCoreState,
+    *,
+    l_inv: Tensor | None = None,
+    mask: Tensor | None = None,
+    diff_steps: int = 2,
+) -> Tensor:
+    """Build the invariant finite-temperature free-energy spectral matrix."""
+    setup = _fermi_free_energy_setup(
+        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
+    )
+    active = setup.active
+    entropy = _binary_entropy_matrix(setup.x, setup.occupation, active)
+    identity = torch.diag_embed(active.to(torch.float64))
+    gap_response = _gap_electron_response(
+        setup.h,
+        setup.spectral,
+        active,
+        setup.below,
+        setup.gap_mask,
+        setup.safe_kt,
+    )
+    gap_term = _gap_relative_mu(setup, identity) @ gap_response
+    q = _fermi_free_energy_closure(
+        setup.safe_kt * entropy,
+        gap_term,
+        identity,
+        setup,
+        state,
+        hamiltonian.dtype,
+        lambda value: value[..., None, None],
+    )
+    if setup.li is not None:
+        q = setup.li.transpose(-2, -1) @ q @ setup.li
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     q = torch.where(pair, q, torch.zeros_like(q))
     return q.sum(-3).to(dtype=hamiltonian.dtype)
+
+
+def fermi_free_energy_trace(
+    hamiltonian: Tensor,
+    nel: Tensor,
+    kt: Tensor,
+    state: _FermiCoreState,
+    *,
+    l_inv: Tensor,
+    mask: Tensor | None = None,
+    diff_steps: int = 2,
+) -> Tensor:
+    """
+    Overlap-weighted trace of :func:`fermi_free_energy_matrix`.
+
+    With ``l_inv`` the inverse Cholesky factor of the overlap ``S``, the
+    trace ``Tr(S M)`` of the AO matrix equals the sum of the orthogonal-basis
+    channel traces. This evaluates those traces without the matrix
+    quadrature: ``Tr ln cosh(X/2)`` comes from the eigenvalues, and its
+    derivatives from the differentiable Fermi occupation
+    (``tad_mctc.autograd.attach_gradient``). Neither eigenvectors nor the
+    quadrature are differentiated. Values agree with the quadrature matrix
+    to its quadrature error (about 1e-10 relative).
+    """
+    setup = _fermi_free_energy_setup(
+        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
+    )
+    active = setup.active
+    identity = torch.diag_embed(active.to(torch.float64))
+    x, occupation = setup.x, setup.occupation
+
+    # Binary entropy: Tr[X (1 - 2f)] / 2 - Tr ln cosh(X/2) - ln(2) n. The
+    # gradient of Tr ln cosh(X/2) is tanh(X/2)/2 = 1/2 - f(X), so all its
+    # derivatives follow from those of the differentiable occupation.
+    half_tanh = 0.5 * identity - occupation
+    half_tanh = 0.5 * (half_tanh + half_tanh.transpose(-2, -1))
+    entropy = (
+        (x * half_tanh.transpose(-2, -1)).sum((-2, -1))
+        - attach_gradient(_trace_logcosh, x, half_tanh)
+        - float(np.log(2.0)) * active.sum(-1).to(torch.float64)
+    )
+    gap_response = _gap_electron_response(
+        setup.h,
+        setup.spectral,
+        active,
+        setup.below,
+        setup.gap_mask,
+        setup.safe_kt,
+    )
+    gap_term = (
+        _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
+    ).sum((-2, -1))
+    q = _fermi_free_energy_closure(
+        setup.safe_kt * entropy,
+        gap_term,
+        active.sum(-1).to(torch.float64),
+        setup,
+        state,
+        hamiltonian.dtype,
+        lambda value: value,
+    )
+    return q.sum(-1).to(dtype=hamiltonian.dtype)
 
 
 def aufbau_free_energy_matrix(
@@ -494,9 +648,6 @@ def _projector(
     e_hi = torch.where(rank == active_count, e_last + span, e_hi)
     mu = (0.5 * (e_lo + e_hi)).detach()
 
-    # ``active`` indexes basis functions, while ``evals`` is sorted by energy.
-    # A canonical padded layout can place physical orbitals at noncontiguous
-    # AO indices, so the basis mask cannot be applied directly to eigenvalues.
     eigenvalue_active = torch.arange(
         n, device=matrix.device
     ) < active_count.unsqueeze(-1)
@@ -526,8 +677,7 @@ def _projector(
     # data-dependent control flow. The detached spectral-gap preconditioner
     # balances the smallest and largest magnitudes before the iteration,
     # keeping the inverse systems nonsingular. Since x is symmetric and
-    # invertible, solve (x @ x) y = x for y = x**-1; the coefficient matrix is
-    # positive definite and can use the transform-safe Cholesky solve above.
+    # invertible, solve (x @ x) y = x for y = x**-1 with Cholesky.
     for _ in range(14):
         inverse = _solve_positive_definite(x @ x, x)
         x = 0.5 * (x + inverse)
@@ -550,8 +700,7 @@ def aufbau_density_matrix(
     frontier projector, preserving dxtb's fractional-electron convention.
     An exact degeneracy across differently occupied states is outside the
     differentiable contract: the matrix-sign projector becomes singular and
-    its positive-definite factorization raises rather than manufacturing a
-    response.
+    its ``torch.linalg.solve`` raises rather than manufacturing a response.
     """
     work_dtype = (
         torch.float64

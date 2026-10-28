@@ -104,6 +104,40 @@ def test_scalar_implicit_root_jvp_jacfwd_jacrev() -> None:
     torch.testing.assert_close(jacfwd[1], jacrev[1], atol=1.0e-10, rtol=1.0e-9)
 
 
+def test_scalar_implicit_root_nested_forward_and_reverse_modes() -> None:
+    """Every second-order nesting, including forward-over-forward."""
+    a = torch.tensor(0.31, dtype=torch.float64)
+    b = torch.tensor(0.27, dtype=torch.float64)
+
+    def attached(value: torch.Tensor) -> torch.Tensor:
+        return _scalar_attached(a, value)
+
+    def unrolled(value: torch.Tensor) -> torch.Tensor:
+        return _scalar_primal_unrolled(a, value)
+
+    jacrev, jacfwd = torch.func.jacrev, torch.func.jacfwd
+    expected = jacrev(jacrev(unrolled))(b)
+    for nested in (
+        jacrev(jacrev(attached)),
+        jacfwd(jacrev(attached)),
+        jacrev(jacfwd(attached)),
+        jacfwd(jacfwd(attached)),
+    ):
+        torch.testing.assert_close(
+            nested(b), expected, atol=1.0e-10, rtol=1.0e-9
+        )
+
+    # All eight third-order nestings, including jacfwd(jacfwd(jacfwd)).
+    expected = jacrev(jacrev(jacrev(unrolled)))(b)
+    for outer in (jacrev, jacfwd):
+        for middle in (jacrev, jacfwd):
+            for inner in (jacrev, jacfwd):
+                third = outer(middle(inner(attached)))(b)
+                torch.testing.assert_close(
+                    third, expected, atol=1.0e-9, rtol=1.0e-8
+                )
+
+
 def test_nonsymmetric_vector_tangent_and_adjoint_match_dense_reference() -> (
     None
 ):
@@ -1230,15 +1264,19 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    original = solver.fermi_free_energy_matrix
     calls = 0
 
-    def counted(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
+    def counting(original):
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
 
-    monkeypatch.setattr(solver, "fermi_free_energy_matrix", counted)
+        return counted
+
+    # the default equal partition evaluates only the trace
+    for name in ("fermi_free_energy_matrix", "fermi_free_energy_trace"):
+        monkeypatch.setattr(solver, name, counting(getattr(solver, name)))
     electron_count = case.nel.clone().requires_grad_(True)
     result = run_prepared_functional_implicit(
         case.numbers,
