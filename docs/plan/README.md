@@ -21,6 +21,7 @@ API.
 | `08-scf-redesign-overview.md` | Architectural roadmap for the SCF solver/convergence redesign, including Broyden retention, DIIS/SOSCF strategies, convergence certification, and xitorch retirement |
 | `09-scf-s0-audit.md` | S0 baseline classification, functional/legacy architecture inventory, and the synchronization gate before S1 |
 | `10-scf-s0.1-matrix-fermi-hardening.md` | S0.1 adaptive matrix-Fermi scaling for large spectra, transform checks, and updated S1 gate |
+| `11-scf-s0.1b-reconciliation.md` | Reconciles the upstream adaptive Fermi kernel, documents the supported scaling envelope, fail-closed behavior, transform checks, and performance cost |
 
 The design review referenced by the plan is not in the repository.
 
