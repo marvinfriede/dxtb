@@ -163,21 +163,22 @@ including the detailed serial no-grad response-slope probe.
 All listed tests ran with explicit `PYTHONPATH=src`. No reference, assertion,
 or tolerance was weakened.
 
-| Selection | Python 3.11 / Torch 2.8 | Python 3.14 / Torch 2.14.1 |
-|---|---:|---:|
-| Invariant spectral density, including p14/p15, rotated, and explicit range failure | 57 passed | 57 passed |
-| E7a padding, padded GFN1/GFN2 spectral/SCF, implicit-root controls | 147 passed | 147 passed |
-| E6bcompat, retained legacy composition, policy | 64 passed | 64 passed |
-| Mapped padded integral/spectral and GFN2 SCF | 119 passed | 119 passed |
-| E1.3/E6a D3 and transform acceptance | 146 passed | 146 passed |
-| Invariant free energy and functional implicit root | 68 passed | 68 passed |
+| Selection | Python 3.10 / Torch 2.7 | Python 3.11 / Torch 2.8 | Python 3.12 / Torch 2.11 | Python 3.12 / Torch 2.13 | Python 3.14 / Torch 2.14.1 |
+|---|---:|---:|---:|---:|---:|
+| Invariant spectral density, including p14/p15, rotated, and explicit range failure | 57 passed | 57 passed | 57 passed | 57 passed | 57 passed |
+| E7a padding, padded GFN1/GFN2 spectral/SCF, implicit-root controls | — | 147 passed | — | — | 147 passed |
+| E6bcompat, retained legacy composition, policy | — | 64 passed | — | — | 64 passed |
+| Mapped padded integral/spectral and GFN2 SCF | — | 119 passed | — | — | 119 passed |
+| E1.3/E6a D3 and transform acceptance | — | 146 passed | — | — | 146 passed |
+| Invariant free energy and functional implicit root | — | 68 passed | — | — | 68 passed |
 
-The Python 3.14 runs emitted the known `torch.jit.script` FutureWarning.
-PyTorch 2.8 E7a/E6bimpl selections emitted the established
-`count_nonzero` vmap performance warning. D3 0.7 emitted its existing
-`chunk_size` deprecation warnings. No CUDA run was performed. Black, isort,
-`py_compile`, and `git diff --check` pass; Ruff and mypy were unavailable in
-the project environments.
+The Python 3.14 runs emitted the known `torch.jit.script` FutureWarning; the
+Torch 2.11 and 2.13 spectral runs emitted the corresponding upstream
+deprecation warning. PyTorch 2.8 E7a/E6bimpl selections emitted the
+established `count_nonzero` vmap performance warning. D3 0.7 emitted its
+existing `chunk_size` deprecation warnings. No CUDA run was performed. Black,
+isort, `py_compile`, and `git diff --check` pass; Ruff and mypy were
+unavailable in the project environments.
 
 ## Independent review and next work
 
