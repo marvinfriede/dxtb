@@ -1,0 +1,47 @@
+# This file is part of dxtb.
+#
+# SPDX-Identifier: Apache-2.0
+# Copyright (C) 2026 Grimme Group
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Minimal immutable SCF stages and strategy composition."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .method import SCFMethod
+
+__all__ = ["SCFStage", "SCFStrategy"]
+
+
+@dataclass(frozen=True, eq=False)
+class SCFStage:
+    """One numerical method stage in an SCF strategy."""
+
+    method: SCFMethod
+
+
+@dataclass(frozen=True, eq=False)
+class SCFStrategy:
+    """Immutable ordered stages; S1 executes one stage only."""
+
+    stages: tuple[SCFStage, ...]
+
+    def single_stage(self) -> SCFStage:
+        """Return the executable S1 stage or reject unsupported composition."""
+        if len(self.stages) != 1:
+            raise NotImplementedError(
+                "S1 functional SCF supports exactly one strategy stage."
+            )
+        return self.stages[0]

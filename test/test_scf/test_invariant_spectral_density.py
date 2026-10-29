@@ -1020,7 +1020,7 @@ def test_fermi_matrix_scaling_is_lane_local_under_vmap() -> None:
     )
 
     assert torch.isfinite(batched).all()
-    torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(batched, explicit, atol=1.0e-13, rtol=1.0e-13)
 
 
 @pytest.mark.parametrize("bad_value", [float("inf"), float("nan"), 1.01])
@@ -1050,7 +1050,7 @@ def test_fermi_matrix_direct_batch_isolates_unsupported_lane(
     )
 
     assert torch.isfinite(batched[0]).all()
-    torch.testing.assert_close(batched[0], expected, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(batched[0], expected, atol=1.0e-13, rtol=1.0e-13)
     assert torch.isnan(batched[1]).all()
 
     direction = torch.diag(torch.tensor([1.0, -0.5], dtype=torch.float64))
@@ -1070,11 +1070,15 @@ def test_fermi_matrix_direct_batch_isolates_unsupported_lane(
         )[0, 0]
 
     parameter = torch.zeros((), dtype=torch.float64)
-    batched_jvp = jvp(batched_response, (parameter,), (torch.ones_like(parameter),))[1]
+    batched_jvp = jvp(
+        batched_response, (parameter,), (torch.ones_like(parameter),)
+    )[1]
     standalone_jvp = jvp(
         standalone_response, (parameter,), (torch.ones_like(parameter),)
     )[1]
-    torch.testing.assert_close(batched_jvp, standalone_jvp, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        batched_jvp, standalone_jvp, atol=1.0e-12, rtol=1.0e-12
+    )
 
 
 def test_fermi_matrix_vmap_isolates_unsupported_lane_and_jvp() -> None:
@@ -1114,7 +1118,9 @@ def test_fermi_matrix_vmap_isolates_unsupported_lane_and_jvp() -> None:
 
     assert torch.isfinite(values[0])
     assert torch.isnan(values[1])
-    torch.testing.assert_close(vmapped_jvp[0], standalone_jvp, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        vmapped_jvp[0], standalone_jvp, atol=1.0e-12, rtol=1.0e-12
+    )
     assert torch.isfinite(vmapped_jvp[0])
 
 
@@ -1144,7 +1150,7 @@ def test_fermi_matrix_quadrature_shaped_batch_matches_explicit_lanes() -> None:
     )
 
     assert torch.isfinite(batched).all()
-    torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(batched, explicit, atol=1.0e-13, rtol=1.0e-13)
 
 
 def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:

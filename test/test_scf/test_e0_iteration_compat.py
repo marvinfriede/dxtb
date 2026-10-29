@@ -25,7 +25,8 @@ import torch
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler, Result
 from dxtb._src.constants import labels
-from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional import method as functional_method
+from dxtb._src.scf.functional import problem as functional_problem
 
 from ..utils import get_param_module
 from .samples import samples
@@ -157,8 +158,8 @@ def test_full_mode_iteration_compatibility(
 ) -> None:
     """Lock production map counts and raw final-map outputs for E4."""
     counts = {"map": 0, "mixer": 0}
-    original_map: Callable = functional_solver.scf_map
-    original_mixer: Callable = functional_solver.simple_mix
+    original_map: Callable = functional_problem.scf_map
+    original_mixer: Callable = functional_method.simple_mix
 
     def count_map(*args, **kwargs):
         counts["map"] += 1
@@ -168,8 +169,8 @@ def test_full_mode_iteration_compatibility(
         counts["mixer"] += 1
         return original_mixer(x_old, x_new, damp)
 
-    monkeypatch.setattr(functional_solver, "scf_map", count_map)
-    monkeypatch.setattr(functional_solver, "simple_mix", count_mixer)
+    monkeypatch.setattr(functional_problem, "scf_map", count_map)
+    monkeypatch.setattr(functional_method, "simple_mix", count_mixer)
 
     sample = samples["H2O"]
     numbers = sample["numbers"].to(device="cpu")

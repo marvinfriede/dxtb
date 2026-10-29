@@ -37,6 +37,8 @@ from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.scf import iterator as scf_iterator
 from dxtb._src.scf.functional import anderson as functional_anderson
 from dxtb._src.scf.functional import eager as functional_eager
+from dxtb._src.scf.functional import method as functional_method
+from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
     resolve_full_scf_route,
     run_functional_full_eager,
@@ -1746,7 +1748,7 @@ def test_dynamic_damping_iterate_and_switch_parity(
     map_inputs: list[torch.Tensor] = []
     transition_damps: list[torch.Tensor] = []
     module = (
-        functional_solver
+        functional_problem
         if mixer == labels.MIXER_LINEAR
         else functional_anderson
     )
@@ -1763,13 +1765,13 @@ def test_dynamic_damping_iterate_and_switch_parity(
 
     monkeypatch.setattr(module, map_name, record_functional_map)
     if mixer == labels.MIXER_LINEAR:
-        original_mix = functional_solver.simple_mix
+        original_mix = functional_method.simple_mix
 
         def record_simple_mix(old, mapped, damp):
             transition_damps.append(torch.as_tensor(damp).detach().clone())
             return original_mix(old, mapped, damp)
 
-        monkeypatch.setattr(functional_solver, "simple_mix", record_simple_mix)
+        monkeypatch.setattr(functional_method, "simple_mix", record_simple_mix)
     else:
         original_mix = functional_anderson.anderson_mix
 
