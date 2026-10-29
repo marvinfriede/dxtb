@@ -228,3 +228,11 @@ Versioned JSONL traces are under `benchmarks/results/e6c1-w2c3/`, including:
 
 The map-wide matrix-product profile is aggregate, as described above; the
 dense-solve count/timing is scoped to `_matrix_fermi`.
+
+## Publication
+
+The diagnostic harness, traces, report, and roadmap update were committed as
+`4614e12d3eedafa3d4c76beec6cf901c747ebd09` and pushed to
+`origin/claude/tender-dijkstra-cda42s`; the remote ref was verified at that
+commit. The later publication-note commit changes documentation only. No
+production spectral or SCF code was published in this package.
