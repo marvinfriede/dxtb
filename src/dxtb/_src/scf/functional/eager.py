@@ -954,6 +954,8 @@ def run_prepared_functional_implicit(
     prepared = _prepare_scf_root(
         outcome,
         maxiter=config.maxiter,
+        x_atol=config.x_atol,
+        x_atol_max=config.x_atol_max,
         final_valid=fermi_status_ok(final_status, like=outcome.converged),
         raw_map=adapter,
         parameters=parameters,

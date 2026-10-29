@@ -174,11 +174,13 @@ def _prepare_scf_root(
     outcome: object,
     *,
     maxiter: int,
+    x_atol: float,
+    x_atol_max: float,
     final_valid: Tensor,
     raw_map: RawMap,
     parameters: tuple[Tensor, ...],
 ) -> _PreparedSCFRoot:
-    """Validate primal/Fermi status before any differentiation transform."""
+    """Validate the root against the exact inputs before differentiation."""
     if maxiter == 0:
         raise SCFConvergenceError(
             "Implicit physical-root differentiation requires maxiter > 0."
@@ -193,10 +195,31 @@ def _prepare_scf_root(
             & ~status.invalid_temperature.any()
             & ~status.too_many_electrons.any()
         )
+
+    # Re-evaluate the raw physical map with the exact tensors that will be
+    # passed to the implicit attachment. This catches a root prepared for a
+    # different finite parameter value before it can enter the IFT boundary.
+    with torch.no_grad():
+        independent_residual = raw_map(outcome.root_x, *parameters)
+        independent_residual = independent_residual - outcome.root_x
+        residual_norms = torch.stack(
+            (
+                torch.linalg.vector_norm(independent_residual),
+                independent_residual.abs().amax(),
+            )
+        )
+        residual_valid = torch.isfinite(independent_residual).all()
+        residual_valid = (
+            residual_valid
+            & (residual_norms[0] <= x_atol)
+            & (residual_norms[1] <= x_atol_max)
+        )
+    valid = valid & residual_valid
     if not bool(valid):
         raise SCFConvergenceError(
             "Cannot differentiate an implicit physical root because the "
-            "primal SCF/Fermi solve did not converge."
+            "primal SCF/Fermi solve did not converge for the supplied "
+            "physical inputs."
         )
     return _PreparedSCFRoot(
         root_x=outcome.root_x,
