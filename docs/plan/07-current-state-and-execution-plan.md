@@ -3327,6 +3327,34 @@ full workload or performance clearance is claimed. See
 captured JSONL stages under `benchmarks/results/e6c1-w2a/` and
 `benchmarks/results/e6c1-w2b/`.
 
+### W2a.2 correction status
+
+The preceding W2a.1 paragraph records the failure state before the corrective
+work below and is superseded for numerical acceptance. W2a.2 corrected the
+adaptive matrix-Fermi kernel's p14→p15 reverse and mixed third-derivative
+discrepancy. An independent scalar and rotated-matrix oracle now passes the
+unchanged `2e-8` relative third-order tolerance in PyTorch 2.8 and 2.14.1. The
+correction replaces cancellation-prone `matrix_exp(X) - I` with a bounded
+symmetric matrix-expm1 evaluation while retaining inactive-input masking. The
+original negative tmpda electron-response slope is not reproduced: detailed
+one-trip diagnostics show finite occupations, target count 139 in both
+channels, and positive response slopes. Serial and mapped one- and two-trip
+tmpda energies, free energies, residuals, and position gradients agree.
+
+The W2 performance gate remains OPEN. The prior bounded 300-trip mapped run
+reached 179 completed spectral evaluations in 300 seconds and peaked at 106.4
+GiB before termination; it did not produce a full Result or reach backward.
+That unsafe run was not repeated. W2b's 2–16-trip measurements show about
+0.64 GiB additional differentiated RSS per trip, with the eight-trip no-grad
+run at 0.37 GiB versus 6.90 GiB with backward, pointing to saved unrolled SCF
+autograd state. W2a.2 repeated only bounded one- and two-trip calculations.
+No full eight-conformer result or W2 performance clearance is claimed. The
+architecture comparison recommends a bounded converged-root implicit
+differentiation prototype as the next study, while keeping its derivative
+contract distinct from fixed-trip differentiation. See
+[`E6c1-W2a2-third-order-correction.md`](E6c1-W2a2-third-order-correction.md)
+and [`E6c1-W2c-memory-architecture-decision.md`](E6c1-W2c-memory-architecture-decision.md).
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

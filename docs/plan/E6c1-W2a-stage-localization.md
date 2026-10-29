@@ -11,6 +11,14 @@ one- and two-trip values and position gradients agree. The instrumented
 reached 106.4 GiB RSS before Result construction or backward. No full-workload
 parity or performance clearance is claimed.
 
+**W2a.2 follow-up:** the adaptive implementation's p14→p15 reverse and mixed
+third derivatives failed the established tolerance because `matrix_exp(X) - I`
+lost accuracy in a small spectral component before tanh doubling. The
+correction and independent scalar/rotated-oracle validation are recorded in
+[`E6c1-W2a2-third-order-correction.md`](E6c1-W2a2-third-order-correction.md).
+The original W2a stage and memory measurements remain historical and
+unchanged.
+
 ## Repository and environment
 
 - Starting SHA: `5dc157bd12e854d2a8df9bee084d768eaa270a35`.

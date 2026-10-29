@@ -1,5 +1,14 @@
 # E6c1-W2b — Fixed-trip memory diagnosis
 
+The W2b measurements below are retained as the pre-W2a.2 fixed-trip memory
+diagnosis. W2a.2 corrected the matrix-Fermi cancellation error and reran only
+bounded one- and two-trip tmpda checks; it did not repeat the high-memory
+32/179/300-trip attempts. See
+[`E6c1-W2a2-third-order-correction.md`](E6c1-W2a2-third-order-correction.md)
+for the corrected numerical results and current short-trip peaks. The
+unrolled differentiation graph remains the diagnosed memory owner, and W2
+performance remains OPEN.
+
 ## Decision
 
 **W2 memory owner identified; W2 remains OPEN.** Differentiated memory grows
