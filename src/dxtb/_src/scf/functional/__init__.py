@@ -14,18 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional SCF building blocks, not yet used by the production solver."""
-
-from .eager import (
-    EagerFullResult,
-    FullSCFRoute,
-    FunctionalCoreResult,
-    apply_functional_full_policy,
-    functional_core_result,
-    resolve_full_scf_route,
-    run_prepared_functional_full,
-    run_functional_full_eager,
-)
+"""Internal functional SCF problem, method, map, and solver contracts."""
 
 from .anderson import (
     AndersonSettings,
@@ -36,6 +25,7 @@ from .anderson import (
     solve_scf_fock_anderson,
     solve_scf_potential_anderson,
 )
+from .convergence import SCFConvergence
 from .data import (
     ChargeLayout,
     FermiSettings,
@@ -45,6 +35,7 @@ from .data import (
     SCFMapResult,
     SCFPotential,
     SCFSpectralResult,
+    functional_scf_interactions_eligible,
     pack_charges,
     pack_potential,
     potential_layout,
@@ -52,7 +43,16 @@ from .data import (
     unpack_charges,
     unpack_potential,
     validate_functional_scf_interactions,
-    functional_scf_interactions_eligible,
+)
+from .eager import (
+    EagerFullResult,
+    FullSCFRoute,
+    FunctionalCoreResult,
+    apply_functional_full_policy,
+    functional_core_result,
+    resolve_full_scf_route,
+    run_functional_full_eager,
+    run_prepared_functional_full,
 )
 from .map import (
     evaluate_hamiltonian,
@@ -66,11 +66,19 @@ from .map import (
     scf_map,
     validate_fock_state,
 )
+from .method import (
+    LinearMethod,
+    SCFMethod,
+    SCFMethodContext,
+    SCFMethodProposal,
+    SCFMethodState,
+)
+from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
 from .solver import (
     DampingState,
     DynamicDampingSettings,
-    SCFSolverDiagnostics,
     SCFResidual,
+    SCFSolverDiagnostics,
     SCFSolveResult,
     SCFSolverSettings,
     SCFTrajectoryStatus,
@@ -89,6 +97,7 @@ from .solver import (
     solve_scf_simple,
     trajectory_status_from_map,
 )
+from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
     "AndersonSettings",
@@ -102,14 +111,25 @@ __all__ = [
     "FermiSettings",
     "PotentialLayout",
     "SCFCharges",
+    "SCFConvergence",
     "SCFInputs",
+    "SCFMethod",
+    "SCFMethodContext",
+    "SCFMethodProposal",
+    "SCFMethodState",
     "SCFMapResult",
+    "SCFPhysicalState",
+    "SCFProblem",
+    "SCFRepresentation",
     "SCFResidual",
+    "SCFStage",
+    "SCFStrategy",
     "SCFSolveResult",
     "SCFTrajectoryStatus",
     "SCFSolverSettings",
     "SCFSolverDiagnostics",
     "SCFPotential",
+    "LinearMethod",
     "SCFSpectralResult",
     "pack_charges",
     "pack_potential",

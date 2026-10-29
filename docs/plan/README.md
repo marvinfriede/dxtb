@@ -22,6 +22,7 @@ API.
 | `09-scf-s0-audit.md` | S0 baseline classification, functional/legacy architecture inventory, and the synchronization gate before S1 |
 | `10-scf-s0.1-matrix-fermi-hardening.md` | S0.1 adaptive matrix-Fermi scaling for large spectra, transform checks, and updated S1 gate |
 | `11-scf-s0.1b-reconciliation.md` | Records published-kernel reconciliation, finite scaling envelope, bad-lane isolation, public failure behavior, transform checks, and performance cost |
+| `12-scf-s1-core-contracts.md` | S1 core physical-problem/state, method, single-stage strategy, controller reuse, and linear-route migration |
 
 The design review referenced by the plan is not in the repository.
 

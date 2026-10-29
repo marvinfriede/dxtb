@@ -40,8 +40,9 @@ from dxtb._src.scf.functional import (
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import potential_to_hamiltonian
+from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    potential_to_hamiltonian,
     setup_anderson_solver_settings,
     setup_simple_solver_settings,
     solve_scf_fock_anderson,
@@ -796,7 +797,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
         },
     )
     guess = _fock_guess(case)
-    original = functional_solver.fock_map
+    original = functional_problem.fock_map
     calls = 0
 
     def fail_initial(value: torch.Tensor, inputs: object):
@@ -815,7 +816,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
             )
         return result
 
-    monkeypatch.setattr(functional_solver, "fock_map", fail_initial)
+    monkeypatch.setattr(functional_problem, "fock_map", fail_initial)
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
     assert calls == 2

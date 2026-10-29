@@ -39,8 +39,9 @@ from dxtb._src.scf.functional import (
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import potential_initial_guess
+from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    potential_initial_guess,
     setup_anderson_solver_settings,
     setup_simple_solver_settings,
     simple_mix,
@@ -48,7 +49,6 @@ from dxtb._src.scf.functional import (
     solve_scf_potential_anderson,
     solve_scf_potential_simple,
 )
-from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
 
 from .test_functional_map import (
@@ -342,7 +342,7 @@ def test_gfn2_potential_padding_is_invariant_under_mixing(
         )
 
     mapped_pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
-    original = functional_map.potential_map
+    original = functional_problem.potential_map
 
     def record(value: torch.Tensor, inputs: object, layout: object):
         result = original(value, inputs, layout)
@@ -429,7 +429,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
         },
     )
     guess, layout = _initial_guess(case)
-    original = functional_solver.potential_map
+    original = functional_map.potential_map
     map_calls = 0
 
     def fail_initial_map(value: torch.Tensor, inputs: object, layout_: object):
@@ -451,7 +451,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
             )
         return result
 
-    monkeypatch.setattr(functional_solver, "potential_map", fail_initial_map)
+    monkeypatch.setattr(functional_problem, "potential_map", fail_initial_map)
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_potential_simple(guess, case.inputs, layout, settings)
     assert map_calls == 2
