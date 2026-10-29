@@ -23,6 +23,7 @@ API.
 | `10-scf-s0.1-matrix-fermi-hardening.md` | S0.1 adaptive matrix-Fermi scaling for large spectra, transform checks, and updated S1 gate |
 | `11-scf-s0.1b-reconciliation.md` | Records published-kernel reconciliation, finite scaling envelope, bad-lane isolation, public failure behavior, transform checks, and performance cost |
 | `12-scf-s1-core-contracts.md` | S1 core physical-problem/state, method, single-stage strategy, controller reuse, and linear-route migration |
+| `13-scf-s1.1-zero-budget-status.md` | Restores the fixed-trip `maxiter=0` final-only status contract while preserving eager compatibility behavior |
 
 The design review referenced by the plan is not in the repository.
 
