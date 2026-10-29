@@ -28,6 +28,7 @@ unless the independently evaluated physical root passes its convergence gate.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 import platform
@@ -47,12 +48,11 @@ sys.path.insert(0, str(ROOT / "test"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from molecules import mols  # noqa: E402
-
 import dxtb as dxtb_package  # noqa: E402
 from dxtb import GFN1_XTB, ParamModule, labels  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb._src.calculators.result import Result  # noqa: E402
+from dxtb._src.constants import defaults  # noqa: E402
 from dxtb._src.calculators.singlepoint import (  # noqa: E402
     _evaluate_classical_descriptor,
     _interaction_data,
@@ -81,6 +81,7 @@ from dxtb._src.scf.guess import get_guess  # noqa: E402
 from dxtb._src.scf.iterator import get_refocc  # noqa: E402
 from dxtb._src.typing.exceptions import SCFConvergenceError  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from benchmarks.baseline.workloads import conformers as frozen_conformers  # noqa: E402
 
 DTYPE = torch.float64
 STARTED = time.perf_counter()
@@ -127,12 +128,97 @@ def current_rss_mb() -> float | None:
     return None
 
 
+def cpu_model() -> str | None:
+    """Return the Linux CPU model name when procfs provides it."""
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", maxsplit=1)[1].strip()
+    except OSError:
+        return None
+    return None
+
+
 def peak_rss_mb() -> float:
     """Return the process lifetime RSS high-water mark in MiB."""
     value = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     if sys.platform == "darwin":
         return value / (1024.0 * 1024.0)
     return value / 1024.0
+
+
+def profile_primal_map(prepared: PreparedInputs) -> None:
+    """Profile one raw SCF map and its named physical subcomponents."""
+    import dxtb._src.scf.functional.map as map_module
+    from dxtb._src.wavefunction import filling
+    from torch.profiler import ProfilerActivity, profile
+
+    components = (
+        (map_module, "potential_from_charges", "interaction_potential"),
+        (map_module, "potential_to_hamiltonian", "hamiltonian_build"),
+        (map_module, "_transitional_diagonalize", "diagonalization"),
+        (
+            filling,
+            "_get_fermi_occupation_core_state",
+            "fermi_occupation_state",
+        ),
+        (map_module, "fermi_density_matrix", "fermi_density"),
+        (map_module, "_density_to_charges", "density_to_charges"),
+    )
+    originals = [(module, name, getattr(module, name)) for module, name, _ in components]
+    timings: list[dict[str, Any]] = []
+
+    for module, name, label in components:
+        original = getattr(module, name)
+
+        def measured(*args: Any, _fn=original, _label=label, **kwargs: Any):
+            started = time.perf_counter()
+            value = _fn(*args, **kwargs)
+            timings.append(
+                {
+                    "component": _label,
+                    "duration_s": time.perf_counter() - started,
+                }
+            )
+            return value
+
+        setattr(module, name, measured)
+
+    started = time.perf_counter()
+    try:
+        with torch.no_grad():
+            with profile(
+                activities=[ProfilerActivity.CPU],
+                record_shapes=True,
+                profile_memory=True,
+            ) as profiler:
+                result = scf_map(prepared.initial_state, prepared.inputs)
+    finally:
+        for module, name, original in originals:
+            setattr(module, name, original)
+
+    top_operations = sorted(
+        profiler.key_averages(),
+        key=lambda event: event.self_cpu_time_total,
+        reverse=True,
+    )[:40]
+    emit(
+        "single_primal_map_profile_completed",
+        duration_s=time.perf_counter() - started,
+        density_finite=bool(torch.isfinite(result.density).all()),
+        component_timings=timings,
+        top_operations=[
+            {
+                "operation": event.key,
+                "calls": event.count,
+                "self_cpu_seconds": event.self_cpu_time_total / 1.0e6,
+                "cpu_seconds": event.cpu_time_total / 1.0e6,
+                "self_cpu_memory_bytes": event.self_cpu_memory_usage,
+                "input_shapes": event.input_shapes,
+            }
+            for event in top_operations
+        ],
+    )
 
 
 def emit(stage: str, **values: Any) -> None:
@@ -175,18 +261,10 @@ def construct_workload(
     conformer_index: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return one conformer from the frozen tmpda geometry generator."""
-    source = mols["tmpda"]
-    base_positions = source["positions"].double()
-    generator = torch.Generator().manual_seed(0)
-    displacement = (
-        0.1
-        * torch.randn((8, *base_positions.shape), generator=generator).double()
-    )
-    displacement[0] = 0.0
-    if not 0 <= conformer_index < displacement.shape[0]:
+    numbers, positions = frozen_conformers("tmpda", 8, sigma=0.1, seed=0)
+    if not 0 <= conformer_index < positions.shape[0]:
         raise ValueError("The requested conformer is outside the W2 workload.")
-    positions = (base_positions.unsqueeze(0) + displacement)[conformer_index]
-    return source["numbers"].to(dtype=torch.int64), positions
+    return numbers[conformer_index], positions[conformer_index]
 
 
 def setup_model_system(
@@ -195,30 +273,71 @@ def setup_model_system(
     maxiter: int,
     x_atol: float,
     x_atol_max: float,
+    gradient_mode: str,
 ) -> tuple[Model, Any]:
-    """Build the GFN1 Model/System with the frozen W2 options."""
+    """Build the Model/System with frozen W2 settings and grad mode."""
+    if gradient_mode not in ("positions-only", "positions-and-model"):
+        raise ValueError(f"Unsupported gradient mode: {gradient_mode}")
+
     parameters = ParamModule(GFN1_XTB, dtype=DTYPE)
     config = Config.create(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         mixer=labels.MIXER_ANDERSON,
         scf_mode=labels.SCF_MODE_FULL,
+        scp_mode=labels.SCP_MODE_CHARGE,
         maxiter=maxiter,
         f_atol=1.0e-8,
         x_atol=x_atol,
         x_atol_max=x_atol_max,
         fermi_etemp=300.0,
+        force_convergence=False,
     )
     model = Model(par=parameters, config=config, auto_int_level=True)
 
-    # Enable the real Model-owned parameter leaves before System setup so
-    # setup-derived H0 and interaction tensors keep their parameter graph.
-    for parameter in model.par.parameters():
-        if parameter.is_floating_point():
-            parameter.requires_grad_(True)
+    if gradient_mode == "positions-and-model":
+        for parameter in model.par.parameters():
+            if parameter.is_floating_point():
+                parameter.requires_grad_(True)
+    else:
+        for parameter in model.par.parameters():
+            if parameter.is_floating_point():
+                parameter.requires_grad_(False)
 
     system = model.setup(numbers, batch_mode=0)
     return model, system
+
+
+def floating_parameter_counts(model: Model) -> tuple[int, int]:
+    """Return total and trainable floating Model parameter leaf counts."""
+    floating = [
+        parameter
+        for parameter in model.par.parameters()
+        if parameter.is_floating_point()
+    ]
+    return len(floating), sum(parameter.requires_grad for parameter in floating)
+
+
+def setup_shared_parameter_system(
+    model: Model, numbers: torch.Tensor
+) -> tuple[Model, Any]:
+    """Build a fresh System façade over the same Model parameter owner."""
+    serial_model = Model(
+        par=model.par,
+        config=model.config,
+        auto_int_level=model.auto_int_level,
+    )
+    serial_system = serial_model.setup(numbers, batch_mode=0)
+    original_parameters = tuple(model.par.named_parameters())
+    serial_parameters = tuple(serial_model.par.named_parameters())
+    if len(original_parameters) != len(serial_parameters) or any(
+        first_name != second_name or first_value is not second_value
+        for (first_name, first_value), (second_name, second_value) in zip(
+            original_parameters, serial_parameters
+        )
+    ):
+        raise RuntimeError("Serial reference changed Model parameter ownership.")
+    return serial_model, serial_system
 
 
 def prepare_call_inputs(case: PhysicalCase) -> PreparedInputs:
@@ -474,10 +593,19 @@ def _instrument_linear_response():
 
         def measured(*args, **kwargs):
             started = time.perf_counter()
+            rss_before = current_rss_mb()
             output = operator(*args, **kwargs)
+            rss_after = current_rss_mb()
             record = {
                 "operator": name,
                 "seconds": time.perf_counter() - started,
+                "rss_before_mb": rss_before,
+                "rss_after_mb": rss_after,
+                "rss_delta_mb": (
+                    None
+                    if rss_before is None or rss_after is None
+                    else rss_after - rss_before
+                ),
             }
             records.append(record)
             count = sum(item["operator"] == name for item in records)
@@ -498,8 +626,30 @@ def _instrument_linear_response():
 
     def traced_implicit_solve(matvec, rhs, *args, **kwargs):
         started = time.perf_counter()
+        result = None
+
+        def response_norms(value: torch.Tensor, lanes: int | None) -> Any:
+            value = value.detach()
+            if lanes is not None and lanes > 1 and value.ndim > 0:
+                if value.shape[0] == lanes and value.ndim > 1:
+                    dimensions = tuple(range(1, value.ndim))
+                    measured = torch.linalg.vector_norm(value, dim=dimensions)
+                elif value.shape[0] == lanes:
+                    measured = value.abs()
+                else:
+                    measured = torch.linalg.vector_norm(value)
+            else:
+                measured = torch.linalg.vector_norm(value)
+            return measured.cpu().tolist()
+
+        input_lane_count = rhs.shape[0] if rhs.ndim >= 3 else None
+        try:
+            rhs_norm: Any = response_norms(rhs, input_lane_count)
+        except (RuntimeError, NotImplementedError, TypeError, ValueError):
+            rhs_norm = {"shape": list(rhs.shape), "batched_transform": True}
         entry = {
-            "rhs_norm": float(torch.linalg.vector_norm(rhs).detach()),
+            "rhs_norm": rhs_norm,
+            "rhs_shape": list(rhs.shape),
             "pre_solver_seconds": started - _RESPONSE_STARTED[0],
         }
         emit("implicit_response_solver_entered", **entry)
@@ -519,14 +669,38 @@ def _instrument_linear_response():
             *args,
             **kwargs,
         )
-        entry.update(
-            duration_s=time.perf_counter() - started,
-            status=result.status.detach().cpu().tolist(),
-            iterations=result.iterations.detach().cpu().tolist(),
-            residual_norm=float(
-                torch.linalg.vector_norm(result.residual).detach()
-            ),
+        entry["duration_s"] = time.perf_counter() - started
+        lane_count = (
+            int(result.status.shape[0])
+            if result.status.ndim > 0
+            else None
         )
+        for name, value in (
+            ("status", result.status),
+            ("iterations", result.iterations),
+            ("residual", result.residual),
+        ):
+            try:
+                entry[name] = value.detach().cpu().tolist()
+            except (RuntimeError, NotImplementedError):
+                entry[name] = {
+                    "shape": list(value.shape),
+                    "batched_transform": True,
+                }
+        try:
+            residual_norm = response_norms(result.residual, lane_count)
+            entry["residual_norm"] = residual_norm
+            denominator = torch.as_tensor(
+                entry["rhs_norm"], dtype=rhs.dtype, device=rhs.device
+            )
+            numerator = torch.as_tensor(
+                residual_norm, dtype=rhs.dtype, device=rhs.device
+            )
+            entry["relative_residual"] = (
+                numerator / denominator.clamp_min(torch.finfo(rhs.dtype).tiny)
+            ).detach().cpu().tolist()
+        except (RuntimeError, NotImplementedError):
+            entry["residual_norm"] = {"batched_transform": True}
         emit("implicit_response_solver_completed", **entry)
         return result
 
@@ -540,14 +714,14 @@ _RESPONSE_STARTED = [0.0]
 def differentiate_positions(
     result: Result,
     positions: torch.Tensor,
-    model_parameters: tuple[torch.Tensor, ...],
+    model_parameters: tuple[tuple[str, torch.Tensor], ...],
     *,
     observable: str,
 ) -> tuple[torch.Tensor, tuple[torch.Tensor | None, ...]]:
     """Differentiate the selected physical Result observable once."""
     energy_only, energy_plus_fenergy = evaluate_energy(result)
     objective = energy_only if observable == "energy" else energy_plus_fenergy
-    parameters = (positions, *model_parameters)
+    parameters = (positions, *(value for _, value in model_parameters))
     response_module, original, records = _instrument_linear_response()
     _RESPONSE_STARTED[0] = time.perf_counter()
     emit("backward_started", observable=observable)
@@ -592,6 +766,21 @@ def differentiate_positions(
             )
             for name in ("matvec", "linearize", "rlinearize")
         },
+        model_gradients=[
+            {
+                "name": name,
+                "shape": list(parameter.shape),
+                "connected": gradient is not None,
+                "finite": gradient is None
+                or bool(torch.isfinite(gradient).all()),
+                "norm": None
+                if gradient is None
+                else float(torch.linalg.vector_norm(gradient)),
+            }
+            for (name, parameter), gradient in zip(
+                model_parameters, gradients[1:]
+            )
+        ],
     )
     return objective.detach(), gradients
 
@@ -630,13 +819,16 @@ def run_mapped_diagnostic(
     adapters: list[Any] = []
     lane_parameters: list[tuple[torch.Tensor, ...]] = []
     validated_roots: list[Any] = []
+    lane_indices = list(range(conformer_count))
+    if args.reverse_order:
+        lane_indices.reverse()
     lane_geometries = [
-        construct_workload(index)[1] for index in range(conformer_count)
+        construct_workload(index)[1] for index in lane_indices
     ]
     positions = torch.stack(lane_geometries).requires_grad_(True)
 
-    for lane_index in range(conformer_count):
-        lane_numbers, _ = construct_workload(lane_index)
+    for lane_index, conformer_index in enumerate(lane_indices):
+        lane_numbers, _ = construct_workload(conformer_index)
         if not torch.equal(lane_numbers, numbers):
             raise RuntimeError("The frozen conformers have different atoms.")
         lane_positions = positions[lane_index]
@@ -649,7 +841,11 @@ def run_mapped_diagnostic(
             spin=None,
         )
         prepared = prepare_call_inputs(case)
-        emit("mapped_lane_root_preparation_started", lane=lane_index)
+        emit(
+            "mapped_lane_root_preparation_started",
+            lane=lane_index,
+            conformer_index=conformer_index,
+        )
         outcome, map_count, root_seconds = prepare_primal_root(prepared)
         adapter, parameters, raw_residual, validated = validate_physical_root(
             prepared, outcome
@@ -657,6 +853,7 @@ def run_mapped_diagnostic(
         emit(
             "mapped_lane_root_validated",
             lane=lane_index,
+            conformer_index=conformer_index,
             map_evaluations=map_count,
             root_seconds=root_seconds,
             iterations=int(outcome.iterations.detach()),
@@ -767,6 +964,8 @@ def run_mapped_diagnostic(
         lane_iterations=iterations.detach().cpu().tolist(),
         lane_residuals=residuals.detach().cpu().tolist(),
         simultaneous_mapped_lanes=conformer_count,
+        rss_current_mb=current_rss_mb(),
+        rss_peak_mb=peak_rss_mb(),
     )
     started = time.perf_counter()
     mapped_energy, mapped_fenergy = vmap(evaluate_lane, in_dims=dimensions)(
@@ -787,6 +986,7 @@ def run_mapped_diagnostic(
             torch.isfinite(mapped_energy).all()
             & torch.isfinite(mapped_fenergy).all()
         ),
+        rss_current_mb=current_rss_mb(),
         rss_peak_mb=peak_rss_mb(),
     )
     if not (
@@ -795,67 +995,327 @@ def run_mapped_diagnostic(
     ):
         raise RuntimeError("Mapped tmpda energies are nonfinite.")
 
-    serial_energy = []
-    serial_fenergy = []
-    for lane_index, (prepared, outcome, lane_adapter, parameters) in enumerate(
-        zip(prepared_lanes, outcomes, adapters, lane_parameters)
-    ):
-        map_result = lane_adapter.evaluate(outcome.root_x, *parameters)
-        physical_result, _ = finalize_physical_result(
-            prepared, outcome, map_result
+    if args.diagnostic_mode == "mapped-parity":
+        serial_energy = []
+        serial_fenergy = []
+        with torch.no_grad():
+            for lane_index, (
+                prepared,
+                outcome,
+                lane_adapter,
+                parameters,
+            ) in enumerate(
+                zip(prepared_lanes, outcomes, adapters, lane_parameters)
+            ):
+                map_result = lane_adapter.evaluate(outcome.root_x, *parameters)
+                physical_result, _ = finalize_physical_result(
+                    prepared, outcome, map_result
+                )
+                serial_energy.append(physical_result.energy.sum())
+                serial_fenergy.append(physical_result.fenergy.sum())
+                emit(
+                    "mapped_lane_serial_value_reference",
+                    lane=lane_index,
+                    energy_only=float(physical_result.energy.sum()),
+                    free_energy=float(physical_result.fenergy.sum()),
+                    grad_enabled=torch.is_grad_enabled(),
+                )
+        torch.testing.assert_close(
+            mapped_energy,
+            torch.stack(serial_energy),
+            atol=3.0e-8,
+            rtol=3.0e-8,
+            msg="Mapped tmpda energy differs from independent serial values.",
         )
-        serial_energy.append(physical_result.energy.sum())
-        serial_fenergy.append(physical_result.fenergy.sum())
-        emit(
-            "mapped_lane_serial_reference",
-            lane=lane_index,
-            energy_only=float(physical_result.energy.sum().detach()),
-            free_energy=float(physical_result.fenergy.sum().detach()),
+        torch.testing.assert_close(
+            mapped_fenergy,
+            torch.stack(serial_fenergy),
+            atol=3.0e-9,
+            rtol=3.0e-8,
+            msg="Mapped tmpda free energy differs from independent values.",
         )
-    serial_energy_tensor = torch.stack(serial_energy)
-    serial_fenergy_tensor = torch.stack(serial_fenergy)
-    torch.testing.assert_close(
-        mapped_energy,
-        serial_energy_tensor,
-        atol=3.0e-8,
-        rtol=3.0e-8,
-        msg="Mapped tmpda energy differs from independently finalized lanes.",
-    )
-    torch.testing.assert_close(
-        mapped_fenergy,
-        serial_fenergy_tensor,
-        atol=3.0e-9,
-        rtol=3.0e-8,
-        msg="Mapped tmpda free energy differs from independent lanes.",
-    )
 
-    emit("mapped_backward_started", observable="energy-only")
-    backward_start = time.perf_counter()
-    position_gradients = torch.autograd.grad(
-        mapped_energy.sum(),
-        positions,
-        retain_graph=True,
-    )[0]
-    if not torch.isfinite(position_gradients).all():
-        raise RuntimeError("Mapped tmpda position gradients are nonfinite.")
+    model_parameter_items = tuple(
+        (name, value)
+        for name, value in model.par.named_parameters()
+        if value.requires_grad
+    )
+    position_jacobian = []
+    gradient_started = time.perf_counter()
+    response_module, original_solve, response_records = (
+        _instrument_linear_response()
+    )
+    _RESPONSE_STARTED[0] = time.perf_counter()
+    try:
+        for lane_index in range(conformer_count):
+            retain_graph = (
+                lane_index < conformer_count - 1 or bool(model_parameter_items)
+            )
+            lane_grads = torch.autograd.grad(
+                mapped_energy[lane_index],
+                positions,
+                retain_graph=retain_graph,
+            )
+            lane_position_gradient = lane_grads[0]
+            if lane_position_gradient is None or not torch.isfinite(
+                lane_position_gradient
+            ).all():
+                raise RuntimeError("Mapped lane position gradients are nonfinite.")
+            position_jacobian.append(lane_position_gradient.detach())
+            diagonal = lane_position_gradient[lane_index]
+            off_diagonal = torch.cat(
+                [
+                    lane_position_gradient[index].reshape(-1)
+                    for index in range(conformer_count)
+                    if index != lane_index
+                ]
+            )
+            torch.testing.assert_close(
+                off_diagonal,
+                torch.zeros_like(off_diagonal),
+                atol=2.0e-9,
+                rtol=0.0,
+                msg=f"Mapped energy lane {lane_index} couples to another lane.",
+            )
+            emit(
+                "mapped_lane_position_response",
+                lane=lane_index,
+                gradient_norm=float(torch.linalg.vector_norm(diagonal)),
+                gradient_max_abs=float(diagonal.abs().max()),
+                gradient=diagonal.detach().cpu().tolist(),
+                cross_lane_max_abs=float(off_diagonal.abs().max()),
+                cross_lane_norm=float(torch.linalg.vector_norm(off_diagonal)),
+                rss_peak_mb=peak_rss_mb(),
+            )
+    finally:
+        response_module.implicit_solve = original_solve
+    position_jacobian_tensor = torch.stack(position_jacobian)
     emit(
         "mapped_backward_completed",
-        duration_s=time.perf_counter() - backward_start,
-        gradient_norm=float(
-            torch.linalg.vector_norm(position_gradients).detach()
-        ),
-        gradient_max_abs=float(position_gradients.abs().max().detach()),
+        duration_s=time.perf_counter() - gradient_started,
+        gradient_norm=float(torch.linalg.vector_norm(position_jacobian_tensor)),
+        gradient_max_abs=float(position_jacobian_tensor.abs().max()),
         rss_peak_mb=peak_rss_mb(),
     )
+
+    mapped_parameter_gradients = None
+    if model_parameter_items:
+        response_module, original_solve, _ = _instrument_linear_response()
+        _RESPONSE_STARTED[0] = time.perf_counter()
+        try:
+            mapped_parameter_gradients = torch.autograd.grad(
+                mapped_energy.sum(),
+                tuple(value for _, value in model_parameter_items),
+                allow_unused=True,
+            )
+        finally:
+            response_module.implicit_solve = original_solve
+        if not all(
+            value is None or bool(torch.isfinite(value).all())
+            for value in mapped_parameter_gradients
+        ):
+            raise RuntimeError("Mapped Model parameter gradients are nonfinite.")
+        emit(
+            "mapped_shared_model_parameter_response",
+            parameter_count=len(model_parameter_items),
+            connected_count=sum(
+                value is not None for value in mapped_parameter_gradients
+            ),
+            parameters=[
+                {
+                    "name": name,
+                    "shape": list(parameter.shape),
+                    "gradient_finite": gradient is None
+                    or bool(torch.isfinite(gradient).all()),
+                    "gradient_norm": None
+                    if gradient is None
+                    else float(torch.linalg.vector_norm(gradient)),
+                }
+                for (name, parameter), gradient in zip(
+                    model_parameter_items, mapped_parameter_gradients
+                )
+            ],
+        )
+
+    if args.diagnostic_mode == "mapped-parity":
+        serial_position_gradients = []
+        serial_parameter_gradients = []
+        for lane_index, (prepared, outcome) in enumerate(
+            zip(prepared_lanes, outcomes)
+        ):
+            serial_setup_start = time.perf_counter()
+            serial_model, serial_system = setup_shared_parameter_system(
+                model, numbers
+            )
+            serial_case = PhysicalCase(
+                model=serial_model,
+                system=serial_system,
+                numbers=prepared.case.numbers,
+                positions=positions[lane_index],
+                charge=prepared.case.charge,
+                spin=prepared.case.spin,
+            )
+            serial_prepared = prepare_call_inputs(serial_case)
+            (
+                serial_adapter,
+                serial_parameters,
+                _,
+                serial_validated_root,
+            ) = validate_physical_root(serial_prepared, outcome)
+            emit(
+                "serial_reference_setup_completed",
+                lane=lane_index,
+                duration_s=time.perf_counter() - serial_setup_start,
+                shared_parameter_owner=True,
+                independent_setup_graph=True,
+            )
+            serial_root = serial_validated_root.attach()
+            serial_result, _ = finalize_physical_result(
+                serial_prepared,
+                outcome,
+                serial_adapter.evaluate(serial_root, *serial_parameters),
+            )
+            serial_gradients = torch.autograd.grad(
+                serial_result.energy.sum(),
+                (positions, *(value for _, value in model_parameter_items)),
+                allow_unused=True,
+                retain_graph=lane_index < conformer_count - 1,
+            )
+            serial_position_gradient = serial_gradients[0]
+            if serial_position_gradient is None:
+                raise RuntimeError("Serial position response is disconnected.")
+            torch.testing.assert_close(
+                position_jacobian_tensor[lane_index, lane_index],
+                serial_position_gradient[lane_index],
+                atol=2.0e-7,
+                rtol=2.0e-6,
+                msg=f"Mapped/serial position gradient mismatch in lane {lane_index}.",
+            )
+            torch.testing.assert_close(
+                serial_position_gradient[
+                    1 - lane_index : 2 - lane_index
+                ],
+                torch.zeros_like(
+                    serial_position_gradient[1 - lane_index : 2 - lane_index]
+                ),
+                atol=2.0e-9,
+                rtol=0.0,
+                msg="Serial lane response leaked to another conformer.",
+            )
+            serial_position_gradients.append(serial_gradients[0].detach())
+            if model_parameter_items:
+                serial_parameter_gradients.append(
+                    tuple(
+                        None if value is None else value.detach()
+                        for value in serial_gradients[1:]
+                    )
+                )
+            emit(
+                "serial_lane_position_response",
+                lane=lane_index,
+                gradient_norm=float(
+                    torch.linalg.vector_norm(serial_position_gradient[lane_index])
+                ),
+                gradient=serial_position_gradient[
+                    lane_index
+                ].detach().cpu().tolist(),
+                max_difference=float(
+                    (
+                        position_jacobian_tensor[lane_index, lane_index]
+                        - serial_position_gradient[lane_index]
+                    ).abs().max()
+                ),
+            )
+
+        if model_parameter_items:
+            summed_serial = []
+            for parameter_index, parameter in enumerate(model_parameter_items):
+                contributions = [
+                    lane[parameter_index]
+                    for lane in serial_parameter_gradients
+                ]
+                present = [value for value in contributions if value is not None]
+                serial_sum = (
+                    torch.stack(present).sum(0)
+                    if present
+                    else torch.zeros_like(parameter[1])
+                )
+                summed_serial.append(serial_sum)
+            parameter_max_abs_difference = 0.0
+            parameter_difference_square_sum = torch.zeros((), dtype=DTYPE)
+            mapped_gradient_square_sum = torch.zeros((), dtype=DTYPE)
+            serial_gradient_square_sum = torch.zeros((), dtype=DTYPE)
+            compared_parameter_count = 0
+            for (name, _), mapped_gradient, serial_gradient in zip(
+                model_parameter_items,
+                mapped_parameter_gradients,
+                summed_serial,
+            ):
+                compared_parameter_count += 1
+                if mapped_gradient is None:
+                    if torch.count_nonzero(serial_gradient):
+                        raise RuntimeError(
+                            f"Mapped parameter {name} is disconnected, but "
+                            "serial gradients are nonzero."
+                        )
+                    mapped_value = torch.zeros_like(serial_gradient)
+                else:
+                    mapped_value = mapped_gradient
+                if mapped_value.shape != serial_gradient.shape:
+                    raise RuntimeError(
+                        f"Parameter gradient shape mismatch: {name}"
+                    )
+                if (
+                    mapped_value.device != serial_gradient.device
+                    or mapped_value.dtype != serial_gradient.dtype
+                ):
+                    raise RuntimeError(
+                        f"Parameter gradient device/dtype mismatch: {name}"
+                    )
+                difference = mapped_value - serial_gradient
+                parameter_max_abs_difference = max(
+                    parameter_max_abs_difference,
+                    float(difference.abs().max()),
+                )
+                parameter_difference_square_sum += difference.square().sum()
+                mapped_gradient_square_sum += mapped_value.square().sum()
+                serial_gradient_square_sum += serial_gradient.square().sum()
+                if mapped_gradient is None:
+                    continue
+                torch.testing.assert_close(
+                    mapped_gradient,
+                    serial_gradient,
+                    atol=2.0e-8,
+                    rtol=2.0e-7,
+                    msg=f"Shared Model parameter gradient mismatch: {name}",
+                )
+            parameter_difference_norm = float(
+                torch.sqrt(parameter_difference_square_sum)
+            )
+            serial_gradient_norm = float(torch.sqrt(serial_gradient_square_sum))
+            emit(
+                "shared_model_parameter_gradient_comparison",
+                compared_parameter_count=compared_parameter_count,
+                max_abs_difference=parameter_max_abs_difference,
+                difference_norm=parameter_difference_norm,
+                mapped_gradient_norm=float(
+                    torch.sqrt(mapped_gradient_square_sum)
+                ),
+                summed_serial_gradient_norm=serial_gradient_norm,
+                relative_difference_norm=(
+                    parameter_difference_norm
+                    / max(serial_gradient_norm, torch.finfo(DTYPE).tiny)
+                ),
+                assertions_passed=True,
+            )
     emit(
         "mapped_diagnostic_complete",
         conformers=conformer_count,
+        conformer_indices=lane_indices,
         iterations=iterations.detach().cpu().tolist(),
         mapped_energy=mapped_energy.detach().cpu().tolist(),
         mapped_free_energy=mapped_fenergy.detach().cpu().tolist(),
-        gradient_norm=float(
-            torch.linalg.vector_norm(position_gradients).detach()
-        ),
+        gradient_norm=float(torch.linalg.vector_norm(position_jacobian_tensor)),
         rss_peak_mb=peak_rss_mb(),
     )
 
@@ -873,8 +1333,27 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         torch=torch.__version__,
         dxtb_source=dxtb_package.__file__,
         hostname=socket.gethostname(),
+        cpu_model=cpu_model(),
         torch_threads=torch.get_num_threads(),
         torch_interop_threads=torch.get_num_interop_threads(),
+        thread_environment={
+            name: os.environ.get(name)
+            for name in (
+                "OMP_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+            )
+        },
+        dependencies={
+            distribution: importlib.metadata.version(distribution)
+            for distribution in (
+                "tad-mctc",
+                "tad-multicharge",
+                "tad-libcint",
+                "tad-dftd3",
+                "tad-dftd4",
+            )
+        },
         memory_limit_mb=_MEMORY_LIMIT_MB,
         workload="tmpda conformer 0, 69 atoms, float64, GFN1, PyTorch",
         displacement={
@@ -882,6 +1361,7 @@ def run_diagnostic(args: argparse.Namespace) -> None:
             "axis": args.displace_axis,
             "bohr": args.displace_bohr,
         },
+        conformer_index=args.conformer_index,
         scf={
             "temperature_kelvin": 300.0,
             "mixer": "anderson",
@@ -889,11 +1369,21 @@ def run_diagnostic(args: argparse.Namespace) -> None:
             "x_atol": args.x_atol,
             "x_atol_max": args.x_atol_max,
             "f_atol": 1.0e-8,
+            "scp_mode": labels.SCP_MODE_CHARGE,
+            "scf_mode": labels.SCF_MODE_FULL,
+            "gradient_mode": args.gradient_mode,
         },
     )
 
     started = time.perf_counter()
-    numbers, base_positions = construct_workload()
+    numbers, base_positions = construct_workload(args.conformer_index)
+    frozen_numbers, frozen_positions = frozen_conformers(
+        "tmpda", 8, sigma=0.1, seed=0
+    )
+    if not torch.equal(numbers, frozen_numbers[args.conformer_index]):
+        raise RuntimeError("Atomic ordering differs from frozen W2 workload.")
+    if not torch.equal(base_positions, frozen_positions[args.conformer_index]):
+        raise RuntimeError("Geometry differs from frozen W2 workload.")
     if args.displace_atom is not None:
         if not 0 <= args.displace_atom < numbers.numel():
             raise ValueError("--displace-atom is outside the tmpda geometry.")
@@ -914,6 +1404,7 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         maxiter=args.maxiter,
         x_atol=args.x_atol,
         x_atol_max=args.x_atol_max,
+        gradient_mode=args.gradient_mode,
     )
     case = PhysicalCase(
         model=model,
@@ -929,6 +1420,18 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         atoms=int(numbers.numel()),
         classical_labels=[x.label for x in system.classicals.components],
         interaction_labels=[x.label for x in system.interactions.components],
+        scf_config={
+            "scp_mode": system.config.scf.scp_mode,
+            "scf_mode": system.config.scf.scf_mode,
+            "maxiter": system.config.scf.maxiter,
+            "x_atol": system.config.scf.x_atol,
+            "x_atol_max": system.config.scf.x_atol_max,
+            "f_atol": system.config.scf.f_atol,
+            "fermi_etemp": system.config.scf.fermi.etemp,
+            "force_convergence": system.config.scf.force_convergence,
+            "strict": system.config.scf.strict,
+        },
+        parameter_leaf_counts=floating_parameter_counts(model),
     )
 
     if args.stage == "mapped":
@@ -946,6 +1449,11 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         initial_state_shape=list(prepared.initial_state.shape),
         graph_on_position_inputs=bool(prepared.integrals.hcore.requires_grad),
     )
+
+    if args.stage == "map-profile":
+        profile_primal_map(prepared)
+        _MEMORY_STOP.set()
+        return
 
     emit("primal_root_preparation_started")
     try:
@@ -1026,8 +1534,8 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         return
 
     model_parameters = tuple(
-        value
-        for _, value in model.par.named_parameters()
+        (name, value)
+        for name, value in model.par.named_parameters()
         if value.requires_grad
     )
     emit(
@@ -1079,6 +1587,8 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         "physical_forces",
         observable=args.observable,
         forces=(-gradients[0]).detach().cpu().tolist(),
+        model_parameter_names=[name for name, _ in model_parameters],
+        model_parameter_count=len(model_parameters),
     )
     emit("diagnostic_complete", completed_stage=args.stage)
     _MEMORY_STOP.set()
@@ -1087,7 +1597,9 @@ def run_diagnostic(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--stage", choices=("root", "energy", "mapped"), default="root"
+        "--stage",
+        choices=("root", "energy", "serial", "mapped", "map-profile"),
+        default="root",
     )
     parser.add_argument(
         "--observable",
@@ -1097,9 +1609,23 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--maxiter", type=int, default=300)
     parser.add_argument("--x-atol", type=float, default=1.0e-8)
-    parser.add_argument("--x-atol-max", type=float, default=1.0e-8)
+    parser.add_argument(
+        "--x-atol-max", type=float, default=defaults.X_ATOL_MAX
+    )
+    parser.add_argument(
+        "--gradient-mode",
+        choices=("positions-only", "positions-and-model"),
+        default="positions-only",
+    )
     parser.add_argument("--memory-limit-mb", type=float, default=16_000.0)
     parser.add_argument("--nconformers", type=int, default=2)
+    parser.add_argument("--conformer-index", type=int, default=0)
+    parser.add_argument("--reverse-order", action="store_true")
+    parser.add_argument(
+        "--diagnostic-mode",
+        choices=("mapped-only", "mapped-parity"),
+        default="mapped-only",
+    )
     parser.add_argument("--displace-atom", type=int)
     parser.add_argument("--displace-axis", type=int, default=0)
     parser.add_argument("--displace-bohr", type=float, default=0.0)
