@@ -3369,8 +3369,28 @@ two-trip tmpda serial/mapped energy, free-energy, metadata, and gradient
 results agree; the previously observed negative electron-response slope did
 not recur. See
 [`E6c1-W2a2-scaling-range-hardening.md`](E6c1-W2a2-scaling-range-hardening.md).
-W2c1 remains a separate proof of concept. W2/W3 performance acceptance stays
-open; no long fixed-trip run was attempted.
+W2 performance acceptance stays open; no long fixed-trip run was attempted.
+
+### W2c1 converged-root proof of concept
+
+The private W2c1 diagnostic now exercises the accepted eager physical-root
+preparation and existing `implicit_root` attachment on GFN1 H2 and H2O. At
+300 K, the small H2O converged energy, forces, model `selfenergy` gradient,
+and tested higher `n0` responses match a fixed-trip result that converged to
+the same root. Mapped H2/H2O energy responses match independent serial
+responses with zero cross-System blocks; shared model parameter gradients
+also match. The 16-trip H2O higher-order diagnostic used 31–33% less peak RSS
+with implicit differentiation. This is a small-system feasibility result,
+not tmpda or ensemble performance evidence.
+
+The full internal root-state Jacobian probe on H2O has NaNs in some response
+directions in serial and mapped modes, while the energy adjoint solves tested
+here converge. Failed responses remain NaN, and arbitrary full-state
+Jacobian validity is not established. The fixed-trip production route remains
+unchanged. W2c1 is promising as an energy-observable architecture candidate;
+W2 and W3 remain OPEN, and E6broute remains BLOCKED. No 300-trip tmpda or
+eight-conformer run was attempted. See
+[`E6c1-W2c1-implicit-root-prototype.md`](E6c1-W2c1-implicit-root-prototype.md).
 
 ### Historical implementation/status record
 

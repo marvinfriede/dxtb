@@ -2,13 +2,12 @@
 
 ## Decision status
 
-**Architecture comparison recorded; implementation decision remains OPEN.**
-The next bounded proof of concept should evaluate a converged physical SCF
-root with implicit differentiation. This is a different derivative contract
-from the current finite fixed-trip trajectory. The current fixed-trip path
-remains authoritative until a separate package validates and accepts that
-contract. No checkpointing, implicit-route substitution, or convergence-aware
-loop change is implemented here.
+**The converged-root proof of concept is promising for scalar energy
+observables on small GFN1 systems; production route selection remains OPEN.**
+See [E6c1-W2c1](E6c1-W2c1-implicit-root-prototype.md). This is a different
+derivative contract from the current finite fixed-trip trajectory. The
+current fixed-trip path remains authoritative. No checkpointing,
+implicit-route substitution, or convergence-aware loop change is implemented.
 
 ## Evidence carried forward
 
@@ -72,6 +71,17 @@ before memory savings are considered.
 
 ## Remaining limits
 
+- The H2O proof reduced peak RSS by 31–33% at a 16-trip fixed/unrolled
+  comparison and matched converged energy, position, model-derived parameter,
+  and tested higher-order responses. This small-case result does not predict
+  tmpda/eight-conformer behavior.
+- Per-System mapped H2/H2O energy Jacobians matched serial results and had
+  zero cross-System blocks. Some arbitrary H2O full-root-state Jacobian
+  directions produced NaNs in both serial and mapped evaluation, while the
+  tested energy adjoint remained converged. A general state-Jacobian contract
+  is not established.
+- The prototype is a feasibility result only; it does not authorize replacing
+  fixed-trip derivatives in the production path.
 - No candidate architecture has a measured full-W2 memory/time curve.
 - No 32-, 179-, or 300-trip differentiation run was repeated.
 - No full eight-conformer mapped result exists.
