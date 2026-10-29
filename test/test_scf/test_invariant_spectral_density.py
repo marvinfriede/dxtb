@@ -855,7 +855,83 @@ def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:
     )
 
 
-def test_fermi_matrix_masks_inactive_inputs_before_matrix_exponential() -> None:
+def test_rotated_fermi_matrix_p14_p15_boundary_derivatives() -> None:
+    """A rotated symmetric spectrum retains third derivatives at p14/p15."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    rotation = torch.tensor([[0.8, -0.6], [0.6, 0.8]], dtype=torch.float64)
+    frontier_vector = rotation[:, 0]
+    frontier_projector = torch.outer(frontier_vector, frontier_vector)
+
+    # For this rotation and upper > frontier, the largest absolute row sum is
+    # 1.12 * upper - 0.12 * frontier. The boundary selects p14 at equality.
+    threshold = (2.0**16 * kt + 0.12 * frontier) / 1.12
+    upper = torch.stack(
+        (threshold * (1.0 - 1.0e-10), threshold * (1.0 + 1.0e-10))
+    )
+    parameter = torch.zeros_like(upper)
+    hamiltonian = (
+        rotation
+        @ torch.diag_embed(torch.stack((frontier + parameter, upper), dim=-1))
+        @ rotation.mT
+    )
+    bound = (hamiltonian / kt).abs().sum(-1).amax(-1)
+    selected_power = torch.ceil(torch.log2(bound / 4.0)).to(torch.long)
+    torch.testing.assert_close(selected_power, torch.tensor([14, 15]))
+
+    def response(delta: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+        spectrum = torch.stack((frontier + delta, high))
+        matrix = rotation @ torch.diag(spectrum) @ rotation.mT
+        density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+        return (density * frontier_projector).sum()
+
+    active = torch.ones(2, dtype=torch.bool)
+    first_reverse = torch.func.grad(response, argnums=0)
+    second_reverse = torch.func.grad(first_reverse, argnums=0)
+    third_reverse = torch.func.grad(second_reverse, argnums=0)
+    third_forward = jacfwd(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+    third_reverse_forward = jacrev(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+
+    actual_value = torch.func.vmap(response)(parameter, upper)
+    actual_first = torch.func.vmap(first_reverse)(parameter, upper)
+    actual_second = torch.func.vmap(second_reverse)(parameter, upper)
+    actual_third_reverse = torch.func.vmap(third_reverse)(parameter, upper)
+    actual_third_forward = torch.func.vmap(third_forward)(parameter, upper)
+    actual_third_reverse_forward = torch.func.vmap(third_reverse_forward)(
+        parameter, upper
+    )
+
+    occupation = torch.sigmoid(-frontier / kt)
+    product = occupation * (1.0 - occupation)
+    expected_third = (
+        -product
+        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
+        / kt.pow(3)
+    )
+    expected = (
+        occupation.expand_as(upper),
+        (-product / kt).expand_as(upper),
+        (product * (1.0 - 2.0 * occupation) / kt.square()).expand_as(upper),
+        expected_third.expand_as(upper),
+    )
+    actual = (
+        actual_value,
+        actual_first,
+        actual_second,
+        actual_third_reverse,
+        actual_third_forward,
+        actual_third_reverse_forward,
+    )
+    expected_all = (*expected, expected[3], expected[3])
+    for value, reference in zip(actual, expected_all):
+        torch.testing.assert_close(value, reference, atol=2.0e-4, rtol=2.0e-8)
+
+
+def test_fermi_matrix_masks_inactive_inputs_before_matrix_function() -> None:
     """Inactive noncontiguous orbital values cannot destabilize the kernel."""
     matrix = torch.diag(
         torch.tensor([0.2, 1.0e8, -0.3, -1.0e8], dtype=torch.float64)
@@ -893,6 +969,19 @@ def test_fermi_matrix_masks_inactive_inputs_before_matrix_exponential() -> None:
     assert first(parameter) == 0.0
     assert second(parameter) == 0.0
     assert third(parameter) == 0.0
+
+
+def test_fermi_matrix_marks_out_of_range_spectrum_as_numerical_failure() -> (
+    None
+):
+    """The bounded expm1 approximation does not silently accept huge inputs."""
+    matrix = torch.diag(torch.tensor([0.1, 1.0e10], dtype=torch.float64))
+    active = torch.ones(2, dtype=torch.bool)
+    kt = torch.tensor(1.0e-3, dtype=torch.float64)
+
+    density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+
+    assert not torch.isfinite(density).all()
 
 
 def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:
