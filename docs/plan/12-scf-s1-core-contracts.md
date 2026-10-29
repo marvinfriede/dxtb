@@ -149,8 +149,11 @@ and Anderson tests remain the behavioral acceptance suite.
 An independent same-environment comparison between the accepted general
 source and the S1 source found identical results for H2/GFN1, H2O/GFN2, and
 NO2/GFN2 at 300 K. For these cases the iteration counts were 16, 19, and 17;
-all converged. Energy, free energy, residual, charges, density norm, and
-Hamiltonian norm matched exactly at printed precision. No production
+all converged. Energies were `-1.0585983567240072`, `-5.104158799409437`, and
+`-10.953075803268927`; energy/free energy, residual, charges, density,
+Hamiltonian, iteration count, and convergence all matched bitwise. Wall times
+were approximately 1.08/1.09 s, 1.35/1.34 s, and 1.25/1.25 s before/after;
+this is run-to-run noise, not a material regression. No production
 matrix-Fermi code changed.
 
 ## 7. Deferred work
@@ -165,11 +168,11 @@ configuration migration.
 
 ## 8. Validation status
 
-The focused S1 contract file passes, as do the map/solver/eager-compatibility,
-E0 iteration, Fock and potential selections. The Phase-A groups reproduce 225
-passed plus the inherited single failure, 54 passed, and 131 passed
-respectively. The Anderson selection has 32 passing tests plus its one
-inherited parity failure. Compileall, Black, isort, and `git diff --check`
-pass on the changed files. Exact final validation counts after the package
-boundary synchronization are recorded in the completion report. The inherited
+After synchronization to `a0f35c92e7357752e2f4cc8ec2ba2b3f16ba4423`, the
+S1 contracts plus map/solver/eager-compatibility/E0/Fock/potential selection
+reported 304 passed; the contract file alone reported 41 passed. Phase-A
+Groups 1, 2, and 3 reported 225 passed plus the single inherited failure, 54
+passed, and 131 passed respectively. The standalone Anderson selection
+reported 32 passed plus that same inherited parity failure. Compileall,
+Black, isort, and `git diff --check` pass on the changed files. The inherited
 Anderson strict-parity failure is not relaxed or otherwise modified.
