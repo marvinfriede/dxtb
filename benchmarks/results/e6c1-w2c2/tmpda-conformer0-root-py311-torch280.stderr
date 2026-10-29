@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 821, in <module>
+    main()
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 817, in main
+    run_diagnostic(args)
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 696, in run_diagnostic
+    ) = validate_physical_root(prepared, outcome)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 356, in validate_physical_root
+    validated = _prepare_scf_root(
+                ^^^^^^^^^^^^^^^^^^
+TypeError: _prepare_scf_root() got an unexpected keyword argument 'x_atol'

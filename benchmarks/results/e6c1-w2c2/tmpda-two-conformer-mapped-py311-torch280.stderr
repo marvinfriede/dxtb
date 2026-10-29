@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 1112, in <module>
+    main()
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 1108, in main
+    run_diagnostic(args)
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 934, in run_diagnostic
+    run_mapped_diagnostic(model, system, numbers, args)
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 771, in run_mapped_diagnostic
+    mapped_energy, mapped_fenergy = vmap(evaluate_lane, in_dims=dimensions)(
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp1/friede/dxtb-agentic/envs/py3.11-torch2.8.0/lib64/python3.11/site-packages/torch/_functorch/apis.py", line 202, in wrapped
+    return vmap_impl(
+           ^^^^^^^^^^
+  File "/tmp1/friede/dxtb-agentic/envs/py3.11-torch2.8.0/lib64/python3.11/site-packages/torch/_functorch/vmap.py", line 334, in vmap_impl
+    return _flat_vmap(
+           ^^^^^^^^^^^
+  File "/tmp1/friede/dxtb-agentic/envs/py3.11-torch2.8.0/lib64/python3.11/site-packages/torch/_functorch/vmap.py", line 484, in _flat_vmap
+    batched_outputs = func(*batched_inputs, **kwargs)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp1/friede/dxtb-agentic/dxtb/benchmarks/e6c1_w2c2_implicit.py", line 737, in evaluate_lane
+    attached = implicit_root(root, *parameters, raw_map=adapter)
+               ^^^^^^^^^^^^^
+NameError: name 'implicit_root' is not defined
