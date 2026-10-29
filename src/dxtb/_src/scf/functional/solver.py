@@ -829,7 +829,7 @@ def _solve_map_control(
         problem=problem,
         method=method,
         state_projection=state_projection,
-        record_initial_status=True,
+        record_initial_status=maxiter > 0,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )
