@@ -73,6 +73,7 @@ from .map import (
     scf_map,
     unpack_potential,
 )
+from .problem import SCFProblem, SCFRepresentation
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
@@ -443,7 +444,8 @@ def _solve_representation(
             padded_state = lambda value: torch.where(
                 matrix_mask, value, inputs.integrals.hcore
             )
-            padded_residual = lambda value: torch.where(matrix_mask, value, 0.0)
+            problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+            padded_residual = problem.project_residual
         if isinstance(settings, SCFSolverSettings):
             return solve_scf_fock_simple(
                 fock,
@@ -474,39 +476,6 @@ def _padded_potential_projections(
     """Mask fictitious orbital/atom potential entries and PADNZ residuals."""
     orbital_mask = inputs.orbital_mask
     atom_mask = inputs.numbers != 0
-    component_masks = [orbital_mask.reshape(-1)]
-    component_masks.extend(
-        mask
-        for mask in (
-            (
-                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 3).reshape(-1)
-                if layout.dipole_shape is not None
-                else None
-            ),
-            (
-                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 6).reshape(-1)
-                if layout.quadrupole_shape is not None
-                else None
-            ),
-        )
-        if mask is not None
-    )
-    width = max(_shape_numel(shape) for shape in layout.shapes)
-    packed_mask = torch.stack(
-        tuple(
-            torch.cat(
-                (
-                    mask,
-                    torch.zeros(
-                        width - mask.numel(),
-                        dtype=torch.bool,
-                        device=mask.device,
-                    ),
-                )
-            )
-            for mask in component_masks
-        )
-    )
 
     def project_state(value: Tensor) -> Tensor:
         potential = unpack_potential(value, layout)
@@ -531,10 +500,10 @@ def _padded_potential_projections(
             layout,
         )
 
-    def project_residual(value: Tensor) -> Tensor:
-        return torch.where(packed_mask, value, 0.0)
-
-    return project_state, project_residual
+    problem = SCFProblem(
+        inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+    )
+    return project_state, problem.project_residual
 
 
 def _padded_charge_projections(
@@ -543,39 +512,6 @@ def _padded_charge_projections(
     """Mask inactive orbital and atom multipoles in charge-SCP state."""
     orbital_mask = inputs.orbital_mask
     atom_mask = inputs.numbers != 0
-    component_masks = [orbital_mask.reshape(-1)]
-    component_masks.extend(
-        mask
-        for mask in (
-            (
-                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 3).reshape(-1)
-                if inputs.charge_layout.dipole_shape is not None
-                else None
-            ),
-            (
-                atom_mask.reshape(-1, 1).expand(*atom_mask.shape, 6).reshape(-1)
-                if inputs.charge_layout.quadrupole_shape is not None
-                else None
-            ),
-        )
-        if mask is not None
-    )
-    width = max(_shape_numel(shape) for shape in inputs.charge_layout.shapes)
-    packed_mask = torch.stack(
-        tuple(
-            torch.cat(
-                (
-                    mask,
-                    torch.zeros(
-                        width - mask.numel(),
-                        dtype=torch.bool,
-                        device=mask.device,
-                    ),
-                )
-            )
-            for mask in component_masks
-        )
-    )
 
     def project_state(value: Tensor) -> Tensor:
         charges = unpack_charges(value, inputs.charge_layout)
@@ -598,15 +534,8 @@ def _padded_charge_projections(
             inputs.charge_layout,
         )
 
-    return project_state, lambda value: torch.where(packed_mask, value, 0.0)
-
-
-def _shape_numel(shape: tuple[int, ...]) -> int:
-    """Return a statically known component size."""
-    result = 1
-    for size in shape:
-        result *= size
-    return result
+    problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
+    return project_state, problem.project_residual
 
 
 def run_functional_full_eager(

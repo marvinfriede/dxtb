@@ -23,7 +23,6 @@ from dataclasses import dataclass, fields, is_dataclass
 from typing import ClassVar, cast
 
 import torch
-from tad_mctc.batch import real_atoms
 from tad_mctc.math import einsum
 from tad_mctc.tree import Node, child
 
@@ -49,9 +48,7 @@ from .data import (
     pack_potential,
     unpack_potential,
 )
-from .interactions import (
-    interaction_energy_from_charges as _core_interaction_energy,
-)
+from .energy import free_energy_from_spectral, interaction_energy_from_charges
 from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -65,11 +62,6 @@ from .method import (
     simple_mix,
 )
 from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
-from .spectral import (
-    aufbau_free_energy_matrix,
-    fermi_free_energy_matrix,
-    fermi_free_energy_trace,
-)
 from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
@@ -1241,13 +1233,6 @@ def _materialize_solver_trace(
     )
 
 
-def interaction_energy_from_charges(
-    charges: SCFCharges, inputs: SCFInputs
-) -> Tensor:
-    """Return atom-resolved interaction energy for explicit final charges."""
-    return _core_interaction_energy(charges, inputs.interactions, inputs.index)
-
-
 def finalize_scf(
     map_result: SCFMapResult,
     inputs: SCFInputs,
@@ -1294,71 +1279,6 @@ def finalize_scf(
             ),
         ),
         trace=trace,
-    )
-
-
-def free_energy_from_spectral(
-    spectral: SCFSpectralResult, inputs: SCFInputs
-) -> Tensor:
-    """Partition the entropy contribution from one selected spectral phase."""
-    if inputs.fermi_settings is None:
-        return inputs.integrals.hcore.new_zeros(inputs.numbers.shape)
-    settings = inputs.fermi_settings
-    if settings.smear and spectral._fermi_state is None:
-        raise RuntimeError(
-            "A smeared spectral result must retain its authoritative "
-            "Fermi state for free-energy evaluation."
-        )
-    if settings.smear and settings.partition == labels.FERMI_PARTITION_EQUAL:
-        # The equal partition needs only the overlap-weighted trace, whose
-        # derivatives avoid the entropy quadrature (fermi_free_energy_trace).
-        total = fermi_free_energy_trace(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            spectral._fermi_state,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-            diff_steps=filling._diff_steps(settings.diff_order),
-        ).unsqueeze(-1)
-        real = real_atoms(inputs.numbers)
-        count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        return torch.where(real, (total / count).expand_as(real), 0.0)
-    if settings.smear:
-        entropy_matrix = fermi_free_energy_matrix(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            spectral._fermi_state,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-            diff_steps=filling._diff_steps(settings.diff_order),
-        )
-    else:
-        entropy_matrix = aufbau_free_energy_matrix(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-        )
-    if settings.partition == labels.FERMI_PARTITION_EQUAL:
-        real = real_atoms(inputs.numbers)
-        count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        total = torch.diagonal(
-            inputs.integrals.overlap @ entropy_matrix,
-            dim1=-2,
-            dim2=-1,
-        ).sum(-1, keepdim=True)
-        equal = total / count
-        return torch.where(real, equal.expand_as(real), 0.0)
-    if settings.partition == labels.FERMI_PARTITION_ATOMIC:
-        orbital_populations = torch.diagonal(
-            entropy_matrix @ inputs.integrals.overlap, dim1=-2, dim2=-1
-        )
-        return inputs.index.reduce_orbital_to_atom(orbital_populations)
-    raise ValueError(
-        f"Unknown Fermi free-energy partition {settings.partition}."
     )
 
 

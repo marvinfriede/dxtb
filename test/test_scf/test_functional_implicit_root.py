@@ -1246,7 +1246,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
-    from dxtb._src.scf.functional import solver
+    from dxtb._src.scf.functional import energy
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
 
     case = _case(
@@ -1276,7 +1276,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
 
     # the default equal partition evaluates only the trace
     for name in ("fermi_free_energy_matrix", "fermi_free_energy_trace"):
-        monkeypatch.setattr(solver, name, counting(getattr(solver, name)))
+        monkeypatch.setattr(energy, name, counting(getattr(energy, name)))
     electron_count = case.nel.clone().requires_grad_(True)
     result = run_prepared_functional_implicit(
         case.numbers,

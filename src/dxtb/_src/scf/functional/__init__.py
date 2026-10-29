@@ -25,6 +25,16 @@ from .anderson import (
     solve_scf_fock_anderson,
     solve_scf_potential_anderson,
 )
+from .certification import (
+    SCFCertificationMetrics,
+    SCFCertificationResult,
+    SCFCertificationThresholds,
+    SCFProgressMetrics,
+    certification_metrics,
+    certify_scf_state,
+    scf_progress_metrics,
+    stationarity_matrix,
+)
 from .convergence import SCFConvergence
 from .data import (
     ChargeLayout,
@@ -54,6 +64,7 @@ from .eager import (
     run_functional_full_eager,
     run_prepared_functional_full,
 )
+from .energy import electronic_energy_from_spectral, free_energy_from_spectral
 from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -108,6 +119,9 @@ __all__ = [
     "DynamicDampingSettings",
     "AndersonState",
     "ChargeLayout",
+    "SCFCertificationMetrics",
+    "SCFCertificationResult",
+    "SCFCertificationThresholds",
     "FermiSettings",
     "PotentialLayout",
     "SCFCharges",
@@ -119,6 +133,7 @@ __all__ = [
     "SCFMethodState",
     "SCFMapResult",
     "SCFPhysicalState",
+    "SCFProgressMetrics",
     "SCFProblem",
     "SCFRepresentation",
     "SCFResidual",
@@ -167,6 +182,12 @@ __all__ = [
     "unpack_potential",
     "validate_functional_scf_interactions",
     "functional_scf_interactions_eligible",
+    "certification_metrics",
+    "certify_scf_state",
+    "scf_progress_metrics",
+    "stationarity_matrix",
+    "electronic_energy_from_spectral",
+    "free_energy_from_spectral",
     "functional_core_result",
     "resolve_full_scf_route",
     "apply_functional_full_policy",
