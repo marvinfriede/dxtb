@@ -3402,22 +3402,25 @@ The mapped-root correction and validation evidence is in
 
 ### W2c2 tmpda implicit-root feasibility
 
-The private W2c2 diagnostic now converges and independently validates the
-frozen conformer-0 tmpda root at the prescribed 300-step/`1e-8` settings. Its
-energy-only implicit force response and the separately measured
-energy-plus-free-energy response both complete with converged BiCGSTAB solves
-and finite Model-parameter gradients. A selected carbon-coordinate force is
-consistent with independently converged finite differences at two step sizes.
-The two-conformer mapped run also completes with independently validated
-66/96-step roots, serial-parity energy/free-energy values, and a finite summed
-position gradient. However, that mapped run does not yet establish per-lane
-response status, serial gradient parity, cross-lane derivative blocks, or
-shared parameter-gradient accumulation. It peaks at 8.37 GiB and takes 395 s
-for two lanes; four/eight-lane runs were not attempted. These results do not
-support W2 performance clearance or an implicit production route. W2/W3 remain
-OPEN and E6broute remains BLOCKED. See
-[`E6c1-W2c2-tmpda-implicit-feasibility.md`](E6c1-W2c2-tmpda-implicit-feasibility.md)
-and the versioned traces under `benchmarks/results/e6c1-w2c2/`.
+The private W2c2 diagnostic converges and independently validates the
+conformer-0 tmpda root. Its initial runs used the stricter diagnostic setting
+`x_atol_max=1e-8`; the frozen mapped W2 benchmark leaves this at the effective
+Config default `1e-5`. W2c2a now explicitly matches the frozen mapped
+configuration, separates position-only from Model-parameter differentiation,
+and verifies the two-lane mapped physical roots. The corrected isolated
+position-only mapped process peaks at 4.10 GiB; the previous 8.37 GiB peak
+included retained serial-reference graphs and is kept as a combined-process
+historical measurement. Per-lane mapped gradients match independent serial
+gradients, cross-conformer position blocks are zero, shared Model parameter
+gradients match the sum of serial contributions, and each active lane's
+implicit response converges. Profiling identifies Fermi-density construction
+and its matrix products/solves as a major primal-map cost; response
+linearization is also a major cost. These two-lane feasibility results do not
+establish full W2 throughput or justify a production route. Four/eight-lane
+measurements remain outstanding; W2/W3 remain OPEN and E6broute remains
+BLOCKED. See
+[`E6c1-W2c2a-mapped-gradient-and-performance.md`](E6c1-W2c2a-mapped-gradient-and-performance.md)
+and the versioned traces under `benchmarks/results/e6c1-w2c2a/`.
 
 ### Historical implementation/status record
 

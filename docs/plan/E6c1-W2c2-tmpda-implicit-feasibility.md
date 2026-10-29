@@ -19,7 +19,12 @@ the dependency stack, or the fixed-trip derivative contract.
 - Each calculation ran in a fresh process with a 16,000 MiB RSS watchdog and
   a bounded external timeout. The original W2 workload settings were retained:
   69-atom tmpda, GFN1, float64, PyTorch integrals, 300 K, FULL, Anderson,
-  maxiter 300, `f_atol=x_atol=x_atol_max=1e-8`, production classical terms.
+  maxiter 300, `f_atol=x_atol=1e-8`, production classical terms. The frozen
+  mapped W2 benchmark does not specify `x_atol_max`; its effective value is
+  `defaults.X_ATOL_MAX` (1e-5). The original W2c2 harness explicitly used
+  `x_atol_max=1e-8`, so those results are a stricter-convergence diagnostic,
+  not an exact frozen-W2 configuration measurement. See the reconciliation in
+  [`E6c1-W2c2a-mapped-gradient-and-performance.md`](E6c1-W2c2a-mapped-gradient-and-performance.md).
 
 The principal commands used the Python 3.11 / Torch 2.8 environment and one
 thread. Each command redirected stdout and stderr to a unique file under the
@@ -170,10 +175,15 @@ gradient accumulation across lanes. No assertion of cross-lane derivative
 independence is made from the summed gradient alone. These gaps prevent a
 claim that the mapped implicit architecture is accepted for W2.
 
-Four- and eight-conformer calculations were not attempted. The two-lane
-calculation already peaked above the historical legacy eight-conformer RSS
-measurement, and its runtime was several minutes. Stopping there avoids an
-unsafe extrapolation or a misleading throughput claim.
+Four- and eight-conformer calculations were not attempted. The original
+combined two-lane diagnostic included serial derivative-reference graphs in
+its 8.37 GiB process peak. W2c2a later isolated mapped execution at 4.10 GiB,
+and added lane-wise response status, per-lane serial position-gradient parity,
+zero cross-lane position blocks, and shared Model parameter-gradient
+accumulation. The old peak is retained as combined-process history, not an
+isolated mapped measurement. Stopping at two lanes avoids an unsafe
+extrapolation or a misleading throughput claim; see
+[`E6c1-W2c2a-mapped-gradient-and-performance.md`](E6c1-W2c2a-mapped-gradient-and-performance.md).
 
 ## Comparison and limitations
 
