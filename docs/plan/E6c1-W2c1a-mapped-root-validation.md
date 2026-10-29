@@ -15,7 +15,9 @@ directional probe is classified below as a pre-solver execution-cost limit.
 - Tested implementation SHA: `40e878ceee0e2a5aaefaf0b59c19958bd584fde5`; the
   report and roadmap commit follows the implementation/tests.
 - Branch: `claude/tender-dijkstra-cda42s`.
-- Remote: unchanged at the accepted starting baseline; no publication made.
+- Remote at implementation review: unchanged at the accepted starting
+  baseline. This report and the preceding package commits were subsequently
+  pushed; the final remote ref was verified against the report commit.
 - Implementation commits: `87efa84` root validation, `a3ccde5` regressions,
   and `40e878c` staged diagnostics. `74369d7` adds the requested `AGENTS.md`.
 - Dependencies: mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.7.0,
@@ -175,4 +177,4 @@ evidence. No five-profile rerun was made.
 - W2/W3: **open**.
 - E6bcompat: unchanged; no regression observed in the tests run here.
 - Public Calculator routing: **unchanged**.
-- Remote publication: **not pushed**.
+- Remote publication: **pushed and verified** after this report was committed.
