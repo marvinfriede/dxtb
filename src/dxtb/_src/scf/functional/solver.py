@@ -23,7 +23,6 @@ from dataclasses import dataclass, fields, is_dataclass
 from typing import ClassVar, cast
 
 import torch
-from tad_mctc.batch import real_atoms
 from tad_mctc.math import einsum
 from tad_mctc.tree import Node, child
 
@@ -49,9 +48,7 @@ from .data import (
     pack_potential,
     unpack_potential,
 )
-from .interactions import (
-    interaction_energy_from_charges as _core_interaction_energy,
-)
+from .energy import free_energy_from_spectral, interaction_energy_from_charges
 from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -65,11 +62,6 @@ from .method import (
     simple_mix,
 )
 from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
-from .spectral import (
-    aufbau_free_energy_matrix,
-    fermi_free_energy_matrix,
-    fermi_free_energy_trace,
-)
 from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
@@ -1247,13 +1239,6 @@ def _materialize_solver_trace(
         fermi_residual=stack_optional("residual"),
         mixer_state=mixer_state,
     )
-
-
-def interaction_energy_from_charges(
-    charges: SCFCharges, inputs: SCFInputs
-) -> Tensor:
-    """Return atom-resolved interaction energy for explicit final charges."""
-    return _core_interaction_energy(charges, inputs.interactions, inputs.index)
 
 
 def finalize_scf(
