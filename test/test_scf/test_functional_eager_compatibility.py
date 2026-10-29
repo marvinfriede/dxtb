@@ -43,6 +43,7 @@ from dxtb._src.scf.functional import (
     run_prepared_functional_full,
 )
 from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional import spectral as functional_spectral
 from dxtb._src.scf.functional.data import setup_scf_inputs
 from dxtb._src.scf.functional.eager import (
     _check_subsolve_status,
@@ -1912,3 +1913,100 @@ def test_eager_force_convergence_policy(
         assert "SCF does not converge" in legacy_warnings[0][0]
         assert "Simple" in legacy_warnings[0][0]
         assert str(maxiter) in legacy_warnings[0][0]
+
+
+def test_unsupported_spectral_lane_cannot_report_public_scf_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unsupported active Fermi map stays invalid through eager policies."""
+    original = functional_spectral._matrix_fermi
+
+    def unsupported(matrix, shift, kt, active):
+        offset = torch.zeros_like(matrix)
+        offset[..., -1, -1] = 1.0e10
+        return original(matrix + offset, shift, kt, active)
+
+    monkeypatch.setattr(functional_spectral, "_matrix_fermi", unsupported)
+
+    one_shot = _prepare_case(
+        GFN1_XTB,
+        sample_name="H2",
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "fermi_etemp": 300.0,
+            "maxiter": 0,
+            "force_convergence": True,
+        },
+    )
+    one_shot_result = run_functional_full_eager(
+        one_shot.system.numbers,
+        one_shot.positions,
+        one_shot.charge,
+        one_shot.spin,
+        one_shot.interactions,
+        one_shot.interaction_data,
+        one_shot.system.ihelp,
+        one_shot.system.config.scf,
+        one_shot.integrals,
+        one_shot.refocc,
+    )
+    assert one_shot_result.functional is not None
+    assert not one_shot_result.functional.converged
+    assert not torch.isfinite(one_shot_result.functional.density).all()
+    assert not torch.isfinite(one_shot_result.functional.energy).all()
+
+    forced = _prepare_case(
+        GFN1_XTB,
+        sample_name="H2",
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "fermi_etemp": 300.0,
+            "maxiter": 2,
+            "force_convergence": True,
+        },
+    )
+    # The next map can encounter a NaN state before eager policy evaluation;
+    # this still fails visibly and cannot produce an accepted result.
+    with pytest.raises(RuntimeError):
+        run_functional_full_eager(
+            forced.system.numbers,
+            forced.positions,
+            forced.charge,
+            forced.spin,
+            forced.interactions,
+            forced.interaction_data,
+            forced.system.ihelp,
+            forced.system.config.scf,
+            forced.integrals,
+            forced.refocc,
+        )
+
+    implicit = _prepare_case(
+        GFN1_XTB,
+        sample_name="H2",
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "fermi_etemp": 300.0,
+            "maxiter": 2,
+        },
+    )
+
+    def no_root_attachment(*args, **kwargs):
+        raise AssertionError("invalid primal reached implicit root attachment")
+
+    monkeypatch.setattr(
+        functional_eager._SCFMapTensorTree, "prepare", no_root_attachment
+    )
+    with pytest.raises(RuntimeError):
+        functional_eager.run_prepared_functional_implicit(
+            implicit.system.numbers,
+            implicit.initial_charges,
+            implicit.n0,
+            implicit.occupation,
+            implicit.nel,
+            implicit.interactions,
+            implicit.interaction_data,
+            implicit.system.ihelp,
+            implicit.system.config.scf,
+            implicit.integrals,
+        )
