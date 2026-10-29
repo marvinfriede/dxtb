@@ -3383,14 +3383,22 @@ also match. The 16-trip H2O higher-order diagnostic used 31–33% less peak RSS
 with implicit differentiation. This is a small-system feasibility result,
 not tmpda or ensemble performance evidence.
 
-The full internal root-state Jacobian probe on H2O has NaNs in some response
-directions in serial and mapped modes, while the energy adjoint solves tested
-here converge. Failed responses remain NaN, and arbitrary full-state
-Jacobian validity is not established. The fixed-trip production route remains
-unchanged. W2c1 is promising as an energy-observable architecture candidate;
-W2 and W3 remain OPEN, and E6broute remains BLOCKED. No 300-trip tmpda or
-eight-conformer run was attempted. See
+The original full internal root-state NaNs came from attaching perturbed `n0`
+values to roots prepared for different parameters; those NaNs are not valid
+physical-root evidence. W2c1a now validates roots against their exact parameter
+trees and passes mapped/serial energy, free-energy, position, reference-
+occupation, shared-parameter, and finite-temperature derivative controls on
+the primary CPU profiles. A bounded correct-root directional probe spent 60
+seconds forming the raw-map parameter JVP before entering the linear solver;
+no response failure or NaN was observed. Arbitrary full-state Jacobians
+remain unverified and outside the accepted physical-observable boundary.
+The private W2c1a prototype is accepted at that documented boundary; no
+production implicit or Calculator route changes. W2 and W3 remain OPEN, and
+E6broute remains BLOCKED. No 300-trip tmpda or eight-conformer run was
+attempted. See
 [`E6c1-W2c1-implicit-root-prototype.md`](E6c1-W2c1-implicit-root-prototype.md).
+The mapped-root correction and validation evidence is in
+[`E6c1-W2c1a-mapped-root-validation.md`](E6c1-W2c1a-mapped-root-validation.md).
 
 ### Historical implementation/status record
 

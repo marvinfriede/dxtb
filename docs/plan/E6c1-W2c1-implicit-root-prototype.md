@@ -156,6 +156,24 @@ small converged root; it does not establish acceptable tmpda runtime/memory,
 eight-conformer scaling, or legacy packed performance. No tmpda run was made
 here, and no full 300-trip run was attempted.
 
+### W2c1a correction
+
+The original mapped-root paragraph above is historical diagnostic evidence,
+not sufficient acceptance evidence: the mapped experiment varied `n0` after
+preparing roots with the unperturbed inputs. W2c1a corrects this by preparing
+each lane's physical inputs and root before implicit attachment, and by
+independently checking the raw fixed-point residual at that exact parameter
+point. It also adds a two-geometry H2O comparison with lane-specific
+position-dependent tensors and a non-negligible finite-temperature H2
+free-energy response. See
+[`E6c1-W2c1a-mapped-root-validation.md`](E6c1-W2c1a-mapped-root-validation.md).
+
+The corrected scalar energy, position derivative, and shared Model-parameter
+checks pass on the tested primary profiles. The corrected arbitrary full
+root-state Jacobian probe did not complete within the bounded observation
+window. This paragraph records the status before the follow-up review and is
+superseded by the acceptance decision below and the detailed W2c1a report.
+
 - Converged-root physical parity: **pass** on H2O.
 - Position derivatives: **pass** against converged fixed-trip results.
 - Model parameter and `n0` derivatives: **pass** at the tested boundary.
@@ -171,6 +189,6 @@ here, and no full 300-trip run was attempted.
 - E6broute: **blocked**.
 - Public Calculator routing: **unchanged**.
 
-The W2c1 prototype is accepted at this bounded small-system energy-observable
-boundary. It is not an authorization to substitute implicit differentiation
-into production and does not close W2/W3.
+The W2c1 prototype is accepted at this bounded small-system
+physical-observable boundary. It is not an authorization to substitute
+implicit differentiation into production and does not close W2/W3.
