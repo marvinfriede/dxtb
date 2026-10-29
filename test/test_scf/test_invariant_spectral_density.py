@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 from tad_mctc import storch
@@ -25,10 +27,13 @@ from tad_mctc.units import KELVIN2AU
 from torch.func import jacfwd, jacrev, jvp
 
 from dxtb._src.scf.functional.spectral import (
+    _matrix_expm1,
     _matrix_fermi,
     _projector,
     aufbau_density_matrix,
     fermi_density_matrix,
+    fermi_free_energy_matrix,
+    fermi_free_energy_trace,
 )
 from dxtb._src.scf.utils import get_density
 from dxtb._src.wavefunction import filling
@@ -918,23 +923,111 @@ def test_rotated_fermi_matrix_p14_p15_boundary_derivatives() -> None:
         (product * (1.0 - 2.0 * occupation) / kt.square()).expand_as(upper),
         expected_third.expand_as(upper),
     )
-    actual = (
-        actual_value,
-        actual_first,
-        actual_second,
-        actual_third_reverse,
-        actual_third_forward,
-        actual_third_reverse_forward,
+    checks = (
+        ("occupation", actual_value, expected[0], 5.0e-11),
+        ("first derivative", actual_first, expected[1], 2.0e-9),
+        ("second derivative", actual_second, expected[2], 2.0e-7),
+        ("reverse third derivative", actual_third_reverse, expected[3], 2.0e-4),
+        ("forward third derivative", actual_third_forward, expected[3], 2.0e-4),
+        (
+            "reverse-over-forward third derivative",
+            actual_third_reverse_forward,
+            expected[3],
+            2.0e-4,
+        ),
     )
-    expected_all = (*expected, expected[3], expected[3])
-    for value, reference in zip(actual, expected_all):
-        torch.testing.assert_close(value, reference, atol=2.0e-4, rtol=2.0e-8)
+    for label, value, reference, atol in checks:
+        torch.testing.assert_close(
+            value,
+            reference,
+            atol=atol,
+            rtol=2.0e-8,
+            msg=f"{label} disagrees across the rotated p14/p15 boundary",
+        )
+
+
+@pytest.mark.parametrize(
+    ("lower_power", "upper_power"), ((21, 22), (29, 30), (30, 31))
+)
+def test_fermi_matrix_high_scale_boundaries(
+    lower_power: int, upper_power: int
+) -> None:
+    """High outer-scale transitions are lane-local and explicitly bounded."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    active = torch.ones(2, dtype=torch.bool)
+    threshold_exponent = 4.0 * float(2**lower_power)
+    factors = torch.tensor(
+        [1.0 - 1.0e-9, 1.0, 1.0 + 1.0e-9], dtype=torch.float64
+    )
+    upper = threshold_exponent * factors * kt
+    parameters = torch.zeros_like(upper)
+    matrix_bounds = torch.maximum(
+        (frontier / kt).abs().expand_as(upper), (upper / kt).abs()
+    )
+    required = torch.ceil(torch.log2(matrix_bounds / 4.0)).to(torch.long)
+    assert required.tolist() == [lower_power, lower_power, upper_power]
+
+    def response(parameter: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+        matrix = torch.diag(torch.stack((frontier + parameter, high)))
+        return _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)[0, 0]
+
+    third_reverse = torch.func.grad(
+        torch.func.grad(torch.func.grad(response, argnums=0), argnums=0),
+        argnums=0,
+    )
+    third_forward = jacfwd(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+    third_mixed = jacrev(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+    values = torch.func.vmap(response)(parameters, upper)
+    derivatives_reverse = torch.func.vmap(third_reverse)(parameters, upper)
+    derivatives_forward = torch.func.vmap(third_forward)(parameters, upper)
+    derivatives_mixed = torch.func.vmap(third_mixed)(parameters, upper)
+    valid = required <= 30
+
+    assert torch.isfinite(values[valid]).all()
+    assert torch.isfinite(derivatives_reverse[valid]).all()
+    assert torch.isfinite(derivatives_forward[valid]).all()
+    assert torch.isfinite(derivatives_mixed[valid]).all()
+    if upper_power == 31:
+        assert torch.isnan(values[~valid]).all()
+
+    occupation = torch.sigmoid(-frontier / kt)
+    product = occupation * (1.0 - occupation)
+    expected_third = (
+        -product
+        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
+        / kt.pow(3)
+    )
+    torch.testing.assert_close(
+        values[valid],
+        occupation.expand_as(values[valid]),
+        atol=5.0e-11,
+        rtol=2.0e-10,
+    )
+    for label, derivatives in (
+        ("reverse", derivatives_reverse),
+        ("forward", derivatives_forward),
+        ("reverse-over-forward", derivatives_mixed),
+    ):
+        torch.testing.assert_close(
+            derivatives[valid],
+            expected_third.expand_as(derivatives[valid]),
+            atol=2.0e-4,
+            rtol=2.0e-8,
+            msg=f"{label} third derivative disagrees at p{lower_power}/p{upper_power}",
+        )
 
 
 def test_fermi_matrix_masks_inactive_inputs_before_matrix_function() -> None:
     """Inactive noncontiguous orbital values cannot destabilize the kernel."""
     matrix = torch.diag(
-        torch.tensor([0.2, 1.0e8, -0.3, -1.0e8], dtype=torch.float64)
+        torch.tensor(
+            [0.2, float("nan"), -0.3, float("inf")], dtype=torch.float64
+        )
     )
     active = torch.tensor([True, False, True, False])
     kt = torch.tensor(0.1, dtype=torch.float64)
@@ -982,6 +1075,228 @@ def test_fermi_matrix_marks_out_of_range_spectrum_as_numerical_failure() -> (
     density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
 
     assert not torch.isfinite(density).all()
+
+
+def test_matrix_expm1_sanitizes_over_limit_and_nonfinite_lanes() -> None:
+    """The inner expm1 helper rejects unsafe lanes before polynomial work."""
+    matrices = torch.stack(
+        (
+            torch.diag(torch.tensor([0.1, -0.2], dtype=torch.float64)),
+            torch.tensor([[64.0, 64.0], [64.0, 64.0]], dtype=torch.float64),
+            torch.tensor(
+                [[float("nan"), 0.0], [0.0, 0.0]], dtype=torch.float64
+            ),
+        )
+    )
+    values = torch.func.vmap(_matrix_expm1)(matrices)
+
+    assert torch.isfinite(values[0]).all()
+    assert torch.isnan(values[1]).all()
+    assert torch.isnan(values[2]).all()
+
+
+def test_fermi_matrix_scaling_is_bounded_through_power_30() -> None:
+    """High scaling powers retain the scalar Fermi response and derivatives."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    active = torch.ones(2, dtype=torch.bool)
+    powers = torch.arange(20, 31, dtype=torch.long)
+    signs = torch.where(
+        powers.remainder(2) == 0,
+        torch.tensor(1.0, dtype=torch.float64),
+        torch.tensor(-1.0, dtype=torch.float64),
+    )
+    upper_exponents = (
+        signs
+        * 4.0
+        * torch.pow(torch.tensor(2.0, dtype=torch.float64), powers - 0.5)
+    )
+    upper = upper_exponents * kt
+    parameters = torch.zeros_like(upper)
+
+    induced_bounds = torch.maximum(
+        (frontier / kt).abs().expand_as(upper_exponents),
+        upper_exponents.abs(),
+    )
+    required = torch.ceil(torch.log2(induced_bounds / 4.0)).to(torch.long)
+    assert torch.equal(required, powers)
+    # For this construction exp_argument has norm in (4, 8), so the inner
+    # expm1 helper uses five halvings. The outer Cayley reconstruction uses
+    # one fewer doubling than its scale power.
+    inner_power = torch.ceil(
+        torch.log2((2.0 * induced_bounds / 2.0**powers) / 0.25)
+    )
+    assert torch.equal(inner_power.to(torch.long), torch.full_like(powers, 5))
+    assert torch.equal(powers - 1, torch.arange(19, 30))
+
+    def response(parameter: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+        matrix = torch.diag(torch.stack((frontier + parameter, high)))
+        density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+        return density[0, 0]
+
+    first = torch.func.grad(response, argnums=0)
+    second = torch.func.grad(first, argnums=0)
+    third_reverse = torch.func.grad(second, argnums=0)
+    third_forward = jacfwd(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+    third_mixed = jacrev(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+
+    def full_density(high: torch.Tensor) -> torch.Tensor:
+        matrix = torch.diag(torch.stack((frontier, high)))
+        return _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+
+    value = torch.func.vmap(response)(parameters, upper)
+    density = torch.func.vmap(full_density)(upper)
+    derivative1 = torch.func.vmap(first)(parameters, upper)
+    derivative2 = torch.func.vmap(second)(parameters, upper)
+    derivative3_reverse = torch.func.vmap(third_reverse)(parameters, upper)
+    derivative3_forward = torch.func.vmap(third_forward)(parameters, upper)
+    derivative3_mixed = torch.func.vmap(third_mixed)(parameters, upper)
+
+    occupation = torch.sigmoid(-frontier / kt)
+    product = occupation * (1.0 - occupation)
+    expected = (
+        occupation,
+        -product / kt,
+        product * (1.0 - 2.0 * occupation) / kt.square(),
+        -product
+        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
+        / kt.pow(3),
+    )
+    torch.testing.assert_close(
+        value, expected[0].expand_as(value), atol=5.0e-11, rtol=2.0e-10
+    )
+    expected_upper_occupation = torch.sigmoid(-upper / kt)
+    torch.testing.assert_close(
+        density[:, 1, 1],
+        expected_upper_occupation,
+        atol=5.0e-11,
+        rtol=2.0e-10,
+        msg="high positive/negative spectral occupations disagree",
+    )
+    torch.testing.assert_close(
+        derivative1, expected[1].expand_as(value), atol=2.0e-9, rtol=2.0e-10
+    )
+    torch.testing.assert_close(
+        derivative2, expected[2].expand_as(value), atol=2.0e-7, rtol=2.0e-8
+    )
+    for label, actual in (
+        ("reverse third", derivative3_reverse),
+        ("forward third", derivative3_forward),
+        ("reverse-over-forward third", derivative3_mixed),
+    ):
+        torch.testing.assert_close(
+            actual,
+            expected[3].expand_as(value),
+            atol=2.0e-4,
+            rtol=2.0e-8,
+            msg=f"{label} disagrees at scale powers 20 through 30",
+        )
+
+
+def test_fermi_matrix_scaling_limit_and_nonfinite_lanes_are_isolated() -> None:
+    """Unsupported and nonfinite lanes return NaNs without harming neighbors."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    threshold = 4.0 * float(2**30) * kt
+    upper = torch.tensor(
+        [threshold * (1.0 - 1.0e-10), threshold * (1.0 + 1.0e-10)],
+        dtype=torch.float64,
+    )
+    matrices = torch.diag_embed(
+        torch.stack((frontier.expand_as(upper), upper), dim=-1)
+    )
+    matrices = torch.cat(
+        (
+            matrices,
+            torch.diag_embed(
+                torch.tensor([[frontier, float("nan")]], dtype=torch.float64)
+            ),
+        ),
+        dim=0,
+    )
+    active = torch.ones(2, dtype=torch.bool)
+
+    def evaluate(matrix: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+
+    values = torch.func.vmap(evaluate)(matrices)
+    assert torch.isfinite(values[0]).all()
+    assert torch.isnan(values[1]).all()
+    assert torch.isnan(values[2]).all()
+    torch.testing.assert_close(
+        values[0, 0, 0], torch.sigmoid(-frontier / kt), atol=5e-11, rtol=2e-10
+    )
+
+    def lane_response(
+        parameter: torch.Tensor, matrix: torch.Tensor
+    ) -> torch.Tensor:
+        direction = torch.diag(torch.tensor([1.0, 0.0], dtype=matrix.dtype))
+        return evaluate(matrix + parameter * direction)[0, 0]
+
+    lane_gradient = torch.func.vmap(torch.func.grad(lane_response, argnums=0))(
+        torch.zeros(3, dtype=torch.float64), matrices
+    )
+    assert torch.isfinite(lane_gradient[0])
+
+
+def test_fermi_matrix_range_check_uses_shifted_spectrum_safely() -> None:
+    """Large cancelling energies remain valid; overflowing shifts fail early."""
+    maximum = torch.finfo(torch.float64).max
+    matrices = torch.tensor([[[1.0e300]], [[maximum]]], dtype=torch.float64)
+    shifts = torch.tensor([1.0e300, -maximum], dtype=torch.float64)
+    kt = torch.tensor(0.1, dtype=torch.float64)
+    active = torch.ones(1, dtype=torch.bool)
+
+    def evaluate(matrix: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(matrix, shift, kt, active)
+
+    values = torch.func.vmap(evaluate)(matrices, shifts)
+
+    assert torch.isfinite(values[0]).all()
+    torch.testing.assert_close(
+        values[0, 0, 0], torch.tensor(0.5, dtype=torch.float64)
+    )
+    assert torch.isnan(values[1]).all()
+
+
+def test_fermi_invalid_range_propagates_through_density_and_free_energy() -> (
+    None
+):
+    """Downstream spectral APIs preserve the matrix-Fermi failure signal."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    hamiltonian = torch.diag(torch.tensor([0.0, 1.0e10], dtype=torch.float64))
+    electrons = torch.tensor([1.0, 0.0], dtype=torch.float64)
+    energies = torch.linalg.eigvalsh(hamiltonian).expand(2, -1)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        energies,
+        kt,
+        thr=1.0e-14,
+        maxiter=300,
+        diff_order=3,
+    )
+    # Suppress the explicit wide-gap closure for this low-level propagation
+    # check so the intentionally invalid matrix-Fermi lane reaches entropy.
+    state = replace(state, gap=torch.zeros_like(state.gap))
+    inverse = torch.eye(2, dtype=torch.float64)
+
+    density = fermi_density_matrix(
+        hamiltonian, electrons, kt, state, l_inv=inverse
+    )
+    free_matrix = fermi_free_energy_matrix(
+        hamiltonian, electrons, kt, state, l_inv=inverse
+    )
+    free_trace = fermi_free_energy_trace(
+        hamiltonian, electrons, kt, state, l_inv=inverse
+    )
+
+    assert not torch.isfinite(density).all()
+    assert not torch.isfinite(free_matrix).all()
+    assert not torch.isfinite(free_trace).all()
 
 
 def test_fermi_small_gap_jacfwd_matches_reverse_and_jvp() -> None:

@@ -13,14 +13,21 @@ a benchmark clearance.
 - Starting local SHA: `2de612571934f3891b4b6ac31ed23aa8941532fc`.
 - Implementation/test SHA: `80e2a95f969562d9232c25db9bb89b895bf719ad`.
 - Branch: `claude/tender-dijkstra-cda42s`.
-- Remote baseline: `5dc157bd12e854d2a8df9bee084d768eaa270a35`; this change has
-  not been published yet.
+- Remote baseline at implementation start:
+  `5dc157bd12e854d2a8df9bee084d768eaa270a35`.
 - Dependencies: tad-mctc 0.11.3, tad-multicharge 0.8.0,
   tad-libcint 0.4.0, tad-dftd3 0.7.0, tad-dftd4 0.8.0.
 - CPU profiles: Python 3.11.15 / PyTorch 2.8.0+cpu and Python 3.14.8 /
   PyTorch 2.14.1+cpu. Pytest used `PYTHONPATH=src`, `OMP_NUM_THREADS=1`,
   `-n logical --dist worksteal`.
 - `AGENTS.md` remains untouched and untracked.
+
+The publication note above is historical: when this report was first written,
+the correction had not been pushed. The accepted W2a.2 implementation and
+tests were subsequently published to `origin/claude/tender-dijkstra-cda42s`
+at `6bb357f41733e24aae4367880c05a14f1b7fa84b`. The S0.1b scaling-range
+hardening is a separate follow-up and is not represented by that historical
+SHA.
 
 ## Original failure and derivative definition
 

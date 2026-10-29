@@ -3355,6 +3355,23 @@ contract distinct from fixed-trip differentiation. See
 [`E6c1-W2a2-third-order-correction.md`](E6c1-W2a2-third-order-correction.md)
 and [`E6c1-W2c-memory-architecture-decision.md`](E6c1-W2c-memory-architecture-decision.md).
 
+### S0.1b matrix-Fermi range hardening
+
+S0.1b aligns the outer adaptive Fermi scale with the inner matrix-expm1
+contract: scaled active exponent norm at most four, maximum outer power 30,
+and 29 available tanh doublings. Over-limit and nonfinite active lanes are
+sanitized before matrix operations and return NaNs; inactive padded values
+remain excluded. The p14→p15 third-order correction is retained. Spectral
+oracle and transform tests pass across the supported CPU profiles, and the
+E7a, E6bcompat, mapped GFN1/GFN2, E1.3/E6a, and implicit-root focused gates
+pass on Python 3.11/Torch 2.8 and Python 3.14/Torch 2.14.1. Bounded one- and
+two-trip tmpda serial/mapped energy, free-energy, metadata, and gradient
+results agree; the previously observed negative electron-response slope did
+not recur. See
+[`E6c1-W2a2-scaling-range-hardening.md`](E6c1-W2a2-scaling-range-hardening.md).
+W2c1 remains a separate proof of concept. W2/W3 performance acceptance stays
+open; no long fixed-trip run was attempted.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

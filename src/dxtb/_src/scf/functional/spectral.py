@@ -42,6 +42,9 @@ _GL_NODES_NP, _GL_WEIGHTS_NP = np.polynomial.legendre.leggauss(512)
 _GL_NODES_NP = 0.5 * (_GL_NODES_NP + 1.0)
 _GL_WEIGHTS_NP = 0.5 * _GL_WEIGHTS_NP
 
+_FERMI_MAX_SCALE_POWER = 30
+_FERMI_MAX_SCALED_NORM = 4.0
+
 
 def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
     if mask is None:
@@ -90,36 +93,105 @@ def _matrix_fermi(
     kt: Tensor,
     active: Tensor,
 ) -> Tensor:
-    """Evaluate the symmetric matrix Fermi function with adaptive scaling."""
+    """Evaluate the symmetric matrix Fermi function with bounded scaling.
+
+    Active spectra are supported when their induced infinity norm after
+    scaling is at most four and the required outer scale power is at most 30.
+    Inputs outside this range produce NaNs lane-locally. The detached scale
+    selects an evaluation schedule for the same matrix function.
+    """
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
-    exponent = (matrix - shift[..., None, None] * eye) / kt
-    low_temperature = kt < 5.0e-4
+    active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+
+    # Ignore invalid structural entries before checking finiteness. Replace
+    # invalid lanes before subtraction, division, logarithms, and matrix
+    # solves so they cannot create invalid intermediates.
+    active_matrix = torch.where(active_pair, matrix, torch.zeros_like(matrix))
+    active_any = active.any(-1)
+    finite_matrix = torch.where(
+        active_pair, torch.isfinite(matrix), torch.ones_like(active_pair)
+    ).all(dim=(-1, -2))
+    finite_shift_kt = torch.isfinite(shift) & torch.isfinite(kt) & (kt > 0.0)
+    finite_inputs = finite_matrix & torch.where(
+        active_any, finite_shift_kt, torch.ones_like(active_any)
+    )
+    safe_matrix = torch.where(
+        finite_inputs[..., None, None], active_matrix, torch.zeros_like(matrix)
+    )
+    safe_shift = torch.where(
+        finite_inputs & active_any, shift, torch.zeros_like(shift)
+    )
+    safe_kt = torch.where(finite_inputs & active_any, kt, torch.ones_like(kt))
+
+    # Detect only a genuinely overflowing diagonal subtraction. Large
+    # absolute energies that cancel against the chemical-potential shift can
+    # still have a small, supported exponent and must remain usable.
+    diagonal = safe_matrix.diagonal(dim1=-2, dim2=-1)
+    shift_diagonal = safe_shift.unsqueeze(-1)
+    opposite_signs = (diagonal < 0.0) & (shift_diagonal > 0.0)
+    opposite_signs = opposite_signs | (
+        (diagonal > 0.0) & (shift_diagonal < 0.0)
+    )
+    maximum_value = torch.finfo(matrix.dtype).max
+    subtraction_overflow = (
+        active
+        & opposite_signs
+        & (diagonal.abs() > maximum_value - safe_shift.abs().unsqueeze(-1))
+    ).any(-1)
+    safe_inputs = finite_inputs & ~subtraction_overflow
+    safe_matrix = torch.where(
+        safe_inputs[..., None, None], safe_matrix, torch.zeros_like(matrix)
+    )
+    safe_shift = torch.where(
+        safe_inputs, safe_shift, torch.zeros_like(safe_shift)
+    )
+    safe_kt = torch.where(safe_inputs, safe_kt, torch.ones_like(safe_kt))
+
+    difference = safe_matrix - safe_shift[..., None, None] * eye
+    maximum_exponent = _FERMI_MAX_SCALED_NORM * float(2**_FERMI_MAX_SCALE_POWER)
+    entry_in_range = (
+        difference.abs().amax(dim=(-1, -2)) / maximum_exponent <= safe_kt
+    )
+    safe_inputs = safe_inputs & (entry_in_range | ~active_any)
+    difference = torch.where(
+        safe_inputs[..., None, None], difference, torch.zeros_like(difference)
+    )
+    safe_kt = torch.where(safe_inputs, safe_kt, torch.ones_like(safe_kt))
+    exponent = difference / safe_kt[..., None, None]
+    low_temperature = safe_kt < 5.0e-4
 
     # Select a scaling schedule from a detached bound on the active spectrum.
     # This prevents wide finite-temperature spectra from overflowing during
     # the matrix exponential while leaving the physical derivative unchanged.
-    active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     exponent = torch.where(active_pair, exponent, torch.zeros_like(exponent))
     exponent_bound = exponent.detach().abs().sum(-1).amax(-1)
     required_power = torch.ceil(
-        torch.log2(exponent_bound.clamp_min(1.0) / 4.0)
+        torch.log2(exponent_bound.clamp_min(1.0) / _FERMI_MAX_SCALED_NORM)
     ).to(torch.long)
 
     base_power = torch.where(low_temperature, 22, 11)
-    scale_power = torch.maximum(base_power, required_power).clamp_max(22)
+    in_range = safe_inputs & (required_power <= _FERMI_MAX_SCALE_POWER)
+    exponent = torch.where(
+        in_range[..., None, None], exponent, torch.zeros_like(exponent)
+    )
+    scale_power = torch.maximum(base_power, required_power).clamp(
+        min=0, max=_FERMI_MAX_SCALE_POWER
+    )
     scale = torch.pow(exponent.new_tensor(2.0), scale_power)
     exp_argument = 2.0 * exponent / scale[..., None, None]
     expm1_scaled = _matrix_expm1(exp_argument)
     tangent = dense_solve(expm1_scaled + 2.0 * eye, expm1_scaled)
-    for index in range(21):
+    for index in range(_FERMI_MAX_SCALE_POWER - 1):
         doubled = 2.0 * tangent @ dense_solve(eye + tangent @ tangent, eye)
         update = index < (scale_power - 1)
         tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
     density = 0.5 * (density + density.transpose(-2, -1))
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
-    return torch.where(pair, density, torch.zeros_like(density))
+    density = torch.where(pair, density, torch.zeros_like(density))
+    nan = torch.full_like(density, float("nan"))
+    return torch.where(in_range[..., None, None], density, nan)
 
 
 def _matrix_expm1(matrix: Tensor) -> Tensor:
@@ -135,7 +207,13 @@ def _matrix_expm1(matrix: Tensor) -> Tensor:
         matrix.shape[-1], dtype=matrix.dtype, device=matrix.device
     )
     identity = identity.expand(matrix.shape)
-    norm_bound = matrix.detach().abs().sum(-1).amax(-1)
+    finite = torch.isfinite(matrix).all(dim=(-1, -2))
+    maximum = matrix.detach().abs().amax(dim=(-1, -2))
+    prevalid = finite & (maximum <= 64.0)
+    safe_matrix = torch.where(
+        prevalid[..., None, None], matrix, torch.zeros_like(matrix)
+    )
+    norm_bound = safe_matrix.detach().abs().sum(-1).amax(-1)
     requested_scale_power = torch.ceil(
         torch.log2(norm_bound.clamp_min(0.25) / 0.25)
     ).to(torch.long)
@@ -143,10 +221,15 @@ def _matrix_expm1(matrix: Tensor) -> Tensor:
     # the supported spectral range, so at most five halvings are normally
     # needed. The larger fixed loop also covers broader spectra without
     # data-dependent Python control flow under vmap.
-    in_supported_range = requested_scale_power <= 8
+    in_supported_range = prevalid & (requested_scale_power <= 8)
+    safe_matrix = torch.where(
+        in_supported_range[..., None, None],
+        safe_matrix,
+        torch.zeros_like(matrix),
+    )
     scale_power = requested_scale_power.clamp(0, 8)
     scale = torch.pow(matrix.new_tensor(2.0), scale_power)
-    scaled = matrix / scale[..., None, None]
+    scaled = safe_matrix / scale[..., None, None]
 
     square = scaled @ scaled
     cube = square @ scaled
@@ -530,7 +613,11 @@ def _fermi_free_energy_closure(
         & ~setup.full
         & ~setup.too_many
     )
-    return torch.where(channel(valid_gap), gap_value, q)
+    q = torch.where(channel(valid_gap), gap_value, q)
+    finite_occupation = torch.isfinite(setup.occupation).all(dim=(-1, -2))
+    return torch.where(
+        channel(~finite_occupation), torch.full_like(q, float("nan")), q
+    )
 
 
 def _gap_relative_mu(setup: _FermiFreeEnergySetup, identity: Tensor) -> Tensor:
