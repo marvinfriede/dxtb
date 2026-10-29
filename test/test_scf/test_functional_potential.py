@@ -204,8 +204,8 @@ def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
     assert calls == int(result.iterations) + 1
 
 
-def test_potential_maxiter_zero_tracks_raw_and_final_fermi_status() -> None:
-    """One-shot potential mode tracks both spectra without outer convergence."""
+def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
+    """Zero-budget fixed-trip potential mode has no trajectory status."""
     _, result, _ = _run_legacy_and_functional(
         {
             "mixer": labels.MIXER_LINEAR,
@@ -214,11 +214,11 @@ def test_potential_maxiter_zero_tracks_raw_and_final_fermi_status() -> None:
         }
     )
     assert not bool(result.converged)
-    assert result.trajectory_status is not None
+    assert result.trajectory_status is None
     assert result.map_result.fermi_status is not None
     assert result.final_evaluation.fermi_status is not None
-    assert bool(result.trajectory_status.fermi_converged.all())
     assert bool(result.final_evaluation.fermi_status.converged.all())
+    assert int(result.iterations) == 1
     assert bool(functional_subsolves_ok(result))
     assert not bool(functional_converged_and_valid(result))
 

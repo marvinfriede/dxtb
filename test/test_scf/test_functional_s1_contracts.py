@@ -38,6 +38,7 @@ from dxtb._src.scf.functional import (
     SCFStrategy,
     fock_initial_guess,
     fock_map,
+    functional_subsolves_ok,
     potential_initial_guess,
     potential_map,
     scf_map,
@@ -202,6 +203,35 @@ def test_eager_and_fixed_trip_linear_controllers_agree() -> None:
     torch.testing.assert_close(eager.converged, fixed.converged)
     torch.testing.assert_close(eager.residual, fixed.residual)
     assert bool(eager.converged)
+
+
+def test_zero_budget_fixed_trip_and_eager_keep_distinct_status_ownership() -> (
+    None
+):
+    """Fixed-trip zero budget omits trajectory status; eager keeps it."""
+    case = _prepare_case(
+        GFN1_XTB,
+        sample_name="H2",
+        scf_options={"fermi_etemp": 300.0, "maxiter": 0},
+    )
+    settings = SCFSolverSettings(0, False, 0.4, 1.0e-8, 1.0e-8)
+
+    fixed = solve_scf_simple(case.x, case.inputs, settings)
+    eager = solve_scf_simple(case.x, case.inputs, settings, eager=True)
+
+    assert int(fixed.iterations) == int(eager.iterations) == 1
+    assert not bool(fixed.converged)
+    assert not bool(eager.converged)
+    assert fixed.trajectory_status is None
+    assert eager.trajectory_status is not None
+    assert fixed.map_result.fermi_status is not None
+    assert fixed.final_evaluation.fermi_status is not None
+    assert bool(functional_subsolves_ok(fixed))
+
+    _assert_map_result_equal(fixed.map_result, eager.map_result)
+    torch.testing.assert_close(fixed.energy, eager.energy)
+    torch.testing.assert_close(fixed.fenergy, eager.fenergy)
+    torch.testing.assert_close(fixed.density, eager.density)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

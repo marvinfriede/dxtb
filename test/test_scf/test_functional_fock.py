@@ -506,7 +506,8 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
     assert calls == 2
     assert int(result.iterations) == 1
     assert not bool(result.converged)
-    assert result.trajectory_status is not None
+    assert result.trajectory_status is None
+    assert result.map_result.fermi_status is not None
     assert result.final_evaluation.fermi_status is not None
     assert bool(functional_subsolves_ok(result))
 
@@ -830,10 +831,10 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
     assert not bool(functional_subsolves_ok(result))
 
 
-def test_fock_valid_trajectory_with_invalid_final_spectrum(
+def test_fock_zero_budget_uses_final_status_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The separate final Fock spectrum contributes its own status."""
+    """Zero-budget Fock validity comes from the separate final spectrum."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
@@ -858,8 +859,9 @@ def test_fock_valid_trajectory_with_invalid_final_spectrum(
 
     monkeypatch.setattr(functional_solver, "evaluate_hamiltonian", fail_final)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
-    assert result.trajectory_status is not None
-    assert bool(result.trajectory_status.fermi_converged.all())
+    assert result.trajectory_status is None
+    assert result.map_result.fermi_status is not None
+    assert bool(result.map_result.fermi_status.converged.all())
     assert result.final_evaluation.fermi_status is not None
     assert not bool(result.final_evaluation.fermi_status.converged.all())
     assert not bool(functional_subsolves_ok(result))
