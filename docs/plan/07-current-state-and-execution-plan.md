@@ -3400,6 +3400,25 @@ attempted. See
 The mapped-root correction and validation evidence is in
 [`E6c1-W2c1a-mapped-root-validation.md`](E6c1-W2c1a-mapped-root-validation.md).
 
+### W2c2 tmpda implicit-root feasibility
+
+The private W2c2 diagnostic now converges and independently validates the
+frozen conformer-0 tmpda root at the prescribed 300-step/`1e-8` settings. Its
+energy-only implicit force response and the separately measured
+energy-plus-free-energy response both complete with converged BiCGSTAB solves
+and finite Model-parameter gradients. A selected carbon-coordinate force is
+consistent with independently converged finite differences at two step sizes.
+The two-conformer mapped run also completes with independently validated
+66/96-step roots, serial-parity energy/free-energy values, and a finite summed
+position gradient. However, that mapped run does not yet establish per-lane
+response status, serial gradient parity, cross-lane derivative blocks, or
+shared parameter-gradient accumulation. It peaks at 8.37 GiB and takes 395 s
+for two lanes; four/eight-lane runs were not attempted. These results do not
+support W2 performance clearance or an implicit production route. W2/W3 remain
+OPEN and E6broute remains BLOCKED. See
+[`E6c1-W2c2-tmpda-implicit-feasibility.md`](E6c1-W2c2-tmpda-implicit-feasibility.md)
+and the versioned traces under `benchmarks/results/e6c1-w2c2/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
