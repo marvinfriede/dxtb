@@ -207,4 +207,5 @@ transform contract.
 - E6bcompat: **preserved**.
 - Public Calculator routing: **unchanged**.
 - E6broute: **blocked**.
-- Remote publication: **not yet performed**.
+- Remote publication: pushed to `origin/claude/tender-dijkstra-cda42s`; the
+  verified final branch SHA is recorded in the delivery report.
