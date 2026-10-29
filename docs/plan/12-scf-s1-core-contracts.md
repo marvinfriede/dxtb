@@ -101,11 +101,11 @@ public trace field name `mixer_state` and its tensor layout are unchanged.
 Controller lifecycle, damping selection, active masks, projection, map counts,
 and root selection remain shared.
 
-The fixed-trip controller now retains the initial Fermi trajectory status for
-the accepted `maxiter=0` one-shot, matching the eager controller and existing
-status contract. The one raw map still produces `converged=False`; the extra
-status records the map that was already evaluated and does not change the
-iteration budget or convergence decision.
+The initial S1 implementation incorrectly retained the initial Fermi
+trajectory status for fixed-trip `maxiter=0`, matching eager execution. S1.1
+corrects this regression: fixed-trip zero-budget execution keeps
+`trajectory_status=None` and exposes only the final spectrum status publicly;
+eager compatibility retains its separately characterized status behavior.
 
 Differentiation was not reimplemented. The accepted E3.1 boundary remains the
 eager `_prepare_scf_root` validation followed by prepared-root `attach()`,
@@ -176,3 +176,7 @@ passed, and 131 passed respectively. The standalone Anderson selection
 reported 32 passed plus that same inherited parity failure. Compileall,
 Black, isort, and `git diff --check` pass on the changed files. The inherited
 Anderson strict-parity failure is not relaxed or otherwise modified.
+
+The initial S1 validation omitted the E6a.2 public zero-trip status test, which
+allowed the fixed-trip status regression to pass unnoticed. S1.1 adds that
+public status selection to the required lifecycle validation.
