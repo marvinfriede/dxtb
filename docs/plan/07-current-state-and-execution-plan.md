@@ -3437,8 +3437,11 @@ lane-independence checks. It improved isolated 255-orbital forward time by
 about 8–11%, but the full tmpda energy-only position response regressed from
 164.44 s to 170.13 s; `linearize` time increased from 38.72 s to 49.32 s.
 Higher-order derivative timings also regressed at the 255-orbital size in the
-Torch 2.14.1 profile. The candidate was rejected and no production code or
-public routing changed.
+Torch 2.14.1 profile. A later audit found its end-to-end process used 128
+PyTorch inter-op threads while the W2c2a baseline used one. Keep the recorded
+timings, but treat the 3.5% end-to-end regression as an uncontrolled
+comparison. The candidate was rejected and no production code or public
+routing changed.
 
 Eager `torch.cond` and differentiable `torch.while_loop` probes did not support
 the needed `torch.func` transform path on either primary profile. No safe
@@ -3449,6 +3452,20 @@ E6broute remains BLOCKED. A compiled-control-flow prototype or a separately
 proved lower-cost matrix-function algorithm requires its own gated package.
 See [`E6c1-W2c3-fermi-response-optimization.md`](E6c1-W2c3-fermi-response-optimization.md)
 and the versioned traces under `benchmarks/results/e6c1-w2c3/`.
+
+### W2c4 spectral reuse feasibility
+
+The experimental eigensystem-density candidate matched invariant density
+values in smooth standard and generalized-overlap cases, but its Hamiltonian
+derivatives diverged severely near orbital degeneracy and became NaN at exact
+degeneracy. A one-call matrix-Fermi candidate using the scalar filling
+chemical-potential value also matched primal values but lost the differentiable
+electron-count response and produced incorrect first-through-third
+Hamiltonian derivatives. Neither candidate entered production. W2c4 closes as
+a failed feasibility gate without a timing claim or tmpda rerun; W2/W3 remain
+OPEN, E6broute remains BLOCKED, and public Calculator routing is unchanged.
+See [`E6c1-W2c4-spectral-reuse-feasibility.md`](E6c1-W2c4-spectral-reuse-feasibility.md)
+and `benchmarks/results/e6c1-w2c4/`.
 
 ### Historical implementation/status record
 

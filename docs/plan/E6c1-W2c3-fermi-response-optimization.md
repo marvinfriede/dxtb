@@ -16,7 +16,8 @@ unchanged.
 - Candidate diagnostic SHA: same source baseline; no production SCF change
 - Branch: `claude/tender-dijkstra-cda42s`
 - Initial remote SHA: `a0f35c92e7357752e2f4cc8ec2ba2b3f16ba4423`
-- Primary host: AMD EPYC 7763, CPU, one intra-op and one inter-op thread
+- Primary baseline host: AMD EPYC 7763, CPU, one intra-op and one inter-op
+  thread
 - Profiles: Python 3.11.15 / Torch 2.8.0+cpu and Python 3.14.8 / Torch
   2.14.1+cpu
 - Dependencies: tad-mctc 0.11.3, tad-multicharge 0.8.0, tad-libcint 0.4.0,
@@ -163,7 +164,15 @@ correctness failure.
 The candidate was evaluated in a fresh process by temporarily substituting the
 Cholesky helper for `dense_solve` and running the accepted W2c2a energy-only,
 positions-only diagnostic. The monkey patch was restored in `finally`; no
-production file changed.
+production file changed. A later audit of this candidate trace found that it
+used one PyTorch intra-op thread but **128 inter-op threads**. The accepted
+W2c2a baseline used one inter-op thread. The timing comparison below is
+therefore not a perfectly controlled thread comparison. The candidate's
+recorded timings are retained unchanged as historical measurements; the
+3.5% total-time regression and 27% `linearize` increase should be treated as
+indicative, not as a controlled estimate of the Cholesky effect. This does not
+justify rerunning the expensive candidate: its isolated higher-order timings
+were already unfavorable, and the end-to-end result did not show a benefit.
 
 | Measure | Accepted baseline | Cholesky experiment |
 |---|---:|---:|
