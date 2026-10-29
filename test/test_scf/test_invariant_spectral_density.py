@@ -1023,6 +1023,130 @@ def test_fermi_matrix_scaling_is_lane_local_under_vmap() -> None:
     torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
 
 
+@pytest.mark.parametrize("bad_value", [float("inf"), float("nan"), 1.01])
+def test_fermi_matrix_direct_batch_isolates_unsupported_lane(
+    bad_value: float,
+) -> None:
+    """An unsupported direct-batch lane is sanitized before matrix solves."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    supported = torch.diag(torch.tensor([-2.0e-4, 3.0e-4], dtype=torch.float64))
+    unsupported = torch.diag(
+        torch.tensor(
+            [0.1, bad_value * (4.0 * float(2**30) * float(kt))],
+            dtype=torch.float64,
+        )
+    )
+    matrices = torch.stack((supported, unsupported))
+    active = torch.ones((2, 2), dtype=torch.bool)
+    shifts = torch.zeros(2, dtype=torch.float64)
+    temperatures = torch.full((2,), float(kt), dtype=torch.float64)
+
+    batched = _matrix_fermi(matrices, shifts, temperatures, active)
+    expected = _matrix_fermi(
+        supported,
+        torch.zeros_like(kt),
+        kt,
+        torch.ones(2, dtype=torch.bool),
+    )
+
+    assert torch.isfinite(batched[0]).all()
+    torch.testing.assert_close(batched[0], expected, atol=0.0, rtol=0.0)
+    assert torch.isnan(batched[1]).all()
+
+    direction = torch.diag(torch.tensor([1.0, -0.5], dtype=torch.float64))
+
+    def batched_response(parameter: torch.Tensor) -> torch.Tensor:
+        perturbed = matrices.clone()
+        perturbed[0] = perturbed[0] + parameter * direction
+        result = _matrix_fermi(perturbed, shifts, temperatures, active)
+        return result[0, 0, 0]
+
+    def standalone_response(parameter: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(
+            supported + parameter * direction,
+            torch.zeros_like(kt),
+            kt,
+            torch.ones(2, dtype=torch.bool),
+        )[0, 0]
+
+    parameter = torch.zeros((), dtype=torch.float64)
+    batched_jvp = jvp(batched_response, (parameter,), (torch.ones_like(parameter),))[1]
+    standalone_jvp = jvp(
+        standalone_response, (parameter,), (torch.ones_like(parameter),)
+    )[1]
+    torch.testing.assert_close(batched_jvp, standalone_jvp, atol=0.0, rtol=0.0)
+
+
+def test_fermi_matrix_vmap_isolates_unsupported_lane_and_jvp() -> None:
+    """A bad vmapped lane does not change its supported neighbor's JVP."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    active = torch.ones(2, dtype=torch.bool)
+    supported = torch.diag(torch.tensor([-2.0e-4, 3.0e-4], dtype=torch.float64))
+    over_limit = torch.diag(
+        torch.tensor(
+            [0.1, 1.01 * 4.0 * float(2**30) * float(kt)],
+            dtype=torch.float64,
+        )
+    )
+    matrices = torch.stack((supported, over_limit))
+    direction = torch.diag(torch.tensor([1.0, -0.5], dtype=torch.float64))
+
+    def response(matrix: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(
+            matrix + delta * direction,
+            torch.zeros_like(kt),
+            kt,
+            active,
+        )[0, 0]
+
+    parameters = torch.zeros(2, dtype=torch.float64)
+    values = torch.func.vmap(response)(matrices, parameters)
+
+    def jvp_one(matrix: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
+        return jvp(
+            lambda value: response(matrix, value),
+            (delta,),
+            (torch.ones_like(delta),),
+        )[1]
+
+    vmapped_jvp = torch.func.vmap(jvp_one)(matrices, parameters)
+    standalone_jvp = jvp_one(supported, parameters[0])
+
+    assert torch.isfinite(values[0])
+    assert torch.isnan(values[1])
+    torch.testing.assert_close(vmapped_jvp[0], standalone_jvp, atol=0.0, rtol=0.0)
+    assert torch.isfinite(vmapped_jvp[0])
+
+
+def test_fermi_matrix_quadrature_shaped_batch_matches_explicit_lanes() -> None:
+    """A heterogeneous 512-lane Fermi batch matches individual evaluations."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    pattern = torch.tensor([0.5, 2.0, 12.0, 70.1], dtype=torch.float64)
+    upper = pattern.repeat(128)
+    matrices = torch.diag_embed(
+        torch.stack((torch.full_like(upper, -0.2), upper), dim=-1)
+    )
+    shifts = torch.zeros(512, dtype=torch.float64)
+    temperatures = torch.full((512,), float(kt), dtype=torch.float64)
+    active = torch.ones((512, 2), dtype=torch.bool)
+
+    batched = _matrix_fermi(matrices, shifts, temperatures, active)
+    explicit = torch.stack(
+        [
+            _matrix_fermi(
+                matrices[index],
+                torch.zeros_like(kt),
+                kt,
+                torch.ones(2, dtype=torch.bool),
+            )
+            for index in range(512)
+        ]
+    )
+
+    assert torch.isfinite(batched).all()
+    torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
+
+
 def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:
     """Values and derivatives remain stable across every scale boundary."""
     kt = torch.tensor(9.5e-4, dtype=torch.float64)
