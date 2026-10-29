@@ -27,7 +27,7 @@ import torch
 from tad_mctc import storch
 from torch.func import jacrev, jvp
 
-from dxtb import Calculator, GFN1_XTB, GFN2_XTB, labels
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
@@ -37,13 +37,15 @@ from dxtb._src.scf.functional import (
     SCFMapResult,
     fock_initial_guess,
     fock_map,
+)
+from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import (
     pack_charges,
     potential_initial_guess,
     potential_map,
     scf_map,
     setup_scf_inputs,
 )
-from dxtb._src.scf.functional import map as functional_map
 from dxtb._src.scf.functional.anderson import (
     _solve_map_anderson,
     setup_anderson_solver_settings,
@@ -122,6 +124,7 @@ def _case(
     temperature: float = 0.0,
     field: Tensor | None = None,
     dtype: torch.dtype = torch.float64,
+    int_driver: int | None = None,
 ):
     dd = {"device": torch.device("cpu"), "dtype": dtype}
     source = SYSTEMS.get(sample_name)
@@ -155,6 +158,8 @@ def _case(
             else labels.INTLEVEL_QUADRUPOLE
         ),
     }
+    if int_driver is not None:
+        options["int_driver"] = int_driver
     if field is None:
         field = torch.zeros(3, **dd)
     # The public parameter constants are lazy loaders. Their ``__eq__``
