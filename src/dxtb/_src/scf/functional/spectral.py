@@ -109,9 +109,9 @@ def _matrix_fermi(
     base_power = torch.where(low_temperature, 22, 11)
     scale_power = torch.maximum(base_power, required_power).clamp_max(22)
     scale = torch.pow(exponent.new_tensor(2.0), scale_power)
-    scaled = exponent / scale[..., None, None]
-    exp_scaled = torch.matrix_exp(2.0 * scaled)
-    tangent = dense_solve(exp_scaled + eye, exp_scaled - eye)
+    exp_argument = 2.0 * exponent / scale[..., None, None]
+    expm1_scaled = _matrix_expm1(exp_argument)
+    tangent = dense_solve(expm1_scaled + 2.0 * eye, expm1_scaled)
     for index in range(21):
         doubled = 2.0 * tangent @ dense_solve(eye + tangent @ tangent, eye)
         update = index < (scale_power - 1)
@@ -120,6 +120,70 @@ def _matrix_fermi(
     density = 0.5 * (density + density.transpose(-2, -1))
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     return torch.where(pair, density, torch.zeros_like(density))
+
+
+def _matrix_expm1(matrix: Tensor) -> Tensor:
+    """Evaluate a symmetric matrix ``expm1`` without subtractive cancellation.
+
+    Supported Fermi spectra are scaled lane-wise to have an induced infinity
+    norm no greater than 1/4. A 12-term Taylor polynomial is then accurate
+    beyond float64 precision on that interval. Repeatedly applying
+    ``expm1(2 X) = expm1(X) @ (expm1(X) + 2 I)`` restores the original scale
+    without subtracting nearly equal matrices.
+    """
+    identity = torch.eye(
+        matrix.shape[-1], dtype=matrix.dtype, device=matrix.device
+    )
+    identity = identity.expand(matrix.shape)
+    norm_bound = matrix.detach().abs().sum(-1).amax(-1)
+    requested_scale_power = torch.ceil(
+        torch.log2(norm_bound.clamp_min(0.25) / 0.25)
+    ).to(torch.long)
+    # The upstream Fermi scaling bounds the exponential argument by 8 over
+    # the supported spectral range, so at most five halvings are normally
+    # needed. The larger fixed loop also covers broader spectra without
+    # data-dependent Python control flow under vmap.
+    in_supported_range = requested_scale_power <= 8
+    scale_power = requested_scale_power.clamp(0, 8)
+    scale = torch.pow(matrix.new_tensor(2.0), scale_power)
+    scaled = matrix / scale[..., None, None]
+
+    square = scaled @ scaled
+    cube = square @ scaled
+    fourth = square @ square
+
+    block_zero = (
+        identity + 0.5 * scaled + (1.0 / 6.0) * square + (1.0 / 24.0) * cube
+    )
+    block_one = (
+        (1.0 / 120.0) * identity
+        + (1.0 / 720.0) * scaled
+        + (1.0 / 5040.0) * square
+        + (1.0 / 40320.0) * cube
+    )
+    block_two = (
+        (1.0 / 362880.0) * identity
+        + (1.0 / 3628800.0) * scaled
+        + (1.0 / 39916800.0) * square
+        + (1.0 / 479001600.0) * cube
+    )
+    result = block_two @ fourth + block_one
+    result = result @ fourth + block_zero
+    result = scaled @ result
+    result = 0.5 * (result + result.transpose(-2, -1))
+
+    for index in range(8):
+        doubled = result @ (result + 2.0 * identity)
+        doubled = 0.5 * (doubled + doubled.transpose(-2, -1))
+        update = index < scale_power
+        result = torch.where(update[..., None, None], doubled, result)
+
+    result = torch.where(
+        in_supported_range[..., None, None],
+        result,
+        torch.full_like(result, float("nan")),
+    )
+    return result
 
 
 def _gap_electron_response(
