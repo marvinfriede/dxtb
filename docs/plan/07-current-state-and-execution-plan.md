@@ -3467,6 +3467,29 @@ OPEN, E6broute remains BLOCKED, and public Calculator routing is unchanged.
 See [`E6c1-W2c4-spectral-reuse-feasibility.md`](E6c1-W2c4-spectral-reuse-feasibility.md)
 and `benchmarks/results/e6c1-w2c4/`.
 
+### W2c5 invariant chemical-potential shift feasibility
+
+W2c5 derived and tested the gauge-invariant matrix shift
+`D' = [I + expm1(-delta/kT)(I-D)]^-1 D` for reusing an already computed
+matrix-Fermi density across scalar chemical-potential corrections. The
+diagnostic passed values and tested derivatives through third order on
+rotated, exactly/near-degenerate, generalized-overlap, padded, low-temperature,
+wide-gap, and mixed-lane fixtures. The identity is only admitted in a
+conservative guarded shift range; behavior outside that range returns NaNs,
+and universal production correction bounds have not been established. The
+free-energy trace probe was limited to an orthonormal fixture.
+
+The equivalent trace-squared slope contraction passed value and derivative
+checks. Its isolated CPU microbenchmark improved slope evaluation, with the
+largest gains at 128 and 255 orbitals. Neither the shift candidate nor the
+trace-squared contraction was integrated into production: no matched
+implicit-response or end-to-end tmpda timing was measured, and production
+integration requires coordination with the SCF owner. No production numerical
+code changed, so E7a/E6bcompat were not rerun. W2/W3 remain OPEN, E6broute
+remains BLOCKED, and public Calculator routing is unchanged. See
+[`E6c1-W2c5-fermi-shift-reuse.md`](E6c1-W2c5-fermi-shift-reuse.md) and the
+versioned traces under `benchmarks/results/e6c1-w2c5/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
