@@ -3422,6 +3422,34 @@ BLOCKED. See
 [`E6c1-W2c2a-mapped-gradient-and-performance.md`](E6c1-W2c2a-mapped-gradient-and-performance.md)
 and the versioned traces under `benchmarks/results/e6c1-w2c2a/`.
 
+### W2c3 matrix-Fermi cost diagnosis
+
+W2c3 profiled the unchanged matrix-Fermi kernel at the initial, intermediate,
+and converged states of frozen tmpda conformer 0. All selected power 16 for
+both spin channels. Each raw map made three matrix-Fermi calls and executed 90
+dense solves; 42 per map (46.7%) were outer-doubling results discarded by the
+tensor update mask. The map-wide profiler counted 573 matrix-product operators,
+but that timing is aggregate over all of `scf_map`, not Fermi-only.
+
+A scoped Cholesky solve substitution passed the tested diagonal scalar-oracle
+value and third-derivative checks, including powers 14 through 30, and mapped
+lane-independence checks. It improved isolated 255-orbital forward time by
+about 8–11%, but the full tmpda energy-only position response regressed from
+164.44 s to 170.13 s; `linearize` time increased from 38.72 s to 49.32 s.
+Higher-order derivative timings also regressed at the 255-orbital size in the
+Torch 2.14.1 profile. The candidate was rejected and no production code or
+public routing changed.
+
+Eager `torch.cond` and differentiable `torch.while_loop` probes did not support
+the needed `torch.func` transform path on either primary profile. No safe
+transform-compatible way to skip per-lane masked solves was established, and
+the power-30 contract prevents lowering the global static loop bound. W2c3
+closes as a diagnosis with no optimization selected. W2/W3 remain OPEN and
+E6broute remains BLOCKED. A compiled-control-flow prototype or a separately
+proved lower-cost matrix-function algorithm requires its own gated package.
+See [`E6c1-W2c3-fermi-response-optimization.md`](E6c1-W2c3-fermi-response-optimization.md)
+and the versioned traces under `benchmarks/results/e6c1-w2c3/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
