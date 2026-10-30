@@ -31,6 +31,7 @@ from dxtb._src.scf.functional import (
     SCFProblem,
     SCFRepresentation,
     SCFSolverSettings,
+    certification_core_metrics,
     certification_metrics,
     certify_scf_state,
     electronic_energy_from_spectral,
@@ -41,6 +42,12 @@ from dxtb._src.scf.functional import (
     scf_map,
     scf_progress_metrics,
     stationarity_matrix,
+)
+from dxtb._src.scf.functional.certification import (
+    SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
+    SCF_CERTIFICATION_STANDARD,
+    SCF_CERTIFICATION_TIGHT,
+    _stationarity_norms,
 )
 from dxtb._src.scf.functional.solver import _resolve_tolerance, _solve_map
 
@@ -89,8 +96,7 @@ def _loose_thresholds(
         representation=representation,
         fixed_point_l2=1.0e6,
         fixed_point_max=1.0e6,
-        stationarity_l2=1.0e6,
-        stationarity_max=1.0e6,
+        stationarity_orthogonalized_per_sqrt_orbital=1.0e6,
         electron_count=1.0e6,
     )
 
@@ -153,6 +159,89 @@ def test_characterization_row_contains_verified_model_and_initial_state() -> (
     assert row["hcore_norm"] > 0.0
     assert row["overlap_norm"] > 0.0
     assert row["converged"]
+
+
+def test_orthogonalized_stationarity_scaling_for_direct_sums() -> None:
+    """The per-sqrt-orbital norm is constant for repeated residual blocks."""
+    block = torch.tensor(
+        [[0.0, 0.4, -0.1], [-0.4, 0.0, 0.2], [0.1, -0.2, 0.0]],
+        dtype=torch.float64,
+    )
+
+    def metrics(scale: torch.Tensor, copies: int) -> tuple[torch.Tensor, ...]:
+        residual = torch.block_diag(*(scale * block for _ in range(copies)))
+        mask = torch.ones(residual.shape[-1], dtype=torch.bool)
+        inverse_sqrt_overlap = torch.eye(
+            residual.shape[-1], dtype=residual.dtype
+        )
+        return _stationarity_norms(residual, inverse_sqrt_overlap, mask)
+
+    base = metrics(torch.tensor(1.0, dtype=torch.float64), 1)
+    for copies in (1, 2, 4, 8):
+        values = metrics(torch.tensor(1.0, dtype=torch.float64), copies)
+        assert torch.allclose(values[2], base[2] * copies**0.5)
+        assert torch.allclose(values[3], base[3])
+        assert torch.allclose(values[4], base[4])
+        assert torch.allclose(values[5], base[5] / copies**0.5)
+        assert torch.allclose(
+            values[2] / (3 * copies), base[2] / 3 / copies**0.5
+        )
+
+    direction = torch.tensor(0.3, dtype=torch.float64)
+
+    def normalized(scale: torch.Tensor) -> torch.Tensor:
+        return metrics(scale, 4)[4]
+
+    value, tangent = torch.func.jvp(
+        normalized, (torch.tensor(1.0, dtype=torch.float64),), (direction,)
+    )
+    jacobian = torch.func.jacfwd(normalized)(
+        torch.tensor(1.0, dtype=torch.float64)
+    )
+    assert torch.allclose(value, base[4])
+    assert torch.allclose(tangent, jacobian * direction)
+
+
+def test_float32_electron_trace_error_scales_with_repeated_blocks() -> None:
+    """Independent Tr(P S) roundoff grows linearly under block replication."""
+    density64 = torch.diag(
+        torch.tensor([0.123456789123, 0.234567891234], dtype=torch.float64)
+    )
+    overlap64 = torch.tensor([[1.0, 0.1], [0.1, 1.0]], dtype=torch.float64)
+    block_target = torch.diagonal(density64 @ overlap64).sum()
+    errors = []
+    for copies in (1, 2, 4, 8):
+        density = torch.block_diag(
+            *(density64.to(torch.float32) for _ in range(copies))
+        )
+        overlap = torch.block_diag(
+            *(overlap64.to(torch.float32) for _ in range(copies))
+        )
+        measured = torch.diagonal(density @ overlap).sum()
+        target = copies * block_target
+        errors.append((measured.double() - target).abs())
+    for copies, error in zip((1, 2, 4, 8), errors):
+        assert error.item() == pytest.approx(
+            errors[0].item() * copies, rel=1e-6
+        )
+
+
+def test_internal_profiles_have_explicit_float32_stationarity_floor() -> None:
+    """Reference profiles never imply float64 tolerances in float32."""
+    assert SCF_CERTIFICATION_STANDARD.fixed_point_l2 == 1.0e-4
+    assert SCF_CERTIFICATION_STANDARD.fixed_point_max == 1.0e-5
+    for profile in (
+        SCF_CERTIFICATION_STANDARD,
+        SCF_CERTIFICATION_TIGHT,
+        SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
+    ):
+        assert profile.stationarity_tolerance(torch.float32) == 1.0e-5
+    assert (
+        SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE.stationarity_tolerance(
+            torch.float64
+        )
+        == 1.0e-12
+    )
 
 
 @pytest.mark.parametrize(
@@ -395,7 +484,7 @@ def test_electron_count_is_measured_independently() -> None:
 
 def test_open_shell_electron_count_keeps_both_spin_targets() -> None:
     """Independent Tr(P S) uses the target population of both spin channels."""
-    _, problem, state = _problem_and_state(
+    case, problem, state = _problem_and_state(
         GFN2_XTB,
         sample_name="NO2",
         spin=1.0,
@@ -431,12 +520,32 @@ def test_float32_finite_temperature_certification_floor(
     assert metrics.fermi_ok
     assert metrics.finite_ok
     assert torch.isfinite(metrics.fixed_point.l2)
-    assert torch.isfinite(metrics.stationarity_l2)
+    assert torch.isfinite(metrics.stationarity_ao_l2)
     assert torch.isfinite(metrics.electron_count_error)
     assert torch.isfinite(metrics.electronic_free_energy)
     assert case.inputs.nel.sum().item() == pytest.approx(
         metrics.electron_count.item(), abs=2e-6
     )
+
+
+def test_fractional_float32_count_error_stays_below_effective_root_floor() -> (
+    None
+):
+    """Material Fermi occupations retain the count check within f32 floor."""
+    row = characterize_case(
+        GFN2_XTB,
+        sample_name="NO2",
+        spin=1.0,
+        temperature=2000.0,
+        dtype=torch.float32,
+        tolerance=1.0e-12,
+    )
+    assert row["model"] == "GFN2-xTB"
+    assert row["effective_root_tolerance"] == pytest.approx(5.0e-5)
+    assert row["fractional_occupation_count"] > 0
+    assert 1.0e-3 < row["fractional_occupation_min"] < 1.0
+    assert abs(row["electron_count_error"]) < row["effective_root_tolerance"]
+    assert row["fermi_ok"] and row["finite_ok"]
 
 
 def test_padded_residual_entries_do_not_contribute() -> None:
@@ -468,7 +577,10 @@ def test_certification_thresholds_are_explicit_and_representation_bound(
         problem, state, _loose_thresholds(representation)
     )
     assert result.certified, result.metrics
-    strict = replace(_loose_thresholds(representation), stationarity_l2=0.0)
+    strict = replace(
+        _loose_thresholds(representation),
+        stationarity_orthogonalized_per_sqrt_orbital=0.0,
+    )
     assert not certify_scf_state(problem, state, strict).certified
     wrong = _loose_thresholds(SCFRepresentation.CHARGE)
     if representation is not SCFRepresentation.CHARGE:
@@ -505,6 +617,26 @@ def test_energy_observables_match_existing_solver_result(
     torch.testing.assert_close(metrics.electronic_energy, expected_energy.sum())
 
 
+def test_core_certification_matches_full_metrics() -> None:
+    """Optional observables do not change the core certification values."""
+    _, problem, state = _problem_and_state(
+        GFN2_XTB, sample_name="NO2", spin=1.0, temperature=300.0
+    )
+    core = certification_core_metrics(problem, state)
+    full = certification_metrics(problem, state)
+    torch.testing.assert_close(core.fixed_point.l2, full.fixed_point.l2)
+    torch.testing.assert_close(core.stationarity_ao_l2, full.stationarity_ao_l2)
+    torch.testing.assert_close(
+        core.stationarity_orthogonalized_l2_per_sqrt_orbital,
+        full.stationarity_orthogonalized_l2_per_sqrt_orbital,
+    )
+    torch.testing.assert_close(
+        core.electron_count_error, full.electron_count_error
+    )
+    assert core.finite_ok == full.finite_ok
+    assert core.fermi_ok == full.fermi_ok
+
+
 def test_fermi_validity_and_finite_validity_are_independent() -> None:
     """Unsupported matrix-Fermi output fails despite an OK Fermi status."""
     case = _prepare_case(
@@ -529,6 +661,36 @@ def test_fermi_validity_and_finite_validity_are_independent() -> None:
     assert not certify_scf_state(
         problem, broken_state, _loose_thresholds(problem.representation)
     ).certified
+
+
+def test_independent_electron_count_threshold_rejects_perturbed_density() -> (
+    None
+):
+    """A finite state with valid Fermi status can fail the independent count."""
+    _, problem, state = _problem_and_state(
+        GFN2_XTB, sample_name="NO2", spin=1.0, temperature=300.0
+    )
+    spectral = state.map_result.spectral
+    perturbation = (
+        torch.eye(spectral.density.shape[-1], dtype=spectral.density.dtype)
+        * 1.0e-3
+    )
+    bad_spectral = replace(spectral, density=spectral.density + perturbation)
+    bad_map = replace(state.map_result, spectral=bad_spectral)
+    bad_state = replace(state, map_result=bad_map)
+    result = certify_scf_state(
+        problem,
+        bad_state,
+        replace(
+            _loose_thresholds(problem.representation),
+            electron_count=1.0e-5,
+        ),
+    )
+    assert result.metrics.finite_ok
+    assert result.metrics.fermi_ok
+    assert result.metrics.electron_count_error.abs() > 1.0e-5
+    assert not result.electron_count_ok
+    assert not result.certified
 
 
 def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> (
@@ -560,7 +722,10 @@ def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> (
     tight_metrics = certification_metrics(problem, tight)
     assert loose_metrics.fixed_point.l2 < 1.0e-6
     assert tight_metrics.fixed_point.l2 < 1.0e-10
-    assert loose_metrics.stationarity_l2 > tight_metrics.stationarity_l2 * 10.0
+    assert (
+        loose_metrics.stationarity_ao_l2
+        > tight_metrics.stationarity_ao_l2 * 10.0
+    )
 
 
 def test_fermi_failure_is_reported_without_changing_physical_metrics() -> None:
@@ -582,7 +747,7 @@ def test_fermi_failure_is_reported_without_changing_physical_metrics() -> None:
     assert not metrics.fermi_ok
     assert metrics.finite_ok
     assert torch.isfinite(metrics.fixed_point.l2)
-    assert torch.isfinite(metrics.stationarity_l2)
+    assert torch.isfinite(metrics.stationarity_ao_l2)
     assert not certify_scf_state(
         problem, failed_state, _loose_thresholds(problem.representation)
     ).certified
@@ -595,8 +760,7 @@ def test_loose_fixed_point_threshold_does_not_imply_stationarity() -> None:
         representation=problem.representation,
         fixed_point_l2=1.0e6,
         fixed_point_max=1.0e6,
-        stationarity_l2=1.0e-12,
-        stationarity_max=1.0e-12,
+        stationarity_orthogonalized_per_sqrt_orbital=1.0e-12,
         electron_count=1.0,
     )
     result = certify_scf_state(problem, state, thresholds)
@@ -682,7 +846,7 @@ def test_certification_does_not_evaluate_another_scf_map(monkeypatch) -> None:
 
     monkeypatch.setattr(SCFProblem, "map", unexpected_map)
     metrics = certification_metrics(problem, state)
-    assert torch.isfinite(metrics.stationarity_l2)
+    assert torch.isfinite(metrics.stationarity_ao_l2)
 
 
 def test_certification_metrics_support_vmap_jvp_jacfwd_and_nested_derivative() -> (
@@ -725,7 +889,7 @@ def test_fresh_fock_stationarity_requires_no_spectral_evaluation(
         physical_map, "evaluate_hamiltonian", unexpected_diagonalization
     )
     metrics = certification_metrics(problem, state)
-    assert torch.isfinite(metrics.stationarity_l2)
+    assert torch.isfinite(metrics.stationarity_ao_l2)
 
 
 def test_float32_effective_root_tolerance_is_reported() -> None:
@@ -738,6 +902,6 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
     effective = _resolve_tolerance(requested, state.x.dtype)
     assert effective > requested
     assert metrics.fixed_point.l2.dtype is torch.float32
-    assert metrics.stationarity_l2.dtype is torch.float32
+    assert metrics.stationarity_ao_l2.dtype is torch.float32
     assert metrics.electron_count_error.dtype is torch.float32
     del case

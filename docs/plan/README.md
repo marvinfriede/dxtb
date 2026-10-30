@@ -26,6 +26,7 @@ API.
 | `13-scf-s1.1-zero-budget-status.md` | Restores the fixed-trip `maxiter=0` final-only status contract while preserving eager compatibility behavior |
 | `14-scf-s2a-certification-characterization.md` | Adds diagnostic physical certification metrics and records tolerance, representation, finite-temperature, and transform characterization before S2b integration |
 | `15-scf-s2a.1-certification-evidence-correction.md` | Corrects model provenance in S2a characterization, compares raw and orthogonalized stationarity, and records the evidence needed to choose S2b gates |
+| `16-scf-s2a.2-certification-policy.md` | Freezes the lazy-loader audit, size-aware stationarity scalar, electron-count rule, internal profiles, and S2b controller design |
 
 The design review referenced by the plan is not in the repository.
 

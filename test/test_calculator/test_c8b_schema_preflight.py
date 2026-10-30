@@ -48,6 +48,7 @@ from dxtb._src.calculators.model import (
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
+from dxtb._src.loader.lazy.lazy_param import LazyLoaderParam
 
 
 class _IntegralCoreNode(Node):
@@ -95,15 +96,39 @@ class _ModelParameterTree(Node):
 
 
 def _system(
-    method: str = GFN2_XTB,
+    method: LazyLoaderParam = GFN2_XTB,
     numbers: tuple[int, ...] = (1, 1),
     driver: int = labels.INTDRIVER_PYTORCH,
     dtype: torch.dtype = torch.float64,
 ) -> System:
-    method_label = labels.GFN1_XTB if method == GFN1_XTB else labels.GFN2_XTB
+    if method is GFN1_XTB:
+        method_label = labels.GFN1_XTB
+    elif method is GFN2_XTB:
+        method_label = labels.GFN2_XTB
+    else:
+        raise ValueError(f"Unsupported parameter loader: {method!r}")
     config = Config.create(method=method_label, int_driver=driver)
     model = Model(par=ParamModule(method, dtype=dtype), config=config)
     return model.setup(torch.tensor(numbers, dtype=torch.int64))
+
+
+@pytest.mark.parametrize(
+    "loader,method_label,parameter_name",
+    [
+        (GFN1_XTB, labels.GFN1_XTB, "GFN1-xTB"),
+        (GFN2_XTB, labels.GFN2_XTB, "GFN2-xTB"),
+    ],
+    ids=["gfn1", "gfn2"],
+)
+def test_system_helper_preserves_lazy_loader_identity(
+    loader: LazyLoaderParam, method_label: int, parameter_name: str
+) -> None:
+    """Loader identity resolves to the corresponding integer model label."""
+    system = _system(method=loader)
+    assert system.config.method == method_label
+    assert system.h0_setup.method == parameter_name.casefold().replace(
+        "-xtb", ""
+    )
 
 
 def _prototype(system: System) -> _ExactCoreNode:

@@ -39,13 +39,14 @@ from dxtb._src.calculators.singlepoint import (
     _interaction_data,
 )
 from dxtb._src.components.classicals import Classical
+from dxtb._src.loader.lazy.lazy_param import LazyLoaderParam
 from dxtb._src.scf.functional.core import tensor_leaves
 from dxtb._src.scf.functional.interactions import (
     prepare_functional_interactions,
 )
 
 
-def _system(method: str, label: int, numbers: list[int]) -> System:
+def _system(method: LazyLoaderParam, label: int, numbers: list[int]) -> System:
     return Model(
         par=ParamModule(method, dtype=torch.float64),
         config=Config.create(method=label),
@@ -196,12 +197,17 @@ def test_core_setup_union_contains_all_registered_families() -> None:
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
 def test_singlepoint_coherence_checks_do_not_construct_descriptors(
-    monkeypatch: pytest.MonkeyPatch, method: str
+    monkeypatch: pytest.MonkeyPatch, method: LazyLoaderParam
 ) -> None:
     """Persistent descriptors are reused during repeated evaluations."""
     from dxtb._src.calculators.singlepoint import singlepoint
 
-    method_label = labels.GFN1_XTB if method == GFN1_XTB else labels.GFN2_XTB
+    if method is GFN1_XTB:
+        method_label = labels.GFN1_XTB
+    elif method is GFN2_XTB:
+        method_label = labels.GFN2_XTB
+    else:
+        raise ValueError(f"Unsupported parameter loader: {method!r}")
     positions_a = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
     )
@@ -209,6 +215,9 @@ def test_singlepoint_coherence_checks_do_not_construct_descriptors(
     positions_b[1, 2] += 0.05
 
     system = _system(method, method_label, [1, 1])
+    assert system.config.method == method_label
+    expected_h0_method = "gfn1" if method is GFN1_XTB else "gfn2"
+    assert system.h0_setup.method == expected_h0_method
     assert system.exact_core is not None
     persistent_classical = system.exact_core.classical_terms
     persistent_interactions = system.exact_core.interaction_terms
