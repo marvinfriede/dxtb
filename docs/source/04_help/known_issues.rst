@@ -49,9 +49,10 @@ reverse/JVP transforms, ``jacfwd`` and ``vmap`` after that preparation.
 Wrapping public ``System.singlepoint`` or ``Calculator`` calls in a transform
 remains E6a scope; use ``scf_mode="full"`` for those public transform
 workflows until E6a lands. Batches, unsupported interactions and legacy solver
-overrides still use the legacy compatibility implementation. The default
-Broyden mixer also remains on the legacy implicit engine; explicitly select
-Simple or Anderson to use the functional physical-root route. Any functional
+overrides still use the legacy compatibility implementation. Native Broyden
+is available for eligible single-System charge, potential and Fock
+representations in the functional routes. Batch calculations and calls with
+legacy solver overrides retain the legacy implementation. Any functional
 implicit route rejects a nonconverged primal with ``SCFConvergenceError``
 regardless of ``force_convergence`` or ``strict``.
 
