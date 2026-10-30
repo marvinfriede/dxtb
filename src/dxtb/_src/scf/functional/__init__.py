@@ -29,6 +29,7 @@ from .broyden import (
     BroydenState,
     setup_broyden_method_settings,
 )
+from .cdiis import CDIISMethod, CDIISMethodSettings, CDIISState
 from .certification import (
     SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
     SCF_CERTIFICATION_STANDARD,
@@ -138,6 +139,9 @@ __all__ = [
     "BroydenMethod",
     "BroydenMethodSettings",
     "BroydenState",
+    "CDIISMethod",
+    "CDIISMethodSettings",
+    "CDIISState",
     "EagerFullResult",
     "FullSCFRoute",
     "FunctionalCoreResult",

@@ -28,6 +28,10 @@ from dxtb._src.typing import Tensor
 from .convergence import SCFConvergence, SCFResidual
 from .energy import electronic_energy_from_spectral, free_energy_from_spectral
 from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .stationarity import (
+    ao_stationarity_matrix,
+    orthogonalized_stationarity_matrix,
+)
 
 __all__ = [
     "SCFCertificationMetrics",
@@ -307,14 +311,12 @@ def _stationarity_matrix(
 ) -> Tensor:
     inputs = problem.inputs
     density = state.map_result.spectral.density
-    overlap = inputs.integrals.overlap
-    left = fresh_hamiltonian @ density @ overlap
-    right = overlap @ density @ fresh_hamiltonian
-    residual = left - right
-    pair_mask = (
-        inputs.orbital_mask[..., :, None] & inputs.orbital_mask[..., None, :]
+    return ao_stationarity_matrix(
+        fresh_hamiltonian,
+        density,
+        inputs.integrals.overlap,
+        inputs.orbital_mask,
     )
-    return torch.where(pair_mask, residual, 0.0)
 
 
 def _stationarity_norms(
@@ -323,10 +325,8 @@ def _stationarity_norms(
     orbital_mask: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Return AO/orthogonalized norms and the size-aware orthogonal norm."""
-    orthogonalized = (
-        inverse_sqrt_overlap.transpose(-2, -1)
-        @ ao_residual
-        @ inverse_sqrt_overlap
+    orthogonalized = orthogonalized_stationarity_matrix(
+        ao_residual, inverse_sqrt_overlap, orbital_mask
     )
     active_orbitals = orbital_mask.sum().to(ao_residual.dtype)
     active_pairs = (
