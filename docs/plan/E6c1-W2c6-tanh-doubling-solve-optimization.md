@@ -21,6 +21,7 @@ eight-conformer W2 acceptance workload was not run.
 | Field | Value |
 |---|---|
 | Required starting SHA | `45f2e9ec98368c51521146559e2c3c615ae09d2b` |
+| Final production implementation SHA | `f14ca105e15251b4dcc370f2232fdb7f64839b06` |
 | Starting branch | `claude/tender-dijkstra-cda42s` |
 | Starting remote SHA | `45f2e9ec98368c51521146559e2c3c615ae09d2b` at package start |
 | CPU | AMD EPYC 7763 64-Core Processor |
@@ -241,11 +242,12 @@ expected values used the post-change production function. That issue was
 corrected by adding the independent pre-change recurrence described above,
 plus explicit p30 and p31 assertions. Follow-up review returned **NO
 FINDING** on the corrected regression reference and benchmark provenance. The
-reviewed code consists of the diagnostic commit `41540c8` and the production
-plus test commit `f14ca10`. The reviewer later identified a bookkeeping hash
-mismatch caused by updating this report after the reviewed aggregate diff;
-the intervening change was documentation-only. No code, test, or benchmark
-blocker remained.
+reviewed code consists of diagnostic commit
+`41540c8afa7d896d4015b46a81590c740fe49f55` and production plus test commit
+`f14ca105e15251b4dcc370f2232fdb7f64839b06`. The reviewer later identified a
+bookkeeping hash mismatch caused by updating this report after the reviewed
+aggregate diff; the intervening change was documentation-only. No code, test,
+or benchmark blocker remained.
 
 The production edit is only the direct-RHS tanh-doubling expression. The
 reviewer found no blocker in the numerical, transform, padding, lane, or
