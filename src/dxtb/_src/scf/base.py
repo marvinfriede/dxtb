@@ -57,7 +57,6 @@ if TYPE_CHECKING:
         InteractionList,
         InteractionListCache,
     )
-    from dxtb._src.exlibs import xitorch as xt
     from dxtb._src.integral.container import IntegralMatrices
 del TYPE_CHECKING
 
@@ -147,7 +146,6 @@ class BaseSCF:
             self.ints = integrals
             self.occupation = occupation
             self.nel = occupation.sum(-1) if nel is None else nel
-            self.eigen_options: dict[str, Any] = {"method": "exacteig"}
             self.n0 = n0
             self.numbers = numbers
             self.ihelp = ihelp
@@ -235,12 +233,6 @@ class BaseSCF:
     fwd_options: dict[str, Any]
     """Options for forwards pass"""
 
-    bck_options: dict[str, Any]
-    """Options for backwards pass"""
-
-    eigen_options: dict[str, Any]
-    """Options for eigensolver"""
-
     def __init__(
         self,
         interactions: InteractionList,
@@ -253,10 +245,6 @@ class BaseSCF:
                 raise ValueError("Invalid configuration object.")
         else:
             self.config = ConfigSCF()
-
-        bck_options = kwargs.pop("bck_options", {})
-        fwd_options = kwargs.pop("fwd_options", {})
-        eigen_options = kwargs.pop("eigen_options", {})
 
         # validate early; the iteration function is selected in `_fcn`
         if self.config.scp_mode not in (
@@ -275,30 +263,16 @@ class BaseSCF:
         dtype = self.dtype
 
         # TODO: Move these settings to config
-        self.bck_options = {"posdef": True, **bck_options}
         self.fwd_options = {
-            "force_convergence": False,
-            "method": "broyden1",
-            "alpha": -0.5,
             "damp": self.config.damp,
             "damp_init": self.config.damp_init,
-            "damp_dynamic": self.config.damp_dynamic,
-            "damp_dynamic_factor": self.config.damp_dynamic_factor,
             "damp_generations": self.config.damp_generations,
+            "damp_diagonal_offset": self.config.damp_diagonal_offset,
             "damp_soft_start": self.config.damp_soft_start,
-            "f_tol": check_tols(self.config.f_atol, dtype),
             "x_tol": check_tols(self.config.x_atol, dtype),
             "x_tol_max": check_tols(self.config.x_atol_max, dtype),
-            "f_rtol": float("inf"),
-            "x_rtol": float("inf"),
             "maxiter": self.config.maxiter,
-            "verbose": False,
-            "line_search": False,
-            **fwd_options,
         }
-
-        self.eigen_options = {"method": "exacteig", **eigen_options}
-        self._data.eigen_options = self.eigen_options
 
         self.kt = torch.tensor(self.config.fermi.etemp * KELVIN2AU, **self.dd)
 
@@ -341,13 +315,13 @@ class BaseSCF:
         """
 
     @abstractmethod
-    def get_overlap(self) -> xt.LinearOperator | Tensor:
+    def get_overlap(self) -> Tensor:
         """
         Get the overlap matrix.
 
         Returns
         -------
-        LinearOperator | Tensor
+        Tensor
             Overlap matrix.
         """
 
