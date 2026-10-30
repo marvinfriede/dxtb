@@ -28,23 +28,11 @@ import torch
 
 from dxtb import GFN1_XTB, OutputHandler, labels
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.scf.implicit import SelfConsistentFieldImplicit as SCF
 from dxtb._src.scf.mixer import Anderson
 from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 from dxtb.calculators import EnergyCalculator
 from dxtb.components.base import InteractionList
 from dxtb.config import ConfigSCF
-
-
-def test_properties() -> None:
-    d = torch.randn((3, 3))  # dummy
-    with pytest.raises(TypeError):
-        IntegralMatrices()  # type: ignore[call-arg]
-    ints = IntegralMatrices(hcore=d, overlap=torch.randn((3, 3)))
-    scf = SCF(d, d, d, d, d, d, integrals=ints)  # type: ignore
-    assert scf.shape == d.shape
-    assert scf.device == d.device
-    assert scf.dtype == d.dtype
 
 
 def test_fail() -> None:

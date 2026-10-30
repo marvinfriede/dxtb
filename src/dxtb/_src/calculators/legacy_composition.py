@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Private ordered composition for retained legacy single-System routes."""
+"""Private ordered composition for independent single-System evaluations."""
 
 from __future__ import annotations
 
@@ -43,14 +43,13 @@ class LegacySystemRoute(Enum):
     """Static execution ownership for one independently prepared System."""
 
     MAPPED = auto()
-    LEGACY_COMPOSED = auto()
     SEPARATE_ROUTE = auto()
     REJECTED = auto()
 
 
 @dataclass(frozen=True)
 class LegacySCFOptions:
-    """Engine constructor extras retained by the low-level SCF contract."""
+    """Legacy engine constructor extras, now rejected explicitly."""
 
     args: tuple[Any, ...] = ()
     kwargs: Mapping[str, Any] | None = None
@@ -89,29 +88,39 @@ def classify_legacy_system(
 
     if core.integral is None:
         return LegacySystemRoute.REJECTED
-    if core.integral.driver_type == labels.INTDRIVER_LIBCINT:
-        return LegacySystemRoute.LEGACY_COMPOSED
-    if core.integral.driver_type != labels.INTDRIVER_PYTORCH:
-        return LegacySystemRoute.REJECTED
-
     if legacy_options is not None and (
         legacy_options.args or legacy_options.kwargs
     ):
-        return LegacySystemRoute.LEGACY_COMPOSED
-
-    if config.scf.scf_mode != labels.SCF_MODE_FULL:
-        return LegacySystemRoute.LEGACY_COMPOSED
+        raise NotImplementedError(
+            "Legacy SCF engine positional/keyword overrides are no longer "
+            "supported by functional SCF."
+        )
 
     eligible, _ = functional_scf_interactions_eligible(system.interactions)
     if not eligible:
-        return LegacySystemRoute.LEGACY_COMPOSED
+        names = ", ".join(
+            type(component).__name__
+            for component in system.interactions.components
+        )
+        raise NotImplementedError(
+            f"Functional SCF does not support interaction extension(s): {names}."
+        )
 
     if len(core.classical_terms) != len(system.classicals.components):
-        return LegacySystemRoute.LEGACY_COMPOSED
+        names = ", ".join(
+            type(component).__name__
+            for component in system.classicals.components
+        )
+        raise NotImplementedError(
+            "Functional SCF does not support custom classical extension(s): "
+            f"{names}."
+        )
 
     scf_config = config.scf
-    if scf_config.fermi.etemp < 0.0 or scf_config.fermi.maxiter < 0:
-        return LegacySystemRoute.LEGACY_COMPOSED
+    if scf_config.fermi.etemp < 0.0:
+        raise ValueError("Electronic Temperature must be non-negative.")
+    if scf_config.fermi.maxiter < 0:
+        raise ValueError("Fermi maxiter must be non-negative.")
     if scf_config.maxiter < 0:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
 
@@ -129,11 +138,7 @@ def compose_legacy_systems(
     field_grad: Tensor | None = None,
     legacy_options: LegacySCFOptions | None = None,
 ) -> LegacyCompositionResult:
-    """Evaluate retained Systems independently and preserve input order.
-
-    This private boundary deliberately performs an outer Python composition
-    of independent legacy calls. It is not a fallback for the mapped route.
-    """
+    """Evaluate Systems independently and preserve input order."""
     count = len(systems)
     if count == 0:
         raise ValueError("Legacy composition requires at least one System.")
@@ -167,19 +172,6 @@ def compose_legacy_systems(
         raise ValueError(
             f"Systems {rejected} are not supported by retained composition."
         )
-    mapped = [
-        source_ids[i]
-        for i, route in enumerate(routes)
-        if route is LegacySystemRoute.MAPPED
-    ]
-    if mapped:
-        raise ValueError(
-            "Mapped-eligible Systems must use the private mapped evaluator; "
-            f"legacy composition was not selected for source IDs {mapped}."
-        )
-
-    kwargs = None if legacy_options is None else legacy_options.as_kwargs()
-    args = () if legacy_options is None else legacy_options.args
     results_list: list[Result] = []
     for source_id, system, position, charge, spin, route in zip(
         source_ids, systems, positions, charges, spins, routes
@@ -193,13 +185,6 @@ def compose_legacy_systems(
                 field,
                 field_grad,
                 fixed_trip=False,
-                force_legacy_scf=(
-                    route is LegacySystemRoute.LEGACY_COMPOSED
-                    or bool(args)
-                    or bool(kwargs)
-                ),
-                legacy_scf_args=args,
-                legacy_scf_kwargs=kwargs,
                 refresh_extension_caches=True,
             )
         except Exception as error:

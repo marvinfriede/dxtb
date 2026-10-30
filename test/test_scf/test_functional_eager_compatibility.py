@@ -63,70 +63,35 @@ from .test_functional_map import _assert_tensor_equal, _prepare_case
 
 
 def test_default_full_route_resolves_native_potential_broyden() -> None:
-    """Default potential/Broyden config keeps its configured method."""
-    case = _prepare_case(GFN1_XTB)
-    config = replace(
-        case.system.config.scf,
-        scp_mode=labels.SCP_MODE_POTENTIAL,
-        fermi=ConfigFermi(),
-    )
-    OutputHandler.clear_warnings()
-    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
-    assert route.kind == "functional"
-    assert route.representation == labels.SCP_MODE_POTENTIAL
-    assert route.effective_mixer == labels.MIXER_BROYDEN
-    assert route.warning is None
-    assert config.fermi.etemp == 300.0
-    assert OutputHandler.warnings == []
+    """The configured default stays native and has no substitution warning."""
+    from dxtb.config import ConfigSCF
 
-
-@pytest.mark.parametrize(
-    "mixer",
-    [labels.MIXER_LINEAR, labels.MIXER_BROYDEN],
-    ids=["simple", "default-broyden"],
-)
-def test_negative_temperature_uses_legacy_eager_behavior(mixer: int) -> None:
-    """Negative temperature preserves the legacy warning and error family."""
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": mixer, "fermi_etemp": -1.0},
-        setup_functional=False,
-    )
-    config = case.system.config.scf
+    case = _prepare_case(GFN2_XTB, sample_name="H2O")
     route = resolve_full_scf_route(
-        config,
+        ConfigSCF(),
         case.interactions,
         case.system.ihelp,
         case.system.numbers,
         case.integrals,
     )
-    assert route.kind == "legacy"
-    assert route.reason == (
-        "negative electronic temperature retains legacy eager behavior"
-    )
+    assert route.kind == "functional"
+    assert route.effective_mixer == labels.MIXER_BROYDEN
+    assert route.warning is None
 
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 
-    def legacy_result() -> dict[str, object]:
-        engine = SelfConsistentFieldFull(
-            case.interactions,
-            case.occupation,
-            case.n0,
-            numbers=case.system.numbers,
-            ihelp=case.system.ihelp,
-            cache=case.interaction_data,
-            integrals=case.integrals,
-            config=config,
-            nel=case.nel,
-        )
-        return engine(case.initial_charges.clone())
+def test_single_system_full_does_not_instantiate_legacy_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Supported single-System FULL execution stays on the functional path."""
+    from dxtb._src.scf import unrolling
 
-    OutputHandler.clear_warnings()
-    baseline = legacy_result()
-    legacy_warnings = list(OutputHandler.warnings)
+    case = _prepare_case(GFN1_XTB, sample_name="H2")
 
-    OutputHandler.clear_warnings()
-    routed = scf_iterator.solve(
+    def forbidden(*args, **kwargs):
+        raise AssertionError("single-System FULL must not instantiate legacy")
+
+    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", forbidden)
+    result = scf_iterator.solve(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -134,226 +99,22 @@ def test_negative_temperature_uses_legacy_eager_behavior(mixer: int) -> None:
         case.interactions,
         case.interaction_data,
         case.system.ihelp,
-        config,
+        case.system.config.scf,
         case.integrals,
         case.refocc,
     )
-    routed_warnings = list(OutputHandler.warnings)
-    assert isinstance(routed, dict)
-    assert routed_warnings == legacy_warnings
-    for field in (
-        "energy",
-        "fenergy",
-        "hamiltonian",
-        "density",
-        "emo",
-        "occupation",
-    ):
-        torch.testing.assert_close(routed[field], baseline[field])
+    assert bool(result.converged)
 
 
 @pytest.mark.parametrize(
     "override",
-    [
-        "eigen_options",
-        "fwd_options",
-        "bck_options",
-        "unexpected_option",
-        "solver_options",
-        "positional",
-    ],
+    ["fwd_options", "bck_options", "eigen_options", "unexpected_option"],
 )
-def test_full_engine_overrides_remain_legacy_owned(
-    monkeypatch: pytest.MonkeyPatch, override: str
-) -> None:
-    """Legacy engine overrides reach SelfConsistentFieldFull unchanged."""
-    from dxtb._src.scf import unrolling
-
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
-    )
-    marker = object()
-    options = {"method": "exacteig"}
-    supplied_args = (marker,) if override == "positional" else ()
-    supplied_kwargs = {} if override == "positional" else {override: options}
-    seen: dict[str, object] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            seen["args"] = args
-            seen["kwargs"] = kwargs
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            return {}
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError("functional runner must not consume overrides")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    result = scf_iterator.solve(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-        *supplied_args,
-        **supplied_kwargs,
-    )
-    assert result == {}
-    forwarded_args = seen["args"]
-    forwarded_kwargs = seen["kwargs"]
-    if override == "positional":
-        assert forwarded_args[3] is marker
-    else:
-        assert forwarded_kwargs[override] is options
-
-
-@pytest.mark.parametrize("owner", [None, "object"])
-def test_core_index_owner_keyword_remains_legacy_owned(
-    monkeypatch: pytest.MonkeyPatch, owner: object | str | None
-) -> None:
-    """The public solver does not reserve the internal owner keyword."""
-    from dxtb._src.scf import unrolling
-
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
-    )
-    marker = object() if owner == "object" else None
-    seen: dict[str, object] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            seen["kwargs"] = kwargs
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            return {}
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError("legacy overrides must not enter functional SCF")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    result = scf_iterator.solve(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-        core_index_owner=marker,
-    )
-    assert result == {}
-    assert seen["kwargs"]["core_index_owner"] is marker
-
-
-@pytest.mark.parametrize("owner", [None, "object"])
-def test_core_index_owner_keyword_remains_legacy_owned_for_implicit(
-    monkeypatch: pytest.MonkeyPatch, owner: object | str | None
-) -> None:
-    """Implicit mode also forwards the reserved-looking keyword unchanged."""
-    from dxtb._src.scf import implicit
-
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
-    )
-    config = replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT)
-    marker = object() if owner == "object" else None
-    seen: dict[str, object] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            seen["kwargs"] = kwargs
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            return {}
-
-    monkeypatch.setattr(implicit, "SelfConsistentFieldImplicit", CaptureEngine)
-    result = scf_iterator.solve(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        config,
-        case.integrals,
-        case.refocc,
-        core_index_owner=marker,
-    )
-    assert result == {}
-    assert seen["kwargs"]["core_index_owner"] is marker
-
-
-def test_core_index_remains_the_preexisting_internal_keyword() -> None:
-    """The earlier core_index handoff remains reserved by the solver."""
-    from dxtb._src.scf.functional import FunctionalCoreResult
-
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
-    )
-    result = scf_iterator.solve(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-        core_index=None,
-    )
-    assert isinstance(result, FunctionalCoreResult)
-
-
-@pytest.mark.parametrize("key", ["unexpected_option", "solver_options"])
-@pytest.mark.parametrize("runner", ["production", "adapter"])
-def test_arbitrary_full_kwargs_preserve_legacy_typeerror(
-    monkeypatch: pytest.MonkeyPatch, key: str, runner: str
-) -> None:
-    """Arbitrary FULL keywords reach legacy and are never silently dropped."""
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 0},
-        setup_functional=False,
-    )
-
-    def unexpected(*args: object, **kwargs: object) -> None:
-        raise AssertionError("nonempty FULL kwargs cannot enter functional SCF")
-
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    call = (
-        scf_iterator.solve
-        if runner == "production"
-        else run_functional_full_eager
-    )
-    with pytest.raises(
-        TypeError,
-        match=rf"unexpected keyword argument '{key}'",
-    ):
-        call(
+def test_legacy_engine_overrides_are_retired(override: str) -> None:
+    """Opaque legacy engine settings fail instead of selecting another SCF."""
+    case = _prepare_case(GFN1_XTB)
+    with pytest.raises(NotImplementedError, match="Legacy SCF engine"):
+        scf_iterator.solve(
             case.system.numbers,
             case.positions,
             case.charge,
@@ -364,73 +125,13 @@ def test_arbitrary_full_kwargs_preserve_legacy_typeerror(
             case.system.config.scf,
             case.integrals,
             case.refocc,
-            **{key: object()},
+            **{override: {"method": "exacteig"}},
         )
 
 
-def test_legacy_engine_options_are_retained_by_full_engine() -> None:
-    """The legacy engine applies supported forward and eigensolver options."""
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
-
+def test_legacy_engine_positional_override_is_retired() -> None:
     case = _prepare_case(GFN1_XTB)
-    engine = SelfConsistentFieldFull(
-        case.interactions,
-        case.occupation,
-        case.n0,
-        numbers=case.system.numbers,
-        ihelp=case.system.ihelp,
-        cache=case.interaction_data,
-        integrals=case.integrals,
-        config=case.system.config.scf,
-        nel=case.nel,
-        fwd_options={"damp": 0.25},
-        eigen_options={"method": "exacteig"},
-    )
-    assert engine.fwd_options["damp"] == 0.25
-    assert engine.eigen_options["method"] == "exacteig"
-
-
-@pytest.mark.parametrize(
-    ("integral_field", "message"),
-    [
-        ("hcore", "No core Hamiltonian provided"),
-        ("overlap", "No Overlap provided"),
-    ],
-)
-def test_missing_integrals_remain_legacy_owned(
-    monkeypatch: pytest.MonkeyPatch,
-    integral_field: str,
-    message: str,
-) -> None:
-    """Incomplete integral inputs preserve legacy validation behavior."""
-    case = _prepare_case(GFN1_XTB)
-    kwargs = {
-        "hcore": case.integrals.hcore,
-        "overlap": case.integrals.overlap,
-        "dipole": case.integrals.dipole,
-        "quadrupole": case.integrals.quadrupole,
-    }
-    kwargs[integral_field] = None
-    integrals = SimpleNamespace(**kwargs)
-    route = resolve_full_scf_route(
-        case.system.config.scf,
-        case.interactions,
-        case.system.ihelp,
-        case.system.numbers,
-        integrals,
-    )
-    assert route.kind == "legacy"
-    assert "missing hcore or overlap" in (route.reason or "")
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError(
-            "malformed integrals cannot enter functional setup"
-        )
-
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(NotImplementedError, match="Legacy SCF engine"):
         scf_iterator.solve(
             case.system.numbers,
             case.positions,
@@ -440,7 +141,99 @@ def test_missing_integrals_remain_legacy_owned(
             case.interaction_data,
             case.system.ihelp,
             case.system.config.scf,
-            integrals,
+            case.integrals,
+            case.refocc,
+            object(),
+        )
+
+
+def test_invalid_temperature_and_fermi_budget_are_explicit_errors() -> None:
+    case = _prepare_case(GFN1_XTB)
+    with pytest.raises(ValueError, match="Temperature must be non-negative"):
+        resolve_full_scf_route(
+            replace(case.system.config.scf, fermi=ConfigFermi(etemp=-1.0)),
+            case.interactions,
+            case.system.ihelp,
+            case.system.numbers,
+            case.integrals,
+        )
+    with pytest.raises(ValueError, match="Fermi maxiter must be non-negative"):
+        resolve_full_scf_route(
+            replace(case.system.config.scf, fermi=ConfigFermi(maxiter=-1)),
+            case.interactions,
+            case.system.ihelp,
+            case.system.numbers,
+            case.integrals,
+        )
+
+
+@pytest.mark.parametrize("integral", ["hcore", "overlap"])
+def test_missing_integrals_are_explicit_setup_errors(integral: str) -> None:
+    case = _prepare_case(GFN1_XTB)
+    values = {
+        "hcore": case.integrals.hcore,
+        "overlap": case.integrals.overlap,
+        "dipole": case.integrals.dipole,
+        "quadrupole": case.integrals.quadrupole,
+    }
+    values[integral] = None
+    with pytest.raises(ValueError, match="requires hcore and overlap"):
+        resolve_full_scf_route(
+            case.system.config.scf,
+            case.interactions,
+            case.system.ihelp,
+            case.system.numbers,
+            SimpleNamespace(**values),
+        )
+
+
+def test_nonfull_route_resolution_rejects_wrong_mode() -> None:
+    case = _prepare_case(GFN1_XTB)
+    with pytest.raises(ValueError, match="requires SCF_MODE_FULL"):
+        resolve_full_scf_route(
+            replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT),
+            case.interactions,
+            case.system.ihelp,
+        )
+
+
+def test_experimental_mode_has_a_specific_retirement_error() -> None:
+    case = _prepare_case(GFN1_XTB)
+    config = replace(
+        case.system.config.scf, scf_mode=labels.SCF_MODE_EXPERIMENTAL
+    )
+    with pytest.raises(NotImplementedError, match="single-shot.*retired"):
+        scf_iterator.solve(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
+            case.refocc,
+        )
+
+
+def test_fixed_trip_experimental_mode_has_the_same_retirement_error() -> None:
+    """Fixed-trip execution cannot reach the retired single-shot engine."""
+    case = _prepare_case(GFN1_XTB)
+    config = replace(
+        case.system.config.scf, scf_mode=labels.SCF_MODE_EXPERIMENTAL
+    )
+    with pytest.raises(NotImplementedError, match="single-shot.*retired"):
+        functional_eager.run_system_fixed_trip(
+            case.system.numbers,
+            case.positions,
+            case.charge,
+            case.spin,
+            case.interactions,
+            case.interaction_data,
+            case.system.ihelp,
+            config,
+            case.integrals,
             case.refocc,
         )
 
@@ -593,56 +386,6 @@ def test_strict_broyden_invalid_spin_precedes_route_error() -> None:
     assert OutputHandler.warnings == []
 
 
-def test_negative_fermi_maxiter_is_legacy_owned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Negative Fermi iteration limits retain legacy runtime behavior."""
-    OutputHandler.clear_warnings()
-    case = _prepare_case(
-        GFN1_XTB,
-        scf_options={
-            "fermi_etemp": 300.0,
-            "fermi_maxiter": -1,
-            "mixer": labels.MIXER_BROYDEN,
-            "scp_mode": labels.SCP_MODE_CHARGE,
-            "maxiter": 0,
-        },
-        setup_functional=False,
-    )
-    route = resolve_full_scf_route(
-        case.system.config.scf, case.interactions, case.system.ihelp
-    )
-    assert route.kind == "legacy"
-    assert route.reason == "negative Fermi maxiter retains legacy behavior"
-    legacy_warnings = list(OutputHandler.warnings)
-    OutputHandler.clear_warnings()
-    with pytest.raises(RuntimeError, match="Fermi energy failed to converge"):
-        case.engine(case.initial_charges.clone())
-    assert OutputHandler.warnings == []
-    OutputHandler.clear_warnings()
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError("negative Fermi maxiter must use legacy full SCF")
-
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    with pytest.raises(RuntimeError, match="Fermi energy failed to converge"):
-        scf_iterator.solve(
-            case.system.numbers,
-            case.positions,
-            case.charge,
-            case.spin,
-            case.interactions,
-            case.interaction_data,
-            case.system.ihelp,
-            case.system.config.scf,
-            case.integrals,
-            case.refocc,
-        )
-    assert OutputHandler.warnings == legacy_warnings
-
-
 def test_negative_scf_maxiter_is_functional_configuration_error() -> None:
     """E0's negative outer iteration policy is rejected before execution."""
     case = _prepare_case(GFN1_XTB)
@@ -651,14 +394,14 @@ def test_negative_scf_maxiter_is_functional_configuration_error() -> None:
         resolve_full_scf_route(config, case.interactions, case.system.ihelp)
 
 
-def test_negative_scf_maxiter_invalid_spin_precedes_e0_error() -> None:
-    """Common reference validation precedes functional maxiter validation."""
+def test_negative_scf_maxiter_invalid_spin_is_rejected_explicitly() -> None:
+    """Negative iteration budgets fail before legacy spin validation."""
     from dxtb._src.scf.iterator import solve as legacy_solve
 
     case = _prepare_case(GFN1_XTB)
     config = replace(case.system.config.scf, maxiter=-1)
     invalid_spin = case.spin + 1.0
-    with pytest.raises(ValueError, match="unpaired electrons"):
+    with pytest.raises(ValueError, match="maxiter >= 0"):
         legacy_solve(
             case.system.numbers,
             case.positions,
@@ -705,48 +448,6 @@ def test_negative_scf_maxiter_valid_preparation_raises_e0_error() -> None:
         )
 
 
-def test_legacy_owned_routes_precede_negative_scf_maxiter() -> None:
-    """Batch, extensions and negative Fermi limits stay legacy-owned."""
-    case = _prepare_case(GFN1_XTB)
-    negative = replace(case.system.config.scf, maxiter=-1)
-    assert (
-        resolve_full_scf_route(
-            negative,
-            case.interactions,
-            case.system.ihelp,
-            case.system.numbers.unsqueeze(0),
-        ).kind
-        == "legacy"
-    )
-
-    class ExtendedField(ElectricField):
-        """A user extension retained by the legacy engine."""
-
-    extended = InteractionList(
-        *case.interactions.components,
-        ExtendedField(torch.zeros(3, dtype=case.positions.dtype)),
-    )
-    assert (
-        resolve_full_scf_route(
-            negative, extended, case.system.ihelp, case.system.numbers
-        ).kind
-        == "legacy"
-    )
-
-    negative_fermi = replace(
-        negative,
-        fermi=replace(negative.fermi, maxiter=-1),
-    )
-    route = resolve_full_scf_route(
-        negative_fermi,
-        case.interactions,
-        case.system.ihelp,
-        case.system.numbers,
-    )
-    assert route.kind == "legacy"
-    assert route.reason == "negative Fermi maxiter retains legacy behavior"
-
-
 def test_float32_damping_warning_uses_configured_decimal() -> None:
     """Legacy and functional float32 warnings preserve configured decimals."""
     options = {
@@ -790,65 +491,18 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
     assert "damping factor of 0.99." in OutputHandler.warnings[-1][0]
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [labels.SCF_MODE_IMPLICIT, labels.SCF_MODE_EXPERIMENTAL],
-    ids=["implicit", "experimental"],
-)
-def test_non_full_modes_remain_legacy_owned(mode: int) -> None:
-    """The full functional route never absorbs other solver modes."""
-    case = _prepare_case(GFN1_XTB)
-    route = resolve_full_scf_route(
-        replace(case.system.config.scf, scf_mode=mode),
-        case.interactions,
-        case.system.ihelp,
-    )
-    assert route.kind == "legacy"
-
-
-def test_nonselfconsistent_method_remains_legacy_owned() -> None:
-    """The functional SCF route is not used for GFN0-like methods."""
+def test_gfn0_remains_a_nonselfconsistent_special_case() -> None:
+    """The retained GFN0 path is one eigensolve, outside iterative SCF."""
     case = _prepare_case(GFN1_XTB)
     config = replace(case.system.config.scf, method=labels.GFN0_XTB)
     assert not config.requires_iterations
-    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
-    assert route.kind == "legacy"
+    from dxtb._src.scf.nonselfconsistent import solve_nonselfconsistent
+
+    assert solve_nonselfconsistent is not None
 
 
-def test_nonselfconsistent_legacy_kwargs_are_forwarded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The eager wrapper preserves non-SCF iterator keyword forwarding."""
-    case = _prepare_case(GFN1_XTB)
-    config = replace(case.system.config.scf, method=labels.GFN0_XTB)
-    seen: dict[str, object] = {}
-
-    def capture(*args: object, **kwargs: object) -> dict[str, object]:
-        seen.update(kwargs)
-        return {}
-
-    monkeypatch.setattr(functional_eager, "solve_nonselfconsistent", capture)
-    options = {"method": "exacteig"}
-    result = run_functional_full_eager(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        config,
-        case.integrals,
-        case.refocc,
-        eigen_options=options,
-    )
-    assert result.route.kind == "legacy"
-    assert result.legacy == {}
-    assert seen["eigen_options"] is options
-
-
-def test_batched_numbers_remain_legacy_owned() -> None:
-    """A batched System request cannot enter the single-System adapter."""
+def test_packed_full_batch_is_an_explicit_compatibility_boundary() -> None:
+    """Public packed FULL batch dispatch remains unchanged at the S7 boundary."""
     case = _prepare_case(GFN1_XTB)
     route = resolve_full_scf_route(
         case.system.config.scf,
@@ -856,56 +510,7 @@ def test_batched_numbers_remain_legacy_owned() -> None:
         case.system.ihelp,
         case.system.numbers.unsqueeze(0),
     )
-    assert route.kind == "legacy"
-
-
-def test_batched_production_dispatch_uses_legacy_engine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FULL batch calls reach the legacy engine without functional setup."""
-    from dxtb._src.scf import unrolling
-
-    case = _prepare_case(GFN1_XTB)
-    seen: dict[str, object] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            seen["args"] = args
-            seen["kwargs"] = kwargs
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            seen["guess"] = guess
-            return {"legacy_batch": True}
-
-    def prepared_refocc(*args: object, **kwargs: object):
-        return case.n0, case.occupation, case.nel
-
-    def prepared_guess(*args: object, **kwargs: object):
-        return case.initial_charges
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError("batch FULL calls must remain legacy-owned")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
-    monkeypatch.setattr(scf_iterator, "get_refocc", prepared_refocc)
-    monkeypatch.setattr(scf_iterator, "get_guess", prepared_guess)
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    result = scf_iterator.solve(
-        case.system.numbers.unsqueeze(0),
-        case.positions.unsqueeze(0),
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-    )
-    assert result == {"legacy_batch": True}
-    assert "guess" in seen
+    assert route.kind == "batch_compat"
 
 
 @pytest.mark.parametrize("field_kind", ["field", "field_grad"])
@@ -1121,75 +726,24 @@ def test_eager_failure_order_is_chronological(
         _check_subsolve_status(synthetic)
 
 
-def test_custom_interaction_routes_to_legacy_and_keeps_extension_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A custom field subclass is rejected before setup and runs via legacy."""
-    field = torch.tensor([0.002, -0.001, 0.0015], dtype=torch.float64)
-    case = _prepare_case(
-        GFN1_XTB,
-        field=field,
-        scf_options={
-            "mixer": labels.MIXER_LINEAR,
-            "scp_mode": labels.SCP_MODE_CHARGE,
-            "maxiter": 2,
-            "x_atol": 0.0,
-            "x_atol_max": 0.0,
-        },
-    )
+def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
+    """Unsupported interaction subclasses never select a legacy engine."""
+    case = _prepare_case(GFN1_XTB)
 
     class ExtendedField(ElectricField):
-        """A legacy extension that shifts the atom field potential."""
+        """A custom field extension outside the functional interaction API."""
 
-        def __init__(self, value: torch.Tensor) -> None:
-            super().__init__(value)
-            self.calls = 0
-
-        def get_monopole_atom_potential(self, cache, *args, **kwargs):
-            self.calls += 1
-            return (
-                super().get_monopole_atom_potential(cache, *args, **kwargs)
-                + 0.01
-            )
-
-    custom_field = ExtendedField(field)
-    components = [
-        component
-        for component in case.interactions.components
-        if type(component) is not ElectricField
-    ]
+    field = ExtendedField(torch.zeros(3, dtype=torch.float64))
     interactions = InteractionList(
-        *components,
-        custom_field,
+        *case.interactions.components,
+        field,
         device=case.positions.device,
         dtype=case.positions.dtype,
     )
-    route = resolve_full_scf_route(
-        case.system.config.scf, interactions, case.system.ihelp
-    )
-    assert route.kind == "legacy"
-    cache = _interaction_data(case.system, case.positions, interactions)
-
-    def unexpected(*args: object, **kwargs: object) -> torch.Tensor:
-        raise AssertionError("custom interactions must remain legacy-owned")
-
-    monkeypatch.setattr(
-        functional_eager, "run_prepared_functional_full", unexpected
-    )
-    result = scf_iterator.solve(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        interactions,
-        cache,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-    )
-    assert isinstance(result, dict)
-    assert custom_field.calls > 0
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        resolve_full_scf_route(
+            case.system.config.scf, interactions, case.system.ihelp
+        )
 
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])

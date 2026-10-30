@@ -121,8 +121,8 @@ def test_libcint_composition_matches_independent_serial_systems() -> None:
     a = _system(na, driver=labels.INTDRIVER_LIBCINT)
     b = _system(nb, driver=labels.INTDRIVER_LIBCINT)
     pa, pb = _positions(na), _positions(nb)
-    assert classify_legacy_system(a) is LegacySystemRoute.LEGACY_COMPOSED
-    assert classify_legacy_system(b) is LegacySystemRoute.LEGACY_COMPOSED
+    assert classify_legacy_system(a) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(b) is LegacySystemRoute.MAPPED
 
     composed = compose_legacy_systems((a, b), (pa, pb), source_ids=(4, 19))
     reversed_result = compose_legacy_systems(
@@ -225,7 +225,7 @@ def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
         driver=labels.INTDRIVER_LIBCINT,
         interaction=(custom,),
     )
-    with pytest.raises(ValueError, match="Explicit field"):
+    with pytest.raises(NotImplementedError, match="interaction extension"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -233,82 +233,47 @@ def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
         )
 
 
-def test_custom_interaction_is_retained_and_order_independent() -> None:
+def test_custom_interaction_is_explicitly_unsupported() -> None:
     interaction = _NonzeroInteraction()
     na, nb = [1, 1], [3, 1]
     a = _system(na, interaction=(interaction,))
     b = _system(nb, interaction=(interaction,))
     pa, pb = _positions(na), _positions(nb)
-    assert classify_legacy_system(a) is LegacySystemRoute.LEGACY_COMPOSED
-    ab = compose_legacy_systems((a, b), (pa, pb))
-    ba = compose_legacy_systems((b, a), (pb, pa))
-    assert interaction.calls > 0
-    for result, system, pos in zip(ab.results, (a, b), (pa, pb)):
-        serial = system.singlepoint(pos)
-        torch.testing.assert_close(result.energy, serial.energy)
-        torch.testing.assert_close(result.scf, serial.scf)
-    for lhs, rhs in zip(ab.results, ba.results[::-1]):
-        torch.testing.assert_close(lhs.energy, rhs.energy)
-    assert interaction.calls > 0
-    baseline = _system(na).singlepoint(pa)
-    assert ab.results[0].potential is not None
-    assert baseline.potential is not None
-    assert not torch.allclose(
-        ab.results[0].potential.mono, baseline.potential.mono
-    )
-
-    mapped_pos = pa.clone().requires_grad_()
-    serial_pos = pa.clone().requires_grad_()
-    mapped = compose_legacy_systems((a,), (mapped_pos,)).results[0]
-    serial = a.singlepoint(serial_pos)
-    (mapped_grad,) = torch.autograd.grad(mapped.energy.sum(), mapped_pos)
-    (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
-    torch.testing.assert_close(mapped_grad, serial_grad)
-    assert torch.count_nonzero(mapped_grad) > 0
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        classify_legacy_system(a)
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        compose_legacy_systems((a, b), (pa, pb))
 
 
-def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
+def test_custom_classical_extension_is_explicitly_unsupported() -> None:
     component = _CacheClassical()
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     positions = _positions(numbers)
-    assert classify_legacy_system(system) is LegacySystemRoute.LEGACY_COMPOSED
-    before = component.cache_calls
-    first = compose_legacy_systems((system,), (positions,)).results[0]
-    second = compose_legacy_systems((system,), (positions,)).results[0]
-    assert component.cache_calls >= before + 2
-    first_classicals = dict(first.classical)
-    second_classicals = dict(second.classical)
-    assert component.label in first_classicals
-    assert torch.count_nonzero(first_classicals[component.label]) > 0
-    torch.testing.assert_close(
-        first_classicals[component.label], second_classicals[component.label]
-    )
-    torch.testing.assert_close(first.energy, second.energy)
+    with pytest.raises(NotImplementedError, match="custom classical"):
+        classify_legacy_system(system)
+    with pytest.raises(NotImplementedError, match="custom classical"):
+        compose_legacy_systems((system,), (positions,))
 
 
-def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
+def test_custom_classical_position_gradient_route_is_explicitly_unsupported() -> (
     None
 ):
     component = _CacheClassical()
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     mapped_pos = _positions(numbers).requires_grad_()
-    serial_pos = _positions(numbers).requires_grad_()
-    result = compose_legacy_systems((system,), (mapped_pos,)).results[0]
-    serial = system.singlepoint(serial_pos)
-    (mapped_grad,) = torch.autograd.grad(result.energy.sum(), mapped_pos)
-    (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
-    torch.testing.assert_close(mapped_grad, serial_grad)
-    assert torch.count_nonzero(mapped_grad) > 0
+    with pytest.raises(NotImplementedError, match="custom classical"):
+        compose_legacy_systems((system,), (mapped_pos,))
 
 
-def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
+def test_mapped_eligible_system_uses_functional_composer() -> None:
     numbers = [1, 1]
     system = _system(numbers)
     assert classify_legacy_system(system) is LegacySystemRoute.MAPPED
-    with pytest.raises(ValueError, match="Mapped-eligible"):
-        compose_legacy_systems((system,), (_positions(numbers),))
+    result = compose_legacy_systems((system,), (_positions(numbers),))
+    assert len(result.results) == 1
+    assert torch.isfinite(result.results[0].energy).all()
 
 
 @pytest.mark.parametrize(
@@ -319,7 +284,7 @@ def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
     ],
     ids=["negative-temperature", "negative-fermi-maxiter"],
 )
-def test_legacy_owned_fermi_edges_select_legacy_route(
+def test_invalid_fermi_edges_are_rejected(
     options: dict[str, float | int],
 ) -> None:
     config = Config.create(
@@ -331,7 +296,10 @@ def test_legacy_owned_fermi_edges_select_legacy_route(
     system = Model(
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor([1, 1], device=DEVICE))
-    assert classify_legacy_system(system) is LegacySystemRoute.LEGACY_COMPOSED
+    with pytest.raises(
+        ValueError, match="Electronic Temperature|Fermi maxiter"
+    ):
+        classify_legacy_system(system)
 
 
 def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
@@ -371,7 +339,7 @@ def test_classical_only_calculation_retains_separate_route() -> None:
 def test_legacy_engine_keywords_are_not_filtered() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -382,7 +350,7 @@ def test_legacy_engine_keywords_are_not_filtered() -> None:
 def test_legacy_engine_positional_extras_are_not_filtered() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -390,9 +358,7 @@ def test_legacy_engine_positional_extras_are_not_filtered() -> None:
         )
 
 
-def test_legacy_engine_constructor_options_are_consumed_by_legacy_owner() -> (
-    None
-):
+def test_legacy_engine_constructor_options_are_retired() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
     options = LegacySCFOptions(
@@ -402,54 +368,26 @@ def test_legacy_engine_constructor_options_are_consumed_by_legacy_owner() -> (
             "eigen_options": {"method": "exacteig"},
         }
     )
-    result = compose_legacy_systems(
-        (system,), (_positions(numbers),), legacy_options=options
-    ).results[0]
-    assert torch.isfinite(result.energy).all()
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        compose_legacy_systems(
+            (system,), (_positions(numbers),), legacy_options=options
+        )
 
 
-def test_legacy_composition_preserves_option_values_and_constructor_merge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forward option identities and retain legacy constructor defaults."""
-    from dxtb._src.scf import unrolling
-
-    original = unrolling.SelfConsistentFieldFull
-    captured: dict[str, object] = {}
-
-    def capture(*args, **kwargs):
-        captured.update(kwargs)
-        engine = original(*args, **kwargs)
-        captured["engine"] = engine
-        return engine
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", capture)
+def test_legacy_composition_rejects_engine_option_dictionaries() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    fwd_options = {"damp": 0.25}
-    bck_options = {"posdef": False}
-    eigen_options = {"method": "exacteig"}
     options = LegacySCFOptions(
         kwargs={
-            "fwd_options": fwd_options,
-            "bck_options": bck_options,
-            "eigen_options": eigen_options,
+            "fwd_options": {"damp": 0.25},
+            "bck_options": {"posdef": False},
+            "eigen_options": {"method": "exacteig"},
         }
     )
-
-    compose_legacy_systems(
-        (system,), (_positions(numbers),), legacy_options=options
-    )
-
-    assert captured["fwd_options"] is fwd_options
-    assert captured["bck_options"] is bck_options
-    assert captured["eigen_options"] is eigen_options
-    assert captured["config"] is system.config.scf
-    engine = captured["engine"]
-    assert engine.fwd_options["damp"] == 0.25
-    assert engine.fwd_options["maxiter"] == system.config.scf.maxiter
-    assert engine.bck_options == {"posdef": False}
-    assert engine.eigen_options == {"method": "exacteig"}
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        compose_legacy_systems(
+            (system,), (_positions(numbers),), legacy_options=options
+        )
 
 
 @pytest.mark.parametrize(
@@ -461,7 +399,7 @@ def test_legacy_composition_preserves_malformed_option_errors(
     """Malformed legacy option mappings fail at the legacy owner."""
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError, match="mapping"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -469,32 +407,19 @@ def test_legacy_composition_preserves_malformed_option_errors(
         )
 
 
-def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
-    """Each heterogeneous lane retains its own configured classical labels."""
+def test_custom_classical_extensions_are_rejected_in_composition() -> None:
+    """Composition does not fall back for heterogeneous custom extensions."""
     numbers = [1, 1]
     first_component = _CacheClassical()
     second_component = _CacheClassical()
     second_component.label = "E6bOtherCacheClassical"
     first_system = _system(numbers, classical=(first_component,))
     second_system = _system(numbers, classical=(second_component,))
-    results = compose_legacy_systems(
-        (first_system, second_system),
-        (_positions(numbers), _positions(numbers, shift=0.1)),
-    ).results
-
-    assert first_component.label in dict(results[0].classical)
-    assert second_component.label not in dict(results[0].classical)
-    assert second_component.label in dict(results[1].classical)
-    assert first_component.label not in dict(results[1].classical)
-    labels_0 = tuple(label for label, _ in results[0].classical)
-    labels_1 = tuple(label for label, _ in results[1].classical)
-    common_0 = tuple(
-        label for label in labels_0 if label != first_component.label
-    )
-    common_1 = tuple(
-        label for label in labels_1 if label != second_component.label
-    )
-    assert common_0 == common_1
+    with pytest.raises(NotImplementedError, match="custom classical"):
+        compose_legacy_systems(
+            (first_system, second_system),
+            (_positions(numbers), _positions(numbers, shift=0.1)),
+        )
 
 
 def test_legacy_composition_preserves_original_exception_and_source_id(

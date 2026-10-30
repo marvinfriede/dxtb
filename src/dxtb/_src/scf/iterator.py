@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 if TYPE_CHECKING:
     from .functional.eager import FunctionalCoreResult
 
-__all__ = ["solve", "solve_legacy"]
+__all__ = ["solve"]
 
 
 def _use_functional_implicit_route(
@@ -65,11 +65,11 @@ def _use_functional_implicit_route(
     *,
     legacy_engine_overrides: bool,
 ) -> bool:
-    """Resolve the opt-in implicit implementation without changing FULL.
+    """Resolve the single or packed functional implicit route.
 
-    Eligible single-System routes honor the configured functional method.
-    Batches, legacy overrides, and unsupported physical inputs retain the
-    established compatibility implementation.
+    Public packed implicit calls retain their tensor-batched behavior through
+    the functional map and response. This is separate from W2c9's internal
+    converged-root conformer orchestration.
     """
     from .functional.data import functional_scf_interactions_eligible
 
@@ -77,8 +77,6 @@ def _use_functional_implicit_route(
     return (
         not legacy_engine_overrides
         and eligible
-        and ihelp.batch_mode == 0
-        and numbers.ndim == 1
         and config.fermi.etemp >= 0.0
         and config.fermi.maxiter >= 0
         and config.maxiter >= 0
@@ -131,8 +129,13 @@ def solve(
     Returns
     -------
     SCFResult | FunctionalCoreResult
-        Legacy result mapping or tensor-status functional full-SCF result.
+    Legacy GFN0 result mapping or tensor-status functional iterative result.
     """
+    if args or kwargs:
+        raise NotImplementedError(
+            "Legacy SCF engine positional/keyword overrides are no longer "
+            "supported by functional SCF."
+        )
     return _solve_impl(
         numbers,
         positions,
@@ -144,10 +147,8 @@ def solve(
         config,
         integrals,
         refocc,
-        args,
         core_index,
         None,
-        kwargs,
     )
 
 
@@ -165,9 +166,6 @@ def solve_with_core_index(
     *,
     core_index: CoreIndexData,
     core_index_owner: object,
-    args: tuple[Any, ...] = (),
-    kwargs: dict[str, Any] | None = None,
-    force_legacy: bool = False,
 ) -> SCFResult | FunctionalCoreResult:
     """Run SCF with an internally trusted captured structural map."""
     return _solve_impl(
@@ -181,47 +179,8 @@ def solve_with_core_index(
         config,
         integrals,
         refocc,
-        args,
         core_index,
         core_index_owner,
-        {} if kwargs is None else kwargs,
-        force_legacy,
-    )
-
-
-def solve_legacy(
-    numbers: Tensor,
-    positions: Tensor,
-    chrg: Tensor,
-    spin: Tensor | None,
-    interactions: InteractionList,
-    cache: InteractionListCache,
-    ihelp: IndexHelper,
-    config: ConfigSCF,
-    integrals: IntegralMatrices,
-    refocc: Tensor,
-    *args: Any,
-    core_index: CoreIndexData | None = None,
-    core_index_owner: object | None = None,
-    **kwargs: Any,
-) -> SCFResult | FunctionalCoreResult:
-    """Run the established legacy engine without functional route selection."""
-    return _solve_impl(
-        numbers,
-        positions,
-        chrg,
-        spin,
-        interactions,
-        cache,
-        ihelp,
-        config,
-        integrals,
-        refocc,
-        args,
-        core_index,
-        core_index_owner,
-        kwargs,
-        True,
     )
 
 
@@ -236,13 +195,17 @@ def _solve_impl(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    args: tuple[Any, ...],
     core_index: CoreIndexData | None,
     core_index_owner: object | None,
-    kwargs: dict[str, Any],
-    force_legacy: bool = False,
 ) -> SCFResult | FunctionalCoreResult:
-    """Share numerical dispatch while preserving the public kwargs mapping."""
+    """Dispatch iterative functional SCF and the retained GFN0 special case."""
+    if config.fermi.etemp < 0.0:
+        raise ValueError("Electronic Temperature must be non-negative.")
+    if config.fermi.maxiter < 0:
+        raise ValueError("Fermi maxiter must be non-negative.")
+    if config.maxiter < 0:
+        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+
     n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
 
     if config.requires_iterations is False:
@@ -258,7 +221,6 @@ def _solve_impl(
             integrals,
             n0,
             occupation,
-            **kwargs,
         )
 
     charges = get_guess(numbers, positions, chrg, ihelp, config.guess)
@@ -270,44 +232,62 @@ def _solve_impl(
         )
 
     if config.scf_mode == labels.SCF_MODE_IMPLICIT:
-        # The transform-compatible route has an explicit eligibility gate.
-        # Unsupported legacy options, extensions and batches retain their
-        # established xitorch compatibility implementation.
-        functional_implicit = (
-            _use_functional_implicit_route(
-                config,
-                interactions,
-                ihelp,
-                numbers,
-                integrals,
-                legacy_engine_overrides=bool(args) or bool(kwargs),
-            )
-            and not force_legacy
+        is_public_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
+        route_name = (
+            "public packed implicit compatibility"
+            if is_public_batch
+            else "single-System functional implicit"
         )
-        if functional_implicit:
-            from .functional.eager import (
-                functional_core_result,
-                run_prepared_functional_implicit,
-            )
+        if not _use_functional_implicit_route(
+            config,
+            interactions,
+            ihelp,
+            numbers,
+            integrals,
+            legacy_engine_overrides=False,
+        ):
+            from .functional.data import functional_scf_interactions_eligible
 
-            result = run_prepared_functional_implicit(
-                numbers,
-                charges,
-                n0,
-                occupation,
-                nab,
-                interactions,
-                cache,
-                ihelp,
-                config,
-                integrals,
-                core_index=core_index,
-                core_index_owner=core_index_owner,
-            )
-            return functional_core_result(result)
+            eligible, names = functional_scf_interactions_eligible(interactions)
+            if not eligible:
+                raise NotImplementedError(
+                    f"{route_name} does not support interaction "
+                    f"extension(s): {names}."
+                )
+            if config.fermi.etemp < 0.0:
+                raise ValueError("Electronic Temperature must be non-negative.")
+            if config.fermi.maxiter < 0:
+                raise ValueError("Fermi maxiter must be non-negative.")
+            if config.maxiter < 0:
+                raise ValueError(
+                    "The functional SCF solver requires maxiter >= 0."
+                )
+            if integrals.hcore is None or integrals.overlap is None:
+                raise ValueError(
+                    f"{route_name} requires hcore and overlap integrals."
+                )
+            raise ValueError(f"Unsupported {route_name} mixer {config.mixer}.")
 
-        # pylint: disable=import-outside-toplevel
-        from .implicit import SelfConsistentFieldImplicit as SCF
+        from .functional.eager import (
+            functional_core_result,
+            run_prepared_functional_implicit,
+        )
+
+        result = run_prepared_functional_implicit(
+            numbers,
+            charges,
+            n0,
+            occupation,
+            nab,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            core_index=core_index,
+            core_index_owner=core_index_owner,
+        )
+        return functional_core_result(result)
     elif config.scf_mode == labels.SCF_MODE_FULL:
         # pylint: disable=import-outside-toplevel
         from dxtb import OutputHandler
@@ -318,20 +298,14 @@ def _solve_impl(
             run_prepared_functional_full,
         )
 
-        legacy_engine_overrides = bool(args) or bool(kwargs)
-        route = (
-            resolve_full_scf_route(
-                config,
-                interactions,
-                ihelp,
-                numbers,
-                integrals,
-                legacy_engine_overrides,
-            )
-            if not force_legacy
-            else None
+        route = resolve_full_scf_route(
+            config,
+            interactions,
+            ihelp,
+            numbers,
+            integrals,
         )
-        if route is not None and route.kind == "functional":
+        if route.kind == "functional":
             if route.warning is not None:
                 OutputHandler.warn(route.warning)
             result = run_prepared_functional_full(
@@ -351,10 +325,14 @@ def _solve_impl(
             )
             return apply_functional_full_policy(result, config, route)
 
+        if route.kind != "batch_compat":
+            raise RuntimeError(f"Unknown FULL route kind {route.kind}.")
         from .unrolling import SelfConsistentFieldFull as SCF
     elif config.scf_mode == labels.SCF_MODE_EXPERIMENTAL:
-        # pylint: disable=import-outside-toplevel
-        from .unrolling import SelfConsistentFieldSingleShot as SCF
+        raise NotImplementedError(
+            "Experimental single-shot SCF derivatives were not exact and the "
+            "legacy implementation has been retired; use FULL or IMPLICIT."
+        )
     else:
         raise ValueError(f"Unknown SCF mode '{config.scf_mode}'.")
 
@@ -362,14 +340,12 @@ def _solve_impl(
         interactions,
         occupation,
         n0,
-        *args,
         numbers=numbers,
         ihelp=ihelp,
         cache=cache,
         integrals=integrals,
         config=config,
         nel=nab,
-        **kwargs,
     )(charges)
 
 

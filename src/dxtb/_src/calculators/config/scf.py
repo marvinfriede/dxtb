@@ -286,18 +286,14 @@ class ConfigSCF:
 
     .. warning::
 
-        Eligible single-System implicit calculations use the functional
-        physical-root derivative with ordinary eager execution and
-        ``torch.autograd``. Its private prepared-root response supports
-        ``torch.func`` reverse/JVP transforms, ``jacfwd`` and ``vmap`` after
-        eager root preparation. Wrapping public ``System.singlepoint`` calls
-        in a transform remains outside this mode and is owned by E6a. Legacy
-        fallbacks remain for batches, unsupported interactions and legacy
-        solver overrides. Native functional Broyden is used for eligible
-        single-System charge, potential and Fock representations. Batches,
-        unsupported interactions, and legacy solver overrides remain
-        legacy-owned. See :ref:`help_known_issues` for the compatibility
-        limits.
+        Implicit calculations use the functional physical-root derivative
+        with eager root validation and ordinary ``torch.autograd``. Its
+        prepared-root response supports ``torch.func`` transforms. FULL and
+        IMPLICIT iterative routes use the functional SCF controller. The
+        historical experimental single-shot mode is retired because its
+        derivatives were not exact. Public packed FULL batches retain their
+        established unrolled compatibility route; see :ref:`help_known_issues`
+        for its scope.
     """
 
     scp_mode: int = defaults.SCP_MODE
