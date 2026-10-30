@@ -40,7 +40,6 @@ class ToleranceWarning(UserWarning):
     """
     Warning for unreasonable tolerances.
 
-    If tolerances are too small, the previous step in xitorch's Broyden method
-    may become equal to the current step. This leads to a difference of zero,
-    which in turn causes `NaN`s due to division by the difference.
+    Extremely tight tolerances can make iterative solver progress smaller
+    than the working precision, so the requested accuracy may not be reached.
     """

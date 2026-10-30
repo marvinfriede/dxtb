@@ -277,8 +277,8 @@ def setup_scf_inputs(
     if config.fermi.maxiter < 0:
         raise ValueError("Functional Fermi maxiter must be non-negative.")
     validate_functional_scf_interactions(interactions)
-    if numbers.ndim != 1 or ihelp.batch_mode != 0:
-        raise ValueError("E4.0 SCFInputs require one unbatched System.")
+    if numbers.ndim < 1:
+        raise ValueError("SCFInputs require an atomic-number axis.")
     if integrals.hcore is None or integrals.overlap is None:
         raise ValueError("SCFInputs require hcore and overlap integrals.")
     if core_index is not None:

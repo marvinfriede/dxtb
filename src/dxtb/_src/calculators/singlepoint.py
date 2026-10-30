@@ -512,9 +512,6 @@ def _singlepoint_impl(
     field_grad: Tensor | None,
     *,
     fixed_trip: bool,
-    force_legacy_scf: bool = False,
-    legacy_scf_args: tuple[Any, ...] = (),
-    legacy_scf_kwargs: dict[str, Any] | None = None,
     refresh_extension_caches: bool = False,
 ) -> Result:
     """Share setup, physical kernels, and Result construction by controller."""
@@ -841,7 +838,21 @@ def _singlepoint_impl(
         if core is not None and core_index is not None
         else {}
     )
-    if fixed_trip:
+    if fixed_trip and config.scf.scf_mode == labels.SCF_MODE_IMPLICIT:
+        scf_results = scf_solve(
+            numbers,
+            positions,
+            charge,
+            spin_tensor,
+            call_interactions,
+            interaction_data,
+            system.ihelp,
+            config.scf,
+            matrices,
+            refocc,
+            **scf_kwargs,
+        )
+    elif fixed_trip:
         from dxtb._src.scf.functional.eager import run_system_fixed_trip
 
         scf_results = run_system_fixed_trip(
@@ -859,43 +870,19 @@ def _singlepoint_impl(
             core_index_owner=(system if core_index is not None else None),
         )
     else:
-        legacy_args = legacy_scf_args
-        legacy_kwargs = {} if legacy_scf_kwargs is None else legacy_scf_kwargs
-        if force_legacy_scf:
-            scf_results = scf.solve_legacy(
-                numbers,
-                positions,
-                charge,
-                spin_tensor,
-                call_interactions,
-                interaction_data,
-                system.ihelp,
-                config.scf,
-                matrices,
-                refocc,
-                *legacy_args,
-                core_index=core_index,
-                core_index_owner=system if core_index is not None else None,
-                **legacy_kwargs,
-            )
-        else:
-            if legacy_args or legacy_kwargs:
-                raise ValueError(
-                    "Legacy SCF options require the explicit legacy route."
-                )
-            scf_results = scf_solve(
-                numbers,
-                positions,
-                charge,
-                spin_tensor,
-                call_interactions,
-                interaction_data,
-                system.ihelp,
-                config.scf,
-                matrices,
-                refocc,
-                **scf_kwargs,
-            )
+        scf_results = scf_solve(
+            numbers,
+            positions,
+            charge,
+            spin_tensor,
+            call_interactions,
+            interaction_data,
+            system.ihelp,
+            config.scf,
+            matrices,
+            refocc,
+            **scf_kwargs,
+        )
     scf_output = _normalize_scf_output(scf_results, positions)
 
     total_energy = classical_energy + scf_output.energy + scf_output.fenergy

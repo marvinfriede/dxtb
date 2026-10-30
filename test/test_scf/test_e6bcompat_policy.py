@@ -83,32 +83,9 @@ def _packed_low_level_inputs(
 @pytest.mark.parametrize(
     ("keyword", "value"),
     [
-        ("unexpected_option", object()),
-        ("solver_options", {"unused": True}),
-        ("another_unknown_option", object()),
-    ],
-    ids=["unexpected-option", "solver-options", "other-unknown"],
-)
-def test_batched_low_level_unknown_keywords_reach_legacy_constructor(
-    keyword: str, value: object
-) -> None:
-    """Unknown direct SCF kwargs fail at the legacy constructor, not routing."""
-    calculator, numbers, positions = _packed_calculator()
-    call = _packed_low_level_inputs(calculator, numbers, positions)
-
-    with pytest.raises(
-        TypeError,
-        match=rf"unexpected keyword argument '{keyword}'",
-    ):
-        iterator.solve(*call, **{keyword: value})
-
-
-@pytest.mark.parametrize(
-    ("keyword", "value"),
-    [
         ("fwd_options", {"damp": 0.25}),
         ("bck_options", {"posdef": False}),
-        ("eigen_options", {"method": "custom_exacteig"}),
+        ("eigen_options", {"method": "exacteig"}),
         ("unexpected_option", object()),
         ("solver_options", {"unused": True}),
         ("another_unknown_option", object()),
@@ -122,126 +99,26 @@ def test_batched_low_level_unknown_keywords_reach_legacy_constructor(
         "other-unknown",
     ],
 )
-def test_batched_low_level_kwargs_are_forwarded_unchanged(
-    monkeypatch: pytest.MonkeyPatch, keyword: str, value: object
+def test_batched_low_level_engine_kwargs_are_explicitly_retired(
+    keyword: str, value: object
 ) -> None:
-    """Batched solve forwards options into its selected legacy engine."""
-    from dxtb._src.scf import unrolling
-    from dxtb._src.scf.functional import eager
-
-    calculator, numbers, positions = _packed_calculator()
-    call = _packed_low_level_inputs(calculator, numbers, positions)
-    seen: dict[str, Any] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            seen["args"] = args
-            seen["kwargs"] = kwargs
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            return {"legacy": True}
-
-    def forbidden(*args: Any, **kwargs: Any) -> torch.Tensor:
-        raise AssertionError(
-            "nonempty engine kwargs cannot enter functional SCF"
-        )
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
-    monkeypatch.setattr(eager, "run_prepared_functional_full", forbidden)
-    assert iterator.solve(*call, **{keyword: value}) == {"legacy": True}
-    assert seen["kwargs"][keyword] is value
-
-
-def test_batched_low_level_positional_engine_extra_reaches_legacy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Direct positional extras reach the engine without public API expansion."""
-    from dxtb._src.scf import unrolling
-    from dxtb._src.scf.functional import eager
-
-    calculator, numbers, positions = _packed_calculator()
-    call = _packed_low_level_inputs(calculator, numbers, positions)
-    marker = object()
-    seen: dict[str, Any] = {}
-
-    class CaptureEngine:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            seen["args"] = args
-
-        def __call__(self, guess: torch.Tensor) -> dict[str, object]:
-            return {"legacy": True}
-
-    def forbidden(*args: Any, **kwargs: Any) -> torch.Tensor:
-        raise AssertionError("positional extras cannot enter functional SCF")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", CaptureEngine)
-    monkeypatch.setattr(eager, "run_prepared_functional_full", forbidden)
-    assert iterator.solve(*call, marker) == {"legacy": True}
-    assert seen["args"][3] is marker
-
-
-def test_batched_low_level_positional_extra_keeps_constructor_error() -> None:
-    """An unsupported forwarded positional extra fails at legacy creation."""
+    """Arbitrary old engine kwargs never select the retained batch engine."""
     calculator, numbers, positions = _packed_calculator()
     call = _packed_low_level_inputs(calculator, numbers, positions)
 
-    with pytest.raises(TypeError, match="multiple values|positional"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        iterator.solve(*call, **{keyword: value})
+
+
+def test_batched_low_level_positional_engine_extra_is_explicitly_retired() -> (
+    None
+):
+    """Arbitrary old engine positional extras do not enter a solver."""
+    calculator, numbers, positions = _packed_calculator()
+    call = _packed_low_level_inputs(calculator, numbers, positions)
+
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         iterator.solve(*call, object())
-
-
-@pytest.mark.parametrize(
-    "keyword", ["fwd_options", "bck_options", "eigen_options"]
-)
-def test_batched_legacy_named_options_require_mapping_values(
-    keyword: str,
-) -> None:
-    """Legacy option dictionaries reject malformed non-mapping values."""
-    calculator, numbers, positions = _packed_calculator()
-    call = _packed_low_level_inputs(calculator, numbers, positions)
-
-    with pytest.raises(TypeError, match="mapping"):
-        iterator.solve(*call, **{keyword: None})
-
-
-def test_batched_legacy_named_option_defaults_and_override_precedence() -> None:
-    """The actual FULL constructor merges named options over defaults."""
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
-
-    calculator, numbers, positions = _packed_calculator()
-    call = _packed_low_level_inputs(calculator, numbers, positions)
-    (
-        _,
-        _,
-        charge,
-        spin,
-        interactions,
-        cache,
-        ihelp,
-        config,
-        integrals,
-        refocc,
-    ) = call
-    n0, occupation, nel = iterator.get_refocc(refocc, charge, spin, ihelp)
-
-    engine = SelfConsistentFieldFull(
-        interactions,
-        occupation,
-        n0,
-        numbers=numbers,
-        ihelp=ihelp,
-        cache=cache,
-        integrals=integrals,
-        config=config,
-        nel=nel,
-        fwd_options={"damp": 0.25},
-        bck_options={"posdef": False},
-        eigen_options={"method": "custom_exacteig"},
-    )
-
-    assert engine.fwd_options["damp"] == 0.25
-    assert engine.fwd_options["maxiter"] == config.maxiter
-    assert engine.bck_options == {"posdef": False}
-    assert engine.eigen_options == {"method": "custom_exacteig"}
 
 
 def test_batched_malformed_integral_shapes_fail_at_their_owner() -> None:
@@ -270,14 +147,14 @@ def test_batched_malformed_integral_shapes_fail_at_their_owner() -> None:
 @pytest.mark.parametrize(
     ("field", "message"),
     [
-        ("hcore", "No core Hamiltonian provided"),
-        ("overlap", "No Overlap provided"),
+        ("hcore", "requires hcore and overlap"),
+        ("overlap", "requires hcore and overlap"),
     ],
 )
-def test_batched_missing_integrals_keep_legacy_errors(
+def test_batched_missing_integrals_are_setup_errors(
     field: str, message: str
 ) -> None:
-    """Missing batch matrices are rejected by BaseSCF._Data."""
+    """Missing integrals fail before the packed compatibility route."""
     calculator, numbers, positions = _packed_calculator()
     call = list(_packed_low_level_inputs(calculator, numbers, positions))
     integrals = call[8]

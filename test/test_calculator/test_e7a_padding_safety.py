@@ -21,7 +21,7 @@ from dxtb._src.calculators.canonical_padding import (
 )
 from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import Model
-from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional import energy as functional_energy
 from dxtb._src.scf.functional.padded import (
     _prepare_padded_interactions,
     evaluate_padded_systems,
@@ -227,7 +227,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
     positions = tuple(value.requires_grad_() for value in positions)
 
     trace_calls = 0
-    trace = functional_solver.fermi_free_energy_trace
+    trace = functional_energy.fermi_free_energy_trace
 
     def record_trace(*args, **kwargs):
         nonlocal trace_calls
@@ -235,7 +235,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
         return trace(*args, **kwargs)
 
     monkeypatch.setattr(
-        functional_solver, "fermi_free_energy_trace", record_trace
+        functional_energy, "fermi_free_energy_trace", record_trace
     )
 
     def mapped_energies(values):

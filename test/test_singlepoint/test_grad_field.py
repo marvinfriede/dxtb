@@ -49,7 +49,6 @@ tol = 1e-1
 
 # FIXME: There seem to be multiple issues with this gradient here.
 # - SiH4 fails for 0.0 (0.01 check depends on eps)
-# - "ValueError: grad requires non-empty inputs." for xitorch
 # - non-negligible differences between --fast and --slow
 sample_list = ["H2", "H2O"]
 xfields = [0.0, 1.0, -2.0]
