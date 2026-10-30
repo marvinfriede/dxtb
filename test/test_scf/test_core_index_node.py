@@ -40,7 +40,7 @@ _SYSTEMS = (
 def _indices(method, molecule: str) -> tuple[IndexHelper, CoreIndexData]:
     numbers = mols[molecule]["numbers"].to(device="cpu")
     par = get_param_module(
-        "gfn1" if method == GFN1_XTB else "gfn2",
+        "gfn1" if method is GFN1_XTB else "gfn2",
         device="cpu",
         dtype=torch.float64,
     )

@@ -25,6 +25,7 @@ API.
 | `12-scf-s1-core-contracts.md` | S1 core physical-problem/state, method, single-stage strategy, controller reuse, and linear-route migration |
 | `13-scf-s1.1-zero-budget-status.md` | Restores the fixed-trip `maxiter=0` final-only status contract while preserving eager compatibility behavior |
 | `14-scf-s2a-certification-characterization.md` | Adds diagnostic physical certification metrics and records tolerance, representation, finite-temperature, and transform characterization before S2b integration |
+| `15-scf-s2a.1-certification-evidence-correction.md` | Corrects model provenance in S2a characterization, compares raw and orthogonalized stationarity, and records the evidence needed to choose S2b gates |
 
 The design review referenced by the plan is not in the repository.
 
