@@ -44,6 +44,7 @@ from dxtb._src.scf.functional import (
 )
 from dxtb._src.scf.functional.solver import _resolve_tolerance, _solve_map
 
+from .scf_certification_characterization import characterize_case
 from .test_functional_map import _prepare_case
 
 
@@ -95,6 +96,66 @@ def _loose_thresholds(
 
 
 @pytest.mark.parametrize(
+    "method,config_method,h0_method,parameter_name,reference",
+    [
+        (GFN1_XTB, labels.GFN1_XTB, "gfn1", "GFN1-xTB", -5.8052489623704),
+        (GFN2_XTB, labels.GFN2_XTB, "gfn2", "GFN2-xTB", -5.1041590251073),
+    ],
+    ids=["gfn1-h2o", "gfn2-h2o"],
+)
+def test_characterization_h2o_helper_proves_resolved_method(
+    method: int,
+    config_method: int,
+    h0_method: str,
+    parameter_name: str,
+    reference: float,
+) -> None:
+    """Guard characterization rows against a requested/resolved model mixup."""
+    case = _prepare_case(method, sample_name="H2O")
+    assert case.calc.model.config.method == config_method
+    assert case.system.config.method == config_method
+    assert case.system.h0_setup.method == h0_method
+    assert case.par.forward().meta.name.value == parameter_name
+
+    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    outcome = _solve_map(
+        case.x,
+        SCFSolverSettings(120, False, 0.2, 1.0e-6, 1.0e-6),
+        problem.map,
+    )
+    assert bool(outcome.converged)
+    spectral = outcome.map_result.spectral
+    energy = (
+        electronic_energy_from_spectral(spectral, case.inputs).sum()
+        + free_energy_from_spectral(spectral, case.inputs).sum()
+    ).item()
+    assert abs(energy - reference) < 1.0e-3
+
+
+def test_characterization_row_contains_verified_model_and_initial_state() -> (
+    None
+):
+    """Structured rows carry checked model and physical input provenance."""
+    row = characterize_case(
+        GFN2_XTB,
+        sample_name="H2",
+        representation=SCFRepresentation.CHARGE,
+        dtype=torch.float64,
+        tolerance=1.0e-6,
+    )
+    assert row["model"] == "GFN2-xTB"
+    assert row["model_config"] == labels.GFN2_XTB
+    assert row["h0_method"] == "gfn2"
+    assert row["parameter_model"] == "GFN2-xTB"
+    assert row["initial_x_sha256"]
+    assert row["occupation"]
+    assert row["nel"]
+    assert row["hcore_norm"] > 0.0
+    assert row["overlap_norm"] > 0.0
+    assert row["converged"]
+
+
+@pytest.mark.parametrize(
     "representation",
     [
         SCFRepresentation.CHARGE,
@@ -143,7 +204,7 @@ def test_stationarity_uses_fresh_hamiltonian_not_diagonalized_hamiltonian() -> (
 
 
 def test_stationarity_is_nonorthogonal_and_permutation_covariant() -> None:
-    """The AO commutator norm is invariant under simultaneous AO permutation."""
+    """Raw and orthogonalized norms are invariant under AO permutation."""
     _, problem, state = _problem_and_state(sample_name="H2O")
     spectral = state.map_result.spectral
     fock = problem.rebuild_hamiltonian(spectral.charges)
@@ -151,6 +212,8 @@ def test_stationarity_is_nonorthogonal_and_permutation_covariant() -> None:
     overlap = problem.inputs.integrals.overlap
     mask = problem.inputs.orbital_mask
     residual = stationarity_matrix(problem, state)
+    inverse_sqrt = problem.inputs.inverse_cholesky
+    orthogonalized = inverse_sqrt.T @ residual @ inverse_sqrt
     identity = torch.eye(
         overlap.shape[-1], dtype=overlap.dtype, device=overlap.device
     )
@@ -167,6 +230,10 @@ def test_stationarity_is_nonorthogonal_and_permutation_covariant() -> None:
         - permuted_overlap @ permuted_density @ permuted_fock
     )
     permuted_residual = torch.where(pair_mask, permuted_residual, 0.0)
+    permuted_inverse_sqrt = inverse_sqrt[permutation][:, permutation]
+    permuted_orthogonalized = (
+        permuted_inverse_sqrt.T @ permuted_residual @ permuted_inverse_sqrt
+    )
     torch.testing.assert_close(
         torch.linalg.vector_norm(permuted_residual),
         torch.linalg.vector_norm(residual),
@@ -179,6 +246,98 @@ def test_stationarity_is_nonorthogonal_and_permutation_covariant() -> None:
         atol=2e-12,
         rtol=2e-12,
     )
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(permuted_orthogonalized),
+        torch.linalg.vector_norm(orthogonalized),
+        atol=2e-12,
+        rtol=2e-12,
+    )
+    torch.testing.assert_close(
+        permuted_orthogonalized.abs().amax(),
+        orthogonalized.abs().amax(),
+        atol=2e-12,
+        rtol=2e-12,
+    )
+
+
+def test_orthogonalized_stationarity_matches_orthogonal_basis_algebra() -> None:
+    """The transformed commutator equals X.T R_AO X for SPD overlap."""
+    dtype = torch.float64
+    overlap_seed = torch.tensor(
+        [[1.4, 0.2, -0.1], [0.2, 1.1, 0.15], [-0.1, 0.15, 0.9]],
+        dtype=dtype,
+    )
+    overlap = overlap_seed @ overlap_seed.T
+    fock = torch.tensor(
+        [[-0.8, 0.1, 0.3], [0.1, 0.4, -0.2], [0.3, -0.2, 0.9]],
+        dtype=dtype,
+    )
+    density_seed = torch.tensor(
+        [[0.7, 0.1, 0.05], [0.1, 0.3, -0.02], [0.05, -0.02, 0.2]],
+        dtype=dtype,
+    )
+    density = density_seed @ density_seed.T
+    eigenvalues, eigenvectors = torch.linalg.eigh(overlap)
+    inverse_sqrt = (
+        eigenvectors * eigenvalues.rsqrt().unsqueeze(-2)
+    ) @ eigenvectors.T
+
+    residual_ao = fock @ density @ overlap - overlap @ density @ fock
+    residual_orth_from_ao = inverse_sqrt.T @ residual_ao @ inverse_sqrt
+    fock_orth = inverse_sqrt.T @ fock @ inverse_sqrt
+    inverse = torch.linalg.inv(inverse_sqrt)
+    density_orth = inverse @ density @ inverse.T
+    residual_orth_direct = fock_orth @ density_orth - density_orth @ fock_orth
+
+    torch.testing.assert_close(
+        residual_orth_from_ao, residual_orth_direct, atol=2e-13, rtol=2e-13
+    )
+
+
+def test_stationarity_metrics_respond_to_basis_rescaling() -> None:
+    """Orthogonalized Frobenius norm is basis-covariant under rescaling."""
+    dtype = torch.float64
+    seed = torch.tensor(
+        [[1.4, 0.2, -0.1], [0.2, 1.1, 0.15], [-0.1, 0.15, 0.9]],
+        dtype=dtype,
+    )
+    overlap = seed @ seed.T
+    fock = torch.tensor(
+        [[-0.8, 0.1, 0.3], [0.1, 0.4, -0.2], [0.3, -0.2, 0.9]],
+        dtype=dtype,
+    )
+    density_seed = torch.tensor(
+        [[0.7, 0.1, 0.05], [0.1, 0.3, -0.02], [0.05, -0.02, 0.2]],
+        dtype=dtype,
+    )
+    density = density_seed @ density_seed.T
+
+    def metrics(s: torch.Tensor, f: torch.Tensor, p: torch.Tensor):
+        eigenvalues, eigenvectors = torch.linalg.eigh(s)
+        inverse_sqrt = (
+            eigenvectors * eigenvalues.rsqrt().unsqueeze(-2)
+        ) @ eigenvectors.T
+        residual = f @ p @ s - s @ p @ f
+        residual_orth = inverse_sqrt.T @ residual @ inverse_sqrt
+        return (
+            torch.linalg.vector_norm(residual),
+            residual.abs().amax(),
+            torch.linalg.vector_norm(residual_orth),
+            residual_orth.abs().amax(),
+        )
+
+    original = metrics(overlap, fock, density)
+    basis_change = torch.diag(torch.tensor([0.35, 1.7, 3.2], dtype=dtype))
+    inverse_change = torch.linalg.inv(basis_change)
+    rescaled = metrics(
+        basis_change.T @ overlap @ basis_change,
+        basis_change.T @ fock @ basis_change,
+        inverse_change @ density @ inverse_change.T,
+    )
+    assert not torch.isclose(original[0], rescaled[0], rtol=1e-3, atol=1e-8)
+    assert not torch.isclose(original[1], rescaled[1], rtol=1e-3, atol=1e-8)
+    torch.testing.assert_close(original[2], rescaled[2], atol=2e-12, rtol=2e-12)
+    assert not torch.isclose(original[3], rescaled[3], rtol=1e-3, atol=1e-8)
 
 
 @pytest.mark.parametrize(
@@ -232,6 +391,52 @@ def test_electron_count_is_measured_independently() -> None:
     )
     assert metrics.fermi_ok
     assert metrics.finite_ok
+
+
+def test_open_shell_electron_count_keeps_both_spin_targets() -> None:
+    """Independent Tr(P S) uses the target population of both spin channels."""
+    _, problem, state = _problem_and_state(
+        GFN2_XTB,
+        sample_name="NO2",
+        spin=1.0,
+        temperature=300.0,
+    )
+    metrics = certification_metrics(problem, state)
+    assert problem.inputs.nel.shape[-1] == 2
+    assert bool((problem.inputs.nel > 0).all())
+    torch.testing.assert_close(
+        metrics.electron_count, problem.inputs.nel.sum(), atol=2e-12, rtol=0.0
+    )
+    torch.testing.assert_close(
+        metrics.electron_count_error,
+        metrics.electron_count - problem.inputs.nel.sum(),
+    )
+    assert metrics.fermi_electron_count_ok
+
+
+@pytest.mark.parametrize("temperature", [300.0, 1.0])
+def test_float32_finite_temperature_certification_floor(
+    temperature: float,
+) -> None:
+    """Fermi and physical metrics remain valid at the float32 tolerance floor."""
+    case, problem, state = _problem_and_state(
+        GFN2_XTB,
+        sample_name="H2O",
+        temperature=temperature,
+        dtype=torch.float32,
+    )
+    metrics = certification_metrics(problem, state)
+    effective = _resolve_tolerance(1.0e-12, state.x.dtype)
+    assert effective == pytest.approx(5.0e-5)
+    assert metrics.fermi_ok
+    assert metrics.finite_ok
+    assert torch.isfinite(metrics.fixed_point.l2)
+    assert torch.isfinite(metrics.stationarity_l2)
+    assert torch.isfinite(metrics.electron_count_error)
+    assert torch.isfinite(metrics.electronic_free_energy)
+    assert case.inputs.nel.sum().item() == pytest.approx(
+        metrics.electron_count.item(), abs=2e-6
+    )
 
 
 def test_padded_residual_entries_do_not_contribute() -> None:

@@ -121,8 +121,14 @@ def _prepare_case(
     if positions is None:
         positions = sample["positions"].to(device="cpu", dtype=dtype).clone()
     if par is None:
+        if method is GFN1_XTB:
+            parameter_model = "gfn1"
+        elif method is GFN2_XTB:
+            parameter_model = "gfn2"
+        else:
+            raise ValueError(f"Unknown parameter model {method!r}.")
         par = get_param_module(
-            "gfn1" if method == GFN1_XTB else "gfn2",
+            parameter_model,
             device="cpu",
             dtype=dtype,
         )

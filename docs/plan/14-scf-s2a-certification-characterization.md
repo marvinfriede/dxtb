@@ -98,6 +98,15 @@ diagonalize the fresh Hamiltonian.
 
 ## 4. Characterization results
 
+> **S2a.1 correction:** The GFN2/H2O rows in this section are superseded.
+> The test helper selected GFN1 parameters for both `GFN1_XTB` and
+> `GFN2_XTB`: distinct lazy parameter loaders compare equal with `==`. The
+> `-5.805... Eh` H2O result is GFN1; it is not a GFN2 root. Some later rows
+> also lacked a model-identity guard and must not be treated as verified GFN2
+> evidence. The helper now uses identity dispatch, and the corrected,
+> model-verified characterization is in
+> `15-scf-s2a.1-certification-evidence-correction.md`.
+
 All rows below use the Python 3.14 / PyTorch 2.14.1 CPU environment unless
 otherwise shown. The raw root solver's reported iteration count includes its
 initial physical map. Certification adds no outer map. Numerical values are
@@ -152,14 +161,11 @@ fresh-Fock residual at the same nominal raw tolerance.
 | GFN2/NO2 doublet | charge | 300 K / f64 | `1e-12` | `7.50e-13` / `3.65e-13` | `3.56e-15` / `9.99e-16` | `3.6e-15` | `-12.4611743257` / `-12.4611743257` | 57 |
 | GFN1/H2 | charge | 300 K / f64 | `1e-8` | `9.84e-9` / `4.85e-9` | `2.10e-16` / `1.11e-16` | `-6.7e-16` | `-1.0585983567` / same | 36 |
 
-The fixture helper can produce a different valid initial multipole guess after
-other model setup has run in the same process. In one mixed-order diagnostic,
-GFN2/H2O reached a second fixed point with energy `-5.1041587994`; isolated
-fresh-process runs from a consistent guess reached `-5.8052487051`. The two
-observations are not used as a root-tolerance comparison. Both were finite and
-had small fixed-point and fresh-Fock residuals. S2b should preserve the
-initial-guess provenance in any state-transition characterization and should
-not use energy alone to decide whether a root is certified.
+The original setup-order-dependence claim is withdrawn. It came from the
+unverified model-labeling path described above and was not supported by a
+model-identity-controlled comparison. S2a.1 reran alternating setup sequences
+with both the corrected test helper and independent fresh `ParamModule`
+instances; those results are recorded in the follow-up document.
 
 At 300 K the NO2 entropy correction was about `-1e-15` for these orbital
 occupations, so electronic energy and total free energy coincide at displayed
@@ -219,7 +225,12 @@ the same physical state's `fenergy`; pass/reuse that observable through an
 explicit physical-observable value or request progress metrics separately.
 Keep a direct-from-state diagnostic path and verify it against finalization.
 
-## 7. S2b evidence and recommendation
+## 7. S2b evidence and recommendation (superseded by S2a.1)
+
+The model-labeled evidence and recommendation below are retained as the
+historical S2a record only. Do not use the GFN2/H2O observations or these
+threshold suggestions for S2b; see the provenance-checked correction in
+`15-scf-s2a.1-certification-evidence-correction.md`.
 
 This evidence is enough to design explicit profiles, but not enough to publish
 universal tolerance defaults.
