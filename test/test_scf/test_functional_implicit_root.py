@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from dxtb import labels
 from dxtb._src.scf.functional.implicit import (
     _require_linear_convergence,
     implicit_root,
@@ -503,8 +504,14 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     [0, 1, 2],
     ids=("charge", "potential", "fock"),
 )
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_ANDERSON, labels.MIXER_BROYDEN],
+    ids=("anderson", "broyden"),
+)
 def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     representation: int,
+    mixer: int,
 ) -> None:
     from dataclasses import replace
     from test.test_scf.test_functional_root_derivatives import _case
@@ -517,6 +524,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         "H2",
         method=GFN1_XTB,
         representation=representation,
+        mixer=mixer,
         tolerance=1.0e-12,
         temperature=0.0,
         field=field,
@@ -524,6 +532,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     config = replace(
         case.system.config.scf,
         scf_mode=labels.SCF_MODE_IMPLICIT,
+        mixer=mixer,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -566,6 +575,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
             "H2",
             method=GFN1_XTB,
             representation=representation,
+            mixer=mixer,
             tolerance=1.0e-12,
             temperature=0.0,
             field=perturbed_field,
@@ -573,6 +583,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         perturbed_config = replace(
             perturbed.system.config.scf,
             scf_mode=labels.SCF_MODE_IMPLICIT,
+            mixer=mixer,
             maxiter=100,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -616,6 +627,7 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
         tolerance=1.0e-12,
         temperature=0.0,
     )
+    assert case.system.h0_setup is not None
     config = replace(
         case.system.config.scf,
         scf_mode=labels.SCF_MODE_IMPLICIT,
@@ -977,7 +989,7 @@ def test_public_functional_implicit_h2_float32_response() -> None:
     )
 
 
-def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
+def test_implicit_mixer_policy_selects_native_broyden_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
@@ -994,11 +1006,10 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     default = ConfigSCF()
     assert default.mixer == labels.MIXER_BROYDEN
 
-    # The implicit default preserves legacy ownership, where Broyden is
-    # ignored by the old implicit engine. Strictness remains FULL-specific.
+    # Supported charge/potential implicit calls honor the configured mixer.
     for strict in (False, True):
         broyden = replace(base, mixer=labels.MIXER_BROYDEN, strict=strict)
-        assert not _use_functional_implicit_route(
+        assert _use_functional_implicit_route(
             replace(broyden, mixer=default.mixer),
             case.interactions,
             case.system.ihelp,
@@ -1006,7 +1017,7 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
             case.integrals,
             legacy_engine_overrides=False,
         )
-        assert not _use_functional_implicit_route(
+        assert _use_functional_implicit_route(
             broyden,
             case.interactions,
             case.system.ihelp,
@@ -1023,6 +1034,18 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
                 case.integrals,
                 legacy_engine_overrides=False,
             )
+
+    fock_broyden = replace(
+        base, mixer=labels.MIXER_BROYDEN, scp_mode=labels.SCP_MODE_FOCK
+    )
+    assert _use_functional_implicit_route(
+        fock_broyden,
+        case.interactions,
+        case.system.ihelp,
+        case.numbers,
+        case.integrals,
+        legacy_engine_overrides=False,
+    )
 
     assert not _use_functional_implicit_route(
         replace(base, mixer=labels.MIXER_ANDERSON),
@@ -1134,17 +1157,18 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
     functional = functional_system.singlepoint(
         case.positions, field=torch.zeros(3, **_DD)
     )
-    legacy_results = []
+
+    broyden_results = []
     for strict in (False, True):
-        legacy_system = replace(
+        broyden_system = replace(
             case.system,
             config=replace(
                 case.system.config,
                 scf=replace(legacy_config, strict=strict),
             ),
         )
-        legacy_results.append(
-            legacy_system.singlepoint(
+        broyden_results.append(
+            broyden_system.singlepoint(
                 case.positions, field=torch.zeros(3, **_DD)
             )
         )
@@ -1173,8 +1197,61 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
         "emo",
         "occupation",
     ):
-        for legacy in legacy_results:
-            assert_tree_close(getattr(functional, name), getattr(legacy, name))
+        for broyden in broyden_results:
+            assert_tree_close(getattr(functional, name), getattr(broyden, name))
+
+
+def test_iterator_routes_implicit_broyden_away_from_legacy_rootfinder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The eligible iterator route prepares a native Broyden physical root."""
+    from dataclasses import replace
+    from test.test_scf.test_functional_root_derivatives import _case
+
+    import dxtb._src.scf.implicit as legacy_implicit
+    from dxtb import GFN1_XTB, labels
+    from dxtb._src.scf.iterator import solve
+
+    case = _case(
+        "H2",
+        method=GFN1_XTB,
+        representation=labels.SCP_MODE_CHARGE,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=1.0e-10,
+        maxiter=100,
+        temperature=0.0,
+    )
+    assert case.system.h0_setup is not None
+
+    def unexpected_legacy_root(*args, **kwargs):
+        raise AssertionError(
+            "eligible implicit Broyden reached the legacy rootfinder"
+        )
+
+    monkeypatch.setattr(
+        legacy_implicit, "SelfConsistentFieldImplicit", unexpected_legacy_root
+    )
+    config = replace(
+        case.system.config.scf,
+        scf_mode=labels.SCF_MODE_IMPLICIT,
+        mixer=labels.MIXER_BROYDEN,
+        maxiter=100,
+        x_atol=1.0e-10,
+        x_atol_max=1.0e-10,
+    )
+    result = solve(
+        case.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        case.system.h0_setup.refocc,
+    )
+    assert bool(result.converged)
 
 
 def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
@@ -1312,9 +1389,14 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
 
 
 @pytest.mark.slow
-def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_ANDERSON, labels.MIXER_BROYDEN],
+    ids=("anderson", "broyden"),
+)
+def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
+    mixer: int,
+) -> None:
     from test.test_scf.test_functional_root_derivatives import (
         _case,
         _initial_state,
@@ -1334,7 +1416,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
         "NO2",
         method=GFN2_XTB,
         representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_ANDERSON,
+        mixer=mixer,
         tolerance=tolerance,
         maxiter=300,
         temperature=300.0,
@@ -1496,7 +1578,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
             "NO2",
             method=GFN2_XTB,
             representation=labels.SCP_MODE_POTENTIAL,
-            mixer=labels.MIXER_ANDERSON,
+            mixer=mixer,
             tolerance=tolerance,
             maxiter=300,
             temperature=300.0,

@@ -269,8 +269,7 @@ def test_default_full_singlepoint_uses_functional_route(
     monkeypatch.setattr(core_module.scf, "solve_with_core_index", capture_solve)
     OutputHandler.clear_warnings()
     result = singlepoint(system, positions)
-    assert len(OutputHandler.warnings) == 1
-    assert "Using Anderson mixer instead" in OutputHandler.warnings[0][0]
+    assert OutputHandler.warnings == []
     functional = captured["result"]
     assert isinstance(functional, FunctionalCoreResult)
     assert result.charges is not None
@@ -372,8 +371,8 @@ def test_production_converged_route_executes_only_physical_maps(
     """Eager production stops mapping after convergence, unlike fixed trips."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional import anderson
     from dxtb._src.scf.functional import map as functional_map
+    from dxtb._src.scf.functional import problem as functional_problem
     from dxtb._src.scf.unrolling.base import BaseTSCF
 
     options = {
@@ -404,7 +403,7 @@ def test_production_converged_route_executes_only_physical_maps(
         method, scf_options=options, setup_functional=False
     )
     functional_counts = {"raw_maps": 0, "spectra": 0}
-    original_map = anderson.potential_map
+    original_map = functional_problem.potential_map
     original_evaluate = functional_map.evaluate_hamiltonian
 
     def count_functional_map(*args, **kwargs):
@@ -415,7 +414,9 @@ def test_production_converged_route_executes_only_physical_maps(
         functional_counts["spectra"] += 1
         return original_evaluate(*args, **kwargs)
 
-    monkeypatch.setattr(anderson, "potential_map", count_functional_map)
+    monkeypatch.setattr(
+        functional_problem, "potential_map", count_functional_map
+    )
     monkeypatch.setattr(
         functional_map, "evaluate_hamiltonian", count_functional_spectrum
     )
@@ -433,7 +434,6 @@ def test_production_converged_route_executes_only_physical_maps(
         assert code.device == production_case.positions.device
         assert code.shape == torch.Size([])
         assert code.item() == 0
-    assert production_result.iterations.item() == legacy_raw_maps
     assert functional_counts["raw_maps"] == production_result.iterations.item()
     assert functional_counts["spectra"] == functional_counts["raw_maps"] + 1
 
@@ -717,11 +717,13 @@ def test_production_dynamic_damping_matches_legacy(
     torch.testing.assert_close(actual.fenergy, expected["fenergy"])
 
 
-def test_production_gfn2_default_broyden_route_matches_legacy() -> None:
-    """GFN2 default potential/Broyden/300 K route matches legacy outputs."""
+def test_production_gfn2_default_broyden_route_is_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GFN2 potential/Broyden runs natively without Anderson substitution."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+    import dxtb._src.scf.unrolling as legacy_unrolling
 
     options = {
         "scp_mode": labels.SCP_MODE_POTENTIAL,
@@ -729,64 +731,29 @@ def test_production_gfn2_default_broyden_route_matches_legacy() -> None:
         "fermi_etemp": 300.0,
         "maxiter": 2,
     }
-    legacy_case = _prepare_case(
-        GFN2_XTB,
-        scf_options=options,
-        setup_functional=False,
-    )
     production_case = _prepare_case(
         GFN2_XTB,
         scf_options=options,
         setup_functional=False,
     )
-    OutputHandler.clear_warnings()
-    legacy_engine = SelfConsistentFieldFull(
-        legacy_case.interactions,
-        legacy_case.occupation,
-        legacy_case.n0,
-        numbers=legacy_case.system.numbers,
-        ihelp=legacy_case.system.ihelp,
-        cache=legacy_case.interaction_data,
-        integrals=legacy_case.integrals,
-        config=legacy_case.system.config.scf,
-        nel=legacy_case.nel,
+
+    def unexpected_legacy_solver(*args, **kwargs):
+        raise AssertionError(
+            "eligible FULL Broyden must use the functional route"
+        )
+
+    monkeypatch.setattr(
+        legacy_unrolling, "SelfConsistentFieldFull", unexpected_legacy_solver
     )
-    expected = legacy_engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
     OutputHandler.clear_warnings()
     actual = singlepoint(production_case.system, production_case.positions)
-    assert OutputHandler.warnings == legacy_warnings
-    assert (
-        sum(
-            "Using Anderson mixer instead" in warning[0]
-            for warning in legacy_warnings
-        )
-        == 1
+    assert not any(
+        "Using Anderson mixer instead" in warning[0]
+        for warning in OutputHandler.warnings
     )
-    for name in ("density", "emo", "occupation", "hamiltonian"):
-        torch.testing.assert_close(getattr(actual, name), expected[name])
-    torch.testing.assert_close(actual.scf, expected["energy"])
-    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
     assert actual.charges is not None and actual.potential is not None
-    for legacy_name, result_name in (
-        ("mono", "mono"),
-        ("dipole", "dipole"),
-        ("quad", "quadrupole"),
-    ):
-        expected_charge = getattr(expected["charges"], legacy_name, None)
-        expected_potential = getattr(expected["potential"], legacy_name, None)
-        actual_charge = getattr(actual.charges, result_name)
-        actual_potential = getattr(actual.potential, result_name)
-        if expected_charge is None:
-            assert actual_charge is None
-        else:
-            assert actual_charge is not None
-            torch.testing.assert_close(actual_charge, expected_charge)
-        if expected_potential is None:
-            assert actual_potential is None
-        else:
-            assert actual_potential is not None
-            torch.testing.assert_close(actual_potential, expected_potential)
+    assert actual.density is not None and torch.isfinite(actual.density).all()
+    assert actual.scf is not None and torch.isfinite(actual.scf).all()
 
 
 def test_core_singlepoint_supports_independent_position_gradients() -> None:
