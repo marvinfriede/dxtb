@@ -405,6 +405,7 @@ def test_exact_core_checks_classical_setup_coherency(
         par=ParamModule(method, dtype=torch.float64),
         config=Config.create(method=method_label),
     ).setup(torch.tensor([1, 1]))
+    assert system.config.method == method_label
     assert system.exact_core is not None
     setup = getattr(system, field)
     if setup is None:
@@ -419,11 +420,12 @@ def test_exact_core_checks_classical_setup_coherency(
 def test_exact_core_checks_interaction_setup_coherency(field: str) -> None:
     """Each captured interaction setup remains coherent with its façade."""
     method = GFN1_XTB if field in ("es2_setup", "es3_setup") else GFN2_XTB
-    method_label = labels.GFN1_XTB if method == GFN1_XTB else labels.GFN2_XTB
+    method_label = labels.GFN1_XTB if method is GFN1_XTB else labels.GFN2_XTB
     system = Model(
         par=ParamModule(method, dtype=torch.float64),
         config=Config.create(method=method_label),
     ).setup(torch.tensor([1, 1]))
+    assert system.config.method == method_label
     assert system.exact_core is not None
     setup = getattr(system, field)
     assert setup is not None, f"default configuration has no {field}"

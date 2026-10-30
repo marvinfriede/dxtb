@@ -26,10 +26,12 @@ from .anderson import (
     solve_scf_potential_anderson,
 )
 from .certification import (
+    SCFCertificationCoreMetrics,
     SCFCertificationMetrics,
     SCFCertificationResult,
     SCFCertificationThresholds,
     SCFProgressMetrics,
+    certification_core_metrics,
     certification_metrics,
     certify_scf_state,
     scf_progress_metrics,
@@ -120,6 +122,7 @@ __all__ = [
     "AndersonState",
     "ChargeLayout",
     "SCFCertificationMetrics",
+    "SCFCertificationCoreMetrics",
     "SCFCertificationResult",
     "SCFCertificationThresholds",
     "FermiSettings",
@@ -183,6 +186,7 @@ __all__ = [
     "validate_functional_scf_interactions",
     "functional_scf_interactions_eligible",
     "certification_metrics",
+    "certification_core_metrics",
     "certify_scf_state",
     "scf_progress_metrics",
     "stationarity_matrix",

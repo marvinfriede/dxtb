@@ -30,10 +30,16 @@ from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
 
 __all__ = [
     "SCFCertificationMetrics",
+    "SCFCertificationCoreMetrics",
+    "SCFInternalCertificationProfile",
     "SCFCertificationResult",
     "SCFCertificationThresholds",
+    "SCF_CERTIFICATION_STANDARD",
+    "SCF_CERTIFICATION_TIGHT",
+    "SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE",
     "SCFProgressMetrics",
     "certification_metrics",
+    "certification_core_metrics",
     "certify_scf_state",
     "stationarity_matrix",
 ]
@@ -46,9 +52,70 @@ class SCFCertificationThresholds:
     representation: SCFRepresentation
     fixed_point_l2: float
     fixed_point_max: float
-    stationarity_l2: float
-    stationarity_max: float
+    stationarity_orthogonalized_per_sqrt_orbital: float
     electron_count: float
+
+
+@dataclass(frozen=True)
+class SCFInternalCertificationProfile:
+    """Explicit internal accuracy profile proposed for S2b integration."""
+
+    name: str
+    fixed_point_l2: float
+    fixed_point_max: float
+    stationarity_orthogonalized_per_sqrt_orbital: float
+    electron_count_uses_effective_root_tolerance: bool = True
+    stationarity_float32_floor: float = 1.0e-5
+
+    def stationarity_tolerance(self, dtype: torch.dtype) -> float:
+        """Resolve the explicit stationarity floor for the numerical dtype."""
+        if dtype is torch.float32:
+            return max(
+                self.stationarity_orthogonalized_per_sqrt_orbital,
+                self.stationarity_float32_floor,
+            )
+        return self.stationarity_orthogonalized_per_sqrt_orbital
+
+
+SCF_CERTIFICATION_STANDARD = SCFInternalCertificationProfile(
+    "standard",
+    fixed_point_l2=1.0e-4,
+    fixed_point_max=1.0e-5,
+    stationarity_orthogonalized_per_sqrt_orbital=1.0e-5,
+)
+SCF_CERTIFICATION_TIGHT = SCFInternalCertificationProfile(
+    "tight",
+    fixed_point_l2=1.0e-10,
+    fixed_point_max=1.0e-10,
+    stationarity_orthogonalized_per_sqrt_orbital=1.0e-9,
+)
+SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE = SCFInternalCertificationProfile(
+    "higher_order_reference",
+    fixed_point_l2=1.0e-12,
+    fixed_point_max=1.0e-12,
+    stationarity_orthogonalized_per_sqrt_orbital=1.0e-12,
+)
+
+
+@dataclass(frozen=True, eq=False)
+class SCFCertificationCoreMetrics:
+    """Certification metrics that do not require energy or entropy work."""
+
+    representation: SCFRepresentation
+    fixed_point: SCFResidual
+    stationarity_ao_l2: Tensor
+    stationarity_ao_max: Tensor
+    stationarity_orthogonalized_l2: Tensor
+    stationarity_orthogonalized_max: Tensor
+    stationarity_orthogonalized_l2_per_sqrt_orbital: Tensor
+    electron_count: Tensor
+    electron_count_error: Tensor
+    finite_ok: Tensor
+    fermi_ok: Tensor
+    fermi_converged: Tensor
+    fermi_electron_count_ok: Tensor
+    fermi_invalid_temperature: Tensor
+    fermi_too_many_electrons: Tensor
 
 
 @dataclass(frozen=True, eq=False)
@@ -57,8 +124,11 @@ class SCFCertificationMetrics:
 
     representation: SCFRepresentation
     fixed_point: SCFResidual
-    stationarity_l2: Tensor
-    stationarity_max: Tensor
+    stationarity_ao_l2: Tensor
+    stationarity_ao_max: Tensor
+    stationarity_orthogonalized_l2: Tensor
+    stationarity_orthogonalized_max: Tensor
+    stationarity_orthogonalized_l2_per_sqrt_orbital: Tensor
     electron_count: Tensor
     electron_count_error: Tensor
     electronic_energy: Tensor
@@ -204,11 +274,44 @@ def _stationarity_matrix(
     return torch.where(pair_mask, residual, 0.0)
 
 
-def certification_metrics(
+def _stationarity_norms(
+    ao_residual: Tensor,
+    inverse_sqrt_overlap: Tensor,
+    orbital_mask: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Return AO/orthogonalized norms and the size-aware orthogonal norm."""
+    orthogonalized = (
+        inverse_sqrt_overlap.transpose(-2, -1)
+        @ ao_residual
+        @ inverse_sqrt_overlap
+    )
+    active_orbitals = orbital_mask.sum().to(ao_residual.dtype)
+    active_pairs = (
+        orbital_mask[..., :, None] & orbital_mask[..., None, :]
+    ).sum()
+    ao_l2 = torch.linalg.vector_norm(ao_residual)
+    ao_max = ao_residual.abs().amax()
+    orthogonalized_l2 = torch.linalg.vector_norm(orthogonalized)
+    orthogonalized_max = orthogonalized.abs().amax()
+    per_sqrt_orbital = orthogonalized_l2 / active_orbitals.sqrt()
+    per_sqrt_pair = (
+        orthogonalized_l2 / active_pairs.to(ao_residual.dtype).sqrt()
+    )
+    return (
+        ao_l2,
+        ao_max,
+        orthogonalized_l2,
+        orthogonalized_max,
+        per_sqrt_orbital,
+        per_sqrt_pair,
+    )
+
+
+def certification_core_metrics(
     problem: SCFProblem,
     state: SCFPhysicalState,
-) -> SCFCertificationMetrics:
-    """Measure physical validity without changing solver stopping behavior."""
+) -> SCFCertificationCoreMetrics:
+    """Measure core physical validity without energy/entropy observables."""
     if state.map_result.mapped_x.shape != state.x.shape:
         raise ValueError("Paired SCF state input and map output shapes differ.")
 
@@ -231,12 +334,16 @@ def certification_metrics(
     target_count = inputs.nel.sum()
     electron_count_error = electron_count - target_count
 
-    energy_by_atom = electronic_energy_from_spectral(spectral, inputs)
-    free_energy_by_atom = free_energy_from_spectral(spectral, inputs)
-    electronic_energy = energy_by_atom.sum()
-    electronic_free_energy = electronic_energy + free_energy_by_atom.sum()
-    stationarity_l2 = torch.linalg.vector_norm(stationarity)
-    stationarity_max = stationarity.abs().amax()
+    (
+        stationarity_l2,
+        stationarity_max,
+        stationarity_orthogonalized_l2,
+        stationarity_orthogonalized_max,
+        stationarity_scaled,
+        stationarity_per_sqrt_pair,
+    ) = _stationarity_norms(
+        stationarity, inputs.inverse_cholesky, inputs.orbital_mask
+    )
 
     (
         fermi_converged,
@@ -252,28 +359,70 @@ def certification_metrics(
         stationarity,
         stationarity_l2,
         stationarity_max,
+        stationarity_orthogonalized_l2,
+        stationarity_orthogonalized_max,
+        stationarity_scaled,
+        stationarity_per_sqrt_pair,
         electron_count,
         electron_count_error,
-        electronic_energy,
-        electronic_free_energy,
     )
     finite_ok = _finite_all(finite_values, like=state.x)
 
-    return SCFCertificationMetrics(
+    return SCFCertificationCoreMetrics(
         representation=problem.representation,
         fixed_point=fixed_point,
-        stationarity_l2=stationarity_l2,
-        stationarity_max=stationarity_max,
+        stationarity_ao_l2=stationarity_l2,
+        stationarity_ao_max=stationarity_max,
+        stationarity_orthogonalized_l2=stationarity_orthogonalized_l2,
+        stationarity_orthogonalized_max=stationarity_orthogonalized_max,
+        stationarity_orthogonalized_l2_per_sqrt_orbital=stationarity_scaled,
         electron_count=electron_count,
         electron_count_error=electron_count_error,
-        electronic_energy=electronic_energy,
-        electronic_free_energy=electronic_free_energy,
         finite_ok=finite_ok,
         fermi_ok=fermi_ok,
         fermi_converged=fermi_converged,
         fermi_electron_count_ok=fermi_electron_ok,
         fermi_invalid_temperature=invalid_temperature,
         fermi_too_many_electrons=too_many,
+    )
+
+
+def certification_metrics(
+    problem: SCFProblem,
+    state: SCFPhysicalState,
+) -> SCFCertificationMetrics:
+    """Return core metrics and optional physical energy observables."""
+    core = certification_core_metrics(problem, state)
+    spectral = state.map_result.spectral
+    electronic_energy = electronic_energy_from_spectral(
+        spectral, problem.inputs
+    ).sum()
+    electronic_free_energy = (
+        electronic_energy
+        + free_energy_from_spectral(spectral, problem.inputs).sum()
+    )
+    finite_ok = core.finite_ok & torch.isfinite(electronic_energy)
+    finite_ok = finite_ok & torch.isfinite(electronic_free_energy)
+    return SCFCertificationMetrics(
+        representation=core.representation,
+        fixed_point=core.fixed_point,
+        stationarity_ao_l2=core.stationarity_ao_l2,
+        stationarity_ao_max=core.stationarity_ao_max,
+        stationarity_orthogonalized_l2=core.stationarity_orthogonalized_l2,
+        stationarity_orthogonalized_max=core.stationarity_orthogonalized_max,
+        stationarity_orthogonalized_l2_per_sqrt_orbital=(
+            core.stationarity_orthogonalized_l2_per_sqrt_orbital
+        ),
+        electron_count=core.electron_count,
+        electron_count_error=core.electron_count_error,
+        electronic_energy=electronic_energy,
+        electronic_free_energy=electronic_free_energy,
+        finite_ok=finite_ok,
+        fermi_ok=core.fermi_ok,
+        fermi_converged=core.fermi_converged,
+        fermi_electron_count_ok=core.fermi_electron_count_ok,
+        fermi_invalid_temperature=core.fermi_invalid_temperature,
+        fermi_too_many_electrons=core.fermi_too_many_electrons,
     )
 
 
@@ -291,8 +440,9 @@ def certify_scf_state(
     fixed_point_ok = (metrics.fixed_point.l2 < thresholds.fixed_point_l2) & (
         metrics.fixed_point.max_abs < thresholds.fixed_point_max
     )
-    stationarity_ok = (metrics.stationarity_l2 < thresholds.stationarity_l2) & (
-        metrics.stationarity_max < thresholds.stationarity_max
+    stationarity_ok = (
+        metrics.stationarity_orthogonalized_l2_per_sqrt_orbital
+        < thresholds.stationarity_orthogonalized_per_sqrt_orbital
     )
     electron_count_ok = (
         metrics.electron_count_error.abs() < thresholds.electron_count

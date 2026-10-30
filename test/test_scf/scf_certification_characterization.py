@@ -23,6 +23,7 @@ import hashlib
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
+from dxtb._src.loader.lazy.lazy_param import LazyLoaderParam
 from dxtb._src.scf.functional import (
     SCFPhysicalState,
     SCFProblem,
@@ -55,7 +56,7 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
 
 
 def characterize_case(
-    method: int,
+    method: LazyLoaderParam,
     *,
     sample_name: str,
     representation: SCFRepresentation = SCFRepresentation.CHARGE,
@@ -64,6 +65,7 @@ def characterize_case(
     temperature: float = 0.0,
     dtype: torch.dtype,
     tolerance: float,
+    tolerance_max: float | None = None,
 ) -> dict[str, object]:
     """Build, method-check, solve, and summarize one independent case."""
     if method is GFN1_XTB:
@@ -117,12 +119,15 @@ def characterize_case(
 
     problem = SCFProblem(case.inputs, representation, layout)
     effective_tolerance = _resolve_tolerance(tolerance, x.dtype)
+    effective_tolerance_max = _resolve_tolerance(
+        tolerance if tolerance_max is None else tolerance_max, x.dtype
+    )
     settings = SCFSolverSettings(
         maxiter=180,
         mix_guess=False,
         damp=0.2,
         x_atol=effective_tolerance,
-        x_atol_max=effective_tolerance,
+        x_atol_max=effective_tolerance_max,
     )
     outcome = _solve_map(
         x,
@@ -142,6 +147,11 @@ def characterize_case(
         @ case.inputs.inverse_cholesky
     )
     fermi = state.map_result.fermi_status
+    fermi_state = spectral._fermi_state
+    occupations = spectral.occupation.detach()
+    fractional = occupations[
+        (occupations > 1.0e-3) & (occupations < 1.0 - 1.0e-3)
+    ]
     return {
         "model": expected_name,
         "model_config": int(case.system.config.method),
@@ -157,19 +167,43 @@ def characterize_case(
         "dtype": str(dtype),
         "requested_root_tolerance": tolerance,
         "effective_root_tolerance": effective_tolerance,
+        "requested_root_max_tolerance": (
+            tolerance if tolerance_max is None else tolerance_max
+        ),
+        "effective_root_max_tolerance": effective_tolerance_max,
         "fixed_point_l2": metrics.fixed_point.l2.item(),
         "fixed_point_max": metrics.fixed_point.max_abs.item(),
-        "stationarity_ao_l2": metrics.stationarity_l2.item(),
-        "stationarity_ao_max": metrics.stationarity_max.item(),
+        "stationarity_ao_l2": metrics.stationarity_ao_l2.item(),
+        "stationarity_ao_max": metrics.stationarity_ao_max.item(),
         "stationarity_orth_l2": float(
             orthogonalized.square().sum().sqrt().item()
         ),
         "stationarity_orth_max": float(orthogonalized.abs().amax().item()),
+        "stationarity_orthogonalized_l2_per_sqrt_orbital": (
+            metrics.stationarity_orthogonalized_l2_per_sqrt_orbital.item()
+        ),
         "electron_count": metrics.electron_count.item(),
         "electron_count_error": metrics.electron_count_error.item(),
         "fermi_residual": (
             None if fermi is None else fermi.residual.detach().tolist()
         ),
+        "chemical_potential": (
+            None
+            if fermi_state is None
+            else (
+                fermi_state.chemical_potential_ref
+                + fermi_state.chemical_potential_offset
+            )
+            .detach()
+            .tolist()
+        ),
+        "fractional_occupation_min": (
+            None if fractional.numel() == 0 else fractional.min().item()
+        ),
+        "fractional_occupation_max": (
+            None if fractional.numel() == 0 else fractional.max().item()
+        ),
+        "fractional_occupation_count": fractional.numel(),
         "fermi_converged": bool(metrics.fermi_converged),
         "fermi_electron_count_ok": bool(metrics.fermi_electron_count_ok),
         "finite_ok": bool(metrics.finite_ok),
