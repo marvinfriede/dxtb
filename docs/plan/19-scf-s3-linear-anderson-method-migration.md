@@ -88,6 +88,39 @@ initial state. These are smoke timings, not a performance benchmark.
 The map and certification counts matched between revisions. The small timing
 difference is within the noise expected from a single run.
 
+## Review-gate accounting
+
+The earlier Phase-A Group 3 summary reported 131 tests, while the S3 summary
+reported 128. Collection was repeated with the same explicit selection at
+the S1.1 tree (`0053e265`), the published S2b.1 tree (`6d5cfd1`), the pre-S3
+parent (`f845602`), and the S3 tree. Each collected the same 128 node IDs; the
+before/after node-ID diff is empty. The three test files are unchanged between
+the S1.1 and S2b.1 trees. The Group 3 selection was rerun at S3 and completed
+with 128 passed. Thus S3 removed no Group 3 coverage; the historical 131
+summary was an unreproducible collection/count discrepancy, and the original
+command that produced that number was not preserved.
+
+The exact Group 3 command used for the comparison was:
+
+```bash
+python -m pytest -q -n 1 \
+  test/test_calculator/test_e6a2_public_status.py \
+  test/test_scf/test_invariant_spectral_density.py \
+  test/test_scf/test_invariant_free_energy.py
+```
+
+The earlier broad xdist invocation was interrupted during worker shutdown and
+did not produce a final pytest summary; its complete command and concurrency
+value were not preserved. The same combined file selection was rerun without
+xdist and with `-n 2`, using one thread for each BLAS/OpenMP library and
+`-m 'not slow'`. Both runs completed normally with 562 passed, one inherited
+Anderson strict-gradient-parity failure, and four deselected. The maximum
+difference remained `2.5007065862503453e-11` against `2e-13`. No pytest worker
+processes remained after either run. The shutdown hang is therefore not
+reproduced at serial or low xdist concurrency; the earlier incomplete run is
+classified as a transient/high-concurrency runner event, not an S3 numerical
+regression.
+
 ## Scope status
 
 S3 adds no switching or multi-stage execution. Broyden, CDIIS, SOSCF, and later
