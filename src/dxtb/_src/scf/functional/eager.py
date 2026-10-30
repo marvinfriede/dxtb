@@ -42,14 +42,7 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 
-from .anderson import (
-    AndersonSettings,
-    _solve_map_anderson,
-    setup_anderson_solver_settings,
-    solve_scf_anderson,
-    solve_scf_fock_anderson,
-    solve_scf_potential_anderson,
-)
+from .anderson import AndersonMethod, setup_anderson_method_settings
 from .core import CoreIndexData
 from .data import (
     PotentialLayout,
@@ -67,12 +60,10 @@ from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
     fock_initial_guess,
-    fock_map,
     potential_initial_guess,
-    potential_map,
-    scf_map,
     unpack_potential,
 )
+from .method import LinearMethod
 from .problem import SCFProblem, SCFRepresentation
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
@@ -90,11 +81,10 @@ from .solver import (
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
-    setup_simple_solver_settings,
-    solve_scf_fock_simple,
-    solve_scf_potential_simple,
-    solve_scf_simple,
+    setup_solver_settings,
+    solve_scf_problem,
 )
+from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
     "FullSCFRoute",
@@ -198,9 +188,7 @@ def resolve_full_scf_route(
             config.mixer,
             reason="negative Fermi maxiter retains legacy behavior",
         )
-    if integrals is not None and (
-        integrals.hcore is None or integrals.overlap is None
-    ):
+    if integrals is not None and (integrals.hcore is None or integrals.overlap is None):
         return FullSCFRoute(
             "legacy",
             config.scp_mode,
@@ -211,8 +199,7 @@ def resolve_full_scf_route(
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if config.mixer == labels.MIXER_BROYDEN:
         message = (
-            "Broyden mixer is not implemented for SCF with full gradient "
-            "tracking."
+            "Broyden mixer is not implemented for SCF with full gradient " "tracking."
         )
         if config.strict:
             raise NotImplementedError(message)
@@ -335,10 +322,18 @@ def apply_functional_full_policy(
     return functional_core_result(result)
 
 
-def _solver_settings(config: ConfigSCF, dtype: torch.dtype):
+def _prepare_solver(
+    config: ConfigSCF, dtype: torch.dtype
+) -> tuple[SCFSolverSettings, SCFStrategy]:
+    """Translate the effective configuration into common settings and method."""
+    settings = setup_solver_settings(config, dtype)
     if config.mixer == labels.MIXER_LINEAR:
-        return setup_simple_solver_settings(config, dtype)
-    return setup_anderson_solver_settings(config, dtype)
+        method = LinearMethod()
+    elif config.mixer == labels.MIXER_ANDERSON:
+        method = AndersonMethod(setup_anderson_method_settings(config))
+    else:
+        raise NotImplementedError(f"Unsupported functional mixer {config.mixer}.")
+    return settings, SCFStrategy((SCFStage(method),))
 
 
 def _solve_representation(
@@ -351,7 +346,7 @@ def _solve_representation(
     padded: bool = False,
 ) -> SCFSolveResult:
     """Run one representation with eager or transform-fixed control."""
-    settings = _solver_settings(config, guess.dtype)
+    settings, strategy = _prepare_solver(config, guess.dtype)
     mode = config.scp_mode
     padded_state: Callable[[Tensor], Tensor] | None = None
     padded_residual: Callable[[Tensor], Tensor] | None = None
@@ -374,21 +369,11 @@ def _solve_representation(
         )
         if padded:
             padded_state, padded_residual = _padded_charge_projections(inputs)
-        if isinstance(settings, SCFSolverSettings):
-            return solve_scf_simple(
-                x,
-                inputs,
-                settings,
-                eager=eager,
-                record_trace=record_trace,
-                state_projection=padded_state,
-                residual_projection=padded_residual,
-                project_initial_state=padded,
-            )
-        return solve_scf_anderson(
+        return solve_scf_problem(
             x,
-            inputs,
+            SCFProblem(inputs, SCFRepresentation.CHARGE),
             settings,
+            strategy,
             eager=eager,
             record_trace=record_trace,
             state_projection=padded_state,
@@ -414,23 +399,11 @@ def _solve_representation(
             padded_state, padded_residual = _padded_potential_projections(
                 inputs, layout
             )
-        if isinstance(settings, SCFSolverSettings):
-            return solve_scf_potential_simple(
-                packed,
-                inputs,
-                layout,
-                settings,
-                eager=eager,
-                record_trace=record_trace,
-                state_projection=padded_state,
-                residual_projection=padded_residual,
-                project_initial_state=padded,
-            )
-        return solve_scf_potential_anderson(
+        return solve_scf_problem(
             packed,
-            inputs,
-            layout,
+            SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout),
             settings,
+            strategy,
             eager=eager,
             record_trace=record_trace,
             state_projection=padded_state,
@@ -448,21 +421,11 @@ def _solve_representation(
             )
             problem = SCFProblem(inputs, SCFRepresentation.FOCK)
             padded_residual = problem.project_residual
-        if isinstance(settings, SCFSolverSettings):
-            return solve_scf_fock_simple(
-                fock,
-                inputs,
-                settings,
-                eager=eager,
-                record_trace=record_trace,
-                state_projection=padded_state,
-                residual_projection=padded_residual,
-                project_initial_state=padded,
-            )
-        return solve_scf_fock_anderson(
+        return solve_scf_problem(
             fock,
-            inputs,
+            SCFProblem(inputs, SCFRepresentation.FOCK),
             settings,
+            strategy,
             eager=eager,
             record_trace=record_trace,
             state_projection=padded_state,
@@ -487,24 +450,18 @@ def _padded_potential_projections(
                 dipole=(
                     None
                     if potential.dipole is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), potential.dipole, 0.0
-                    )
+                    else torch.where(atom_mask.unsqueeze(-1), potential.dipole, 0.0)
                 ),
                 quad=(
                     None
                     if potential.quad is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), potential.quad, 0.0
-                    )
+                    else torch.where(atom_mask.unsqueeze(-1), potential.quad, 0.0)
                 ),
             ),
             layout,
         )
 
-    problem = SCFProblem(
-        inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
-    )
+    problem = SCFProblem(inputs, SCFRepresentation.POTENTIAL, potential_layout=layout)
     return project_state, problem.project_residual
 
 
@@ -523,9 +480,7 @@ def _padded_charge_projections(
                 dipole=(
                     None
                     if charges.dipole is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), charges.dipole, 0.0
-                    )
+                    else torch.where(atom_mask.unsqueeze(-1), charges.dipole, 0.0)
                 ),
                 quad=(
                     None
@@ -563,9 +518,7 @@ def run_functional_full_eager(
     """
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
-        route = resolve_full_scf_route(
-            config, interactions, ihelp, numbers, integrals
-        )
+        route = resolve_full_scf_route(config, interactions, ihelp, numbers, integrals)
         legacy = solve_nonselfconsistent(
             numbers,
             interactions,
@@ -663,9 +616,7 @@ def run_prepared_functional_full(
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
     if route.kind != "functional":
-        raise ValueError(
-            "The prepared functional runner requires a functional route."
-        )
+        raise ValueError("The prepared functional runner requires a functional route.")
     if route.representation != config.scp_mode:
         raise ValueError(
             "The prepared functional route representation does not match "
@@ -717,9 +668,7 @@ def run_system_fixed_trip(
             occupation,
         )
 
-    route = resolve_full_scf_route(
-        config, interactions, ihelp, numbers, integrals
-    )
+    route = resolve_full_scf_route(config, interactions, ihelp, numbers, integrals)
     if route.kind != "functional":
         eager_result = run_functional_full_eager(
             numbers,
@@ -734,17 +683,11 @@ def run_system_fixed_trip(
             refocc,
         )
         if eager_result.legacy is None:
-            raise RuntimeError(
-                "Legacy System fallback did not return a result."
-            )
+            raise RuntimeError("Legacy System fallback did not return a result.")
         return eager_result.legacy
 
-    n0, occupation, nel = get_refocc(
-        refocc, chrg, spin, ihelp, validate_spin=False
-    )
-    guess = get_guess(
-        numbers, positions, chrg, ihelp, config.guess, validate=False
-    )
+    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp, validate_spin=False)
+    guess = get_guess(numbers, positions, chrg, ihelp, config.guess, validate=False)
     result = run_prepared_functional_full(
         numbers,
         guess,
@@ -801,7 +744,7 @@ def run_prepared_functional_implicit(
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    settings = _solver_settings(config, guess.dtype)
+    settings, strategy = _prepare_solver(config, guess.dtype)
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -819,50 +762,32 @@ def run_prepared_functional_implicit(
     if representation == labels.SCP_MODE_CHARGE:
         state = pack_charges(charges, inputs.charge_layout)
         layout = None
-        map_fn = lambda x: scf_map(x, inputs)
         problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
     elif representation == labels.SCP_MODE_POTENTIAL:
         state, layout = potential_initial_guess(charges, inputs)
-        map_fn = lambda x: potential_map(x, inputs, layout)
         problem = SCFProblem(
             inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
         )
     elif representation == labels.SCP_MODE_FOCK:
         state = fock_initial_guess(charges, inputs)
         layout = None
-        map_fn = lambda x: fock_map(x, inputs)
         problem = SCFProblem(inputs, SCFRepresentation.FOCK)
     else:
-        raise ValueError(
-            f"Unknown convergence target (SCP mode) '{representation}'."
-        )
+        raise ValueError(f"Unknown convergence target (SCP mode) '{representation}'.")
 
-    if isinstance(settings, SCFSolverSettings):
-        outcome = _solve_map(
-            state,
-            settings,
-            map_fn,
-            state_projection=(
-                None
-                if layout is None
-                else lambda value: _project_potential_padding(value, layout)
-            ),
-            eager=True,
-            problem=problem,
-        )
-    else:
-        outcome = _solve_map_anderson(
-            state,
-            settings,
-            map_fn,
-            state_projection=(
-                None
-                if layout is None
-                else lambda value: _project_potential_padding(value, layout)
-            ),
-            eager=True,
-            problem=problem,
-        )
+    outcome = _solve_map(
+        state,
+        settings,
+        problem.map,
+        state_projection=(
+            None
+            if layout is None
+            else lambda value: _project_potential_padding(value, layout)
+        ),
+        eager=True,
+        problem=problem,
+        strategy=strategy,
+    )
 
     # Check the selected raw result and the representation's final spectrum
     # before any transform sees this root. The accepted solver input remains
@@ -880,9 +805,7 @@ def run_prepared_functional_implicit(
 
     # Preserve final-spectrum failure mapping. Historical trajectory status is
     # diagnostic and does not decide whether this physical root is acceptable.
-    _raise_failure_code(
-        fermi_failure_code(final_status, like=outcome.converged)
-    )
+    _raise_failure_code(fermi_failure_code(final_status, like=outcome.converged))
 
     if not bool(outcome.converged.all()):
         raise SCFConvergenceError(
@@ -890,9 +813,7 @@ def run_prepared_functional_implicit(
             "did not pass physical certification."
         )
 
-    adapter, parameters = _SCFMapTensorTree.prepare(
-        inputs, representation, layout
-    )
+    adapter, parameters = _SCFMapTensorTree.prepare(inputs, representation, layout)
     prepared = _prepare_scf_root(
         outcome,
         maxiter=config.maxiter,

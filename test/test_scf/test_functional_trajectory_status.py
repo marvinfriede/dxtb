@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from torch.func import vmap
 
@@ -31,11 +33,12 @@ from dxtb._src.scf.functional import (
     functional_converged_and_valid,
     functional_subsolves_ok,
 )
+from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
-    FERMI_FAILURE_NONE,
     FERMI_FAILURE_NONCONVERGENCE,
+    FERMI_FAILURE_NONE,
     _solve_map_control,
     accumulate_trajectory_status,
     fermi_failure_code,
@@ -75,7 +78,20 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     def map_fn(x: torch.Tensor) -> SCFMapResult:
         nonlocal calls
         calls += 1
-        return _toy_result(torch.ones_like(x), valid=calls > 1)
+        result = _toy_result(torch.ones_like(x), valid=calls > 1)
+        status = result.fermi_status
+        assert status is not None
+        status = FermiStatus(
+            converged=status.converged,
+            residual=status.residual,
+            invalid_temperature=torch.zeros_like(status.invalid_temperature),
+            too_many_electrons=status.too_many_electrons,
+            electron_count_ok=torch.ones_like(status.electron_count_ok),
+        )
+        return replace(
+            result,
+            spectral=replace(result.spectral, fermi_status=status),
+        )
 
     settings = SCFSolverSettings(
         maxiter=1,
@@ -91,7 +107,8 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active, damp: (mapped, None),
+        method=LinearMethod(),
+        initial_damp=1.0,
     )
     spectral = outcome.map_result.spectral
     assert calls == 2
@@ -106,6 +123,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     result = SCFSolveResult(
         map_result=outcome.map_result,
         final_evaluation=spectral,
+        root_x=outcome.root_x,
         final_charges=SCFCharges(mono=torch.ones(1, dtype=torch.float64)),
         final_potential=SCFPotential(mono=torch.ones(1, dtype=torch.float64)),
         energy=torch.zeros(1, dtype=torch.float64),
@@ -117,7 +135,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     )
     assert result.trajectory_status is not None
     assert result.trajectory_status.fermi_converged.item() is False
-    assert result.trajectory_status.invalid_temperature.item() is True
+    assert result.trajectory_status.invalid_temperature.item() is False
     assert functional_subsolves_ok(result).item() is False
     assert functional_converged_and_valid(result).item() is False
 
@@ -129,7 +147,20 @@ def test_newly_converged_candidate_contributes_first_failure() -> None:
     def map_fn(x: torch.Tensor) -> SCFMapResult:
         nonlocal calls
         calls += 1
-        return _toy_result(torch.ones_like(x), valid=calls == 1)
+        result = _toy_result(torch.ones_like(x), valid=calls == 1)
+        status = result.fermi_status
+        assert status is not None
+        recoverable_status = FermiStatus(
+            converged=status.converged,
+            residual=status.residual,
+            invalid_temperature=torch.zeros_like(status.invalid_temperature),
+            too_many_electrons=status.too_many_electrons,
+            electron_count_ok=torch.ones_like(status.electron_count_ok),
+        )
+        return replace(
+            result,
+            spectral=replace(result.spectral, fermi_status=recoverable_status),
+        )
 
     outcome = _solve_map_control(
         torch.zeros((), dtype=torch.float64),
@@ -138,15 +169,15 @@ def test_newly_converged_candidate_contributes_first_failure() -> None:
         x_atol=0.1,
         x_atol_max=0.1,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active, damp: (mapped, None),
+        method=LinearMethod(),
+        initial_damp=1.0,
     )
     assert outcome.converged.item()
     assert outcome.map_result.fermi_status is not None
     assert outcome.map_result.fermi_status.converged.item() is False
     assert outcome.trajectory_status is not None
     assert (
-        outcome.trajectory_status.first_failure.item()
-        == FERMI_FAILURE_INVALID_TEMPERATURE
+        outcome.trajectory_status.first_failure.item() == FERMI_FAILURE_NONCONVERGENCE
     )
 
 
@@ -298,9 +329,7 @@ def test_inactive_dummy_status_does_not_pollute_trajectory() -> None:
     invalid = _toy_result(torch.ones(()), valid=False).fermi_status
     assert valid is not None and invalid is not None
     initial = accumulate_trajectory_status(None, valid, torch.tensor(True))
-    accumulated = accumulate_trajectory_status(
-        initial, invalid, torch.tensor(False)
-    )
+    accumulated = accumulate_trajectory_status(initial, invalid, torch.tensor(False))
     assert accumulated is not None
     assert accumulated.fermi_converged.item()
     assert accumulated.electron_count_ok.item()
@@ -319,9 +348,9 @@ def test_trajectory_status_vmap_matches_python_loop() -> None:
             status = FermiStatus(
                 converged=~invalid,
                 residual=torch.zeros_like(x),
-                invalid_temperature=invalid,
+                invalid_temperature=torch.zeros_like(invalid),
                 too_many_electrons=torch.zeros_like(invalid),
-                electron_count_ok=~invalid,
+                electron_count_ok=torch.ones_like(invalid),
             )
             return SCFMapResult(
                 mapped_x=mapped,
@@ -345,10 +374,8 @@ def test_trajectory_status_vmap_matches_python_loop() -> None:
             x_atol=0.1,
             x_atol_max=0.1,
             map_fn=map_fn,
-            mix_fn=lambda old, mapped, state, step, active, damp: (
-                old + 0.5 * (mapped - old),
-                None,
-            ),
+            method=LinearMethod(),
+            initial_damp=0.5,
         )
         status = outcome.trajectory_status
         assert status is not None

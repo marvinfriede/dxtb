@@ -24,27 +24,41 @@ import subprocess
 import sys
 import textwrap
 from dataclasses import replace
+from test.test_scf._anderson_helpers import (
+    from_config as setup_anderson_solver_settings,
+)
+from test.test_scf._anderson_helpers import solve_common as solve_common
 
 import numpy as np
 import pytest
 import torch
 from tad_mctc import storch
 
-from dxtb import Calculator, GFN1_XTB, GFN2_XTB
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
-from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.container import Charges
+from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.interactions import (
-    potential_from_charges as _core_potential_from_charges,
-)
 from dxtb._src.scf.functional.anderson import (
+    AndersonMethodSettings,
     AndersonState,
     anderson_mix,
-    _solve_map_anderson,
-    setup_anderson_solver_settings,
+)
+from dxtb._src.scf.functional.core import FunctionalInteractionSet
+from dxtb._src.scf.functional.data import (
+    SCFCharges,
+    SCFMapResult,
+    SCFPotential,
+    pack_potential,
+    potential_layout,
+    setup_scf_inputs,
+    unpack_potential,
+)
+from dxtb._src.scf.functional.eager import resolve_full_scf_route
+from dxtb._src.scf.functional.interactions import (
+    potential_from_charges as _core_potential_from_charges,
 )
 from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
@@ -54,23 +68,16 @@ from dxtb._src.scf.functional.map import (
     potential_map,
     potential_to_hamiltonian,
 )
-from dxtb._src.scf.functional.core import FunctionalInteractionSet
-from dxtb._src.scf.functional.data import (
-    SCFCharges,
-    SCFPotential,
-    pack_potential,
-    potential_layout,
-    setup_scf_inputs,
-    unpack_potential,
-)
-from dxtb._src.scf.functional.eager import resolve_full_scf_route
+from dxtb._src.scf.functional.problem import SCFProblem
 from dxtb._src.scf.functional.solver import (
     _project_potential_padding,
+    _solve_map,
     finalize_scf_potential,
     free_energy_from_spectral,
     interaction_energy_from_charges,
     simple_mix,
 )
+from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.utils import get_density
@@ -79,12 +86,12 @@ from dxtb._src.wavefunction.filling import get_fermi_occupation_core
 
 from .compute import (
     DRIVERS,
+    SCF_OPTIONS,
     _calculator,
     _hyperpolarizability,
     _pol_deriv,
     compute,
 )
-from .compute import SCF_OPTIONS
 from .molecules import SYSTEMS
 from .refdata import REFERENCE_DIR, load_reference
 from .tolerances import TBLITE
@@ -162,9 +169,7 @@ def _fd_classification(
     gap = abs(automatic - center)
     return {
         "status": (
-            "stable plateau agrees"
-            if gap <= error_bound
-            else "stable plateau mismatch"
+            "stable plateau agrees" if gap <= error_bound else "stable plateau mismatch"
         ),
         "window": window,
         "center": center,
@@ -284,9 +289,7 @@ def test_no2_gfn2_third_order_fd_diagnostic(
 ) -> None:
     """Record nested, stored, dxtb-FD, and tblite endpoint comparisons."""
     system = SYSTEMS["NO2"]
-    reference, _, _ = load_reference(
-        REFERENCE_DIR / "tblite" / "gfn2" / "NO2.npz"
-    )
+    reference, _, _ = load_reference(REFERENCE_DIR / "tblite" / "gfn2" / "NO2.npz")
     stored, _, _ = load_reference(REFERENCE_DIR / f"gfn2-{driver}" / "NO2.npz")
     if quantity == "hyperpolarizability":
         nested = _hyperpolarizability(system, "gfn2", driver)[quantity][index]
@@ -315,16 +318,11 @@ def test_no2_gfn2_third_order_fd_diagnostic(
     for step in _DIAGNOSTIC_STEPS:
         if quantity == "hyperpolarizability":
             points = [
-                evaluate(
-                    system.positions, system_field + offset * step * field_axis
-                )
+                evaluate(system.positions, system_field + offset * step * field_axis)
                 for offset in (-2.0, -1.0, 1.0, 2.0)
             ]
             fd = -(
-                points[3][0]
-                - 2.0 * points[2][0]
-                + 2.0 * points[1][0]
-                - points[0][0]
+                points[3][0] - 2.0 * points[2][0] + 2.0 * points[1][0] - points[0][0]
             ) / (2.0 * step**3)
             iterations = [item[1] for item in points]
         else:
@@ -342,19 +340,15 @@ def test_no2_gfn2_third_order_fd_diagnostic(
                     ]
                 )
             alpha_minus = (
-                -(points[0][0][0] - 2.0 * points[0][1][0] + points[0][2][0])
-                / step**2
+                -(points[0][0][0] - 2.0 * points[0][1][0] + points[0][2][0]) / step**2
             )
             alpha_plus = (
-                -(points[1][0][0] - 2.0 * points[1][1][0] + points[1][2][0])
-                / step**2
+                -(points[1][0][0] - 2.0 * points[1][1][0] + points[1][2][0]) / step**2
             )
             fd = (alpha_plus - alpha_minus) / (2.0 * step)
             iterations = [item[1] for row in points for item in row]
         samples.append(float(fd))
-        sweep_records.append(
-            {"step": step, "fd": float(fd), "iterations": iterations}
-        )
+        sweep_records.append({"step": step, "fd": float(fd), "iterations": iterations})
     target = float(np.asarray(reference[quantity])[index])
     dxtb_target = float(np.asarray(stored[quantity])[index])
     tolerance = TBLITE[quantity]
@@ -547,13 +541,11 @@ def _no2_functional_input(driver: str = "pytorch"):
     )
     initial_state, layout = potential_initial_guess(initial_charges, inputs)
     settings = setup_anderson_solver_settings(effective_config, positions.dtype)
-    outcome = _solve_map_anderson(
+    outcome = solve_common(
         initial_state,
         settings,
         lambda value: potential_map(value, inputs, layout),
-        state_projection=lambda value: _project_potential_padding(
-            value, layout
-        ),
+        state_projection=lambda value: _project_potential_padding(value, layout),
         eager=True,
     )
     finalized = finalize_scf_potential(
@@ -604,13 +596,11 @@ def _functional_solve_at(
             map_trace.append(_map_trace_record(value, result, len(map_trace)))
         return result
 
-    outcome = _solve_map_anderson(
+    outcome = solve_common(
         packed,
         settings,
         map_fn,
-        state_projection=lambda value: _project_potential_padding(
-            value, layout
-        ),
+        state_projection=lambda value: _project_potential_padding(value, layout),
         eager=eager,
     )
     finalized = finalize_scf_potential(
@@ -755,9 +745,7 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
         )
         for entry in inputs.interactions.entries
     }
-    rebuilt_packed, rebuilt_layout = potential_initial_guess(
-        initial_charges, inputs
-    )
+    rebuilt_packed, rebuilt_layout = potential_initial_guess(initial_charges, inputs)
     assert rebuilt_layout.mono_shape == layout.mono_shape
     assert rebuilt_layout.dipole_shape == layout.dipole_shape
     assert rebuilt_layout.quadrupole_shape == layout.quadrupole_shape
@@ -784,9 +772,7 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
     mapped_potential = potential_from_charges(spectral.charges, inputs)
     mapped_x = pack_potential(mapped_potential, layout)
     reference_map = potential_map(packed_guess, inputs, layout)
-    torch.testing.assert_close(
-        mapped_x, reference_map.mapped_x, atol=0.0, rtol=0.0
-    )
+    torch.testing.assert_close(mapped_x, reference_map.mapped_x, atol=0.0, rtol=0.0)
 
     values: dict[str, Tensor] = {
         "numbers": model_system.numbers,
@@ -811,9 +797,7 @@ def _map1_stage_tensors(derivative_enabled: bool) -> dict[str, Tensor]:
     }
     _tensor_leaves(raw_charge_guess, "raw_charge_guess", values)
     _tensor_leaves(initial_charges, "initial_charges", values)
-    _tensor_leaves(
-        initial_contributions, "initial_potential_contributions", values
-    )
+    _tensor_leaves(initial_contributions, "initial_potential_contributions", values)
     _tensor_leaves(initial_potential, "initial_potential", values)
     _tensor_leaves(packed_guess, "initial_packed_potential", values)
     for name in ("dipole", "quadrupole"):
@@ -849,9 +833,7 @@ def _map_trace_record(value: Tensor, result, index: int) -> dict[str, object]:
         if occupied_energies.numel() and virtual_energies.numel():
             frontier_gaps.append(
                 float(
-                    (occupied_energies[:, None] - virtual_energies[None, :])
-                    .abs()
-                    .min()
+                    (occupied_energies[:, None] - virtual_energies[None, :]).abs().min()
                 )
             )
     fractional = (occupations - occupations.round()).abs().max()
@@ -862,9 +844,7 @@ def _map_trace_record(value: Tensor, result, index: int) -> dict[str, object]:
             torch.linalg.vector_norm(result.mapped_x.detach() - value.detach())
         ),
         "minimum_adjacent_gap": float(pair_gaps.min()),
-        "minimum_occupied_pair": min(
-            occupied_pair_records, key=lambda row: row[2]
-        ),
+        "minimum_occupied_pair": min(occupied_pair_records, key=lambda row: row[2]),
         "minimum_occupied_pair_gap": min(occupied_pair_gaps),
         "minimum_frontier_gap": min(frontier_gaps) if frontier_gaps else None,
         "orbital_energies": energies.cpu().tolist(),
@@ -896,9 +876,7 @@ def _fixed_n_anderson_at(
         boundary_record["inputs"] = inputs
         boundary_record["settings"] = settings
     if settings.dynamic_damping.enabled:
-        raise AssertionError(
-            "NO2 fixed-N probe expects static Anderson damping"
-        )
+        raise AssertionError("NO2 fixed-N probe expects static Anderson damping")
 
     def map_fn(value: Tensor):
         result = potential_map(value, inputs, layout)
@@ -938,7 +916,7 @@ def _fixed_n_anderson_at(
             current,
             selected.mapped_x,
             mixer_state,
-            settings,
+            settings.method(),
             step=1,
             damp=settings.damp,
         )
@@ -970,9 +948,7 @@ def _fixed_n_anderson_at(
                 n = min(step - 1, settings.generations)
                 raw = selected.mapped_x.reshape(-1) - current.reshape(-1)
                 if mixer_state is None:
-                    hist = raw.new_zeros(
-                        (settings.generations + 1, raw.numel())
-                    )
+                    hist = raw.new_zeros((settings.generations + 1, raw.numel()))
                     x_hist = torch.cat(
                         (current.reshape(-1).unsqueeze(0), hist[1:]), dim=0
                     )
@@ -1005,15 +981,11 @@ def _fixed_n_anderson_at(
                                 torch.finfo(singular_values.dtype).tiny
                             )
                         ),
-                        "df_row_norms": torch.linalg.vector_norm(
-                            df.detach(), dim=-1
-                        )
+                        "df_row_norms": torch.linalg.vector_norm(df.detach(), dim=-1)
                         .cpu()
                         .tolist(),
                         "b_norm": float(torch.linalg.vector_norm(b.detach())),
-                        "theta_norm": float(
-                            torch.linalg.vector_norm(theta.detach())
-                        ),
+                        "theta_norm": float(torch.linalg.vector_norm(theta.detach())),
                         "damping": settings.damp,
                     }
                 )
@@ -1023,7 +995,7 @@ def _fixed_n_anderson_at(
                 current,
                 selected.mapped_x,
                 mixer_state,
-                settings,
+                settings.method(),
                 step=step,
                 transition_active=torch.ones(
                     (), dtype=torch.bool, device=current.device
@@ -1123,18 +1095,14 @@ def _anderson_transition_stages(
             ),
             dim=0,
         )
-        f_hist = flat_old.new_zeros(
-            (settings.generations + 1, flat_old.numel())
-        )
+        f_hist = flat_old.new_zeros((settings.generations + 1, flat_old.numel()))
         previous = AndersonState(x_hist=x_hist, f_hist=f_hist)
     else:
         previous = state
     raw = flat_mapped - flat_old
     f_current = torch.cat((raw.unsqueeze(0), previous.f_hist[1:]), dim=0)
     x_current = torch.cat((flat_old.unsqueeze(0), previous.x_hist[1:]), dim=0)
-    if not (
-        step > settings.generations or (step > 1 and not settings.soft_start)
-    ):
+    if not (step > settings.generations or (step > 1 and not settings.soft_start)):
         mixed = x_current[0] + f_current[0] * settings.damp_init
         rolled_x = torch.roll(x_current, 1, 0)
         return {
@@ -1155,9 +1123,7 @@ def _anderson_transition_stages(
         scale = torch.where(eye != 0, eye + settings.diagonal_offset**2, one)
         a = a * scale
     theta = torch.linalg.solve(a, b.unsqueeze(-1)).squeeze(-1)
-    x_bar_raw = torch.einsum(
-        "h,hv->v", theta, x_current[1 : n + 1] - x_current[0]
-    )
+    x_bar_raw = torch.einsum("h,hv->v", theta, x_current[1 : n + 1] - x_current[0])
     f_bar_raw = torch.einsum("h,hv->v", theta, -df)
     x_bar = x_bar_raw + x_current[0]
     f_bar = f_bar_raw + f_current[0]
@@ -1249,9 +1215,7 @@ def _third_response(
                 "step": step_value,
                 "fd_first": (plus[0] - minus[0]) / (2.0 * step_value),
                 "fd_second": (plus[1] - minus[1]) / (2.0 * step_value),
-                "fd_of_second": convention
-                * (plus[2] - minus[2])
-                / (2.0 * step_value),
+                "fd_of_second": convention * (plus[2] - minus[2]) / (2.0 * step_value),
                 "iterations_plus": plus[3],
                 "iterations_minus": minus[3],
             }
@@ -1265,15 +1229,11 @@ def _third_response(
     }
     if jvp is not None:
         result["jvp_first"] = float(jvp)
-        result["jvp_vs_reverse_first_abs"] = abs(
-            float(jvp) - float(first.detach())
-        )
+        result["jvp_vs_reverse_first_abs"] = abs(float(jvp) - float(first.detach()))
     return result
 
 
-def _mixed_response(
-    energy_fn, step: float | tuple[float, ...]
-) -> dict[str, object]:
+def _mixed_response(energy_fn, step: float | tuple[float, ...]) -> dict[str, object]:
     """Compare mixed nested response with an FD of field polarizability."""
     geometry = torch.zeros((), **_DD, requires_grad=True)
     field = torch.zeros((), **_DD, requires_grad=True)
@@ -1297,9 +1257,7 @@ def _mixed_response(
         if alpha.requires_grad
         else None
     )
-    mixed = (
-        mixed_result if mixed_result is not None else torch.zeros_like(alpha)
-    )
+    mixed = mixed_result if mixed_result is not None else torch.zeros_like(alpha)
 
     def alpha_at(displacement: float) -> tuple[float, int]:
         field_value = torch.zeros((), **_DD, requires_grad=True)
@@ -1313,9 +1271,7 @@ def _mixed_response(
             else None
         )
         first = (
-            first_result
-            if first_result is not None
-            else torch.zeros_like(field_value)
+            first_result if first_result is not None else torch.zeros_like(field_value)
         )
         second = (
             torch.autograd.grad(first, field_value)[0]
@@ -1376,9 +1332,7 @@ def _trajectory_energy_at(
             {
                 "iterations": int(outcome.iterations),
                 "converged": bool(outcome.converged),
-                "residual_max_abs": float(
-                    outcome.residual.detach().abs().max()
-                ),
+                "residual_max_abs": float(outcome.residual.detach().abs().max()),
             }
         )
     if stage == "solver":
@@ -1492,9 +1446,9 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
     selected = outcome.map_result.spectral
     axis = torch.zeros_like(field0)
     axis[1] = 1.0
-    probe = torch.linspace(
-        -0.7, 1.1, selected.density.numel(), **_DD
-    ).reshape_as(selected.density)
+    probe = torch.linspace(-0.7, 1.1, selected.density.numel(), **_DD).reshape_as(
+        selected.density
+    )
     fixed_occupation = selected.occupation.sum(-2).detach()
 
     interactions = InteractionList(
@@ -1562,9 +1516,7 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
             model_system.ihelp,
             effective_config,
         )
-        driving = potential_from_charges(
-            unpack_potential(state, layout), call_inputs
-        )
+        driving = potential_from_charges(unpack_potential(state, layout), call_inputs)
         hamiltonian = potential_to_hamiltonian(
             matrices.hcore,
             matrices.overlap,
@@ -1626,9 +1578,7 @@ def test_no2_spectral_density_at_exact_and_near_degeneracy() -> None:
 
         def gauge_invariant_probe(parameter: Tensor) -> Tensor:
             hamiltonian = (
-                cholesky
-                @ (torch.diag(center) + parameter * split_matrix)
-                @ cholesky.mT
+                cholesky @ (torch.diag(center) + parameter * split_matrix) @ cholesky.mT
             )
             spectral = evaluate_hamiltonian(hamiltonian, inputs)
             energy = (spectral.emo * spectral.occupation.sum(-2)).sum()
@@ -1640,15 +1590,10 @@ def test_no2_spectral_density_at_exact_and_near_degeneracy() -> None:
         for step in _DIAGNOSTIC_STEPS:
 
             def at(point: float) -> float:
-                return float(
-                    gauge_invariant_probe(torch.tensor(point, **_DD)).detach()
-                )
+                return float(gauge_invariant_probe(torch.tensor(point, **_DD)).detach())
 
             fd = (
-                at(2.0 * step)
-                - 2.0 * at(step)
-                + 2.0 * at(-step)
-                - at(-2.0 * step)
+                at(2.0 * step) - 2.0 * at(step) + 2.0 * at(-step) - at(-2.0 * step)
             ) / (2.0 * step**3)
             samples.append(float(fd))
         assert np.isfinite(automatic)
@@ -1672,12 +1617,10 @@ def test_no2_gfn2_frozen_spectrum_fermi_response_matches_fd(
 
     selected = outcome.map_result.spectral
     spectrum = selected.emo.detach()
-    direction = torch.linspace(-1.0, 1.0, spectrum.numel(), **_DD).reshape_as(
-        spectrum
+    direction = torch.linspace(-1.0, 1.0, spectrum.numel(), **_DD).reshape_as(spectrum)
+    probe = torch.linspace(-0.7, 1.1, selected.occupation.numel(), **_DD).reshape_as(
+        selected.occupation
     )
-    probe = torch.linspace(
-        -0.7, 1.1, selected.occupation.numel(), **_DD
-    ).reshape_as(selected.occupation)
 
     def fermi_probe(parameter: Tensor) -> Tensor:
         energies = (
@@ -1710,9 +1653,9 @@ def test_no2_gfn2_frozen_spectrum_fermi_response_matches_fd(
         ) / (2.0 * step**3)
 
     samples = [finite_difference(step) for step in _STEPS]
-    assert float(
-        (selected.occupation - selected.occupation.round()).abs().max()
-    ) < (1.0e-10)
+    assert float((selected.occupation - selected.occupation.round()).abs().max()) < (
+        1.0e-10
+    )
     assert max(samples) - min(samples) < 5.0e-8
     assert abs(automatic - samples[-1]) < 5.0e-8
     print(
@@ -1751,9 +1694,7 @@ def test_no2_gfn1_gfn2_term_activation_at_same_gfn2_state() -> None:
         eager=True,
     )
     assert torch.equal(model_system.numbers, gfn1_system.numbers)
-    assert torch.equal(
-        model_system.ihelp.shell_index, gfn1_system.ihelp.shell_index
-    )
+    assert torch.equal(model_system.ihelp.shell_index, gfn1_system.ihelp.shell_index)
     assert torch.equal(
         model_system.ihelp.orbital_index, gfn1_system.ihelp.orbital_index
     )
@@ -1766,17 +1707,10 @@ def test_no2_gfn1_gfn2_term_activation_at_same_gfn2_state() -> None:
             getattr(model_system.ihelp, name), getattr(gfn1_system.ihelp, name)
         )
     assert inputs.integrals.hcore.shape == gfn1_scf_inputs.integrals.hcore.shape
+    assert inputs.integrals.overlap.shape == gfn1_scf_inputs.integrals.overlap.shape
+    assert inputs.charge_layout.mono_shape == gfn1_scf_inputs.charge_layout.mono_shape
     assert (
-        inputs.integrals.overlap.shape
-        == gfn1_scf_inputs.integrals.overlap.shape
-    )
-    assert (
-        inputs.charge_layout.mono_shape
-        == gfn1_scf_inputs.charge_layout.mono_shape
-    )
-    assert (
-        inputs.charge_layout.dipole_shape
-        == gfn1_scf_inputs.charge_layout.dipole_shape
+        inputs.charge_layout.dipole_shape == gfn1_scf_inputs.charge_layout.dipole_shape
     )
     assert inputs.charge_layout.quadrupole_shape is not None
     assert gfn1_scf_inputs.charge_layout.quadrupole_shape is None
@@ -1814,9 +1748,7 @@ def test_no2_gfn1_gfn2_term_activation_at_same_gfn2_state() -> None:
     selected_potential = unpack_potential(state, layout)
     assert selected_potential.mono is not None
     assert selected_potential.dipole is not None
-    gfn1_potential = SCFPotential(
-        selected_potential.mono, selected_potential.dipole
-    )
+    gfn1_potential = SCFPotential(selected_potential.mono, selected_potential.dipole)
     gfn1_layout = potential_layout(gfn1_potential)
     gfn1_state = pack_potential(gfn1_potential, gfn1_layout)
     mono_size = selected_potential.mono.numel()
@@ -1889,9 +1821,7 @@ def test_no2_gfn2_raw_potential_map_third_order_matches_fd(
 ) -> None:
     """The one-map derivative is checked at a fixed converged input state."""
     _, _, _, _, inputs, layout, state, _, _ = _no2_functional_input(driver)
-    direction = torch.linspace(-0.2, 0.2, state.numel(), **_DD).reshape_as(
-        state
-    )
+    direction = torch.linspace(-0.2, 0.2, state.numel(), **_DD).reshape_as(state)
 
     def map_probe(parameter: Tensor) -> Tensor:
         mapped = potential_map(state + parameter * direction, inputs, layout)
@@ -1951,9 +1881,7 @@ def test_no2_fixed_n_anderson_derivative_matches_fixed_n_fd(
         row["iterations_plus"] == row["iterations_minus"] == n_maps
         for row in result["fd_of_second_sweep"]
     )
-    fd_values = [
-        float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]
-    ]
+    fd_values = [float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]]
     classification = _fd_classification(
         steps, fd_values, float(result["reverse_third"])
     )
@@ -1992,14 +1920,9 @@ def test_no2_fixed_n_simple_mixing_composition_vs_fd() -> None:
         return _energy_from_map_result(map_result, inputs), 20
 
     result = _third_response(energy_fn, (1.0e-4, 5.0e-5, 2.0e-5))
-    fd_values = [
-        float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]
-    ]
+    fd_values = [float(row["fd_of_second"]) for row in result["fd_of_second_sweep"]]
     assert max(fd_values) - min(fd_values) < 5.0e-4
-    assert (
-        abs(float(result["reverse_third"]) - float(np.median(fd_values)))
-        < 5.0e-4
-    )
+    assert abs(float(result["reverse_third"]) - float(np.median(fd_values))) < 5.0e-4
     print({"fixed_n_maps": 20, "simple_damping": 0.2, **result})
 
 
@@ -2059,9 +1982,7 @@ def test_no2_later_fixed_n_prefix_fd_diagnostic(n_maps: int) -> None:
 
     steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7)
     response = _third_response(energy_fn, steps)
-    fd_values = [
-        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
-    ]
+    fd_values = [float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]]
     classification = _fd_classification(
         steps, fd_values, float(response["reverse_third"])
     )
@@ -2094,13 +2015,9 @@ def test_no2_fixed_n20_pol_deriv_level_consistency() -> None:
         )
         return _energy_from_map_result(result, inputs), 20
 
-    response = _mixed_response(
-        energy_fn, (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7)
-    )
+    response = _mixed_response(energy_fn, (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7))
     steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7)
-    fd_values = [
-        float(row["fd_of_field_second"]) for row in response["fd_sweep"]
-    ]
+    fd_values = [float(row["fd_of_field_second"]) for row in response["fd_sweep"]]
     classification = _fd_classification(
         steps, fd_values, float(response["nested_mixed_third"])
     )
@@ -2152,20 +2069,12 @@ def _prefix_boundary_energy(
     }
     if boundary in transition_outputs:
         value = transition_outputs[boundary]
-        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(
-            value
-        )
-        return (
-            weights * value
-        ).sum() / value.numel() ** 0.5, transition_map + 1
+        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(value)
+        return (weights * value).sum() / value.numel() ** 0.5, transition_map + 1
     if boundary in transition:
         value = transition[boundary]
-        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(
-            value
-        )
-        return (
-            weights * value
-        ).sum() / value.numel() ** 0.5, transition_map + 1
+        weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(value)
+        return (weights * value).sum() / value.numel() ** 0.5, transition_map + 1
     if boundary == f"map{transition_map + 1}":
         result = record["following_map_result"]
         inputs = record["inputs"]
@@ -2202,9 +2111,7 @@ def test_no2_prefix8_transition_map9_localization(boundary: str) -> None:
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
 
     def energy_fn(field_value: Tensor, displacement: Tensor):
-        return _prefix_boundary_energy(
-            calculator, field_value, displacement, boundary
-        )
+        return _prefix_boundary_energy(calculator, field_value, displacement, boundary)
 
     if boundary == "map8":
         steps = (1.0e-4, 5.0e-5, 2.0e-5, 1.0e-5, 5.0e-6, 2.0e-6)
@@ -2223,9 +2130,7 @@ def test_no2_prefix8_transition_map9_localization(boundary: str) -> None:
     else:
         steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7, 2.0e-7)
     response = _third_response(energy_fn, steps)
-    fd_values = [
-        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
-    ]
+    fd_values = [float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]]
     classification = _fd_classification(
         steps, fd_values, float(response["reverse_third"])
     )
@@ -2277,9 +2182,7 @@ def test_no2_prefix10_transition_map11_characterization(boundary: str) -> None:
 
     steps = (1.0e-6, 5.0e-7, 2.0e-7, 1.0e-7, 5.0e-8, 2.0e-8)
     response = _third_response(energy_fn, steps)
-    fd_values = [
-        float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]
-    ]
+    fd_values = [float(row["fd_of_second"]) for row in response["fd_of_second_sweep"]]
     classification = _fd_classification(
         steps, fd_values, float(response["reverse_third"])
     )
@@ -2297,17 +2200,13 @@ def test_no2_prefix10_transition_map11_characterization(boundary: str) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "boundary", ("map8", "current", "x_hist", "f_hist", "map9")
-)
+@pytest.mark.parametrize("boundary", ("map8", "current", "x_hist", "f_hist", "map9"))
 def test_no2_pol_deriv_prefix8_transition_map9(boundary: str) -> None:
     """Apply the same prefix boundary split to the mixed response."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
 
     def energy_fn(field_value: Tensor, displacement: Tensor):
-        return _prefix_boundary_energy(
-            calculator, field_value, displacement, boundary
-        )
+        return _prefix_boundary_energy(calculator, field_value, displacement, boundary)
 
     steps = (1.0e-5, 5.0e-6, 2.0e-6, 1.0e-6, 5.0e-7, 2.0e-7)
     response = _mixed_response(energy_fn, steps)
@@ -2355,9 +2254,7 @@ def test_no2_map9_actual_state_tangent_and_spectral_derivative() -> None:
 
     state = state_from_field(center_field)
     field_tangent = torch.func.jacrev(state_from_field)(center_field)
-    geometry_tangent = torch.func.jacrev(state_from_geometry)(
-        torch.zeros((), **_DD)
-    )
+    geometry_tangent = torch.func.jacrev(state_from_geometry)(torch.zeros((), **_DD))
     positions = SYSTEMS["NO2"].positions.clone()
     _, inputs, layout, _, _ = _prepare_functional_at(
         calculator, positions, axis * center_field
@@ -2395,14 +2292,11 @@ def test_no2_map9_actual_state_tangent_and_spectral_derivative() -> None:
         def second_at(point: float) -> Tensor:
             local = torch.tensor(point, **_DD, requires_grad=True)
             local_value = physical_map(local)
-            local_first = torch.autograd.grad(
-                local_value, local, create_graph=True
-            )[0]
+            local_first = torch.autograd.grad(local_value, local, create_graph=True)[0]
             return torch.autograd.grad(local_first, local)[0].detach()
 
         third_fd = [
-            float((second_at(step) - second_at(-step)) / (2.0 * step))
-            for step in steps
+            float((second_at(step) - second_at(-step)) / (2.0 * step)) for step in steps
         ]
         return {
             "state_tangent_norm": float(torch.linalg.vector_norm(tangent)),
@@ -2418,14 +2312,10 @@ def test_no2_map9_actual_state_tangent_and_spectral_derivative() -> None:
         fd_values = probe_result["forward_fd"]
         third_fd_values = probe_result["third_derivative_level_fd"]
         assert max(fd_values) - min(fd_values) < 1.0e-5
-        assert (
-            abs(probe_result["reverse"] - float(np.median(fd_values))) < 1.0e-5
-        )
+        assert abs(probe_result["reverse"] - float(np.median(fd_values))) < 1.0e-5
         assert max(third_fd_values) - min(third_fd_values) < 1.0e-2
         assert (
-            abs(
-                probe_result["nested_third"] - float(np.median(third_fd_values))
-            )
+            abs(probe_result["nested_third"] - float(np.median(third_fd_values)))
             < 1.0e-2
         )
     print(
@@ -2455,8 +2345,7 @@ def test_no2_pol_deriv_fixed_n_anderson_response(n_maps: int) -> None:
     assert response["iterations_center"] == n_maps
     assert response["iterations_plus"] == response["iterations_minus"] == n_maps
     gap = abs(
-        float(response["nested_mixed_third"])
-        - float(response["fd_of_field_second"])
+        float(response["nested_mixed_third"]) - float(response["fd_of_field_second"])
     )
     if n_maps == 20:
         assert gap > 0.1
@@ -2503,17 +2392,14 @@ def test_no2_pol_deriv_tighter_tolerance_response() -> None:
     assert gaps[0] > 0.1
     assert gaps[1] < 1.0e-3
     physical_steps = (2.0e-3, 1.0e-3, 5.0e-4, 2.0e-4, 1.0e-4)
-    physical_values = [
-        _fresh_physical_fd("pol_deriv", step) for step in physical_steps
-    ]
+    physical_values = [_fresh_physical_fd("pol_deriv", step) for step in physical_steps]
     physical_plateau = physical_values[:3]
     physical_spread = max(physical_plateau) - min(physical_plateau)
     assert physical_spread < 1.0e-3, physical_values
     physical_target = float(np.median(physical_plateau))
     physical_bound = max(4.0 * physical_spread, 1.0e-3)
     physical_gaps = [
-        abs(float(row["nested_mixed_third"]) - physical_target)
-        for row in records
+        abs(float(row["nested_mixed_third"]) - physical_target) for row in records
     ]
     assert physical_gaps[0] > 0.1
     assert physical_gaps[1] < physical_bound
@@ -2587,20 +2473,14 @@ def test_no2_fresh_calculator_reproducibility(observable: str) -> None:
             "energy": float(result.total.sum().detach()),
             "iterations": int(result.iterations),
             "charges": (
-                None
-                if charges is None
-                else charges.mono.detach().cpu().tolist()
+                None if charges is None else charges.mono.detach().cpu().tolist()
             ),
             "density": (
                 None
                 if result.density is None
                 else result.density.detach().cpu().tolist()
             ),
-            "emo": (
-                None
-                if result.emo is None
-                else result.emo.detach().cpu().tolist()
-            ),
+            "emo": (None if result.emo is None else result.emo.detach().cpu().tolist()),
             "occupation": (
                 None
                 if result.occupation is None
@@ -2612,9 +2492,7 @@ def test_no2_fresh_calculator_reproducibility(observable: str) -> None:
                 else result.hamiltonian.detach().cpu().tolist()
             ),
             "potential_mono": (
-                None
-                if potential is None
-                else potential.mono.detach().cpu().tolist()
+                None if potential is None else potential.mono.detach().cpu().tolist()
             ),
         }
 
@@ -2658,10 +2536,7 @@ def test_no2_fresh_calculator_reproducibility(observable: str) -> None:
                 np.max(np.abs(np.asarray(before) - np.asarray(after)))
             )
     assert np.isfinite(values).all()
-    assert (
-        max(value for value in state_deltas.values() if value is not None)
-        < 1.0e-10
-    )
+    assert max(value for value in state_deltas.values() if value is not None) < 1.0e-10
     assert spread > 1.0e-5
     print(
         {
@@ -2783,9 +2658,7 @@ def test_no2_fresh_calculator_forward_trajectory_and_gauge() -> None:
                 "hamiltonian_max_abs": float(
                     (left["hamiltonian"] - right["hamiltonian"]).abs().max()
                 ),
-                "energy_max_abs": float(
-                    (left["emo"] - right["emo"]).abs().max()
-                ),
+                "energy_max_abs": float((left["emo"] - right["emo"]).abs().max()),
             }
         )
 
@@ -2922,9 +2795,7 @@ def test_no2_frozen_spectral_derivative_reproducibility() -> None:
         }
 
     before = [derivatives() for _ in range(3)]
-    unrelated_h = h0 + 0.05 * torch.eye(
-        h0.shape[-1], dtype=h0.dtype, device=h0.device
-    )
+    unrelated_h = h0 + 0.05 * torch.eye(h0.shape[-1], dtype=h0.dtype, device=h0.device)
     storch.eighb(
         a=unrelated_h,
         b=None,
@@ -3053,8 +2924,7 @@ def test_no2_spectral_branch_control(monkeypatch) -> None:
         < 1.0e-4
     )
     branch_records["forward_value_difference"] = abs(
-        branch_records["ordinary"]["value"]
-        - branch_records["lorentzian"]["value"]
+        branch_records["ordinary"]["value"] - branch_records["lorentzian"]["value"]
     )
     assert branch_records["forward_value_difference"] < 1.0e-12
     branch_records["lorentzian_reverse_vs_ordinary_fd"] = abs(
@@ -3176,9 +3046,7 @@ def test_no2_invariant_raw_map_derivative_matches_physical_forward(
 
         with monkeypatch.context() as context:
             context.setattr(storch, "eighb", forced_eighb)
-            spectrum = evaluate_hamiltonian(
-                hamiltonian + parameter * direction, inputs
-            )
+            spectrum = evaluate_hamiltonian(hamiltonian + parameter * direction, inputs)
             if output == "band_energy":
                 return (spectrum.emo * spectrum.occupation.sum(-2)).sum()
             if output == "density":
@@ -3227,9 +3095,7 @@ def test_no2_invariant_raw_map_derivative_matches_physical_forward(
                     "ordinary",
                     output,
                 )
-                physical_fd.append(
-                    float(((plus - minus) / (2.0 * step)).detach())
-                )
+                physical_fd.append(float(((plus - minus) / (2.0 * step)).detach()))
             window = _fd_window(steps, physical_fd)
             assert window is not None, (
                 state_name,
@@ -3249,15 +3115,12 @@ def test_no2_invariant_raw_map_derivative_matches_physical_forward(
                 <= error_bound
             )
             assert (
-                abs(branch_records["ordinary"]["jvp"] - physical_center)
-                <= error_bound
+                abs(branch_records["ordinary"]["jvp"] - physical_center) <= error_bound
             )
             assert abs(
                 branch_records["lorentzian"]["reverse"]
                 - branch_records["lorentzian"]["jvp"]
-            ) <= max(
-                1.0e-8, 1.0e-5 * abs(branch_records["lorentzian"]["reverse"])
-            )
+            ) <= max(1.0e-8, 1.0e-5 * abs(branch_records["lorentzian"]["reverse"]))
             lorentzian_gap = abs(
                 branch_records["lorentzian"]["reverse"] - physical_center
             )
@@ -3472,9 +3335,7 @@ def test_no2_subprocess_trajectory_reproducibility() -> None:
         records["single-thread_history"],
     ):
         assert max(record["physical_max_delta"].values()) < 1.0e-10
-    endpoint_values = records["single-thread_endpoint"][
-        "endpoint_AAA_unrelated_A"
-    ]
+    endpoint_values = records["single-thread_endpoint"]["endpoint_AAA_unrelated_A"]
     assert np.isfinite(endpoint_values).all()
     endpoint_spread = max(endpoint_values) - min(endpoint_values)
     records["single-thread_endpoint"]["endpoint_spread"] = endpoint_spread
@@ -3505,9 +3366,7 @@ def test_no2_frozen_anderson_transition_derivative_reproducibility() -> None:
         )
 
     zero = torch.zeros((), **_DD)
-    values, tangents = torch.func.jvp(
-        incoming, (zero,), (torch.ones_like(zero),)
-    )
+    values, tangents = torch.func.jvp(incoming, (zero,), (torch.ones_like(zero),))
     center_record: dict[str, object] = {}
     _fixed_n_anderson_at(
         calculator,
@@ -3521,18 +3380,13 @@ def test_no2_frozen_anderson_transition_derivative_reproducibility() -> None:
     def transition_projection(name: str):
         def evaluate(field: Tensor, _geometry: Tensor):
             perturbed = [
-                value + field * tangent
-                for value, tangent in zip(values, tangents)
+                value + field * tangent for value, tangent in zip(values, tangents)
             ]
             old, mapped, x_hist, f_hist = perturbed
             state = AndersonState(x_hist=x_hist, f_hist=f_hist)
-            stages = _anderson_transition_stages(
-                old, mapped, state, settings, step=8
-            )
+            stages = _anderson_transition_stages(old, mapped, state, settings, step=8)
             value = stages[name]
-            weights = torch.linspace(
-                -1.0, 1.0, value.numel(), **_DD
-            ).reshape_as(value)
+            weights = torch.linspace(-1.0, 1.0, value.numel(), **_DD).reshape_as(value)
             return (weights * value).sum() / value.numel() ** 0.5, 8
 
         return evaluate
@@ -3655,13 +3509,9 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
                 "residual_l2": record["residual_l2"],
                 "minimum_adjacent_gap": record["minimum_adjacent_gap"],
                 "minimum_occupied_pair": record["minimum_occupied_pair"],
-                "minimum_occupied_pair_gap": record[
-                    "minimum_occupied_pair_gap"
-                ],
+                "minimum_occupied_pair_gap": record["minimum_occupied_pair_gap"],
                 "minimum_frontier_gap": record["minimum_frontier_gap"],
-                "max_fractional_occupation": record[
-                    "max_fractional_occupation"
-                ],
+                "max_fractional_occupation": record["max_fractional_occupation"],
                 "fermi_changes_materially": record["fermi_changes_materially"],
                 "orbital_energies": record["orbital_energies"],
                 "occupations": record["occupations"],
@@ -3686,8 +3536,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
         ):
             probe = local[name]
             fd_values = [
-                float(row["fd_of_second"])
-                for row in probe["fd_of_second_sweep"]
+                float(row["fd_of_second"]) for row in probe["fd_of_second_sweep"]
             ]
             assert max(fd_values) - min(fd_values) < tolerance
             assert (
@@ -3698,9 +3547,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
     # Compare no-grad and derivative-enabled physical density evaluation at
     # the smallest-gap map, using gauge-invariant values.
     index = smallest
-    map_result = potential_map(
-        states[selected_indices.index(index)], inputs, layout
-    )
+    map_result = potential_map(states[selected_indices.index(index)], inputs, layout)
     hamiltonian = map_result.spectral.hamiltonian.detach()
     ordinary = evaluate_hamiltonian(hamiltonian, inputs)
     derivative_enabled = evaluate_hamiltonian(
@@ -3708,10 +3555,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
     )
     branch_difference = {
         name: float(
-            (
-                getattr(ordinary, name)
-                - getattr(derivative_enabled, name).detach()
-            )
+            (getattr(ordinary, name) - getattr(derivative_enabled, name).detach())
             .abs()
             .max()
         )
@@ -3720,9 +3564,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
     branch_difference["ordinary_path"] = "fixed ordinary eigensystem"
     branch_difference["derivative_path"] = "fixed ordinary eigensystem"
     assert (
-        max(
-            branch_difference[name] for name in ("density", "emo", "occupation")
-        )
+        max(branch_difference[name] for name in ("density", "emo", "occupation"))
         < 1.0e-12
     )
     print(
@@ -3744,9 +3586,7 @@ def test_no2_intermediate_trajectory_spectra_and_local_maps() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "tolerance", (1.0e-8, 1.0e-10, 1.0e-12, 1.0e-13, 1.0e-14)
-)
+@pytest.mark.parametrize("tolerance", (1.0e-8, 1.0e-10, 1.0e-12, 1.0e-13, 1.0e-14))
 def test_no2_solver_tolerance_sweep(tolerance: float) -> None:
     """Record response sensitivity to the paired SCF residual tolerances."""
     calculator = _calculator(SYSTEMS["NO2"], "gfn2", "pytorch")
@@ -3803,8 +3643,7 @@ def test_no2_solver_tolerance_sweep(tolerance: float) -> None:
     if tolerance in (1.0e-10, 1.0e-12, 1.0e-13):
         physical_steps = (2.0e-3, 1.0e-3, 5.0e-4, 2.0e-4, 1.0e-4)
         physical_values = [
-            _fresh_physical_fd("hyperpolarizability", step)
-            for step in physical_steps
+            _fresh_physical_fd("hyperpolarizability", step) for step in physical_steps
         ]
         physical_plateau = physical_values[:3]
         physical_spread = max(physical_plateau) - min(physical_plateau)
@@ -3870,9 +3709,7 @@ def test_no2_gfn2_solver_hyper_boundary(eager: bool, stage: str) -> None:
     )
     fd = result["fd_of_second_sweep"][0]
     assert abs(float(result["reverse_first"]) - float(fd["fd_first"])) < 1.0e-4
-    assert (
-        abs(float(result["reverse_second"]) - float(fd["fd_second"])) < 2.0e-3
-    )
+    assert abs(float(result["reverse_second"]) - float(fd["fd_second"])) < 2.0e-3
     assert abs(float(result["reverse_third"]) - float(fd["fd_of_second"])) > 1.0
     print(
         {
@@ -3908,10 +3745,7 @@ def test_no2_gfn2_solver_mixed_boundary(eager: bool, stage: str) -> None:
         == 20
     )
     assert (
-        abs(
-            float(result["nested_mixed_third"])
-            - float(result["fd_of_field_second"])
-        )
+        abs(float(result["nested_mixed_third"]) - float(result["fd_of_field_second"]))
         > 0.1
     )
     print(
@@ -3939,9 +3773,7 @@ def test_no2_eager_fixed_trip_center_parity() -> None:
             "iterations": int(result.iterations),
             "converged": bool(result.converged),
             "solver_energy": float(_selected_map_energy(result, inputs)),
-            "finalized_energy": float(
-                (finalized.energy + finalized.fenergy).sum()
-            ),
+            "finalized_energy": float((finalized.energy + finalized.fenergy).sum()),
             "map_result": result.map_result,
         }
     eager = records["eager"]
@@ -4096,9 +3928,7 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
     assert np.isfinite(pol_a) and torch.isfinite(pol_b)
     hyper_delta = float(hyper_a - hyper_b.detach())
     pol_delta = float(pol_a - pol_b.detach())
-    assert abs(hyper_delta) < 5.0e-4 * max(
-        abs(hyper_a), abs(float(hyper_b.detach()))
-    )
+    assert abs(hyper_delta) < 5.0e-4 * max(abs(hyper_a), abs(float(hyper_b.detach())))
     assert abs(pol_delta) < 5.0e-4 * max(abs(pol_a), abs(float(pol_b.detach())))
     print(
         {
