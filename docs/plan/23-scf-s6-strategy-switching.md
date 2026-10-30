@@ -144,6 +144,12 @@ not establish one universal switch threshold.
 
 ## W2c9 adapter reconciliation
 
+The package-boundary rebase from the published S5 line to `7b946a21` was
+checked with `git range-diff`: all 35 pre-S6 SCF commits matched one-for-one.
+The old line had carried W2c9 files as deletions relative to that sync point;
+the rebased line inherits the published W2c9 implementation and its
+`spectral.py` change. No unexplained pre-S6 SCF patch was introduced.
+
 The synchronized W2c9 batch-implicit module still imported the pre-S3
 `_solve_map_anderson` driver and selected controllers by settings-bundle type.
 The focused W2c9 test therefore failed collection at the S6 baseline. The
