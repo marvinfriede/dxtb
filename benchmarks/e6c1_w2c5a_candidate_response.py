@@ -79,6 +79,24 @@ def _read_reference(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return {**root, **complete}, response
 
 
+def _shifted_density(
+    hamiltonian: torch.Tensor,
+    nel: torch.Tensor,
+    kt: torch.Tensor,
+    state: Any,
+    **kwargs: Any,
+) -> torch.Tensor:
+    """Forward the production density contract to the matrix-shift probe."""
+    return _candidate_density(
+        hamiltonian,
+        nel,
+        kt,
+        state,
+        use_trace_square=True,
+        **kwargs,
+    )
+
+
 def run(output: Path, baseline_path: Path, mode: str) -> None:
     """Run one implementation in the matched physical response harness."""
     if mode not in ("production", "matrix-shift"):
@@ -134,28 +152,11 @@ def run(output: Path, baseline_path: Path, mode: str) -> None:
                 **payload,
             )
 
-        def shifted_density(
-            hamiltonian: torch.Tensor,
-            nel: torch.Tensor,
-            kt: torch.Tensor,
-            state: Any,
-            **kwargs: Any,
-        ) -> torch.Tensor:
-            kwargs.pop("diff_steps", None)
-            return _candidate_density(
-                hamiltonian,
-                nel,
-                kt,
-                state,
-                use_trace_square=True,
-                **kwargs,
-            )
-
         def diagnostic_emit(event: str, **payload: Any) -> None:
             emit(event, **payload)
 
         if mode == "matrix-shift":
-            map_module.fermi_density_matrix = shifted_density
+            map_module.fermi_density_matrix = _shifted_density
         w2c2.emit = diagnostic_emit
         try:
             emit(

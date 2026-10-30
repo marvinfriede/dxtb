@@ -143,6 +143,7 @@ def _state(
     kt: torch.Tensor,
     mask: torch.Tensor | None = None,
     l_inv: torch.Tensor | None = None,
+    diff_order: int = 3,
 ) -> Any:
     """Construct the same detached-primal, differentiable filling state."""
     values, _ = storch.eighb(
@@ -169,7 +170,7 @@ def _state(
         mask=channel_mask,
         thr=1.0e-14,
         maxiter=300,
-        diff_order=3,
+        diff_order=diff_order,
     )
 
 
@@ -249,6 +250,8 @@ def _candidate_free_energy_trace(
     electrons: torch.Tensor,
     kt: torch.Tensor,
     state: Any,
+    *,
+    diff_steps: int = 2,
 ) -> torch.Tensor:
     """Evaluate the trace path with call-local matrix-shift reuse.
 
@@ -292,7 +295,7 @@ def _candidate_free_energy_trace(
             kt,
             state,
             l_inv=identity,
-            diff_steps=2,
+            diff_steps=diff_steps,
         )
     finally:
         spectral_module._matrix_fermi = original
@@ -307,8 +310,9 @@ def _candidate_density(
     mask: torch.Tensor | None = None,
     l_inv: torch.Tensor | None = None,
     use_trace_square: bool = False,
+    diff_steps: int = 2,
 ) -> torch.Tensor:
-    """Mirror production count corrections using two invariant matrix shifts."""
+    """Mirror production corrections using the requested number of shifts."""
     dtype = torch.float64
     h = hamiltonian.to(dtype=dtype)
     structural_mask = mask
@@ -352,7 +356,7 @@ def _candidate_density(
     )
     shift = torch.zeros_like(target)
     density = _matrix_fermi(relative, shift, safe_kt, active)
-    for _ in range(2):
+    for _ in range(diff_steps):
         if use_trace_square:
             slope = _trace_square_slope(density, safe_kt)
         else:
