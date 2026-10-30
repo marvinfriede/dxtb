@@ -183,7 +183,8 @@ def _matrix_fermi(
     expm1_scaled = _matrix_expm1(exp_argument)
     tangent = dense_solve(expm1_scaled + 2.0 * eye, expm1_scaled)
     for index in range(_FERMI_MAX_SCALE_POWER - 1):
-        doubled = 2.0 * tangent @ dense_solve(eye + tangent @ tangent, eye)
+        denominator = eye + tangent @ tangent
+        doubled = 2.0 * dense_solve(denominator, tangent)
         update = index < (scale_power - 1)
         tangent = torch.where(update[..., None, None], doubled, tangent)
     density = 0.5 * (eye - tangent)
