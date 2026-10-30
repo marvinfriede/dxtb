@@ -27,6 +27,10 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional import (
+    AndersonMethod,
+    AndersonMethodSettings,
+    BroydenMethod,
+    CDIISMethod,
     LinearMethod,
     SCFCertificationThresholds,
     SCFCoreFailure,
@@ -58,6 +62,7 @@ from dxtb._src.scf.functional.certification import (
     SCF_CERTIFICATION_TIGHT,
     _stationarity_norms,
 )
+from dxtb._src.scf.functional.method import SCFMethod
 from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     SCFTrajectoryStatus,
@@ -159,7 +164,9 @@ def test_characterization_h2o_helper_proves_resolved_method(
     assert abs(energy - reference) < 1.0e-3
 
 
-def test_characterization_row_contains_verified_model_and_initial_state() -> None:
+def test_characterization_row_contains_verified_model_and_initial_state() -> (
+    None
+):
     """Structured rows carry checked model and physical input provenance."""
     row = characterize_case(
         GFN2_XTB,
@@ -190,7 +197,9 @@ def test_orthogonalized_stationarity_scaling_for_direct_sums() -> None:
     def metrics(scale: torch.Tensor, copies: int) -> tuple[torch.Tensor, ...]:
         residual = torch.block_diag(*(scale * block for _ in range(copies)))
         mask = torch.ones(residual.shape[-1], dtype=torch.bool)
-        inverse_sqrt_overlap = torch.eye(residual.shape[-1], dtype=residual.dtype)
+        inverse_sqrt_overlap = torch.eye(
+            residual.shape[-1], dtype=residual.dtype
+        )
         return _stationarity_norms(residual, inverse_sqrt_overlap, mask)
 
     base = metrics(torch.tensor(1.0, dtype=torch.float64), 1)
@@ -200,7 +209,9 @@ def test_orthogonalized_stationarity_scaling_for_direct_sums() -> None:
         assert torch.allclose(values[3], base[3])
         assert torch.allclose(values[4], base[4])
         assert torch.allclose(values[5], base[5] / copies**0.5)
-        assert torch.allclose(values[2] / (3 * copies), base[2] / 3 / copies**0.5)
+        assert torch.allclose(
+            values[2] / (3 * copies), base[2] / 3 / copies**0.5
+        )
 
     direction = torch.tensor(0.3, dtype=torch.float64)
 
@@ -210,7 +221,9 @@ def test_orthogonalized_stationarity_scaling_for_direct_sums() -> None:
     value, tangent = torch.func.jvp(
         normalized, (torch.tensor(1.0, dtype=torch.float64),), (direction,)
     )
-    jacobian = torch.func.jacfwd(normalized)(torch.tensor(1.0, dtype=torch.float64))
+    jacobian = torch.func.jacfwd(normalized)(
+        torch.tensor(1.0, dtype=torch.float64)
+    )
     assert torch.allclose(value, base[4])
     assert torch.allclose(tangent, jacobian * direction)
 
@@ -234,7 +247,9 @@ def test_float32_electron_trace_error_scales_with_repeated_blocks() -> None:
         target = copies * block_target
         errors.append((measured.double() - target).abs())
     for copies, error in zip((1, 2, 4, 8), errors):
-        assert error.item() == pytest.approx(errors[0].item() * copies, rel=1e-6)
+        assert error.item() == pytest.approx(
+            errors[0].item() * copies, rel=1e-6
+        )
 
 
 def test_internal_profiles_have_explicit_float32_stationarity_floor() -> None:
@@ -248,7 +263,9 @@ def test_internal_profiles_have_explicit_float32_stationarity_floor() -> None:
     ):
         assert profile.stationarity_tolerance(torch.float32) == 1.0e-5
     assert (
-        SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE.stationarity_tolerance(torch.float64)
+        SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE.stationarity_tolerance(
+            torch.float64
+        )
         == 1.0e-12
     )
 
@@ -281,7 +298,9 @@ def test_controller_uses_core_certification_without_energy_observables(
     monkeypatch.setattr(
         certification_module, "electronic_energy_from_spectral", forbidden
     )
-    monkeypatch.setattr(certification_module, "free_energy_from_spectral", forbidden)
+    monkeypatch.setattr(
+        certification_module, "free_energy_from_spectral", forbidden
+    )
     case, problem, _ = _problem_and_state(sample_name="H2O")
     settings = SCFSolverSettings(100, False, 0.2, 1.0e-6, 1.0e-6)
     result = solve_scf_simple(case.x, case.inputs, settings)
@@ -325,10 +344,14 @@ def test_independent_count_failure_blocks_controller_certification(
     original = certification_module.certification_core_metrics
 
     def count_inconsistent(problem, state, *, fixed_point_residual=None):
-        metrics = original(problem, state, fixed_point_residual=fixed_point_residual)
+        metrics = original(
+            problem, state, fixed_point_residual=fixed_point_residual
+        )
         return replace(
             metrics,
-            stationarity_orthogonalized_l2_per_sqrt_orbital=state.x.new_zeros(()),
+            stationarity_orthogonalized_l2_per_sqrt_orbital=state.x.new_zeros(
+                ()
+            ),
             electron_count_error=state.x.new_tensor(1.0e9),
         )
 
@@ -453,12 +476,17 @@ def test_fixed_trip_certification_matches_selected_root_diagnostics(
     case, problem, state = _problem_and_state(
         representation=representation, sample_name="H2"
     )
-    assert signature(finalize_scf).parameters["root_x"].default is Parameter.empty
+    assert (
+        signature(finalize_scf).parameters["root_x"].default is Parameter.empty
+    )
     assert (
         signature(finalize_scf_potential).parameters["root_x"].default
         is Parameter.empty
     )
-    assert signature(finalize_scf_fock).parameters["root_x"].default is Parameter.empty
+    assert (
+        signature(finalize_scf_fock).parameters["root_x"].default
+        is Parameter.empty
+    )
     outcome = _solve_map(
         state.x,
         SCFSolverSettings(100, False, 0.2, 1.0e-8, 1.0e-8),
@@ -511,10 +539,14 @@ def test_fixed_trip_certification_matches_selected_root_diagnostics(
         result.diagnostics.certification.result.certified,
     )
     paired = problem.evaluate(result.root_x)
-    torch.testing.assert_close(paired.map_result.mapped_x, result.map_result.mapped_x)
+    torch.testing.assert_close(
+        paired.map_result.mapped_x, result.map_result.mapped_x
+    )
 
 
-def test_fixed_trip_budget_exhaustion_retains_uncertified_final_diagnostic() -> None:
+def test_fixed_trip_budget_exhaustion_retains_uncertified_final_diagnostic() -> (
+    None
+):
     """Budget exhaustion cannot become convergence through final recompute."""
     case, problem, state = _problem_and_state(sample_name="H2O")
     outcome = _solve_map(
@@ -529,7 +561,9 @@ def test_fixed_trip_budget_exhaustion_retains_uncertified_final_diagnostic() -> 
     assert not bool(outcome.terminal_failed)
 
 
-def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> None:
+def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
+    None
+):
     """The same certified root prepares identically with different history."""
     from dxtb._src.scf.functional.implicit import _prepare_scf_root
 
@@ -571,7 +605,9 @@ def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> None
         certified=torch.zeros_like(outcome.certification.certified),
     )
     with pytest.raises(RuntimeError, match="disagree"):
-        _prepare_scf_root(replace(outcome, certification=false_certification), **kwargs)
+        _prepare_scf_root(
+            replace(outcome, certification=false_certification), **kwargs
+        )
 
 
 @pytest.mark.parametrize(
@@ -589,11 +625,15 @@ def test_fixed_point_metric_uses_paired_projected_delta(
     _, problem, state = _problem_and_state(representation=representation)
     metrics = certification_metrics(problem, state)
     delta = problem.project_residual(state.map_result.mapped_x - state.x)
-    torch.testing.assert_close(metrics.fixed_point.l2, torch.linalg.vector_norm(delta))
+    torch.testing.assert_close(
+        metrics.fixed_point.l2, torch.linalg.vector_norm(delta)
+    )
     torch.testing.assert_close(metrics.fixed_point.max_abs, delta.abs().amax())
 
 
-def test_stationarity_uses_fresh_hamiltonian_not_diagonalized_hamiltonian() -> None:
+def test_stationarity_uses_fresh_hamiltonian_not_diagonalized_hamiltonian() -> (
+    None
+):
     """A fresh charge-built Fock detects a deliberately unconverged state."""
     _, problem, state = _problem_and_state(sample_name="H2O")
     spectral = state.map_result.spectral
@@ -604,7 +644,8 @@ def test_stationarity_uses_fresh_hamiltonian_not_diagonalized_hamiltonian() -> N
         - overlap @ density @ spectral.hamiltonian
     )
     diagonalized_residual = torch.where(
-        problem.inputs.orbital_mask[:, None] & problem.inputs.orbital_mask[None, :],
+        problem.inputs.orbital_mask[:, None]
+        & problem.inputs.orbital_mask[None, :],
         diagonalized_residual,
         0.0,
     )
@@ -628,7 +669,9 @@ def test_stationarity_is_nonorthogonal_and_permutation_covariant() -> None:
     residual = stationarity_matrix(problem, state)
     inverse_sqrt = problem.inputs.inverse_cholesky
     orthogonalized = inverse_sqrt.T @ residual @ inverse_sqrt
-    identity = torch.eye(overlap.shape[-1], dtype=overlap.dtype, device=overlap.device)
+    identity = torch.eye(
+        overlap.shape[-1], dtype=overlap.dtype, device=overlap.device
+    )
     assert not torch.allclose(overlap, identity)
 
     permutation = torch.arange(overlap.shape[-1] - 1, -1, -1)
@@ -690,7 +733,9 @@ def test_orthogonalized_stationarity_matches_orthogonal_basis_algebra() -> None:
     )
     density = density_seed @ density_seed.T
     eigenvalues, eigenvectors = torch.linalg.eigh(overlap)
-    inverse_sqrt = (eigenvectors * eigenvalues.rsqrt().unsqueeze(-2)) @ eigenvectors.T
+    inverse_sqrt = (
+        eigenvectors * eigenvalues.rsqrt().unsqueeze(-2)
+    ) @ eigenvectors.T
 
     residual_ao = fock @ density @ overlap - overlap @ density @ fock
     residual_orth_from_ao = inverse_sqrt.T @ residual_ao @ inverse_sqrt
@@ -849,7 +894,9 @@ def test_float32_finite_temperature_certification_floor(
     )
 
 
-def test_fractional_float32_count_error_stays_below_effective_root_floor() -> None:
+def test_fractional_float32_count_error_stays_below_effective_root_floor() -> (
+    None
+):
     """Material Fermi occupations retain the count check within f32 floor."""
     row = characterize_case(
         GFN2_XTB,
@@ -892,7 +939,9 @@ def test_certification_thresholds_are_explicit_and_representation_bound(
 ) -> None:
     """Explicit thresholds yield a verdict and reject representation mismatch."""
     _, problem, state = _problem_and_state(representation=representation)
-    result = certify_scf_state(problem, state, _loose_thresholds(representation))
+    result = certify_scf_state(
+        problem, state, _loose_thresholds(representation)
+    )
     assert result.certified, result.metrics
     strict = replace(
         _loose_thresholds(representation),
@@ -947,7 +996,9 @@ def test_core_certification_matches_full_metrics() -> None:
         core.stationarity_orthogonalized_l2_per_sqrt_orbital,
         full.stationarity_orthogonalized_l2_per_sqrt_orbital,
     )
-    torch.testing.assert_close(core.electron_count_error, full.electron_count_error)
+    torch.testing.assert_close(
+        core.electron_count_error, full.electron_count_error
+    )
     assert bool(core.finite_ok)
     assert bool(full.finite_ok)
     assert core.fermi_ok == full.fermi_ok
@@ -1031,14 +1082,17 @@ def test_fermi_validity_and_finite_validity_are_independent() -> None:
     ).certified
 
 
-def test_independent_electron_count_threshold_rejects_perturbed_density() -> None:
+def test_independent_electron_count_threshold_rejects_perturbed_density() -> (
+    None
+):
     """A finite state with valid Fermi status can fail the independent count."""
     _, problem, state = _problem_and_state(
         GFN2_XTB, sample_name="NO2", spin=1.0, temperature=300.0
     )
     spectral = state.map_result.spectral
     perturbation = (
-        torch.eye(spectral.density.shape[-1], dtype=spectral.density.dtype) * 1.0e-3
+        torch.eye(spectral.density.shape[-1], dtype=spectral.density.dtype)
+        * 1.0e-3
     )
     bad_spectral = replace(spectral, density=spectral.density + perturbation)
     bad_map = replace(state.map_result, spectral=bad_spectral)
@@ -1058,7 +1112,9 @@ def test_independent_electron_count_threshold_rejects_perturbed_density() -> Non
     assert not result.certified
 
 
-def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> None:
+def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> (
+    None
+):
     """Fresh-Fock stationarity resolves beyond a loose raw-root threshold."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
@@ -1085,7 +1141,10 @@ def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> None
     tight_metrics = certification_metrics(problem, tight)
     assert loose_metrics.fixed_point.l2 < 1.0e-6
     assert tight_metrics.fixed_point.l2 < 1.0e-10
-    assert loose_metrics.stationarity_ao_l2 > tight_metrics.stationarity_ao_l2 * 10.0
+    assert (
+        loose_metrics.stationarity_ao_l2
+        > tight_metrics.stationarity_ao_l2 * 10.0
+    )
 
 
 def test_fermi_failure_is_reported_without_changing_physical_metrics() -> None:
@@ -1093,8 +1152,12 @@ def test_fermi_failure_is_reported_without_changing_physical_metrics() -> None:
     _, problem, state = _problem_and_state(temperature=300.0)
     status = state.map_result.fermi_status
     assert status is not None
-    failed_status = replace(status, converged=torch.zeros_like(status.converged))
-    failed_spectral = replace(state.map_result.spectral, fermi_status=failed_status)
+    failed_status = replace(
+        status, converged=torch.zeros_like(status.converged)
+    )
+    failed_spectral = replace(
+        state.map_result.spectral, fermi_status=failed_status
+    )
     failed_state = SCFPhysicalState(
         state.x,
         replace(state.map_result, spectral=failed_spectral),
@@ -1138,7 +1201,9 @@ def test_finite_temperature_status_and_free_energy_are_recorded() -> None:
     assert metrics.fermi_ok
     assert torch.isfinite(metrics.electronic_energy)
     assert torch.isfinite(metrics.electronic_free_energy)
-    assert not torch.equal(metrics.electronic_energy, metrics.electronic_free_energy)
+    assert not torch.equal(
+        metrics.electronic_energy, metrics.electronic_free_energy
+    )
 
 
 def test_free_energy_partition_changes_distribution_not_total() -> None:
@@ -1154,11 +1219,15 @@ def test_free_energy_partition_changes_distribution_not_total() -> None:
     equal = free_energy_from_spectral(state.map_result.spectral, case.inputs)
     atomic_inputs = replace(
         case.inputs,
-        fermi_settings=replace(settings, partition=labels.FERMI_PARTITION_ATOMIC),
+        fermi_settings=replace(
+            settings, partition=labels.FERMI_PARTITION_ATOMIC
+        ),
     )
     atomic = free_energy_from_spectral(state.map_result.spectral, atomic_inputs)
     assert not torch.allclose(equal, atomic)
-    torch.testing.assert_close(equal.sum(), atomic.sum(), atol=5e-10, rtol=5e-10)
+    torch.testing.assert_close(
+        equal.sum(), atomic.sum(), atol=5e-10, rtol=5e-10
+    )
 
 
 def test_near_smearing_boundary_certification_is_finite() -> None:
@@ -1199,7 +1268,9 @@ def test_certification_does_not_evaluate_another_scf_map(monkeypatch) -> None:
     assert torch.isfinite(metrics.stationarity_ao_l2)
 
 
-def test_certification_metrics_support_vmap_jvp_jacfwd_and_nested_derivative() -> None:
+def test_certification_metrics_support_vmap_jvp_jacfwd_and_nested_derivative() -> (
+    None
+):
     """Continuous fresh-Fock metrics compose with torch.func transforms."""
     _, problem, state = _problem_and_state(sample_name="H2")
     direction = torch.ones_like(state.x)
@@ -1242,7 +1313,9 @@ def test_fresh_fock_stationarity_requires_no_spectral_evaluation(
 
 def test_float32_effective_root_tolerance_is_reported() -> None:
     """Diagnostics retain requested and effective float32 root tolerances."""
-    case, problem, state = _problem_and_state(dtype=torch.float32, sample_name="H2")
+    case, problem, state = _problem_and_state(
+        dtype=torch.float32, sample_name="H2"
+    )
     metrics = certification_metrics(problem, state)
     requested = 1.0e-12
     effective = _resolve_tolerance(requested, state.x.dtype)
@@ -1261,33 +1334,58 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
     outcome = _solve_map(state.x, settings, problem.map, problem=problem)
     assert outcome.certification is not None
     diagnostic = outcome.certification
-    assert diagnostic.requested_fixed_point_l2_tolerance.item() == pytest.approx(
-        requested
+    assert (
+        diagnostic.requested_fixed_point_l2_tolerance.item()
+        == pytest.approx(requested)
     )
-    assert diagnostic.requested_fixed_point_max_tolerance.item() == pytest.approx(
-        requested
+    assert (
+        diagnostic.requested_fixed_point_max_tolerance.item()
+        == pytest.approx(requested)
     )
-    assert diagnostic.effective_fixed_point_l2_tolerance.item() == pytest.approx(
-        effective
+    assert (
+        diagnostic.effective_fixed_point_l2_tolerance.item()
+        == pytest.approx(effective)
     )
-    assert diagnostic.effective_fixed_point_max_tolerance.item() == pytest.approx(
-        effective
+    assert (
+        diagnostic.effective_fixed_point_max_tolerance.item()
+        == pytest.approx(effective)
     )
-    assert diagnostic.effective_stationarity_tolerance.item() == pytest.approx(1.0e-5)
-    assert diagnostic.effective_electron_count_tolerance.item() == pytest.approx(
-        effective
+    assert diagnostic.effective_stationarity_tolerance.item() == pytest.approx(
+        1.0e-5
+    )
+    assert (
+        diagnostic.effective_electron_count_tolerance.item()
+        == pytest.approx(effective)
     )
 
 
+@pytest.mark.parametrize(
+    "method,representation",
+    [
+        (LinearMethod(), SCFRepresentation.CHARGE),
+        (
+            AndersonMethod(AndersonMethodSettings(0.1, 4, True, 0.01)),
+            SCFRepresentation.CHARGE,
+        ),
+        (BroydenMethod(), SCFRepresentation.CHARGE),
+        (CDIISMethod(), SCFRepresentation.FOCK),
+    ],
+    ids=["linear", "anderson", "broyden", "cdiis"],
+)
 def test_terminal_nonfinite_candidate_does_not_reach_method(
     monkeypatch: pytest.MonkeyPatch,
+    method: SCFMethod,
+    representation: SCFRepresentation,
 ) -> None:
     """A bad map is frozen and the method sees only finite transition data."""
     import dxtb._src.scf.functional.solver as solver_module
 
-    case, problem, _ = _problem_and_state(sample_name="H2O")
+    _, problem, physical = _problem_and_state(
+        sample_name="H2O", representation=representation
+    )
     calls = 0
     transitions = 0
+    inactive_observations = []
     original_transition = solver_module._method_transition
 
     def map_fn(x: torch.Tensor):
@@ -1311,27 +1409,48 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
         map_result = args[3]
         assert torch.isfinite(map_result.mapped_x).all()
         assert torch.isfinite(map_result.spectral.density).all()
+        if not bool(args[7]):
+            inactive_observations.append(
+                (args[2].clone(), map_result.mapped_x.clone(), args[4].clone())
+            )
         transitions += 1
-        return original_transition(*args, **kwargs)
+        proposal = original_transition(*args, **kwargs)
+        if not bool(args[7]):
+            before = solver_module._method_state_tensors(args[5])
+            after = solver_module._method_state_tensors(proposal.state)
+            assert len(before) == len(after)
+            for old_value, new_value in zip(before, after):
+                torch.testing.assert_close(
+                    new_value, old_value, rtol=0.0, atol=0.0
+                )
+        return proposal
 
     monkeypatch.setattr(solver_module, "_method_transition", check_transition)
     outcome = _solve_map_control(
-        case.x,
+        physical.x,
         maxiter=2,
-        mix_guess=False,
+        mix_guess=True,
         x_atol=1.0e-8,
         x_atol_max=1.0e-8,
         map_fn=map_fn,
         problem=problem,
-        method=LinearMethod(),
+        method=method,
         damping_settings=DynamicDampingSettings(),
     )
     assert calls == 3
-    assert transitions == 2
+    assert transitions == 3
     assert not bool(outcome.converged)
     assert bool(outcome.terminal_failed)
     assert outcome.certification is not None
-    assert torch.equal(outcome.terminal_failed, outcome.certification.terminal_failed)
-    assert int(outcome.certification.failure_code) == int(SCFCoreFailure.NONFINITE)
+    assert torch.equal(
+        outcome.terminal_failed, outcome.certification.terminal_failed
+    )
+    assert int(outcome.certification.failure_code) == int(
+        SCFCoreFailure.NONFINITE
+    )
     assert torch.isfinite(outcome.root_x).all()
     assert not torch.isfinite(outcome.map_result.spectral.density).all()
+    assert len(inactive_observations) == 2
+    for observation in inactive_observations[1:]:
+        for actual, expected in zip(observation, inactive_observations[0]):
+            torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
