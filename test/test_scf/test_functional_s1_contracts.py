@@ -364,7 +364,7 @@ def test_converged_outcome_retains_the_tested_map_input(
     case = _prepare_case(GFN1_XTB)
     x, layout, _ = _map_for_representation(case, representation)
     problem = SCFProblem(case.inputs, representation, layout)
-    settings = SCFSolverSettings(1, False, 0.4, 1.0e6, 1.0e6)
+    settings = SCFSolverSettings(100, False, 0.4, 1.0e-8, 1.0e-8)
     outcome = _solve_map(
         x,
         settings,

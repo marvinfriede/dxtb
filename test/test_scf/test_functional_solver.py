@@ -30,10 +30,11 @@ from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     SCFCharges,
     SCFMapResult,
-    SCFSpectralResult,
     SCFPotential,
     SCFSolverSettings,
+    SCFSpectralResult,
     setup_simple_solver_settings,
+    simple_mix,
     solve_scf_simple,
 )
 from dxtb._src.scf.functional.solver import _solve_map
@@ -182,16 +183,31 @@ def test_simple_solver_budget_matrix_matches_legacy(
 
 
 def test_simple_solver_initial_mix_is_not_convergence_tested() -> None:
-    """A loose tolerance is first checked after the initial mixer step."""
-    comparison = _compare_legacy_simple(
-        maxiter=4,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
+    """The initial raw map seeds mix_guess but is not a root candidate."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 4,
+            "mix_guess": True,
+            "x_atol": 1.0e6,
+            "x_atol_max": 1.0e6,
+        },
     )
-    assert len(comparison.calls) == 2
-    assert int(comparison.actual.iterations) == 2
-    assert comparison.actual.converged.item() is True
+    result = solve_scf_simple(
+        case.x,
+        case.inputs,
+        SCFSolverSettings(4, True, 0.2, 1.0e6, 1.0e6),
+        record_trace=True,
+    )
+    assert result.trace is not None
+    expected_first_iterate = simple_mix(
+        case.x, result.trace.raw_mapped[0], case.x.new_tensor(0.2)
+    )
+    torch.testing.assert_close(
+        result.trace.map_inputs[1], expected_first_iterate
+    )
+    assert int(result.iterations) > 1
 
 
 def test_simple_solver_nonconverged_result_uses_last_raw_map() -> None:

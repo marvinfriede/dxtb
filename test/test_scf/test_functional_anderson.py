@@ -31,8 +31,8 @@ from dxtb._src.scf.functional import (
     AndersonState,
     SCFCharges,
     SCFMapResult,
-    SCFSpectralResult,
     SCFPotential,
+    SCFSpectralResult,
 )
 from dxtb._src.scf.functional import anderson as anderson_module
 from dxtb._src.scf.functional import (
@@ -41,6 +41,7 @@ from dxtb._src.scf.functional import (
     solve_scf_anderson,
 )
 from dxtb._src.scf.functional.anderson import _solve_map_anderson
+from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.mixer import Anderson
 
 from .samples import samples
@@ -545,28 +546,45 @@ def test_anderson_soft_start_false_matches_legacy() -> None:
     assert int(result.actual.iterations) == 6
 
 
-def test_anderson_loose_convergence_keeps_first_result_safely() -> None:
-    """Inactive fixed trips do not replace results or solve singular history."""
-    result = _compare_legacy_anderson(
-        maxiter=14,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
+def _solve_loose_anderson_with_certification(maxiter: int):
+    """Large raw tolerances still require a valid selected physical root."""
+    options = {
+        "mixer": labels.MIXER_ANDERSON,
+        "maxiter": maxiter,
+        "mix_guess": True,
+        "x_atol": 1.0e6,
+        "x_atol_max": 1.0e6,
+    }
+    case = _prepare_case(GFN1_XTB, scf_options=options)
+    settings = setup_anderson_solver_settings(
+        case.system.config.scf, case.positions.dtype
     )
-    assert result.actual.converged.item() is True
-    assert int(result.actual.iterations) == 2
+    result = solve_scf_anderson(case.x, case.inputs, settings)
+    expected = SCFProblem(case.inputs, SCFRepresentation.CHARGE).evaluate(
+        result.root_x
+    )
+    _assert_tensor_equal(
+        result.map_result.mapped_x, expected.map_result.mapped_x
+    )
+    _assert_tensor_equal(
+        result.map_result.spectral.density,
+        expected.map_result.spectral.density,
+    )
+    return result
+
+
+def test_anderson_loose_convergence_keeps_first_result_safely() -> None:
+    """Inactive fixed trips preserve the first physically certified result."""
+    result = _solve_loose_anderson_with_certification(maxiter=14)
+    assert result.converged.item() is True
+    assert int(result.iterations) > 2
 
 
 def test_anderson_loose_tolerance_matches_first_converged_map() -> None:
-    """A loose criterion freezes the first eligible raw map result."""
-    result = _compare_legacy_anderson(
-        maxiter=20,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
-    )
-    assert result.actual.converged.item() is True
-    assert int(result.actual.iterations) == 2
+    """Raw-map candidacy waits for fresh-Fock physical certification."""
+    result = _solve_loose_anderson_with_certification(maxiter=20)
+    assert result.converged.item() is True
+    assert int(result.iterations) > 2
 
 
 def test_anderson_normal_convergence_matches_legacy() -> None:

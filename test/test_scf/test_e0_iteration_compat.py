@@ -308,7 +308,7 @@ def test_full_f_atol_does_not_change_convergence() -> None:
 
 
 def test_full_x_atol_controls_convergence() -> None:
-    """The two raw-residual x tolerances determine full-mode stopping."""
+    """A loose raw residual cannot bypass physical certification."""
     loose, loose_warnings = _full_result(
         f_atol=1.0e-8, x_atol=1.0e2, x_atol_max=1.0e2
     )
@@ -316,7 +316,9 @@ def test_full_x_atol_controls_convergence() -> None:
         f_atol=1.0e-8, x_atol=1.0e-12, x_atol_max=1.0e-12
     )
 
-    assert loose.iterations.item() == 2
+    assert loose.iterations.item() == 6
     assert tight.iterations.item() == 6
-    assert not any("does not converge" in warning for warning in loose_warnings)
+    assert not bool(loose.converged)
+    assert not bool(tight.converged)
+    assert any("does not converge" in warning for warning in loose_warnings)
     assert any("does not converge" in warning for warning in tight_warnings)

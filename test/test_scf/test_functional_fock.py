@@ -351,8 +351,8 @@ def test_fock_normal_convergence_matches_legacy(mixer: int) -> None:
 
 
 def test_fock_anderson_early_convergence_matches_selected_map() -> None:
-    """An early-converged Fock map remains selected through fixed trips."""
-    _, _, result, legacy = _run_legacy_and_functional(
+    """Raw convergence alone cannot stop before Fock certification passes."""
+    case, _, result, _ = _run_legacy_and_functional(
         {
             "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
@@ -363,9 +363,15 @@ def test_fock_anderson_early_convergence_matches_selected_map() -> None:
             "x_atol_max": 1.0e6,
         }
     )
-    _assert_public_parity(result, legacy)
     assert bool(result.converged)
-    assert int(result.iterations) == 2
+    assert int(result.iterations) > 2
+    assert result.diagnostics.certification is not None
+    assert bool(result.diagnostics.certification.result.certified)
+    expected = functional_problem.fock_map(result.root_x, case.inputs)
+    _assert_tensor_equal(result.map_result.mapped_x, expected.mapped_x)
+    _assert_tensor_equal(
+        result.map_result.spectral.density, expected.spectral.density
+    )
 
 
 @pytest.mark.parametrize(
@@ -821,7 +827,9 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
     assert calls == 2
-    assert bool(result.converged)
+    assert not bool(result.converged)
+    assert result.diagnostics.certification is not None
+    assert not bool(result.diagnostics.certification.result.stationarity_ok)
     assert result.trajectory_status is not None
     assert not bool(result.trajectory_status.fermi_converged.all())
     assert result.map_result.fermi_status is not None
