@@ -29,6 +29,7 @@ API.
 | `16-scf-s2a.2-certification-policy.md` | Freezes the lazy-loader audit, size-aware stationarity scalar, electron-count rule, internal profiles, and S2b controller design |
 | `17-scf-s2b-authoritative-certification.md` | Makes physical certification authoritative for functional SCF, separates root validity from trajectory/finalization status, and records eager/fixed-trip integration and cost |
 | `18-scf-s2b.1-certification-hardening.md` | Restores full-diagnostic finite semantics, requires certification at implicit attachment, requires exact `root_x` at finalization, and makes profile tolerance inheritance explicit |
+| `19-scf-s3-linear-anderson-method-migration.md` | Migrates Anderson to `SCFMethod` and routes Linear/Anderson through the same one-stage strategy and controller |
 
 The design review referenced by the plan is not in the repository.
 
