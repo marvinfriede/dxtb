@@ -161,6 +161,20 @@ def test_broyden_low_rank_update_matches_vendored_first_method() -> None:
             rtol=1e-13,
             atol=1e-14,
         )
+        if hasattr(jacobian.Gm, "cns"):
+            correction_count = int(next_state.history_count)
+            torch.testing.assert_close(
+                next_state.c_history[:correction_count],
+                torch.stack(jacobian.Gm.cns),
+                rtol=1e-13,
+                atol=1e-14,
+            )
+            torch.testing.assert_close(
+                next_state.d_history[:correction_count],
+                torch.stack(jacobian.Gm.dns),
+                rtol=1e-13,
+                atol=1e-14,
+            )
         expected_step = -jacobian.solve(f_next)
         torch.testing.assert_close(
             proposed, x_next + 0.37 * expected_step, rtol=1e-13, atol=1e-14
