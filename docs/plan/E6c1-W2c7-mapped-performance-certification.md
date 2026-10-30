@@ -2,16 +2,20 @@
 
 ## Decision
 
-**W2 remains blocked by an architectural mismatch.** The committed W2c6
+**W2 remains open pending an architectural decision.** The committed W2c6
 production recurrence passes a controlled three-process one-conformer
 implicit-root energy/force comparison against the pre-W2c6 recurrence, and
 the two-conformer private mapped implicit route passes position and shared
 Model-parameter gradient parity. The authoritative
 `vmap(System.singlepoint)` route remains a fixed-trip unrolled calculation.
-Its bounded one-conformer, one-trip energy/force diagnostic did not return
-within 180 seconds. No full 300-trip or eight-conformer mapped calculation
-was launched. A faster private implicit route does not clear the public W2
-gate.
+The W2c7 bounded one-conformer, one-trip energy/force diagnostic did not
+return within 180 seconds. W2c8 repeated the public route with explicit stage
+instrumentation and completed the same one-trip energy/position-gradient
+operation in about 14 seconds in both primary profiles. The historical
+timeout is therefore unreproduced; the W2c7 artifact contains only setup
+progress, so its cause cannot be assigned to any runtime phase. No full
+300-trip or eight-conformer mapped calculation was launched. A faster private
+implicit route does not clear the public W2 gate.
 
 No SCF production source, public Calculator routing, dependency, tolerance,
 or frozen benchmark input changed in this package.
@@ -65,13 +69,18 @@ reported force comparisons.
 | W2c2a/W2c7 private mapped implicit route | Each conformer gets an independent eager physical-root solve without retaining the trajectory graph. After independent residual/Fermi/electron-count checks, the validated roots are mapped through the existing implicit `G(x,p)-x=0` attachment and BiCGSTAB response. | Roots stop after their own convergence counts; this is not differentiation of the finite 300-step trajectory. Geometry/integral tensors are lane-specific; one Model parameter owner is shared. Full Result finalization follows attachment. | Private feasibility diagnostic; not public dispatch. |
 
 The functional route uses the accepted invariant matrix-Fermi density and the
-functional free-energy implementation. The private implicit diagnostic uses
-those same production map/finalization functions. Legacy SCF uses a separate
-legacy iterator and stopping/culling policy; it is not a matched controller
-comparison. The current Calculator batch options also leave the default
-potential SCP mode in place, unlike the mapped W2 functional configuration's
-charge SCP mode. These route differences prevent describing legacy-versus-
-mapped timing as a pure kernel speed comparison.
+functional free-energy implementation. For positive electronic temperature
+and the default `FERMI_PARTITION_EQUAL`, its `free_energy_from_spectral()`
+dispatches to `fermi_free_energy_trace()`. The 512-point entropy quadrature
+diagnosis in the original W2 report predates this equal-partition trace
+implementation and is not evidence for the current W2 configuration. The
+private implicit diagnostic uses the same production map/finalization
+functions. Legacy SCF uses a separate legacy iterator and stopping/culling
+policy; it is not a matched controller comparison. The current Calculator
+batch options also leave the default potential SCP mode in place, unlike the
+mapped W2 functional configuration's charge SCP mode. These route differences
+prevent describing legacy-versus-mapped timing as a pure kernel speed
+comparison.
 
 `W2c6`'s direct-RHS tanh-doubling recurrence is present in production
 `spectral.py`; neither this benchmark nor the private route substitutes a
@@ -176,20 +185,23 @@ bound expired. Its output artifact has no completion event. The run was
 stopped at this bound; it was not treated as a numerical pass or a full W2
 measurement.
 
-This is consistent with the earlier W2 stage trace, which localized the
-one-trip finalization cost to the 512-point matrix-Fermi entropy quadrature.
-The current solver also executes `maxiter=300` map calls even after its
-convergence mask becomes inactive, and reverse-mode differentiation retains
-the fixed-trip trajectory. W2b measured approximately 0.64 GiB of added
-differentiated RSS per trip over trips 2–16 and a 106.4 GiB one-conformer
-full diagnostic before timeout. W2c6 removes matrix multiplications inside
-each matrix-Fermi doubling step; it does not change the number of fixed SCF
-trips, early-stop policy, or trajectory graph lifetime.
+The current solver executes all configured fixed trips: a raw map is used to
+initialize solver state and then another raw map runs per configured trip.
+Its convergence mask controls the state transition but does not skip those
+map evaluations. Reverse-mode differentiation retains the fixed-trip
+trajectory. W2b measured approximately 0.64 GiB of added differentiated RSS
+per trip over trips 2–16 and a 106.4 GiB one-conformer full diagnostic before
+timeout. W2c6 removes matrix multiplications inside each matrix-Fermi doubling
+step; it does not change the number of fixed SCF trips, early-stop policy, or
+trajectory graph lifetime. The W2c7 one-trip timeout is not reproduced by
+the bounded W2c8 rerun, and its dominant runtime component remains unknown.
 
 The staged stop condition therefore applies: four/eight-lane public mapped
 calculations were not launched, and the private implicit route was not
-substituted for the authoritative mapped route to claim W2. The existing
-legacy eight-conformer historical reference (36.215 s at one thread,
+substituted for the authoritative mapped route to claim W2. W2c8's short
+trip-count memory profile confirms rapid growth for the differentiated
+fixed-trip trajectory, but does not measure the full 300-trip workload. The
+existing legacy eight-conformer historical reference (36.215 s at one thread,
 16.998 s at four threads, approximately 8.16 GiB peak) remains context only.
 It differs in controller/stopping policy and the legacy default SCP mode;
 no comparable same-configuration public mapped result exists. The legacy
@@ -204,23 +216,26 @@ validated converged physical root. It completes one conformer in about 144 s
 and two mapped conformers with position gradients in about 429 s, but those
 results do not show that `vmap(System.singlepoint)` passes W2.
 
-W2 is **BLOCKED — ARCHITECTURAL MISMATCH**. The smallest justified next task
+W2 performance clearance remains **OPEN**. The smallest justified next task
 is a separately reviewed architecture package that assesses integration of
-the existing certified physical-root/implicit-response boundary into the
-authoritative functional mapped API. It must define convergence/failure and
+the existing certified physical-root/implicit-response boundary into a
+supported conformer-batch API. It must define convergence/failure and
 Result/status behavior, per-lane root preparation, shared Model ownership,
 padding, and compatibility with accepted E6a/E6bcompat behavior before any
-public routing change. No routing change is made here. The fixed-trip route's
-entropy finalization and trajectory memory remain measured blockers; the
-W2c6 kernel saving alone is not sufficient.
+public routing change. No routing change is made here. The measured fixed-trip
+map repetition and short-run differentiated memory growth are known risks;
+the W2c7 timeout itself was not localized and is not reproducible in the
+W2c8 bounded profile.
 
 ## Validation, review and artifacts
 
 - W2c6 recurrence test module: 27 passed on Python 3.11/PyTorch 2.8 and 27
   passed on Python 3.14/PyTorch 2.14.1.
 - The W2c6 accepted E6a/E7a/E6bcompat and mapped GFN1/GFN2 focused results
-  remain as recorded in the W2c6 report. This package changed no production
-  code and did not rerun those large selections.
+  remain inherited from the W2c6 report. W2c7 itself reran the W2c6
+  recurrence test module on Python 3.11/PyTorch 2.8 and Python
+  3.14/PyTorch 2.14.1; it did not rerun the E7a, E6bcompat, or mapped
+  GFN1/GFN2 selections. This package changed no production code.
 - The new A/B runner passed Python byte compilation and its CLI help check.
 - Two-conformer results and assertions are from the existing W2c2a
   diagnostic run against the committed W2c6 production code; no benchmark

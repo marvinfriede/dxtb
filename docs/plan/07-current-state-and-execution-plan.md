@@ -3554,15 +3554,37 @@ gradient accumulation over 2,261 leaves. Its isolated position-only peak was
 
 This does not clear W2. The authoritative public `vmap(System.singlepoint)`
 route remains fixed-trip unrolled differentiation and executes each
-configured raw-map trip after convergence is masked. Its direct one-conformer
-one-trip energy/force run did not return within a bounded 180 s. The
-private implicit-root route has different convergence and derivative
+configured raw-map trip after convergence is masked. W2c7's one-trip run did
+not return within 180 s, but its artifact contains only setup progress and
+does not identify the cause. W2c8 reran the real public direct and one-lane
+`vmap` calls and completed energy plus position gradient in about 14 s on
+both Python 3.11/Torch 2.8 and Python 3.14/Torch 2.14.1. The old timeout is
+unreproduced; the current dominant forward costs are two Fermi-density
+evaluations and one equal-partition trace free-energy evaluation. Bounded
+one-to-four-trip differentiation shows growing memory (3.26, 4.15, and
+5.93 GiB peaks at 1, 2, and 4 configured trips); eight trips were not
+launched because a linear projection exceeds the historical 8.16 GiB peak.
+The private implicit-root route has different convergence and derivative
 semantics and is not a valid substitute for the documented W2 route. No
 four/eight-lane public run was launched. W2 remains **OPEN — architecture
 review required**; W3 remains OPEN, E6broute remains BLOCKED, and public
 Calculator routing is unchanged. See
 [`E6c1-W2c7-mapped-performance-certification.md`](E6c1-W2c7-mapped-performance-certification.md)
 and `benchmarks/results/e6c1-w2c7/`.
+
+W2c8's architecture review recommends retaining finite-trip semantics for
+the existing `System.singlepoint()` entrypoint and evaluating a separately
+named converged-root batch operation. A literal `vmap(System.singlepoint)`
+cannot host lane-local eager stopping without transform-incompatible
+tensor-to-Python control flow; a fixed-trip loop with masks still evaluates
+the raw map. An explicit batch API would prepare and validate roots
+independently, then map the existing implicit response and Result boundary
+with shared Model ownership. This is a design proposal only. Project-owner
+approval is required both for the new derivative contract and for amending
+the W2 route acceptance from literal `vmap(System.singlepoint)`. No
+production routing or API change was made. See
+[`E6c1-W2c8-functional-scf-architecture-decision.md`](E6c1-W2c8-functional-scf-architecture-decision.md)
+and `benchmarks/results/e6c1-w2c8/`.
 
 ### Historical implementation/status record
 
