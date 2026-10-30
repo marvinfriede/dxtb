@@ -106,7 +106,7 @@ class SCFInternalCertificationProfile:
     fixed_point_l2: float
     fixed_point_max: float
     stationarity_orthogonalized_per_sqrt_orbital: float
-    electron_count_uses_effective_root_tolerance: bool = True
+    inherit_solver_root_tolerances: bool = False
     stationarity_float32_floor: float = 1.0e-5
 
     def stationarity_tolerance(self, dtype: torch.dtype) -> float:
@@ -124,6 +124,7 @@ SCF_CERTIFICATION_STANDARD = SCFInternalCertificationProfile(
     fixed_point_l2=1.0e-4,
     fixed_point_max=1.0e-5,
     stationarity_orthogonalized_per_sqrt_orbital=1.0e-5,
+    inherit_solver_root_tolerances=True,
 )
 SCF_CERTIFICATION_TIGHT = SCFInternalCertificationProfile(
     "tight",
@@ -450,8 +451,7 @@ def resolve_certification_thresholds(
     Explicit tight/reference profiles use their declared root thresholds and
     the existing dtype-resolution floor.
     """
-    standard_profile = profile is SCF_CERTIFICATION_STANDARD
-    if standard_profile:
+    if profile.inherit_solver_root_tolerances:
         fixed_point_l2 = x_atol
         fixed_point_max = x_atol_max
     else:
@@ -468,7 +468,7 @@ def resolve_certification_thresholds(
         electron_count=fixed_point_l2,
         requested_fixed_point_l2=(
             (x_atol if requested_x_atol is None else requested_x_atol)
-            if standard_profile
+            if profile.inherit_solver_root_tolerances
             else profile.fixed_point_l2
         ),
         requested_fixed_point_max=(
@@ -477,7 +477,7 @@ def resolve_certification_thresholds(
                 if requested_x_atol_max is None
                 else requested_x_atol_max
             )
-            if standard_profile
+            if profile.inherit_solver_root_tolerances
             else profile.fixed_point_max
         ),
     )
@@ -618,9 +618,15 @@ def terminal_failure_code(state: SCFPhysicalState) -> Tensor:
 def certification_metrics(
     problem: SCFProblem,
     state: SCFPhysicalState,
+    *,
+    core_metrics: SCFCertificationCoreMetrics | None = None,
 ) -> SCFCertificationMetrics:
     """Return core metrics and optional physical energy observables."""
-    core = certification_core_metrics(problem, state)
+    core = (
+        certification_core_metrics(problem, state)
+        if core_metrics is None
+        else core_metrics
+    )
     spectral = state.map_result.spectral
     electronic_energy = electronic_energy_from_spectral(
         spectral, problem.inputs
@@ -643,7 +649,11 @@ def certification_metrics(
         electron_count_error=core.electron_count_error,
         electronic_energy=electronic_energy,
         electronic_free_energy=electronic_free_energy,
-        finite_ok=core.finite_ok,
+        finite_ok=(
+            core.finite_ok
+            & torch.isfinite(electronic_energy)
+            & torch.isfinite(electronic_free_energy)
+        ),
         fermi_ok=core.fermi_ok,
         fermi_converged=core.fermi_converged,
         fermi_electron_count_ok=core.fermi_electron_count_ok,
@@ -659,15 +669,22 @@ def certify_scf_state(
 ) -> SCFCertificationResult:
     """Apply caller-supplied thresholds to one method-independent state."""
     core = certify_scf_core_state(problem, state, thresholds)
-    metrics = certification_metrics(problem, state)
+    metrics = certification_metrics(problem, state, core_metrics=core.metrics)
+    certified = (
+        core.fixed_point_ok
+        & core.stationarity_ok
+        & core.electron_count_ok
+        & metrics.finite_ok
+        & core.fermi_ok
+    )
     return SCFCertificationResult(
         metrics=metrics,
         fixed_point_ok=core.fixed_point_ok,
         stationarity_ok=core.stationarity_ok,
         electron_count_ok=core.electron_count_ok,
-        finite_ok=core.finite_ok,
+        finite_ok=metrics.finite_ok,
         fermi_ok=core.fermi_ok,
-        certified=core.certified,
+        certified=certified,
     )
 
 

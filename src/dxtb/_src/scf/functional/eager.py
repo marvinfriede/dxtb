@@ -914,9 +914,9 @@ def run_prepared_functional_implicit(
             prepared.residual,
             prepared.trajectory_status,
             prepared.damping_state,
+            root_x=attached_root,
             certification=prepared.certification,
             terminal_failed=torch.zeros_like(prepared.converged),
-            root_x=prepared.root_x,
         )
     if representation == labels.SCP_MODE_POTENTIAL:
         assert layout is not None
@@ -929,9 +929,9 @@ def run_prepared_functional_implicit(
             prepared.residual,
             prepared.trajectory_status,
             prepared.damping_state,
+            root_x=attached_root,
             certification=prepared.certification,
             terminal_failed=torch.zeros_like(prepared.converged),
-            root_x=prepared.root_x,
         )
     return finalize_scf_fock(
         attached_map_result,
@@ -941,7 +941,7 @@ def run_prepared_functional_implicit(
         prepared.residual,
         prepared.trajectory_status,
         prepared.damping_state,
+        root_x=attached_root,
         certification=prepared.certification,
         terminal_failed=torch.zeros_like(prepared.converged),
-        root_x=prepared.root_x,
     )
