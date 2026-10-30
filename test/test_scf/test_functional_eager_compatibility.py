@@ -1889,7 +1889,10 @@ def test_eager_force_convergence_policy(
                 functional_case.integrals,
                 functional_case.refocc,
             )
-        assert str(functional_error.value) == legacy_message
+        assert str(functional_error.value).startswith(legacy_message)
+        assert "physical SCF root was not certified" in str(
+            functional_error.value
+        )
         return
 
     legacy = legacy_case.engine(legacy_case.initial_charges.clone())

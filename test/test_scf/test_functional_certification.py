@@ -26,19 +26,27 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional import (
+    LinearMethod,
     SCFCertificationThresholds,
+    SCFCoreFailure,
+    SCFInternalCertificationProfile,
     SCFPhysicalState,
     SCFProblem,
     SCFRepresentation,
     SCFSolverSettings,
+)
+from dxtb._src.scf.functional import certification as certification_module
+from dxtb._src.scf.functional import (
     certification_core_metrics,
     certification_metrics,
+    certify_scf_core_state,
     certify_scf_state,
     electronic_energy_from_spectral,
     fock_initial_guess,
     free_energy_from_spectral,
     interaction_energy_from_charges,
     potential_initial_guess,
+    resolve_certification_thresholds,
     scf_map,
     scf_progress_metrics,
     stationarity_matrix,
@@ -49,7 +57,16 @@ from dxtb._src.scf.functional.certification import (
     SCF_CERTIFICATION_TIGHT,
     _stationarity_norms,
 )
-from dxtb._src.scf.functional.solver import _resolve_tolerance, _solve_map
+from dxtb._src.scf.functional.solver import (
+    DynamicDampingSettings,
+    SCFTrajectoryStatus,
+    _resolve_tolerance,
+    _solve_map,
+    _solve_map_control,
+    setup_simple_solver_settings,
+    solve_scf_simple,
+)
+from dxtb._src.typing.exceptions import SCFConvergenceError
 
 from .scf_certification_characterization import characterize_case
 from .test_functional_map import _prepare_case
@@ -242,6 +259,233 @@ def test_internal_profiles_have_explicit_float32_stationarity_floor() -> None:
         )
         == 1.0e-12
     )
+
+
+@pytest.mark.parametrize("tolerance", [1.0e-2, 1.0e-8])
+def test_standard_thresholds_inherit_effective_caller_tolerances(
+    tolerance: float,
+) -> None:
+    """Standard certification neither tightens nor loosens caller settings."""
+    _, problem, state = _problem_and_state()
+    thresholds = resolve_certification_thresholds(
+        problem,
+        x_atol=tolerance,
+        x_atol_max=tolerance * 2.0,
+        dtype=state.x.dtype,
+    )
+    assert thresholds.fixed_point_l2 == tolerance
+    assert thresholds.fixed_point_max == tolerance * 2.0
+    assert thresholds.electron_count == tolerance
+
+
+def test_controller_uses_core_certification_without_energy_observables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The authoritative solve gate does not call energy or entropy helpers."""
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("full energy diagnostics entered the SCF gate")
+
+    monkeypatch.setattr(
+        certification_module, "electronic_energy_from_spectral", forbidden
+    )
+    monkeypatch.setattr(
+        certification_module, "free_energy_from_spectral", forbidden
+    )
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    settings = SCFSolverSettings(100, False, 0.2, 1.0e-6, 1.0e-6)
+    result = solve_scf_simple(case.x, case.inputs, settings)
+    assert result.diagnostics is not None
+    assert result.diagnostics.certification is not None
+
+
+@pytest.mark.parametrize("eager", [False, True], ids=["fixed-trip", "eager"])
+def test_raw_candidate_with_failed_stationarity_keeps_iterating(
+    eager: bool,
+) -> None:
+    """A loose raw root does not stop while physical stationarity fails."""
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    profile = SCFInternalCertificationProfile(
+        name="stationarity-reject",
+        fixed_point_l2=1.0e6,
+        fixed_point_max=1.0e6,
+        stationarity_orthogonalized_per_sqrt_orbital=0.0,
+    )
+    settings = SCFSolverSettings(2, False, 0.2, 1.0e6, 1.0e6)
+    result = solve_scf_simple(
+        case.x,
+        case.inputs,
+        settings,
+        eager=eager,
+        certification_profile=profile,
+    )
+    assert not bool(result.converged)
+    assert int(result.iterations) == 3
+    assert result.diagnostics is not None
+    assert not bool(result.diagnostics.terminal_failed)
+    assert result.diagnostics.certification is not None
+    assert int(result.diagnostics.certification.result.failure_code) == 2
+
+
+@pytest.mark.parametrize("eager", [False, True], ids=["fixed-trip", "eager"])
+def test_independent_count_failure_blocks_controller_certification(
+    eager: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The independent trace gate blocks an otherwise valid candidate."""
+    original = certification_module.certification_core_metrics
+
+    def count_inconsistent(problem, state, *, fixed_point_residual=None):
+        metrics = original(
+            problem, state, fixed_point_residual=fixed_point_residual
+        )
+        return replace(
+            metrics,
+            stationarity_orthogonalized_l2_per_sqrt_orbital=state.x.new_zeros(
+                ()
+            ),
+            electron_count_error=state.x.new_tensor(1.0e9),
+        )
+
+    monkeypatch.setattr(
+        certification_module, "certification_core_metrics", count_inconsistent
+    )
+    case, _, _ = _problem_and_state(sample_name="H2O")
+    settings = SCFSolverSettings(2, False, 0.2, 1.0e6, 1.0e6)
+    result = solve_scf_simple(case.x, case.inputs, settings, eager=eager)
+    assert not bool(result.converged)
+    assert result.diagnostics is not None
+    assert result.diagnostics.certification is not None
+    assert bool(result.diagnostics.certification.result.fixed_point_ok)
+    assert bool(result.diagnostics.certification.result.stationarity_ok)
+    assert not bool(result.diagnostics.certification.result.electron_count_ok)
+    assert int(result.diagnostics.certification.result.failure_code) == int(
+        SCFCoreFailure.ELECTRON_COUNT
+    )
+
+
+def test_implicit_preparation_rejects_raw_only_root() -> None:
+    """Implicit attachment cannot accept a raw-converged uncertified root."""
+    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+
+    case, _, _ = _problem_and_state(sample_name="H2O")
+    profile = SCFInternalCertificationProfile(
+        name="stationarity-reject",
+        fixed_point_l2=1.0e6,
+        fixed_point_max=1.0e6,
+        stationarity_orthogonalized_per_sqrt_orbital=0.0,
+    )
+    outcome = _solve_map(
+        case.x,
+        SCFSolverSettings(2, False, 0.2, 1.0e6, 1.0e6),
+        SCFProblem(case.inputs, SCFRepresentation.CHARGE).map,
+        problem=SCFProblem(case.inputs, SCFRepresentation.CHARGE),
+        certification_profile=profile,
+    )
+    assert not bool(outcome.converged)
+
+    def raw_map(x: torch.Tensor) -> torch.Tensor:
+        return SCFProblem(case.inputs, SCFRepresentation.CHARGE).map(x).mapped_x
+
+    with pytest.raises(SCFConvergenceError):
+        _prepare_scf_root(
+            outcome,
+            maxiter=2,
+            x_atol=1.0e6,
+            x_atol_max=1.0e6,
+            final_valid=torch.ones((), dtype=torch.bool),
+            raw_map=raw_map,
+            parameters=(),
+        )
+
+
+def test_certification_does_not_accept_trajectory_history_as_input() -> None:
+    """One paired physical state has one verdict independent of history."""
+    _, problem, state = _problem_and_state(sample_name="H2O")
+    thresholds = _loose_thresholds(problem.representation)
+    first = certify_scf_core_state(problem, state, thresholds)
+    second = certify_scf_core_state(problem, state, thresholds)
+    assert torch.equal(first.certified, second.certified)
+    assert torch.equal(first.failure_code, second.failure_code)
+    assert first.metrics is not None
+    # Trajectory data is a solver-result diagnostic and is not accepted by the
+    # physical certification function.
+    status = SCFTrajectoryStatus(
+        fermi_converged=torch.tensor(False),
+        electron_count_ok=torch.tensor(False),
+        invalid_temperature=torch.tensor(False),
+        too_many_electrons=torch.tensor(False),
+        first_failure=torch.tensor(3),
+    )
+    assert status.first_failure.item() == 3
+
+
+def test_solver_diagnostics_pair_exact_root_and_map_result() -> None:
+    """Stored diagnostics describe the tested x paired with G(x)."""
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    result = solve_scf_simple(
+        case.x,
+        case.inputs,
+        SCFSolverSettings(140, False, 0.2, 1.0e-8, 1.0e-8),
+    )
+    assert bool(result.converged)
+    assert not torch.equal(result.root_x, result.map_result.mapped_x)
+    state = SCFPhysicalState(result.root_x, result.map_result)
+    expected = certification_core_metrics(problem, state)
+    assert result.diagnostics is not None
+    assert result.diagnostics.certification is not None
+    actual = result.diagnostics.certification.result.metrics
+    torch.testing.assert_close(actual.fixed_point.l2, expected.fixed_point.l2)
+    torch.testing.assert_close(
+        actual.stationarity_orthogonalized_l2_per_sqrt_orbital,
+        expected.stationarity_orthogonalized_l2_per_sqrt_orbital,
+    )
+
+    historical_failure = SCFTrajectoryStatus(
+        fermi_converged=torch.tensor(False),
+        electron_count_ok=torch.tensor(False),
+        invalid_temperature=torch.tensor(False),
+        too_many_electrons=torch.tensor(False),
+        first_failure=torch.tensor(3),
+    )
+    altered_history = replace(result, trajectory_status=historical_failure)
+    assert torch.equal(result.converged, altered_history.converged)
+
+
+def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
+    None
+):
+    """The same certified root prepares identically with different history."""
+    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    settings = SCFSolverSettings(140, False, 0.2, 1.0e-8, 1.0e-8)
+    outcome = _solve_map(case.x, settings, problem.map, problem=problem)
+    assert bool(outcome.converged)
+    altered = replace(
+        outcome,
+        trajectory_status=SCFTrajectoryStatus(
+            fermi_converged=torch.tensor(False),
+            electron_count_ok=torch.tensor(False),
+            invalid_temperature=torch.tensor(False),
+            too_many_electrons=torch.tensor(False),
+            first_failure=torch.tensor(3),
+        ),
+    )
+
+    def raw_map(x: torch.Tensor) -> torch.Tensor:
+        return problem.map(x).mapped_x
+
+    kwargs = dict(
+        maxiter=140,
+        x_atol=1.0e-8,
+        x_atol_max=1.0e-8,
+        final_valid=torch.ones((), dtype=torch.bool),
+        raw_map=raw_map,
+        parameters=(),
+    )
+    prepared = _prepare_scf_root(outcome, **kwargs)
+    prepared_with_history = _prepare_scf_root(altered, **kwargs)
+    torch.testing.assert_close(prepared.root_x, prepared_with_history.root_x)
 
 
 @pytest.mark.parametrize(
@@ -893,7 +1137,7 @@ def test_fresh_fock_stationarity_requires_no_spectral_evaluation(
 
 
 def test_float32_effective_root_tolerance_is_reported() -> None:
-    """Certification can report metrics at the existing float32 floor."""
+    """Diagnostics retain requested and effective float32 root tolerances."""
     case, problem, state = _problem_and_state(
         dtype=torch.float32, sample_name="H2"
     )
@@ -904,4 +1148,97 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
     assert metrics.fixed_point.l2.dtype is torch.float32
     assert metrics.stationarity_ao_l2.dtype is torch.float32
     assert metrics.electron_count_error.dtype is torch.float32
-    del case
+    config = replace(
+        case.system.config.scf,
+        maxiter=1,
+        mixer=labels.MIXER_LINEAR,
+        x_atol=requested,
+        x_atol_max=requested,
+    )
+    settings = setup_simple_solver_settings(config, state.x.dtype)
+    outcome = _solve_map(state.x, settings, problem.map, problem=problem)
+    assert outcome.certification is not None
+    diagnostic = outcome.certification
+    assert (
+        diagnostic.requested_fixed_point_l2_tolerance.item()
+        == pytest.approx(requested)
+    )
+    assert (
+        diagnostic.requested_fixed_point_max_tolerance.item()
+        == pytest.approx(requested)
+    )
+    assert (
+        diagnostic.effective_fixed_point_l2_tolerance.item()
+        == pytest.approx(effective)
+    )
+    assert (
+        diagnostic.effective_fixed_point_max_tolerance.item()
+        == pytest.approx(effective)
+    )
+    assert diagnostic.effective_stationarity_tolerance.item() == pytest.approx(
+        1.0e-5
+    )
+    assert (
+        diagnostic.effective_electron_count_tolerance.item()
+        == pytest.approx(effective)
+    )
+
+
+def test_terminal_nonfinite_candidate_does_not_reach_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad map is frozen and the method sees only finite transition data."""
+    import dxtb._src.scf.functional.solver as solver_module
+
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    calls = 0
+    transitions = 0
+    original_transition = solver_module._linear_transition_adapter
+
+    def map_fn(x: torch.Tensor):
+        nonlocal calls
+        calls += 1
+        mapped = problem.map(x)
+        if calls == 2:
+            bad_spectral = replace(
+                mapped.spectral,
+                density=torch.full_like(mapped.spectral.density, torch.nan),
+            )
+            return replace(
+                mapped,
+                mapped_x=torch.full_like(mapped.mapped_x, torch.nan),
+                spectral=bad_spectral,
+            )
+        return mapped
+
+    def check_transition(*args, **kwargs):
+        nonlocal transitions
+        map_result = args[3]
+        assert torch.isfinite(map_result.mapped_x).all()
+        assert torch.isfinite(map_result.spectral.density).all()
+        transitions += 1
+        return original_transition(*args, **kwargs)
+
+    monkeypatch.setattr(
+        solver_module, "_linear_transition_adapter", check_transition
+    )
+    outcome = _solve_map_control(
+        case.x,
+        maxiter=2,
+        mix_guess=False,
+        x_atol=1.0e-8,
+        x_atol_max=1.0e-8,
+        map_fn=map_fn,
+        problem=problem,
+        method=LinearMethod(),
+        damping_settings=DynamicDampingSettings(),
+    )
+    assert calls == 3
+    assert transitions == 2
+    assert not bool(outcome.converged)
+    assert bool(outcome.terminal_failed)
+    assert int(outcome.certification.failure_code) == int(
+        SCFCoreFailure.NONFINITE
+    )
+    assert torch.isfinite(outcome.root_x).all()
+    assert not torch.isfinite(outcome.map_result.spectral.density).all()

@@ -408,7 +408,9 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
         ),
     )
     assert bool(result.map_result.fermi_status.converged.all())
-    assert bool(result.converged)
+    assert not bool(result.converged)
+    assert result.diagnostics.certification is not None
+    assert not bool(result.diagnostics.certification.result.stationarity_ok)
     assert not bool(functional_subsolves_ok(failed_final))
 
 
