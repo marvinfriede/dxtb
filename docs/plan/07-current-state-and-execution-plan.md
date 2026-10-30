@@ -3505,6 +3505,21 @@ production. W2/W3 remain OPEN, E6broute remains BLOCKED, and public routing is
 unchanged. See [`E6c1-W2c5a-physical-shift-performance.md`](E6c1-W2c5a-physical-shift-performance.md)
 and `benchmarks/results/e6c1-w2c5a/`.
 
+### W2c5b full-domain matrix-shift decision
+
+W2c5b rejects production matrix-shift reuse. The diagnostic candidate's
+`diff_steps` schedule now follows the production derivative-order mapping, but
+a supported direct matrix-Fermi case proves that density-only reuse narrows
+the accepted range: an initial occupation rounded to zero becomes
+`4.5397868702390376e-05` after a valid direct shift, while the guarded update
+must reject it. A safe transformed fallback with useful performance has not
+been established. Production `spectral.py` remains unchanged. The trace-
+squared slope optimization is separately deferred because an isolated slope
+gain did not establish an implicit-response benefit. Generalized-overlap and
+atomic free-energy reuse remain unqualified. W2/W3 remain OPEN, E6broute
+remains BLOCKED, and public Calculator routing is unchanged. See
+[`E6c1-W2c5b-full-domain-integration-decision.md`](E6c1-W2c5b-full-domain-integration-decision.md).
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

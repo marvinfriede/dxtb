@@ -186,3 +186,21 @@ Black, isort, Python byte compilation and `git diff --check` passed. Ruff was
 not installed in the available environments. No production SCF/spectral code
 changed, so E7a/E6bcompat pytest selections were not rerun; their previously
 accepted evidence remains the applicable production boundary.
+
+## W2c5b full-domain decision
+
+The W2c5b follow-up corrected the experimental density and trace helpers to
+honor the caller's `diff_steps`, including zero. The focused tests pass for
+the supported 0–4 correction-count schedules on Python 3.11/PyTorch 2.8 and
+Python 3.14/PyTorch 2.14.1. A saturated one-orbital fixture demonstrates a
+full-domain limitation: the accepted direct matrix-Fermi path returns
+`4.5397868702390376e-05` after a shift of 990 from an initial density rounded
+to exactly zero, while the guarded density-only candidate returns NaN.
+
+This closes the integration question negatively. The matrix-shift candidate
+cannot replace the full accepted S0.1b domain with the density alone, and no
+transform-compatible fallback preserving its performance was established.
+Production remains unchanged. Generalized-overlap and atomic-partition free
+energy reuse remains unqualified. See
+[`E6c1-W2c5b-full-domain-integration-decision.md`](E6c1-W2c5b-full-domain-integration-decision.md)
+for the counterexample, test logs and final gate table.
