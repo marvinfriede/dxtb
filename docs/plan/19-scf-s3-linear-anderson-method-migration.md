@@ -74,6 +74,20 @@ helper. Its primal setup was updated to call `_prepare_solver()` and the common
 `_solve_map()` with the resulting strategy. This is a call-site migration only;
 it does not alter W2 calculations.
 
+## H2O/GFN2 performance smoke
+
+The same H2O/GFN2 Anderson case was run once at S2b.1 (`6d5cfd1`) and once at
+S3. Both runs used `maxiter=40`, `mix_guess=True`, one CPU thread, and the same
+initial state. These are smoke timings, not a performance benchmark.
+
+| Controller | S2b.1 time | S3 time | Iterations | Maps | Core certifications | Energy (Eh) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Eager | 0.0850 s | 0.0850 s | 10 | 10 | 1 | -5.1041587994095075 |
+| Fixed-trip | 0.4611 s | 0.4545 s | 10 | 41 | 41 | -5.1041587994095075 |
+
+The map and certification counts matched between revisions. The small timing
+difference is within the noise expected from a single run.
+
 ## Scope status
 
 S3 adds no switching or multi-stage execution. Broyden, CDIIS, SOSCF, and later
