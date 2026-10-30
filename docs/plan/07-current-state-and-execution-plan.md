@@ -3520,6 +3520,26 @@ atomic free-energy reuse remain unqualified. W2/W3 remain OPEN, E6broute
 remains BLOCKED, and public Calculator routing is unchanged. See
 [`E6c1-W2c5b-full-domain-integration-decision.md`](E6c1-W2c5b-full-domain-integration-decision.md).
 
+### W2c6 invariant tanh-doubling solve reformulation
+
+W2c6 replaces the final multiplication by the inverse in each matrix-Fermi
+tanh-doubling step with an algebraically equivalent direct right-hand-side
+dense solve. It keeps the invariant matrix input, accepted dense solver,
+fixed step loop, scaling/padding rules, chemical-potential correction count,
+and S0.1b numerical range. Focused values and first-through-third AD
+selections pass on all available environments carrying the accepted
+tad-mctc 0.11.3 stack; the Python 3.10/PyTorch 2.6 environment is not
+compatible because it contains tad-mctc 0.9.1. Profiling confirms 29 fewer
+underlying matrix multiplies per matrix-Fermi evaluation and no change in
+dense-solve count. At the captured 255-orbital tmpda state, differentiated
+density correction improved by 17–20%; one bounded full one-conformer
+energy/force run improved elapsed time by 11.35% with energy/force parity.
+This is a kernel optimization only. The eight-conformer W2 workload has not
+been cleared; W2/W3 remain OPEN, E6broute remains BLOCKED, and public
+Calculator routing is unchanged. See
+[`E6c1-W2c6-tanh-doubling-solve-optimization.md`](E6c1-W2c6-tanh-doubling-solve-optimization.md)
+and `benchmarks/results/e6c1-w2c6/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
