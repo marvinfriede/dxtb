@@ -24,6 +24,7 @@ import numpy as np
 import torch
 from tad_mctc.autograd import attach_gradient
 from tad_mctc.storch.linsolve import dense_solve
+from tad_mctc.tools.compile import is_compiling
 
 from dxtb._src.typing import Tensor
 
@@ -333,6 +334,49 @@ def _gap_electron_response(
     return torch.where(gap[..., None, None], response, 0.0)
 
 
+def _tracks_derivatives(x: Tensor) -> bool:
+    """Check if a tensor tracks reverse- or forward-mode derivatives."""
+    if is_compiling():
+        return True
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    raw_stack = ft.get_interpreter_stack()
+    stack = (
+        {}
+        if raw_stack is None
+        else {interp.level(): interp.key() for interp in raw_stack}
+    )
+    jvp_levels = [
+        lvl for lvl, key in stack.items() if key == ft.TransformType.Jvp
+    ]
+    top_jvp_level = max(jvp_levels) if jvp_levels else None
+    current = x
+    while True:
+        if ft.is_batchedtensor(current):
+            current = ft.get_unwrapped(current)
+            continue
+        if torch.is_grad_enabled() and current.requires_grad:
+            return True
+        level = ft.maybe_get_level(current)
+        if level == -1:
+            if (
+                torch.autograd.forward_ad.unpack_dual(current).tangent
+                is not None
+            ):
+                return True
+        elif stack.get(level) == ft.TransformType.Jvp:
+            if level != top_jvp_level:
+                return True
+            if (
+                torch.autograd.forward_ad.unpack_dual(current).tangent
+                is not None
+            ):
+                return True
+        if not ft.is_functorch_wrapped_tensor(current):
+            break
+        current = ft.get_unwrapped(current)
+    return False
+
+
 def fermi_density_matrix(
     hamiltonian: Tensor,
     nel: Tensor,
@@ -344,77 +388,29 @@ def fermi_density_matrix(
     diff_steps: int = 2,
 ) -> Tensor:
     """Build an invariant Fermi density from dxtb's shared primal state."""
-    work_dtype = (
-        torch.float64
-        if hamiltonian.dtype != torch.float64
-        else hamiltonian.dtype
+    setup = _fermi_free_energy_setup(
+        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
     )
-    h = hamiltonian.to(dtype=work_dtype)
-    li = None if l_inv is None else l_inv.to(dtype=work_dtype)
-    # The explicit mask indexes the AO basis; state.orbital_mask indexes the
-    # energy-sorted spectrum. Canonical AO validity may be noncontiguous.
-    structural_mask = mask
-    if structural_mask is None:
-        structural_mask = state.orbital_mask
-        if structural_mask is not None and structural_mask.ndim == h.ndim:
-            structural_mask = structural_mask.select(-2, 0)
-    h, spectral, active = _prepare_matrix(h, li, structural_mask)
-
-    h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
-    spectral = spectral.unsqueeze(-3).expand_as(h)
-    active = active.unsqueeze(-2).expand(*nel.shape, active.shape[-1])
-    if li is not None:
-        li = li.unsqueeze(-3).expand_as(h)
-        pair = active.unsqueeze(-1) & active.unsqueeze(-2)
-        li = torch.where(pair, li, torch.zeros_like(li))
-    kt = kt.to(device=h.device, dtype=h.dtype)
-    kt_pos = state.kt_positive.to(device=h.device)
-    safe_kt = torch.where(kt_pos, kt, torch.ones_like(kt))
-    ref = state.chemical_potential_ref.to(device=h.device, dtype=h.dtype)
-    offset = state.chemical_potential_offset.to(device=h.device, dtype=h.dtype)
-    ref = ref.squeeze(-1)
-    offset = offset.squeeze(-1)
-    channel_shape = (*nel.shape, 1, 1)
+    h = setup.h
+    active = setup.active
     eye = torch.eye(h.shape[-1], dtype=h.dtype, device=h.device)
-    relative = spectral - ref.reshape(channel_shape) * eye
-    relative = relative - offset.reshape(channel_shape) * eye
-    target = nel.to(device=h.device, dtype=h.dtype)
-    empty = state.empty.to(device=h.device)
-    full = state.full.to(device=h.device)
-    too_many = state.too_many.to(device=h.device)
-    active_channel = state.active.to(device=h.device)
-    gap_mask = state.gap.to(device=h.device, dtype=torch.bool)
-    below = state.below.to(device=h.device, dtype=torch.bool)
-    diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
-    shift = torch.zeros_like(target)
-    for _ in range(diff_steps):
-        density = _matrix_fermi(relative, shift, safe_kt, active)
-        count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
-        slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
-            -1
-        ) / safe_kt
-        safe_slope = torch.where(
-            slope.abs() > torch.finfo(h.dtype).tiny, slope, 1.0
-        )
-        correction = torch.where(diff_mask, (target - count) / safe_slope, 0.0)
-        shift = shift + correction
-
-    density = _matrix_fermi(relative, shift, safe_kt, active)
     eye_channel = eye * active.unsqueeze(-1).to(h.dtype)
-    density = torch.where(empty[..., None, None], 0.0, density)
-    density = torch.where(too_many[..., None, None], 0.0, density)
-    density = torch.where(full[..., None, None], eye_channel, density)
-    response = _gap_electron_response(
-        h,
-        spectral,
-        active,
-        state.below.to(device=h.device, dtype=torch.bool),
-        gap_mask,
-        safe_kt,
-    )
-    density = density + (target - target.detach())[..., None, None] * response
-    if li is not None:
-        density = li.transpose(-2, -1) @ density @ li
+    density = torch.where(setup.empty[..., None, None], 0.0, setup.occupation)
+    density = torch.where(setup.too_many[..., None, None], 0.0, density)
+    density = torch.where(setup.full[..., None, None], eye_channel, density)
+    count_delta = setup.target - setup.target.detach()
+    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
+        response = _gap_electron_response(
+            h,
+            setup.spectral,
+            active,
+            setup.below,
+            setup.gap_mask,
+            setup.safe_kt,
+        )
+        density = density + count_delta[..., None, None] * response
+    if setup.li is not None:
+        density = setup.li.transpose(-2, -1) @ density @ setup.li
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     density = torch.where(pair, density, torch.zeros_like(density))
     return density.sum(-3).to(dtype=hamiltonian.dtype)
@@ -527,9 +523,7 @@ def _fermi_free_energy_setup(
     for _ in range(diff_steps):
         density = _matrix_fermi(relative, shift, safe_kt, active)
         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
-        slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
-            -1
-        ) / safe_kt
+        slope = (count - (density * density).sum(dim=(-2, -1))) / safe_kt
         safe_slope = torch.where(
             slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
         )
@@ -643,15 +637,19 @@ def fermi_free_energy_matrix(
     active = setup.active
     entropy = _binary_entropy_matrix(setup.x, setup.occupation, active)
     identity = torch.diag_embed(active.to(torch.float64))
-    gap_response = _gap_electron_response(
-        setup.h,
-        setup.spectral,
-        active,
-        setup.below,
-        setup.gap_mask,
-        setup.safe_kt,
-    )
-    gap_term = _gap_relative_mu(setup, identity) @ gap_response
+    count_delta = setup.target - setup.target.detach()
+    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
+        gap_response = _gap_electron_response(
+            setup.h,
+            setup.spectral,
+            active,
+            setup.below,
+            setup.gap_mask,
+            setup.safe_kt,
+        )
+        gap_term = _gap_relative_mu(setup, identity) @ gap_response
+    else:
+        gap_term = torch.zeros_like(setup.x)
     q = _fermi_free_energy_closure(
         setup.safe_kt * entropy,
         gap_term,
@@ -707,17 +705,21 @@ def fermi_free_energy_trace(
         - attach_gradient(_trace_logcosh, x, half_tanh)
         - float(np.log(2.0)) * active.sum(-1).to(torch.float64)
     )
-    gap_response = _gap_electron_response(
-        setup.h,
-        setup.spectral,
-        active,
-        setup.below,
-        setup.gap_mask,
-        setup.safe_kt,
-    )
-    gap_term = (
-        _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
-    ).sum((-2, -1))
+    count_delta = setup.target - setup.target.detach()
+    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
+        gap_response = _gap_electron_response(
+            setup.h,
+            setup.spectral,
+            active,
+            setup.below,
+            setup.gap_mask,
+            setup.safe_kt,
+        )
+        gap_term = (
+            _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
+        ).sum((-2, -1))
+    else:
+        gap_term = torch.zeros_like(setup.shift)
     q = _fermi_free_energy_closure(
         setup.safe_kt * entropy,
         gap_term,
