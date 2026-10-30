@@ -43,6 +43,7 @@ from dxtb._src.typing.exceptions import (
 from dxtb._src.wavefunction.filling import FermiStatus
 
 from .anderson import AndersonMethod, setup_anderson_method_settings
+from .broyden import BroydenMethod, setup_broyden_method_settings
 from .core import CoreIndexData
 from .data import (
     PotentialLayout,
@@ -188,7 +189,9 @@ def resolve_full_scf_route(
             config.mixer,
             reason="negative Fermi maxiter retains legacy behavior",
         )
-    if integrals is not None and (integrals.hcore is None or integrals.overlap is None):
+    if integrals is not None and (
+        integrals.hcore is None or integrals.overlap is None
+    ):
         return FullSCFRoute(
             "legacy",
             config.scp_mode,
@@ -198,17 +201,7 @@ def resolve_full_scf_route(
     if config.maxiter < 0:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if config.mixer == labels.MIXER_BROYDEN:
-        message = (
-            "Broyden mixer is not implemented for SCF with full gradient " "tracking."
-        )
-        if config.strict:
-            raise NotImplementedError(message)
-        return FullSCFRoute(
-            "functional",
-            config.scp_mode,
-            labels.MIXER_ANDERSON,
-            warning=message + " Using Anderson mixer instead.",
-        )
+        return FullSCFRoute("functional", config.scp_mode, config.mixer)
     if config.mixer not in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
         raise ValueError(f"Unknown mixer '{config.mixer}'.")
     return FullSCFRoute("functional", config.scp_mode, config.mixer)
@@ -287,9 +280,11 @@ def _nonconvergence_message(
     config: ConfigSCF, route: FullSCFRoute, switched: bool
 ) -> str:
     """Format the legacy warning from configured Python values."""
-    mixer_label = (
-        "Simple" if route.effective_mixer == labels.MIXER_LINEAR else "Anderson"
-    )
+    mixer_label = {
+        labels.MIXER_LINEAR: "Simple",
+        labels.MIXER_ANDERSON: "Anderson",
+        labels.MIXER_BROYDEN: "Broyden",
+    }[route.effective_mixer]
     damp = config.damp_dynamic_factor if switched else config.damp
     return (
         f"SCF does not converge after {config.maxiter} cycles using "
@@ -331,8 +326,12 @@ def _prepare_solver(
         method = LinearMethod()
     elif config.mixer == labels.MIXER_ANDERSON:
         method = AndersonMethod(setup_anderson_method_settings(config))
+    elif config.mixer == labels.MIXER_BROYDEN:
+        method = BroydenMethod(setup_broyden_method_settings(config))
     else:
-        raise NotImplementedError(f"Unsupported functional mixer {config.mixer}.")
+        raise NotImplementedError(
+            f"Unsupported functional mixer {config.mixer}."
+        )
     return settings, SCFStrategy((SCFStage(method),))
 
 
@@ -450,18 +449,24 @@ def _padded_potential_projections(
                 dipole=(
                     None
                     if potential.dipole is None
-                    else torch.where(atom_mask.unsqueeze(-1), potential.dipole, 0.0)
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), potential.dipole, 0.0
+                    )
                 ),
                 quad=(
                     None
                     if potential.quad is None
-                    else torch.where(atom_mask.unsqueeze(-1), potential.quad, 0.0)
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), potential.quad, 0.0
+                    )
                 ),
             ),
             layout,
         )
 
-    problem = SCFProblem(inputs, SCFRepresentation.POTENTIAL, potential_layout=layout)
+    problem = SCFProblem(
+        inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+    )
     return project_state, problem.project_residual
 
 
@@ -480,7 +485,9 @@ def _padded_charge_projections(
                 dipole=(
                     None
                     if charges.dipole is None
-                    else torch.where(atom_mask.unsqueeze(-1), charges.dipole, 0.0)
+                    else torch.where(
+                        atom_mask.unsqueeze(-1), charges.dipole, 0.0
+                    )
                 ),
                 quad=(
                     None
@@ -518,7 +525,9 @@ def run_functional_full_eager(
     """
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
-        route = resolve_full_scf_route(config, interactions, ihelp, numbers, integrals)
+        route = resolve_full_scf_route(
+            config, interactions, ihelp, numbers, integrals
+        )
         legacy = solve_nonselfconsistent(
             numbers,
             interactions,
@@ -616,7 +625,9 @@ def run_prepared_functional_full(
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
     if route.kind != "functional":
-        raise ValueError("The prepared functional runner requires a functional route.")
+        raise ValueError(
+            "The prepared functional runner requires a functional route."
+        )
     if route.representation != config.scp_mode:
         raise ValueError(
             "The prepared functional route representation does not match "
@@ -668,7 +679,9 @@ def run_system_fixed_trip(
             occupation,
         )
 
-    route = resolve_full_scf_route(config, interactions, ihelp, numbers, integrals)
+    route = resolve_full_scf_route(
+        config, interactions, ihelp, numbers, integrals
+    )
     if route.kind != "functional":
         eager_result = run_functional_full_eager(
             numbers,
@@ -683,11 +696,17 @@ def run_system_fixed_trip(
             refocc,
         )
         if eager_result.legacy is None:
-            raise RuntimeError("Legacy System fallback did not return a result.")
+            raise RuntimeError(
+                "Legacy System fallback did not return a result."
+            )
         return eager_result.legacy
 
-    n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp, validate_spin=False)
-    guess = get_guess(numbers, positions, chrg, ihelp, config.guess, validate=False)
+    n0, occupation, nel = get_refocc(
+        refocc, chrg, spin, ihelp, validate_spin=False
+    )
+    guess = get_guess(
+        numbers, positions, chrg, ihelp, config.guess, validate=False
+    )
     result = run_prepared_functional_full(
         numbers,
         guess,
@@ -773,7 +792,9 @@ def run_prepared_functional_implicit(
         layout = None
         problem = SCFProblem(inputs, SCFRepresentation.FOCK)
     else:
-        raise ValueError(f"Unknown convergence target (SCP mode) '{representation}'.")
+        raise ValueError(
+            f"Unknown convergence target (SCP mode) '{representation}'."
+        )
 
     outcome = _solve_map(
         state,
@@ -805,7 +826,9 @@ def run_prepared_functional_implicit(
 
     # Preserve final-spectrum failure mapping. Historical trajectory status is
     # diagnostic and does not decide whether this physical root is acceptable.
-    _raise_failure_code(fermi_failure_code(final_status, like=outcome.converged))
+    _raise_failure_code(
+        fermi_failure_code(final_status, like=outcome.converged)
+    )
 
     if not bool(outcome.converged.all()):
         raise SCFConvergenceError(
@@ -813,7 +836,9 @@ def run_prepared_functional_implicit(
             "did not pass physical certification."
         )
 
-    adapter, parameters = _SCFMapTensorTree.prepare(inputs, representation, layout)
+    adapter, parameters = _SCFMapTensorTree.prepare(
+        inputs, representation, layout
+    )
     prepared = _prepare_scf_root(
         outcome,
         maxiter=config.maxiter,

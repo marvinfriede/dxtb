@@ -155,7 +155,8 @@ class Driver:
         io.OutputHandler.write_stdout("", v=5)
 
         # The analytical IR, Raman and dipole calculations need the full SCF
-        # with the Anderson mixer. Broyden is not supported in full SCF mode.
+        # with the Anderson mixer. Other FULL routes retain their configured
+        # method and use the functional router when eligible.
         scf = config.scf
         if args.ir is True or args.raman is True or args.dipole is True:
             scf = replace(
@@ -163,11 +164,6 @@ class Driver:
                 scf_mode=labels.SCF_MODE_FULL,
                 mixer=labels.MIXER_ANDERSON,
             )
-        elif (
-            scf.scf_mode == labels.SCF_MODE_FULL
-            and scf.mixer == labels.MIXER_BROYDEN
-        ):
-            scf = replace(scf, mixer=labels.MIXER_ANDERSON)
         config = replace(config, scf=scf)
 
         # first tensor when using CUDA takes a long time to initialize...

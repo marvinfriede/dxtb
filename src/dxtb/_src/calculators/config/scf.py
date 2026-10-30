@@ -293,9 +293,11 @@ class ConfigSCF:
         eager root preparation. Wrapping public ``System.singlepoint`` calls
         in a transform remains outside this mode and is owned by E6a. Legacy
         fallbacks remain for batches, unsupported interactions and legacy
-        solver overrides. The default/Broyden mixer also remains legacy-owned;
-        select Simple or Anderson for the functional physical-root route. See
-        :ref:`help_known_issues` for the compatibility limits.
+        solver overrides. Native functional Broyden is used for eligible
+        single-System charge, potential and Fock representations. Batches,
+        unsupported interactions, and legacy solver overrides remain
+        legacy-owned. See :ref:`help_known_issues` for the compatibility
+        limits.
     """
 
     scp_mode: int = defaults.SCP_MODE
