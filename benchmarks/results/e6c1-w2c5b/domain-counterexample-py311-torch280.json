@@ -1,0 +1,19 @@
+{
+  "case": "density-only shift loses a rounded occupation",
+  "purpose": "accepted direct-kernel domain limit; not a production SCF state",
+  "source_baseline_sha": "72234b537dfd41e91375cc42fa3ba7cd95596419",
+  "python": "3.11",
+  "torch": "2.8.0",
+  "dtype": "float64",
+  "orthogonalized_hamiltonian": [[1000.0]],
+  "electron_count": null,
+  "kT": 1.0,
+  "initial_shift": 0.0,
+  "chemical_potential_shift": 990.0,
+  "shift_ratio_abs": 990.0,
+  "candidate_guard": 9.010913347279288,
+  "initial_direct_matrix_fermi": [[0.0]],
+  "shifted_direct_matrix_fermi": [[4.5397868702390376e-05]],
+  "density_only_candidate": [["NaN"]],
+  "interpretation": "The initial rounded density contains no occupation information to recover the later direct-kernel value. This demonstrates a representational limitation, not reachability from a validated physical filling state."
+}

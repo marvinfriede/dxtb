@@ -1,0 +1,11 @@
+bringing up nodes...
+bringing up nodes...
+
+............                                                             [100%]
+=============================== warnings summary ===============================
+test/test_scf/test_e6c1_w2c5b_shift_contract.py::test_matrix_shift_candidate_respects_diff_steps[2-3]
+  /tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1/lib/python3.14/site-packages/torch/jit/_script.py:1485: FutureWarning: `torch.jit.script` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+12 passed, 1 warning in 34.76s
