@@ -23,6 +23,12 @@ from .anderson import (
     anderson_mix,
     setup_anderson_method_settings,
 )
+from .broyden import (
+    BroydenMethod,
+    BroydenMethodSettings,
+    BroydenState,
+    setup_broyden_method_settings,
+)
 from .certification import (
     SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
     SCF_CERTIFICATION_STANDARD,
@@ -129,6 +135,9 @@ from .strategy import SCFStage, SCFStrategy
 __all__ = [
     "AndersonMethod",
     "AndersonMethodSettings",
+    "BroydenMethod",
+    "BroydenMethodSettings",
+    "BroydenState",
     "EagerFullResult",
     "FullSCFRoute",
     "FunctionalCoreResult",
@@ -199,6 +208,7 @@ __all__ = [
     "scf_map",
     "setup_scf_inputs",
     "setup_anderson_method_settings",
+    "setup_broyden_method_settings",
     "setup_simple_solver_settings",
     "setup_solver_settings",
     "solve_scf_problem",

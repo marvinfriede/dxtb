@@ -67,10 +67,9 @@ def _use_functional_implicit_route(
 ) -> bool:
     """Resolve the opt-in implicit implementation without changing FULL.
 
-    The legacy implicit engine historically owns Broyden/default-mixer calls
-    and ignores ``ConfigSCF.mixer``. Keep those calls on that compatibility
-    route. Only explicit Simple and Anderson settings select the new
-    functional physical-root implementation.
+    Eligible single-System routes honor the configured functional method.
+    Batches, legacy overrides, and unsupported physical inputs retain the
+    established compatibility implementation.
     """
     from .functional.data import functional_scf_interactions_eligible
 
@@ -85,7 +84,8 @@ def _use_functional_implicit_route(
         and config.maxiter >= 0
         and integrals.hcore is not None
         and integrals.overlap is not None
-        and config.mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON)
+        and config.mixer
+        in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON, labels.MIXER_BROYDEN)
     )
 
 
