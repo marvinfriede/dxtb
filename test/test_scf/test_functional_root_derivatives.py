@@ -35,6 +35,8 @@ from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.functional import (
     SCFCharges,
     SCFMapResult,
+    SCFProblem,
+    SCFRepresentation,
     fock_initial_guess,
     fock_map,
 )
@@ -291,6 +293,8 @@ def _finalize_map_result(
     residual,
     trajectory_status=None,
     damping_state=None,
+    *,
+    root_x: Tensor,
 ):
     """Apply the configured representation's ordinary finalization."""
     representation = case.system.config.scf.scp_mode
@@ -303,6 +307,7 @@ def _finalize_map_result(
             residual,
             trajectory_status,
             damping_state,
+            root_x=root_x,
         )
     if representation == labels.SCP_MODE_POTENTIAL:
         _, layout = _initial_state(case, inputs)
@@ -316,6 +321,7 @@ def _finalize_map_result(
             residual,
             trajectory_status,
             damping_state,
+            root_x=root_x,
         )
     if representation == labels.SCP_MODE_FOCK:
         return finalize_scf_fock(
@@ -326,6 +332,7 @@ def _finalize_map_result(
             residual,
             trajectory_status,
             damping_state,
+            root_x=root_x,
         )
     raise ValueError(f"Unknown SCF representation: {representation}")
 
@@ -360,6 +367,12 @@ def _run_root(
         if config.scp_mode == labels.SCP_MODE_POTENTIAL
         else None
     )
+    representation = {
+        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+    }[config.scp_mode]
+    problem = SCFProblem(inputs, representation, layout)
     if config.mixer == labels.MIXER_ANDERSON:
         settings = setup_anderson_solver_settings(config, initial.dtype)
         outcome = _solve_map_anderson(
@@ -368,6 +381,7 @@ def _run_root(
             observed_map,
             state_projection=projection,
             eager=eager,
+            problem=problem,
         )
     elif config.mixer == labels.MIXER_LINEAR:
         settings = setup_simple_solver_settings(config, initial.dtype)
@@ -377,6 +391,7 @@ def _run_root(
             observed_map,
             state_projection=projection,
             eager=eager,
+            problem=problem,
         )
     else:
         raise ValueError(f"Unsupported reference mixer: {config.mixer}")
@@ -390,6 +405,7 @@ def _run_root(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        root_x=outcome.root_x,
     )
     root = outcome.root_x
     raw_residual = outcome.map_result.mapped_x - root
@@ -1348,7 +1364,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
         zero = state.new_zeros(())
         yes = torch.ones((), dtype=torch.bool, device=state.device)
         finalized = _finalize_map_result(
-            case, map_result, inputs, zero, yes, zero
+            case, map_result, inputs, zero, yes, zero, root_x=state
         )
         return (finalized.energy + finalized.fenergy).sum()
 
@@ -1395,6 +1411,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
             outcome.residual,
             outcome.trajectory_status,
             outcome.damping_state,
+            root_x=outcome.root_x,
         )
         return (finalized.energy + finalized.fenergy).sum()
 

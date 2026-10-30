@@ -541,6 +541,19 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         case.integrals,
     )
     assert bool(result.converged)
+    from test.test_scf.test_functional_root_derivatives import (
+        _initial_state,
+        _map_fn,
+    )
+
+    _, layout = _initial_state(case, case.inputs)
+    paired_map = _map_fn(case, case.inputs, layout)(result.root_x)
+    torch.testing.assert_close(paired_map.mapped_x, result.map_result.mapped_x)
+    root_gradient = torch.autograd.grad(
+        result.root_x.square().sum(), field, retain_graph=True
+    )[0]
+    assert torch.isfinite(root_gradient).all()
+    assert torch.linalg.vector_norm(root_gradient) > 0.0
     observable = result.energy.sum() + result.fenergy.sum()
     gradient = torch.autograd.grad(observable, field)[0][1]
 
@@ -1412,6 +1425,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
             outcome.residual,
             outcome.trajectory_status,
             outcome.damping_state,
+            root_x=state,
         )
         return (finalized.energy + finalized.fenergy).sum()
 
