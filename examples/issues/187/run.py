@@ -53,19 +53,15 @@ def main() -> int:
     calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts, **dd)
     assert calc.integrals.hcore is not None
 
-    from dxtb._src.exlibs.xitorch.optimize import minimize
-
-    def get_energy(positions) -> torch.Tensor:
-        return calc.get_energy(positions)
-
-    minpos = minimize(
-        get_energy,
-        positions,
-        method="gd",
-        maxiter=200,
-        step=1e-2,
-        verbose=True,
-    )
+    minpos = positions.detach().clone().requires_grad_(True)
+    for iteration in range(200):
+        energy = calc.get_energy(minpos)
+        (gradient,) = torch.autograd.grad(energy, minpos)
+        with torch.no_grad():
+            minpos -= 1e-2 * gradient
+        minpos.requires_grad_(True)
+        if iteration % 20 == 0:
+            print(f"step {iteration:3d}: E = {energy.item():.8f} Eh")
 
     print("\nInitial geometry:")
     print(positions.detach().numpy())

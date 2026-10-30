@@ -24,4 +24,3 @@ intensive than using the implicit function theorem.
 """
 
 from .default import SelfConsistentFieldFull
-from .singleshot import SelfConsistentFieldSingleShot

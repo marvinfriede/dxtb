@@ -116,15 +116,11 @@ def test_broyden_uses_controller_projected_proposal() -> None:
     torch.testing.assert_close(proposal, x + 0.25 * projected_delta)
 
 
-def test_broyden_low_rank_update_matches_vendored_first_method() -> None:
-    """Native low-rank inverse actions match xitorch BroydenFirst arithmetic."""
-    from dxtb._src.exlibs.xitorch._impls.optimize.root._jacobian import (
-        BroydenFirst,
-    )
-
+def test_broyden_low_rank_update_matches_dense_first_method_reference() -> None:
+    """Native low-rank updates match a test-local dense Broyden-first formula."""
     method = BroydenMethod(BroydenMethodSettings(max_rank=8))
-    jacobian = BroydenFirst(alpha=-0.5, max_rank=None)
     x = torch.tensor([0.4, -0.2, 0.6], dtype=torch.float64)
+    inverse = 0.5 * torch.eye(3, dtype=x.dtype)
     matrix = torch.tensor(
         [[0.35, 0.08, -0.02], [0.03, 0.27, 0.04], [0.01, -0.06, 0.31]],
         dtype=x.dtype,
@@ -143,17 +139,23 @@ def test_broyden_low_rank_update_matches_vendored_first_method() -> None:
         return f, new_x, next_state
 
     f, x_next, state = observe(x, None, 1)
-    jacobian.setup(x, f, lambda value: value)
-    expected_step = -jacobian.solve(f)
+    previous_x = x
+    previous_f = f
+    expected_step = -inverse @ f
     torch.testing.assert_close(
         x_next, x + 0.37 * expected_step, rtol=0.0, atol=1e-15
     )
 
     for step in range(2, 6):
         f_next, proposed, next_state = observe(x_next, state, step)
-        jacobian.update(x_next.clone(), f_next)
+        s = x_next - previous_x
+        y = f_next - previous_f
+        v = inverse.mT @ s
+        c = s - inverse @ y
+        d = v / torch.dot(y, v)
+        inverse = inverse + torch.outer(c, d)
         vector = torch.tensor([0.7, -0.4, 0.2], dtype=x.dtype)
-        expected_inverse_action = jacobian.solve(vector)
+        expected_inverse_action = inverse @ vector
         actual_inverse_action = _apply_inverse(next_state, vector, 0.5)
         torch.testing.assert_close(
             actual_inverse_action,
@@ -161,25 +163,25 @@ def test_broyden_low_rank_update_matches_vendored_first_method() -> None:
             rtol=1e-13,
             atol=1e-14,
         )
-        if hasattr(jacobian.Gm, "cns"):
-            correction_count = int(next_state.history_count)
-            torch.testing.assert_close(
-                next_state.c_history[:correction_count],
-                torch.stack(jacobian.Gm.cns),
-                rtol=1e-13,
-                atol=1e-14,
-            )
-            torch.testing.assert_close(
-                next_state.d_history[:correction_count],
-                torch.stack(jacobian.Gm.dns),
-                rtol=1e-13,
-                atol=1e-14,
-            )
-        expected_step = -jacobian.solve(f_next)
+        correction_count = int(next_state.history_count)
+        torch.testing.assert_close(
+            next_state.c_history[correction_count - 1],
+            c,
+            rtol=1e-13,
+            atol=1e-14,
+        )
+        torch.testing.assert_close(
+            next_state.d_history[correction_count - 1],
+            d,
+            rtol=1e-13,
+            atol=1e-14,
+        )
+        expected_step = -inverse @ f_next
         torch.testing.assert_close(
             proposed, x_next + 0.37 * expected_step, rtol=1e-13, atol=1e-14
         )
         assert int(next_state.history_count) == step - 1
+        previous_x, previous_f = x_next, f_next
         x_next, state = proposed, next_state
 
 

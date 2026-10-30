@@ -161,3 +161,32 @@ def has_memleak_tensor(
         _show_memsize(fcn, size0, num0, repeats, gccollect=gccollect)
 
     return size0 != size
+
+
+def has_tensor_memory_growth(
+    fcn: Callable,
+    repeats: int = 5,
+    gccollect: bool = False,
+    warmup: int = 2,
+) -> bool:
+    """Check for continuing tensor growth after one-time runtime setup.
+
+    Functional SCF and autograd may leave a small, stable set of tensors in
+    framework caches. This check distinguishes that fixed baseline from a leak
+    that grows with each repeated call.
+    """
+    for _ in range(warmup):
+        fcn()
+        if gccollect:
+            gc.collect()
+
+    previous = _get_tensor_memory(return_number_tensors=True)
+    for _ in range(repeats):
+        fcn()
+        if gccollect:
+            gc.collect()
+        current = _get_tensor_memory(return_number_tensors=True)
+        if current[0] > previous[0] or current[1] > previous[1]:
+            return True
+        previous = current
+    return False

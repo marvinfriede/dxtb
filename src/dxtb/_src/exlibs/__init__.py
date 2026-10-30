@@ -29,13 +29,12 @@ if TYPE_CHECKING:
     from . import libcint as libcint
     from . import pyscf as pyscf
     from . import scipy as scipy
-    from . import xitorch as xitorch
 else:
     import dxtb._src.loader.lazy as _lazy
 
     __getattr__, __dir__, __all__ = _lazy.attach_module(
         __name__,
-        ["libcint", "pyscf", "scipy", "xitorch"],
+        ["libcint", "pyscf", "scipy"],
     )
 
     del _lazy

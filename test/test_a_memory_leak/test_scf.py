@@ -30,7 +30,7 @@ from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
 from ..molecules import mols as samples
-from .util import garbage_collect, has_memleak_tensor
+from .util import garbage_collect, has_tensor_memory_growth
 
 opts = {"verbosity": 0, "maxiter": 50, "exclude": ["rep", "disp", "hal"]}
 repeats = 5
@@ -40,7 +40,9 @@ repeats = 5
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("run_gc", [False, True])
 @pytest.mark.parametrize("create_graph", [False, True])
-def test_xitorch(dtype: torch.dtype, run_gc: bool, create_graph: bool) -> None:
+def test_functional_implicit(
+    dtype: torch.dtype, run_gc: bool, create_graph: bool
+) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     def fcn():
@@ -72,7 +74,7 @@ def test_xitorch(dtype: torch.dtype, run_gc: bool, create_graph: bool) -> None:
 
     # run garbage collector to avoid leaks across other tests
     garbage_collect()
-    leak = has_memleak_tensor(fcn, gccollect=run_gc)
+    leak = has_tensor_memory_growth(fcn, gccollect=run_gc)
     garbage_collect()
 
     assert not leak, "Memory leak detected"
@@ -82,7 +84,7 @@ def test_xitorch(dtype: torch.dtype, run_gc: bool, create_graph: bool) -> None:
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("run_gc", [False, True])
 @pytest.mark.parametrize("create_graph", [False, True])
-def test_xitorch_pure(
+def test_functional_implicit_energy(
     dtype: torch.dtype, run_gc: bool, create_graph: bool
 ) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
@@ -109,7 +111,7 @@ def test_xitorch_pure(
 
     # run garbage collector to avoid leaks across other tests
     garbage_collect()
-    leak = has_memleak_tensor(fcn, gccollect=run_gc)
+    leak = has_tensor_memory_growth(fcn, gccollect=run_gc)
     garbage_collect()
 
     assert not leak, "Memory leak detected"
@@ -155,7 +157,7 @@ def skip_test_fulltracking(
 
     # run garbage collector to avoid leaks across other tests
     garbage_collect()
-    leak = has_memleak_tensor(fcn, gccollect=run_gc)
+    leak = has_tensor_memory_growth(fcn, gccollect=run_gc)
     garbage_collect()
 
     assert not leak, "Memory leak detected"
