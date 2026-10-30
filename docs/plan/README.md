@@ -31,6 +31,7 @@ API.
 | `18-scf-s2b.1-certification-hardening.md` | Restores full-diagnostic finite semantics, requires certification at implicit attachment, requires exact `root_x` at finalization, and makes profile tolerance inheritance explicit |
 | `19-scf-s3-linear-anderson-method-migration.md` | Migrates Anderson to `SCFMethod` and routes Linear/Anderson through the same one-stage strategy and controller |
 | `20-scf-s4-native-broyden.md` | Adds native limited-memory Broyden first-method updates, routes supported representations through the shared controller, and records rank/physical-case evidence |
+| `21-scf-s4-review-gate.md` | Records independent S4 equation/safeguard review, expanded rank and Fock evidence, the short-trajectory parity classification, and Python 3.10 dependency status |
 
 The design review referenced by the plan is not in the repository.
 
