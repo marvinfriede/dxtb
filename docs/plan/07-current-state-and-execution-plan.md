@@ -3490,6 +3490,21 @@ remains BLOCKED, and public Calculator routing is unchanged. See
 [`E6c1-W2c5-fermi-shift-reuse.md`](E6c1-W2c5-fermi-shift-reuse.md) and the
 versioned traces under `benchmarks/results/e6c1-w2c5/`.
 
+### W2c5a physical correction range and performance qualification
+
+W2c5a measured the physical Newton correction range in tmpda conformers 0/1,
+H2O GFN1, and diagnostic high-temperature GFN1/GFN2 cases. All sampled
+corrections were far inside the shift guard; sampled tmpda density spectra
+were within roundoff of `[0,1]`, and denominators were well conditioned. A
+matched one-conformer tmpda energy-response run showed close energy/gradient
+parity, lower elapsed time, and lower process peak RSS for the matrix-shift
+candidate. These are one-run, candidate-only measurements. The complete
+S0.1b numerical domain and generalized-overlap/padded free-energy path remain
+unqualified, so neither matrix-shift nor trace-squared was integrated into
+production. W2/W3 remain OPEN, E6broute remains BLOCKED, and public routing is
+unchanged. See [`E6c1-W2c5a-physical-shift-performance.md`](E6c1-W2c5a-physical-shift-performance.md)
+and `benchmarks/results/e6c1-w2c5a/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

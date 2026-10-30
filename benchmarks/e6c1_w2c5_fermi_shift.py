@@ -190,24 +190,36 @@ def _matmul_slope(density: torch.Tensor, kt: torch.Tensor) -> torch.Tensor:
 
 
 def _shift_density(
-    density: torch.Tensor, delta: torch.Tensor, kt: torch.Tensor
+    density: torch.Tensor,
+    delta: torch.Tensor,
+    kt: torch.Tensor,
+    active: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Apply a scalar chemical-potential shift to an invariant Fermi matrix."""
+    """Apply a guarded scalar shift after sanitizing invalid lane operands."""
     max_ratio = -0.25 * torch.log(
         density.new_tensor(torch.finfo(density.dtype).eps)
     )
-    ratio = -delta / kt
-    valid = (
-        torch.isfinite(density).all(dim=(-1, -2))
-        & torch.isfinite(ratio)
-        & torch.isfinite(kt)
-        & (kt > 0.0)
-        & (ratio.abs() <= max_ratio)
-    )
+    kt_ok = torch.isfinite(kt) & (kt > 0.0)
+    delta_ok = torch.isfinite(delta)
+    safe_kt = torch.where(kt_ok, kt, torch.ones_like(kt))
+    in_range = delta_ok & kt_ok & (delta.abs() <= max_ratio * safe_kt)
+    safe_delta = torch.where(in_range, delta, torch.zeros_like(delta))
+    ratio = -safe_delta / safe_kt
+    ratio_finite = torch.isfinite(ratio)
+    safe_ratio = torch.where(ratio_finite, ratio, torch.zeros_like(ratio))
+    if active is None:
+        active_pair = torch.ones_like(density, dtype=torch.bool)
+    else:
+        active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    density_finite = torch.where(
+        active_pair, torch.isfinite(density), torch.ones_like(active_pair)
+    ).all(dim=(-1, -2))
+    valid = in_range & ratio_finite & density_finite
     safe_density = torch.where(
-        valid[..., None, None], density, torch.zeros_like(density)
+        valid[..., None, None] & active_pair,
+        density,
+        torch.zeros_like(density),
     )
-    safe_ratio = torch.where(valid, ratio, torch.zeros_like(ratio))
     eye = torch.eye(
         density.shape[-1], dtype=density.dtype, device=density.device
     ).expand(density.shape)
@@ -261,6 +273,7 @@ def _candidate_free_energy_trace(
                 previous_density,
                 shift - previous_shift,
                 temperature,
+                active,
             )
         previous_density = density
         previous_shift = shift
@@ -352,7 +365,7 @@ def _candidate_density(
             (target - density.diagonal(dim1=-2, dim2=-1).sum(-1)) / safe_slope,
             0.0,
         )
-        density = _shift_density(density, correction, safe_kt)
+        density = _shift_density(density, correction, safe_kt, active)
 
     eye_channel = eye * active.unsqueeze(-1).to(dtype)
     density = torch.where(empty[..., None, None], 0.0, density)
