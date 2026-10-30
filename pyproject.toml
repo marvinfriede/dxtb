@@ -54,7 +54,6 @@ exclude = ["./src/dxtb/exlibs/*"]
 plugins = ["covdefaults"]
 source = ["./src"]
 omit = [
-  "./src/dxtb/_src/exlibs/xitorch/*",
   "./src/dxtb/_src/exlibs/scipy/*",
   "./src/dxtb/_src/typing/*",
   "./src/dxtb/components/*",
