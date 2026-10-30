@@ -327,7 +327,9 @@ def apply_functional_full_policy(
             bool(result.diagnostics.dynamic_damping_switched),
         )
         if config.force_convergence:
-            raise SCFConvergenceError(message)
+            raise SCFConvergenceError(
+                f"{message} The physical SCF root was not certified."
+            )
         OutputHandler.warn(message, SCFConvergenceWarning)
 
     return functional_core_result(result)
@@ -818,13 +820,18 @@ def run_prepared_functional_implicit(
         state = pack_charges(charges, inputs.charge_layout)
         layout = None
         map_fn = lambda x: scf_map(x, inputs)
+        problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
     elif representation == labels.SCP_MODE_POTENTIAL:
         state, layout = potential_initial_guess(charges, inputs)
         map_fn = lambda x: potential_map(x, inputs, layout)
+        problem = SCFProblem(
+            inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+        )
     elif representation == labels.SCP_MODE_FOCK:
         state = fock_initial_guess(charges, inputs)
         layout = None
         map_fn = lambda x: fock_map(x, inputs)
+        problem = SCFProblem(inputs, SCFRepresentation.FOCK)
     else:
         raise ValueError(
             f"Unknown convergence target (SCP mode) '{representation}'."
@@ -841,6 +848,7 @@ def run_prepared_functional_implicit(
                 else lambda value: _project_potential_padding(value, layout)
             ),
             eager=True,
+            problem=problem,
         )
     else:
         outcome = _solve_map_anderson(
@@ -853,6 +861,7 @@ def run_prepared_functional_implicit(
                 else lambda value: _project_potential_padding(value, layout)
             ),
             eager=True,
+            problem=problem,
         )
 
     # Check the selected raw result and the representation's final spectrum
@@ -869,13 +878,17 @@ def run_prepared_functional_implicit(
             outcome.map_result.mapped_x, inputs
         ).fermi_status
 
-    # Preserve the established eager Fermi failure mapping before rejecting
-    # any remaining outer-root nonconvergence in the prepared-root boundary.
-    if outcome.trajectory_status is not None:
-        _raise_failure_code(outcome.trajectory_status.first_failure)
+    # Preserve final-spectrum failure mapping. Historical trajectory status is
+    # diagnostic and does not decide whether this physical root is acceptable.
     _raise_failure_code(
         fermi_failure_code(final_status, like=outcome.converged)
     )
+
+    if not bool(outcome.converged.all()):
+        raise SCFConvergenceError(
+            "Cannot prepare implicit differentiation for an SCF state that "
+            "did not pass physical certification."
+        )
 
     adapter, parameters = _SCFMapTensorTree.prepare(
         inputs, representation, layout
@@ -883,8 +896,8 @@ def run_prepared_functional_implicit(
     prepared = _prepare_scf_root(
         outcome,
         maxiter=config.maxiter,
-        x_atol=config.x_atol,
-        x_atol_max=config.x_atol_max,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
         final_valid=fermi_status_ok(final_status, like=outcome.converged),
         raw_map=adapter,
         parameters=parameters,
@@ -901,6 +914,9 @@ def run_prepared_functional_implicit(
             prepared.residual,
             prepared.trajectory_status,
             prepared.damping_state,
+            certification=prepared.certification,
+            terminal_failed=torch.zeros_like(prepared.converged),
+            root_x=prepared.root_x,
         )
     if representation == labels.SCP_MODE_POTENTIAL:
         assert layout is not None
@@ -913,6 +929,9 @@ def run_prepared_functional_implicit(
             prepared.residual,
             prepared.trajectory_status,
             prepared.damping_state,
+            certification=prepared.certification,
+            terminal_failed=torch.zeros_like(prepared.converged),
+            root_x=prepared.root_x,
         )
     return finalize_scf_fock(
         attached_map_result,
@@ -922,4 +941,7 @@ def run_prepared_functional_implicit(
         prepared.residual,
         prepared.trajectory_status,
         prepared.damping_state,
+        certification=prepared.certification,
+        terminal_failed=torch.zeros_like(prepared.converged),
+        root_x=prepared.root_x,
     )

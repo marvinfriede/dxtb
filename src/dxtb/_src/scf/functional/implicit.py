@@ -160,6 +160,7 @@ class _PreparedSCFRoot:
     residual: Tensor
     trajectory_status: object | None
     damping_state: object
+    certification: object | None
     raw_map: RawMap
     parameters: tuple[Tensor, ...]
 
@@ -186,15 +187,6 @@ def _prepare_scf_root(
             "Implicit physical-root differentiation requires maxiter > 0."
         )
     valid = outcome.converged.all() & final_valid
-    status = outcome.trajectory_status
-    if status is not None:
-        valid = (
-            valid
-            & status.fermi_converged.all()
-            & status.electron_count_ok.all()
-            & ~status.invalid_temperature.any()
-            & ~status.too_many_electrons.any()
-        )
 
     # Re-evaluate the raw physical map with the exact tensors that will be
     # passed to the implicit attachment. This catches a root prepared for a
@@ -229,6 +221,7 @@ def _prepare_scf_root(
         residual=outcome.residual,
         trajectory_status=outcome.trajectory_status,
         damping_state=outcome.damping_state,
+        certification=getattr(outcome, "certification", None),
         raw_map=raw_map,
         parameters=parameters,
     )
