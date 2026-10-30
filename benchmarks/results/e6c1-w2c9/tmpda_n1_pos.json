@@ -1,0 +1,94 @@
+{
+  "conformer_indices": [
+    0
+  ],
+  "environment": {
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "git_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "hostname": "m199",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python_version": "3.11.15",
+    "torch_num_interop_threads": 1,
+    "torch_num_threads": 1,
+    "torch_version": "2.8.0+cpu"
+  },
+  "gradient_mode": "positions-only",
+  "lanes": [
+    {
+      "conformer_index": 0,
+      "converged": true,
+      "electron_count_error": 0.0,
+      "energy_eh": -29.758437462176317,
+      "fenergy_eh": -0.0013913116544088532,
+      "iterations": 66,
+      "lane_index": 0,
+      "pos_grad_max_abs": 11.468045151276947,
+      "pos_grad_norm": 41.29473633572573,
+      "raw_residual_l2": 6.012016343937147e-09,
+      "raw_residual_max": 4.355969696057116e-09,
+      "scf_eh": -133.78432456395782,
+      "solver_residual": [
+        6.012016343937147e-09,
+        4.355969696057116e-09
+      ]
+    }
+  ],
+  "linear_response": {
+    "operator_counts": {
+      "linearize": 13,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "operator_seconds": {
+      "linearize": 18.706340519012883,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "solves": [
+      {
+        "iterations": [
+          5
+        ],
+        "pre_solver_s": 1.4558238240424544,
+        "relative_residual": [
+          9.946068872576431e-07
+        ],
+        "residual_norm": [
+          3.5780256233652264e-13
+        ],
+        "rhs_norm": [
+          3.5974269525024657e-07
+        ],
+        "solver_duration_s": 20.128198344027624,
+        "status": [
+          0
+        ]
+      }
+    ]
+  },
+  "memory_mb": {
+    "peak_rss_mb": 1422.20703125,
+    "rss_after_backward_mb": 1293.65234375,
+    "rss_after_forward_mb": 1225.47265625,
+    "rss_after_root_prep_mb": 468.47265625,
+    "rss_after_setup_mb": 322.7109375
+  },
+  "model_parameters": {
+    "connected_nonzero": 0,
+    "connected_zero": 0,
+    "disconnected": 0,
+    "floating_total": 2261,
+    "trainable_total": 0
+  },
+  "nconformers": 1,
+  "stage": "batch",
+  "timings_s": {
+    "attach_finalize_s": 1.6824020470958203,
+    "backward_s": 24.74666748312302,
+    "root_prep_s": 70.87774596898817,
+    "setup_s": 0.2186144411098212,
+    "total_s": 97.53268561302684
+  }
+}

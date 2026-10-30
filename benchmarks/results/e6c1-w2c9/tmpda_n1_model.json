@@ -1,0 +1,94 @@
+{
+  "conformer_indices": [
+    0
+  ],
+  "environment": {
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "git_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "hostname": "m199",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python_version": "3.11.15",
+    "torch_num_interop_threads": 1,
+    "torch_num_threads": 1,
+    "torch_version": "2.8.0+cpu"
+  },
+  "gradient_mode": "positions-and-model",
+  "lanes": [
+    {
+      "conformer_index": 0,
+      "converged": true,
+      "electron_count_error": 0.0,
+      "energy_eh": -29.758437462176317,
+      "fenergy_eh": -0.0013913116544088532,
+      "iterations": 66,
+      "lane_index": 0,
+      "pos_grad_max_abs": 11.468045151276947,
+      "pos_grad_norm": 41.29473633572573,
+      "raw_residual_l2": 6.012016343937147e-09,
+      "raw_residual_max": 4.355969696057116e-09,
+      "scf_eh": -133.78432456395782,
+      "solver_residual": [
+        6.012016343937147e-09,
+        4.355969696057116e-09
+      ]
+    }
+  ],
+  "linear_response": {
+    "operator_counts": {
+      "linearize": 13,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "operator_seconds": {
+      "linearize": 18.740993262035772,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "solves": [
+      {
+        "iterations": [
+          5
+        ],
+        "pre_solver_s": 3.815569012891501,
+        "relative_residual": [
+          9.946068872576431e-07
+        ],
+        "residual_norm": [
+          3.5780256233652264e-13
+        ],
+        "rhs_norm": [
+          3.5974269525024657e-07
+        ],
+        "solver_duration_s": 20.112994762137532,
+        "status": [
+          0
+        ]
+      }
+    ]
+  },
+  "memory_mb": {
+    "peak_rss_mb": 1667.18359375,
+    "rss_after_backward_mb": 1454.86328125,
+    "rss_after_forward_mb": 1453.14453125,
+    "rss_after_root_prep_mb": 473.65234375,
+    "rss_after_setup_mb": 323.0
+  },
+  "model_parameters": {
+    "connected_nonzero": 73,
+    "connected_zero": 4,
+    "disconnected": 2184,
+    "floating_total": 2261,
+    "trainable_total": 2261
+  },
+  "nconformers": 1,
+  "stage": "batch",
+  "timings_s": {
+    "attach_finalize_s": 2.4369766290765256,
+    "backward_s": 28.541619245894253,
+    "root_prep_s": 71.21251906803809,
+    "setup_s": 0.2195034478791058,
+    "total_s": 102.41879623802379
+  }
+}

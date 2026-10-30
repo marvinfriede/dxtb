@@ -1,0 +1,23 @@
+{
+  "baseline_bwd_grad_median_s": 5.0256802251096815,
+  "baseline_fwd_grad_median_s": 2.6134286778979003,
+  "baseline_no_grad_median_s": 2.587483525974676,
+  "environment": {
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "git_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "hostname": "m199",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python_version": "3.11.15",
+    "torch_num_interop_threads": 1,
+    "torch_num_threads": 1,
+    "torch_version": "2.8.0+cpu"
+  },
+  "gradient_max_abs_diff": 0.0,
+  "optimized_bwd_grad_median_s": 2.778235943056643,
+  "optimized_fwd_grad_median_s": 2.3089513981249183,
+  "optimized_no_grad_median_s": 2.0981844740454108,
+  "rss_peak_mb": 2371.1484375,
+  "stage": "kernel_ab"
+}

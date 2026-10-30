@@ -3586,6 +3586,54 @@ production routing or API change was made. See
 [`E6c1-W2c8-functional-scf-architecture-decision.md`](E6c1-W2c8-functional-scf-architecture-decision.md)
 and `benchmarks/results/e6c1-w2c8/`.
 
+### W2c9 converged-root conformer batch orchestration and spectral optimization
+
+W2c9 implements the internal converged-root conformer batch orchestration layer
+(`prepare_converged_root_batch` and `evaluate_converged_root_batch`) in
+`src/dxtb/_src/calculators/batch_implicit.py` and optimizes
+`src/dxtb/_src/scf/functional/spectral.py` by guarding
+`_gap_electron_response` with `_tracks_derivatives(nel) or _tracks_derivatives(count_delta)`
+(including outer `Jvp` interpreter levels), unifying `fermi_density_matrix` with
+`_fermi_free_energy_setup`, and replacing the Newton-slope `density @ density`
+matrix product with the symmetric trace-square identity while keeping
+`spectral.py` 100% pure functional and stateless. In the isolated `tmpda`
+conformer-0 `scf_map + free_energy_from_spectral` A/B benchmark
+(`kernel_ab.json`),
+`no_grad` time fell by 18.91% (`2.5875 s` to `2.0982 s`, 1.23x),
+forward-grad time fell by 11.65% (`2.6134 s` to `2.3090 s`, 1.13x), and
+backward-grad time fell by 44.72% (`5.0257 s` to `2.7782 s`, 1.81x) with
+`0.0` maximum gradient difference.
+
+In isolated single-threaded `tmpda` conformer batch benchmarks (`py3.11-torch2.8.0`):
+- 1 conformer (`positions-only`): `97.53 s`, `1.39 GiB` peak RSS (down from
+  W2c7's `143.94 s` / `2.51 GiB`, 32.24% faster and 44.61% lower RSS).
+- 1 conformer (`positions-and-model`): `102.42 s`, `1.63 GiB` peak RSS.
+- 2 conformers (`positions-only`): `239.21 s`, `2.31 GiB` peak RSS (down from
+  W2c7's `429.36 s` / `3.62 GiB`, 44.29% faster / 1.80x speedup and 36.17%
+  lower RSS); reversed order `[1, 0]` completed in `241.46 s` / `2.34 GiB` with
+  `< 3e-13 Eh` energy and `< 3e-14` gradient norm parity.
+- 2 conformers (`positions-and-model`): `251.91 s`, `2.86 GiB` peak RSS (down
+  from W2c7's `470.02 s` / `4.31 GiB`, 46.40% faster / 1.87x speedup and 33.69%
+  lower RSS); serial/cross-lane parity verified `cross_lane_pos_grad_max_abs = 0.0`,
+  `pos_grad_max_abs_diff = 6.35e-14`, and `model_param_grad_max_abs_diff = 1.56e-13`
+  across all 2,261 leaves (`73` connected non-zero, `4` connected zero, `2,184`
+  disconnected).
+- 4 conformers (`positions-only`): `499.24 s`, `5.60 GiB` peak RSS; all four
+  lanes converged (`66, 96, 112, 72` SCF iterations; `5, 7, 6, 7` BiCGSTAB
+  iterations) with exact parity on lanes 0 and 1.
+
+Focused W2c9/spectral/implicit suites pass across all five supported
+`tad-mctc 0.11.3` environments (`216 passed` per environment), and the 15-module
+E7a/E6bcompat/E6a/E6bimpl regression gate passes (`261 passed`) on both
+`py3.11-torch2.8.0` and `py3.14-torch2.14.1`. Because simultaneous 4-lane mapped
+evaluation already peaks at `5.60 GiB` RSS, an unchunked 8-conformer run is
+projected to exceed `11 GiB` RSS and was not launched. Public
+`System.singlepoint()` semantics and `Calculator` routing remain unchanged; W2
+and W3 remain OPEN and E6broute remains BLOCKED pending project-owner approval
+of the explicit batch API contract and chunked lane evaluation. See
+[`E6c1-W2c9-implicit-batch-integration.md`](E6c1-W2c9-implicit-batch-integration.md)
+and `benchmarks/results/e6c1-w2c9/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility

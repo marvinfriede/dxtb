@@ -1,0 +1,118 @@
+{
+  "conformer_indices": [
+    0,
+    1
+  ],
+  "environment": {
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "git_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "hostname": "m199",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python_version": "3.11.15",
+    "torch_num_interop_threads": 1,
+    "torch_num_threads": 1,
+    "torch_version": "2.8.0+cpu"
+  },
+  "gradient_mode": "positions-and-model",
+  "lanes": [
+    {
+      "conformer_index": 0,
+      "converged": true,
+      "electron_count_error": 0.0,
+      "energy_eh": -29.758437462176317,
+      "fenergy_eh": -0.0013913116544088532,
+      "iterations": 66,
+      "lane_index": 0,
+      "pos_grad_max_abs": 11.468045151276947,
+      "pos_grad_norm": 41.29473633572573,
+      "raw_residual_l2": 6.012016343937147e-09,
+      "raw_residual_max": 4.355969696057116e-09,
+      "scf_eh": -133.78432456395782,
+      "solver_residual": [
+        6.012016343937147e-09,
+        4.355969696057116e-09
+      ]
+    },
+    {
+      "conformer_index": 1,
+      "converged": true,
+      "electron_count_error": 0.0,
+      "energy_eh": -11.31264270383538,
+      "fenergy_eh": -0.00188699280154335,
+      "iterations": 96,
+      "lane_index": 1,
+      "pos_grad_max_abs": 20.574916404715342,
+      "pos_grad_norm": 66.29496021458891,
+      "raw_residual_l2": 6.4161492065701126e-09,
+      "raw_residual_max": 2.7393677326514876e-09,
+      "scf_eh": -130.68137490060238,
+      "solver_residual": [
+        6.4161492065701126e-09,
+        2.7393677326514876e-09
+      ]
+    }
+  ],
+  "linear_response": {
+    "operator_counts": {
+      "linearize": 17,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "operator_seconds": {
+      "linearize": 49.405760570429265,
+      "matvec": 0,
+      "rlinearize": 0
+    },
+    "solves": [
+      {
+        "iterations": [
+          5,
+          7
+        ],
+        "pre_solver_s": 7.5605029698926955,
+        "relative_residual": [
+          9.946068872576431e-07,
+          3.1968838159797707e-07
+        ],
+        "residual_norm": [
+          3.5780256233652264e-13,
+          9.241851537341343e-14
+        ],
+        "rhs_norm": [
+          3.5974269525024657e-07,
+          2.890893779481607e-07
+        ],
+        "solver_duration_s": 52.2006056511309,
+        "status": [
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "memory_mb": {
+    "peak_rss_mb": 2929.8203125,
+    "rss_after_backward_mb": 2562.76171875,
+    "rss_after_forward_mb": 1866.1171875,
+    "rss_after_root_prep_mb": 567.9765625,
+    "rss_after_setup_mb": 324.99609375
+  },
+  "model_parameters": {
+    "connected_nonzero": 73,
+    "connected_zero": 4,
+    "disconnected": 2184,
+    "floating_total": 2261,
+    "trainable_total": 2261
+  },
+  "nconformers": 2,
+  "stage": "batch",
+  "timings_s": {
+    "attach_finalize_s": 4.110337608959526,
+    "backward_s": 70.33607428404503,
+    "root_prep_s": 177.21558726602234,
+    "setup_s": 0.23595941392704844,
+    "total_s": 251.9063982530497
+  }
+}
