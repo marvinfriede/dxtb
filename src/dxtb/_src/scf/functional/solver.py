@@ -1520,9 +1520,10 @@ def finalize_scf(
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
     trace: SCFSolverTrace | None = None,
+    *,
+    root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
-    root_x: Tensor | None = None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -1541,7 +1542,7 @@ def finalize_scf(
         final_potential=final_potential,
         energy=energy,
         fenergy=fenergy,
-        root_x=(map_result.mapped_x if root_x is None else root_x),
+        root_x=root_x,
         iterations=iterations,
         converged=converged,
         residual=residual,
@@ -1586,9 +1587,10 @@ def finalize_scf_potential(
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
     trace: SCFSolverTrace | None = None,
+    *,
+    root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
-    root_x: Tensor | None = None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra representation conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -1607,7 +1609,7 @@ def finalize_scf_potential(
         final_potential=final_potential,
         energy=energy,
         fenergy=fenergy,
-        root_x=(map_result.mapped_x if root_x is None else root_x),
+        root_x=root_x,
         iterations=iterations,
         converged=converged,
         residual=residual,
@@ -1651,9 +1653,10 @@ def finalize_scf_fock(
     trajectory_status: SCFTrajectoryStatus | None,
     damping_state: DampingState | None = None,
     trace: SCFSolverTrace | None = None,
+    *,
+    root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
-    root_x: Tensor | None = None,
 ) -> SCFSolveResult:
     """Finalize Fock mode from one spectrum of the selected mapped matrix."""
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
@@ -1671,7 +1674,7 @@ def finalize_scf_fock(
         final_potential=final_potential,
         energy=energy,
         fenergy=fenergy,
-        root_x=(map_result.mapped_x if root_x is None else root_x),
+        root_x=root_x,
         iterations=iterations,
         converged=converged,
         residual=residual,

@@ -186,7 +186,19 @@ def _prepare_scf_root(
         raise SCFConvergenceError(
             "Implicit physical-root differentiation requires maxiter > 0."
         )
-    valid = outcome.converged.all() & final_valid
+    certification = getattr(outcome, "certification", None)
+    if certification is None:
+        raise SCFConvergenceError(
+            "Implicit physical-root differentiation requires an "
+            "authoritatively certified SCF root."
+        )
+    converged = outcome.converged.all()
+    certified = certification.certified.all()
+    if bool(converged) != bool(certified):
+        raise RuntimeError(
+            "SCF outcome convergence and physical certification disagree."
+        )
+    valid = converged & certified & final_valid
 
     # Re-evaluate the raw physical map with the exact tensors that will be
     # passed to the implicit attachment. This catches a root prepared for a
