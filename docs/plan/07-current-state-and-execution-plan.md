@@ -3540,6 +3540,30 @@ Calculator routing is unchanged. See
 [`E6c1-W2c6-tanh-doubling-solve-optimization.md`](E6c1-W2c6-tanh-doubling-solve-optimization.md)
 and `benchmarks/results/e6c1-w2c6/`.
 
+### W2c7 mapped performance certification
+
+W2c7 reran the unpatched W2c6 production recurrence on the private
+converged-root route in three fresh one-conformer processes and compared it
+with three fresh processes using the pre-W2c6 identity-RHS recurrence. The
+median total fell from 164.62 s to 143.94 s (12.56%); energy, free-energy
+field, force, convergence, and response-solve results agreed. The two-lane
+private mapped implicit route also passed independent root checks, per-lane
+position-gradient comparisons, zero cross-lane blocks, and shared Model
+gradient accumulation over 2,261 leaves. Its isolated position-only peak was
+3.62 GiB; the serial parity process peaked at 4.51 GiB.
+
+This does not clear W2. The authoritative public `vmap(System.singlepoint)`
+route remains fixed-trip unrolled differentiation and executes each
+configured raw-map trip after convergence is masked. Its direct one-conformer
+one-trip energy/force run did not return within a bounded 180 s. The
+private implicit-root route has different convergence and derivative
+semantics and is not a valid substitute for the documented W2 route. No
+four/eight-lane public run was launched. W2 remains **OPEN — architecture
+review required**; W3 remains OPEN, E6broute remains BLOCKED, and public
+Calculator routing is unchanged. See
+[`E6c1-W2c7-mapped-performance-certification.md`](E6c1-W2c7-mapped-performance-certification.md)
+and `benchmarks/results/e6c1-w2c7/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
