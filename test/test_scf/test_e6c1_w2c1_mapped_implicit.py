@@ -167,6 +167,7 @@ def _evaluate_lane(
         converged,
         residual,
         trajectory_status,
+        root_x=attached,
     )
     return result.energy.sum(), result.fenergy.sum()
 
@@ -483,6 +484,7 @@ def test_two_geometry_roots_match_independent_serial_energy_and_derivatives() ->
                 torch.as_tensor(lane_outcome.converged),
                 lane_outcome.reported_residual,
                 status,
+                root_x=attached,
             )
             return finalized.energy.sum() + finalized.fenergy.sum()
 
@@ -630,6 +632,7 @@ def test_implicit_root_retains_finite_temperature_free_energy_responses() -> (
             outcome.outcome.residual,
             outcome.outcome.trajectory_status,
             outcome.outcome.damping_state,
+            root_x=attached,
         )
         return finalized.energy.sum(), finalized.fenergy.sum()
 
@@ -784,6 +787,7 @@ def test_implicit_root_retains_finite_temperature_free_energy_responses() -> (
         serial_outcome.outcome.residual,
         serial_outcome.outcome.trajectory_status,
         serial_outcome.outcome.damping_state,
+        root_x=serial_attached,
     )
     serial_physical_total = (
         serial_finalized.energy.sum() + serial_finalized.fenergy.sum()

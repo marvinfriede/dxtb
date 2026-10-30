@@ -565,6 +565,7 @@ def _no2_functional_input(driver: str = "pytorch"):
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        root_x=outcome.root_x,
     )
     # The map's selected state is the solver state. Public Result.potential is
     # deliberately not used here: it is evaluated after this state is mapped.
@@ -621,6 +622,7 @@ def _functional_solve_at(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        root_x=outcome.root_x,
     )
     return outcome, inputs, layout, finalized
 

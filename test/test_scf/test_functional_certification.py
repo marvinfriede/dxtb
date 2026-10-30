@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from inspect import Parameter, signature
 
 import pytest
 import torch
@@ -63,6 +64,9 @@ from dxtb._src.scf.functional.solver import (
     _resolve_tolerance,
     _solve_map,
     _solve_map_control,
+    finalize_scf,
+    finalize_scf_fock,
+    finalize_scf_potential,
     setup_simple_solver_settings,
     solve_scf_simple,
 )
@@ -451,6 +455,107 @@ def test_solver_diagnostics_pair_exact_root_and_map_result() -> None:
     assert torch.equal(result.converged, altered_history.converged)
 
 
+@pytest.mark.parametrize(
+    "representation",
+    [
+        SCFRepresentation.CHARGE,
+        SCFRepresentation.POTENTIAL,
+        SCFRepresentation.FOCK,
+    ],
+    ids=("charge", "potential", "fock"),
+)
+def test_fixed_trip_certification_matches_selected_root_diagnostics(
+    representation: SCFRepresentation,
+) -> None:
+    """Final diagnostics agree with controller bits for the selected pair."""
+    case, problem, state = _problem_and_state(
+        representation=representation, sample_name="H2"
+    )
+    assert (
+        signature(finalize_scf).parameters["root_x"].default is Parameter.empty
+    )
+    assert (
+        signature(finalize_scf_potential).parameters["root_x"].default
+        is Parameter.empty
+    )
+    assert (
+        signature(finalize_scf_fock).parameters["root_x"].default
+        is Parameter.empty
+    )
+    outcome = _solve_map(
+        state.x,
+        SCFSolverSettings(100, False, 0.2, 1.0e-8, 1.0e-8),
+        problem.map,
+        problem=problem,
+    )
+    assert outcome.certification is not None
+    assert torch.equal(outcome.converged, outcome.certification.certified)
+    assert not bool(outcome.terminal_failed)
+
+    if representation is SCFRepresentation.CHARGE:
+        result = finalize_scf(
+            outcome.map_result,
+            case.inputs,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            root_x=outcome.root_x,
+            certification=outcome.certification,
+        )
+    elif representation is SCFRepresentation.POTENTIAL:
+        assert problem.potential_layout is not None
+        result = finalize_scf_potential(
+            outcome.map_result,
+            case.inputs,
+            problem.potential_layout,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            root_x=outcome.root_x,
+            certification=outcome.certification,
+        )
+    else:
+        result = finalize_scf_fock(
+            outcome.map_result,
+            case.inputs,
+            outcome.iterations,
+            outcome.converged,
+            outcome.residual,
+            outcome.trajectory_status,
+            root_x=outcome.root_x,
+            certification=outcome.certification,
+        )
+    assert result.diagnostics is not None
+    assert result.diagnostics.certification is not None
+    assert torch.equal(
+        result.converged,
+        result.diagnostics.certification.result.certified,
+    )
+    paired = problem.evaluate(result.root_x)
+    torch.testing.assert_close(
+        paired.map_result.mapped_x, result.map_result.mapped_x
+    )
+
+
+def test_fixed_trip_budget_exhaustion_retains_uncertified_final_diagnostic() -> (
+    None
+):
+    """Budget exhaustion cannot become convergence through final recompute."""
+    case, problem, state = _problem_and_state(sample_name="H2O")
+    outcome = _solve_map(
+        state.x,
+        SCFSolverSettings(1, False, 0.2, 1.0e-12, 1.0e-12),
+        problem.map,
+        problem=problem,
+    )
+    assert outcome.certification is not None
+    assert not bool(outcome.converged)
+    assert not bool(outcome.certification.certified)
+    assert not bool(outcome.terminal_failed)
+
+
 def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
     None
 ):
@@ -486,6 +591,18 @@ def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
     prepared = _prepare_scf_root(outcome, **kwargs)
     prepared_with_history = _prepare_scf_root(altered, **kwargs)
     torch.testing.assert_close(prepared.root_x, prepared_with_history.root_x)
+
+    with pytest.raises(SCFConvergenceError, match="authoritatively certified"):
+        _prepare_scf_root(replace(outcome, certification=None), **kwargs)
+    assert outcome.certification is not None
+    false_certification = replace(
+        outcome.certification,
+        certified=torch.zeros_like(outcome.certification.certified),
+    )
+    with pytest.raises(RuntimeError, match="disagree"):
+        _prepare_scf_root(
+            replace(outcome, certification=false_certification), **kwargs
+        )
 
 
 @pytest.mark.parametrize(
@@ -877,8 +994,61 @@ def test_core_certification_matches_full_metrics() -> None:
     torch.testing.assert_close(
         core.electron_count_error, full.electron_count_error
     )
-    assert core.finite_ok == full.finite_ok
+    assert bool(core.finite_ok)
+    assert bool(full.finite_ok)
     assert core.fermi_ok == full.fermi_ok
+
+
+@pytest.mark.parametrize(
+    "observable",
+    ["electronic_energy_from_spectral", "free_energy_from_spectral"],
+)
+def test_full_diagnostics_require_finite_optional_observables(
+    observable: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Optional NaN observables fail full but not core finite validity."""
+    _, problem, state = _problem_and_state(sample_name="H2O")
+    core = certification_core_metrics(problem, state)
+    assert bool(core.finite_ok)
+
+    def return_nan(spectral, inputs):
+        return spectral.orbital_energy.new_full(inputs.numbers.shape, torch.nan)
+
+    monkeypatch.setattr(certification_module, observable, return_nan)
+    full = certification_metrics(problem, state, core_metrics=core)
+    assert not bool(full.finite_ok)
+    result = certify_scf_state(
+        problem, state, _loose_thresholds(problem.representation)
+    )
+    assert not bool(result.finite_ok)
+    assert not bool(result.certified)
+
+
+@pytest.mark.parametrize("copy_standard", [True, False])
+def test_standard_profile_tolerance_inheritance_is_explicit(
+    copy_standard: bool,
+) -> None:
+    """Copied and modified standard profiles retain solver inheritance."""
+    from dataclasses import replace
+
+    _, problem, state = _problem_and_state()
+    profile = replace(SCF_CERTIFICATION_STANDARD)
+    if not copy_standard:
+        profile = replace(
+            profile,
+            stationarity_orthogonalized_per_sqrt_orbital=5.0e-6,
+        )
+    thresholds = resolve_certification_thresholds(
+        problem,
+        x_atol=1.0e-8,
+        x_atol_max=2.0e-8,
+        dtype=state.x.dtype,
+        profile=profile,
+    )
+    assert thresholds.fixed_point_l2 == 1.0e-8
+    assert thresholds.fixed_point_max == 2.0e-8
+    if not copy_standard:
+        assert thresholds.stationarity_orthogonalized_per_sqrt_orbital == 5.0e-6
 
 
 def test_fermi_validity_and_finite_validity_are_independent() -> None:
@@ -1237,6 +1407,10 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
     assert transitions == 2
     assert not bool(outcome.converged)
     assert bool(outcome.terminal_failed)
+    assert outcome.certification is not None
+    assert torch.equal(
+        outcome.terminal_failed, outcome.certification.terminal_failed
+    )
     assert int(outcome.certification.failure_code) == int(
         SCFCoreFailure.NONFINITE
     )
