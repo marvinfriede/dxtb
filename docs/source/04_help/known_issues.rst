@@ -41,20 +41,16 @@ displacement of 0.01 bohr already gives correct derivatives).
 Implicit SCF uses a prepared physical-root boundary
 --------------------------------------------------
 
-Eligible single-System ``scf_mode="implicit"`` calculations use the
-functional physical-root derivative in eager calls and support ordinary
-``torch.autograd``. Primal root acquisition and convergence validation happen
-eagerly. The private prepared-root response supports ``torch.func``
-reverse/JVP transforms, ``jacfwd`` and ``vmap`` after that preparation.
-Wrapping public ``System.singlepoint`` or ``Calculator`` calls in a transform
-remains E6a scope; use ``scf_mode="full"`` for those public transform
-workflows until E6a lands. Batches, unsupported interactions and legacy solver
-overrides still use the legacy compatibility implementation. Native Broyden
-is available for eligible single-System charge, potential and Fock
-representations in the functional routes. Batch calculations and calls with
-legacy solver overrides retain the legacy implementation. Any functional
-implicit route rejects a nonconverged primal with ``SCFConvergenceError``
-regardless of ``force_convergence`` or ``strict``.
+``scf_mode="implicit"`` uses the functional physical-root derivative. Root
+acquisition and physical validation happen eagerly; the prepared-root response
+supports ordinary ``torch.autograd`` and its documented ``torch.func``
+transforms. FULL and IMPLICIT iterative routes use the functional SCF
+controller. The public packed FULL batch route retains its established
+unrolled compatibility implementation. Unsupported interaction extensions
+and legacy solver overrides fail explicitly instead of selecting another
+engine. The experimental single-shot mode is retired because its derivatives
+were not exact. An implicit route rejects a nonconverged primal with
+``SCFConvergenceError`` regardless of ``force_convergence`` or ``strict``.
 
 In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
 modes, and ``scf_mode="nonpure"`` existed; that mode was removed.

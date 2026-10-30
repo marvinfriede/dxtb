@@ -34,6 +34,7 @@ API.
 | `21-scf-s4-review-gate.md` | Records independent S4 equation/safeguard review, expanded rank and Fock evidence, the short-trajectory parity classification, and Python 3.10 dependency status |
 | `22-scf-s5-native-cdiis.md` | Adds internal Fock-space commutator CDIIS with orthogonalized stationarity errors, bounded Pulay history, dtype-aware conditioning safeguards, and standalone characterization |
 | `23-scf-s6-strategy-switching.md` | Adds eager multi-stage strategy control, compact-to-Fock observation conversion, Broyden/Anderson to CDIIS characterization, and fixed-trip inactive-lane sanitation |
+| `24-scf-s7-legacy-xitorch-retirement.md` | Makes functional iterative SCF authoritative, migrates GFN0's retained generalized eigensolve, fixes switched implicit representation ownership, and removes the vendored xitorch and retired SCF engines |
 
 The design review referenced by the plan is not in the repository.
 
@@ -101,10 +102,7 @@ python -m test.test_baseline.tables              # tables for the report
 
 ## Known test flake
 
-`test/test_a_memory_leak/test_scf.py::test_xitorch[False-False-*]` (implicit
-SCF mode, no garbage collection between runs) fails intermittently and not
-reproducibly: it passed in some full runs and failed in others, also without
-the Fermi changes of T0.12 and at earlier commits. The leaked object is one
-tensor per call, freed by the garbage collector (the variants with
-`run_gc=True` pass), i.e., a reference cycle in the implicit solver. It is not
-investigated; the implicit solver is replaced or reworked in E0/E3.
+The historical xitorch memory-leak cases were replaced by functional
+implicit-SCF repeat-call checks in S7. See
+[`24-scf-s7-legacy-xitorch-retirement.md`](24-scf-s7-legacy-xitorch-retirement.md)
+for current results.
