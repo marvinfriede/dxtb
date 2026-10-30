@@ -28,8 +28,13 @@ from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
+from .certification import (
+    SCF_CERTIFICATION_STANDARD,
+    SCFInternalCertificationProfile,
+)
 from .data import PotentialLayout, SCFInputs, SCFMapResult
 from .map import fock_map, potential_map, scf_map
+from .problem import SCFProblem, SCFRepresentation
 from .solver import (
     DynamicDampingSettings,
     SCFSolveResult,
@@ -68,6 +73,8 @@ class AndersonSettings:
     x_atol: float
     x_atol_max: float
     dynamic_damping: DynamicDampingSettings = DynamicDampingSettings()
+    requested_x_atol: float | None = None
+    requested_x_atol_max: float | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -105,6 +112,8 @@ def setup_anderson_solver_settings(
             enabled=config.damp_dynamic,
             factor=config.damp_dynamic_factor,
         ),
+        requested_x_atol=config.x_atol,
+        requested_x_atol_max=config.x_atol_max,
     )
 
 
@@ -201,6 +210,10 @@ def _solve_map_anderson(
     record_trace: bool = False,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
+    problem: SCFProblem | None = None,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
 ) -> _SolverOutcome:
     """Run Anderson with transform-fixed or eager single-System control."""
 
@@ -231,6 +244,10 @@ def _solve_map_anderson(
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
         mix_fn=transition,
+        problem=problem,
+        certification_profile=certification_profile,
+        requested_x_atol=settings.requested_x_atol,
+        requested_x_atol_max=settings.requested_x_atol_max,
         state_projection=state_projection,
         initial_damp=settings.damp,
         damping_settings=settings.dynamic_damping,
@@ -266,8 +283,12 @@ def solve_scf_anderson(
     state_projection: Callable[[Tensor], Tensor] | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
 ) -> SCFSolveResult:
     """Solve charge mode with Anderson and selected eager/fixed control."""
+    problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
     outcome = _solve_map_anderson(
         guess,
         settings,
@@ -277,6 +298,8 @@ def solve_scf_anderson(
         record_trace=record_trace,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
+        problem=problem,
+        certification_profile=certification_profile,
     )
     return finalize_scf(
         outcome.map_result,
@@ -287,6 +310,9 @@ def solve_scf_anderson(
         outcome.trajectory_status,
         outcome.damping_state,
         outcome.trace,
+        certification=outcome.certification,
+        terminal_failed=outcome.terminal_failed,
+        root_x=outcome.root_x,
     )
 
 
@@ -301,8 +327,14 @@ def solve_scf_potential_anderson(
     state_projection: Callable[[Tensor], Tensor] | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
 ) -> SCFSolveResult:
     """Solve potential mode with Anderson and selected eager/fixed control."""
+    problem = SCFProblem(
+        inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+    )
     project = lambda value: _project_potential_padding(value, layout)
     if state_projection is not None:
         project = lambda value: state_projection(
@@ -317,6 +349,8 @@ def solve_scf_potential_anderson(
         record_trace=record_trace,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
+        problem=problem,
+        certification_profile=certification_profile,
     )
     return finalize_scf_potential(
         outcome.map_result,
@@ -328,6 +362,9 @@ def solve_scf_potential_anderson(
         outcome.trajectory_status,
         outcome.damping_state,
         outcome.trace,
+        certification=outcome.certification,
+        terminal_failed=outcome.terminal_failed,
+        root_x=outcome.root_x,
     )
 
 
@@ -341,8 +378,12 @@ def solve_scf_fock_anderson(
     state_projection: Callable[[Tensor], Tensor] | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
 ) -> SCFSolveResult:
     """Solve Fock mode with Anderson and selected eager/fixed control."""
+    problem = SCFProblem(inputs, SCFRepresentation.FOCK)
     outcome = _solve_map_anderson(
         guess,
         settings,
@@ -352,6 +393,8 @@ def solve_scf_fock_anderson(
         record_trace=record_trace,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
+        problem=problem,
+        certification_profile=certification_profile,
     )
     return finalize_scf_fock(
         outcome.map_result,
@@ -362,4 +405,7 @@ def solve_scf_fock_anderson(
         outcome.trajectory_status,
         outcome.damping_state,
         outcome.trace,
+        certification=outcome.certification,
+        terminal_failed=outcome.terminal_failed,
+        root_x=outcome.root_x,
     )
