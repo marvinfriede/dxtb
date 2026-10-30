@@ -55,6 +55,12 @@ implicit certification, attached root pairing, and transform compatibility.
 The Python 3.14 compiler emitted only the existing TorchScript deprecation
 warning.
 
+The post-fix H2O/GFN2 performance smoke used the same 40-step budget and
+single-thread CPU setup. One run measured eager at `0.147 s`, 19 iterations,
+and 1 core-certification call; fixed-trip measured `0.436 s`, 19 iterations,
+and 41 calls (40 loop candidates plus the selected-pair diagnostic). These
+single-run timings are a call-count/separation check, not a new timing baseline.
+
 Static checks passed: compileall, Black, isort for changed production and SCF
 test files, and `git diff --check`. The edited baseline diagnostics file had
 an unrelated pre-existing isort import-order diff; its imports were not
