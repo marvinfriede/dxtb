@@ -43,14 +43,14 @@ from dxtb._src.scf.functional import map as functional_map
 from dxtb._src.scf.functional import potential_to_hamiltonian
 from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    setup_anderson_solver_settings,
     setup_simple_solver_settings,
-    solve_scf_fock_anderson,
     solve_scf_fock_simple,
 )
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional import validate_fock_state
 
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_fock as solve_scf_fock_anderson
 from .test_functional_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
@@ -179,9 +179,7 @@ def test_fock_initial_guess_call_local_parity(
 
 def test_fock_state_requires_single_structural_matrix() -> None:
     """Fock validation checks rank and static shape without values."""
-    case = _prepare_case(
-        GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
-    )
+    case = _prepare_case(GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK})
     guess = _fock_guess(case)
     validate_fock_state(guess, case.inputs)
     with pytest.raises(ValueError, match="single-System matrix"):
@@ -255,9 +253,7 @@ def test_fock_raw_map_matches_legacy(
         if got is None:
             continue
         assert torch.isfinite(got).all()
-    assert torch.allclose(
-        actual.mapped_x, actual.mapped_x.mT, atol=2e-13, rtol=0
-    )
+    assert torch.allclose(actual.mapped_x, actual.mapped_x.mT, atol=2e-13, rtol=0)
 
 
 @pytest.mark.parametrize(
@@ -306,17 +302,13 @@ def test_fock_simple_finite_budget_matches_legacy(
     )
     _assert_public_parity(result, legacy)
     assert len(legacy["mapped_states"]) == maxiter + 1
-    _assert_tensor_equal(
-        result.map_result.mapped_x, legacy["mapped_states"][-1][1]
-    )
+    _assert_tensor_equal(result.map_result.mapped_x, legacy["mapped_states"][-1][1])
     last_input, last_output = legacy["mapped_states"][-1]
     delta = last_output - last_input
     expected_residual = torch.stack(
         (torch.linalg.vector_norm(delta), delta.abs().amax())
     )
-    torch.testing.assert_close(
-        result.residual, expected_residual, rtol=0.0, atol=2e-13
-    )
+    torch.testing.assert_close(result.residual, expected_residual, rtol=0.0, atol=2e-13)
     _assert_tensor_equal(result.hamiltonian, result.map_result.mapped_x)
     _assert_tensor_equal(
         result.final_evaluation.hamiltonian, result.map_result.mapped_x
@@ -369,9 +361,7 @@ def test_fock_anderson_early_convergence_matches_selected_map() -> None:
     assert bool(result.diagnostics.certification.result.certified)
     expected = functional_problem.fock_map(result.root_x, case.inputs)
     _assert_tensor_equal(result.map_result.mapped_x, expected.mapped_x)
-    _assert_tensor_equal(
-        result.map_result.spectral.density, expected.spectral.density
-    )
+    _assert_tensor_equal(result.map_result.spectral.density, expected.spectral.density)
 
 
 @pytest.mark.parametrize(
@@ -453,7 +443,7 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
     )
     guess = _fock_guess(case)
     states: list[torch.Tensor] = []
-    original = functional_anderson.fock_map
+    original = functional_problem.fock_map
 
     def record(value: torch.Tensor, inputs: object):
         states.append(value.clone())
@@ -461,10 +451,8 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
         states.append(result.mapped_x.clone())
         return result
 
-    monkeypatch.setattr(functional_anderson, "fock_map", record)
-    settings = setup_anderson_solver_settings(
-        case.system.config.scf, guess.dtype
-    )
+    monkeypatch.setattr(functional_problem, "fock_map", record)
+    settings = setup_anderson_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_anderson(guess, case.inputs, settings)
     assert len(states) > 2
     for value in (
@@ -544,9 +532,7 @@ def test_fock_anderson_accelerates_and_preserves_symmetry(
         atol=2e-13,
         rtol=0,
     )
-    assert torch.allclose(
-        result.hamiltonian, result.hamiltonian.mT, atol=2e-13, rtol=0
-    )
+    assert torch.allclose(result.hamiltonian, result.hamiltonian.mT, atol=2e-13, rtol=0)
 
 
 def test_fock_gfn2_multipole_solver_matches_legacy() -> None:
@@ -581,16 +567,12 @@ def test_fock_position_derivatives_match_physical_fd() -> None:
     }
     initial = _prepare_case(GFN1_XTB, scf_options=options)
     positions = initial.positions.clone().requires_grad_(True)
-    functional = _prepare_case(
-        GFN1_XTB, positions=positions, scf_options=options
-    )
+    functional = _prepare_case(GFN1_XTB, positions=positions, scf_options=options)
     guess = _fock_guess(functional)
     settings = setup_simple_solver_settings(
         functional.system.config.scf, positions.dtype
     )
-    energy = solve_scf_fock_simple(
-        guess, functional.inputs, settings
-    ).energy.sum()
+    energy = solve_scf_fock_simple(guess, functional.inputs, settings).energy.sum()
     grad = torch.autograd.grad(energy, positions, create_graph=True)[0]
     hess = torch.autograd.grad(grad.square().sum(), positions)[0]
     assert torch.isfinite(grad).all()
@@ -602,9 +584,7 @@ def test_fock_position_derivatives_match_physical_fd() -> None:
         local_settings = setup_simple_solver_settings(
             case.system.config.scf, value.dtype
         )
-        return solve_scf_fock_simple(
-            initial, case.inputs, local_settings
-        ).energy.sum()
+        return solve_scf_fock_simple(initial, case.inputs, local_settings).energy.sum()
 
     _assert_directional_fd(energy_at_positions, positions, grad)
 
@@ -637,9 +617,7 @@ def test_fock_parameter_and_field_gradients() -> None:
     field_settings = setup_simple_solver_settings(
         field_case.system.config.scf, field_guess.dtype
     )
-    field_result = solve_scf_fock_simple(
-        field_guess, field_case.inputs, field_settings
-    )
+    field_result = solve_scf_fock_simple(field_guess, field_case.inputs, field_settings)
     field_grad = torch.autograd.grad(
         (field_result.energy + field_result.fenergy).sum(), field
     )[0]
@@ -669,13 +647,9 @@ def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
     }
     functional = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
     guess = _fock_guess(functional)
-    settings = setup_simple_solver_settings(
-        functional.system.config.scf, guess.dtype
-    )
+    settings = setup_simple_solver_settings(functional.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, functional.inputs, settings)
-    actual = torch.autograd.grad(
-        (result.energy + result.fenergy).sum(), charge
-    )[0]
+    actual = torch.autograd.grad((result.energy + result.fenergy).sum(), charge)[0]
 
     assert torch.isfinite(actual).all()
     assert torch.count_nonzero(actual) > 0
@@ -694,9 +668,7 @@ def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
 
 def test_fock_map_reverse_jvp_jacfwd_are_finite() -> None:
     """Fock map transforms remain finite for symmetric matrix directions."""
-    case = _prepare_case(
-        GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
-    )
+    case = _prepare_case(GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK})
     x = _fock_guess(case)
     direction = torch.arange(x.numel(), dtype=x.dtype).reshape_as(x) / 1000
     direction = direction + direction.mT
@@ -712,9 +684,7 @@ def test_fock_map_reverse_jvp_jacfwd_are_finite() -> None:
 
 def test_potential_to_hamiltonian_transform_ladder_is_consistent() -> None:
     """The smooth potential assembly subpath agrees across AD modes."""
-    case = _prepare_case(
-        GFN2_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
-    )
+    case = _prepare_case(GFN2_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK})
     point = case.integrals.hcore.new_zeros(
         case.inputs.charge_layout.mono_shape
     ).requires_grad_()
@@ -744,9 +714,7 @@ def test_potential_to_hamiltonian_transform_ladder_is_consistent() -> None:
     torch.testing.assert_close(
         forward_jacobian, reverse_jacobian, rtol=1e-12, atol=1e-12
     )
-    torch.testing.assert_close(
-        gradient, reverse_jacobian, rtol=1e-12, atol=1e-12
-    )
+    torch.testing.assert_close(gradient, reverse_jacobian, rtol=1e-12, atol=1e-12)
 
 
 def test_fock_solver_vmap_matches_loop() -> None:

@@ -34,14 +34,14 @@ class SCFStage:
 
 @dataclass(frozen=True, eq=False)
 class SCFStrategy:
-    """Immutable ordered stages; S1 executes one stage only."""
+    """Immutable ordered stages for the current single-stage SCF path."""
 
     stages: tuple[SCFStage, ...]
 
     def single_stage(self) -> SCFStage:
-        """Return the executable S1 stage or reject unsupported composition."""
+        """Return the executable stage or reject unsupported composition."""
         if len(self.stages) != 1:
             raise NotImplementedError(
-                "S1 functional SCF supports exactly one strategy stage."
+                "Current functional SCF supports exactly one strategy stage."
             )
         return self.stages[0]

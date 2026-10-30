@@ -17,13 +17,11 @@
 """Internal functional SCF problem, method, map, and solver contracts."""
 
 from .anderson import (
-    AndersonSettings,
+    AndersonMethod,
+    AndersonMethodSettings,
     AndersonState,
     anderson_mix,
-    setup_anderson_solver_settings,
-    solve_scf_anderson,
-    solve_scf_fock_anderson,
-    solve_scf_potential_anderson,
+    setup_anderson_method_settings,
 )
 from .certification import (
     SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
@@ -118,16 +116,19 @@ from .solver import (
     functional_trajectory_ok,
     interaction_energy_from_charges,
     setup_simple_solver_settings,
+    setup_solver_settings,
     simple_mix,
     solve_scf_fock_simple,
     solve_scf_potential_simple,
+    solve_scf_problem,
     solve_scf_simple,
     trajectory_status_from_map,
 )
 from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
-    "AndersonSettings",
+    "AndersonMethod",
+    "AndersonMethodSettings",
     "EagerFullResult",
     "FullSCFRoute",
     "FunctionalCoreResult",
@@ -197,15 +198,14 @@ __all__ = [
     "potential_to_hamiltonian",
     "scf_map",
     "setup_scf_inputs",
-    "setup_anderson_solver_settings",
+    "setup_anderson_method_settings",
     "setup_simple_solver_settings",
+    "setup_solver_settings",
+    "solve_scf_problem",
     "simple_mix",
     "solve_scf_simple",
     "solve_scf_potential_simple",
-    "solve_scf_potential_anderson",
-    "solve_scf_fock_anderson",
     "solve_scf_fock_simple",
-    "solve_scf_anderson",
     "unpack_charges",
     "unpack_potential",
     "validate_functional_scf_interactions",

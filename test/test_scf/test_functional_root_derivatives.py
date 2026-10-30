@@ -48,10 +48,6 @@ from dxtb._src.scf.functional import (
     scf_map,
     setup_scf_inputs,
 )
-from dxtb._src.scf.functional.anderson import (
-    _solve_map_anderson,
-    setup_anderson_solver_settings,
-)
 from dxtb._src.scf.functional.solver import (
     _project_potential_padding,
     _solve_map,
@@ -75,6 +71,8 @@ from ..test_baseline.test_e30_diagnostics import (
 )
 from ..test_baseline.tolerances import TBLITE
 from ..utils import get_param_module
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_common as solve_common
 from .samples import samples
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
@@ -110,9 +108,7 @@ def _force_lorentzian(monkeypatch: pytest.MonkeyPatch) -> None:
             broadening_method="lorn",
         )
 
-    monkeypatch.setattr(
-        functional_map, "_transitional_diagonalize", diagonalize
-    )
+    monkeypatch.setattr(functional_map, "_transitional_diagonalize", diagonalize)
 
 
 def _case(
@@ -155,9 +151,7 @@ def _case(
         "fermi_etemp": temperature,
         "verbosity": 0,
         "int_level": (
-            labels.INTLEVEL_DIPOLE
-            if field is not None
-            else labels.INTLEVEL_QUADRUPOLE
+            labels.INTLEVEL_DIPOLE if field is not None else labels.INTLEVEL_QUADRUPOLE
         ),
     }
     if int_driver is not None:
@@ -231,9 +225,7 @@ def _inputs_at_field(case, field_parameter: Tensor):
         device=case.positions.device,
         dtype=case.positions.dtype,
     )
-    interaction_data = _interaction_data(
-        case.system, case.positions, interactions
-    )
+    interaction_data = _interaction_data(case.system, case.positions, interactions)
     return setup_scf_inputs(
         case.numbers,
         case.integrals,
@@ -375,7 +367,7 @@ def _run_root(
     problem = SCFProblem(inputs, representation, layout)
     if config.mixer == labels.MIXER_ANDERSON:
         settings = setup_anderson_solver_settings(config, initial.dtype)
-        outcome = _solve_map_anderson(
+        outcome = solve_common(
             initial,
             settings,
             observed_map,
@@ -445,7 +437,7 @@ def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
             "spectral",
             "driving_potential",
         }
-        assert not hasattr(mapped, "mixer_state")
+        assert not hasattr(mapped, "method_state")
         assert not hasattr(mapped, "iterations")
 
 
@@ -471,9 +463,7 @@ def test_solver_outcome_retains_the_convergence_tested_input(
         mixer=mixer,
     )
     assert record.converged
-    torch.testing.assert_close(
-        record.root, record.last_map_input, rtol=0, atol=0
-    )
+    torch.testing.assert_close(record.root, record.last_map_input, rtol=0, atol=0)
     torch.testing.assert_close(
         record.outcome.map_result.mapped_x,
         record.last_map_result.mapped_x,
@@ -506,18 +496,14 @@ def test_solver_outcome_retains_the_convergence_tested_input(
             record.residual.abs().amax(),
         )
     )
-    torch.testing.assert_close(
-        record.reported_residual, residual_norms, rtol=0, atol=0
-    )
+    torch.testing.assert_close(record.reported_residual, residual_norms, rtol=0, atol=0)
     assert (
         bool((residual_norms[0] < tolerance) & (residual_norms[1] < tolerance))
         == record.converged
     )
     assert record.solver_map_evaluations == record.map_count
     assert record.diagnostic_map_evaluations == 0
-    torch.testing.assert_close(
-        record.last_map_input, record.root, rtol=0, atol=0
-    )
+    torch.testing.assert_close(record.last_map_input, record.root, rtol=0, atol=0)
     assert record.last_map_result.mapped_x.shape == record.root.shape
 
 
@@ -632,9 +618,7 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
             long.residual.abs().amax(),
         )
     )
-    torch.testing.assert_close(
-        long.reported_residual, residual_norms, rtol=0, atol=0
-    )
+    torch.testing.assert_close(long.reported_residual, residual_norms, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize(
@@ -677,9 +661,7 @@ def test_fixed_trip_exhaustion_retains_last_selected_map_input(
     assert record.map_count == 2
     assert record.solver_map_evaluations == 2
     assert record.diagnostic_map_evaluations == 0
-    torch.testing.assert_close(
-        record.root, record.last_map_input, rtol=0, atol=0
-    )
+    torch.testing.assert_close(record.root, record.last_map_input, rtol=0, atol=0)
     torch.testing.assert_close(
         record.outcome.map_result.mapped_x,
         record.last_map_result.mapped_x,
@@ -703,9 +685,7 @@ def test_fixed_trip_exhaustion_retains_last_selected_map_input(
             record.residual.abs().amax(),
         )
     )
-    torch.testing.assert_close(
-        record.reported_residual, residual_norms, rtol=0, atol=0
-    )
+    torch.testing.assert_close(record.reported_residual, residual_norms, rtol=0, atol=0)
 
 
 def test_nonconverged_root_reference_is_not_presented_as_a_root() -> None:
@@ -748,9 +728,7 @@ def _require_converged(record: _RootRecord) -> None:
 def _preflight_derivative_roots(converged: Tensor) -> None:
     """Reject any unvalidated root before entering a transform context."""
     if not bool(converged.all()):
-        raise SCFConvergenceError(
-            "Physical-root derivatives require converged roots"
-        )
+        raise SCFConvergenceError("Physical-root derivatives require converged roots")
 
 
 def _request_root_derivative(converged: Tensor, derivative_request):
@@ -772,9 +750,7 @@ def test_host_preflight_rejects_nonconverged_root_status() -> None:
         torch.tensor(False),
         torch.tensor([True, False]),
     ):
-        with pytest.raises(
-            SCFConvergenceError, match="require converged roots"
-        ):
+        with pytest.raises(SCFConvergenceError, match="require converged roots"):
             _request_root_derivative(converged, derivative_request)
         assert not entered_transform
     assert (
@@ -902,10 +878,7 @@ def test_no2_hyperpolarizability_tight_root_reference(
             }
         )
     energy_changes = [
-        abs(
-            records[index]["finalized_energy"]
-            - records[index + 1]["finalized_energy"]
-        )
+        abs(records[index]["finalized_energy"] - records[index + 1]["finalized_energy"])
         for index in range(len(records) - 1)
     ]
     derivative_changes = {
@@ -921,8 +894,7 @@ def test_no2_hyperpolarizability_tight_root_reference(
     assert derivative_changes["third"][-1] < 1.0e-3
     physical_steps = (2.0e-3, 1.0e-3, 5.0e-4)
     physical_fd = [
-        _fresh_physical_fd("hyperpolarizability", step)
-        for step in physical_steps
+        _fresh_physical_fd("hyperpolarizability", step) for step in physical_steps
     ]
     physical_spread = max(physical_fd) - min(physical_fd)
     physical_target = float(sorted(physical_fd)[len(physical_fd) // 2])
@@ -931,9 +903,7 @@ def test_no2_hyperpolarizability_tight_root_reference(
     assert abs(records[0]["third"] - physical_target) > 1.0
     for record in records[2:]:
         assert abs(record["third"] - physical_target) < physical_bound
-    assert (
-        abs(physical_target - (-3.35277)) < TBLITE["hyperpolarizability"].atol
-    )
+    assert abs(physical_target - (-3.35277)) < TBLITE["hyperpolarizability"].atol
     print(
         {
             "no2_hyperpolarizability_root_reference": records,
@@ -981,10 +951,7 @@ def test_no2_pol_deriv_tight_root_reference(
             }
         )
     energy_changes = [
-        abs(
-            records[index]["finalized_energy"]
-            - records[index + 1]["finalized_energy"]
-        )
+        abs(records[index]["finalized_energy"] - records[index + 1]["finalized_energy"])
         for index in range(len(records) - 1)
     ]
     derivative_changes = {
@@ -1001,9 +968,7 @@ def test_no2_pol_deriv_tight_root_reference(
         for value in changes
     )
     physical_steps = (2.0e-3, 1.0e-3, 5.0e-4)
-    physical_fd = [
-        _fresh_physical_fd("pol_deriv", step) for step in physical_steps
-    ]
+    physical_fd = [_fresh_physical_fd("pol_deriv", step) for step in physical_steps]
     physical_spread = max(physical_fd) - min(physical_fd)
     physical_target = float(sorted(physical_fd)[len(physical_fd) // 2])
     assert physical_spread < 1.0e-3
@@ -1051,9 +1016,7 @@ def test_fixed_point_map_representation_contract(
         expected_result = expected(initial, case.inputs)
     actual = map_fn(initial)
     torch.testing.assert_close(actual.mapped_x, expected_result.mapped_x)
-    assert type(actual.driving_potential) is type(
-        expected_result.driving_potential
-    )
+    assert type(actual.driving_potential) is type(expected_result.driving_potential)
 
 
 def test_simple_and_anderson_reach_the_same_h2_root_and_response(
@@ -1091,9 +1054,7 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
     )
     for name in ("density", "occupation", "emo"):
         torch.testing.assert_close(
-            getattr(
-                records[labels.MIXER_LINEAR].outcome.map_result.spectral, name
-            ),
+            getattr(records[labels.MIXER_LINEAR].outcome.map_result.spectral, name),
             getattr(
                 records[labels.MIXER_ANDERSON].outcome.map_result.spectral,
                 name,
@@ -1124,18 +1085,14 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
         first = torch.autograd.grad(value, parameter, create_graph=True)[0]
         second = torch.autograd.grad(first, parameter)[0]
         derivatives.append(torch.stack((first, second)))
-    torch.testing.assert_close(
-        derivatives[0], derivatives[1], rtol=1.0e-5, atol=2.0e-7
-    )
+    torch.testing.assert_close(derivatives[0], derivatives[1], rtol=1.0e-5, atol=2.0e-7)
     print(
         {
             "system": "H2/GFN1",
             "root_tolerance": tolerance,
             "simple_maps": records[labels.MIXER_LINEAR].map_count,
             "anderson_maps": records[labels.MIXER_ANDERSON].map_count,
-            "simple_residual": float(
-                records[labels.MIXER_LINEAR].residual.abs().max()
-            ),
+            "simple_residual": float(records[labels.MIXER_LINEAR].residual.abs().max()),
             "anderson_residual": float(
                 records[labels.MIXER_ANDERSON].residual.abs().max()
             ),
@@ -1205,10 +1162,7 @@ def test_h2_smooth_root_response_converges_with_explicit_tolerance(
         )
 
     energy_changes = [
-        abs(
-            records[index]["finalized_energy"]
-            - records[index + 1]["finalized_energy"]
-        )
+        abs(records[index]["finalized_energy"] - records[index + 1]["finalized_energy"])
         for index in range(len(records) - 1)
     ]
     derivative_changes = {
@@ -1329,9 +1283,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
     assert float(root_record.residual.abs().max()) < 2.0e-11
     root = root_record.root.detach()
 
-    _, layout = _initial_state(
-        case, _inputs_at_field(case, torch.zeros((), **_DD))
-    )
+    _, layout = _initial_state(case, _inputs_at_field(case, torch.zeros((), **_DD)))
 
     def mapped(state: Tensor, parameter: Tensor) -> Tensor:
         inputs = _inputs_at_field(case, parameter)
@@ -1392,7 +1344,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
             if config.scp_mode == labels.SCP_MODE_POTENTIAL
             else None
         )
-        outcome = _solve_map_anderson(
+        outcome = solve_common(
             initial,
             settings,
             map_fn,
@@ -1417,9 +1369,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
 
     unrolled_parameter = origin.detach().requires_grad_(True)
     unrolled_value = unrolled_energy(unrolled_parameter)
-    unrolled_derivative = torch.autograd.grad(
-        unrolled_value, unrolled_parameter
-    )[0]
+    unrolled_derivative = torch.autograd.grad(unrolled_value, unrolled_parameter)[0]
     torch.testing.assert_close(
         jacobian_response, unrolled_derivative, rtol=2.0e-4, atol=2.0e-6
     )

@@ -49,22 +49,22 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 import dxtb as dxtb_package  # noqa: E402
+from benchmarks.baseline.workloads import conformers as frozen_conformers  # noqa: E402
 from dxtb import GFN1_XTB, ParamModule, labels  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb._src.calculators.result import Result  # noqa: E402
-from dxtb._src.constants import defaults  # noqa: E402
 from dxtb._src.calculators.singlepoint import (  # noqa: E402
     _evaluate_classical_descriptor,
     _interaction_data,
 )
+from dxtb._src.constants import defaults  # noqa: E402
 from dxtb._src.integral.evaluation import build_integral_matrices  # noqa: E402
 from dxtb._src.scf.functional import (  # noqa: E402
     SCFCharges,
     pack_charges,
     setup_scf_inputs,
 )
-from dxtb._src.scf.functional.anderson import _solve_map_anderson  # noqa: E402
-from dxtb._src.scf.functional.eager import _solver_settings  # noqa: E402
+from dxtb._src.scf.functional.eager import _prepare_solver  # noqa: E402
 from dxtb._src.scf.functional.implicit import (  # noqa: E402
     _prepare_scf_root,
     _SCFMapTensorTree,
@@ -73,6 +73,7 @@ from dxtb._src.scf.functional.implicit import (  # noqa: E402
 from dxtb._src.scf.functional.map import scf_map  # noqa: E402
 from dxtb._src.scf.functional.solver import (  # noqa: E402
     SCFTrajectoryStatus,
+    _solve_map,
     fermi_failure_code,
     fermi_status_ok,
     finalize_scf,
@@ -81,7 +82,6 @@ from dxtb._src.scf.guess import get_guess  # noqa: E402
 from dxtb._src.scf.iterator import get_refocc  # noqa: E402
 from dxtb._src.typing.exceptions import SCFConvergenceError  # noqa: E402
 from dxtb.config import Config  # noqa: E402
-from benchmarks.baseline.workloads import conformers as frozen_conformers  # noqa: E402
 
 DTYPE = torch.float64
 STARTED = time.perf_counter()
@@ -149,9 +149,10 @@ def peak_rss_mb() -> float:
 
 def profile_primal_map(prepared: PreparedInputs) -> None:
     """Profile one raw SCF map and its named physical subcomponents."""
+    from torch.profiler import ProfilerActivity, profile
+
     import dxtb._src.scf.functional.map as map_module
     from dxtb._src.wavefunction import filling
-    from torch.profiler import ProfilerActivity, profile
 
     components = (
         (map_module, "potential_from_charges", "interaction_potential"),
@@ -400,7 +401,7 @@ def prepare_call_inputs(case: PhysicalCase) -> PreparedInputs:
 def prepare_primal_root(prepared: PreparedInputs) -> tuple[Any, int, float]:
     """Run the accepted eager Anderson controller without a trajectory graph."""
     config = prepared.case.system.config.scf
-    settings = _solver_settings(config, DTYPE)
+    settings, strategy = _prepare_solver(config, DTYPE)
     map_evaluations = 0
 
     def observed_map(state: torch.Tensor):
@@ -412,11 +413,12 @@ def prepare_primal_root(prepared: PreparedInputs) -> tuple[Any, int, float]:
 
     map_start = time.perf_counter()
     with torch.no_grad():
-        outcome = _solve_map_anderson(
+        outcome = _solve_map(
             prepared.initial_state,
             settings,
             observed_map,
             eager=True,
+            strategy=strategy,
         )
     return outcome, map_evaluations, time.perf_counter() - map_start
 
