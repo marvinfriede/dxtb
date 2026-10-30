@@ -28,6 +28,7 @@ API.
 | `15-scf-s2a.1-certification-evidence-correction.md` | Corrects model provenance in S2a characterization, compares raw and orthogonalized stationarity, and records the evidence needed to choose S2b gates |
 | `16-scf-s2a.2-certification-policy.md` | Freezes the lazy-loader audit, size-aware stationarity scalar, electron-count rule, internal profiles, and S2b controller design |
 | `17-scf-s2b-authoritative-certification.md` | Makes physical certification authoritative for functional SCF, separates root validity from trajectory/finalization status, and records eager/fixed-trip integration and cost |
+| `18-scf-s2b.1-certification-hardening.md` | Restores full-diagnostic finite semantics, requires certification at implicit attachment, requires exact `root_x` at finalization, and makes profile tolerance inheritance explicit |
 
 The design review referenced by the plan is not in the repository.
 
