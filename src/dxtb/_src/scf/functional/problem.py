@@ -44,6 +44,7 @@ from .map import (
 )
 
 __all__ = [
+    "convert_physical_state_to_fock",
     "SCFPhysicalState",
     "SCFProblem",
     "SCFRepresentation",
@@ -161,6 +162,37 @@ class SCFProblem:
             self.potential_layout,
         )
         return _zero_row_padding(packed, self.potential_layout.shapes)
+
+
+def convert_physical_state_to_fock(
+    problem: SCFProblem, state: SCFPhysicalState
+) -> tuple[SCFProblem, SCFPhysicalState]:
+    """Convert one compact observation to its exactly paired Fock state.
+
+    The Fock input is the Hamiltonian that generated the observation's
+    density. Its mapped output is rebuilt from that density's charges. The
+    conversion performs no spectrum evaluation or physical map.
+    """
+    if problem.representation is SCFRepresentation.FOCK:
+        return problem, state
+    if problem.representation not in (
+        SCFRepresentation.CHARGE,
+        SCFRepresentation.POTENTIAL,
+    ):
+        raise NotImplementedError(
+            f"Cannot convert {problem.representation.value} to Fock."
+        )
+
+    fock_problem = SCFProblem(problem.inputs, SCFRepresentation.FOCK)
+    spectral = state.map_result.spectral
+    paired_input = spectral.hamiltonian
+    fresh_fock = fock_problem.rebuild_hamiltonian(spectral.charges)
+    fock_result = SCFMapResult(
+        mapped_x=fresh_fock,
+        spectral=spectral,
+        driving_potential=None,
+    )
+    return fock_problem, SCFPhysicalState(paired_input, fock_result)
 
 
 def _zero_row_padding(

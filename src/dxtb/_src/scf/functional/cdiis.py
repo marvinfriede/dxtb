@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import cast
+from typing import ClassVar, cast
 
 import torch
 
@@ -96,6 +96,9 @@ class CDIISState:
 class CDIISMethod:
     """Conventional commutator CDIIS operating on the Fock representation."""
 
+    required_representation: ClassVar[SCFRepresentation] = (
+        SCFRepresentation.FOCK
+    )
     settings: CDIISMethodSettings = CDIISMethodSettings()
 
     def propose(

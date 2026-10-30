@@ -94,7 +94,6 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.anderson import _solve_map_anderson
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
     replace_tensor_leaves,
@@ -111,7 +110,7 @@ from dxtb._src.scf.functional.data import (
 from dxtb._src.scf.functional.eager import (
     _padded_charge_projections,
     _padded_potential_projections,
-    _solver_settings,
+    _prepare_solver,
     public_scf_status,
     resolve_full_scf_route,
 )
@@ -144,7 +143,6 @@ from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_NONE,
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
     DampingState,
-    SCFSolverSettings,
     SCFTrajectoryStatus,
     _project_potential_padding,
     _solve_map,
@@ -153,6 +151,7 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf_fock,
     finalize_scf_potential,
 )
+from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
@@ -1649,8 +1648,8 @@ def _solve_and_validate_lane_primal(
     numbers: Tensor,
     representation: int,
     settings: Any,
+    strategy: SCFStrategy,
     lane_padded: bool,
-    effective_mixer: int,
     maxiter: int,
     damp_default: float,
     damp_dynamic_factor: float,
@@ -1674,22 +1673,14 @@ def _solve_and_validate_lane_primal(
         )
 
         with eager_primal_fermi_scope(eager_primal_fermi):
-            if isinstance(settings, SCFSolverSettings):
-                outcome = _solve_map(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
-            else:
-                outcome = _solve_map_anderson(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
+            outcome = _solve_map(
+                initial_state,
+                settings,
+                map_fn,
+                state_projection=state_projection,
+                strategy=strategy,
+                eager=True,
+            )
 
         with eager_primal_fermi_scope(False):
             adapter, primal_params = _SCFMapTensorTree.prepare(
@@ -1905,6 +1896,7 @@ def _solve_and_validate_lane_primal(
         )
 
 
+
 def prepare_converged_root_batch(
     system: System | PaddedExactSystemCore,
     positions: Tensor,
@@ -1970,7 +1962,9 @@ def prepare_converged_root_batch(
     )
 
     representation = route.representation
-    settings = _solver_settings(effective_scf_config, positions.dtype)
+    settings, strategy = _prepare_solver(
+        effective_scf_config, positions.dtype
+    )
     has_padding = bool((numbers == 0).any())
 
     external_input_ids = {
@@ -2091,8 +2085,8 @@ def prepare_converged_root_batch(
                 numbers,
                 representation,
                 settings,
+                strategy,
                 lane_padded,
-                route.effective_mixer,
                 effective_scf_config.maxiter,
                 effective_scf_config.damp,
                 effective_scf_config.damp_dynamic_factor,
@@ -2833,6 +2827,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         elif representation == labels.SCP_MODE_POTENTIAL:
             assert layout is not None
@@ -2845,6 +2840,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         else:
             finalized = finalize_scf_fock(
@@ -2855,6 +2851,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         dummy = finalized.energy.new_zeros(())
         q_dip = (
