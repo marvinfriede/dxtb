@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
+from enum import IntEnum
 from typing import ClassVar, cast
 
 import torch
@@ -72,13 +73,21 @@ from .method import (
     SCFMethodState,
     simple_mix,
 )
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
-from .strategy import SCFStage, SCFStrategy
+from .problem import (
+    SCFPhysicalState,
+    SCFProblem,
+    SCFRepresentation,
+    convert_physical_state_to_fock,
+)
+from .strategy import SCFStage, SCFStrategy, SCFSwitchPolicy
 
 __all__ = [
     "DynamicDampingSettings",
     "DampingState",
     "SCFSolverDiagnostics",
+    "SCFSwitchMetrics",
+    "SCFStrategyDiagnostics",
+    "SCFSwitchReason",
     "SCFPhysicalCertificationDiagnostics",
     "SCFResidual",
     "SCFSolveResult",
@@ -124,6 +133,34 @@ class DampingState:
     switched: Tensor
 
 
+class SCFSwitchReason(IntEnum):
+    """Internal reason codes for an eager strategy transition."""
+
+    NONE = 0
+    PHYSICAL_THRESHOLD = 1
+    MAX_STAGE_ITERATIONS = 2
+
+
+@dataclass(frozen=True, eq=False)
+class SCFSwitchMetrics:
+    """Physical root metrics observed when an eager stage transition occurs."""
+
+    fixed_point_l2: Tensor
+    fixed_point_max: Tensor
+    stationarity: Tensor
+
+
+@dataclass(frozen=True, eq=False)
+class SCFStrategyDiagnostics:
+    """Per-stage physical map counts and eager transition decisions."""
+
+    final_stage_index: Tensor
+    switch_count: Tensor
+    stage_iterations: tuple[Tensor, ...]
+    switch_reasons: tuple[Tensor, ...]
+    switch_metrics: tuple[SCFSwitchMetrics, ...]
+
+
 @dataclass(frozen=True, eq=False)
 class SCFSolverDiagnostics:
     """Tensor-valued numerical diagnostics for eager compatibility."""
@@ -132,6 +169,7 @@ class SCFSolverDiagnostics:
     dynamic_damping_switched: Tensor
     terminal_failed: Tensor
     certification: SCFPhysicalCertificationDiagnostics | None = None
+    strategy: SCFStrategyDiagnostics | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -448,6 +486,8 @@ class _SolverOutcome:
     terminal_failed: Tensor
     certification: SCFCertificationCoreResult | None = None
     trace: SCFSolverTrace | None = None
+    final_problem: SCFProblem | None = None
+    strategy_diagnostics: SCFStrategyDiagnostics | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -460,6 +500,8 @@ class _SolverControlState:
 
     current_x: Tensor
     map_input_x: Tensor
+    method_observation_x: Tensor
+    method_observation: SCFMapResult
     method_state: SCFMethodState | None
     damping_state: DampingState
     map_result: SCFMapResult
@@ -520,6 +562,70 @@ def _update_damping(
     return DampingState(
         torch.where(switch, factor, current.value),
         current.switched | switch,
+    )
+
+
+def _fock_state_projection(
+    problem: SCFProblem,
+) -> Callable[[Tensor], Tensor]:
+    """Keep inactive padded Fock rows at the physical core Hamiltonian."""
+    mask = (
+        problem.inputs.orbital_mask[..., :, None]
+        & problem.inputs.orbital_mask[..., None, :]
+    )
+    hcore = problem.inputs.integrals.hcore
+    return lambda value: torch.where(mask, value, hcore)
+
+
+def _switch_decision(
+    policy: SCFSwitchPolicy,
+    stage_iterations: int,
+    fixed_point_l2: Tensor,
+    certification: SCFCertificationCoreResult | None,
+) -> tuple[bool, SCFSwitchReason]:
+    """Evaluate one configured eager switch without energy observables."""
+    if policy.max_stage_iterations is not None and (
+        stage_iterations >= policy.max_stage_iterations
+    ):
+        return True, SCFSwitchReason.MAX_STAGE_ITERATIONS
+    if stage_iterations < policy.min_stage_iterations:
+        return False, SCFSwitchReason.NONE
+    stationarity_ok = True
+    if policy.stationarity is not None:
+        stationarity_ok = (
+            certification is not None
+            and float(
+                certification.metrics.stationarity_orthogonalized_l2_per_sqrt_orbital
+            )
+            <= policy.stationarity
+        )
+    residual_ok = (
+        policy.fixed_point_l2 is None
+        or float(fixed_point_l2) <= policy.fixed_point_l2
+    )
+    if stationarity_ok and residual_ok:
+        return True, SCFSwitchReason.PHYSICAL_THRESHOLD
+    return False, SCFSwitchReason.NONE
+
+
+def _strategy_diagnostics(
+    final_stage_index: int,
+    switch_count: Tensor,
+    stage_iterations: list[Tensor],
+    switch_reasons: list[Tensor],
+    *,
+    like: Tensor,
+    switch_metrics: list[SCFSwitchMetrics] | None = None,
+) -> SCFStrategyDiagnostics:
+    """Materialize immutable eager strategy accounting as tensor leaves."""
+    return SCFStrategyDiagnostics(
+        final_stage_index=torch.tensor(
+            final_stage_index, dtype=torch.int64, device=like.device
+        ),
+        switch_count=switch_count,
+        stage_iterations=tuple(stage_iterations),
+        switch_reasons=tuple(switch_reasons),
+        switch_metrics=tuple(switch_metrics or ()),
     )
 
 
@@ -806,9 +912,25 @@ def _solve_map(
 ) -> _SolverOutcome:
     """Run one strategy through fixed-trip or eager shared control."""
     selected_strategy = strategy or SCFStrategy((SCFStage(LinearMethod()),))
-    method = selected_strategy.single_stage().method
+    if problem is None:
+        if len(selected_strategy.stages) != 1:
+            raise ValueError("Multi-stage execution requires an SCFProblem.")
+        stages = selected_strategy.stages
+    else:
+        representations = selected_strategy.resolve_representations(
+            problem.representation
+        )
+        if not eager and len(selected_strategy.stages) != 1:
+            raise NotImplementedError(
+                "Dynamic multi-stage SCF is currently eager-only."
+            )
+        if representations[0] is not problem.representation:
+            raise NotImplementedError(
+                "The initial strategy stage must match the supplied problem."
+            )
+        stages = selected_strategy.stages
 
-    controller = _solve_map_control_eager if eager else _solve_map_control
+    first_stage = stages[0]
     common = dict(
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,
@@ -817,11 +939,14 @@ def _solve_map(
         map_fn=map_fn,
         state_projection=state_projection,
         damping_settings=settings.dynamic_damping,
-        initial_damp=settings.damp,
+        initial_damp=(
+            settings.damp
+            if first_stage.initial_damp is None
+            else first_stage.initial_damp
+        ),
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
         problem=problem,
-        method=method,
         certification_profile=certification_profile,
         requested_x_atol=settings.requested_x_atol,
         requested_x_atol_max=settings.requested_x_atol_max,
@@ -837,10 +962,16 @@ def _solve_map(
             )
         common.pop("residual_projection")
         common.pop("project_initial_state")
-        return controller(guess, **common)
-    return controller(
+        return _solve_map_control_eager(
+            guess,
+            **common,
+            strategy=selected_strategy,
+            default_stage_damp=settings.damp,
+        )
+    return _solve_map_control(
         guess,
         **common,
+        method=first_stage.method,
         record_trace=record_trace,
     )
 
@@ -889,6 +1020,7 @@ def solve_scf_problem(
         strategy=strategy,
         certification_profile=certification_profile,
     )
+    final_problem = outcome.final_problem or problem
     common = (
         outcome.map_result,
         problem.inputs,
@@ -902,16 +1034,17 @@ def solve_scf_problem(
     diagnostics = dict(
         certification=outcome.certification,
         terminal_failed=outcome.terminal_failed,
+        strategy_diagnostics=outcome.strategy_diagnostics,
         root_x=outcome.root_x,
     )
-    if problem.representation is SCFRepresentation.CHARGE:
+    if final_problem.representation is SCFRepresentation.CHARGE:
         return finalize_scf(*common, **diagnostics)
-    if problem.representation is SCFRepresentation.POTENTIAL:
-        assert problem.potential_layout is not None
+    if final_problem.representation is SCFRepresentation.POTENTIAL:
+        assert final_problem.potential_layout is not None
         return finalize_scf_potential(
             outcome.map_result,
-            problem.inputs,
-            problem.potential_layout,
+            final_problem.inputs,
+            final_problem.potential_layout,
             outcome.iterations,
             outcome.converged,
             outcome.residual,
@@ -959,6 +1092,7 @@ def _solve_map_control(
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )
+    zero = torch.zeros((), dtype=torch.int64, device=guess.device)
 
     observations = (
         (
@@ -987,6 +1121,10 @@ def _solve_map_control(
                 if record_trace
                 else None
             ),
+            final_problem=problem,
+            strategy_diagnostics=_strategy_diagnostics(
+                0, zero, [state.iterations], [], like=guess
+            ),
         )
 
     thresholds = (
@@ -1009,17 +1147,20 @@ def _solve_map_control(
         candidate = map_fn(state.current_x)
         candidate_certification = None
         if problem is not None and thresholds is not None:
+            certification_candidate = _select_map_result(
+                state.active, candidate, _finite_map_result(state.map_result)
+            )
             candidate_x = (
-                state_projection(candidate.mapped_x)
+                state_projection(certification_candidate.mapped_x)
                 if project_initial_state and state_projection is not None
-                else candidate.mapped_x
+                else certification_candidate.mapped_x
             )
             candidate_residual = _residual(
                 candidate_x - state.current_x, residual_projection
             )
             candidate_certification = certify_scf_core_state(
                 problem,
-                SCFPhysicalState(state.current_x, candidate),
+                SCFPhysicalState(state.current_x, certification_candidate),
                 thresholds,
                 fixed_point_residual=candidate_residual,
             )
@@ -1073,6 +1214,10 @@ def _solve_map_control(
             if record_trace
             else None
         ),
+        final_problem=problem,
+        strategy_diagnostics=_strategy_diagnostics(
+            0, zero, [state.iterations], [], like=guess
+        ),
     )
 
 
@@ -1085,8 +1230,9 @@ def _solve_map_control_eager(
     x_atol_max: float,
     map_fn: Callable[[Tensor], SCFMapResult],
     problem: SCFProblem | None = None,
-    method: SCFMethod,
+    strategy: SCFStrategy,
     initial_damp: float = 0.4,
+    default_stage_damp: float | None = None,
     damping_settings: DynamicDampingSettings = DynamicDampingSettings(),
     state_projection: Callable[[Tensor], Tensor] | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
@@ -1097,13 +1243,39 @@ def _solve_map_control_eager(
     requested_x_atol: float | None = None,
     requested_x_atol_max: float | None = None,
 ) -> _SolverOutcome:
-    """Run eager single-System control, stopping after accepted convergence.
+    """Run the shared eager lifecycle for one or more strategy stages.
 
     This host-controlled controller is for production eager execution only.
     Transform and vmap users must use :func:`_solve_map_control`, whose trip
     count is static and which contains no tensor-dependent Python control.
-    Both controllers call the same pure initialization and transition helpers.
+    Both controllers call the same physical initialization and transition
+    helpers. Dynamic stage selection is restricted to this eager boundary.
     """
+    if problem is None and len(strategy.stages) != 1:
+        raise ValueError("Multi-stage execution requires an SCFProblem.")
+    stage_representations = (
+        (None,) * len(strategy.stages)
+        if problem is None
+        else strategy.resolve_representations(problem.representation)
+    )
+    if (
+        problem is not None
+        and stage_representations[0] is not problem.representation
+    ):
+        raise NotImplementedError(
+            "The initial strategy stage must match the supplied problem."
+        )
+
+    stages = strategy.stages
+    current_stage_index = 0
+    current_stage = stages[0]
+    current_problem = problem
+    current_map_fn = map_fn
+    current_method = current_stage.method
+    current_state_projection = state_projection
+    current_residual_projection = residual_projection
+    current_project_initial_state = project_initial_state
+
     initial = map_fn(guess)
     state = _initialize_solver_control(
         guess,
@@ -1111,20 +1283,45 @@ def _solve_map_control_eager(
         mix_guess=mix_guess,
         initial_damp=initial_damp,
         map_fn=lambda _: initial,
-        problem=problem,
-        method=method,
-        state_projection=state_projection,
+        problem=current_problem,
+        method=current_method,
+        state_projection=current_state_projection,
         initial_result=initial,
     )
 
+    zero = torch.zeros((), dtype=torch.int64, device=guess.device)
+    stage_iterations = [torch.ones_like(state.iterations)] + [
+        torch.zeros_like(state.iterations) for _ in stages[1:]
+    ]
+    switch_reasons = [zero.clone() for _ in stages[:-1]]
+    switch_metrics = [
+        SCFSwitchMetrics(
+            zero.to(guess.dtype), zero.to(guess.dtype), zero.to(guess.dtype)
+        )
+        for _ in stages[:-1]
+    ]
+    switch_count = zero.clone()
+    method_step = 2 if mix_guess else 1
+
     if maxiter == 0:
-        return _solver_outcome(state, converged=torch.zeros_like(state.active))
+        return _solver_outcome(
+            state,
+            converged=torch.zeros_like(state.active),
+            final_problem=current_problem,
+            strategy_diagnostics=_strategy_diagnostics(
+                current_stage_index,
+                switch_count,
+                stage_iterations,
+                switch_reasons,
+                like=guess,
+            ),
+        )
 
     thresholds = (
         None
-        if problem is None
+        if current_problem is None
         else resolve_certification_thresholds(
-            problem,
+            current_problem,
             x_atol=x_atol,
             x_atol_max=x_atol_max,
             dtype=guess.dtype,
@@ -1134,14 +1331,14 @@ def _solve_map_control_eager(
         )
     )
     if (
-        problem is not None
+        current_problem is not None
         and thresholds is not None
         and bool(state.terminal_failed)
     ):
         state = replace(
             state,
             certification=certify_scf_core_state(
-                problem,
+                current_problem,
                 SCFPhysicalState(state.map_input_x, state.map_result),
                 thresholds,
                 fixed_point_residual=SCFResidual(
@@ -1150,57 +1347,261 @@ def _solve_map_control_eager(
             ),
         )
 
-    for index in range(maxiter):
+    for _ in range(maxiter):
         # The tensor-to-bool read is deliberately isolated to this eager,
         # single-System controller. The fixed-trip controller never reads it.
         if not bool(state.active):
             break
-        candidate = map_fn(state.current_x)
+        candidate = current_map_fn(state.current_x)
+        stage_iterations[current_stage_index] = stage_iterations[
+            current_stage_index
+        ] + state.active.to(torch.int64)
         candidate_certification = None
-        if problem is not None and thresholds is not None:
+        switch_policy = current_stage.switch_policy
+        if current_problem is not None and thresholds is not None:
             candidate_x = (
-                state_projection(candidate.mapped_x)
-                if project_initial_state and state_projection is not None
+                current_state_projection(candidate.mapped_x)
+                if current_project_initial_state
+                and current_state_projection is not None
                 else candidate.mapped_x
             )
             candidate_residual = _residual(
-                candidate_x - state.current_x, residual_projection
+                candidate_x - state.current_x, current_residual_projection
             )
             raw_candidate = SCFConvergence(x_atol, x_atol_max).converged(
                 candidate_residual
             )
             physical_state = SCFPhysicalState(state.current_x, candidate)
             terminal_code = terminal_failure_code(physical_state)
-            should_certify = bool(raw_candidate) or bool(
-                terminal_code != int(SCFCoreFailure.NONE)
+            should_certify = (
+                bool(raw_candidate)
+                or bool(terminal_code != int(SCFCoreFailure.NONE))
+                or switch_policy is not None
             )
             if should_certify:
                 candidate_certification = certify_scf_core_state(
-                    problem,
+                    current_problem,
                     physical_state,
                     thresholds,
                     fixed_point_residual=candidate_residual,
                 )
+        else:
+            candidate_x = candidate.mapped_x
+            candidate_residual = _residual(
+                candidate_x - state.current_x, current_residual_projection
+            )
+            raw_candidate = SCFConvergence(x_atol, x_atol_max).converged(
+                candidate_residual
+            )
+            terminal_code = terminal_failure_code(
+                SCFPhysicalState(state.current_x, candidate)
+            )
+
+        is_certified = (
+            False
+            if candidate_certification is None
+            else bool(candidate_certification.certified)
+        )
+        is_terminal = bool(terminal_code != int(SCFCoreFailure.NONE))
+        should_switch = False
+        switch_reason = SCFSwitchReason.NONE
+        if switch_policy is not None and current_stage_index < len(stages) - 1:
+            should_switch, switch_reason = _switch_decision(
+                switch_policy,
+                int(stage_iterations[current_stage_index]),
+                candidate_residual.l2,
+                candidate_certification,
+            )
+            should_switch = (
+                should_switch and not is_certified and not is_terminal
+            )
+
         state = _solver_control_step(
             state,
             candidate,
-            method_step=index + (2 if mix_guess else 1),
-            problem=problem,
-            method=method,
+            method_step=method_step,
+            problem=current_problem,
+            method=current_method,
             x_atol=x_atol,
             x_atol_max=x_atol_max,
             damping_settings=damping_settings,
-            state_projection=state_projection,
-            residual_projection=residual_projection,
-            project_initial_state=project_initial_state,
+            state_projection=current_state_projection,
+            residual_projection=current_residual_projection,
+            project_initial_state=current_project_initial_state,
             certification=candidate_certification,
+            method_transition_active=(
+                state.active
+                & torch.tensor(not should_switch, device=guess.device)
+            ),
         )
+        if should_switch:
+            next_stage_index = current_stage_index + 1
+            next_stage = stages[next_stage_index]
+            next_representation = stage_representations[next_stage_index]
+            paired = SCFPhysicalState(state.map_input_x, state.map_result)
+            if next_representation is SCFRepresentation.FOCK:
+                assert current_problem is not None
+                next_problem, paired = convert_physical_state_to_fock(
+                    current_problem, paired
+                )
+            else:
+                if current_problem is None or next_representation is None:
+                    next_problem = current_problem
+                elif current_problem.representation is next_representation:
+                    next_problem = current_problem
+                else:
+                    raise NotImplementedError(
+                        "S6 supports conversion into Fock representation only."
+                    )
+            if next_problem is None:
+                raise ValueError("A strategy switch requires an SCFProblem.")
 
-    if problem is not None and thresholds is not None and bool(state.active):
+            next_state_projection = current_state_projection
+            next_residual_projection = current_residual_projection
+            next_project_initial_state = current_project_initial_state
+            if next_problem.representation is SCFRepresentation.FOCK:
+                next_state_projection = _fock_state_projection(next_problem)
+                next_residual_projection = next_problem.project_residual
+                next_project_initial_state = True
+
+            paired_x = (
+                next_state_projection(paired.x)
+                if next_project_initial_state
+                and next_state_projection is not None
+                else paired.x
+            )
+            paired_map_x = (
+                next_state_projection(paired.map_result.mapped_x)
+                if next_project_initial_state
+                and next_state_projection is not None
+                else paired.map_result.mapped_x
+            )
+            paired = SCFPhysicalState(
+                paired_x,
+                replace(paired.map_result, mapped_x=paired_map_x),
+            )
+            paired_residual = _residual(
+                paired_map_x - paired_x, next_residual_projection
+            )
+            next_thresholds = resolve_certification_thresholds(
+                next_problem,
+                x_atol=x_atol,
+                x_atol_max=x_atol_max,
+                dtype=guess.dtype,
+                profile=certification_profile,
+                requested_x_atol=requested_x_atol,
+                requested_x_atol_max=requested_x_atol_max,
+            )
+            paired_certification = certify_scf_core_state(
+                next_problem,
+                paired,
+                next_thresholds,
+                fixed_point_residual=paired_residual,
+            )
+            next_damp = (
+                default_stage_damp
+                if next_stage.initial_damp is None
+                and default_stage_damp is not None
+                else (
+                    initial_damp
+                    if next_stage.initial_damp is None
+                    else next_stage.initial_damp
+                )
+            )
+            next_damping = DampingState(
+                guess.new_tensor(next_damp),
+                torch.zeros((), dtype=torch.bool, device=guess.device),
+            )
+            next_terminal = paired_certification.terminal_failed
+            next_certified = paired_certification.certified
+            if bool(next_certified) or bool(next_terminal):
+                state = replace(
+                    state,
+                    current_x=paired.x,
+                    map_input_x=paired.x,
+                    method_observation_x=paired.x,
+                    method_observation=paired.map_result,
+                    method_state=None,
+                    damping_state=next_damping,
+                    map_result=paired.map_result,
+                    residual=paired_residual.as_tensor(),
+                    active=~(next_certified | next_terminal),
+                    certified=next_certified,
+                    terminal_failed=next_terminal,
+                    certification=paired_certification,
+                )
+            else:
+                paired_proposal = _method_transition(
+                    next_problem,
+                    next_stage.method,
+                    paired.x,
+                    paired.map_result,
+                    paired_map_x,
+                    None,
+                    1,
+                    torch.ones_like(state.active),
+                    next_damping.value,
+                )
+                proposed_x = (
+                    next_state_projection(paired_proposal.x)
+                    if next_state_projection is not None
+                    else paired_proposal.x
+                )
+                state = replace(
+                    state,
+                    current_x=proposed_x,
+                    map_input_x=paired.x,
+                    method_observation_x=paired.x,
+                    method_observation=paired.map_result,
+                    method_state=paired_proposal.state,
+                    damping_state=next_damping,
+                    map_result=paired.map_result,
+                    residual=paired_residual.as_tensor(),
+                    active=torch.ones_like(state.active),
+                    certified=torch.zeros_like(state.certified),
+                    terminal_failed=torch.zeros_like(state.terminal_failed),
+                    certification=paired_certification,
+                )
+
+            current_stage_index = next_stage_index
+            current_stage = next_stage
+            current_problem = next_problem
+            current_map_fn = next_problem.map
+            current_method = next_stage.method
+            current_state_projection = next_state_projection
+            current_residual_projection = next_residual_projection
+            current_project_initial_state = next_project_initial_state
+            thresholds = next_thresholds
+            stage_iterations[next_stage_index] = zero.clone()
+            switch_reasons[next_stage_index - 1] = torch.tensor(
+                int(switch_reason), dtype=torch.int64, device=guess.device
+            )
+            if candidate_certification is None:
+                raise RuntimeError(
+                    "A physical strategy switch requires core certification "
+                    "metrics."
+                )
+            switch_metrics[next_stage_index - 1] = SCFSwitchMetrics(
+                fixed_point_l2=candidate_residual.l2,
+                fixed_point_max=candidate_residual.max_abs,
+                stationarity=(
+                    candidate_certification.metrics.stationarity_orthogonalized_l2_per_sqrt_orbital
+                ),
+            )
+            switch_count = switch_count + 1
+            method_step = 2
+        else:
+            method_step += 1
+
+    if (
+        current_problem is not None
+        and thresholds is not None
+        and bool(state.active)
+    ):
         state = replace(
             state,
             certification=certify_scf_core_state(
-                problem,
+                current_problem,
                 SCFPhysicalState(
                     state.map_input_x,
                     state.map_result,
@@ -1212,7 +1613,19 @@ def _solve_map_control_eager(
             ),
         )
 
-    return _solver_outcome(state, converged=state.certified)
+    return _solver_outcome(
+        state,
+        converged=state.certified,
+        final_problem=current_problem,
+        strategy_diagnostics=_strategy_diagnostics(
+            current_stage_index,
+            switch_count,
+            stage_iterations,
+            switch_reasons,
+            like=guess,
+            switch_metrics=switch_metrics,
+        ),
+    )
 
 
 def _initialize_solver_control(
@@ -1279,6 +1692,8 @@ def _initialize_solver_control(
     return _SolverControlState(
         current_x=current_x,
         map_input_x=initial_guess,
+        method_observation_x=initial_guess,
+        method_observation=_finite_map_result(initial),
         method_state=method_state,
         damping_state=damping,
         map_result=initial,
@@ -1315,6 +1730,27 @@ def _finite_map_result(result: SCFMapResult) -> SCFMapResult:
     return cast(SCFMapResult, finite_tree(result))
 
 
+def _map_result_is_finite(result: SCFMapResult) -> Tensor:
+    """Return a tensor predicate for finiteness of floating map leaves."""
+    checks: list[Tensor] = []
+
+    def collect(value) -> None:
+        if isinstance(value, Tensor):
+            if value.is_floating_point() or value.is_complex():
+                checks.append(torch.isfinite(value).all())
+        elif is_dataclass(value):
+            for item in fields(value):
+                collect(getattr(value, item.name))
+        elif isinstance(value, tuple):
+            for item in value:
+                collect(item)
+
+    collect(result)
+    if not checks:
+        return torch.ones((), dtype=torch.bool, device=result.mapped_x.device)
+    return torch.stack(checks).all()
+
+
 def _solver_control_step(
     state: _SolverControlState,
     candidate: SCFMapResult,
@@ -1329,6 +1765,7 @@ def _solver_control_step(
     residual_projection: Callable[[Tensor], Tensor] | None,
     project_initial_state: bool,
     certification: SCFCertificationCoreResult | None = None,
+    method_transition_active: Tensor | None = None,
 ) -> _SolverControlState:
     """Advance one raw map using canonical result/method/status ordering."""
     trajectory_status = accumulate_trajectory_status(
@@ -1359,19 +1796,38 @@ def _solver_control_step(
         state.active, state.iterations + 1, state.iterations
     )
     transition_active = state.active & ~certified_event & ~terminal_event
+    method_active = (
+        transition_active
+        if method_transition_active is None
+        else transition_active & method_transition_active
+    )
     transition_candidate_x = _select_tensor(
         terminal_event, state.current_x, candidate_x
     )
     transition_map_result = _select_map_result(
         terminal_event, state.map_result, candidate
     )
-    mixed_x, method_state = _transition_proposal(
-        state.current_x,
+    method_map_result = _select_map_result(
+        method_active,
         transition_map_result,
-        transition_candidate_x,
+        state.method_observation,
+    )
+    method_input_x = _select_tensor(
+        method_active, state.current_x, state.method_observation_x
+    )
+    stable_proposal_x = state.method_observation.mapped_x
+    if project_initial_state and state_projection is not None:
+        stable_proposal_x = state_projection(stable_proposal_x)
+    method_proposal_x = _select_tensor(
+        method_active, transition_candidate_x, stable_proposal_x
+    )
+    mixed_x, method_state = _transition_proposal(
+        method_input_x,
+        method_map_result,
+        method_proposal_x,
         state.method_state,
         method_step,
-        transition_active,
+        method_active,
         state.damping_state.value,
         problem=problem,
         method=method,
@@ -1384,11 +1840,20 @@ def _solver_control_step(
     )
     if state_projection is not None:
         mixed_x = state_projection(mixed_x)
-    current_x = _select_tensor(transition_active, mixed_x, state.current_x)
+    current_x = _select_tensor(method_active, mixed_x, state.current_x)
+    observation_active = (
+        state.active & ~terminal_event & _map_result_is_finite(candidate)
+    )
     return _SolverControlState(
         current_x=current_x,
         map_input_x=_select_tensor(
             state.active, state.current_x, state.map_input_x
+        ),
+        method_observation_x=_select_tensor(
+            observation_active, state.current_x, state.method_observation_x
+        ),
+        method_observation=_select_map_result(
+            observation_active, candidate, state.method_observation
         ),
         method_state=method_state,
         damping_state=damping,
@@ -1418,6 +1883,8 @@ def _solver_outcome(
     *,
     converged: Tensor,
     trace: SCFSolverTrace | None = None,
+    final_problem: SCFProblem | None = None,
+    strategy_diagnostics: SCFStrategyDiagnostics | None = None,
 ) -> _SolverOutcome:
     """Materialize solver status from shared controller state."""
     return _SolverOutcome(
@@ -1431,6 +1898,8 @@ def _solver_outcome(
         terminal_failed=state.terminal_failed,
         certification=state.certification,
         trace=trace,
+        final_problem=final_problem,
+        strategy_diagnostics=strategy_diagnostics,
     )
 
 
@@ -1553,6 +2022,7 @@ def finalize_scf(
     root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
+    strategy_diagnostics: SCFStrategyDiagnostics | None = None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -1601,6 +2071,7 @@ def finalize_scf(
                 if certification is None
                 else SCFPhysicalCertificationDiagnostics(certification)
             ),
+            strategy=strategy_diagnostics,
         ),
         trace=trace,
     )
@@ -1620,6 +2091,7 @@ def finalize_scf_potential(
     root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
+    strategy_diagnostics: SCFStrategyDiagnostics | None = None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra representation conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -1668,6 +2140,7 @@ def finalize_scf_potential(
                 if certification is None
                 else SCFPhysicalCertificationDiagnostics(certification)
             ),
+            strategy=strategy_diagnostics,
         ),
         trace=trace,
     )
@@ -1686,6 +2159,7 @@ def finalize_scf_fock(
     root_x: Tensor,
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
+    strategy_diagnostics: SCFStrategyDiagnostics | None = None,
 ) -> SCFSolveResult:
     """Finalize Fock mode from one spectrum of the selected mapped matrix."""
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
@@ -1733,6 +2207,7 @@ def finalize_scf_fock(
                 if certification is None
                 else SCFPhysicalCertificationDiagnostics(certification)
             ),
+            strategy=strategy_diagnostics,
         ),
         trace=trace,
     )

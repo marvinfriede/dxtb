@@ -100,7 +100,12 @@ from .method import (
     SCFMethodProposal,
     SCFMethodState,
 )
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .problem import (
+    SCFPhysicalState,
+    SCFProblem,
+    SCFRepresentation,
+    convert_physical_state_to_fock,
+)
 from .solver import (
     DampingState,
     DynamicDampingSettings,
@@ -109,6 +114,9 @@ from .solver import (
     SCFSolverDiagnostics,
     SCFSolveResult,
     SCFSolverSettings,
+    SCFStrategyDiagnostics,
+    SCFSwitchMetrics,
+    SCFSwitchReason,
     SCFTrajectoryStatus,
     accumulate_trajectory_status,
     fermi_status_ok,
@@ -131,7 +139,7 @@ from .solver import (
     solve_scf_simple,
     trajectory_status_from_map,
 )
-from .strategy import SCFStage, SCFStrategy
+from .strategy import SCFStage, SCFStrategy, SCFSwitchPolicy
 
 __all__ = [
     "AndersonMethod",
@@ -168,8 +176,13 @@ __all__ = [
     "SCFProgressMetrics",
     "SCFProblem",
     "SCFRepresentation",
+    "convert_physical_state_to_fock",
     "SCFResidual",
+    "SCFStrategyDiagnostics",
+    "SCFSwitchReason",
     "SCFStage",
+    "SCFSwitchMetrics",
+    "SCFSwitchPolicy",
     "SCFStrategy",
     "SCFSolveResult",
     "SCFTrajectoryStatus",

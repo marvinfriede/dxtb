@@ -25,10 +25,10 @@ and mapped implicit differentiation.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import IntEnum
-import warnings
 
 import torch
 from tad_mctc.autograd import is_functorch_tensor
@@ -85,7 +85,6 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.anderson import _solve_map_anderson
 from dxtb._src.scf.functional.core import replace_tensor_leaves, tensor_leaves
 from dxtb._src.scf.functional.data import (
     PotentialLayout,
@@ -98,7 +97,7 @@ from dxtb._src.scf.functional.data import (
 from dxtb._src.scf.functional.eager import (
     _padded_charge_projections,
     _padded_potential_projections,
-    _solver_settings,
+    _prepare_solver,
     public_scf_status,
     resolve_full_scf_route,
 )
@@ -124,7 +123,6 @@ from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_NONE,
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
     DampingState,
-    SCFSolverSettings,
     SCFTrajectoryStatus,
     _project_potential_padding,
     _solve_map,
@@ -761,7 +759,7 @@ def prepare_converged_root_batch(
     )
 
     representation = route.representation
-    settings = _solver_settings(effective_scf_config, positions.dtype)
+    settings, strategy = _prepare_solver(effective_scf_config, positions.dtype)
     has_padding = bool((numbers == 0).any())
 
     lanes: list[ConvergedRootLaneRecord] = []
@@ -908,22 +906,14 @@ def prepare_converged_root_batch(
             if lane_padded and state_projection is not None:
                 initial_state = state_projection(initial_state)
 
-            if isinstance(settings, SCFSolverSettings):
-                outcome = _solve_map(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
-            else:
-                outcome = _solve_map_anderson(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
+            outcome = _solve_map(
+                initial_state,
+                settings,
+                map_fn,
+                state_projection=state_projection,
+                strategy=strategy,
+                eager=True,
+            )
 
             adapter, primal_params = _SCFMapTensorTree.prepare(
                 primal_inputs, representation, layout
@@ -1371,7 +1361,7 @@ def _refresh_prepared_batch_inputs(
             f"has {batch_size} lanes."
         )
     effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
-    settings = _solver_settings(effective_scf_config, positions.dtype)
+    settings, _ = _prepare_solver(effective_scf_config, positions.dtype)
     if chrg is _UNSET:
         charges = tuple(
             lane.charge.to(device=positions.device, dtype=positions.dtype)
@@ -1850,6 +1840,7 @@ def evaluate_converged_root_batch(
                     residual,
                     traj_status,
                     damp_state,
+                    root_x=attached,
                 )
             elif representation == labels.SCP_MODE_POTENTIAL:
                 assert layout is not None
@@ -1862,6 +1853,7 @@ def evaluate_converged_root_batch(
                     residual,
                     traj_status,
                     damp_state,
+                    root_x=attached,
                 )
             else:
                 finalized = finalize_scf_fock(
@@ -1872,6 +1864,7 @@ def evaluate_converged_root_batch(
                     residual,
                     traj_status,
                     damp_state,
+                    root_x=attached,
                 )
             dummy = finalized.energy.new_zeros(())
             q_dip = (
