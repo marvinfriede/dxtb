@@ -33,6 +33,7 @@ API.
 | `20-scf-s4-native-broyden.md` | Adds native limited-memory Broyden first-method updates, routes supported representations through the shared controller, and records rank/physical-case evidence |
 | `21-scf-s4-review-gate.md` | Records independent S4 equation/safeguard review, expanded rank and Fock evidence, the short-trajectory parity classification, and Python 3.10 dependency status |
 | `22-scf-s5-native-cdiis.md` | Adds internal Fock-space commutator CDIIS with orthogonalized stationarity errors, bounded Pulay history, dtype-aware conditioning safeguards, and standalone characterization |
+| `23-scf-s6-strategy-switching.md` | Adds eager multi-stage strategy control, compact-to-Fock observation conversion, Broyden/Anderson to CDIIS characterization, and fixed-trip inactive-lane sanitation |
 
 The design review referenced by the plan is not in the repository.
 
