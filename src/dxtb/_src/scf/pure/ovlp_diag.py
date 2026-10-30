@@ -1,110 +1,51 @@
+# This file is part of dxtb.
+#
+# SPDX-Identifier: Apache-2.0
+# Copyright (C) 2024 Grimme Group
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Generalized symmetric eigensolve for the retained GFN0 route."""
+
 from __future__ import annotations
 
 import torch
+from tad_mctc import storch
 
-from dxtb._src.exlibs import xitorch as xt
 from dxtb._src.timing.decorator import timer_decorator
 from dxtb._src.typing import Tensor
 
-__all__ = ["get_overlap", "diagonalize", "symeig_padded"]
-
-PADDING_SHIFT = 1e3
-"""
-Diagonal of the padding block of the Hamiltonian (Hartree) during the
-diagonalization, which moves the eigenvalues of the padding orbitals behind
-all physical ones.
-"""
-
-
-def symeig_padded(
-    hamiltonian: Tensor, smat: Tensor, eigen_options: dict
-) -> tuple[Tensor, Tensor]:
-    """
-    Generalized eigendecomposition of zero-padded (batched) matrices.
-
-    The occupation is masked by orbital position, i.e., it requires the
-    eigenvalues of the padding orbitals at the end, as
-    :func:`tad_mctc.storch.eighb` does for the unrolled SCF. With a zero
-    padding block, the padding eigenvalues are 0 and are sorted between the
-    physical ones, which gives electrons to padding orbitals whenever an
-    orbital close to zero is (partially) occupied, e.g., for anions in a
-    padded batch. The padding block of the Hamiltonian is therefore shifted
-    for the diagonalization and the padding eigenvalues are reported as 0.
-
-    Parameters
-    ----------
-    hamiltonian : Tensor
-        Current Hamiltonian matrix.
-    smat : Tensor
-        Current overlap matrix.
-    eigen_options : dict
-        Options for calculating EVs.
-
-    Returns
-    -------
-    evals : Tensor
-        Eigenvalues of the Hamiltonian.
-    evecs : Tensor
-        Eigenvectors of the Hamiltonian.
-    """
-    zeros = torch.eq(smat, 0)
-    mask = torch.all(zeros, dim=-1) & torch.all(zeros, dim=-2)
-
-    h_op = xt.LinearOperator.m(
-        hamiltonian + torch.diag_embed(PADDING_SHIFT * mask.type(smat.dtype))
-    )
-    o_op = get_overlap(smat)
-    evals, evecs = xt.linalg.lsymeig(A=h_op, M=o_op, **eigen_options)
-
-    # padding orbitals are at the end, as in the (padded) AO order
-    return torch.where(mask, torch.zeros_like(evals), evals), evecs
-
-
-def get_overlap(smat: Tensor) -> xt.LinearOperator:
-    """
-    Get the overlap matrix.
-
-    Parameters
-    ----------
-    smat : Tensor
-        Current overlap matrix as tensor.
-
-    Returns
-    -------
-    LinearOperator
-        Overlap matrix as linear operator.
-    """
-
-    zeros = torch.eq(smat, 0)
-    mask = torch.all(zeros, dim=-1) & torch.all(zeros, dim=-2)
-
-    return xt.LinearOperator.m(
-        smat + torch.diag_embed(smat.new_ones(*smat.shape[:-2], 1) * mask)
-    )
+__all__ = ["diagonalize"]
 
 
 @timer_decorator("Diagonalize", "SCF")
-def diagonalize(
-    hamiltonian: Tensor, ovlp: Tensor, eigen_options: dict
-) -> tuple[Tensor, Tensor]:
+def diagonalize(hamiltonian: Tensor, overlap: Tensor) -> tuple[Tensor, Tensor]:
+    """Solve the padded generalized problem ``H C = S C e``.
+
+    ``storch.eighb`` handles zero-overlap padding by moving ghost orbitals to
+    the end and returning their eigenvalues as zero. This is the ordering
+    required by the occupation mask in the retained non-self-consistent GFN0
+    path, so no artificial Hamiltonian shift is needed.
     """
-    Diagonalize the Hamiltonian.
+    differentiable = hamiltonian.requires_grad or overlap.requires_grad
+    broadening_method = "lorn" if differentiable else None
+    factor = torch.finfo(hamiltonian.dtype).eps ** 0.5
 
-    Parameters
-    ----------
-    hamiltonian : Tensor
-        Current Hamiltonian matrix.
-    ovlp : Tensor
-        Current overlap matrix.
-    eigen_options : dict
-        Options for calculating EVs.
-
-    Returns
-    -------
-    evals : Tensor
-        Eigenvalues of the Hamiltonian.
-    evecs : Tensor
-        Eigenvectors of the Hamiltonian.
-    """
-
-    return symeig_padded(hamiltonian, ovlp, eigen_options)
+    return storch.eighb(
+        hamiltonian,
+        overlap,
+        sort_out=True,
+        aux=True,
+        is_posdef=False,
+        broadening_method=broadening_method,
+        factor=factor,
+    )

@@ -31,7 +31,7 @@ from dxtb._src.components.interactions import (
     Potential,
 )
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Any, Tensor
+from dxtb._src.typing import Tensor
 from dxtb.config import ConfigSCF
 
 from .pure.conversions import density_to_charges, hamiltonian_to_density
@@ -67,7 +67,6 @@ def solve_nonselfconsistent(
     integrals: IntegralMatrices,
     n0: Tensor,
     occupation: Tensor,
-    **kwargs: Any,
 ) -> SCFResult:
     """
     Solve a non-self-consistent electronic problem with exactly one eigensolve.
@@ -93,11 +92,6 @@ def solve_nonselfconsistent(
         cache=cache,
         integrals=integrals,
     )
-
-    data.eigen_options = {
-        "method": "exacteig",
-        **kwargs.pop("eigen_options", {}),
-    }
 
     # H0 is the full Hamiltonian for the non-self-consistent method.
     data.hamiltonian = integrals.hcore
