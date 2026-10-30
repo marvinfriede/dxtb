@@ -152,7 +152,7 @@ The only failure is
 absolute difference `2.5007065862503453e-11` against `2e-13`. Its test
 tolerance and Anderson implementation were not changed. Python 3.11 / PyTorch
 2.8.0 passed the selected standard-threshold, float32 count, vmap/JVP/jacfwd/
-nested metric, implicit-root, and fixed-trip transform smoke tests (7 passed).
+nested metric, implicit-root, and fixed-trip transform smoke tests (8 passed).
 
 ## Deferred work
 
