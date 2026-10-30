@@ -36,6 +36,7 @@ from dxtb._src.scf.functional import (
     SCFSolverSettings,
     SCFStage,
     SCFStrategy,
+    SCFSwitchPolicy,
     fock_initial_guess,
     fock_map,
     functional_subsolves_ok,
@@ -258,29 +259,35 @@ def test_linear_method_matches_simple_mix(
     assert proposal.state is None
 
 
-def test_single_stage_strategy_is_required_for_execution() -> None:
-    """S1 accepts one stage and rejects method switching explicitly."""
+def test_single_stage_strategy_helper_rejects_dynamic_execution() -> None:
+    """The fixed-trip convenience rejects eager-only stage composition."""
     method = LinearMethod()
     stage = SCFStage(method)
     assert SCFStrategy((stage,)).single_stage() is stage
-    with pytest.raises(NotImplementedError, match="exactly one"):
-        SCFStrategy((stage, stage)).single_stage()
+    first = SCFStage(
+        method, switch_policy=SCFSwitchPolicy(max_stage_iterations=2)
+    )
+    with pytest.raises(NotImplementedError, match="eager-only"):
+        SCFStrategy((first, stage)).single_stage()
 
 
-def test_multi_stage_strategy_is_rejected_by_solver_entry() -> None:
-    """The S1 solver does not silently ignore later strategy stages."""
+def test_fixed_trip_multi_stage_strategy_is_rejected_by_solver_entry() -> None:
+    """Fixed-trip execution rejects dynamic stages rather than ignoring them."""
     case = _prepare_case(GFN1_XTB)
     problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
     settings = SCFSolverSettings(1, False, 0.4, 1.0e-8, 1.0e-8)
-    stage = SCFStage(LinearMethod())
+    stage = SCFStage(
+        LinearMethod(), switch_policy=SCFSwitchPolicy(max_stage_iterations=1)
+    )
+    final = SCFStage(LinearMethod())
 
-    with pytest.raises(NotImplementedError, match="exactly one"):
+    with pytest.raises(NotImplementedError, match="eager-only"):
         _solve_map(
             case.x,
             settings,
             problem.map,
             problem=problem,
-            strategy=SCFStrategy((stage, stage)),
+            strategy=SCFStrategy((stage, final)),
         )
 
 
