@@ -2582,16 +2582,10 @@ def test_b6a_functional_interaction_family_matrix(
     _assert_persistent_identity_unchanged(system, before)
 
 
-def test_functional_map_has_no_legacy_stateful_hooks() -> None:
+def test_functional_modules_have_no_legacy_stateful_hooks() -> None:
+    """All functional modules remain free of legacy mutable-owner hooks."""
     root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
-    # E3.1b's isolated implicit-root primitive is the sole custom transform
-    # boundary. Keep this architectural guard focused on the raw-map and
-    # solver implementation, which must remain ordinary functional code.
-    source = "\n".join(
-        path.read_text()
-        for path in root.glob("*.py")
-        if path.name != "implicit.py"
-    )
+    source = "\n".join(path.read_text() for path in root.glob("*.py"))
     for forbidden in (
         "_Data",
         ".cull(",
@@ -2600,9 +2594,28 @@ def test_functional_map_has_no_legacy_stateful_hooks() -> None:
         ".update(",
         "self._data",
         "object.__setattr__",
-        "torch.autograd.Function",
         "cache_is_latest",
+    ):
+        assert forbidden not in source
+
+
+def test_transform_capable_functional_paths_avoid_host_tensor_extraction() -> (
+    None
+):
+    """Transform-capable paths avoid host extraction; eager SOSCF is exempt."""
+    root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
+    # The implicit-root adapter owns a custom transform boundary. SOSCF is an
+    # eager-only method in S8; orbital.py contains its eager-only fixed-sector
+    # pair construction. The capability and fixed-trip rejection are locked
+    # by test_functional_soscf.py; removing host setup is S12.
+    source = "\n".join(
+        path.read_text()
+        for path in root.glob("*.py")
+        if path.name not in ("implicit.py", "orbital.py", "soscf.py")
+    )
+    for forbidden in (
         ".item(",
         ".tolist(",
+        "torch.autograd.Function",
     ):
         assert forbidden not in source

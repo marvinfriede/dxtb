@@ -28,101 +28,88 @@ from dxtb._src.scf.functional import (
     setup_simple_solver_settings,
     solve_scf_simple,
 )
+from dxtb._src.wavefunction import filling
 
-from .test_functional_map import _assert_directional_fd, _prepare_case
+from .test_functional_map import _prepare_case
 
 
-def test_positive_subcutoff_temperature_preserves_legacy_free_energy() -> None:
-    """Positive sub-cutoff kT keeps the legacy Aufbau entropy contribution."""
+def test_positive_subcutoff_temperature_matches_low_temperature_entropy() -> (
+    None
+):
+    """Sub-cutoff free energy matches the independent Aufbau entropy."""
     cutoff_kelvin = 3.0e-7 / KELVIN2AU
     temperature = 0.5 * cutoff_kelvin
     options = {
         "mixer": labels.MIXER_LINEAR,
         "maxiter": 0,
         "fermi_etemp": temperature,
+        "fermi_partition": labels.FERMI_PARTITION_EQUAL,
     }
-    legacy = _prepare_case(GFN1_XTB, charge=0.3, scf_options=options)
-    functional = _prepare_case(GFN1_XTB, charge=0.3, scf_options=options)
-
-    legacy.engine.scf(legacy.x, return_charges=False)
-    expected = legacy.engine.get_electronic_free_energy()
+    case = _prepare_case(GFN1_XTB, charge=0.3, scf_options=options)
     actual = solve_scf_simple(
-        functional.x,
-        functional.inputs,
+        case.x,
+        case.inputs,
         setup_simple_solver_settings(
-            functional.system.config.scf, functional.positions.dtype
+            case.system.config.scf, case.positions.dtype
         ),
     )
+    settings = case.inputs.fermi_settings
+    assert settings is not None
+    assert settings.smear is False
+    expected_orbital = filling.get_fermi_entropy_low_temperature(
+        case.inputs.occupation, settings.kt
+    )
+    expected_total = expected_orbital.sum()
 
-    assert torch.count_nonzero(expected) > 0
-    torch.testing.assert_close(actual.fenergy, expected, rtol=0.0, atol=0.0)
+    assert torch.count_nonzero(expected_total) > 0
+    torch.testing.assert_close(
+        actual.fenergy.sum(), expected_total, rtol=0.0, atol=2.0e-13
+    )
+    torch.testing.assert_close(
+        actual.fenergy,
+        expected_total.expand_as(actual.fenergy) / case.system.numbers.numel(),
+        rtol=0.0,
+        atol=2.0e-13,
+    )
 
 
-def test_subcutoff_fractional_charge_gradient_matches_legacy() -> None:
-    """Positive sub-cutoff entropy keeps the fractional-charge derivative."""
-    from tad_mctc import storch
-
+def test_subcutoff_entropy_fractional_charge_gradient_matches_reference() -> (
+    None
+):
+    """Sub-cutoff entropy has the reference fractional-charge derivative."""
     cutoff_kelvin = 3.0e-7 / KELVIN2AU
     options = {
         "mixer": labels.MIXER_LINEAR,
         "maxiter": 0,
         "fermi_etemp": 0.5 * cutoff_kelvin,
+        "fermi_partition": labels.FERMI_PARTITION_EQUAL,
     }
     charge = torch.tensor([0.3], dtype=torch.float64, requires_grad=True)
-    functional = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
+    case = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
     actual = solve_scf_simple(
-        functional.x,
-        functional.inputs,
+        case.x,
+        case.inputs,
         setup_simple_solver_settings(
-            functional.system.config.scf, functional.positions.dtype
+            case.system.config.scf, case.positions.dtype
         ),
     )
+    settings = case.inputs.fermi_settings
+    assert settings is not None
+    assert settings.smear is False
     actual_gradient = torch.autograd.grad(
-        (actual.energy + actual.fenergy).sum(), charge
+        actual.fenergy.sum(), charge, retain_graph=True
     )[0]
-
-    def total_at_charge(value: torch.Tensor) -> torch.Tensor:
-        local = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
-        local_result = solve_scf_simple(
-            local.x,
-            local.inputs,
-            setup_simple_solver_settings(
-                local.system.config.scf, local.positions.dtype
-            ),
-        )
-        return (local_result.energy + local_result.fenergy).sum()
-
-    _assert_directional_fd(total_at_charge, charge, actual_gradient)
-
-    legacy = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
-
-    def _unbroadened_diagonalize(
-        hamiltonian: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        l_inv = legacy.engine._get_inv_cholesky()
-        return storch.eighb(
-            a=hamiltonian,
-            b=None,
-            l_inv=l_inv,
-            is_posdef=True,
-            broadening_method=None,
-        )
-
-    legacy.engine.diagonalize = _unbroadened_diagonalize
-    raw = legacy.engine.scf(legacy.x, return_charges=False)
-    charges = legacy.engine.converged_to_charges(raw)
-    legacy_value = legacy.engine.get_energy(charges).sum()
-    legacy_value = (
-        legacy_value + legacy.engine.get_electronic_free_energy().sum()
-    )
-    expected_gradient = torch.autograd.grad(legacy_value, charge)[0]
+    expected = filling.get_fermi_entropy_low_temperature(
+        case.inputs.occupation, settings.kt
+    ).sum()
+    expected_gradient = torch.autograd.grad(expected, charge)[0]
     torch.testing.assert_close(
         actual_gradient, expected_gradient, rtol=0.0, atol=2.0e-13
     )
 
 
-def test_temperature_cutoff_boundaries_preserve_legacy_split() -> None:
-    """Only exact zero omits free-energy settings; cutoff equality smears."""
+def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
+    """Exact zero, sub-cutoff, and smeared temperatures keep their contracts."""
     cutoff = 3.0e-7
     cases = [
         (0.0, None),
@@ -174,17 +161,20 @@ def test_temperature_cutoff_boundaries_preserve_legacy_split() -> None:
                 assert result.trajectory_status is None
                 assert result.final_evaluation.fermi_status is None
                 assert functional_subsolves_ok(result).item() is True
-                case.engine.scf(case.x, return_charges=False)
+                assert settings is not None
+                expected_entropy = filling.get_fermi_entropy_low_temperature(
+                    case.inputs.occupation, settings.kt
+                ).sum()
                 torch.testing.assert_close(
-                    result.fenergy,
-                    case.engine.get_electronic_free_energy(),
+                    result.fenergy.sum(),
+                    expected_entropy,
                     rtol=0.0,
-                    atol=0.0,
+                    atol=2.0e-13,
                 )
 
 
-def test_outer_convergence_and_fermi_status_remain_separate() -> None:
-    """Outer SCF may converge while its selected inner Fermi search fails."""
+def test_raw_fixed_point_and_fermi_status_remain_separate() -> None:
+    """Raw fixed-point progress is distinct from Fermi validity/certification."""
     case = _prepare_case(
         GFN1_XTB,
         sample_name="H2O",
@@ -207,7 +197,12 @@ def test_outer_convergence_and_fermi_status_remain_separate() -> None:
         ),
     )
     status = result.map_result.fermi_status
-    assert result.converged.item() is True
+    certification = result.diagnostics.certification.result
+    assert certification.fixed_point_ok.item() is True
+    assert certification.fermi_ok.item() is False
+    assert certification.certified.item() is False
+    assert result.converged.item() is False
     assert status is not None
     assert not bool(status.converged.all())
     assert functional_subsolves_ok(result).item() is False
+    assert functional_converged_and_valid(result).item() is False
