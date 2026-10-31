@@ -58,7 +58,9 @@ For H2/GFN1, H2O/GFN1, H2O/GFN2, and NO2/GFN2, local HVPs match dense test
 Hessians and have symmetric bilinear products. A centered gradient difference
 also agrees for H2O/GFN2. The HVP is the actual energy Hessian, not the
 orbital-energy denominator. The denominator is used only as a positive
-preconditioner.
+preconditioner. The production proposal uses the analytic origin gradient;
+the independent AD gradient identity remains a test gate and is not recomputed
+on every macroiteration.
 
 ## Inner solve and step acceptance
 
@@ -76,12 +78,15 @@ case. Negative curvature increases the level shift geometrically and restarts
 the inner solve. If retries fail, the method uses a recorded preconditioned
 orbital-gradient descent fallback. No CDIIS fallback is hidden inside SOSCF.
 
-The step is bounded by an internal trust radius and backtracked from the
-controller-provided damping. Acceptance uses an Armijo energy condition with
-an energy-scale and dtype-aware roundoff allowance. Each accepted trial must
-preserve the ordering of differently occupied Fock orbital energies. The
-state records gradient/step norms, inner residual, microiterations, HVP count,
-level shift, line-search alpha/trials, negative curvature, and fallback use.
+The step is bounded by an internal trust/step-radius bound and backtracked from
+the controller-provided damping; the radius is not adapted by a predicted vs
+actual reduction ratio. Acceptance uses an Armijo energy condition with an
+energy-scale and dtype-aware roundoff allowance. The stored predicted
+reduction is the linear directional decrease `-g.dot(s)` used by Armijo, not
+the quadratic Newton-model reduction. Each accepted trial must preserve the
+spectral ordering of the differently occupied Fock blocks. The state records
+gradient/step norms, inner residual, microiterations, HVP count, level shift,
+line-search alpha/trials, negative curvature, and fallback use.
 
 ## Fock seed and physical certification
 
@@ -105,6 +110,11 @@ perform an eigensolve or an additional physical map.
 The shared S2 certification remains authoritative and still checks both the
 Fock fixed-point residual and physical stationarity. An orbital gradient alone
 cannot declare convergence.
+
+SOSCF performs no additional physical SCF map or generalized AO eigensolve in
+its proposal. S8.1 adds small symmetric eigenspectra of equal-occupation MO
+blocks for Aufbau-sector safety; these block checks are not an AO diagonalize
+step.
 
 ## Strategy and implicit response
 
@@ -176,3 +186,115 @@ package handoff.
 
 No public default/configuration changes, EDIIS/ADIIS, finite-temperature
 SOSCF, S9, S10, S11, or transform support for SOSCF were started.
+
+## S8.1 precision and occupation-sector hardening
+
+The post-S8 review reproduced an accuracy ceiling in the stationary reseed
+shortcut. On the S8 baseline, the threshold was
+`sqrt(eps) * max(abs(Ffresh), 1)`, which is `1.4901e-8` for the tested H2O/GFN2
+Fock scale. A `1e-9` rotation from an independently converged CDIIS root had
+orbital-gradient norm `3.0065552e-9` and fixed-point residual
+`1.0055848e-9`, but produced an SOSCF proposal with zero HVPs. Repeating the
+old proposal three times left the fixed-point residual at `1.00558e-9`, with
+zero HVPs and only `1.4e-15` to `3.0e-15` changes in the proposed seed.
+
+The shortcut now uses the separate `stationary_atol_factor` setting, default
+32, and
+
+```text
+floor = factor * eps * max(abs(Ffresh)) * sqrt(max(nrot, 1))
+```
+
+with the Fock scale clamped to at least one. At H2O/GFN2, `nrot=8` and this
+floor is `2.0097e-14`. The controlled `1e-9` displacement now performs HVPs,
+reduces the physical residual, and certifies at `x_atol=x_atol_max=1e-10`.
+Float64 and float32 tests characterize factors 10, 32, and 100. The genuine
+zero-gradient/stale-input-eigenvalue test tightens its CDIIS root to `1e-12`;
+the gradient remains below the epsilon-scale floor and still reseeds with
+zero HVPs.
+
+A second review finding showed that ordering the diagonal entries of
+`C.T @ Ffresh @ C` is gauge-dependent and insufficient when the seed retains
+full equal-occupation blocks. The adversarial `[2, 2, 0]` block
+`[[-1, 2], [2, -1]]` has diagonal entries below the virtual value zero, but
+its eigenvalues `[-3, 1]` interleave the virtual sector. The new
+`_occupation_sector_spectra()` and `_occupation_sector_order_valid()` helpers
+compute each active same-occupation block spectrum and require the maximum
+eigenvalue of every higher-occupation sector, plus the gap floor, to remain
+below the minimum eigenvalue of the next lower sector. The gap floor is scaled
+from the AO Fock magnitude and dtype, so same-sector MO gauge rotations do not
+change the threshold or verdict. This check runs at method entry, for each
+line-search trial, and defensively before seed construction. Unsafe trials
+backtrack; unsafe seeds raise. No diagonal-only seed was introduced.
+
+The open-shell NO2/GFN2 seed test rotates all `2->1`, `2->0`, and `1->0`
+coordinates by `1e-4`. Its sector gaps are positive and the next Fock map
+reproduces the accepted density, charges, and mapped Fock. A separate
+same-sector gauge test confirms unchanged block spectra and seeded physical
+map. A synthetic crossing trial that passes Armijo is rejected at the full
+step; the shorter `alpha=0.125` trial is accepted after the block spectra
+separate. The adversarial `[2,2,0]` fixture also diagonalizes the unsafe
+block-preserving seed: its occupied block eigenvalues interleave the virtual
+level, and Aufbau filling the global sorted spectrum changes the represented
+density. This demonstrates the physical failure mode behind the block check.
+
+### Tight-root and larger-system characterization
+
+The controlled H2O/GFN2 tight strategy uses three CDIIS maps followed by six
+SOSCF maps and certifies at `1e-10`. It takes 17 HVPs/microiterations, has a
+final fixed-point L2/max of `2.2622e-11` / `8.2266e-12`, stationarity
+`2.1358e-11`, orbital-gradient norm `7.3986e-11`, and energy
+`-5.104158799409648`. The SOSCF gradient trajectory decreases from
+`1.1214e-3` through `6.9874e-5`, `4.4193e-6`, `2.8127e-7`, `1.7970e-8`,
+and `1.1515e-9`.
+
+The open-shell NO2/GFN2/0 K strategy uses five CDIIS maps and eleven SOSCF
+maps and certifies at `1e-9`. It has 63 HVPs/microiterations, fixed-point
+L2/max `6.8309e-10` / `2.6521e-10`, stationarity `2.3547e-10`, electron-count
+error `7.1e-15`, final orbital-gradient norm `1.1536e-9`, and energy
+`-10.953075803272055`. The final occupation-sector spectral gaps are
+`0.1460373` for 2/1 and `0.0482472` for 1/0.
+
+The NO2 implicit geometry check perturbs the x coordinate of atom 0 and
+compares the sum of the prepared implicit Fock root from tight CDIIS and
+CDIIS-to-SOSCF roots. First derivatives are `-0.2725750100164` and
+`-0.2725750097151` (difference `3.0133e-10`). Second derivatives are
+`-1.5599331805206` and `-1.5599331798598` (difference `6.6083e-10`). This is
+reverse-over-reverse for the geometry-built PyTorch-integral path; the existing
+H2O geometry and hcore response controls remain in place.
+
+The C4H5NCS/GFN2/0 K CDIIS-to-SOSCF run exercises the full `nrot=360`
+production path (`nao=38`) and certifies in 17 physical maps: ten CDIIS and
+seven SOSCF. It performs 60 HVPs/microiterations, seven line-search trials,
+no negative-curvature retries, and no gradient fallback. Wall time is 2.46 s
+and the process peak is 1757.1 MiB on the recorded Python 3.14/PyTorch 2.14.1
+CPU environment. A float64 AO matrix is 11,552 bytes. The persistent method
+state has only O(nrot) vectors/scalars and no `nrot x nrot` Hessian. The final
+fixed-point L2/max is `7.9726e-8` / `2.8339e-8`, stationarity is `2.8367e-8`,
+and energy is `-19.694059708019115`.
+
+The S8.1 characterization script and raw JSON records are retained under
+`benchmarks/soscf_s81_characterize.py` and
+`benchmarks/results/soscf-s81/`; their SHA-256 hashes are recorded in the
+package handoff. An independent read-only review found no blocker or major
+issue; its minor request for explicit density reassignment evidence is covered
+by the synthetic regression above.
+
+### S8.1 regression record
+
+The final focused SOSCF file passed **55 tests** on Python 3.14/PyTorch 2.14.1
+and **55 tests** on Python 3.11/PyTorch 2.8.0, including the new synthetic
+seed-density reassignment assertion. A broader combined SCF/calculator
+selection completed with **630 passed and 5 failed**. Four failures are
+pre-existing `test_e6a0_system_vmap.py` assertions that expect the retired S7
+negative-temperature, negative-Fermi-iteration, experimental-mode, and strict
+Broyden legacy-routing behavior; S8.1 changes none of those routing files. The
+remaining failure is the accepted Anderson parity discrepancy
+`2.5007065862503453e-11` versus `2e-13`. These five results are not represented
+as S8.1 regressions passing. The exact cases are retained in the validation
+handoff. Black, isort, compileall, and `git diff --check` pass.
+
+The production proposal no longer computes a second AD gradient on every
+macroiteration. `torch.func.grad(energy_at)` remains in the HVP operator and
+in the independent gradient/Hessian test references. This avoids redundant
+reverse-mode work while preserving the analytic-gradient identity gate.
