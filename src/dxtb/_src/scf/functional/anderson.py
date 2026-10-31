@@ -199,6 +199,7 @@ def _solve_map_anderson(
     *,
     eager: bool = False,
     record_trace: bool = False,
+    record_initial_status: bool | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
 ) -> _SolverOutcome:
@@ -253,6 +254,7 @@ def _solve_map_anderson(
         guess,
         **common,
         record_trace=record_trace,
+        record_initial_status=record_initial_status,
     )
 
 
@@ -315,6 +317,7 @@ def solve_scf_potential_anderson(
         state_projection=project,
         eager=eager,
         record_trace=record_trace,
+        record_initial_status=True,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )
@@ -350,6 +353,7 @@ def solve_scf_fock_anderson(
         state_projection=state_projection,
         eager=eager,
         record_trace=record_trace,
+        record_initial_status=True,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )

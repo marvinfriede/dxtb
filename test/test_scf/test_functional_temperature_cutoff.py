@@ -29,7 +29,7 @@ from dxtb._src.scf.functional import (
     solve_scf_simple,
 )
 
-from .test_functional_map import _prepare_case
+from .test_functional_map import _assert_directional_fd, _prepare_case
 
 
 def test_positive_subcutoff_temperature_preserves_legacy_free_energy() -> None:
@@ -60,6 +60,8 @@ def test_positive_subcutoff_temperature_preserves_legacy_free_energy() -> None:
 
 def test_subcutoff_fractional_charge_gradient_matches_legacy() -> None:
     """Positive sub-cutoff entropy keeps the fractional-charge derivative."""
+    from tad_mctc import storch
+
     cutoff_kelvin = 3.0e-7 / KELVIN2AU
     options = {
         "mixer": labels.MIXER_LINEAR,
@@ -79,7 +81,34 @@ def test_subcutoff_fractional_charge_gradient_matches_legacy() -> None:
         (actual.energy + actual.fenergy).sum(), charge
     )[0]
 
+    def total_at_charge(value: torch.Tensor) -> torch.Tensor:
+        local = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
+        local_result = solve_scf_simple(
+            local.x,
+            local.inputs,
+            setup_simple_solver_settings(
+                local.system.config.scf, local.positions.dtype
+            ),
+        )
+        return (local_result.energy + local_result.fenergy).sum()
+
+    _assert_directional_fd(total_at_charge, charge, actual_gradient)
+
     legacy = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
+
+    def _unbroadened_diagonalize(
+        hamiltonian: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        l_inv = legacy.engine._get_inv_cholesky()
+        return storch.eighb(
+            a=hamiltonian,
+            b=None,
+            l_inv=l_inv,
+            is_posdef=True,
+            broadening_method=None,
+        )
+
+    legacy.engine.diagonalize = _unbroadened_diagonalize
     raw = legacy.engine.scf(legacy.x, return_charges=False)
     charges = legacy.engine.converged_to_charges(raw)
     legacy_value = legacy.engine.get_energy(charges).sum()

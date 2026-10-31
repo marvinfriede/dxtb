@@ -677,6 +677,7 @@ def _solve_map(
     *,
     eager: bool = False,
     record_trace: bool = False,
+    record_initial_status: bool | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
 ) -> _SolverOutcome:
@@ -714,6 +715,7 @@ def _solve_map(
         guess,
         **common,
         record_trace=record_trace,
+        record_initial_status=record_initial_status,
     )
 
 
@@ -733,10 +735,16 @@ def _solve_map_control(
     damping_settings: DynamicDampingSettings = DynamicDampingSettings(),
     state_projection: Callable[[Tensor], Tensor] | None = None,
     record_trace: bool = False,
+    record_initial_status: bool | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
 ) -> _SolverOutcome:
     """Run transform-compatible fixed-trip control around a raw map."""
+    record_initial = (
+        maxiter > 0
+        if record_initial_status is None
+        else record_initial_status
+    )
     state = _initialize_solver_control(
         guess,
         maxiter=maxiter,
@@ -745,7 +753,7 @@ def _solve_map_control(
         map_fn=map_fn,
         mix_fn=mix_fn,
         state_projection=state_projection,
-        record_initial_status=maxiter > 0,
+        record_initial_status=record_initial,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )
@@ -1206,6 +1214,18 @@ def free_energy_from_spectral(
         real = real_atoms(inputs.numbers)
         count = real.count_nonzero(dim=-1).unsqueeze(-1)
         return torch.where(real, (total / count).expand_as(real), 0.0)
+    if (
+        not settings.smear
+        and settings.partition == labels.FERMI_PARTITION_EQUAL
+    ):
+        entropy = filling.get_fermi_entropy_low_temperature(
+            spectral.occupation, settings.kt
+        )
+        entropy = torch.where(inputs.orbital_mask, entropy, 0.0)
+        total = entropy.sum(-1, keepdim=True)
+        real = real_atoms(inputs.numbers)
+        count = real.count_nonzero(dim=-1).unsqueeze(-1)
+        return torch.where(real, (total / count).expand_as(real), 0.0)
     if settings.smear:
         entropy_matrix = fermi_free_energy_matrix(
             spectral.hamiltonian,
@@ -1401,6 +1421,7 @@ def solve_scf_potential_simple(
         state_projection=project,
         eager=eager,
         record_trace=record_trace,
+        record_initial_status=True,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )
@@ -1436,6 +1457,7 @@ def solve_scf_fock_simple(
         state_projection=state_projection,
         eager=eager,
         record_trace=record_trace,
+        record_initial_status=True,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
     )

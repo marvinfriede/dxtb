@@ -44,7 +44,11 @@ from dxtb._src.scf.functional.anderson import _solve_map_anderson
 from dxtb._src.scf.mixer import Anderson
 
 from .samples import samples
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_functional_map import (
+    _assert_directional_fd,
+    _assert_tensor_equal,
+    _prepare_case,
+)
 
 
 def _map_result(mapped: torch.Tensor) -> SCFMapResult:
@@ -767,6 +771,25 @@ def test_anderson_solver_mixed_convergence_vmap() -> None:
 
 def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     """Position, parameter, and explicit-field graphs pass through Anderson."""
+    from tad_mctc import storch
+
+    def _disable_legacy_lorentzian_broadening(engine: object) -> None:
+        """Disable BaseTSCF's eps**0.5 Lorentzian gap broadening for exact parity."""
+
+        def _unbroadened_diagonalize(
+            hamiltonian: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            l_inv = engine._get_inv_cholesky()
+            return storch.eighb(
+                a=hamiltonian,
+                b=None,
+                l_inv=l_inv,
+                is_posdef=True,
+                broadening_method=None,
+            )
+
+        engine.diagonalize = _unbroadened_diagonalize
+
     positions = (
         samples["H2O"]["positions"]
         .to(device="cpu", dtype=torch.float64)
@@ -790,9 +813,22 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     grad = torch.autograd.grad(energy, positions, create_graph=True)[0]
     grad2 = torch.autograd.grad(grad.square().sum(), positions)[0]
     assert torch.isfinite(grad).all() and torch.isfinite(grad2).all()
+
+    def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        local = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
+        local_settings = setup_anderson_solver_settings(
+            local.system.config.scf, value.dtype
+        )
+        return solve_scf_anderson(
+            local.x, local.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_positions, positions, grad)
+
     legacy_geom = _prepare_case(
         GFN1_XTB, positions=positions, scf_options=options
     )
+    _disable_legacy_lorentzian_broadening(legacy_geom.engine)
     legacy_x = legacy_geom.engine.scf(legacy_geom.x, return_charges=False)
     legacy_charges = legacy_geom.engine.converged_to_charges(legacy_x)
     legacy_energy = legacy_geom.engine.get_energy(legacy_charges).sum()
@@ -821,6 +857,7 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     legacy_parameter_case = _prepare_case(
         GFN1_XTB, par=par, scf_options=options
     )
+    _disable_legacy_lorentzian_broadening(legacy_parameter_case.engine)
     legacy_parameter_x = legacy_parameter_case.engine.scf(
         legacy_parameter_case.x, return_charges=False
     )
@@ -850,9 +887,24 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     field_grad = torch.autograd.grad(field_energy, field)[0]
     assert torch.isfinite(field_grad).all()
     assert torch.count_nonzero(field_grad) > 0
+
+    def energy_at_field(value: torch.Tensor) -> torch.Tensor:
+        local = _prepare_case(
+            GFN1_XTB, field=value, scf_options={**options, "maxiter": 1}
+        )
+        local_settings = setup_anderson_solver_settings(
+            local.system.config.scf, torch.float64
+        )
+        return solve_scf_anderson(
+            local.x, local.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_field, field, field_grad)
+
     legacy_field_case = _prepare_case(
         GFN1_XTB, field=field, scf_options={**options, "maxiter": 1}
     )
+    _disable_legacy_lorentzian_broadening(legacy_field_case.engine)
     legacy_field_x = legacy_field_case.engine.scf(
         legacy_field_case.x, return_charges=False
     )
