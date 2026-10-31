@@ -39,6 +39,7 @@ from dxtb._src.scf.functional.cdiis import CDIISMethod
 from dxtb._src.scf.functional.method import LinearMethod, SCFMethodContext
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
+from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
 _REPRESENTATIONS = {
     labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
@@ -220,7 +221,7 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
             settings,
             problem.map,
             problem=problem,
-            method=method,
+            strategy=SCFStrategy((SCFStage(method),)),
         )
         return (
             outcome.root_x,
