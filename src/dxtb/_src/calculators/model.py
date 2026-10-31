@@ -602,6 +602,325 @@ class System:
             self, positions, chrg, spin, field, field_grad
         )
 
+    def energy(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+        *,
+        include_free_energy: bool = True,
+    ) -> Tensor:
+        """Evaluate the scalar total energy of this System."""
+        from dxtb._src.calculators.properties.functional import system_energy
+
+        return system_energy(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            include_free_energy=include_free_energy,
+        )
+
+    def forces(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate nuclear forces ``-dE/dR`` of this System via ``torch.func``."""
+        from dxtb._src.calculators.properties.functional import system_forces
+
+        return system_forces(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def hessian(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+        *,
+        matrix: bool = False,
+    ) -> Tensor:
+        """Evaluate the nuclear Hessian ``d^2E/dR^2`` via ``torch.func``."""
+        from dxtb._src.calculators.properties.functional import system_hessian
+
+        return system_hessian(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            matrix=matrix,
+        )
+
+    def dipole(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the electric dipole moment ``-dE/dF`` via ``torch.func``."""
+        from dxtb._src.calculators.properties.functional import system_dipole
+
+        return system_dipole(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def quadrupole(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the packed electric quadrupole moment ``-3 dE/dG``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_quadrupole,
+        )
+
+        return system_quadrupole(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def polarizability(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the static polarizability tensor ``-d^2E/dF^2``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_polarizability,
+        )
+
+        return system_polarizability(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def dipole_deriv(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the Cartesian dipole derivative ``d(mu)/dR``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_dipole_deriv,
+        )
+
+        return system_dipole_deriv(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def pol_deriv(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the Cartesian polarizability derivative ``d(alpha)/dR``."""
+        from dxtb._src.calculators.properties.functional import system_pol_deriv
+
+        return system_pol_deriv(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def hyperpolarizability(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the static first hyperpolarizability ``beta = -d^3E/dF^3``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_hyperpolarizability,
+        )
+
+        return system_hyperpolarizability(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def third_order_directional(
+        self,
+        positions: Tensor,
+        v1: Tensor,
+        v2: Tensor | None = None,
+        v3: Tensor | None = None,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the third directional energy derivative along ``(v1, v2, v3)``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_third_order_directional,
+        )
+
+        return system_third_order_directional(
+            self,
+            positions,
+            v1,
+            v2=v2,
+            v3=v3,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def bond_orders(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+    ) -> Tensor:
+        """Evaluate the Wiberg bond order matrix ``(nat, nat)``."""
+        from dxtb._src.calculators.properties.functional import (
+            system_bond_orders,
+        )
+
+        return system_bond_orders(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+        )
+
+    def vibration(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+        *,
+        project_translational: bool = True,
+        project_rotational: bool = True,
+    ):
+        """Perform vibrational analysis purely via ``System`` transforms."""
+        from dxtb._src.calculators.properties.functional import system_vibration
+
+        return system_vibration(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            project_translational=project_translational,
+            project_rotational=project_rotational,
+        )
+
+    def ir(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+        *,
+        project_translational: bool = True,
+        project_rotational: bool = True,
+    ):
+        """Calculate IR frequencies and intensities without mutable cache resets."""
+        from dxtb._src.calculators.properties.functional import system_ir
+
+        return system_ir(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            project_translational=project_translational,
+            project_rotational=project_rotational,
+        )
+
+    def raman(
+        self,
+        positions: Tensor,
+        chrg: Tensor | float | int = defaults.CHRG,
+        spin: Tensor | float | int | None = defaults.SPIN,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
+        *,
+        project_translational: bool = True,
+        project_rotational: bool = True,
+    ):
+        """Calculate Raman frequencies, intensities, and depolarization ratios."""
+        from dxtb._src.calculators.properties.functional import system_raman
+
+        return system_raman(
+            self,
+            positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            project_translational=project_translational,
+            project_rotational=project_rotational,
+        )
+
     @property
     def d3_setup(self) -> DispersionD3CoreSetup | None:
         """Return the sole exact D3 setup when the System has one."""

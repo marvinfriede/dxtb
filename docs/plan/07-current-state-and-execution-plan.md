@@ -47,7 +47,7 @@ Current state:
 | B6             | partial                         | B6a-SCF-core, B6a-SCF-validation, B6b-core, B6a-D3.1, B6a-D3.1a, and B6a-Cache.1 are complete. Exact single-System classical families now own their captured setup values directly; normal setup does not call `ClassicalList.get_cache()`, and no persistent generic built-in cache is stored. `System.classical_cache` is an on-demand compatibility view; packed systems and explicit custom-extension data retain legacy ownership. Single-System setup rejects ambiguous duplicate classical labels without changing direct or packed `ClassicalList` policy. Broader B6a remains open for retirement of legacy Component/Cache lifecycle APIs and the separately owned compatibility purge. C5 is complete and unblocks C6/C7. |
 | B6a-Cache.1   | done                            | Exact single-System Repulsion, SRB, IES, Halogen, classical D4, and D3 setups are captured directly through their family builders. The stored generic cache was replaced by explicit custom-extension data and packed-only legacy storage. The `System.classical_cache` compatibility property assembles an ordered view over family Nodes and stored extension data on demand. The System boundary rejects duplicate active labels and multiple exact instances of the singular-setup families; D3 supports multiple identity-associated setups. |
 | B7             | done                            | Fields are explicit single-System call inputs; exact field components remain Calculator-only compatibility adapters, and response derivatives are mutation-free. The full original E6a GFN1/GFN2 PyTorch method/component/derivative boundary is now accepted; see [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). |
-| B8             | not done                        | Remaining later-track work remains open.                                                            |
+| B8             | complete (B8a / B8b)            | Pure `torch.func` 1st–3rd order property evaluators (`energy`, `forces`, `hessian`, `dipole`, `quadrupole`, `polarizability`, `dipole_deriv`, `pol_deriv`, `hyperpolarizability`, `third_order`, `vibration`, `ir`, `raman`, `bond_orders`, and `system_parameter_force_jacobian`) are implemented in `dxtb._src.calculators.properties.functional` and exposed on `System`. Redundant `reset_all()` calls on single-System functional `Calculator.ir` / `raman` paths are eliminated. |
 | C1/C1b         | available upstream              | `Node`, `ModuleNode`, tree utilities already exist in tad-mctc 0.9.1.                              |
 | C5-C9          | C5/C6/C7/C8a/C8b complete | C6 is accepted at the exact-core/legacy boundary; public component/list/cache APIs remain compatibility owners for direct and packed routes. C8b.1 registered the production exact core and selected backend, C8b.2 registered the Model parameter tree with functional setup substitution, and C8b.3a/.3b accepted H2/H3 and canonical GFN1/PyTorch H2/H2O complete-core padding/stacking plus mapped Repulsion value/gradient parity. C8b remains complete at its documented structural/P9 pure-kernel boundary. Padded H0/integral numerical evaluation is now separately owned by E6bimpl.0; no mixed-System SCF or production route is accepted yet. Historical numerical failures remain separately tracked, including the ten inherited GFN1 density-parity failures and five GFN2 force/Hessian failures matched against the C8b.3b base. C7.0-C7.4 complete scoped single-System setup Node acceptance. `tad-libcint` 0.3.0 map and CPU-conversion policy passed its prior five-environment C7.4 checks; C8b focused structural tests passed in five CPU configurations. |
 | E0             | done — decision fixed           | Physical map `G` is separate from the solver/mixer transition; canonical full-mode convergence tests both raw-residual x norms and excludes `f_atol`. Functional unrolling is the reference path and future implicit differentiation applies to `G(x)-x`. `maxiter`/iteration-count compatibility is characterized in [`E0-decision-note.md`](E0-decision-note.md). |
@@ -55,10 +55,10 @@ Current state:
 | E2             | partial — E2-core done           | E2-core is the completed single-System fixed-shape `PairPlan` path and is the prerequisite for core consumers. E2-legacy packed-driver per-entry setup cleanup remains owned by E6broute. |
 | E3.0            | complete                        | Both GFN2/NO2 endpoints reproduce for PyTorch and libcint; the diagnosis localizes the historical discrepancy to complete finite-tolerance fixed-point response / finite-root trajectory accuracy, without assigning a defective Anderson sub-operation. The inherited frozen-spectral-density third-order diagnostic also had an undefined local `calculator` in both driver rows; it now derives the equivalent effective mixer configuration from the prepared System and selected interactions and verifies matching Fermi settings. |
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
-| E3             | acceptance open                 | E3.1b is complete and E1.3 is now accepted. The E3-specific end-to-end reference/derivative matrix remains to be rerun under its own package gate; this E1/E6a closure does not close E3. E2-core and E4core are complete. |
+| E3             | complete                        | Full E3 end-to-end reference and derivative acceptance (`autograd.grad`, `func.grad`, `jacrev`, `jvp`, `jacfwd`, 2nd-order, 3rd-order directional, mixed forward/reverse, `vmap`) across scalar/2x2 generalized-overlap fixed-point references, GFN1/GFN2 water, charged/open-shell systems, exact/near-degenerate $D_{3h}$ $\text{H}_3^+$, finite-temperature partial occupations, DFT-D3 GFN1, Model parameters, fields/field-gradients, and unrolled vs implicit converged physical roots is complete (`test_e3_end_to_end_acceptance.py`), and all nine inherited functional SCF test discrepancies are resolved. See [`functional-refactoring-closure.md`](functional-refactoring-closure.md). |
 | E4             | umbrella partial; E4core accepted | E4core (E4.0–E4.5b) is the canonical functional single-System SCF path. E4.6a is blocked on E6broute batch-route retirement; E4.6b is blocked on remaining legacy FULL fallback retirement. |
-| E6/E7/E8       | E6a complete; downstream E6/E7/E8 open | E6a.0–E6a.4 satisfy the documented GFN1/GFN2 PyTorch public conformer, Result/status, built-in component, and derivative boundary. The final E1.3/E6a audit and five-environment official-D3 matrix are in [`E1.3-E6a-final-acceptance.md`](E1.3-E6a-final-acceptance.md). GFN0 IES/SRB vmap, whole-System libcint transforms, mixed-System batching, and arbitrary custom callback transforms are outside the original E6a contract. E6bcompat-policy is complete in [`E6bcompat-policy.md`](E6bcompat-policy.md). E6bimpl.0 now provides a private mapped GFN1/PyTorch padded H0/integral foundation; full mixed-System SCF remains open. See [`E6bimpl0-padded-numerical-foundation.md`](E6bimpl0-padded-numerical-foundation.md). E6bcompat validates replacements or explicit migrations. E6broute additionally requires batch-critical E7 and E6c1 W2/W3 clearance. Libcint eager/reference compatibility remains separate. |
-| E6bimpl        | complete at private implementation boundary | E6bimpl.0/1a/1b-F, 2a/2b-F and 2c accept the private mixed GFN1/GFN2 PyTorch numerical paths. E6bimpl.3 adds ordered retained legacy composition for libcint and custom extensions without changing public Calculator routing. Its 24 focused tests pass in all five CPU profiles; actual CPU libcint calculations, fields, custom contributions/caches, low-level options, error parity, ordering and gradients are covered. The six matched functional SCF failures and interrupted 601-node run remain recorded baseline evidence; no new failure was found in completed selections. E6bcompat is the next differential acceptance package. E6broute remains blocked on E6bcompat, E7 batch safety and E6c1 W2/W3 clearance. See [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md). |
+| E6/E7/E8       | E6a, E6bimpl, E6bcompat, E7, E8 complete; E6broute adapter ready | E6a.0–E6a.4, E6bimpl, and E6bcompat are complete, and the candidate E6broute packed `Result` adapter (`pack_system_results` and `evaluate_packed_systems` in `dxtb._src.calculators.packed_result`) is implemented and verified. Broader E7 padding safety (`test_e7a_padding_safety.py`) and E8 third-order G1 PyTorch transform acceptance (`test_b8_e8_functional_properties.py`) are complete. Default `Calculator.singlepoint` batch dispatch remains on legacy packed execution until E6c1-W2/W3 clearance. See [`functional-refactoring-closure.md`](functional-refactoring-closure.md). |
+| E6bimpl        | complete at private implementation boundary | E6bimpl.0/1a/1b-F, 2a/2b-F and 2c accept the private mixed GFN1/GFN2 PyTorch numerical paths. E6bimpl.3 adds ordered retained legacy composition for libcint and custom extensions without changing public Calculator routing. Its 24 focused tests pass in all five CPU profiles; actual CPU libcint calculations, fields, custom contributions/caches, low-level options, error parity, ordering and gradients are covered. E6bcompat differential acceptance and the candidate E6broute packed `Result` adapter (`packed_result.py`) are complete. E6broute default switch remains gated only on E6c1 W2/W3 clearance. See [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md) and [`functional-refactoring-closure.md`](functional-refactoring-closure.md). |
 | E5             | done                            | PyTorch multipole integrals landed upstream and pass the baseline transform checks.                |
 | F/D            | F0 done; broader track not started | F0 verifies functional parameter updates through fresh Model/System construction. Full training remains downstream. |
 | U1–U4 dependency/API integration | development integration accepted and merged; public release blocked | Accepted source `68d5609fad4515deb50222d7c17224bd74f333f5` descends from target `f8297423a363305d0233307bc92d1c6c947b63a8`; the remote implicit-SCF update `4546417c4a1174ce9322a0c18014eb552c678f7a` is also included. Validated merge commit: `eb3fab5a9444d85c8f3a1eaaf722d2049e8bebd7`. Development versions are mctc 0.11.3, multicharge 0.8.0, libcint 0.4.0, D3 0.7.0 and D4 0.8.0. The combined dependency, SCF, E1.3/E6a and mixed-System validation is in [`U1-U4-claude-tender-merge.md`](U1-U4-claude-tender-merge.md); historical U1–U4 implementation evidence remains in [`U1-U4-upstream-consolidation.md`](U1-U4-upstream-consolidation.md). Published D3/D4 metadata conflicts remain accepted only for the development `--no-deps` profile. |
@@ -3797,6 +3797,70 @@ classification, parallel root preparation, and contract hardening), and
 Model-gradient, and matched legacy benchmarks). See
 [`E6c1-W2c11-integrated-batch-performance.md`](E6c1-W2c11-integrated-batch-performance.md)
 and `benchmarks/results/e6c1-w2c11/`.
+
+### Functional refactoring consolidation, E3/E7/B8/E8 closure, and multiprocessing removal
+
+Following W2c11, the functional refactoring consolidation package completes the
+remaining correctness, transform, property, and compatibility milestones before
+further performance optimization (see
+[`functional-refactoring-closure.md`](functional-refactoring-closure.md)):
+
+1. **Application-Managed Multiprocessing Removal (`batch_implicit.py`, `batch_streaming.py`, `spectral.py`)**:
+   - Removes all `multiprocessing`, `ProcessPoolExecutor`, `ThreadPoolExecutor`,
+     process-tree `/proc` inspection, and `num_workers` parameters from
+     `prepare_converged_root_batch`, `stream_batch_value_and_grad`, and
+     `BatchPreparationDiagnostics`; CPU parallelism is delegated strictly to
+     PyTorch and external `OMP_NUM_THREADS` configuration.
+   - Replaces `.item()` in `_matrix_fermi_eager` (`spectral.py`) with
+     `int(scale_power.max())` and classifies all W2c9–W2c11 additions into
+     core correctness, pure mathematical identity, eager-only optimization,
+     experimental batch orchestration, and removed infrastructure.
+
+2. **Full E3 End-to-End Acceptance and Functional SCF Parity (`test_e3_end_to_end_acceptance.py`, `solver.py`, `anderson.py`)**:
+   - Resolves all nine inherited `test/test_scf/test_functional_*.py`
+     discrepancies (`solver.py`, `anderson.py`, `test_functional_anderson.py`,
+     `test_functional_temperature_cutoff.py`), bringing all 13 functional,
+     invariant, and implicit-root SCF test modules (`500/500` tests) to 100% pass.
+   - Completes end-to-end E3 numerical and derivative acceptance (`autograd.grad`,
+     `func.grad`, `jacrev`, `jvp`, `jacfwd`, 2nd-order, 3rd-order directional,
+     mixed forward/reverse, `vmap`) across scalar and $2\times 2$ generalized-overlap
+     fixed-point references, GFN1/GFN2 water, charged ($\text{OH}^-$) and
+     open-shell ($\text{OH}^\bullet$) systems, exact and near-degenerate
+     $D_{3h}$ $\text{H}_3^+$, finite-temperature partial occupations, DFT-D3 GFN1,
+     Model parameter differentiation, electric field/field-gradient differentiation,
+     mixed derivatives, and unrolled trajectory vs. converged physical-root
+     implicit differentiation.
+
+3. **E6b Consolidation and Candidate E6broute Packed `Result` Adapter (`packed_result.py`, `test_e6bcompat_differential.py`)**:
+   - Implements `pack_system_results` and `evaluate_packed_systems` in
+     `dxtb._src.calculators.packed_result`, routing mapped-eligible Systems by
+     canonical bucket via `evaluate_padded_systems`, routing retained libcint
+     and custom-extension Systems via `compose_legacy_systems`, and reassembling
+     a source-ordered packed `Result` with both `legacy_compat=True` and
+     functional tensor-valued `SCFStatus` (`legacy_compat=False`) contracts.
+   - Retains default `Calculator.singlepoint` batch dispatch on legacy packed
+     execution until `E6c1-W2` and `E6c1-W3` performance clearance.
+
+4. **Broader E7 Padding Safety Audit (`test_e7a_padding_safety.py`)**:
+   - Audits zero-filled, coincident, and large-displacement inactive padded
+     coordinates and negative index mappings across distances, coordination
+     numbers, ES2, ES3, AES2, D4SC, classical terms, generalized overlap and
+     $\mathbf{S}^{-1/2}$ factorizations, orbital masks, occupations, spectral
+     transformations, density/potential assembly, convergence residuals, and
+     mixed valid/invalid lanes under `vmap` through third-order derivatives.
+
+5. **Downstream Functional Properties and Third-Order Composition (`B8a`, `B8b`, `E8`)**:
+   - Implements pure `torch.func` property evaluators (`system_energy`,
+     `system_forces`, `system_hessian`, `system_dipole`, `system_quadrupole`,
+     `system_polarizability`, `system_dipole_deriv`, `system_pol_deriv`,
+     `system_hyperpolarizability`, `system_third_order_directional`,
+     `system_parameter_force_jacobian`, `system_bond_orders`, `system_vibration`,
+     `system_ir`, `system_raman`) in `dxtb._src.calculators.properties.functional`
+     and exposes them as methods on `System` (`model.py`).
+   - Eliminates redundant `reset_all()` calls in `AutogradCalculator.ir` and
+     `raman` when the single-System functional path is active.
+   - Documents the complete `E6broute` / `E4.6a` / `E4.6b` / `C9` / `B6` legacy
+     retirement inventory in [`functional-refactoring-closure.md`](functional-refactoring-closure.md).
 
 ### Historical implementation/status record
 

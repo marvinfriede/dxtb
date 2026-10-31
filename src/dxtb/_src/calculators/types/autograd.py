@@ -1067,11 +1067,10 @@ class AutogradCalculator(EnergyCalculator):
         # run vibrational analysis first
         vib_res = self.vibration(positions, chrg, spin, **kwargs)
 
-        # TODO: Figure out how to run func transforms 2x properly
-        # (improve: Hessian does not need dipole integral but dipder does)
-        self.classicals.reset_all()
-        self.interactions.reset_all()
-        self.integrals.reset_all()
+        if self.ihelp.batch_mode != 0 or self.system._active_exact_core() is None:
+            self.classicals.reset_all()
+            self.interactions.reset_all()
+            self.integrals.reset_all()
 
         # calculate nuclear dipole derivative dmu/dR: (..., 3, nat, 3)
         dmu_dr = self.dipole_deriv(
@@ -1124,14 +1123,11 @@ class AutogradCalculator(EnergyCalculator):
             positions, chrg, spin, use_functorch=use_functorch, **kwargs
         )
 
-        # TODO: Figure out how to run func transforms 2x properly
-        # (improve: Hessian does not need dipole integral but dipder does)
-        self.classicals.reset_all()
-        self.interactions.reset_all()
-        self.integrals.reset_all()
+        if self.ihelp.batch_mode != 0 or self.system._active_exact_core() is None:
+            self.classicals.reset_all()
+            self.interactions.reset_all()
+            self.integrals.reset_all()
 
-        # FIXME: functorch does not work here, liekly because of some
-        # weird interaction with libcint.
         # d(..., 3, 3) / d(..., nat, 3) -> (..., 3, 3, nat, 3)
         da_dr = self.pol_deriv(
             positions, chrg, spin, use_functorch=False, **kwargs
