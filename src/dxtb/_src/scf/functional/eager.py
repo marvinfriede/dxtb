@@ -846,7 +846,7 @@ def run_prepared_functional_implicit(
     attached_map_result = adapter.evaluate(attached_root, *parameters)
 
     if final_representation is SCFRepresentation.CHARGE:
-        return finalize_scf(
+        finalized = finalize_scf(
             attached_map_result,
             final_inputs,
             prepared.iterations,
@@ -859,9 +859,9 @@ def run_prepared_functional_implicit(
             strategy_diagnostics=outcome.strategy_diagnostics,
             terminal_failed=torch.zeros_like(prepared.converged),
         )
-    if final_representation is SCFRepresentation.POTENTIAL:
+    elif final_representation is SCFRepresentation.POTENTIAL:
         assert final_layout is not None
-        return finalize_scf_potential(
+        finalized = finalize_scf_potential(
             attached_map_result,
             final_inputs,
             final_layout,
@@ -875,16 +875,25 @@ def run_prepared_functional_implicit(
             strategy_diagnostics=outcome.strategy_diagnostics,
             terminal_failed=torch.zeros_like(prepared.converged),
         )
-    return finalize_scf_fock(
-        attached_map_result,
-        final_inputs,
-        prepared.iterations,
-        prepared.converged,
-        prepared.residual,
-        prepared.trajectory_status,
-        prepared.damping_state,
-        root_x=attached_root,
-        certification=prepared.certification,
-        strategy_diagnostics=outcome.strategy_diagnostics,
-        terminal_failed=torch.zeros_like(prepared.converged),
+    else:
+        finalized = finalize_scf_fock(
+            attached_map_result,
+            final_inputs,
+            prepared.iterations,
+            prepared.converged,
+            prepared.residual,
+            prepared.trajectory_status,
+            prepared.damping_state,
+            root_x=attached_root,
+            certification=prepared.certification,
+            strategy_diagnostics=outcome.strategy_diagnostics,
+            terminal_failed=torch.zeros_like(prepared.converged),
+        )
+
+    # Response-coordinate revalidation is separate from the primal solver
+    # trajectory. Keep the public solve counters tied to the primal controller.
+    return replace(
+        finalized,
+        iterations=outcome.iterations,
+        residual=outcome.residual,
     )

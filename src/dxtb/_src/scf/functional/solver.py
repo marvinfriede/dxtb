@@ -224,6 +224,12 @@ class SCFSolveResult:
     ``energy`` contains the atom-resolved SCF electronic/interactions energy
     excluding entropy. ``fenergy`` is the separately partitioned electronic
     free-energy contribution, so the total electronic term is their sum.
+
+    ``residual`` and ``iterations`` describe the primal controller trajectory.
+    An internal alternate response representation may use different response
+    coordinates; its residual is reported only by response certification
+    diagnostics and does not replace the primal residual here. If present,
+    ``diagnostics.strategy`` likewise describes only the primal strategy.
     """
 
     map_result: SCFMapResult
