@@ -332,3 +332,52 @@ directory-wide `.tolist()` scan also sees the eager-only SOSCF implementation.
 This expanded command was not the historical 630-test selection and does not
 replace its acceptance result. The four rewritten E6a.0 routing tests passed
 in both primary Python environments.
+
+### S8.1b review gate — reproducible SCF regression selection
+
+At `72ccc23739b85fd1422d6434c06c6fddd902ccf9`, the reproducible selection
+`test/test_scf/test_functional_*.py` plus `test/test_calculator/test_e6a0_system_vmap.py`
+collected 602 nodes and completed with 596 passed and six failed. The exact
+failures were the accepted Anderson gradient discrepancy, the directory-wide
+functional architecture scan, and all four nodes in
+`test_functional_temperature_cutoff.py`:
+
+- `test_functional_anderson.py::test_anderson_solver_real_position_parameter_and_field_gradients`
+- `test_functional_map.py::test_functional_map_has_no_legacy_stateful_hooks`
+- `test_functional_temperature_cutoff.py::test_positive_subcutoff_temperature_preserves_legacy_free_energy`
+- `test_functional_temperature_cutoff.py::test_subcutoff_fractional_charge_gradient_matches_legacy`
+- `test_functional_temperature_cutoff.py::test_temperature_cutoff_boundaries_preserve_legacy_split`
+- `test_functional_temperature_cutoff.py::test_outer_convergence_and_fermi_status_remain_separate`
+
+The entire temperature file was run unmodified with Python 3.14/PyTorch 2.14.1
+at S7 (`17eba1a`), S8 (`2167f19`), and current (`72ccc23`). All four tests
+failed identically at all three revisions. The first three compared against
+the retired single-System SCF oracle or required bitwise legacy free-energy
+equality. Their replacements use
+`filling.get_fermi_entropy_low_temperature(occupation, kt)` as an independent
+occupation-space physical reference. They retain equal atom partitioning,
+the fractional-charge entropy derivative, exact-zero settings/zero entropy,
+positive sub-cutoff non-smearing, and cutoff-equality/above-cutoff smearing.
+The temperature test file no longer calls the legacy engine for its reference.
+
+The fourth failure was not an entropy-oracle issue. Its raw fixed-point
+component passes while Fermi validity fails; S2 certification intentionally
+requires both, as well as stationarity and electron-count checks. The test now
+asserts those component verdicts and the resulting non-certified state rather
+than claiming the full physical result is converged with failed Fermi status.
+
+The architecture guard is split. All functional modules, including SOSCF,
+remain checked for legacy mutable-owner hooks. The host tensor-extraction scan
+continues to cover raw maps, certification, solver, and transform-capable
+method paths. It excludes `implicit.py` for its custom transform boundary and
+the eager-only SOSCF orbital path (`soscf.py` plus its `orbital.py` sector-pair
+helper). `SOSCFMethod.supports_fixed_trip is False`, and the existing test
+confirms fixed-trip SOSCF is rejected before a physical map. Removing host
+control from this eager-only method path belongs to S12.
+
+After these test-only changes the same glob selection collected 603 nodes:
+602 passed and the only failure was the inherited Anderson discrepancy
+`2.5007065862503453e-11` versus `2e-13`. The node count increased by one
+because the original single architecture test was split into the two required
+independent guards. The E6a.0 routing tests were included and pass. No
+production SOSCF code changed, and W2c10 was not synchronized.
