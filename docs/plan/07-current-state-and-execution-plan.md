@@ -3711,6 +3711,93 @@ adaptive Fermi optimization). See
 [`E6c1-W2c10-batch-hardening-and-streaming.md`](E6c1-W2c10-batch-hardening-and-streaming.md)
 and `benchmarks/results/e6c1-w2c10/`.
 
+### W2c11 integrated converged-root performance, streaming certification, and API readiness
+
+W2c11 completes the streaming response-failure and API contracts, integrates
+eager-primal optimizations with streaming differentiation, introduces
+detached-primal spectral Fermi evaluation (`eager_primal_fermi="spectral"`) and
+process-isolated parallel physical-root preparation (`num_workers`), certifies
+8-conformer `tmpda` position and `2,261`-leaf `Model` parameter gradients
+against independent serial references, and audits matched legacy packed
+`Calculator` performance:
+
+1. **Five-Category Response-Failure Contract and Call-Local Diagnostics (`batch_implicit.py`, `batch_streaming.py`)**:
+   - Adds `BatchRootFailureCode.NONFINITE_DERIVATIVE = 10`, `RESPONSE_NOT_RUN = -1`,
+     `classify_batch_failure_category` (`"success"`, `"primal_scf_failure"`,
+     `"fermi_failure"`, `"response_failure"`, `"nonfinite_derivative"`), and
+     call-local `ResponseDiagnosticCollector` / `BatchResponseDiagnostics`.
+   - `StreamingBatchValueAndGrad` returns per-lane `response_converged`,
+     `response_status`, `response_iterations`, `response_residual`, and
+     `failure_category` without global mutable state or retrospective `Result`
+     mutation, attributing failures across `positions`, `chrg`, `spin`, `field`,
+     `field_grad`, and shared `Model` parameters (`chunk_size = 1, 2, 4`).
+   - Hardens `stream_batch_value_and_grad` to accept `PreparedConvergedRootBatch | System`,
+     reject nonfinite `weights` with `ValueError`, skip differentiation on
+     zero-weight lanes (`response_status == -1`), preserve caller backward hooks,
+     and deduplicate aliased `Model` parameter references.
+
+2. **Detached-Primal Spectral Fermi (`eager_primal_fermi="spectral"`) and Parallel Root Preparation (`spectral.py`, `batch_implicit.py`)**:
+   - Profiling `tmpda[0]` (`66` SCF iterations) shows `fermi_density_matrix`
+     accounts for **94.57%** (`69.69 s` / `73.69 s`, `6,030` dense solves) of
+     static root preparation and **91.42%** (`42.18 s` / `46.14 s`, `3,258`
+     solves) of adaptive root preparation.
+   - `eager_primal_fermi="spectral"` diagonalizes `safe_spectral_base` once per
+     detached primal SCF step in `_fermi_free_energy_setup`, executes the
+     `diff_steps` Newton chemical-potential updates in 1D $O(N_{\text{orb}})$
+     vector arithmetic, and forms $D = U \operatorname{diag}(f(\varepsilon_i)) U^\top$
+     while retaining unchanged static matrix-Fermi root validation and implicit
+     differentiation. On `tmpda[0]`, root preparation drops to **`7.54 s`**
+     (**9.77x** faster than static, **6.12x** faster than adaptive) with `90`
+     dense solves (validation step only) and `2.34e-14` max root difference.
+   - Process-isolated worker pool (`num_workers = 1, 2, 4`, 1 thread per
+     worker, using `"fork"` on Linux CPU when CUDA is not initialized and
+     `"spawn"` otherwise) with `BatchPreparationDiagnostics` (`wall_time_s`,
+     `total_cpu_time_s`, `process_tree_peak_rss_mb`, `process_tree_pss_mb`)
+     reduces 8-conformer `tmpda` root preparation from `82.35 s` (`1` worker)
+     to **`42.72 s` (`2` workers, `1.93x`)** and **`22.81 s` (`4` workers,
+     `3.61x` vs. 1 worker and `37.28x` vs. W2c10 static `850.47 s`)** at
+     `640.6 MiB` preparation process-tree PSS.
+
+3. **Eight-Conformer `tmpda` Position & `2,261`-Leaf `Model` Parameter Certification and Matched Legacy Audit**:
+   - All 8 `tmpda` conformers (`0..7`, including `4..7`) match independent
+     single-`System` serial references (`serial-ref-n8-pos.json`,
+     `serial-ref-n8-model.json`) to `0.000e+00` (`adaptive` streaming, `802.38 s`,
+     `2,033.3 MiB` RSS) and `<= 1.920e-13 Eh/Bohr` (`spectral` streaming,
+     `360.77 s` 1-worker / `295.07 s` 4-worker, **`2,055.0 MiB` / `2.01 GiB`
+     overall peak tree RSS**).
+   - Shared `Model` parameter gradients (`2,261` leaves: `73` connected nonzero,
+     `4` connected zero, `2,184` disconnected) match serial references to
+     `0.000e+00` (`c=1`) and `<= 1.990e-13` (`c=2`) across unit and
+     `[1.25, -0.75, 0.0, 0.5]` weights (`371.37 s` 1-worker / `322.85 s` 4-worker,
+     `2,307.9 MiB` / `2.25 GiB` peak tree RSS at $N=8$).
+   - Legacy `Calculator(batch_mode=2)` audit (`legacy-packed-{potential,charge}-n{1,2,4,8}.json`)
+     shows that historical `OPTS` defaulted to `scp_mode="potential"`
+     (`[77, 82, 124, 205]` iters, `35.27 s`, `5,185.3 MiB` RSS at $N=8$), whereas
+     matched `scp_mode="charge"` converges in the exact same `[66, 96, 112, 115]`
+     max iterations (`29.01 s`, `4,541.5 MiB` / `4.43 GiB` peak RSS at $N=8$).
+     W2c11 spectral+streaming uses **54.8% less memory (`2.01 GiB` vs. `4.43 GiB`)**
+     at $N=8$, with the remaining time difference (`295.07 s` vs. `29.01 s`)
+     localized to exact eigensolver-free BiCGSTAB implicit differentiation
+     (`272.01 s`) versus unrolled trajectory AD through `storch.eighb`.
+
+The 8-module focused SCF/implicit/spectral gate passes across all five
+`tad-mctc 0.11.3` CPU environments (`274/274` non-slow passed per environment;
+`277/277` with slow on `py3.11-torch2.8.0`),
+and the 15-module E7a/E6bcompat/E6a/E6bimpl regression gate passes (`261/261`)
+on both `py3.11-torch2.8.0` and `py3.14-torch2.14.1`. Public `System.singlepoint()`
+and `Calculator` routing remain unchanged; W2 remains OPEN pending project-owner
+sign-off on the explicit batch API contract, W3 remains OPEN, and E6broute
+remains BLOCKED. Implementation commits from base
+`8ed902f762804a9da7f4537e8d40bab80822ed1d`:
+`8e3722923d2565bd2fd654c8be9ca8e0bebcbf89` (detached-primal spectral Fermi mode
+and thread-local primal Fermi scope),
+`da43ec0779d2b0b852003fcb78f2d17c72f5e13a` (streaming response-failure
+classification, parallel root preparation, and contract hardening), and
+`8be7e32542d9644b3aadd4a26dcc29179bd641fa` (integrated, parallel,
+Model-gradient, and matched legacy benchmarks). See
+[`E6c1-W2c11-integrated-batch-performance.md`](E6c1-W2c11-integrated-batch-performance.md)
+and `benchmarks/results/e6c1-w2c11/`.
+
 ### Historical implementation/status record
 
 B3b-Final.3 accepted the staged exact/packed layout and compatibility
