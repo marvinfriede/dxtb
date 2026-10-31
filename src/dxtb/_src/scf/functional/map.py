@@ -54,6 +54,7 @@ __all__ = [
     "potential_map",
     "scf_map",
     "validate_fock_state",
+    "density_to_charges_and_core_energy",
 ]
 
 
@@ -112,7 +113,7 @@ def _transitional_diagonalize(
     )
 
 
-def _density_to_charges(
+def density_to_charges_and_core_energy(
     density: Tensor, inputs: SCFInputs
 ) -> tuple[SCFCharges, Tensor]:
     """Return Mulliken multipoles and orbital-resolved core energy."""
@@ -186,7 +187,9 @@ def evaluate_hamiltonian(
             mask=inputs.orbital_mask,
             diff_steps=filling._diff_steps(settings.diff_order),
         )
-    charges, orbital_energy = _density_to_charges(density, inputs)
+    charges, orbital_energy = density_to_charges_and_core_energy(
+        density, inputs
+    )
     return SCFSpectralResult(
         hamiltonian=hamiltonian,
         density=density,
