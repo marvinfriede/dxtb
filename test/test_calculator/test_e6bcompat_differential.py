@@ -623,3 +623,269 @@ print("EXPLICIT_REJECT_AND_DEFAULT_WARNED_FALLBACK")
     )
     assert completed.returncode == 0, completed.stderr
     assert "EXPLICIT_REJECT_AND_DEFAULT_WARNED_FALLBACK" in completed.stdout
+
+
+@pytest.mark.parametrize("method", [labels.GFN1_XTB, labels.GFN2_XTB])
+def test_pack_system_results_and_evaluate_packed_systems_parity(
+    method: int,
+) -> None:
+    """Candidate E6broute packed adapter matches public Calculator and serial Results."""
+    from dxtb._src.calculators.packed_result import (
+        evaluate_packed_systems,
+        pack_system_results,
+    )
+
+    compositions = ((1, 1), (8, 1, 1), (6, 1, 1, 1, 1))
+    source_positions = tuple(
+        _geometry(comp, 0).clone().requires_grad_(True)
+        for comp in compositions
+    )
+    charges = (0.0, 0.0, 0.0)
+    spins = (0.0, 0.0, 0.0)
+    field = torch.tensor(
+        [0.0015, -0.001, 0.002], dtype=DTYPE, requires_grad=True
+    )
+    field_grad = torch.tensor(
+        [
+            [0.0005, 0.0002, -0.0001],
+            [0.0002, -0.0003, 0.0001],
+            [-0.0001, 0.0001, -0.0002],
+        ],
+        dtype=DTYPE,
+        requires_grad=True,
+    )
+    extra_settings = (
+        {"scp_mode": labels.SCP_MODE_FOCK}
+        if method == labels.GFN2_XTB
+        else {}
+    )
+    param, systems, _, _, decoded, serial = _private_mapped(
+        method,
+        compositions,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        settings=extra_settings,
+    )
+    numbers, padded_positions = _pad_public_inputs(
+        compositions, [p.detach() for p in source_positions]
+    )
+    opts = dict(_SETTINGS, **extra_settings, method=method, verbosity=0)
+    calculator = Calculator(
+        numbers,
+        param,
+        opts=opts,
+        batch_mode=1,
+        dtype=DTYPE,
+        auto_int_level=False,
+    )
+    public = calculator.singlepoint(
+        padded_positions,
+        torch.tensor(charges, dtype=DTYPE),
+        torch.tensor(spins, dtype=DTYPE),
+        field=field,
+        field_grad=field_grad,
+    )
+
+    packed_compat = evaluate_packed_systems(
+        systems,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        legacy_compat=True,
+    )
+    _assert_packed_decoded_parity(
+        packed_compat, decoded, systems, compositions
+    )
+    torch.testing.assert_close(
+        packed_compat.energy, public.energy, atol=2.0e-9, rtol=2.0e-9
+    )
+
+    packed_functional = evaluate_packed_systems(
+        systems,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        legacy_compat=False,
+    )
+    assert packed_functional.iterations.shape == (3,)
+    assert packed_functional.converged is not None
+    assert packed_functional.converged.shape == (3,)
+    assert packed_functional.residual is not None
+    assert packed_functional.residual.shape[0] == 3
+    assert packed_functional.status is not None
+    assert packed_functional.status.trajectory_failure.shape == (3,)
+    assert packed_functional.status.final_failure.shape == (3,)
+
+    # Direct pack_system_results on serial results matches packed_functional
+    repacked_serial = pack_system_results(serial, legacy_compat=False)
+    torch.testing.assert_close(
+        packed_functional.energy, repacked_serial.energy, atol=1.0e-12, rtol=1.0e-12
+    )
+    assert packed_functional.multipoles is not None
+
+    # Cross-lane derivative isolation and field/field_grad derivative parity
+    for lane_idx in range(len(compositions)):
+        grads = torch.autograd.grad(
+            packed_functional.energy[lane_idx].sum(),
+            source_positions,
+            retain_graph=True,
+        )
+        for other_idx, g in enumerate(grads):
+            if other_idx == lane_idx:
+                ref_g = torch.autograd.grad(
+                    serial[lane_idx].energy.sum(),
+                    source_positions[lane_idx],
+                    retain_graph=True,
+                )[0]
+                torch.testing.assert_close(g, ref_g, atol=1.0e-10, rtol=1.0e-10)
+            else:
+                assert float(g.abs().max()) == 0.0
+
+    packed_fg = torch.autograd.grad(
+        packed_functional.energy.sum(), (field, field_grad), retain_graph=True
+    )
+    public_fg = torch.autograd.grad(
+        public.energy.sum(), (field, field_grad), retain_graph=True
+    )
+    for actual, expected in zip(packed_fg, public_fg):
+        torch.testing.assert_close(actual, expected, atol=2.0e-8, rtol=2.0e-8)
+
+
+def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
+    """evaluate_packed_systems coordinates multi-bucket MAPPED and retained lanes."""
+    from dxtb._src.calculators.legacy_composition import (
+        LegacySCFOptions,
+        LegacySystemRoute,
+        classify_legacy_system,
+    )
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+
+    cfg_gfn1_mapped = Config.create(method=labels.GFN1_XTB, **_SETTINGS)
+    cfg_gfn2_mapped = Config.create(
+        method=labels.GFN2_XTB,
+        **(_SETTINGS | {"scp_mode": labels.SCP_MODE_FOCK}),
+    )
+    cfg_gfn1_legacy = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"scf_mode": labels.SCF_MODE_IMPLICIT}),
+    )
+
+    sys0 = Model(
+        par=param_gfn1, config=cfg_gfn1_mapped, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+    sys1 = Model(
+        par=param_gfn1, config=cfg_gfn1_legacy, auto_int_level=False
+    ).setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    sys2 = Model(
+        par=param_gfn2, config=cfg_gfn2_mapped, auto_int_level=False
+    ).setup(torch.tensor([1, 1, 1], dtype=torch.int64))
+
+    assert classify_legacy_system(sys0) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys1) is LegacySystemRoute.LEGACY_COMPOSED
+    assert classify_legacy_system(sys2) is LegacySystemRoute.MAPPED
+
+    systems = (sys0, sys1, sys2)
+    positions = (
+        _geometry((1, 1), 0),
+        _geometry((8, 1, 1), 0),
+        _geometry((1, 1, 1), 0),
+    )
+    charges = (0.0, 0.0, 1.0)
+    spins = (0.0, 0.0, 0.0)
+
+    packed = evaluate_packed_systems(systems, positions, charges, spins)
+    serial = tuple(
+        s.singlepoint(p, c, sp)
+        for s, p, c, sp in zip(systems, positions, charges, spins)
+    )
+    assert packed.energy.shape == (3, 3)
+    for idx, ref in enumerate(serial):
+        nat = ref.energy.numel()
+        torch.testing.assert_close(
+            packed.energy[idx, :nat], ref.energy, atol=1.0e-10, rtol=1.0e-10
+        )
+
+    # E6bcompat strict vs warned GFN2 non-Fock and unknown kwargs
+    cfg_gfn2_charge = Config.create(
+        method=labels.GFN2_XTB,
+        **(_SETTINGS | {"scp_mode": labels.SCP_MODE_CHARGE}),
+    )
+    sys_gfn2_charge = Model(
+        par=param_gfn2, config=cfg_gfn2_charge, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+
+    with pytest.raises(NotImplementedError, match="Fock-mode SCF"):
+        evaluate_packed_systems(
+            (sys_gfn2_charge,),
+            (_geometry((1, 1), 0),),
+            strict_e6bcompat=True,
+        )
+
+    OutputHandler.clear_warnings()
+    warned_res = evaluate_packed_systems(
+        (sys_gfn2_charge,),
+        (_geometry((1, 1), 0),),
+        strict_e6bcompat=False,
+    )
+    assert warned_res.energy.shape == (1, 2)
+    assert any(
+        "Resetting 'scp_mode' to 'fock'" in msg
+        for msg, _ in OutputHandler.warnings
+    )
+
+    with pytest.raises(TypeError, match="unexpected keyword arguments"):
+        evaluate_packed_systems(
+            (sys0,),
+            (_geometry((1, 1), 0),),
+            legacy_options=LegacySCFOptions(kwargs={"unknown_flag": True}),
+            strict_e6bcompat=True,
+        )
+
+    # Open-shell (odd-electron OH.) with default spin=None and mixed SCF/non-SCF occupation packing
+    cfg_gfn1_open = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"fermi_etemp": 300.0}),
+    )
+    sys_oh = Model(
+        par=param_gfn1, config=cfg_gfn1_open, auto_int_level=False
+    ).setup(torch.tensor([8, 1], dtype=torch.int64))
+    cfg_non_scf = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"exclude": ["scf"]}),
+    )
+    sys_non_scf = Model(
+        par=param_gfn1, config=cfg_non_scf, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+    oh_pos = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.83]], dtype=DTYPE)
+    h2_pos = _geometry((1, 1), 0)
+    packed_open_and_nonscf = evaluate_packed_systems(
+        (sys_oh, sys_non_scf),
+        (oh_pos, h2_pos),
+        legacy_compat=False,
+    )
+    ref_oh = sys_oh.singlepoint(oh_pos)
+    ref_non_scf = sys_non_scf.singlepoint(h2_pos)
+    torch.testing.assert_close(
+        packed_open_and_nonscf.energy[0], ref_oh.energy, atol=1.0e-12, rtol=1.0e-12
+    )
+    torch.testing.assert_close(
+        packed_open_and_nonscf.energy[1],
+        ref_non_scf.energy,
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+    assert packed_open_and_nonscf.occupation is not None
+    assert packed_open_and_nonscf.occupation.shape[0] == 2
+    assert packed_open_and_nonscf.occupation.shape[1] == 2
+    assert int(torch.count_nonzero(packed_open_and_nonscf.occupation[1])) == 0
+
