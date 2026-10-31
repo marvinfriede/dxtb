@@ -285,16 +285,50 @@ by the synthetic regression above.
 The final focused SOSCF file passed **55 tests** on Python 3.14/PyTorch 2.14.1
 and **55 tests** on Python 3.11/PyTorch 2.8.0, including the new synthetic
 seed-density reassignment assertion. A broader combined SCF/calculator
-selection completed with **630 passed and 5 failed**. Four failures are
-pre-existing `test_e6a0_system_vmap.py` assertions that expect the retired S7
-negative-temperature, negative-Fermi-iteration, experimental-mode, and strict
-Broyden legacy-routing behavior; S8.1 changes none of those routing files. The
-remaining failure is the accepted Anderson parity discrepancy
-`2.5007065862503453e-11` versus `2e-13`. These five results are not represented
-as S8.1 regressions passing. The exact cases are retained in the validation
-handoff. Black, isort, compileall, and `git diff --check` pass.
+selection initially completed with **630 passed and 5 failed**. Four failures
+were stale executable assertions in `test_e6a0_system_vmap.py` for pre-S4/S7
+routing behavior, not accepted baseline failures. S8.1a replaces them with
+tests for the current explicit validation, retired experimental mode, and
+native Broyden contracts. The one remaining numerical failure is the accepted
+Anderson parity discrepancy `2.5007065862503453e-11` versus `2e-13`.
 
 The production proposal no longer computes a second AD gradient on every
 macroiteration. `torch.func.grad(energy_at)` remains in the HVP operator and
 in the independent gradient/Hessian test references. This avoids redundant
 reverse-mode work while preserving the analytic-gradient identity gate.
+
+### S8.1a review gate — public routing tests
+
+The four stale E6a.0 expectations were reproduced on the S8.1 starting tree
+as the following exact failing nodes:
+
+- `test_system_legacy_fallback_constructs_only_eager_guess`
+- `test_system_static_legacy_routes_skip_transform_guess[negative-fermi-maxiter]`
+- `test_system_static_legacy_routes_skip_transform_guess[non-full-mode]`
+- `test_system_strict_mixer_error_precedes_initial_guess`
+
+The tests now require negative electronic temperature and negative Fermi
+iteration count to raise their explicit `ValueError`s before a guess or
+functional solve is entered. Experimental single-shot raises the documented
+retirement `NotImplementedError` before guessing. Strict Broyden is exercised
+through a real public `System.singlepoint()` call, with a probe confirming
+`BroydenMethod.propose()` is reached. No production SCF code changed.
+
+The complete E6a.0 file passes **14 tests** on Python 3.14/PyTorch 2.14.1 and
+**14 tests** on Python 3.11/PyTorch 2.8.0. Focused S8.1 checks for the tight
+H2O stationary-floor regression, synthetic block-spectrum counterexample,
+and NO2 open-shell seed pass **3 tests** on Python 3.14. The exact command for
+the earlier 630-test combined selection was not preserved in the package
+record, so that exact selection is not claimed as rerun here; the prior
+630/5 result is historical, and the completed E6a.0 and focused SOSCF results
+above are the S8.1a evidence.
+
+An expanded reproducible selection of all `test_functional_*.py` SCF modules
+plus `test_e6a0_system_vmap.py` collected 602 tests and completed with 596
+passed and 6 failed. Besides the accepted Anderson gradient discrepancy, the
+additional failures were three `test_functional_temperature_cutoff.py`
+assertions and `test_functional_map_has_no_legacy_stateful_hooks`, whose
+directory-wide `.tolist()` scan also sees the eager-only SOSCF implementation.
+This expanded command was not the historical 630-test selection and does not
+replace its acceptance result. The four rewritten E6a.0 routing tests passed
+in both primary Python environments.
