@@ -180,6 +180,91 @@ def _compile_fixed_trip(budget: int) -> dict[str, object]:
     }
 
 
+def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
+    """Attempt Dynamo/eager compilation of a physical fixed-trip solve."""
+    case = _case(
+        "H2",
+        method=GFN1_XTB,
+        representation=labels.SCP_MODE_FOCK,
+        mixer=labels.MIXER_LINEAR,
+        maxiter=budget,
+        tolerance=0.0,
+    )
+    initial, _ = _initial_state(case, case.inputs)
+    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    settings = SCFSolverSettings(
+        maxiter=budget,
+        mix_guess=True,
+        damp=0.4,
+        x_atol=0.0,
+        x_atol_max=0.0,
+    )
+    method_factories = {
+        "Linear": LinearMethod,
+        "Anderson": lambda: AndersonMethod(
+            AndersonMethodSettings(
+                damp_init=0.3,
+                generations=2,
+                soft_start=False,
+                diagonal_offset=None,
+            )
+        ),
+        "Broyden": BroydenMethod,
+        "CDIIS": CDIISMethod,
+    }
+    method = method_factories[name]()
+
+    def physical_fixed_trip(value: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        outcome = _solve_map(
+            value,
+            settings,
+            problem.map,
+            problem=problem,
+            method=method,
+        )
+        return (
+            outcome.root_x,
+            outcome.iterations,
+            outcome.residual,
+            outcome.converged,
+        )
+
+    result: dict[str, object] = {
+        "method": name,
+        "budget": budget,
+        "backend": "eager",
+    }
+    try:
+        expected = physical_fixed_trip(initial)
+        started = time.perf_counter()
+        explanation = torch._dynamo.explain(physical_fixed_trip)(initial)
+        result["explain_seconds"] = time.perf_counter() - started
+        result["graph_count"] = explanation.graph_count
+        result["graph_break_count"] = explanation.graph_break_count
+        compiled = torch.compile(physical_fixed_trip, backend="eager")
+        started = time.perf_counter()
+        actual = compiled(initial)
+        result["first_call_seconds"] = time.perf_counter() - started
+        torch.testing.assert_close(
+            actual[0], expected[0], rtol=0.0, atol=1.0e-12
+        )
+        torch.testing.assert_close(actual[1], expected[1], rtol=0.0, atol=0.0)
+        torch.testing.assert_close(
+            actual[2], expected[2], rtol=0.0, atol=1.0e-12
+        )
+        assert torch.equal(actual[3], expected[3])
+        started = time.perf_counter()
+        compiled(initial + 1.0e-8)
+        result["steady_call_seconds"] = time.perf_counter() - started
+        result["value_parity"] = True
+    except Exception as exc:  # benchmark records unsupported routes
+        result["supported"] = False
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    else:
+        result["supported"] = True
+    return result
+
+
 def _compile_transition(name: str) -> dict[str, object]:
     """Compile a fixed-shape Fock method transition with method history."""
     case = _case(
@@ -277,6 +362,13 @@ def main() -> None:
         )
     ]
     fixed_trip = [_compile_fixed_trip(budget) for budget in (4, 8, 16)]
+    physical_fixed_trip = [
+        _compile_physical_solver("Linear", budget) for budget in (4, 8, 16)
+    ]
+    physical_method_smokes = [
+        _compile_physical_solver(name, 4)
+        for name in ("Anderson", "Broyden", "CDIIS")
+    ]
     transitions = [
         _compile_transition(name)
         for name in ("Linear", "Anderson", "Broyden", "CDIIS")
@@ -294,6 +386,8 @@ def main() -> None:
         "raw_maps": maps,
         "transitions": transitions,
         "fixed_trip_affine": fixed_trip,
+        "physical_fixed_trip": physical_fixed_trip,
+        "physical_method_smokes": physical_method_smokes,
     }
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output is None:
