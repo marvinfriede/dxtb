@@ -999,6 +999,7 @@ def solve_scf_problem(
     *,
     eager: bool = False,
     record_trace: bool = False,
+    record_initial_status: bool | None = None,
     state_projection: Callable[[Tensor], Tensor] | None = None,
     residual_projection: Callable[[Tensor], Tensor] | None = None,
     project_initial_state: bool = False,
@@ -1029,6 +1030,7 @@ def solve_scf_problem(
         state_projection=state_projection,
         eager=eager,
         record_trace=record_trace,
+        record_initial_status=record_initial_status,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
         problem=problem,
@@ -2098,83 +2100,6 @@ def finalize_scf(
     )
 
 
-def free_energy_from_spectral(
-    spectral: SCFSpectralResult, inputs: SCFInputs
-) -> Tensor:
-    """Partition the entropy contribution from one selected spectral phase."""
-    if inputs.fermi_settings is None:
-        return inputs.integrals.hcore.new_zeros(inputs.numbers.shape)
-    settings = inputs.fermi_settings
-    if settings.smear and spectral._fermi_state is None:
-        raise RuntimeError(
-            "A smeared spectral result must retain its authoritative "
-            "Fermi state for free-energy evaluation."
-        )
-    if settings.smear and settings.partition == labels.FERMI_PARTITION_EQUAL:
-        # The equal partition needs only the overlap-weighted trace, whose
-        # derivatives avoid the entropy quadrature (fermi_free_energy_trace).
-        total = fermi_free_energy_trace(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            spectral._fermi_state,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-            diff_steps=filling._diff_steps(settings.diff_order),
-        ).unsqueeze(-1)
-        real = real_atoms(inputs.numbers)
-        count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        return torch.where(real, (total / count).expand_as(real), 0.0)
-    if (
-        not settings.smear
-        and settings.partition == labels.FERMI_PARTITION_EQUAL
-    ):
-        entropy = filling.get_fermi_entropy_low_temperature(
-            spectral.occupation, settings.kt
-        )
-        entropy = torch.where(inputs.orbital_mask, entropy, 0.0)
-        total = entropy.sum(-1, keepdim=True)
-        real = real_atoms(inputs.numbers)
-        count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        return torch.where(real, (total / count).expand_as(real), 0.0)
-    if settings.smear:
-        entropy_matrix = fermi_free_energy_matrix(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            spectral._fermi_state,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-            diff_steps=filling._diff_steps(settings.diff_order),
-        )
-    else:
-        entropy_matrix = aufbau_free_energy_matrix(
-            spectral.hamiltonian,
-            inputs.nel,
-            settings.kt,
-            l_inv=inputs.inverse_cholesky,
-            mask=inputs.orbital_mask,
-        )
-    if settings.partition == labels.FERMI_PARTITION_EQUAL:
-        real = real_atoms(inputs.numbers)
-        count = real.count_nonzero(dim=-1).unsqueeze(-1)
-        total = torch.diagonal(
-            inputs.integrals.overlap @ entropy_matrix,
-            dim1=-2,
-            dim2=-1,
-        ).sum(-1, keepdim=True)
-        equal = total / count
-        return torch.where(real, equal.expand_as(real), 0.0)
-    if settings.partition == labels.FERMI_PARTITION_ATOMIC:
-        orbital_populations = torch.diagonal(
-            entropy_matrix @ inputs.integrals.overlap, dim1=-2, dim2=-1
-        )
-        return inputs.index.reduce_orbital_to_atom(orbital_populations)
-    raise ValueError(
-        f"Unknown Fermi free-energy partition {settings.partition}."
-    )
-
-
 def finalize_scf_potential(
     map_result: SCFMapResult,
     inputs: SCFInputs,
@@ -2367,7 +2292,6 @@ def solve_scf_potential_simple(
         SCFStrategy((SCFStage(LinearMethod()),)),
         eager=eager,
         record_trace=record_trace,
-        record_initial_status=True,
         state_projection=state_projection,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
@@ -2398,7 +2322,6 @@ def solve_scf_fock_simple(
         SCFStrategy((SCFStage(LinearMethod()),)),
         eager=eager,
         record_trace=record_trace,
-        record_initial_status=True,
         state_projection=state_projection,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
