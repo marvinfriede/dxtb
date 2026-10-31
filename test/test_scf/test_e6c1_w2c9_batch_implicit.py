@@ -1807,3 +1807,897 @@ def test_public_singlepoint_contract_preserved() -> None:
     res = system.singlepoint(pos)
     g = torch.autograd.grad(res.energy.sum(), pos)[0]
     assert bool(torch.isfinite(g).all())
+
+
+def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinguish BiCGSTAB response failures from non-BiCGSTAB nonfinite derivatives across all families."""
+    from tad_mctc.storch.linsolve import (
+        STATUS_CONVERGED,
+        STATUS_NONFINITE,
+        LinearSolveResult,
+    )
+    from tad_mctc.storch.linsolve import bicgstab as real_bicgstab
+
+    from dxtb._src.calculators import batch_implicit
+    from dxtb._src.calculators.batch_implicit import (
+        RESPONSE_NOT_RUN,
+        classify_batch_failure_category,
+    )
+
+    numbers, base_positions = _h2o_conformers()
+    c3 = base_positions[0].clone()
+    c3[1, 2] -= 0.05
+    c3[2, 1] += 0.04
+    pos4 = torch.cat((base_positions, c3.unsqueeze(0)), dim=0)
+    efield = torch.tensor([0.002, -0.001, 0.0015], dtype=DTYPE, device=DEVICE)
+    efgrad = torch.zeros((3, 3), dtype=DTYPE, device=DEVICE)
+    efgrad[0, 0] = 0.001
+    efgrad[1, 1] = -0.0004
+    efgrad[2, 2] = -0.0006
+
+    model, system = _build_system(
+        numbers,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+        etemp=300.0,
+        force_convergence=False,
+        trainable_model=True,
+    )
+    prepared = prepare_converged_root_batch(
+        system, pos4, field=efield, field_grad=efgrad, strict=False
+    )
+
+    # 1. Nonfinite objective weights must raise ValueError immediately.
+    for bad_w in (
+        torch.tensor([1.0, float("nan"), 1.0, 1.0], dtype=DTYPE, device=DEVICE),
+        torch.tensor([1.0, float("inf"), 1.0, 1.0], dtype=DTYPE, device=DEVICE),
+    ):
+        with pytest.raises(ValueError, match="finite"):
+            stream_batch_value_and_grad(
+                prepared, model, pos4, weights=bad_w, strict=False
+            )
+
+    # 2. Confirmed BiCGSTAB failure on lane 1 ONLY -> RESPONSE_FAILURE (9) on lane 1,
+    # while lanes 0, 2, 3 succeed (NONE = 0), consistent across chunk_size in (1, 2, 4).
+    target_lane1_root0 = (
+        prepared.lanes[1].root_x.detach().reshape(-1)[0].clone()
+    )
+
+    def _fail_bicgstab_on_lane1(matvec, rhs, *params, **kwargs):
+        res = real_bicgstab(matvec, rhs, *params, **kwargs)
+        root_param = batch_implicit._unwrap_primal_tensor(params[0])
+        root0 = root_param.reshape(res.status.numel(), -1)[:, 0].reshape(
+            res.status.shape
+        )
+        fail_mask_stat = (root0 - target_lane1_root0).abs() < 1.0e-12
+        extra_dims = res.solution.ndim - res.status.ndim
+        fail_mask_sol = fail_mask_stat.reshape(
+            *res.status.shape, *(1 for _ in range(extra_dims))
+        )
+        bad_sol = torch.where(
+            fail_mask_sol,
+            torch.full_like(res.solution, float("nan")),
+            res.solution,
+        )
+        bad_stat = torch.where(
+            fail_mask_stat,
+            torch.full_like(res.status, int(STATUS_NONFINITE)),
+            res.status,
+        )
+        return LinearSolveResult(
+            solution=bad_sol,
+            status=bad_stat,
+            iterations=res.iterations,
+            residual=res.residual,
+            target=res.target,
+        )
+
+    monkeypatch.setattr(batch_implicit, "bicgstab", _fail_bicgstab_on_lane1)
+    for cs in (1, 2, 4):
+        out_resp = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            field_grad=efgrad.clone().requires_grad_(True),
+            chunk_size=cs,
+            strict=False,
+        )
+        assert out_resp.failure_category == (
+            "success",
+            "response_failure",
+            "success",
+            "success",
+        )
+        assert out_resp.final_failure.tolist() == [
+            int(BatchRootFailureCode.NONE),
+            int(BatchRootFailureCode.RESPONSE_FAILURE),
+            int(BatchRootFailureCode.NONE),
+            int(BatchRootFailureCode.NONE),
+        ]
+        assert out_resp.response_converged.tolist() == [True, False, True, True]
+        assert out_resp.response_status.tolist() == [
+            int(STATUS_CONVERGED),
+            int(STATUS_NONFINITE),
+            int(STATUS_CONVERGED),
+            int(STATUS_CONVERGED),
+        ]
+        assert bool(torch.isnan(out_resp.position_gradient[1]).all())
+        assert bool(torch.isfinite(out_resp.position_gradient[0]).all())
+        assert bool(torch.isfinite(out_resp.position_gradient[2]).all())
+        assert bool(torch.isfinite(out_resp.position_gradient[3]).all())
+
+    with pytest.raises(SCFConvergenceError, match=r"\[Lane 1\]"):
+        stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            field_grad=efgrad.clone().requires_grad_(True),
+            chunk_size=2,
+            strict=True,
+        )
+
+    # Finite-but-unconverged BiCGSTAB (status == 1) also masks lane 1 gradients with NaN:
+    def _fail_bicgstab_finite_maxiter_on_lane1(
+        matvec, rhs, *params, **kwargs
+    ) -> LinearSolveResult:
+        res = real_bicgstab(matvec, rhs, *params, **kwargs)
+        root_param = batch_implicit._unwrap_primal_tensor(params[0])
+        root0 = root_param.reshape(res.status.numel(), -1)[:, 0].reshape(
+            res.status.shape
+        )
+        fail_mask_stat = (root0 - target_lane1_root0).abs() < 1.0e-12
+        bad_stat = torch.where(
+            fail_mask_stat,
+            torch.ones_like(res.status),
+            res.status,
+        )
+        return LinearSolveResult(
+            solution=res.solution,
+            status=bad_stat,
+            iterations=res.iterations,
+            residual=res.residual,
+            target=res.target,
+        )
+
+    monkeypatch.setattr(
+        batch_implicit, "bicgstab", _fail_bicgstab_finite_maxiter_on_lane1
+    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_resp_maxiter = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            chunk_size=2,
+            strict=False,
+        )
+    assert out_resp_maxiter.failure_category == (
+        "success",
+        "response_failure",
+        "success",
+        "success",
+    )
+    assert out_resp_maxiter.response_status.tolist() == [0, 1, 0, 0]
+    assert bool(torch.isnan(out_resp_maxiter.position_gradient[1]).all())
+    assert bool(torch.isfinite(out_resp_maxiter.position_gradient[0]).all())
+    monkeypatch.setattr(batch_implicit, "bicgstab", _fail_bicgstab_on_lane1)
+
+    # Zero-weight on failing lane 1 skips lane 1 response solve and leaves gradients finite!
+    out_resp_masked = stream_batch_value_and_grad(
+        prepared,
+        model,
+        pos4,
+        weights=torch.tensor([1.0, 0.0, 1.0, -0.5], dtype=DTYPE, device=DEVICE),
+        field=efield.clone().requires_grad_(True),
+        field_grad=efgrad.clone().requires_grad_(True),
+        chunk_size=2,
+        strict=False,
+    )
+    assert out_resp_masked.failure_category == (
+        "success",
+        "success",
+        "success",
+        "success",
+    )
+    assert int(out_resp_masked.response_status[1].item()) == RESPONSE_NOT_RUN
+    assert not bool(out_resp_masked.response_converged[1])
+    assert bool((out_resp_masked.position_gradient[1] == 0.0).all())
+    assert bool(torch.isfinite(out_resp_masked.position_gradient).all())
+    monkeypatch.setattr(batch_implicit, "bicgstab", real_bicgstab)
+
+    # 3. Non-BiCGSTAB nonfinite derivatives per input family -> NONFINITE_DERIVATIVE (10)
+    # while response_converged remains True!
+    # 3a. Position-only derivative failure via a hook on chunk positions (classical repulsion path)
+    # and 3b. External-field-only derivative failure, 3c. Charge-only, 3d. Spin-only, 3e. Model-parameter-only.
+    orig_eval_classical = batch_implicit._evaluate_lane_classical
+
+    # Inject a nonfinite gradient only into position of lane 2 during classical evaluation
+    # (outside implicit_root / BiCGSTAB!).
+    class _NanGradOnLane2Pos(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, e_term, pos_lane):
+            ctx.is_lane2 = bool(
+                torch.allclose(pos_lane.detach(), pos4[2].detach(), atol=1e-12)
+            )
+            return e_term.clone()
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if ctx.is_lane2:
+                return grad_out, torch.full(
+                    (3, 3), float("nan"), dtype=DTYPE, device=DEVICE
+                )
+            return grad_out, torch.zeros(
+                (3, 3), dtype=DTYPE, device=DEVICE
+            )
+
+    def _hooked_classical_pos(sys_obj, l_pos, l_chrg):
+        terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
+        if terms and l_pos.requires_grad:
+            lbl, val = terms[0]
+            val = _NanGradOnLane2Pos.apply(val, l_pos)
+            return ((lbl, val), *terms[1:])
+        return terms
+
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", _hooked_classical_pos
+    )
+    for cs in (1, 2, 4):
+        out_pos_nan = stream_batch_value_and_grad(
+            prepared, model, pos4, chunk_size=cs, strict=False
+        )
+        assert out_pos_nan.response_converged.tolist() == [
+            True,
+            True,
+            True,
+            True,
+        ]
+        assert out_pos_nan.failure_category == (
+            "success",
+            "success",
+            "nonfinite_derivative",
+            "success",
+        )
+        assert out_pos_nan.final_failure.tolist() == [
+            int(BatchRootFailureCode.NONE),
+            int(BatchRootFailureCode.NONE),
+            int(BatchRootFailureCode.NONFINITE_DERIVATIVE),
+            int(BatchRootFailureCode.NONE),
+        ]
+    with pytest.raises(SCFConvergenceError, match=r"\[Lane 2\]"):
+        stream_batch_value_and_grad(
+            prepared, model, pos4, chunk_size=2, strict=True
+        )
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", orig_eval_classical
+    )
+
+    # 3b. Charge-only derivative failure on lane 0 (shared scalar chrg with requires_grad=True)
+    class _NanGradOnLane0Chrg(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, e_term, pos_lane, chrg_lane):
+            ctx.is_lane0 = bool(
+                torch.allclose(pos_lane.detach(), pos4[0].detach(), atol=1e-12)
+            )
+            ctx.chrg_shape = chrg_lane.shape
+            return e_term.clone()
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if ctx.is_lane0:
+                return (
+                    grad_out,
+                    None,
+                    torch.full(
+                        ctx.chrg_shape,
+                        float("nan"),
+                        dtype=DTYPE,
+                        device=DEVICE,
+                    ),
+                )
+            return (
+                grad_out,
+                None,
+                torch.zeros(ctx.chrg_shape, dtype=DTYPE, device=DEVICE),
+            )
+
+    def _hooked_classical_chrg(sys_obj, l_pos, l_chrg):
+        terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
+        if terms and l_chrg.requires_grad:
+            lbl, val = terms[0]
+            val = _NanGradOnLane0Chrg.apply(val, l_pos, l_chrg)
+            return ((lbl, val), *terms[1:])
+        return terms
+
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", _hooked_classical_chrg
+    )
+    chrg_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    for cs in (1, 2, 4):
+        out_chrg_nan = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            chrg=chrg_leaf,
+            chunk_size=cs,
+            strict=False,
+        )
+        # Position gradients are all finite, but charge gradient on lane 0 is NaN!
+        assert bool(torch.isfinite(out_chrg_nan.position_gradient).all())
+        assert out_chrg_nan.charge_gradient is not None
+        assert bool(torch.isnan(out_chrg_nan.charge_gradient).any())
+        assert out_chrg_nan.response_converged.tolist() == [
+            True,
+            True,
+            True,
+            True,
+        ]
+        assert out_chrg_nan.failure_category == (
+            "nonfinite_derivative",
+            "success",
+            "success",
+            "success",
+        )
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", orig_eval_classical
+    )
+
+    # 3c. External-field-only derivative failure on lane 3 (shared field with requires_grad=True)
+    orig_refresh = batch_implicit._refresh_prepared_batch_inputs
+
+    class _NanGradOnLane3Field(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, f_tensor, is_lane3: bool):
+            ctx.is_lane3 = is_lane3
+            return f_tensor.clone()
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if ctx.is_lane3:
+                return torch.full_like(grad_out, float("nan")), None
+            return grad_out, None
+
+    def _hooked_refresh_field(
+        prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
+    ):
+        if isinstance(f_in, torch.Tensor) and f_in.requires_grad and f_in.ndim == 2:
+            hooked_rows = []
+            for row_idx in range(f_in.shape[0]):
+                is_l3 = bool(
+                    torch.allclose(
+                        eval_pos[row_idx].detach(),
+                        pos4[3].detach(),
+                        atol=1e-12,
+                    )
+                )
+                hooked_rows.append(_NanGradOnLane3Field.apply(f_in[row_idx], is_l3))
+            f_in = torch.stack(hooked_rows, dim=0)
+        return orig_refresh(
+            prep_obj,
+            eval_pos,
+            c_in,
+            s_in,
+            f_in,
+            fg_in,
+            strict_mode=strict_mode,
+        )
+
+    monkeypatch.setattr(
+        batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_field
+    )
+    for cs in (1, 2, 4):
+        out_field_nan = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            chunk_size=cs,
+            strict=False,
+        )
+        assert bool(torch.isfinite(out_field_nan.position_gradient).all())
+        assert out_field_nan.field_gradient is not None
+        assert bool(torch.isnan(out_field_nan.field_gradient).any())
+        assert out_field_nan.response_converged.tolist() == [
+            True,
+            True,
+            True,
+            True,
+        ]
+        assert out_field_nan.failure_category == (
+            "success",
+            "success",
+            "success",
+            "nonfinite_derivative",
+        )
+    monkeypatch.setattr(
+        batch_implicit, "_refresh_prepared_batch_inputs", orig_refresh
+    )
+
+    # 3d. Spin-only derivative failure on lane 1 (shared scalar spin with requires_grad=True)
+    def _hooked_refresh_spin(
+        prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
+    ):
+        if isinstance(s_in, torch.Tensor) and s_in.requires_grad and s_in.ndim == 1:
+            hooked_s = []
+            for row_idx in range(s_in.shape[0]):
+                is_l1 = bool(
+                    torch.allclose(
+                        eval_pos[row_idx].detach(),
+                        pos4[1].detach(),
+                        atol=1e-12,
+                    )
+                )
+                hooked_s.append(_NanGradOnLane3Field.apply(s_in[row_idx], is_l1))
+            s_in = torch.stack(hooked_s, dim=0)
+        return orig_refresh(
+            prep_obj,
+            eval_pos,
+            c_in,
+            s_in,
+            f_in,
+            fg_in,
+            strict_mode=strict_mode,
+        )
+
+    prep_spin = prepare_converged_root_batch(
+        system, pos4, spin=0.0, field=efield, field_grad=efgrad, strict=False
+    )
+    monkeypatch.setattr(
+        batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_spin
+    )
+    spin_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    for cs in (1, 2):
+        out_spin_nan = stream_batch_value_and_grad(
+            prep_spin,
+            model,
+            pos4,
+            spin=spin_leaf,
+            chunk_size=cs,
+            strict=False,
+        )
+        assert bool(torch.isfinite(out_spin_nan.position_gradient).all())
+        assert out_spin_nan.spin_gradient is not None
+        assert bool(torch.isnan(out_spin_nan.spin_gradient).any())
+        assert out_spin_nan.failure_category == (
+            "success",
+            "nonfinite_derivative",
+            "success",
+            "success",
+        )
+    monkeypatch.setattr(
+        batch_implicit, "_refresh_prepared_batch_inputs", orig_refresh
+    )
+
+    # 3e. Model-parameter-only derivative failure on lane 2 (position/field/chrg gradients stay finite!)
+    class _NanGradOnLane2ModelParam(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, e_term, pos_lane, model_param):
+            ctx.is_lane2 = bool(
+                torch.allclose(pos_lane.detach(), pos4[2].detach(), atol=1e-12)
+            )
+            ctx.param_shape = model_param.shape
+            return e_term.clone()
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if ctx.is_lane2:
+                return (
+                    grad_out,
+                    None,
+                    torch.full(
+                        ctx.param_shape,
+                        float("nan"),
+                        dtype=DTYPE,
+                        device=DEVICE,
+                    ),
+                )
+            return (
+                grad_out,
+                None,
+                torch.zeros(ctx.param_shape, dtype=DTYPE, device=DEVICE),
+            )
+
+    assert model.par.element is not None
+    target_model_leaf = model.par.element.O.arep.param
+    assert target_model_leaf.requires_grad
+
+    def _hooked_classical_model(sys_obj, l_pos, l_chrg):
+        terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
+        if terms:
+            lbl, val = terms[0]
+            val = _NanGradOnLane2ModelParam.apply(
+                val, l_pos, target_model_leaf
+            )
+            return ((lbl, val), *terms[1:])
+        return terms
+
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", _hooked_classical_model
+    )
+    for cs in (1, 2, 4):
+        out_mod_nan = stream_batch_value_and_grad(
+            prepared, model, pos4, chunk_size=cs, strict=False
+        )
+        assert bool(torch.isfinite(out_mod_nan.position_gradient).all())
+        assert any(
+            g is not None and bool(torch.isnan(g).any())
+            for g in out_mod_nan.model_parameter_gradients
+        )
+        assert out_mod_nan.response_converged.tolist() == [
+            True,
+            True,
+            True,
+            True,
+        ]
+        assert out_mod_nan.failure_category == (
+            "success",
+            "success",
+            "nonfinite_derivative",
+            "success",
+        )
+    monkeypatch.setattr(
+        batch_implicit, "_evaluate_lane_classical", orig_eval_classical
+    )
+
+    # 4. Verify all 5 failure categories together in a 5-lane batch:
+    # lane 0: success (NONE = 0)
+    # lane 1: fermi_failure (FERMI_NONCONVERGENCE = 3)
+    # lane 2: primal_scf_failure (MAXITER_EXCEEDED = 5)
+    # lane 3: response_failure (RESPONSE_FAILURE = 9)
+    # lane 4: nonfinite_derivative (NONFINITE_DERIVATIVE = 10)
+    codes = torch.tensor(
+        [
+            int(BatchRootFailureCode.NONE),
+            int(BatchRootFailureCode.FERMI_NONCONVERGENCE),
+            int(BatchRootFailureCode.MAXITER_EXCEEDED),
+            int(BatchRootFailureCode.RESPONSE_FAILURE),
+            int(BatchRootFailureCode.NONFINITE_DERIVATIVE),
+        ],
+        dtype=torch.int64,
+    )
+    assert classify_batch_failure_category(codes) == (
+        "success",
+        "fermi_failure",
+        "primal_scf_failure",
+        "response_failure",
+        "nonfinite_derivative",
+    )
+
+
+def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution() -> (
+    None
+):
+    """Verify input aliasing, caller hooks, wrong-Model rejection, and 12-step long-lived stability."""
+    import resource
+
+    numbers, base_positions = _h2o_conformers()
+    model, system = _build_system(
+        numbers,
+        int_level=labels.INTLEVEL_DIPOLE,
+        etemp=300.0,
+        force_convergence=False,
+        trainable_model=True,
+    )
+    pos2 = base_positions[:2].clone()
+
+    # 1. Wrong Model instance is rejected without silent cloning.
+    other_model, _ = _build_system(numbers, trainable_model=True)
+    prepared = prepare_converged_root_batch(system, pos2, strict=True)
+    with pytest.raises(ValueError, match="does not match"):
+        stream_batch_value_and_grad(prepared, other_model, pos2, strict=True)
+
+    # 2. Aliased external scalar input (same tensor leaf passed as both chrg and spin)
+    # and caller backward hooks on positions are preserved cleanly.
+    shared_zero = torch.tensor(
+        0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
+    prep_zero = prepare_converged_root_batch(
+        system, pos2, chrg=shared_zero, spin=shared_zero, strict=True
+    )
+    pos_with_hook = pos2.clone().requires_grad_(True)
+    hook_calls: list[int] = []
+    handle = pos_with_hook.register_hook(
+        lambda g: (hook_calls.append(int(g.shape[0])), g)[1]
+    )
+    try:
+        out_alias = stream_batch_value_and_grad(
+            prep_zero,
+            model,
+            pos_with_hook,
+            chrg=shared_zero,
+            spin=shared_zero,
+            chunk_size=1,
+            strict=True,
+        )
+    finally:
+        handle.remove()
+    assert out_alias.charge_gradient is not None
+    assert out_alias.spin_gradient is not None
+    assert bool(torch.isfinite(out_alias.charge_gradient).all())
+    assert bool(torch.isfinite(out_alias.spin_gradient).all())
+    # Caller's hook on pos_with_hook is preserved across both chunk backward passes.
+    assert hook_calls == [2, 2]
+
+    # 3. Repeated streaming evaluations in one long-lived process (12 iterations)
+    # verify Model identity, fresh Result snapshots, gradient accuracy, and bounded RSS.
+    model_id_initial = id(model)
+    par_id_initial = id(model.par)
+    seen_results: list[int] = []
+    rss_samples_kb: list[int] = []
+    for step in range(12):
+        offset = 0.002 * ((step % 4) - 1.5)
+        step_pos = pos2.clone()
+        step_pos[:, 1, 2] += offset
+        out_step = stream_batch_value_and_grad(
+            system,
+            model,
+            step_pos,
+            chunk_size=1 if step % 2 == 0 else 2,
+            strict=True,
+            eager_primal_fermi="spectral" if step % 3 == 0 else True,
+        )
+        assert id(model) == model_id_initial
+        assert id(model.par) == par_id_initial
+        assert bool(out_step.converged.all())
+        assert out_step.failure_category == ("success", "success")
+        assert bool(torch.isfinite(out_step.energy).all())
+        assert bool(torch.isfinite(out_step.position_gradient).all())
+        seen_results.append(id(out_step))
+        if step >= 3:
+            rss_samples_kb.append(
+                int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            )
+    # Peak RSS across steps 3..11 must not grow unboundedly (< 32 MB growth).
+    assert max(rss_samples_kb) - min(rss_samples_kb) < 32 * 1024
+
+
+def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
+    """Verify static, adaptive, and spectral primal modes with streaming and thread-local scope safety."""
+    import concurrent.futures
+
+    from dxtb._src.scf.functional.spectral import (
+        _current_primal_fermi_mode,
+        eager_primal_fermi_scope,
+    )
+
+    # 1. Nested contexts, exception restoration, invalid mode rejection, and thread isolation.
+    assert _current_primal_fermi_mode() == "static"
+    with pytest.raises(ValueError, match="eager_primal_fermi must be"):
+        with eager_primal_fermi_scope("invalid_mode"):
+            pass
+    assert _current_primal_fermi_mode() == "static"
+
+    try:
+        with eager_primal_fermi_scope(True):
+            assert _current_primal_fermi_mode() == "adaptive"
+            with eager_primal_fermi_scope("spectral"):
+                assert _current_primal_fermi_mode() == "spectral"
+                with eager_primal_fermi_scope(False):
+                    assert _current_primal_fermi_mode() == "static"
+                assert _current_primal_fermi_mode() == "spectral"
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert _current_primal_fermi_mode() == "static"
+
+    # Multi-thread isolation: another thread entering "spectral" or "adaptive" does not affect main thread.
+    def _worker_scope_check(mode_in: str) -> tuple[str, str]:
+        before = _current_primal_fermi_mode()
+        with eager_primal_fermi_scope(mode_in):
+            inside = _current_primal_fermi_mode()
+        after = _current_primal_fermi_mode()
+        assert before == "static" and after == "static"
+        return before, inside
+
+    with eager_primal_fermi_scope("adaptive"):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            f1 = ex.submit(_worker_scope_check, "spectral")
+            f2 = ex.submit(_worker_scope_check, "static")
+            assert f1.result() == ("static", "spectral")
+            assert f2.result() == ("static", "static")
+        assert _current_primal_fermi_mode() == "adaptive"
+    assert _current_primal_fermi_mode() == "static"
+
+    # 2. Closed-shell H2O (50K, 300K, 5000K) and open-shell NO2 (300K):
+    # static, adaptive, and spectral primal modes all validate under the static raw map
+    # and produce matching streaming energies, free energies, position gradients, and Model gradients.
+    numbers_h2o, pos_h2o = _h2o_conformers()
+    for etemp in (50.0, 300.0, 5000.0):
+        model_h2o, sys_h2o = _build_system(
+            numbers_h2o, etemp=etemp, trainable_model=True
+        )
+        out_static = stream_batch_value_and_grad(
+            sys_h2o,
+            model_h2o,
+            pos_h2o[:2],
+            chunk_size=1,
+            strict=True,
+            eager_primal_fermi=False,
+        )
+        for mode in (True, "spectral"):
+            out_mode = stream_batch_value_and_grad(
+                sys_h2o,
+                model_h2o,
+                pos_h2o[:2],
+                chunk_size=1,
+                strict=True,
+                eager_primal_fermi=mode,
+            )
+            torch.testing.assert_close(
+                out_mode.energy, out_static.energy, atol=1e-11, rtol=1e-11
+            )
+            torch.testing.assert_close(
+                out_mode.free_energy,
+                out_static.free_energy,
+                atol=1e-11,
+                rtol=1e-11,
+            )
+            torch.testing.assert_close(
+                out_mode.position_gradient,
+                out_static.position_gradient,
+                atol=1e-9,
+                rtol=1e-9,
+            )
+            for g_m, g_s in zip(
+                out_mode.model_parameter_gradients,
+                out_static.model_parameter_gradients,
+            ):
+                if g_s is None:
+                    assert g_m is None
+                else:
+                    assert g_m is not None
+                    torch.testing.assert_close(
+                        g_m, g_s, atol=1e-9, rtol=1e-8
+                    )
+
+    # Open-shell NO2 radical (Z=[7, 8, 8], spin=1.0)
+    numbers_no2 = torch.tensor([7, 8, 8], device=DEVICE)
+    no2_0 = torch.tensor(
+        [
+            [0.00000000, 0.00000000, 0.22000000],
+            [0.00000000, 2.05000000, -0.88000000],
+            [0.00000000, -2.05000000, -0.88000000],
+        ],
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+    no2_1 = no2_0.clone()
+    no2_1[1, 1] += 0.06
+    no2_1[2, 2] -= 0.04
+    pos_no2 = torch.stack((no2_0, no2_1), dim=0)
+    model_no2, sys_no2 = _build_system(
+        numbers_no2, etemp=300.0, trainable_model=True
+    )
+    out_no2_static = stream_batch_value_and_grad(
+        sys_no2,
+        model_no2,
+        pos_no2,
+        spin=1.0,
+        chunk_size=2,
+        strict=True,
+        eager_primal_fermi=False,
+    )
+    for mode in (True, "spectral"):
+        out_no2_mode = stream_batch_value_and_grad(
+            sys_no2,
+            model_no2,
+            pos_no2,
+            spin=1.0,
+            chunk_size=2,
+            strict=True,
+            eager_primal_fermi=mode,
+        )
+        torch.testing.assert_close(
+            out_no2_mode.energy, out_no2_static.energy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            out_no2_mode.position_gradient,
+            out_no2_static.position_gradient,
+            atol=1e-9,
+            rtol=1e-9,
+        )
+
+
+def test_w2c11_parallel_root_preparation_parity_and_failure_semantics() -> (
+    None
+):
+    """Process-isolated parallel root preparation preserves deterministic order and failure semantics."""
+    numbers, base_positions = _h2o_conformers()
+    c3 = base_positions[0].clone()
+    c3[1, 2] -= 0.05
+    c3[2, 1] += 0.04
+    pos4 = torch.cat((base_positions, c3.unsqueeze(0)), dim=0)
+    model, system = _build_system(
+        numbers, etemp=300.0, force_convergence=False, trainable_model=True
+    )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        prepare_converged_root_batch(system, pos4, num_workers=0)
+
+    prep_w1 = prepare_converged_root_batch(
+        system, pos4, eager_primal_fermi="spectral", num_workers=1, strict=True
+    )
+    prep_w2 = prepare_converged_root_batch(
+        system, pos4, eager_primal_fermi="spectral", num_workers=2, strict=True
+    )
+    assert prep_w1.preparation_diagnostics is not None
+    assert prep_w2.preparation_diagnostics is not None
+    assert prep_w1.preparation_diagnostics.num_workers == 1
+    assert prep_w2.preparation_diagnostics.num_workers == 2
+    assert prep_w2.preparation_diagnostics.worker_cpu_time_s > 0.0
+    assert (
+        prep_w2.preparation_diagnostics.process_tree_peak_rss_mb
+        >= prep_w2.preparation_diagnostics.parent_peak_rss_mb
+    )
+    assert len(prep_w2.preparation_diagnostics.worker_pids) >= 1
+
+    for l1, l2 in zip(prep_w1.lanes, prep_w2.lanes):
+        assert l1.lane_index == l2.lane_index
+        assert l1.root_valid == l2.root_valid
+        torch.testing.assert_close(l1.root_x, l2.root_x, atol=1e-13, rtol=1e-13)
+        torch.testing.assert_close(
+            l1.raw_residual_l2, l2.raw_residual_l2, atol=1e-13, rtol=1e-13
+        )
+
+    out_w1 = stream_batch_value_and_grad(
+        prep_w1, model, pos4, chunk_size=2, strict=True
+    )
+    out_w2 = stream_batch_value_and_grad(
+        prep_w2, model, pos4, chunk_size=2, strict=True
+    )
+    out_sys_w2 = stream_batch_value_and_grad(
+        system,
+        model,
+        pos4,
+        chunk_size=2,
+        eager_primal_fermi="spectral",
+        num_workers=2,
+        strict=True,
+    )
+    eval_sys_w2 = evaluate_converged_root_batch(
+        system,
+        pos4,
+        eager_primal_fermi="spectral",
+        num_workers=2,
+        strict=True,
+    )
+    torch.testing.assert_close(out_w1.energy, out_w2.energy, atol=1e-13, rtol=0)
+    torch.testing.assert_close(
+        out_w1.energy, out_sys_w2.energy, atol=1e-13, rtol=0
+    )
+    torch.testing.assert_close(
+        out_w1.energy, eval_sys_w2.energy.sum(dim=-1), atol=1e-13, rtol=0
+    )
+    torch.testing.assert_close(
+        out_w1.position_gradient,
+        out_w2.position_gradient,
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    torch.testing.assert_close(
+        out_w1.position_gradient,
+        out_sys_w2.position_gradient,
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+    # Non-strict and strict failure propagation under num_workers=2:
+    _, sys_max1 = _build_system(
+        numbers, maxiter=1, force_convergence=False, etemp=300.0
+    )
+    with pytest.warns(SCFConvergenceWarning):
+        prep_fail_w2 = prepare_converged_root_batch(
+            sys_max1, pos4[:2], num_workers=2, strict=False
+        )
+    assert not prep_fail_w2.all_roots_valid
+    assert all(
+        lane.failure_code == int(BatchRootFailureCode.MAXITER_EXCEEDED)
+        for lane in prep_fail_w2.lanes
+    )
+    with pytest.raises(SCFConvergenceError, match=r"\[Lane 0\]"):
+        prepare_converged_root_batch(
+            sys_max1, pos4[:2], num_workers=2, strict=True
+        )

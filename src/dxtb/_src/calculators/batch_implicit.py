@@ -26,6 +26,10 @@ and mapped implicit differentiation.
 from __future__ import annotations
 
 import dataclasses
+import multiprocessing as mp
+import os
+import resource
+import time
 import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -35,6 +39,13 @@ from types import SimpleNamespace
 
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
+from tad_mctc.storch.implicit import implicit_fixed_point
+from tad_mctc.storch.linsolve import (
+    STATUS_CONVERGED,
+    STATUS_NONFINITE,
+    LinearSolveResult,
+    bicgstab,
+)
 from tad_mctc.tools.compile import is_compiling
 from torch.func import vmap
 
@@ -88,7 +99,11 @@ from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.functional.anderson import _solve_map_anderson
-from dxtb._src.scf.functional.core import replace_tensor_leaves, tensor_leaves
+from dxtb._src.scf.functional.core import (
+    CoreIndexData,
+    replace_tensor_leaves,
+    tensor_leaves,
+)
 from dxtb._src.scf.functional.data import (
     PotentialLayout,
     SCFCharges,
@@ -104,7 +119,14 @@ from dxtb._src.scf.functional.eager import (
     public_scf_status,
     resolve_full_scf_route,
 )
-from dxtb._src.scf.functional.implicit import _SCFMapTensorTree, implicit_root
+from dxtb._src.scf.functional.implicit import (
+    _LINEAR_SOLVE_ATOL,
+    _LINEAR_SOLVE_RTOL,
+    _SCFMapTensorTree,
+)
+from dxtb._src.scf.functional.implicit import (
+    implicit_root as _functional_implicit_root,
+)
 from dxtb._src.scf.functional.map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -147,9 +169,14 @@ from dxtb._src.typing.exceptions import (
 from dxtb._src.wavefunction.filling import FermiStatus
 
 __all__ = [
+    "RESPONSE_NOT_RUN",
+    "BatchPreparationDiagnostics",
+    "BatchResponseDiagnostics",
     "BatchRootFailureCode",
     "ConvergedRootLaneRecord",
     "PreparedConvergedRootBatch",
+    "ResponseDiagnosticCollector",
+    "classify_batch_failure_category",
     "classify_response_failure_status",
     "evaluate_converged_root_batch",
     "prepare_converged_root_batch",
@@ -157,6 +184,7 @@ __all__ = [
 
 _ELECTRON_COUNT_TOL = 1.0e-6
 _UNSET: Any = object()
+RESPONSE_NOT_RUN: int = -1
 
 
 class BatchRootFailureCode(IntEnum):
@@ -164,11 +192,14 @@ class BatchRootFailureCode(IntEnum):
 
     Codes ``1`` through ``8`` represent primal root-preparation failures and
     are recorded in ``Result.status``. Code ``9`` (``RESPONSE_FAILURE``)
-    identifies an implicit linear-response failure during differentiation:
-    because ``Result`` is an immutable primal snapshot constructed prior to
-    derivative execution, ``Result.converged`` and ``Result.status`` remain
-    primal-root diagnostics while failed response solves produce lane-local
-    ``NaN`` derivatives when selected and ``0.0`` when masked.
+    identifies a confirmed implicit linear-response failure during
+    differentiation, whereas code ``10`` (``NONFINITE_DERIVATIVE``) identifies
+    a nonfinite derivative whose origin is outside or not attributable to a
+    failed linear-response solve. Because ``Result`` is an immutable primal
+    snapshot constructed prior to derivative execution, ``Result.converged``
+    and ``Result.status`` remain primal-root diagnostics while failed response
+    solves produce lane-local ``NaN`` derivatives when selected and ``0.0``
+    when masked.
     """
 
     NONE = 0
@@ -181,6 +212,82 @@ class BatchRootFailureCode(IntEnum):
     NONFINITE_STATE = 7
     INVALID_PADDING = 8
     RESPONSE_FAILURE = 9
+    NONFINITE_DERIVATIVE = 10
+
+
+def classify_batch_failure_category(final_failure: Tensor) -> tuple[str, ...]:
+    """Map per-lane ``BatchRootFailureCode`` values to canonical category names."""
+    categories: list[str] = []
+    for raw_code in final_failure.detach().reshape(-1).tolist():
+        code = int(raw_code)
+        if code == int(BatchRootFailureCode.NONE):
+            categories.append("success")
+        elif code in (
+            int(BatchRootFailureCode.INVALID_TEMPERATURE),
+            int(BatchRootFailureCode.TOO_MANY_ELECTRONS),
+            int(BatchRootFailureCode.FERMI_NONCONVERGENCE),
+            int(BatchRootFailureCode.ELECTRON_COUNT),
+        ):
+            categories.append("fermi_failure")
+        elif code in (
+            int(BatchRootFailureCode.MAXITER_EXCEEDED),
+            int(BatchRootFailureCode.RESIDUAL_TOLERANCE),
+            int(BatchRootFailureCode.NONFINITE_STATE),
+            int(BatchRootFailureCode.INVALID_PADDING),
+        ):
+            categories.append("primal_scf_failure")
+        elif code == int(BatchRootFailureCode.RESPONSE_FAILURE):
+            categories.append("response_failure")
+        elif code == int(BatchRootFailureCode.NONFINITE_DERIVATIVE):
+            categories.append("nonfinite_derivative")
+        else:
+            raise ValueError(f"Unknown BatchRootFailureCode: {code}.")
+    return tuple(categories)
+
+
+@dataclass(frozen=True, eq=False)
+class BatchResponseDiagnostics:
+    """Call-local linear-response diagnostics for a conformer batch."""
+
+    executed: Tensor
+    converged: Tensor
+    status: Tensor
+    iterations: Tensor
+    residual: Tensor
+    target: Tensor
+    incoming_finite: Tensor
+    outgoing_finite: Tensor
+
+    @property
+    def confirmed_failure(self) -> Tensor:
+        """True for lanes where the implicit linear-response solve itself failed."""
+        return (
+            self.executed
+            & self.incoming_finite
+            & (~self.converged | ~self.outgoing_finite)
+        )
+
+
+def implicit_root(
+    root_x: Tensor,
+    *parameters: Tensor,
+    raw_map: Callable[..., Tensor],
+    method: Any = "bicgstab",
+) -> Tensor:
+    """Attach implicit fixed-point derivatives with optional custom linear solver."""
+    if method == "bicgstab":
+        return _functional_implicit_root(root_x, *parameters, raw_map=raw_map)
+    return implicit_fixed_point(
+        raw_map,
+        root_x,
+        *parameters,
+        method=method,
+        rtol=_LINEAR_SOLVE_RTOL,
+        atol=_LINEAR_SOLVE_ATOL,
+    )
+
+
+_BATCH_DEFAULT_IMPLICIT_ROOT = implicit_root
 
 
 @dataclass(frozen=True, eq=False)
@@ -253,6 +360,22 @@ class _TensorValueSnapshot:
 
 
 @dataclass(frozen=True, eq=False)
+class BatchPreparationDiagnostics:
+    """Timing, CPU, and process-tree memory diagnostics for root preparation."""
+
+    num_workers: int
+    wall_time_s: float
+    parent_cpu_time_s: float
+    worker_cpu_time_s: float
+    total_cpu_time_s: float
+    parent_peak_rss_mb: float
+    worker_peak_rss_sum_mb: float
+    process_tree_peak_rss_mb: float
+    process_tree_pss_mb: float
+    worker_pids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, eq=False)
 class PreparedConvergedRootBatch:
     """Validated conformer batch sharing one :class:`System` or padded core owner."""
 
@@ -280,6 +403,7 @@ class PreparedConvergedRootBatch:
     input_tensor_versions: tuple[dict[str, int], ...]
     valid_lane_mask: Tensor
     all_roots_valid: bool
+    preparation_diagnostics: BatchPreparationDiagnostics | None = None
 
 
 def _unwrap_primal_tensor(x: Tensor) -> Tensor:
@@ -918,36 +1042,356 @@ def _classify_fermi_code(code_value: int) -> tuple[int, str]:
     raise ValueError(f"Unknown nonzero Fermi failure code: {code_value}.")
 
 
+class ResponseDiagnosticCollector:
+    """Call-local collector for matrix-free BiCGSTAB response diagnostics."""
+
+    def __init__(self) -> None:
+        self.frozen: bool = False
+        self.executed: Tensor | None = None
+        self.status: Tensor | None = None
+        self.converged: Tensor | None = None
+        self.iterations: Tensor | None = None
+        self.residual: Tensor | None = None
+        self.target: Tensor | None = None
+        self.incoming_finite: Tensor | None = None
+        self.outgoing_finite: Tensor | None = None
+
+    def solve(
+        self,
+        matvec: Callable[..., Tensor],
+        rhs: Tensor,
+        *params: Tensor,
+        **kwargs: Any,
+    ) -> LinearSolveResult:
+        res = bicgstab(matvec, rhs, *params, **kwargs)
+        if not self.frozen:
+            rhs_d = _unwrap_primal_tensor(rhs)
+            sol_d = _unwrap_primal_tensor(res.solution)
+            stat_d = _unwrap_primal_tensor(res.status).to(dtype=torch.int64)
+            iter_d = _unwrap_primal_tensor(res.iterations).to(dtype=torch.int64)
+            res_d = _unwrap_primal_tensor(res.residual)
+            tgt_d = _unwrap_primal_tensor(res.target)
+            n_lanes = max(1, int(stat_d.numel()))
+            self.executed = torch.ones_like(stat_d, dtype=torch.bool)
+            self.status = stat_d
+            self.converged = stat_d == int(STATUS_CONVERGED)
+            self.iterations = iter_d
+            self.residual = res_d
+            self.target = tgt_d
+            if self.incoming_finite is None:
+                self.incoming_finite = (
+                    torch.isfinite(rhs_d.reshape(n_lanes, -1))
+                    .all(dim=-1)
+                    .reshape(stat_d.shape)
+                )
+            if self.outgoing_finite is None:
+                sol_fin = (
+                    torch.isfinite(sol_d.reshape(n_lanes, -1))
+                    .all(dim=-1)
+                    .reshape(stat_d.shape)
+                )
+                self.outgoing_finite = self.converged & sol_fin
+        conv_mask = res.status == int(STATUS_CONVERGED)
+        while conv_mask.ndim < res.solution.ndim:
+            conv_mask = conv_mask.unsqueeze(-1)
+        masked_sol = torch.where(
+            conv_mask,
+            res.solution,
+            torch.full_like(res.solution, float("nan")),
+        )
+        return LinearSolveResult(
+            solution=masked_sol,
+            status=res.status,
+            iterations=res.iterations,
+            residual=res.residual,
+            target=res.target,
+        )
+
+    def record_incoming(self, grad_or_tangent: Tensor) -> None:
+        if self.frozen:
+            return
+        detached = _unwrap_primal_tensor(grad_or_tangent)
+        if detached.ndim >= 1:
+            flat = detached.reshape(detached.shape[0], -1)
+            finite = torch.isfinite(flat).all(dim=-1)
+            active = (flat != 0.0).any(dim=-1)
+        else:
+            finite = torch.isfinite(detached).all()
+            active = (detached != 0.0).any()
+        self.incoming_finite = finite | ~active
+
+    def record_outgoing(
+        self, grads_or_tangents: tuple[Tensor | None, ...]
+    ) -> None:
+        if self.frozen:
+            return
+        first = next((g for g in grads_or_tangents if g is not None), None)
+        if first is None:
+            return
+        first_d = _unwrap_primal_tensor(first)
+        batch_shape = first_d.shape[:1] if first_d.ndim >= 1 else ()
+        finite = torch.ones(
+            batch_shape, dtype=torch.bool, device=first_d.device
+        )
+        for g in grads_or_tangents:
+            if g is None:
+                continue
+            gd = _unwrap_primal_tensor(g)
+            if gd.ndim >= 1 and batch_shape:
+                finite = finite & torch.isfinite(
+                    gd.reshape(gd.shape[0], -1)
+                ).all(dim=-1)
+            else:
+                finite = finite & torch.isfinite(gd).all()
+        self.outgoing_finite = finite
+
+    def finalize(
+        self,
+        valid_indices: list[int],
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> BatchResponseDiagnostics:
+        executed = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        converged = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        status = torch.full(
+            (batch_size,), RESPONSE_NOT_RUN, dtype=torch.int64, device=device
+        )
+        iterations = torch.zeros(batch_size, dtype=torch.int64, device=device)
+        residual = torch.full(
+            (batch_size,), float("nan"), dtype=dtype, device=device
+        )
+        target = torch.full(
+            (batch_size,), float("nan"), dtype=dtype, device=device
+        )
+        incoming_finite = torch.ones(
+            batch_size, dtype=torch.bool, device=device
+        )
+        outgoing_finite = torch.ones(
+            batch_size, dtype=torch.bool, device=device
+        )
+        if not valid_indices:
+            return BatchResponseDiagnostics(
+                executed=executed,
+                converged=converged,
+                status=status,
+                iterations=iterations,
+                residual=residual,
+                target=target,
+                incoming_finite=incoming_finite,
+                outgoing_finite=outgoing_finite,
+            )
+        idx = torch.tensor(valid_indices, dtype=torch.long, device=device)
+        n_valid = len(valid_indices)
+
+        def _expand_bool(val: Tensor | None, default: bool) -> Tensor:
+            if val is None:
+                return torch.full(
+                    (n_valid,), default, dtype=torch.bool, device=device
+                )
+            return (
+                val.reshape(-1)
+                .expand(n_valid)
+                .to(device=device, dtype=torch.bool)
+            )
+
+        def _expand_int(val: Tensor | None, default: int) -> Tensor:
+            if val is None:
+                return torch.full(
+                    (n_valid,), default, dtype=torch.int64, device=device
+                )
+            return (
+                val.reshape(-1)
+                .expand(n_valid)
+                .to(device=device, dtype=torch.int64)
+            )
+
+        def _expand_float(val: Tensor | None) -> Tensor:
+            if val is None:
+                return torch.full(
+                    (n_valid,), float("nan"), dtype=dtype, device=device
+                )
+            return (
+                val.reshape(-1).expand(n_valid).to(device=device, dtype=dtype)
+            )
+
+        inc_v = _expand_bool(self.incoming_finite, True)
+        out_v = _expand_bool(self.outgoing_finite, True)
+        has_monitor = (
+            self.incoming_finite is not None or self.outgoing_finite is not None
+        )
+        exec_v = _expand_bool(self.executed, has_monitor)
+        conv_v = _expand_bool(self.converged, has_monitor) & inc_v & out_v
+        default_stat = (
+            int(STATUS_CONVERGED) if has_monitor else RESPONSE_NOT_RUN
+        )
+        stat_v = _expand_int(self.status, default_stat)
+        if has_monitor and self.status is None:
+            stat_v = torch.where(
+                out_v & inc_v,
+                stat_v,
+                torch.full_like(stat_v, int(STATUS_NONFINITE)),
+            )
+        elif self.status is not None:
+            stat_v = torch.where(
+                (stat_v == int(STATUS_CONVERGED)) & (~inc_v | ~out_v),
+                torch.full_like(stat_v, int(STATUS_NONFINITE)),
+                stat_v,
+            )
+        iter_v = _expand_int(self.iterations, 0)
+        res_v = _expand_float(self.residual)
+        tgt_v = _expand_float(self.target)
+
+        executed[idx] = exec_v
+        converged[idx] = conv_v
+        status[idx] = stat_v
+        iterations[idx] = iter_v
+        residual[idx] = res_v
+        target[idx] = tgt_v
+        incoming_finite[idx] = inc_v
+        outgoing_finite[idx] = out_v
+        return BatchResponseDiagnostics(
+            executed=executed,
+            converged=converged,
+            status=status,
+            iterations=iterations,
+            residual=residual,
+            target=target,
+            incoming_finite=incoming_finite,
+            outgoing_finite=outgoing_finite,
+        )
+
+
+class _ResponseParamsMonitor(torch.autograd.Function):
+    """Record finiteness of parameter sensitivities leaving implicit_root."""
+
+    @staticmethod
+    def forward(
+        ctx: Any,
+        collector: ResponseDiagnosticCollector,
+        *params: Tensor,
+    ) -> tuple[Tensor, ...]:
+        ctx.collector = collector
+        return tuple(p.clone() for p in params)
+
+    @staticmethod
+    def backward(
+        ctx: Any, *grad_outputs: Tensor | None
+    ) -> tuple[None, ...]:
+        ctx.collector.record_outgoing(grad_outputs)
+        return (None, *grad_outputs)
+
+
+class _ResponseOutputMonitor(torch.autograd.Function):
+    """Record finiteness of state sensitivities entering implicit_root."""
+
+    @staticmethod
+    def forward(
+        ctx: Any,
+        collector: ResponseDiagnosticCollector,
+        attached_roots: Tensor,
+    ) -> Tensor:
+        ctx.collector = collector
+        return attached_roots.clone()
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> tuple[None, Tensor]:
+        ctx.collector.record_incoming(grad_output)
+        return None, grad_output
+
+
 def classify_response_failure_status(
     status: SCFStatus,
     converged: Tensor,
-    lane_gradients: Tensor,
+    *lane_gradients: Tensor | None,
+    response_diagnostics: (
+        BatchResponseDiagnostics | ResponseDiagnosticCollector | None
+    ) = None,
+    active_mask: Tensor | None = None,
 ) -> SCFStatus:
     """Return a post-differentiation SCFStatus classifying nonfinite lane derivatives.
 
     Because :class:`Result` is an immutable primal snapshot constructed before
     backward or forward AD executes, ``Result.status`` is never mutated in
     place during differentiation. Callers that inspect per-lane derivative
-    tensors ``(B, ...)`` can use this helper to obtain a new :class:`SCFStatus`
-    where any primal-converged lane with nonfinite derivatives is marked with
-    :attr:`BatchRootFailureCode.RESPONSE_FAILURE`.
+    tensors ``(B, ...)`` can use this helper to obtain a new :class:`SCFStatus`.
+    When ``response_diagnostics`` is supplied, confirmed linear-response solver
+    failures are marked with :attr:`BatchRootFailureCode.RESPONSE_FAILURE` and
+    other nonfinite derivatives on primal-converged lanes are marked with
+    :attr:`BatchRootFailureCode.NONFINITE_DERIVATIVE`.
     """
     batch_size = int(converged.shape[0])
-    grad_finite = torch.isfinite(lane_gradients.reshape(batch_size, -1)).all(
-        dim=-1
+    device = converged.device
+    grad_finite = torch.ones(batch_size, dtype=torch.bool, device=device)
+    for grad_tensor in lane_gradients:
+        if grad_tensor is None:
+            continue
+        if grad_tensor.ndim >= 1 and grad_tensor.shape[0] == batch_size:
+            grad_finite = grad_finite & torch.isfinite(
+                grad_tensor.reshape(batch_size, -1)
+            ).all(dim=-1)
+        elif batch_size == 1:
+            grad_finite = grad_finite & torch.isfinite(
+                grad_tensor
+            ).all().reshape(1)
+        else:
+            raise ValueError(
+                f"Per-lane gradient tensor must have leading dimension "
+                f"{batch_size}; got shape {tuple(grad_tensor.shape)}."
+            )
+
+    primal_ok = converged.to(dtype=torch.bool) & (
+        status.final_failure == int(BatchRootFailureCode.NONE)
     )
-    response_failed = (
-        converged.to(dtype=torch.bool)
-        & (status.final_failure == int(BatchRootFailureCode.NONE))
-        & ~grad_finite
-    )
-    updated_final = torch.where(
-        response_failed,
-        torch.full_like(
-            status.final_failure, int(BatchRootFailureCode.RESPONSE_FAILURE)
-        ),
-        status.final_failure,
-    )
+    if active_mask is not None:
+        primal_ok = primal_ok & active_mask.to(
+            device=device, dtype=torch.bool
+        ).reshape(batch_size)
+
+    if isinstance(response_diagnostics, ResponseDiagnosticCollector):
+        valid_indices = [
+            i
+            for i in range(batch_size)
+            if bool(converged.reshape(-1)[i].item())
+            and int(status.final_failure.reshape(-1)[i].item())
+            == int(BatchRootFailureCode.NONE)
+        ]
+        diag: BatchResponseDiagnostics | None = response_diagnostics.finalize(
+            valid_indices, batch_size, device, torch.float64
+        )
+    else:
+        diag = response_diagnostics
+
+    if diag is not None:
+        confirmed_resp_fail = primal_ok & diag.confirmed_failure.to(
+            device=device
+        )
+        unclassified_nonfinite = (
+            primal_ok & ~confirmed_resp_fail & ~grad_finite
+        )
+        updated_final = torch.where(
+            confirmed_resp_fail,
+            torch.full_like(
+                status.final_failure, int(BatchRootFailureCode.RESPONSE_FAILURE)
+            ),
+            status.final_failure,
+        )
+        updated_final = torch.where(
+            unclassified_nonfinite,
+            torch.full_like(
+                updated_final, int(BatchRootFailureCode.NONFINITE_DERIVATIVE)
+            ),
+            updated_final,
+        )
+    else:
+        response_failed = primal_ok & ~grad_finite
+        updated_final = torch.where(
+            response_failed,
+            torch.full_like(
+                status.final_failure, int(BatchRootFailureCode.RESPONSE_FAILURE)
+            ),
+            status.final_failure,
+        )
     return SCFStatus(
         trajectory_failure=status.trajectory_failure.clone(),
         final_failure=updated_final,
@@ -1199,6 +1643,452 @@ def _validate_prepared_primal(
             )
 
 
+@dataclass(frozen=True, eq=False)
+class _LanePrimalSolveOutcome:
+    """Detached primal fixed-point solve and validation result for one lane."""
+
+    root_x: Tensor
+    iterations: Tensor
+    lane_converged: Tensor
+    lane_residual: Tensor
+    raw_residual_l2: Tensor
+    raw_residual_max: Tensor
+    electron_count_error: Tensor
+    density_finite: bool
+    padding_valid: bool
+    trajectory_status: SCFTrajectoryStatus | None
+    fermi_status: FermiStatus | None
+    damping_state: DampingState
+    status: SCFStatus
+    failure_code: int
+    failure_reason: str | None
+    root_valid: bool
+
+
+def _snapshot_object_tree(obj: Any) -> Any:
+    """Recursively convert Tensor leaves to _TensorValueSnapshot bytes."""
+    if isinstance(obj, torch.Tensor):
+        return _snapshot_required_tensor(obj)
+    if isinstance(obj, CoreIndexData):
+        return (
+            "_CoreIndexData",
+            _snapshot_required_tensor(obj.shells_to_atom),
+            _snapshot_required_tensor(obj.orbitals_to_shell),
+        )
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return (
+            "_Dataclass",
+            type(obj),
+            {
+                f.name: _snapshot_object_tree(getattr(obj, f.name))
+                for f in dataclasses.fields(obj)
+            },
+        )
+    if isinstance(obj, tuple):
+        return tuple(_snapshot_object_tree(item) for item in obj)
+    if isinstance(obj, list):
+        return [_snapshot_object_tree(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _snapshot_object_tree(v) for k, v in obj.items()}
+    return obj
+
+
+def _restore_object_tree(
+    obj: Any, device: torch.device | None = None
+) -> Any:
+    """Recursively restore _TensorValueSnapshot leaves to detached Tensors."""
+    if isinstance(obj, _TensorValueSnapshot):
+        return obj.to_tensor(device=device)
+    if (
+        isinstance(obj, tuple)
+        and len(obj) == 3
+        and obj[0] == "_CoreIndexData"
+        and isinstance(obj[1], _TensorValueSnapshot)
+        and isinstance(obj[2], _TensorValueSnapshot)
+    ):
+        return CoreIndexData(
+            shells_to_atom=obj[1].to_tensor(device=device),
+            orbitals_to_shell=obj[2].to_tensor(device=device),
+        )
+    if (
+        isinstance(obj, tuple)
+        and len(obj) == 3
+        and obj[0] == "_Dataclass"
+        and isinstance(obj[1], type)
+        and isinstance(obj[2], dict)
+    ):
+        cls = obj[1]
+        restored_fields = {
+            k: _restore_object_tree(v, device=device)
+            for k, v in obj[2].items()
+        }
+        return cls(**restored_fields)
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return replace(
+            obj,
+            **{
+                f.name: _restore_object_tree(getattr(obj, f.name), device=device)
+                for f in dataclasses.fields(obj)
+            },
+        )
+    if isinstance(obj, tuple):
+        return tuple(
+            _restore_object_tree(item, device=device) for item in obj
+        )
+    if isinstance(obj, list):
+        return [_restore_object_tree(item, device=device) for item in obj]
+    if isinstance(obj, dict):
+        return {
+            k: _restore_object_tree(v, device=device) for k, v in obj.items()
+        }
+    return obj
+
+
+def _read_process_memory_mb() -> tuple[float, float]:
+    """Return (peak_rss_mb, current_pss_mb) for the current process."""
+    peak_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    pss_kb: float | None = None
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmHWM:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        peak_kb = max(peak_kb, float(parts[1]))
+                    break
+    except OSError:
+        pass
+    try:
+        with open("/proc/self/smaps_rollup", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        pss_kb = float(parts[1])
+                    break
+    except OSError:
+        pass
+    if pss_kb is None:
+        pss_kb = peak_kb
+    return peak_kb / 1024.0, pss_kb / 1024.0
+
+
+def _init_primal_worker() -> None:
+    """Enforce single-threaded BLAS/PyTorch execution inside worker processes."""
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    torch.set_num_threads(1)
+
+
+def _solve_and_validate_lane_primal(
+    primal_inputs: SCFInputs,
+    guess_charges: SCFCharges,
+    numbers: Tensor,
+    representation: int,
+    settings: Any,
+    lane_padded: bool,
+    effective_mixer: int,
+    maxiter: int,
+    damp_default: float,
+    damp_dynamic_factor: float,
+    eager_primal_fermi: bool | str,
+) -> tuple[
+    PotentialLayout | None,
+    _SCFMapTensorTree,
+    tuple[Tensor, ...],
+    _LanePrimalSolveOutcome,
+]:
+    """Solve one lane's detached fixed-point problem and validate with static Fermi."""
+    with torch.no_grad():
+        (
+            initial_state,
+            layout,
+            state_projection,
+            residual_projection,
+            map_fn,
+        ) = _make_representation_projections(
+            primal_inputs, representation, guess_charges, lane_padded
+        )
+
+        with eager_primal_fermi_scope(eager_primal_fermi):
+            if isinstance(settings, SCFSolverSettings):
+                outcome = _solve_map(
+                    initial_state,
+                    settings,
+                    map_fn,
+                    state_projection=state_projection,
+                    eager=True,
+                )
+            else:
+                outcome = _solve_map_anderson(
+                    initial_state,
+                    settings,
+                    map_fn,
+                    state_projection=state_projection,
+                    eager=True,
+                )
+
+        with eager_primal_fermi_scope(False):
+            adapter, primal_params = _SCFMapTensorTree.prepare(
+                primal_inputs, representation, layout
+            )
+            primal_params = tuple(p.clone() for p in primal_params)
+            independent_map = adapter.evaluate(
+                outcome.root_x, *primal_params
+            )
+            independent_mapped_x = (
+                state_projection(independent_map.mapped_x)
+                if (
+                    representation == labels.SCP_MODE_POTENTIAL
+                    and lane_padded
+                    and state_projection is not None
+                )
+                else independent_map.mapped_x
+            )
+
+            if representation == labels.SCP_MODE_CHARGE:
+                final_spectral = independent_map.spectral
+            elif representation == labels.SCP_MODE_POTENTIAL:
+                assert layout is not None
+                final_state = unpack_potential(independent_mapped_x, layout)
+                final_spectral = evaluate_potential(
+                    final_state, primal_inputs
+                )
+            else:
+                final_spectral = evaluate_hamiltonian(
+                    independent_mapped_x, primal_inputs
+                )
+
+        final_fermi_status = final_spectral.fermi_status
+        raw_diff = independent_mapped_x - outcome.root_x
+        if residual_projection is not None:
+            raw_diff = residual_projection(raw_diff)
+        raw_residual_l2 = torch.linalg.vector_norm(raw_diff)
+        raw_residual_max = raw_diff.abs().amax()
+
+        active_orb = primal_inputs.orbital_mask
+        active_count = active_orb.sum(dim=-1, keepdim=True)
+        spectral_mask = (
+            torch.arange(
+                final_spectral.occupation.shape[-1],
+                device=active_orb.device,
+            )
+            < active_count
+        )
+        occ_masked = torch.where(
+            spectral_mask.unsqueeze(-2), final_spectral.occupation, 0.0
+        )
+        mo_electron_error = (
+            (occ_masked.sum(dim=-1) - primal_inputs.nel).abs().amax()
+        )
+        ao_populations = torch.where(
+            active_orb,
+            primal_inputs.n0 - final_spectral.charges.mono,
+            0.0,
+        )
+        ao_electron_error = (
+            (ao_populations.sum(dim=-1) - primal_inputs.nel.sum(dim=-1))
+            .abs()
+            .amax()
+        )
+        electron_count_error = torch.maximum(
+            mo_electron_error, ao_electron_error
+        )
+
+        root_finite = bool(torch.isfinite(outcome.root_x).all())
+        residual_finite = bool(torch.isfinite(raw_diff).all())
+        density_finite = bool(torch.isfinite(final_spectral.density).all())
+
+        has_real_atoms = bool((numbers != 0).any())
+        has_active_orbitals = bool(primal_inputs.orbital_mask.any())
+        padding_valid = has_real_atoms and has_active_orbitals
+        if padding_valid and lane_padded and state_projection is not None:
+            projected_root = state_projection(outcome.root_x)
+            projected_mapped = state_projection(independent_mapped_x)
+            ao_matrix_mask = active_orb.unsqueeze(
+                -1
+            ) & active_orb.unsqueeze(-2)
+            inactive_density_max = (
+                final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
+                .abs()
+                .amax()
+            )
+            padding_valid = bool(
+                torch.isfinite(projected_root).all()
+                and torch.isfinite(projected_mapped).all()
+                and torch.allclose(
+                    projected_root, outcome.root_x, atol=1.0e-12, rtol=0.0
+                )
+                and torch.allclose(
+                    projected_mapped,
+                    independent_mapped_x,
+                    atol=1.0e-12,
+                    rtol=0.0,
+                )
+                and bool(inactive_density_max <= 1.0e-12)
+            )
+
+        traj_code = (
+            0
+            if outcome.trajectory_status is None
+            else int(outcome.trajectory_status.first_failure.item())
+        )
+        final_code = int(
+            fermi_failure_code(
+                final_fermi_status, like=outcome.converged
+            ).item()
+        )
+
+        failure_code = int(BatchRootFailureCode.NONE)
+        failure_reason: str | None = None
+
+        if not padding_valid:
+            failure_code = int(BatchRootFailureCode.INVALID_PADDING)
+            failure_reason = (
+                "Invalid padding state or empty active orbital/atom mask."
+            )
+        elif traj_code != FERMI_FAILURE_NONE:
+            failure_code, failure_reason = _classify_fermi_code(traj_code)
+        elif final_code != FERMI_FAILURE_NONE:
+            failure_code, failure_reason = _classify_fermi_code(final_code)
+        elif not (root_finite and residual_finite and density_finite):
+            failure_code = int(BatchRootFailureCode.NONFINITE_STATE)
+            failure_reason = (
+                "Primal root state, residual, or density is nonfinite."
+            )
+        elif bool(electron_count_error > _ELECTRON_COUNT_TOL):
+            failure_code = int(BatchRootFailureCode.ELECTRON_COUNT)
+            failure_reason = (
+                f"Electron count error {float(electron_count_error):.3e} "
+                f"exceeds tolerance {_ELECTRON_COUNT_TOL:.1e}."
+            )
+        elif not bool(outcome.converged):
+            failure_code = int(BatchRootFailureCode.MAXITER_EXCEEDED)
+            mixer_label = (
+                "Simple"
+                if effective_mixer == labels.MIXER_LINEAR
+                else "Anderson"
+            )
+            damp = (
+                damp_dynamic_factor
+                if bool(outcome.damping_state.switched)
+                else damp_default
+            )
+            failure_reason = (
+                f"SCF does not converge after {maxiter} "
+                f"cycles using {mixer_label} mixing with a damping factor "
+                f"of {damp} (residual L2={float(raw_residual_l2):.3e}, "
+                f"max={float(raw_residual_max):.3e})."
+            )
+        elif not bool(
+            (raw_residual_l2 <= settings.x_atol)
+            & (raw_residual_max <= settings.x_atol_max)
+        ):
+            failure_code = int(BatchRootFailureCode.RESIDUAL_TOLERANCE)
+            failure_reason = (
+                f"Independent raw map residual (L2={float(raw_residual_l2):.3e}, "
+                f"max={float(raw_residual_max):.3e}) exceeds tolerance "
+                f"(x_atol={settings.x_atol:.1e}, "
+                f"x_atol_max={settings.x_atol_max:.1e})."
+            )
+
+        root_valid = failure_code == int(BatchRootFailureCode.NONE)
+        base_status = public_scf_status(
+            outcome.trajectory_status,
+            final_fermi_status,
+            like=outcome.converged,
+        )
+        if not root_valid and int(base_status.final_failure.item()) == 0:
+            status = SCFStatus(
+                trajectory_failure=base_status.trajectory_failure,
+                final_failure=torch.tensor(
+                    failure_code,
+                    dtype=torch.int64,
+                    device=numbers.device,
+                ),
+            )
+        else:
+            status = base_status
+
+        lane_converged = (
+            outcome.converged
+            if root_valid
+            else torch.zeros_like(outcome.converged)
+        )
+        lane_residual = torch.stack((raw_residual_l2, raw_residual_max))
+
+        return (
+            layout,
+            adapter,
+            primal_params,
+            _LanePrimalSolveOutcome(
+                root_x=outcome.root_x.detach(),
+                iterations=outcome.iterations.detach(),
+                lane_converged=lane_converged.detach(),
+                lane_residual=lane_residual.detach(),
+                raw_residual_l2=raw_residual_l2.detach(),
+                raw_residual_max=raw_residual_max.detach(),
+                electron_count_error=electron_count_error.detach(),
+                density_finite=density_finite,
+                padding_valid=padding_valid,
+                trajectory_status=outcome.trajectory_status,
+                fermi_status=final_fermi_status,
+                damping_state=outcome.damping_state,
+                status=status,
+                failure_code=failure_code,
+                failure_reason=failure_reason,
+                root_valid=root_valid,
+            ),
+        )
+
+
+def _worker_solve_lane_task(task: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Execute a single lane's detached primal solve inside an isolated worker."""
+    (
+        lane_index,
+        serialized_inputs,
+        serialized_guess,
+        serialized_numbers,
+        representation,
+        settings,
+        lane_padded,
+        effective_mixer,
+        maxiter,
+        damp_default,
+        damp_dynamic_factor,
+        eager_primal_fermi,
+    ) = task
+    torch.set_num_threads(1)
+    cpu_t0 = time.process_time()
+    primal_inputs = _restore_object_tree(serialized_inputs)
+    guess_charges = _restore_object_tree(serialized_guess)
+    numbers = _restore_object_tree(serialized_numbers)
+    _, _, _, solve_outcome = _solve_and_validate_lane_primal(
+        primal_inputs,
+        guess_charges,
+        numbers,
+        representation,
+        settings,
+        lane_padded,
+        effective_mixer,
+        maxiter,
+        damp_default,
+        damp_dynamic_factor,
+        eager_primal_fermi,
+    )
+    cpu_elapsed = time.process_time() - cpu_t0
+    peak_rss_mb, pss_mb = _read_process_memory_mb()
+    return (
+        lane_index,
+        _snapshot_object_tree(solve_outcome),
+        cpu_elapsed,
+        peak_rss_mb,
+        pss_mb,
+        os.getpid(),
+    )
+
+
 def prepare_converged_root_batch(
     system: System | PaddedExactSystemCore,
     positions: Tensor,
@@ -1208,7 +2098,8 @@ def prepare_converged_root_batch(
     field_grad: Tensor | None = None,
     *,
     strict: bool | None = None,
-    eager_primal_fermi: bool = False,
+    eager_primal_fermi: bool | str = False,
+    num_workers: int = 1,
 ) -> PreparedConvergedRootBatch:
     """Prepare and validate independent physical SCF roots for a conformer batch.
 
@@ -1231,12 +2122,25 @@ def prepare_converged_root_batch(
         ``force_convergence=True`` always raises on a failed lane. Otherwise,
         ``True`` enables strict batch validation and ``False`` or ``None``
         records primal failure metadata so valid lanes can be evaluated.
-    eager_primal_fermi : bool, default False
-        When ``True``, use the eager-only adaptive tanh-doubling Fermi solver
-        exclusively during detached physical root solving while keeping
-        post-preparation residual validation and differentiable evaluation on
-        the fixed-depth Fermi formulation.
+    eager_primal_fermi : bool | str, default False
+        Primal Fermi solver mode used exclusively during detached physical root
+        solving (``False``/``"static"``, ``True``/``"adaptive"``, or
+        ``"spectral"``) while keeping post-preparation residual validation and
+        differentiable evaluation on the fixed-depth Fermi formulation.
+    num_workers : int, default 1
+        Number of worker processes for detached physical root solving.
+        When ``> 1``, only detached byte snapshots cross process boundaries,
+        each worker executes single-threaded (`1` thread per worker), and
+        conformer ordering and validation semantics remain deterministic.
     """
+    if (
+        isinstance(num_workers, bool)
+        or not isinstance(num_workers, int)
+        or num_workers < 1
+    ):
+        raise ValueError("num_workers must be a positive integer.")
+    wall_t0 = time.perf_counter()
+    parent_cpu_t0 = time.process_time()
     (
         _core,
         numbers,
@@ -1287,8 +2191,19 @@ def prepare_converged_root_batch(
     eager_no_grad_build = (
         not is_compiling() and ft.get_interpreter_stack() is None
     )
+    if num_workers > 1:
+        if not eager_no_grad_build:
+            raise RuntimeError(
+                "Parallel physical-root preparation (num_workers > 1) is only "
+                "supported in eager execution outside functorch/compile transforms."
+            )
+        if positions.device.type != "cpu":
+            raise RuntimeError(
+                "Parallel physical-root preparation (num_workers > 1) is only "
+                "supported on CPU tensors."
+            )
 
-    lanes: list[ConvergedRootLaneRecord] = []
+    lane_prebuilds: list[tuple[Any, ...]] = []
     for lane_index in range(batch_size):
         lane_pos = positions[lane_index]
         lane_chrg = charges[lane_index]
@@ -1377,226 +2292,188 @@ def prepare_converged_root_batch(
                     )
                 ),
             )
-
+        lane_prebuilds.append(
             (
-                initial_state,
-                layout,
-                state_projection,
-                residual_projection,
-                map_fn,
-            ) = _make_representation_projections(
-                primal_inputs, representation, guess_charges, lane_padded
+                lane_index,
+                lane_pos,
+                lane_chrg,
+                lane_spin,
+                lane_field,
+                lane_fgrad,
+                primal_inputs,
+                primal_refocc,
+                primal_overlap_norm,
+                lane_padded,
+                guess_charges,
+            )
+        )
+
+    effective_workers = min(num_workers, batch_size)
+    worker_cpu_total_s = 0.0
+    worker_peak_rss_by_pid: dict[int, float] = {}
+    worker_pss_by_pid: dict[int, float] = {}
+    solved_lanes: list[
+        tuple[
+            PotentialLayout | None,
+            _SCFMapTensorTree,
+            tuple[Tensor, ...],
+            _LanePrimalSolveOutcome,
+        ]
+    ] = []
+
+    if effective_workers == 1:
+        for (
+            lane_index,
+            _lpos,
+            _lchrg,
+            _lspin,
+            _lfield,
+            _lfgrad,
+            primal_inputs,
+            _prefocc,
+            _ponorm,
+            lane_padded,
+            guess_charges,
+        ) in lane_prebuilds:
+            solved_lanes.append(
+                _solve_and_validate_lane_primal(
+                    primal_inputs,
+                    guess_charges,
+                    numbers,
+                    representation,
+                    settings,
+                    lane_padded,
+                    route.effective_mixer,
+                    effective_scf_config.maxiter,
+                    effective_scf_config.damp,
+                    effective_scf_config.damp_dynamic_factor,
+                    eager_primal_fermi,
+                )
+            )
+    else:
+        serialized_numbers = _snapshot_required_tensor(numbers)
+        tasks = [
+            (
+                lane_index,
+                _snapshot_object_tree(primal_inputs),
+                _snapshot_object_tree(guess_charges),
+                serialized_numbers,
+                representation,
+                settings,
+                lane_padded,
+                route.effective_mixer,
+                effective_scf_config.maxiter,
+                effective_scf_config.damp,
+                effective_scf_config.damp_dynamic_factor,
+                eager_primal_fermi,
+            )
+            for (
+                lane_index,
+                _lpos,
+                _lchrg,
+                _lspin,
+                _lfield,
+                _lfgrad,
+                primal_inputs,
+                _prefocc,
+                _ponorm,
+                lane_padded,
+                guess_charges,
+            ) in lane_prebuilds
+        ]
+        start_method = (
+            "fork"
+            if "fork" in mp.get_all_start_methods()
+            and not torch.cuda.is_initialized()
+            else "spawn"
+        )
+        ctx = mp.get_context(start_method)
+        prev_threads = torch.get_num_threads()
+        try:
+            torch.set_num_threads(1)
+            with ctx.Pool(
+                processes=effective_workers, initializer=_init_primal_worker
+            ) as pool:
+                worker_outputs = pool.map(
+                    _worker_solve_lane_task, tasks, chunksize=1
+                )
+                parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
+        finally:
+            torch.set_num_threads(prev_threads)
+
+        worker_outputs.sort(key=lambda item: int(item[0]))
+        for (
+            lane_index,
+            _lpos,
+            _lchrg,
+            _lspin,
+            _lfield,
+            _lfgrad,
+            primal_inputs,
+            _prefocc,
+            _ponorm,
+            lane_padded,
+            guess_charges,
+        ), (
+            out_lane_idx,
+            serialized_outcome,
+            w_cpu_s,
+            w_peak_rss_mb,
+            w_pss_mb,
+            w_pid,
+        ) in zip(lane_prebuilds, worker_outputs):
+            assert lane_index == out_lane_idx
+            worker_cpu_total_s += float(w_cpu_s)
+            pid_int = int(w_pid)
+            worker_peak_rss_by_pid[pid_int] = max(
+                worker_peak_rss_by_pid.get(pid_int, 0.0), float(w_peak_rss_mb)
+            )
+            worker_pss_by_pid[pid_int] = max(
+                worker_pss_by_pid.get(pid_int, 0.0), float(w_pss_mb)
+            )
+            with torch.no_grad():
+                _, layout, _, _, _ = _make_representation_projections(
+                    primal_inputs, representation, guess_charges, lane_padded
+                )
+                adapter, primal_params = _SCFMapTensorTree.prepare(
+                    primal_inputs, representation, layout
+                )
+                primal_params = tuple(p.clone() for p in primal_params)
+            solve_outcome = _restore_object_tree(
+                serialized_outcome, device=positions.device
+            )
+            solved_lanes.append(
+                (layout, adapter, primal_params, solve_outcome)
             )
 
-            with eager_primal_fermi_scope(eager_primal_fermi):
-                if isinstance(settings, SCFSolverSettings):
-                    outcome = _solve_map(
-                        initial_state,
-                        settings,
-                        map_fn,
-                        state_projection=state_projection,
-                        eager=True,
-                    )
-                else:
-                    outcome = _solve_map_anderson(
-                        initial_state,
-                        settings,
-                        map_fn,
-                        state_projection=state_projection,
-                        eager=True,
-                    )
-
-            adapter, primal_params = _SCFMapTensorTree.prepare(
-                primal_inputs, representation, layout
-            )
-            primal_params = tuple(p.clone() for p in primal_params)
-            independent_map = adapter.evaluate(outcome.root_x, *primal_params)
-            independent_mapped_x = (
-                state_projection(independent_map.mapped_x)
-                if (
-                    representation == labels.SCP_MODE_POTENTIAL
-                    and lane_padded
-                    and state_projection is not None
-                )
-                else independent_map.mapped_x
-            )
-
-            if representation == labels.SCP_MODE_CHARGE:
-                final_spectral = independent_map.spectral
-            elif representation == labels.SCP_MODE_POTENTIAL:
-                assert layout is not None
-                final_state = unpack_potential(independent_mapped_x, layout)
-                final_spectral = evaluate_potential(final_state, primal_inputs)
-            else:
-                final_spectral = evaluate_hamiltonian(
-                    independent_mapped_x, primal_inputs
-                )
-
-            final_fermi_status = final_spectral.fermi_status
-            raw_diff = independent_mapped_x - outcome.root_x
-            if residual_projection is not None:
-                raw_diff = residual_projection(raw_diff)
-            raw_residual_l2 = torch.linalg.vector_norm(raw_diff)
-            raw_residual_max = raw_diff.abs().amax()
-
-            active_orb = primal_inputs.orbital_mask
-            active_count = active_orb.sum(dim=-1, keepdim=True)
-            spectral_mask = (
-                torch.arange(
-                    final_spectral.occupation.shape[-1],
-                    device=active_orb.device,
-                )
-                < active_count
-            )
-            occ_masked = torch.where(
-                spectral_mask.unsqueeze(-2), final_spectral.occupation, 0.0
-            )
-            mo_electron_error = (
-                (occ_masked.sum(dim=-1) - primal_inputs.nel).abs().amax()
-            )
-            ao_populations = torch.where(
-                active_orb,
-                primal_inputs.n0 - final_spectral.charges.mono,
-                0.0,
-            )
-            ao_electron_error = (
-                (ao_populations.sum(dim=-1) - primal_inputs.nel.sum(dim=-1))
-                .abs()
-                .amax()
-            )
-            electron_count_error = torch.maximum(
-                mo_electron_error, ao_electron_error
-            )
-
-            root_finite = bool(torch.isfinite(outcome.root_x).all())
-            residual_finite = bool(torch.isfinite(raw_diff).all())
-            density_finite = bool(torch.isfinite(final_spectral.density).all())
-
-            has_real_atoms = bool((numbers != 0).any())
-            has_active_orbitals = bool(primal_inputs.orbital_mask.any())
-            padding_valid = has_real_atoms and has_active_orbitals
-            if padding_valid and lane_padded and state_projection is not None:
-                projected_root = state_projection(outcome.root_x)
-                projected_mapped = state_projection(independent_mapped_x)
-                ao_matrix_mask = active_orb.unsqueeze(
-                    -1
-                ) & active_orb.unsqueeze(-2)
-                inactive_density_max = (
-                    final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
-                    .abs()
-                    .amax()
-                )
-                padding_valid = bool(
-                    torch.isfinite(projected_root).all()
-                    and torch.isfinite(projected_mapped).all()
-                    and torch.allclose(
-                        projected_root, outcome.root_x, atol=1.0e-12, rtol=0.0
-                    )
-                    and torch.allclose(
-                        projected_mapped,
-                        independent_mapped_x,
-                        atol=1.0e-12,
-                        rtol=0.0,
-                    )
-                    and bool(inactive_density_max <= 1.0e-12)
-                )
-
-            traj_code = (
-                0
-                if outcome.trajectory_status is None
-                else int(outcome.trajectory_status.first_failure.item())
-            )
-            final_code = int(
-                fermi_failure_code(
-                    final_fermi_status, like=outcome.converged
-                ).item()
-            )
-
-            failure_code = int(BatchRootFailureCode.NONE)
-            failure_reason: str | None = None
-
-            if not padding_valid:
-                failure_code = int(BatchRootFailureCode.INVALID_PADDING)
-                failure_reason = (
-                    "Invalid padding state or empty active orbital/atom mask."
-                )
-            elif traj_code != FERMI_FAILURE_NONE:
-                failure_code, failure_reason = _classify_fermi_code(traj_code)
-            elif final_code != FERMI_FAILURE_NONE:
-                failure_code, failure_reason = _classify_fermi_code(final_code)
-            elif not (root_finite and residual_finite and density_finite):
-                failure_code = int(BatchRootFailureCode.NONFINITE_STATE)
-                failure_reason = (
-                    "Primal root state, residual, or density is nonfinite."
-                )
-            elif bool(electron_count_error > _ELECTRON_COUNT_TOL):
-                failure_code = int(BatchRootFailureCode.ELECTRON_COUNT)
-                failure_reason = (
-                    f"Electron count error {float(electron_count_error):.3e} "
-                    f"exceeds tolerance {_ELECTRON_COUNT_TOL:.1e}."
-                )
-            elif not bool(outcome.converged):
-                failure_code = int(BatchRootFailureCode.MAXITER_EXCEEDED)
-                mixer_label = (
-                    "Simple"
-                    if route.effective_mixer == labels.MIXER_LINEAR
-                    else "Anderson"
-                )
-                damp = (
-                    effective_scf_config.damp_dynamic_factor
-                    if bool(outcome.damping_state.switched)
-                    else effective_scf_config.damp
-                )
-                failure_reason = (
-                    f"SCF does not converge after {effective_scf_config.maxiter} "
-                    f"cycles using {mixer_label} mixing with a damping factor "
-                    f"of {damp} (residual L2={float(raw_residual_l2):.3e}, "
-                    f"max={float(raw_residual_max):.3e})."
-                )
-            elif not bool(
-                (raw_residual_l2 <= settings.x_atol)
-                & (raw_residual_max <= settings.x_atol_max)
-            ):
-                failure_code = int(BatchRootFailureCode.RESIDUAL_TOLERANCE)
-                failure_reason = (
-                    f"Independent raw map residual (L2={float(raw_residual_l2):.3e}, "
-                    f"max={float(raw_residual_max):.3e}) exceeds tolerance "
-                    f"(x_atol={settings.x_atol:.1e}, "
-                    f"x_atol_max={settings.x_atol_max:.1e})."
-                )
-
-            root_valid = failure_code == int(BatchRootFailureCode.NONE)
-            base_status = public_scf_status(
-                outcome.trajectory_status,
-                final_fermi_status,
-                like=outcome.converged,
-            )
-            if not root_valid and int(base_status.final_failure.item()) == 0:
-                status = SCFStatus(
-                    trajectory_failure=base_status.trajectory_failure,
-                    final_failure=torch.tensor(
-                        failure_code,
-                        dtype=torch.int64,
-                        device=positions.device,
-                    ),
-                )
-            else:
-                status = base_status
-
-            lane_converged = (
-                outcome.converged
-                if root_valid
-                else torch.zeros_like(outcome.converged)
-            )
-            lane_residual = torch.stack((raw_residual_l2, raw_residual_max))
-
-        if not root_valid:
-            assert failure_reason is not None
+    lanes: list[ConvergedRootLaneRecord] = []
+    for (
+        lane_index,
+        lane_pos,
+        lane_chrg,
+        lane_spin,
+        lane_field,
+        lane_fgrad,
+        primal_inputs,
+        primal_refocc,
+        primal_overlap_norm,
+        _lane_padded,
+        _guess_charges,
+    ), (
+        layout,
+        adapter,
+        primal_params,
+        solve_outcome,
+    ) in zip(lane_prebuilds, solved_lanes):
+        if not solve_outcome.root_valid:
+            assert solve_outcome.failure_reason is not None
             if strict_mode:
                 _raise_strict_lane_failure(
-                    lane_index, failure_code, failure_reason
+                    lane_index,
+                    solve_outcome.failure_code,
+                    solve_outcome.failure_reason,
                 )
-            msg = f"[Lane {lane_index}] {failure_reason}"
+            msg = f"[Lane {lane_index}] {solve_outcome.failure_reason}"
             warnings.warn(msg, SCFConvergenceWarning, stacklevel=2)
             OutputHandler.warn(msg, SCFConvergenceWarning)
 
@@ -1620,22 +2497,22 @@ def prepare_converged_root_batch(
                 potential_layout=layout,
                 adapter=adapter,
                 parameters=primal_params,
-                root_x=outcome.root_x.detach(),
-                iterations=outcome.iterations,
-                solver_converged=lane_converged,
-                solver_residual=lane_residual,
-                raw_residual_l2=raw_residual_l2,
-                raw_residual_max=raw_residual_max,
-                electron_count_error=electron_count_error,
-                density_finite=density_finite,
-                padding_valid=padding_valid,
-                trajectory_status=outcome.trajectory_status,
-                fermi_status=final_fermi_status,
-                damping_state=outcome.damping_state,
-                status=status,
-                failure_code=failure_code,
-                failure_reason=failure_reason,
-                root_valid=root_valid,
+                root_x=solve_outcome.root_x.detach(),
+                iterations=solve_outcome.iterations,
+                solver_converged=solve_outcome.lane_converged,
+                solver_residual=solve_outcome.lane_residual,
+                raw_residual_l2=solve_outcome.raw_residual_l2,
+                raw_residual_max=solve_outcome.raw_residual_max,
+                electron_count_error=solve_outcome.electron_count_error,
+                density_finite=solve_outcome.density_finite,
+                padding_valid=solve_outcome.padding_valid,
+                trajectory_status=solve_outcome.trajectory_status,
+                fermi_status=solve_outcome.fermi_status,
+                damping_state=solve_outcome.damping_state,
+                status=solve_outcome.status,
+                failure_code=solve_outcome.failure_code,
+                failure_reason=solve_outcome.failure_reason,
+                root_valid=solve_outcome.root_valid,
             )
         )
 
@@ -1650,6 +2527,27 @@ def prepare_converged_root_batch(
         [lane.root_valid for lane in lanes],
         dtype=torch.bool,
         device=positions.device,
+    )
+    wall_elapsed_s = time.perf_counter() - wall_t0
+    parent_cpu_s = time.process_time() - parent_cpu_t0
+    if effective_workers == 1:
+        parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
+    else:
+        latest_peak_rss_mb, _ = _read_process_memory_mb()
+        parent_peak_rss_mb = max(parent_peak_rss_mb, latest_peak_rss_mb)
+    worker_rss_sum_mb = sum(worker_peak_rss_by_pid.values())
+    worker_pss_sum_mb = sum(worker_pss_by_pid.values())
+    prep_diagnostics = BatchPreparationDiagnostics(
+        num_workers=effective_workers,
+        wall_time_s=wall_elapsed_s,
+        parent_cpu_time_s=parent_cpu_s,
+        worker_cpu_time_s=worker_cpu_total_s,
+        total_cpu_time_s=parent_cpu_s + worker_cpu_total_s,
+        parent_peak_rss_mb=parent_peak_rss_mb,
+        worker_peak_rss_sum_mb=worker_rss_sum_mb,
+        process_tree_peak_rss_mb=parent_peak_rss_mb + worker_rss_sum_mb,
+        process_tree_pss_mb=parent_pss_mb + worker_pss_sum_mb,
+        worker_pids=tuple(sorted(worker_peak_rss_by_pid)),
     )
     return PreparedConvergedRootBatch(
         system=system,
@@ -1704,6 +2602,7 @@ def prepare_converged_root_batch(
         ),
         valid_lane_mask=valid_mask,
         all_roots_valid=bool(valid_mask.all()),
+        preparation_diagnostics=prep_diagnostics,
     )
 
 
@@ -2201,6 +3100,7 @@ def _evaluate_valid_lanes_mapped(
     representation: int,
     device: torch.device,
     strict_mode: bool,
+    response_diagnostics: ResponseDiagnosticCollector | None = None,
 ):
     """Evaluate valid conformer lanes simultaneously via vmap over implicit_root."""
     del valid_indices, strict_mode
@@ -2273,6 +3173,16 @@ def _evaluate_valid_lanes_mapped(
         )
 
     def _attach_lane_root(root: Tensor, *params: Tensor) -> Tensor:
+        if (
+            response_diagnostics is not None
+            and implicit_root is _BATCH_DEFAULT_IMPLICIT_ROOT
+        ):
+            return implicit_root(
+                root,
+                *params,
+                raw_map=raw_map,
+                method=response_diagnostics.solve,
+            )
         return implicit_root(root, *params, raw_map=raw_map)
 
     def _finalize_valid_lane(
@@ -2388,9 +3298,26 @@ def _evaluate_valid_lanes_mapped(
         tff_in: Tensor,
         *params_in: Tensor,
     ):
-        attached_roots = vmap(_attach_lane_root, in_dims=attach_in_dims)(
-            roots_in, *params_in
+        ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+        use_monitors = (
+            response_diagnostics is not None
+            and not is_compiling()
+            and ft.get_interpreter_stack() is None
+            and torch.is_grad_enabled()
         )
+        if use_monitors and response_diagnostics is not None:
+            params_for_attach: tuple[Tensor, ...] = (
+                _ResponseParamsMonitor.apply(response_diagnostics, *params_in)
+            )
+        else:
+            params_for_attach = params_in
+        attached_roots = vmap(_attach_lane_root, in_dims=attach_in_dims)(
+            roots_in, *params_for_attach
+        )
+        if use_monitors and response_diagnostics is not None:
+            attached_roots = _ResponseOutputMonitor.apply(
+                response_diagnostics, attached_roots
+            )
         return vmap(_finalize_valid_lane, in_dims=finalize_in_dims)(
             attached_roots,
             iter_in,
@@ -2615,6 +3542,9 @@ def evaluate_converged_root_batch(
     field_grad: Tensor | None = _UNSET,
     *,
     strict: bool | None = None,
+    eager_primal_fermi: bool | str = False,
+    num_workers: int = 1,
+    response_diagnostics: ResponseDiagnosticCollector | None = None,
 ) -> Result:
     """Evaluate a conformer batch using mapped implicit differentiation.
 
@@ -2639,16 +3569,41 @@ def evaluate_converged_root_batch(
         )
         effective_strict = _resolve_strictness(sys_cfg.scf, strict)
         eval_positions = prepared.positions if positions is None else positions
-        lanes = _refresh_prepared_batch_inputs(
-            prepared,
-            eval_positions,
-            chrg,
-            spin,
-            field,
-            field_grad,
-            strict_mode=effective_strict,
-        )
-        representation = prepared.representation
+        with eager_primal_fermi_scope(False):
+            lanes = _refresh_prepared_batch_inputs(
+                prepared,
+                eval_positions,
+                chrg,
+                spin,
+                field,
+                field_grad,
+                strict_mode=effective_strict,
+            )
+            representation = prepared.representation
+            valid_indices = [
+                idx for idx, lane in enumerate(lanes) if lane.root_valid
+            ]
+            if valid_indices:
+                valid_lanes = [lanes[idx] for idx in valid_indices]
+                valid_outputs = _evaluate_valid_lanes_mapped(
+                    valid_lanes,
+                    valid_indices,
+                    representation,
+                    eval_positions.device,
+                    effective_strict,
+                    response_diagnostics=response_diagnostics,
+                )
+            else:
+                valid_outputs = None
+
+            return _assemble_batch_result(
+                system,
+                lanes,
+                eval_positions,
+                valid_indices,
+                valid_outputs,
+                prepared.model_parameter_refs,
+            )
     elif isinstance(batch_or_system, (System, PaddedExactSystemCore)):
         if positions is None:
             raise ValueError(
@@ -2663,6 +3618,8 @@ def evaluate_converged_root_batch(
             field=None if field is _UNSET else field,
             field_grad=None if field_grad is _UNSET else field_grad,
             strict=strict,
+            eager_primal_fermi=eager_primal_fermi,
+            num_workers=num_workers,
         )
         return evaluate_converged_root_batch(
             prepared,
@@ -2672,30 +3629,9 @@ def evaluate_converged_root_batch(
             field=field,
             field_grad=field_grad,
             strict=strict,
+            response_diagnostics=response_diagnostics,
         )
     else:
         raise TypeError(
             "Expected PreparedConvergedRootBatch, System, or PaddedExactSystemCore as first argument."
         )
-
-    valid_indices = [idx for idx, lane in enumerate(lanes) if lane.root_valid]
-    if valid_indices:
-        valid_lanes = [lanes[idx] for idx in valid_indices]
-        valid_outputs = _evaluate_valid_lanes_mapped(
-            valid_lanes,
-            valid_indices,
-            representation,
-            eval_positions.device,
-            effective_strict,
-        )
-    else:
-        valid_outputs = None
-
-    return _assemble_batch_result(
-        system,
-        lanes,
-        eval_positions,
-        valid_indices,
-        valid_outputs,
-        prepared.model_parameter_refs,
-    )
