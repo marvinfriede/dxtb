@@ -189,5 +189,7 @@ configuration, or Python-level parallelism was changed.
 Final benchmark artifacts are stored under `benchmarks/results/scf-s12/`.
 The complete eager, fixed-trip, vmap, and compile JSON set records source SHA
 `d53f7fba6693347889928a71313afb05bc8eb0d4`, a clean worktree, Python 3.14.8,
-PyTorch 2.14.1+cpu, and one intra/inter-op thread. The source SHA predates only
-the final test/documentation-only float32 smoke addition.
+PyTorch 2.14.1+cpu, and one intra/inter-op thread. The source SHA predates the
+final test/documentation-only float32 smoke and a Black-only solver formatting
+commit; no numerical production code changed after the benchmark source
+revision.
