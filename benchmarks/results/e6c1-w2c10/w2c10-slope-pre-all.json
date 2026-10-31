@@ -1,0 +1,56 @@
+{
+  "dimension": 255,
+  "environment": {
+    "benchmark_script_sha256": "9315c682e532c16866c0c90c3f055407ee59af6f95b76f6597e93b42836fb2aa",
+    "cpu": "x86_64",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python": "3.11.15",
+    "source_diff_sha256": "c69686d4b776ca1b8d157fbd0498b51ebd5f30bae7faaf34fe1333ed153080f1",
+    "source_dirty": true,
+    "source_root": "/tmp1/friede/tmp/w2c10-slope-pre",
+    "source_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "torch": "2.8.0+cpu"
+  },
+  "mode": "all",
+  "peak_rss_mib": 7946.109375,
+  "physical": {
+    "conformer": "tmpda[0]",
+    "method": 1,
+    "temperature_kelvin": 300.0
+  },
+  "root_preparation_seconds": 0.0,
+  "root_x_sha256": "d49a1025a20f72bf9865763a242962d55a46ce0fd71a9386aceeca1dc8ac3188",
+  "stage": "w2c10_kernel_ab",
+  "timings_s": {
+    "backward": [
+      7.67005007318221,
+      7.698655920103192,
+      7.757416307926178
+    ],
+    "differentiable_forward": [
+      3.73739749006927,
+      3.661562623921782,
+      2.6545078339986503
+    ],
+    "gradient_norm": 0.28409217571862905,
+    "hvp_norm": 11.24931375768686,
+    "jvp": [
+      8.147909044055268
+    ],
+    "jvp_norm": 0.04387288094138429,
+    "operation_counts": {
+      "aten::matmul": 377,
+      "aten::mm": 8
+    },
+    "primal_no_grad": [
+      2.688875170890242,
+      2.6423492508474737,
+      2.639645673101768
+    ],
+    "second_directional": [
+      33.834853873820975
+    ]
+  }
+}

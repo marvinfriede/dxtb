@@ -3588,7 +3588,10 @@ and `benchmarks/results/e6c1-w2c8/`.
 
 ### W2c9 converged-root conformer batch orchestration and spectral optimization
 
-W2c9 implements the internal converged-root conformer batch orchestration layer
+W2c9 (published in `38745b0f1f13344602c022a8d1a8779351b9f062`,
+`b53bf6d2270b6e85708214edd01887f9cde1aa63`, and
+`7b946a21fcd27807127d54b4262b5ec5177d607d`) implements the internal
+converged-root conformer batch orchestration layer
 (`prepare_converged_root_batch` and `evaluate_converged_root_batch`) in
 `src/dxtb/_src/calculators/batch_implicit.py` and optimizes
 `src/dxtb/_src/scf/functional/spectral.py` by guarding
@@ -3596,13 +3599,15 @@ W2c9 implements the internal converged-root conformer batch orchestration layer
 (including outer `Jvp` interpreter levels), unifying `fermi_density_matrix` with
 `_fermi_free_energy_setup`, and replacing the Newton-slope `density @ density`
 matrix product with the symmetric trace-square identity while keeping
-`spectral.py` 100% pure functional and stateless. In the isolated `tmpda`
-conformer-0 `scf_map + free_energy_from_spectral` A/B benchmark
+`spectral.py` 100% pure functional and stateless. In the historical `tmpda`
+conformer-0 `scf_map + free_energy_from_spectral` forced-response microbenchmark
 (`kernel_ab.json`),
 `no_grad` time fell by 18.91% (`2.5875 s` to `2.0982 s`, 1.23x),
 forward-grad time fell by 11.65% (`2.6134 s` to `2.3090 s`, 1.13x), and
 backward-grad time fell by 44.72% (`5.0257 s` to `2.7782 s`, 1.81x) with
-`0.0` maximum gradient difference.
+`0.0` maximum gradient difference (note: `kernel_ab.json` forced `_tracks_derivatives`
+rather than running unmodified `7d71e930e5bdbd52a252bf23d21803b94d2695f4`; see
+W2c10 below for the authoritative four-way source-level attribution).
 
 In isolated single-threaded `tmpda` conformer batch benchmarks (`py3.11-torch2.8.0`):
 - 1 conformer (`positions-only`): `97.53 s`, `1.39 GiB` peak RSS (down from
@@ -3633,6 +3638,78 @@ and W3 remain OPEN and E6broute remains BLOCKED pending project-owner approval
 of the explicit batch API contract and chunked lane evaluation. See
 [`E6c1-W2c9-implicit-batch-integration.md`](E6c1-W2c9-implicit-batch-integration.md)
 and `benchmarks/results/e6c1-w2c9/`.
+
+### W2c10 batch correctness hardening, streaming differentiation, and spectral attribution
+
+W2c10 hardens the internal converged-root batch architecture, repairs the
+spectral A/B benchmark provenance, introduces memory-bounded streaming batch
+differentiation, adds eager-primal adaptive tanh doubling, and completes the
+1/2/4/8-conformer `tmpda` scaling progression:
+
+1. **Prepared-Root Lifetime and Failure-Contract Hardening (`batch_implicit.py`)**:
+   - Captures immutable byte-backed snapshots (`_TensorValueSnapshot`) and
+     `_version` counters for positions, atomic numbers, connected `Model`
+     leaves, `System` setup tensors, per-lane inputs, flattened map parameters,
+     `SCFInputs` leaves, and `root_x`, validating them unconditionally on both
+     direct calls and override/transform calls (`grad`, `jvp`, `jacfwd`,
+     `jacrev`, nested `jvp`, `torch.compile`).
+   - Enforces mandatory `force_convergence=True` precedence over `strict=False`,
+     fail-closed `_classify_fermi_code`, `NaN` values and derivatives across
+     positions, perturbations, and connected `Model` parameters for selected
+     failed lanes (`_InvalidLaneOutput`), `0.0` masked contributions for
+     unselected failed lanes, and lane-local `NaN` response-failure derivatives
+     (`classify_response_failure_status`) without mutating immutable primal
+     `Result.status`.
+
+2. **Spectral Derivative Guard, Cancellation-Safe Newton Slope, and 4-Way Attribution (`spectral.py`)**:
+   - Hardens `_tracks_derivatives` with per-level `_has_jvp_tangent_at_level`
+     and a conservative `return True` fallback on inspector errors, and replaces
+     the global trace-squared difference with the row-wise cancellation-guarded
+     contraction `(diag_density - (density * density).sum(dim=-1)).sum(-1) / safe_kt`.
+   - Process-isolated 4-way A/B/C/D benchmarks against exact pre-W2c9
+     `7d71e930e5bdbd52a252bf23d21803b94d2695f4` across dimensions `255`, `128`,
+     and `32` show that the electron-count guard (`B`) drives nearly all of the
+     speedup (reducing `tmpda[0]` $N=255$ matmuls from `381` to `271`, backward
+     median from `7.803 s` to `4.922 s` [**-36.9%**], and 2nd-order directional
+     derivative from `33.925 s` to `15.509 s` [**-54.3%**]), while the Newton
+     slope identity (`C` $\to$ `D`) removes 4 additional matmuls per evaluation.
+
+3. **Memory-Bounded Streaming Differentiation (`batch_streaming.py`) and 1/2/4/8-Conformer `tmpda` Scaling**:
+   - `stream_batch_value_and_grad` / `StreamingBatchValueAndGrad` evaluates and
+     differentiates separable weighted batch losses $L = \sum_b w_b E_b$ one
+     chunk at a time, releasing each chunk's autograd graph while matching
+     simultaneous batch gradients across positions, perturbations, and all
+     2,261 shared `Model` leaves.
+   - Across `tmpda` $N = 1, 2, 4, 8$ conformers (`chunk_size=1`), peak RSS stays
+     flat at **`1.91 GiB` ($N=1$), `2.25 GiB` ($N=2$), `2.27 GiB` ($N=4$, down
+     59.42% from `5.60 GiB` simultaneous), and `2.27 GiB` ($N=8$, `2,320.49 MiB`,
+     `1,100.71 s` total with all 8 conformers converged)**.
+
+4. **Eager-Only Adaptive Tanh Doubling (`_matrix_fermi_eager`, `eager_primal_fermi_scope`)**:
+   - Terminates the detached `torch.no_grad()` primal tanh-doubling recurrence
+     at `int(power.max().item())` while keeping post-preparation residual
+     certification and differentiable evaluations on the static 29-step loop.
+   - On `tmpda[0]`, reduces `dense_solve` calls by **45.97%** (`6,030` $\to$
+     `3,258`) and root-preparation time by **36.00%** (`74.49 s` $\to$
+     `47.68 s`, `1.56x` speedup) with bitwise-identical root SHA-256
+     (`d49a1025...`), residual (`6.0120e-09`), and position gradient norm.
+
+The 8-module focused SCF/implicit/spectral gate passes across all five
+`tad-mctc 0.11.3` CPU environments (`244/244` non-slow passed per environment;
+`248/248` with slow on `py3.11-torch2.8.0`), and the 15-module
+E7a/E6bcompat/E6a/E6bimpl regression gate passes (`261/261`) on both
+`py3.11-torch2.8.0` and `py3.14-torch2.14.1`. Public `System.singlepoint()` and
+`Calculator` routing remain unchanged; W2 remains OPEN pending project-owner
+sign-off on the explicit batch API contract, W3 remains OPEN, and E6broute
+remains BLOCKED. Implementation commits from base
+`7b946a21fcd27807127d54b4262b5ec5177d607d`:
+`b9d49800e97d31865468ad982be21542625d75c4` (correctness and failure-contract
+fixes), `3630dd85a682d79d42f4597c6b5b6f47190a77f8` (spectral hardening and
+tests), `b6db1afe9dc362401d62e72f0112fa8e57cad1a0` (memory-bounded streaming
+evaluation), and `25508b50a31635b8dcb2205a7a82003894c85f78` (eager-primal
+adaptive Fermi optimization). See
+[`E6c1-W2c10-batch-hardening-and-streaming.md`](E6c1-W2c10-batch-hardening-and-streaming.md)
+and `benchmarks/results/e6c1-w2c10/`.
 
 ### Historical implementation/status record
 

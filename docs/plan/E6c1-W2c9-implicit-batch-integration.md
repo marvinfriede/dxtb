@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-Package `E6c1-W2c9` transitions the functional SCF converged-root architecture from the `W2c8` design decision (`7d71e930e5bdbd52a252bf23d21803b94d2695f4`) to a reusable internal orchestration layer, a targeted spectral/map performance optimization, a comprehensive acceptance test suite, and a staged `tmpda` conformer batch benchmark progression:
+Package `E6c1-W2c9` transitions the functional SCF converged-root architecture from the `W2c8` design decision (`7d71e930e5bdbd52a252bf23d21803b94d2695f4`) to a reusable internal orchestration layer, a targeted spectral/map performance optimization, a comprehensive acceptance test suite, and a staged `tmpda` conformer batch benchmark progression (published in commits `38745b0f1f13344602c022a8d1a8779351b9f062`, `b53bf6d2270b6e85708214edd01887f9cde1aa63`, and `7b946a21fcd27807127d54b4262b5ec5177d607d`):
 
 1. **Converged-Root Batch Orchestration (`src/dxtb/_src/calculators/batch_implicit.py`)**:
    - Implemented [`prepare_converged_root_batch`](../../src/dxtb/_src/calculators/batch_implicit.py) and [`evaluate_converged_root_batch`](../../src/dxtb/_src/calculators/batch_implicit.py) along with [`PreparedConvergedRootBatch`](../../src/dxtb/_src/calculators/batch_implicit.py), [`ConvergedRootLaneRecord`](../../src/dxtb/_src/calculators/batch_implicit.py), and [`BatchRootFailureCode`](../../src/dxtb/_src/calculators/batch_implicit.py).
@@ -12,7 +12,7 @@ Package `E6c1-W2c9` transitions the functional SCF converged-root architecture f
 2. **Targeted Spectral & Map Optimization (`src/dxtb/_src/scf/functional/spectral.py`)**:
    - Guarded `_gap_electron_response` with `_tracks_derivatives(nel) or _tracks_derivatives(count_delta)` (including outer functorch `Jvp` interpreter levels) so the extra matrix-Fermi solve for the chemical-potential electron-count sensitivity $\partial P / \partial N_{\mathrm{el}}$ is skipped whenever the target electron count does not carry active forward- or reverse-mode derivatives (which holds on every primal SCF step and every position/Hamiltonian/overlap derivative evaluation).
    - Unified `fermi_density_matrix` and `_fermi_free_energy_setup`, replacing the redundant `N x N` matrix multiplication `(density - density @ density).diagonal().sum(-1)` in the Newton slope denominator with the symmetric-density identity $\mathrm{Tr}(D - D^2) = N_{\mathrm{occ}} - \sum_{ij} D_{ij}^2$ while keeping `spectral.py` 100% pure functional and stateless.
-   - In the isolated `tmpda` conformer-0 `scf_map + free_energy_from_spectral` A/B benchmark (`benchmarks/results/e6c1-w2c9/kernel_ab.json`), this reduced `no_grad` map+free-energy time by **18.91%** (`2.5875 s` $\to$ `2.0982 s`, **1.23x speedup**), forward-grad time by **11.65%** (`2.6134 s` $\to$ `2.3090 s`, **1.13x speedup**), and backward-grad time by **44.72%** (`5.0257 s` $\to$ `2.7782 s`, **1.81x speedup**) with bitwise-identical gradients (`gradient_max_abs_diff = 0.0`).
+   - The historical `kernel_ab.json` recorded faster timings, but its “baseline” forcibly enabled electron-count response and was not the complete pre-W2c9 implementation. Those figures are retained as a forced-response microcomparison only; they are not accepted as source-revision attribution. The corrected four-way pre-W2c9/guard-only/slope-only/full comparison is recorded in [`E6c1-W2c10-batch-hardening-and-streaming.md`](E6c1-W2c10-batch-hardening-and-streaming.md).
 
 3. **End-to-End `tmpda` Conformer Batch Performance & Numerical Parity (`benchmarks/results/e6c1-w2c9/`)**:
    - **1 conformer (`positions-only`)**: Completed in **97.53 s** with **1,422.21 MiB (1.39 GiB)** peak RSS (down from W2c7's **143.94 s** and **2,567.79 MiB / 2.51 GiB** — **32.24% faster** and **44.61% lower peak RSS**).
@@ -82,14 +82,15 @@ Every conformer lane is independently validated against an explicit eight-point 
 | `6` | `RESIDUAL_TOLERANCE` | Independent raw-map residual check failed `x_atol` or `x_atol_max` |
 | `7` | `NONFINITE_STATE` | Nonfinite values in `root_x`, `mapped_x`, or `spectral.density` |
 | `8` | `INVALID_PADDING` | Nonzero values in inactive padded atom/shell/orbital slots |
-| `9` | `RESPONSE_FAILURE` | Implicit linear-response solve failed to converge |
+| `9` | `RESPONSE_FAILURE` | Implicit response failure category during differentiation; surfaced as lane-local nonfinite (`NaN`) derivatives when selected and `0.0` when masked, never written retroactively into immutable primal `Result.status` |
 
-- **Strict mode (`strict=True` or `config.scf.force_convergence=True`)**:
-  - Raises `SCFConvergenceError` immediately upon primal root validation failure (outside transforms), naming all failing lane indices, failure codes, iteration counts, and residual norms.
-- **Non-strict mode (`strict=False`)**:
-  - Emits `SCFConvergenceWarning` (both via `warnings.warn` and `OutputHandler.warn`).
-  - Evaluates all valid lanes through the mapped implicit route and fills invalid lanes with `NaN` in floating observables (`energy`, `scf`, `fenergy`, `charges`, `potential`, `density`, `emo`, `occ`) while preserving exact values, finite gradients, and zero cross-lane contamination for all valid lanes.
-  - Records per-lane `converged`, `iterations`, `residual`, `failure_reason`, `fermi_converged`, and `fermi_failure_reason` tensors in `Result.scf_status`.
+- **Strictness precedence**:
+  - `config.scf.force_convergence=True` is mandatory and cannot be weakened by `strict=False`.
+  - Otherwise only `strict=True` requests a batch-level primal `SCFConvergenceError`; `strict=False` and `strict=None` use lane-local primal failure results.
+- **Non-strict invalid lanes**:
+  - Floating primal observables (`energy`, `scf`, `fenergy`, `charges`, `potential`, `density`, `emo`, `occ`) are NaN for invalid lanes; valid lanes remain independent.
+  - Selecting an invalid lane for differentiation produces invalid (NaN) derivatives. A zero-weight/masked invalid lane contributes zero to a masked valid-lane objective.
+  - `Result.status` reports primal facts known at construction (`converged`, `iterations`, `residual`, `trajectory_failure`, and `final_failure`). Implicit-response failures occur after primal evaluation during backward or forward AD and produce lane-local nonfinite (`NaN`) derivatives when selected (or `0.0` when masked) without mutating the already returned immutable `Result.status`.
 
 ---
 
@@ -106,16 +107,31 @@ Every conformer lane is independently validated against an explicit eight-point 
    - Replaced `(density - density @ density).diagonal(dim1=-2, dim2=-1).sum(-1)` in the chemical-potential Newton refinement loop with `count - (density * density).sum(dim=(-2, -1))` (valid because `density` is explicitly symmetrized via `_symmetrize` on the preceding line), eliminating two `O(N^3)` matrix multiplications per matrix-Fermi call.
    - Unified `fermi_density_matrix` to delegate to `_fermi_free_energy_setup` while keeping `spectral.py` 100% pure functional and stateless (no mutable tensor attributes or `is` identity checks).
 
-### 5.2 Isolated Kernel A/B Benchmark (`benchmarks/results/e6c1-w2c9/kernel_ab.json`)
+### 5.2 Historical Kernel A/B (Provenance Correction)
 
-Measured on `tmpda` conformer 0 (`69` atoms, `255` orbitals, `float64`, `OMP_NUM_THREADS=1`, Python 3.11.15 / PyTorch 2.8.0+cpu) at the validated physical root for `scf_map(root_x, inputs) + free_energy_from_spectral(m.spectral, inputs)`:
+The historical `kernel_ab.json` values below are preserved, but their baseline
+label is not accepted as a complete pre-W2c9 source comparison. That run forced
+`_tracks_derivatives` to behave as though the electron-count response were
+always required; this isolates response-work overhead but does not reproduce
+the complete spectral implementation at the pre-W2c9 revision. The W2c10
+four-way fresh-process experiment in
+[`E6c1-W2c10-batch-hardening-and-streaming.md`](E6c1-W2c10-batch-hardening-and-streaming.md)
+is the authoritative attribution. These legacy numbers must not be used to
+claim that the trace-squared slope caused the complete reported speedup.
+
+The old benchmark recorded these values on `tmpda` conformer 0 (`69` atoms,
+`255` orbitals, `float64`, `OMP_NUM_THREADS=1`, Python 3.11.15 / PyTorch
+2.8.0+cpu) for `scf_map(root_x, inputs) + free_energy_from_spectral(...)`:
 
 | Metric | Pre-W2c9 Baseline | W2c9 Optimized | Improvement | Speedup |
 |---|---:|---:|---:|---:|
 | `no_grad` median (`s`) | `2.5875` | `2.0982` | **-18.91%** | **1.23x** |
 | Forward-grad median (`s`) | `2.6134` | `2.3090` | **-11.65%** | **1.13x** |
 | Backward-grad median (`s`) | `5.0257` | `2.7782` | **-44.72%** | **1.81x** |
-| Max abs gradient diff vs baseline | — | `0.0` | Bitwise parity | — |
+| Max abs gradient diff vs forced-response run | — | `0.0` | Bitwise parity | — |
+
+This is a controlled forced-response comparison, not the complete pre-W2c9
+baseline A/B requested for source-level attribution.
 
 ### 5.3 Evaluated and Rejected Ideas
 
@@ -186,6 +202,13 @@ All benchmarks were executed in fresh, isolated single-threaded processes (`OMP_
 | `tmpda_n4_pos.json` | 4 | `[0, 1, 2, 3]` | `positions-only` | `0.21` | `374.14` | `5.35` | `119.52` | `96.53` (17) | **499.24** | **5732.04** (`5.60 GiB`) |
 
 ### 7.2 Comparison Against W2c7 and W2c8 Baselines
+
+The following is a historical architecture comparison, not a controlled
+same-process source A/B. The runs have different routes and instrumentation;
+in particular, a mapped-only run must not be compared to a mapped run that
+also includes serial parity work as though the difference were an optimization
+speedup. Treat these values as the recorded end-to-end observations only. The
+controlled spectral attribution is the separate W2c10 four-way experiment.
 
 | Benchmark Configuration | W2c7 (`7d71e93`) | W2c9 (Current) | Wall-Time Reduction | Peak RSS Reduction |
 |---|---:|---:|---:|---:|

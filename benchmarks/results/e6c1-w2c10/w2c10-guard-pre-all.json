@@ -1,0 +1,56 @@
+{
+  "dimension": 255,
+  "environment": {
+    "benchmark_script_sha256": "9315c682e532c16866c0c90c3f055407ee59af6f95b76f6597e93b42836fb2aa",
+    "cpu": "x86_64",
+    "mkl_num_threads": "1",
+    "omp_num_threads": "1",
+    "openblas_num_threads": "1",
+    "python": "3.11.15",
+    "source_diff_sha256": "2693a6325fb1e254e866c320a01482653bea820893401f813bd8f2606dad7a2f",
+    "source_dirty": true,
+    "source_root": "/tmp1/friede/tmp/w2c10-guard-pre",
+    "source_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "torch": "2.8.0+cpu"
+  },
+  "mode": "all",
+  "peak_rss_mib": 6298.671875,
+  "physical": {
+    "conformer": "tmpda[0]",
+    "method": 1,
+    "temperature_kelvin": 300.0
+  },
+  "root_preparation_seconds": 0.0,
+  "root_x_sha256": "d49a1025a20f72bf9865763a242962d55a46ce0fd71a9386aceeca1dc8ac3188",
+  "stage": "w2c10_kernel_ab",
+  "timings_s": {
+    "backward": [
+      4.917501570889726,
+      4.928231106838211,
+      4.922126634977758
+    ],
+    "differentiable_forward": [
+      3.100368260871619,
+      3.072967492043972,
+      2.226191614056006
+    ],
+    "gradient_norm": 0.2840921757186303,
+    "hvp_norm": 11.249313758079667,
+    "jvp": [
+      5.422274570912123
+    ],
+    "jvp_norm": 0.04387288094138429,
+    "operation_counts": {
+      "aten::matmul": 271,
+      "aten::mm": 8
+    },
+    "primal_no_grad": [
+      2.0942647878546268,
+      2.1460504268761724,
+      2.1376869049854577
+    ],
+    "second_directional": [
+      15.509314107010141
+    ]
+  }
+}

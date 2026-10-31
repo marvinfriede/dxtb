@@ -1,0 +1,54 @@
+{
+  "chunk_size": 1,
+  "energy_eh": [
+    -29.758437462176317,
+    -11.312642703835634
+  ],
+  "environment": {
+    "benchmark_script_sha256": "613dc2c170c6dcae5d695a07824f67bba065867ffe9c484aefe1467f6e4bbfc3",
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "production_source_sha256": "248a281fc972ef9785cfa4480ada058dbe69e4e00575a03f01f220c731d0b55f",
+    "python": "3.11.15",
+    "source_dirty": true,
+    "source_sha": "7b946a21fcd27807127d54b4262b5ec5177d607d",
+    "torch": "2.8.0+cpu",
+    "tracked_diff_sha256": "0ed8c2eded829f9e5c83627783aedbea8d1e6e35a3f189cfc66595978f70d53f"
+  },
+  "free_energy_eh": [
+    -0.0013913116544088532,
+    -0.0018869928018751488
+  ],
+  "gradient_mode": "positions-only",
+  "iterations": [
+    66,
+    96
+  ],
+  "memory_mib": {
+    "peak_rss": 3435.2890625,
+    "phase_peak_rss": {
+      "backward": 3435.2890625,
+      "forward": 3435.2890625,
+      "post_root": 319.56640625,
+      "root_preparation": 384.78515625,
+      "setup": 324.2734375
+    },
+    "rss_after_forward": 3435.2890625,
+    "rss_after_root": 319.56640625
+  },
+  "mode": "naive-chunks",
+  "model_gradient_connected": 0,
+  "nconformers": 2,
+  "position_gradient_norm": 101.56334353215547,
+  "root_residual_l2": [
+    6.012016343937147e-09,
+    6.4161492065701126e-09
+  ],
+  "timings_s": {
+    "backward_or_stream": 57.43634645198472,
+    "forward": 6.727670220891014,
+    "root_preparation": 187.25690197502263
+  }
+}

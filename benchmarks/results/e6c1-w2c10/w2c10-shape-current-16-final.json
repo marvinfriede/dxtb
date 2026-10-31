@@ -1,0 +1,48 @@
+{
+  "dimension": 128,
+  "environment": {
+    "benchmark_script_sha256": "86845aed0b1c880acee2c522c19e30b0371f3d0f9ab10207e17f2453b906d631",
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "python": "3.11.15",
+    "source_diff_sha256": "fc2a0723bc0f7bea551de73c42a7fcc59719051ced093fd7e675314da5d96db3",
+    "source_dirty": true,
+    "source_sha": "7b946a21fcd27807127d54b4262b5ec5177d607d",
+    "torch": "2.8.0+cpu"
+  },
+  "hvp_norm": 2.107495742348124,
+  "jvp_norm": 3.498308295420858,
+  "observable": 13.181192758099979,
+  "operation_counts": {
+    "aten::matmul": 267,
+    "aten::mm": 8
+  },
+  "peak_rss_mib": 1692.65234375,
+  "root_sha256": "8c5195e50ed6722913e62b9ec41f591c498de8cf60dc4e6189a587aaddcfe923",
+  "timings_s": {
+    "backward": [
+      1.3774356769863516,
+      1.3727390689309686,
+      1.371014951961115
+    ],
+    "forward": [
+      0.7979069510474801,
+      0.7804129850119352,
+      0.7698017121292651
+    ],
+    "jvp": [
+      1.9713175741489977
+    ],
+    "primal_no_grad": [
+      0.5150268510915339,
+      0.5254150440450758,
+      0.5113002620637417
+    ],
+    "second_directional": [
+      4.491734493058175
+    ]
+  },
+  "water_count": 16
+}

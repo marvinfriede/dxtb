@@ -1,0 +1,55 @@
+{
+  "chunk_size": 1,
+  "energy_eh": [
+    -29.758437462176317,
+    -11.312642703835634,
+    -21.692981421967666,
+    -33.762321030729446
+  ],
+  "environment": {
+    "benchmark_script_sha256": "8052e923bfc86a142da0c2c4c91e1ba1fa757ca8c738018da75b480a9dbbaebb",
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "production_source_sha256": "a6504150a4276286063a48e9e562495d3f9e75a13eb928b7163f9a951ce4dfef",
+    "python": "3.11.15",
+    "source_dirty": true,
+    "source_sha": "7b946a21fcd27807127d54b4262b5ec5177d607d",
+    "torch": "2.8.0+cpu",
+    "tracked_diff_sha256": "feffd6317fb6e1944b715df987a76571b3b09e76806742de60a15a4287d9b3e4"
+  },
+  "gradient_mode": "positions-only",
+  "iterations": [
+    66,
+    96,
+    112,
+    72
+  ],
+  "memory_mib": {
+    "peak_rss": 2325.8359375,
+    "phase_peak_rss": {
+      "post_root": 323.92578125,
+      "root_preparation": 378.27734375,
+      "setup": 318.0625,
+      "streaming": 2325.8359375
+    },
+    "rss_after_forward": 1695.84375,
+    "rss_after_root": 323.92578125
+  },
+  "mode": "streaming",
+  "model_gradient_connected": 0,
+  "nconformers": 4,
+  "position_gradient_norm": 109.69270411203429,
+  "root_residual_l2": [
+    6.012016343937147e-09,
+    6.4161492065701126e-09,
+    8.967464218897566e-09,
+    6.274236054727033e-09
+  ],
+  "timings_s": {
+    "backward_or_stream": 132.5363803128712,
+    "forward": null,
+    "root_preparation": 387.98002742999233
+  }
+}

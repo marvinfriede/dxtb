@@ -1,0 +1,47 @@
+{
+  "dimension": 32,
+  "environment": {
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "python": "3.11.15",
+    "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_dirty": false,
+    "source_sha": "7d71e930e5bdbd52a252bf23d21803b94d2695f4",
+    "torch": "2.8.0+cpu"
+  },
+  "hvp_norm": 1.369268583054403,
+  "jvp_norm": 1.594392634065859,
+  "observable": 3.245260615454602,
+  "operation_counts": {
+    "aten::matmul": 357,
+    "aten::mm": 8
+  },
+  "peak_rss_mib": 698.23046875,
+  "root_sha256": "7b1ec032b49e9984f368dd41c0af538028a2a70d99df8d5a07dcf6dc2895971a",
+  "timings_s": {
+    "backward": [
+      0.23356446204707026,
+      0.23816140601411462,
+      0.23606314207427204
+    ],
+    "forward": [
+      0.14827867317944765,
+      0.13928106287494302,
+      0.1376515890005976
+    ],
+    "jvp": [
+      0.7579286810941994
+    ],
+    "primal_no_grad": [
+      0.12907119607552886,
+      0.12055823695845902,
+      0.11942425114102662
+    ],
+    "second_directional": [
+      1.501859572948888
+    ]
+  },
+  "water_count": 4
+}

@@ -1,0 +1,43 @@
+{
+  "chunk_size": 1,
+  "energy_eh": [
+    -29.758437462176317,
+    -11.312642703835634
+  ],
+  "environment": {
+    "benchmark_script_sha256": "61f4c8d68419fec00d07976bc155b10693f674652535573bb3799b26e78d0a22",
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "production_source_sha256": "a6504150a4276286063a48e9e562495d3f9e75a13eb928b7163f9a951ce4dfef",
+    "python": "3.11.15",
+    "source_dirty": true,
+    "source_sha": "7b946a21fcd27807127d54b4262b5ec5177d607d",
+    "torch": "2.8.0+cpu",
+    "tracked_diff_sha256": "feffd6317fb6e1944b715df987a76571b3b09e76806742de60a15a4287d9b3e4"
+  },
+  "gradient_mode": "positions-only",
+  "iterations": [
+    66,
+    96
+  ],
+  "memory_mib": {
+    "peak_rss": 2301.98828125,
+    "rss_after_forward": 549.82421875,
+    "rss_after_root": 336.9765625
+  },
+  "mode": "streaming",
+  "model_gradient_connected": 0,
+  "nconformers": 2,
+  "position_gradient_norm": 101.56334353215547,
+  "root_residual_l2": [
+    6.012016343937147e-09,
+    6.4161492065701126e-09
+  ],
+  "timings_s": {
+    "backward_or_stream": 62.73258010786958,
+    "forward": null,
+    "root_preparation": 177.4853816330433
+  }
+}

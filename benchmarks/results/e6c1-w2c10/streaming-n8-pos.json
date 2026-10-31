@@ -1,0 +1,76 @@
+{
+  "chunk_size": 1,
+  "energy_eh": [
+    -29.758437462176317,
+    -11.312642703835634,
+    -21.692981421967666,
+    -33.762321030729446,
+    -32.87042088664811,
+    -18.88648552577837,
+    -16.611094756776982,
+    -16.441186225725907
+  ],
+  "environment": {
+    "benchmark_script_sha256": "0c79a6ab554c07fe23783f8bebe1c4f865ea66d2ba234c1e5b6c56d154fd8c37",
+    "cpu": "x86_64",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "production_source_sha256": "a6504150a4276286063a48e9e562495d3f9e75a13eb928b7163f9a951ce4dfef",
+    "python": "3.11.15",
+    "source_dirty": true,
+    "source_sha": "7b946a21fcd27807127d54b4262b5ec5177d607d",
+    "torch": "2.8.0+cpu",
+    "tracked_diff_sha256": "5fcf299afcdfc560639c43567c02aac7e53f95db44940d79fb6098af53813a03"
+  },
+  "free_energy_eh": [
+    -0.0013913116544088532,
+    -0.0018869928018751488,
+    -0.002603711695789798,
+    -0.0020965523169830325,
+    -0.0026205471535516336,
+    -0.0032112662730583923,
+    -0.0031930141928129155,
+    -0.0027173944420776108
+  ],
+  "gradient_mode": "positions-only",
+  "iterations": [
+    66,
+    96,
+    112,
+    72,
+    111,
+    115,
+    105,
+    78
+  ],
+  "memory_mib": {
+    "peak_rss": 2320.48828125,
+    "phase_peak_rss": {
+      "root_preparation": 379.00390625,
+      "setup": 321.9296875,
+      "streaming": 2320.48828125
+    },
+    "rss_after_forward": 2066.875,
+    "rss_after_root": 339.1015625
+  },
+  "mode": "streaming",
+  "model_gradient_connected": 0,
+  "nconformers": 8,
+  "position_gradient_norm": 172.9233493017112,
+  "root_residual_l2": [
+    6.012016343937147e-09,
+    6.4161492065701126e-09,
+    8.967464218897566e-09,
+    6.274236054727033e-09,
+    3.5716558223336072e-09,
+    3.960262355494905e-09,
+    5.34598449998492e-09,
+    6.422857482303779e-09
+  ],
+  "timings_s": {
+    "backward_or_stream": 250.23172341799363,
+    "forward": null,
+    "root_preparation": 850.4732746770605
+  }
+}

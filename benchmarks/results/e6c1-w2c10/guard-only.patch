@@ -1,0 +1,156 @@
+diff --git a/src/dxtb/_src/scf/functional/spectral.py b/src/dxtb/_src/scf/functional/spectral.py
+index 815c4c0..faa0643 100644
+--- a/src/dxtb/_src/scf/functional/spectral.py
++++ b/src/dxtb/_src/scf/functional/spectral.py
+@@ -24,6 +24,7 @@ import numpy as np
+ import torch
+ from tad_mctc.autograd import attach_gradient
+ from tad_mctc.storch.linsolve import dense_solve
++from tad_mctc.tools.compile import is_compiling
+
+ from dxtb._src.typing import Tensor
+
+@@ -333,6 +334,54 @@ def _gap_electron_response(
+     return torch.where(gap[..., None, None], response, 0.0)
+
+
++def _tracks_derivatives(x: Tensor) -> bool:
++    """Conservatively detect active reverse- or forward-mode derivatives."""
++    if is_compiling():
++        return True
++    try:
++        ft = torch._C._functorch
++        raw_stack = ft.get_interpreter_stack()
++        stack = (
++            {}
++            if raw_stack is None
++            else {interp.level(): interp.key() for interp in raw_stack}
++        )
++        jvp_levels = [
++            level
++            for level, key in stack.items()
++            if key == ft.TransformType.Jvp
++        ]
++        top_jvp_level = max(jvp_levels) if jvp_levels else None
++        current = x
++        while True:
++            if ft.is_batchedtensor(current):
++                current = ft.get_unwrapped(current)
++                continue
++            if torch.is_grad_enabled() and current.requires_grad:
++                return True
++            level = ft.maybe_get_level(current)
++            if level == -1:
++                if (
++                    torch.autograd.forward_ad.unpack_dual(current).tangent
++                    is not None
++                ):
++                    return True
++            elif stack.get(level) == ft.TransformType.Jvp:
++                if level != top_jvp_level:
++                    return True
++                if (
++                    torch.autograd.forward_ad.unpack_dual(current).tangent
++                    is not None
++                ):
++                    return True
++            if not ft.is_functorch_wrapped_tensor(current):
++                break
++            current = ft.get_unwrapped(current)
++        return False
++    except (AttributeError, RuntimeError):
++        return True
++
++
+ def fermi_density_matrix(
+     hamiltonian: Tensor,
+     nel: Tensor,
+@@ -404,15 +453,17 @@ def fermi_density_matrix(
+     density = torch.where(empty[..., None, None], 0.0, density)
+     density = torch.where(too_many[..., None, None], 0.0, density)
+     density = torch.where(full[..., None, None], eye_channel, density)
+-    response = _gap_electron_response(
+-        h,
+-        spectral,
+-        active,
+-        state.below.to(device=h.device, dtype=torch.bool),
+-        gap_mask,
+-        safe_kt,
+-    )
+-    density = density + (target - target.detach())[..., None, None] * response
++    count_delta = target - target.detach()
++    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
++        response = _gap_electron_response(
++            h,
++            spectral,
++            active,
++            state.below.to(device=h.device, dtype=torch.bool),
++            gap_mask,
++            safe_kt,
++        )
++        density = density + count_delta[..., None, None] * response
+     if li is not None:
+         density = li.transpose(-2, -1) @ density @ li
+     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+@@ -643,15 +694,19 @@ def fermi_free_energy_matrix(
+     active = setup.active
+     entropy = _binary_entropy_matrix(setup.x, setup.occupation, active)
+     identity = torch.diag_embed(active.to(torch.float64))
+-    gap_response = _gap_electron_response(
+-        setup.h,
+-        setup.spectral,
+-        active,
+-        setup.below,
+-        setup.gap_mask,
+-        setup.safe_kt,
+-    )
+-    gap_term = _gap_relative_mu(setup, identity) @ gap_response
++    count_delta = setup.target - setup.target.detach()
++    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
++        gap_response = _gap_electron_response(
++            setup.h,
++            setup.spectral,
++            active,
++            setup.below,
++            setup.gap_mask,
++            setup.safe_kt,
++        )
++        gap_term = _gap_relative_mu(setup, identity) @ gap_response
++    else:
++        gap_term = torch.zeros_like(setup.x)
+     q = _fermi_free_energy_closure(
+         setup.safe_kt * entropy,
+         gap_term,
+@@ -707,17 +762,21 @@ def fermi_free_energy_trace(
+         - attach_gradient(_trace_logcosh, x, half_tanh)
+         - float(np.log(2.0)) * active.sum(-1).to(torch.float64)
+     )
+-    gap_response = _gap_electron_response(
+-        setup.h,
+-        setup.spectral,
+-        active,
+-        setup.below,
+-        setup.gap_mask,
+-        setup.safe_kt,
+-    )
+-    gap_term = (
+-        _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
+-    ).sum((-2, -1))
++    count_delta = setup.target - setup.target.detach()
++    if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
++        gap_response = _gap_electron_response(
++            setup.h,
++            setup.spectral,
++            active,
++            setup.below,
++            setup.gap_mask,
++            setup.safe_kt,
++        )
++        gap_term = (
++            _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
++        ).sum((-2, -1))
++    else:
++        gap_term = torch.zeros_like(setup.shift)
+     q = _fermi_free_energy_closure(
+         setup.safe_kt * entropy,
+         gap_term,

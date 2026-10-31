@@ -1,0 +1,26 @@
+diff --git a/src/dxtb/_src/scf/functional/spectral.py b/src/dxtb/_src/scf/functional/spectral.py
+index 815c4c0..5a1088a 100644
+--- a/src/dxtb/_src/scf/functional/spectral.py
++++ b/src/dxtb/_src/scf/functional/spectral.py
+@@ -390,9 +390,7 @@ def fermi_density_matrix(
+     for _ in range(diff_steps):
+         density = _matrix_fermi(relative, shift, safe_kt, active)
+         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
+-        slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
+-            -1
+-        ) / safe_kt
++        slope = (count - (density * density).sum(dim=(-2, -1))) / safe_kt
+         safe_slope = torch.where(
+             slope.abs() > torch.finfo(h.dtype).tiny, slope, 1.0
+         )
+@@ -527,9 +525,7 @@ def _fermi_free_energy_setup(
+     for _ in range(diff_steps):
+         density = _matrix_fermi(relative, shift, safe_kt, active)
+         count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
+-        slope = (density - density @ density).diagonal(dim1=-2, dim2=-1).sum(
+-            -1
+-        ) / safe_kt
++        slope = (count - (density * density).sum(dim=(-2, -1))) / safe_kt
+         safe_slope = torch.where(
+             slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+         )
