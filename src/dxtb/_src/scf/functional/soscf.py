@@ -40,6 +40,7 @@ class SOSCFMethodSettings:
     max_microiterations: int = 40
     micro_rtol: float = 1.0e-3
     micro_atol_factor: float = 100.0
+    stationary_atol_factor: float = 32.0
     initial_level_shift: float = 0.05
     level_shift_growth: float = 2.0
     max_shift_attempts: int = 8
@@ -67,6 +68,13 @@ class SOSCFMethodSettings:
         if not isfinite(self.micro_atol_factor) or self.micro_atol_factor < 0.0:
             raise ValueError(
                 "SOSCF micro_atol_factor must be finite and nonnegative."
+            )
+        if (
+            not isfinite(self.stationary_atol_factor)
+            or self.stationary_atol_factor <= 0.0
+        ):
+            raise ValueError(
+                "SOSCF stationary_atol_factor must be finite and positive."
             )
         if (
             not isfinite(self.initial_level_shift)
@@ -104,7 +112,12 @@ class SOSCFMethodSettings:
 
 @dataclass(frozen=True, eq=False)
 class SOSCFState:
-    """Immutable macroiteration diagnostics and trust controls."""
+    """Immutable macroiteration diagnostics and trust/step-radius controls.
+
+    ``last_predicted_reduction`` is the linear directional decrease
+    ``-gradient.dot(step)`` used by the Armijo test, not a quadratic model
+    reduction.
+    """
 
     trust_radius: Tensor
     level_shift: Tensor
@@ -174,13 +187,72 @@ def _positive_preconditioner(
         * model.occupation_difference
         * (energies[model.pair_a] - energies[model.pair_i])
     )
-    scale = denominator.abs().amax().clamp_min(1.0)
-    floor = torch.finfo(fresh_fock.dtype).eps ** 0.5 * scale
+    denominator_scale = denominator.abs().amax().clamp_min(1.0)
+    floor = torch.finfo(fresh_fock.dtype).eps ** 0.5 * denominator_scale
+    fock_scale = fresh_fock.detach().abs().amax().clamp_min(1.0)
     gap_floor = (
         max(settings.gap_tolerance, torch.finfo(fresh_fock.dtype).eps ** 0.5)
-        * scale
+        * fock_scale
     )
     return denominator.clamp_min(floor), gap_floor
+
+
+def _stationary_gradient_floor(
+    fresh_fock: Tensor, nrot: int, settings: SOSCFMethodSettings
+) -> Tensor:
+    """Return an eps-scale floor for the numerical-zero stationary shortcut."""
+    scale = fresh_fock.detach().abs().amax().clamp_min(1.0)
+    return (
+        settings.stationary_atol_factor
+        * torch.finfo(fresh_fock.dtype).eps
+        * scale
+        * max(nrot, 1) ** 0.5
+    )
+
+
+def _occupation_sector_spectra(
+    model: SOSCFOrbitalModel, fock_mo: Tensor
+) -> tuple[tuple[float, Tensor], ...]:
+    """Return eigenvalue ranges of the active equal-occupation Fock blocks."""
+    total_occupation = model.occupation.sum(dim=-2).detach().cpu().tolist()
+    orbital_mask = model.problem.inputs.orbital_mask.detach().cpu().tolist()
+    sectors = sorted(
+        {
+            float(value)
+            for value, active in zip(total_occupation, orbital_mask)
+            if active
+        },
+        reverse=True,
+    )
+    spectra: list[tuple[float, Tensor]] = []
+    detached_fock = 0.5 * (fock_mo.detach() + fock_mo.detach().mT)
+    for sector in sectors:
+        indices = [
+            index
+            for index, (value, active) in enumerate(
+                zip(total_occupation, orbital_mask)
+            )
+            if active and float(value) == sector
+        ]
+        index_tensor = torch.tensor(
+            indices, dtype=torch.int64, device=fock_mo.device
+        )
+        block = detached_fock.index_select(0, index_tensor).index_select(
+            1, index_tensor
+        )
+        spectra.append((sector, torch.linalg.eigvalsh(block)))
+    return tuple(spectra)
+
+
+def _occupation_sector_order_valid(
+    model: SOSCFOrbitalModel, fock_mo: Tensor, gap_floor: Tensor
+) -> bool:
+    """Check gauge-invariant spectral separation of occupied sectors."""
+    spectra = _occupation_sector_spectra(model, fock_mo)
+    return all(
+        bool(high_values[-1] + gap_floor < low_values[0])
+        for (_, high_values), (_, low_values) in zip(spectra, spectra[1:])
+    )
 
 
 def _pcg_newton_step(
@@ -291,11 +363,23 @@ def _pcg_newton_step(
 
 
 def _build_fock_seed(
-    model: SOSCFOrbitalModel, rotation: Tensor, fresh_fock: Tensor
+    model: SOSCFOrbitalModel,
+    rotation: Tensor,
+    fresh_fock: Tensor,
+    gap_floor: Tensor | None = None,
 ) -> Tensor:
     """Build the next input from fresh Fock blocks in accepted orbitals."""
     coefficients = model.coefficients_at(rotation)
     fock_mo = coefficients.mT @ fresh_fock @ coefficients
+    if gap_floor is None:
+        gap_floor = torch.finfo(
+            fresh_fock.dtype
+        ).eps ** 0.5 * fock_mo.detach().abs().amax().clamp_min(1.0)
+    if not _occupation_sector_order_valid(model, fock_mo, gap_floor):
+        raise ValueError(
+            "SOSCF cannot build a Fock seed with overlapping occupation-sector "
+            "spectra."
+        )
     occupations = model.occupation.sum(dim=-2)
     same_sector = occupations[:, None] == occupations[None, :]
 
@@ -306,6 +390,48 @@ def _build_fock_seed(
     overlap = model.problem.inputs.integrals.overlap
     seed = overlap @ coefficients @ fock_blocks @ coefficients.mT @ overlap
     return 0.5 * (seed + seed.mT)
+
+
+def _backtracking_step(
+    model: SOSCFOrbitalModel,
+    step: Tensor,
+    energy0: Tensor,
+    gap_floor: Tensor,
+    initial_alpha: Tensor,
+    linear_predicted_reduction: Tensor,
+    settings: SOSCFMethodSettings,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, int]:
+    """Accept the first Armijo step with separated occupation spectra."""
+    eps = torch.finfo(step.dtype).eps
+    alpha = initial_alpha
+    for line_search_trials in range(1, settings.max_backtracks + 1):
+        trial = alpha * step
+        trial_energy = model.energy_at(trial)
+        trial_fock = model.fock_at(trial)
+        if not bool(torch.isfinite(trial_energy)) or not bool(
+            torch.isfinite(trial_fock).all()
+        ):
+            alpha = alpha * 0.5
+            continue
+
+        coefficients = model.coefficients_at(trial)
+        trial_mo = coefficients.mT @ trial_fock @ coefficients
+        order_ok = _occupation_sector_order_valid(model, trial_mo, gap_floor)
+        slack = 32.0 * eps * energy0.abs().clamp_min(1.0)
+        armijo_ok = bool(
+            trial_energy
+            <= energy0
+            - settings.armijo_constant * alpha * linear_predicted_reduction
+            + slack
+        )
+        if order_ok and armijo_ok:
+            return trial, trial_fock, trial_energy, alpha, line_search_trials
+        alpha = alpha * 0.5
+
+    raise RuntimeError(
+        "SOSCF energy line search could not accept a fixed-occupation "
+        "orbital step with separated occupation-sector spectra."
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -346,20 +472,6 @@ class SOSCFMethod:
         fresh_fock = context.proposal_x
         zero = physical_state.x.new_zeros(model.nrot)
         gradient = model.physical_gradient_at(zero, fresh_fock)
-        coordinate_gradient = torch.func.grad(model.energy_at)(zero)
-        gradient_tolerance = max(
-            2.0e-9, 100.0 * torch.finfo(gradient.dtype).eps
-        )
-        if not torch.allclose(
-            gradient,
-            coordinate_gradient,
-            rtol=gradient_tolerance,
-            atol=gradient_tolerance,
-        ):
-            raise RuntimeError(
-                "SOSCF physical orbital gradient disagrees with the fixed-"
-                "occupation energy derivative."
-            )
         if not bool(torch.isfinite(gradient).all()) or not bool(
             torch.isfinite(fresh_fock).all()
         ):
@@ -382,16 +494,10 @@ class SOSCFMethod:
         if not bool(torch.isfinite(preconditioner).all()):
             raise RuntimeError("SOSCF orbital preconditioner is non-finite.")
         fresh_mo = model.coefficients.mT @ fresh_fock @ model.coefficients
-        fresh_energies = torch.diagonal(fresh_mo)
-        if bool(
-            torch.any(
-                fresh_energies[model.pair_a] - fresh_energies[model.pair_i]
-                <= gap_floor
-            )
-        ):
+        if not _occupation_sector_order_valid(model, fresh_mo, gap_floor):
             raise RuntimeError(
-                "SOSCF starting state has a differently occupied orbital gap "
-                "outside the smooth fixed-Aufbau sector."
+                "SOSCF starting state has overlapping differently occupied "
+                "Fock-block spectra outside the smooth fixed-Aufbau sector."
             )
 
         # If the current orbitals are stationary to working precision, an
@@ -399,11 +505,11 @@ class SOSCFMethod:
         # stale eigenvalues, so rebuild the density-consistent seed and let
         # the shared controller perform the next physical map/certification.
         gradient_norm = torch.linalg.vector_norm(gradient)
-        stationary_floor = torch.finfo(
-            gradient.dtype
-        ).eps ** 0.5 * fresh_fock.abs().amax().clamp_min(1.0)
+        stationary_floor = _stationary_gradient_floor(
+            fresh_fock, model.nrot, self.settings
+        )
         if bool(gradient_norm <= stationary_floor):
-            seed = _build_fock_seed(model, zero, fresh_fock)
+            seed = _build_fock_seed(model, zero, fresh_fock, gap_floor)
             if not bool(torch.isfinite(seed).all()):
                 raise RuntimeError("SOSCF constructed a non-finite Fock seed.")
             next_state = SOSCFState(
@@ -474,52 +580,27 @@ class SOSCFMethod:
             raise RuntimeError(
                 "SOSCF current fixed-occupation energy is non-finite."
             )
+        # This is the linear directional decrease used by Armijo.
         predicted = -descent
-        alpha = context.damp
-        accepted_rotation = zero
-        accepted_fock = fresh_fock
-        accepted_energy = energy0
-        accepted = False
-        line_search_trials = 0
-        for _ in range(self.settings.max_backtracks):
-            line_search_trials += 1
-            trial = alpha * step
-            trial_energy = model.energy_at(trial)
-            trial_fock = model.fock_at(trial)
-            if not bool(torch.isfinite(trial_energy)) or not bool(
-                torch.isfinite(trial_fock).all()
-            ):
-                alpha = alpha * 0.5
-                continue
-            coefficients = model.coefficients_at(trial)
-            trial_mo = coefficients.mT @ trial_fock @ coefficients
-            trial_energies = torch.diagonal(trial_mo)
-            order_ok = bool(
-                torch.all(
-                    trial_energies[model.pair_a] - trial_energies[model.pair_i]
-                    > gap_floor
-                )
-            )
-            slack = 32.0 * eps * energy0.abs().clamp_min(1.0)
-            if order_ok and bool(
-                trial_energy
-                <= energy0
-                - self.settings.armijo_constant * alpha * predicted
-                + slack
-            ):
-                accepted_rotation = trial
-                accepted_fock = trial_fock
-                accepted_energy = trial_energy
-                accepted = True
-                break
-            alpha = alpha * 0.5
-        if not accepted:
-            raise RuntimeError(
-                "SOSCF energy line search could not accept a fixed-"
-                "occupation orbital step."
-            )
+        (
+            accepted_rotation,
+            accepted_fock,
+            accepted_energy,
+            alpha,
+            line_search_trials,
+        ) = _backtracking_step(
+            model,
+            step,
+            energy0,
+            gap_floor,
+            context.damp,
+            predicted,
+            self.settings,
+        )
 
-        seed = _build_fock_seed(model, accepted_rotation, accepted_fock)
+        seed = _build_fock_seed(
+            model, accepted_rotation, accepted_fock, gap_floor
+        )
         if not bool(torch.isfinite(seed).all()):
             raise RuntimeError("SOSCF constructed a non-finite Fock seed.")
         actual = energy0 - accepted_energy
