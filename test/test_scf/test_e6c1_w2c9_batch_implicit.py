@@ -34,6 +34,7 @@ from dxtb._src.calculators.batch_implicit import (
     evaluate_converged_root_batch,
     prepare_converged_root_batch,
 )
+from dxtb._src.calculators.batch_streaming import stream_batch_value_and_grad
 from dxtb._src.calculators.canonical_padding import (
     bucket_canonical_exact_cores,
     canonicalize_positions,
@@ -1000,6 +1001,16 @@ def test_batch_backward_response_failure_is_lane_local(monkeypatch) -> None:
     assert int(post_status.final_failure[1].item()) == int(
         BatchRootFailureCode.RESPONSE_FAILURE
     )
+    streamed_fail = stream_batch_value_and_grad(
+        prepared, model, positions, chunk_size=1, strict=False
+    )
+    assert bool(streamed_fail.converged.all())
+    assert int(streamed_fail.final_failure[0].item()) == int(
+        BatchRootFailureCode.NONE
+    )
+    assert int(streamed_fail.final_failure[1].item()) == int(
+        BatchRootFailureCode.RESPONSE_FAILURE
+    )
     parameter = prepared.model_parameter_refs[0]
     valid_parameter_gradient = torch.autograd.grad(
         energy[0], parameter, retain_graph=True
@@ -1035,6 +1046,271 @@ def test_batch_backward_response_failure_is_lane_local(monkeypatch) -> None:
         all_failed.energy.sum(), prepared.model_parameter_refs[0]
     )[0]
     assert bool(torch.isnan(all_failed_gradient).all())
+
+
+def test_streaming_batch_gradients_match_simultaneous_mapped_result() -> None:
+    """Chunkwise backward preserves position, field, and shared Model gradients."""
+    numbers, positions = _h2o_conformers()
+    model, system = _build_system(
+        numbers,
+        method=labels.GFN2_XTB,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+        trainable_model=True,
+    )
+    positions = positions[:2].clone().requires_grad_(True)
+    field = torch.tensor(
+        [0.0002, -0.0001, 0.0003], dtype=DTYPE, device=DEVICE
+    ).requires_grad_(True)
+    weights = torch.tensor([1.25, -0.4], dtype=DTYPE, device=DEVICE)
+    prepared = prepare_converged_root_batch(
+        system, positions.detach(), field=field, strict=True
+    )
+
+    simultaneous = evaluate_converged_root_batch(
+        prepared, positions=positions, field=field, strict=True
+    )
+    lane_energy = simultaneous.energy.reshape(2, -1).sum(-1)
+    objective = (lane_energy * weights).sum()
+    parameters = tuple(
+        parameter
+        for parameter in model.par.parameters()
+        if parameter.is_floating_point() and parameter.requires_grad
+    )
+    reference_gradients = torch.autograd.grad(
+        objective,
+        (positions, field, *parameters),
+        allow_unused=True,
+    )
+
+    streamed = stream_batch_value_and_grad(
+        prepared,
+        model,
+        positions.detach(),
+        weights=weights,
+        chunk_size=1,
+        field=field,
+        strict=True,
+    )
+    simultaneous_free_energy = (
+        simultaneous.fenergy.reshape(2, -1).sum(-1)
+        if simultaneous.fenergy is not None
+        else lane_energy
+    )
+    torch.testing.assert_close(
+        streamed.energy,
+        lane_energy.detach(),
+        atol=2.0e-10,
+        rtol=2.0e-10,
+    )
+    torch.testing.assert_close(
+        streamed.free_energy,
+        simultaneous_free_energy.detach(),
+        atol=2.0e-10,
+        rtol=2.0e-10,
+    )
+    torch.testing.assert_close(
+        streamed.position_gradient,
+        reference_gradients[0],
+        atol=2.0e-7,
+        rtol=2.0e-7,
+    )
+    assert streamed.field_gradient is not None
+    torch.testing.assert_close(
+        streamed.field_gradient,
+        reference_gradients[1],
+        atol=2.0e-7,
+        rtol=2.0e-7,
+    )
+    assert len(streamed.model_parameter_gradients) == len(parameters)
+    assert streamed.model_parameter_connected == tuple(
+        gradient is not None for gradient in reference_gradients[2:]
+    )
+    connected_nonzero = sum(
+        g is not None and bool((g.abs() > 0.0).any())
+        for g in streamed.model_parameter_gradients
+    )
+    connected_zero = sum(
+        g is not None and bool((g == 0.0).all())
+        for g in streamed.model_parameter_gradients
+    )
+    disconnected = sum(g is None for g in streamed.model_parameter_gradients)
+    assert connected_nonzero > 0
+    assert connected_zero + disconnected > 0
+    assert connected_nonzero + connected_zero + disconnected == len(parameters)
+    for actual, expected in zip(
+        streamed.model_parameter_gradients, reference_gradients[2:]
+    ):
+        if expected is None:
+            assert actual is None
+        else:
+            assert actual is not None
+            torch.testing.assert_close(
+                actual, expected, atol=2.0e-8, rtol=2.0e-7
+            )
+
+    # Verify chunk_size in (1, 2, 4), lane permutation invariance, and active-lane subset.
+    c3 = positions[0].detach().clone()
+    c3[1, 2] -= 0.05
+    c3[2, 1] += 0.04
+    pos4 = torch.cat(
+        (positions.detach(), positions[:1].detach() + 0.01, c3.unsqueeze(0)),
+        dim=0,
+    )
+    prep4 = prepare_converged_root_batch(system, pos4, strict=True)
+    weights4 = torch.tensor([1.0, 0.0, -0.5, 0.25], dtype=DTYPE, device=DEVICE)
+    stream_c1 = stream_batch_value_and_grad(
+        prep4, model, pos4, weights=weights4, chunk_size=1, strict=True
+    )
+    for cs in (2, 4):
+        stream_cs = stream_batch_value_and_grad(
+            prep4, model, pos4, weights=weights4, chunk_size=cs, strict=True
+        )
+        torch.testing.assert_close(
+            stream_cs.energy, stream_c1.energy, atol=1e-12, rtol=1e-12
+        )
+        torch.testing.assert_close(
+            stream_cs.position_gradient,
+            stream_c1.position_gradient,
+            atol=1e-10,
+            rtol=1e-10,
+        )
+        assert (
+            stream_cs.model_parameter_connected
+            == stream_c1.model_parameter_connected
+        )
+        for g_cs, g_c1 in zip(
+            stream_cs.model_parameter_gradients,
+            stream_c1.model_parameter_gradients,
+        ):
+            if g_c1 is None:
+                assert g_cs is None
+            else:
+                assert g_cs is not None
+                torch.testing.assert_close(g_cs, g_c1, atol=1e-9, rtol=1e-8)
+
+    # Zero-weight lane 1 must have exact zero position gradient.
+    torch.testing.assert_close(
+        stream_c1.position_gradient[1],
+        torch.zeros_like(stream_c1.position_gradient[1]),
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    # Lane permutation invariance.
+    perm = [2, 0, 3, 1]
+    prep4_perm = prepare_converged_root_batch(system, pos4[perm], strict=True)
+    stream_perm = stream_batch_value_and_grad(
+        prep4_perm,
+        model,
+        pos4[perm],
+        weights=weights4[perm],
+        chunk_size=2,
+        strict=True,
+    )
+    torch.testing.assert_close(
+        stream_perm.energy, stream_c1.energy[perm], atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        stream_perm.position_gradient,
+        stream_c1.position_gradient[perm],
+        atol=1e-10,
+        rtol=1e-10,
+    )
+
+
+def test_streaming_invalid_lane_gradient_contract() -> None:
+    """Masked failed lanes stay isolated and selected failures return NaNs."""
+    numbers, positions = _h2o_conformers()
+    model, system = _build_system(
+        numbers, force_convergence=False, trainable_model=True
+    )
+    prepared = prepare_converged_root_batch(system, positions[:2], strict=False)
+    invalid_lane = replace(
+        prepared.lanes[1],
+        root_valid=False,
+        failure_code=int(BatchRootFailureCode.RESIDUAL_TOLERANCE),
+        failure_reason="Injected residual failure on lane 1.",
+        status=replace(
+            prepared.lanes[1].status,
+            final_failure=torch.tensor(
+                int(BatchRootFailureCode.RESIDUAL_TOLERANCE),
+                dtype=torch.int64,
+                device=DEVICE,
+            ),
+        ),
+    )
+    prepared = replace(
+        prepared,
+        lanes=(prepared.lanes[0], invalid_lane),
+        valid_lane_mask=torch.tensor([True, False], device=DEVICE),
+        all_roots_valid=False,
+    )
+
+    masked = stream_batch_value_and_grad(
+        prepared,
+        model,
+        positions[:2],
+        weights=torch.tensor([1.0, 0.0], dtype=DTYPE, device=DEVICE),
+        strict=False,
+    )
+    assert bool(torch.isfinite(masked.energy[0]))
+    assert bool(torch.isnan(masked.energy[1]))
+    assert bool(torch.isfinite(masked.position_gradient[0]).all())
+    assert bool((masked.position_gradient[1] == 0.0).all())
+    assert all(
+        gradient is None or bool(torch.isfinite(gradient).all())
+        for gradient in masked.model_parameter_gradients
+    )
+
+    selected = stream_batch_value_and_grad(
+        prepared,
+        model,
+        positions[:2],
+        weights=torch.tensor([0.0, 1.0], dtype=DTYPE, device=DEVICE),
+        strict=False,
+    )
+    assert bool(torch.isnan(selected.position_gradient[1]).all())
+    assert any(
+        gradient is not None and bool(torch.isnan(gradient).any())
+        for gradient in selected.model_parameter_gradients
+    )
+
+
+def test_streaming_rejects_changed_nontrainable_model_parameters() -> None:
+    """Streaming cannot combine old roots with a changed nontrainable Model."""
+    numbers, positions = _h2o_conformers()
+    model_classical, system_classical = _build_system(
+        numbers, trainable_model=False
+    )
+    prepared_classical = prepare_converged_root_batch(
+        system_classical, positions[:1], strict=True
+    )
+    assert not prepared_classical.model_parameter_refs
+    with torch.no_grad():
+        assert model_classical.par.element is not None
+        model_classical.par.element.O.arep.param.add_(1.0)
+    with pytest.raises(RuntimeError, match="stale for the supplied Model"):
+        stream_batch_value_and_grad(
+            prepared_classical,
+            model_classical,
+            positions[:1],
+            chunk_size=1,
+            strict=True,
+        )
+
+    model, system = _build_system(numbers, trainable_model=False)
+    prepared = prepare_converged_root_batch(system, positions[:1], strict=True)
+    assert not prepared.model_parameter_refs
+
+    with torch.no_grad():
+        for parameter in model.par.parameters():
+            if parameter.is_floating_point():
+                parameter.add_(1.0e-5)
+
+    with pytest.raises(RuntimeError, match="stale for the supplied Model"):
+        stream_batch_value_and_grad(
+            prepared, model, positions[:1], chunk_size=1, strict=True
+        )
 
 
 def test_transforms_grad_jvp_jacfwd_jacrev_hvp_vmap_and_higher_order() -> None:
