@@ -66,6 +66,7 @@ from .map import (
 )
 from .method import LinearMethod
 from .problem import SCFProblem, SCFRepresentation
+from .response import SCFResponseSettings, prepare_response_root
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
@@ -315,15 +316,6 @@ def _prepare_solver(
             f"Unsupported functional mixer {config.mixer}."
         )
     return settings, SCFStrategy((SCFStage(method),))
-
-
-def _representation_label(representation: SCFRepresentation) -> int:
-    """Translate the internal working representation to public config labels."""
-    return {
-        SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
-        SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
-        SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
-    }[representation]
 
 
 def _solve_representation(
@@ -708,6 +700,8 @@ def run_prepared_functional_implicit(
     *,
     core_index: CoreIndexData | None = None,
     core_index_owner: object | None = None,
+    response_settings: SCFResponseSettings | None = None,
+    strategy_override: SCFStrategy | None = None,
 ) -> SCFSolveResult:
     """Acquire a functional primal root, attach its raw-map IFT, then finalize.
 
@@ -731,7 +725,10 @@ def run_prepared_functional_implicit(
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    settings, strategy = _prepare_solver(config, guess.dtype)
+    settings, configured_strategy = _prepare_solver(config, guess.dtype)
+    strategy = (
+        configured_strategy if strategy_override is None else strategy_override
+    )
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -787,7 +784,6 @@ def run_prepared_functional_implicit(
     if final_problem is None:
         raise RuntimeError("The SCF strategy did not return its final problem.")
     final_representation = final_problem.representation
-    final_mode = _representation_label(final_representation)
     final_inputs = final_problem.inputs
     final_layout = final_problem.potential_layout
 
@@ -821,17 +817,30 @@ def run_prepared_functional_implicit(
             "did not pass physical certification."
         )
 
-    adapter, parameters = _SCFMapTensorTree.prepare(
-        final_inputs, final_mode, final_layout
-    )
+    response_root = prepare_response_root(outcome, settings, response_settings)
+    final_problem = response_root.problem
+    final_representation = final_problem.representation
+    final_inputs = final_problem.inputs
+    final_layout = final_problem.potential_layout
+    adapter = response_root.adapter
+    parameters = response_root.parameters
+    response_settings = response_root.settings
+    response_outcome = response_root.outcome
     prepared = _prepare_scf_root(
-        outcome,
+        response_outcome,
         maxiter=config.maxiter,
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
-        final_valid=fermi_status_ok(final_status, like=outcome.converged),
+        final_valid=fermi_status_ok(
+            response_root.map_result.fermi_status,
+            like=response_outcome.converged,
+        ),
         raw_map=adapter,
         parameters=parameters,
+        response_rtol=response_settings.rtol,
+        response_atol=response_settings.atol,
+        response_maxiter=response_settings.maxiter,
+        independent_map_result=response_root.independent_map_result,
     )
     attached_root = prepared.attach()
     attached_map_result = adapter.evaluate(attached_root, *parameters)
@@ -847,6 +856,7 @@ def run_prepared_functional_implicit(
             prepared.damping_state,
             root_x=attached_root,
             certification=prepared.certification,
+            strategy_diagnostics=outcome.strategy_diagnostics,
             terminal_failed=torch.zeros_like(prepared.converged),
         )
     if final_representation is SCFRepresentation.POTENTIAL:
@@ -862,6 +872,7 @@ def run_prepared_functional_implicit(
             prepared.damping_state,
             root_x=attached_root,
             certification=prepared.certification,
+            strategy_diagnostics=outcome.strategy_diagnostics,
             terminal_failed=torch.zeros_like(prepared.converged),
         )
     return finalize_scf_fock(
@@ -874,5 +885,6 @@ def run_prepared_functional_implicit(
         prepared.damping_state,
         root_x=attached_root,
         certification=prepared.certification,
+        strategy_diagnostics=outcome.strategy_diagnostics,
         terminal_failed=torch.zeros_like(prepared.converged),
     )
