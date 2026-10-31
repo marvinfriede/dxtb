@@ -27,7 +27,7 @@ import torch
 from tad_mctc import storch
 from torch.func import jacrev, jvp
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule, labels
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
@@ -128,8 +128,10 @@ def _case(
     maxiter: int = 300,
     temperature: float = 0.0,
     field: Tensor | None = None,
+    positions_override: Tensor | None = None,
     dtype: torch.dtype = torch.float64,
     int_driver: int | None = None,
+    parameter_module: ParamModule | None = None,
 ):
     dd = {"device": torch.device("cpu"), "dtype": dtype}
     source = SYSTEMS.get(sample_name)
@@ -148,6 +150,8 @@ def _case(
             if source.spin is None
             else source.spin.to(device="cpu", dtype=dtype).reshape(-1)
         )
+    if positions_override is not None:
+        positions = positions_override
     options = {
         "scf_mode": labels.SCF_MODE_FULL,
         "scp_mode": representation,
@@ -171,9 +175,14 @@ def _case(
     # compares loaded values, so two not-yet-loaded loaders compare equal.
     # Use identity to preserve the requested model before either is loaded.
     parameter = "gfn1" if method is GFN1_XTB else "gfn2"
+    parameters = (
+        get_param_module(parameter, device="cpu", dtype=dtype)
+        if parameter_module is None
+        else parameter_module
+    )
     calculator = Calculator(
         numbers,
-        get_param_module(parameter, device="cpu", dtype=dtype),
+        parameters,
         device="cpu",
         dtype=dtype,
         opts=options,

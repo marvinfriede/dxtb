@@ -610,6 +610,41 @@ def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
         )
 
 
+def test_implicit_root_revalidation_uses_strict_tolerance_boundary() -> None:
+    """A raw residual exactly on either tolerance is rejected like S2."""
+    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+
+    case, problem, _ = _problem_and_state(sample_name="H2O")
+    outcome = _solve_map(
+        case.x,
+        SCFSolverSettings(200, False, 0.2, 1.0e6, 1.0e6),
+        problem.map,
+        problem=problem,
+    )
+    assert bool(outcome.converged)
+
+    def boundary_map(value: torch.Tensor) -> torch.Tensor:
+        return value + torch.ones_like(value) / value.numel() ** 0.5
+
+    boundary_delta = boundary_map(outcome.root_x) - outcome.root_x
+    exact_l2 = torch.linalg.vector_norm(boundary_delta).item()
+    max_abs = boundary_delta.abs().amax().item()
+    for x_atol, x_atol_max in (
+        (exact_l2, max_abs + 1.0e-8),
+        (exact_l2 + 1.0e-8, max_abs),
+    ):
+        with pytest.raises(SCFConvergenceError, match="did not converge"):
+            _prepare_scf_root(
+                outcome,
+                maxiter=200,
+                x_atol=x_atol,
+                x_atol_max=x_atol_max,
+                final_valid=torch.ones((), dtype=torch.bool),
+                raw_map=boundary_map,
+                parameters=(),
+            )
+
+
 @pytest.mark.parametrize(
     "representation",
     [
