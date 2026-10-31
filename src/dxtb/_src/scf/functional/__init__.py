@@ -139,6 +139,7 @@ from .solver import (
     solve_scf_simple,
     trajectory_status_from_map,
 )
+from .soscf import SOSCFMethod, SOSCFMethodSettings, SOSCFState
 from .strategy import SCFStage, SCFStrategy, SCFSwitchPolicy
 
 __all__ = [
@@ -184,6 +185,9 @@ __all__ = [
     "SCFSwitchMetrics",
     "SCFSwitchPolicy",
     "SCFStrategy",
+    "SOSCFMethod",
+    "SOSCFMethodSettings",
+    "SOSCFState",
     "SCFSolveResult",
     "SCFTrajectoryStatus",
     "SCFSolverSettings",
