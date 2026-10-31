@@ -233,10 +233,13 @@ def main() -> None:
     settings = SCFSolverSettings(args.maxiter, False, 0.5, 1.0e-7, 1.0e-7)
     map_diagnostics: list[dict[str, float]] = []
     map_diagnostic_seconds = 0.0
+    physical_map_seconds = 0.0
 
     def recorded_map(value: torch.Tensor):
-        nonlocal map_diagnostic_seconds
+        nonlocal map_diagnostic_seconds, physical_map_seconds
+        map_started = time.perf_counter()
         mapped = problem.map(value)
+        physical_map_seconds += time.perf_counter() - map_started
         diagnostic_started = time.perf_counter()
         residual = problem.project_residual(mapped.mapped_x - value)
         energy = electronic_energy_from_spectral(mapped.spectral, inputs).sum()
@@ -307,9 +310,22 @@ def main() -> None:
         ),
         "wall_seconds": elapsed,
         "instrumented_wall_seconds": instrumented_elapsed,
+        "physical_map_seconds": physical_map_seconds,
         "map_diagnostic_seconds_removed": map_diagnostic_seconds,
         "physical_map_trajectory": map_diagnostics,
         "physical_maps_recorded": len(map_diagnostics),
+        "coefficient_optimizer_seconds": sum(
+            record["optimizer_seconds"]
+            for record in (
+                () if research_instance is None else research_instance.records
+            )
+        ),
+        "coefficient_optimizer_evaluations": sum(
+            record["optimizer_evaluations"]
+            for record in (
+                () if research_instance is None else research_instance.records
+            )
+        ),
         "coefficient_optimization": (
             None if research_instance is None else research_instance.records
         ),
