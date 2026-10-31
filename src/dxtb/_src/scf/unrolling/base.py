@@ -84,8 +84,8 @@ class BaseTSCF(BaseSCF):
             # Broyden is not implemented for SCF with full gradient, but
             # is the default setting. Without changing the setting, the
             # code immediately raises an error, which is inconvenient.
-            # (The check on the mode is also used to instantiate this class
-            # for the implicit mode in tests.)
+            # (The check on the mode is also used by packed FULL compatibility
+            # setup.)
             if self.config.scf_mode != labels.SCF_MODE_IMPLICIT:
                 msg = (
                     "Broyden mixer is not implemented for SCF with full "
