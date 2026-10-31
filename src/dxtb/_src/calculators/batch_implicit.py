@@ -151,8 +151,8 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf_fock,
     finalize_scf_potential,
 )
-from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
+from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.status import SCFStatus
@@ -1252,9 +1252,7 @@ class _ResponseParamsMonitor(torch.autograd.Function):
         return tuple(p.clone() for p in params)
 
     @staticmethod
-    def backward(
-        ctx: Any, *grad_outputs: Tensor | None
-    ) -> tuple[None, ...]:
+    def backward(ctx: Any, *grad_outputs: Tensor | None) -> tuple[None, ...]:
         ctx.collector.record_outgoing(grad_outputs)
         return (None, *grad_outputs)
 
@@ -1343,9 +1341,7 @@ def classify_response_failure_status(
         confirmed_resp_fail = primal_ok & diag.confirmed_failure.to(
             device=device
         )
-        unclassified_nonfinite = (
-            primal_ok & ~confirmed_resp_fail & ~grad_finite
-        )
+        unclassified_nonfinite = primal_ok & ~confirmed_resp_fail & ~grad_finite
         updated_final = torch.where(
             confirmed_resp_fail,
             torch.full_like(
@@ -1642,6 +1638,7 @@ class _LanePrimalSolveOutcome:
     root_valid: bool
 
 
+
 def _solve_and_validate_lane_primal(
     primal_inputs: SCFInputs,
     guess_charges: SCFCharges,
@@ -1650,6 +1647,7 @@ def _solve_and_validate_lane_primal(
     settings: Any,
     strategy: SCFStrategy,
     lane_padded: bool,
+    effective_mixer: int,
     maxiter: int,
     damp_default: float,
     damp_dynamic_factor: float,
@@ -1687,9 +1685,7 @@ def _solve_and_validate_lane_primal(
                 primal_inputs, representation, layout
             )
             primal_params = tuple(p.clone() for p in primal_params)
-            independent_map = adapter.evaluate(
-                outcome.root_x, *primal_params
-            )
+            independent_map = adapter.evaluate(outcome.root_x, *primal_params)
             independent_mapped_x = (
                 state_projection(independent_map.mapped_x)
                 if (
@@ -1705,9 +1701,7 @@ def _solve_and_validate_lane_primal(
             elif representation == labels.SCP_MODE_POTENTIAL:
                 assert layout is not None
                 final_state = unpack_potential(independent_mapped_x, layout)
-                final_spectral = evaluate_potential(
-                    final_state, primal_inputs
-                )
+                final_spectral = evaluate_potential(final_state, primal_inputs)
             else:
                 final_spectral = evaluate_hamiltonian(
                     independent_mapped_x, primal_inputs
@@ -1759,9 +1753,7 @@ def _solve_and_validate_lane_primal(
         if padding_valid and lane_padded and state_projection is not None:
             projected_root = state_projection(outcome.root_x)
             projected_mapped = state_projection(independent_mapped_x)
-            ao_matrix_mask = active_orb.unsqueeze(
-                -1
-            ) & active_orb.unsqueeze(-2)
+            ao_matrix_mask = active_orb.unsqueeze(-1) & active_orb.unsqueeze(-2)
             inactive_density_max = (
                 final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
                 .abs()
@@ -1897,6 +1889,7 @@ def _solve_and_validate_lane_primal(
 
 
 
+
 def prepare_converged_root_batch(
     system: System | PaddedExactSystemCore,
     positions: Tensor,
@@ -1962,9 +1955,7 @@ def prepare_converged_root_batch(
     )
 
     representation = route.representation
-    settings, strategy = _prepare_solver(
-        effective_scf_config, positions.dtype
-    )
+    settings, strategy = _prepare_solver(effective_scf_config, positions.dtype)
     has_padding = bool((numbers == 0).any())
 
     external_input_ids = {
@@ -2087,6 +2078,7 @@ def prepare_converged_root_batch(
                 settings,
                 strategy,
                 lane_padded,
+                route.effective_mixer,
                 effective_scf_config.maxiter,
                 effective_scf_config.damp,
                 effective_scf_config.damp_dynamic_factor,
