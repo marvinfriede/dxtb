@@ -3,8 +3,16 @@
 ## Scope and synchronization
 
 S12 starts at accepted S11 `eded7ed07ec8a680788511d8d1ac62d79baca36c`.
-The general-refactor branch was at W2c11 `abdb4562a0607475e775072277b63f82501363a0`;
-no synchronization was needed. The general-refactor worktree was not changed.
+The coordination record initially named W2c11 `abdb4562a0607475e775072277b63f82501363a0`.
+During S12, the live general-refactor remote had advanced to
+`9653ecdca42ea7c276a44f447497ef4bd53329fd`. I inspected its four intervening
+commits and the handoff marked the boundary safe, then synchronized once. The
+range-diff mapped all 69 accepted S1–S11 commits; 63 were identical. The six
+non-identical patch resolutions preserved existing target-base energy helper
+and no-worker behavior, applied the common-controller migration, retained
+S8.1b's independent entropy oracle, and propagated S11 mixer diagnostics to
+the serial batch root path. No unexplained SCF change remains. The
+general-refactor worktree was not changed.
 The S11 acceptance record is retained as-is. S12 does not reopen response
 coordinates, certification, finite-temperature policy, or the S10 research
 decision.
@@ -17,9 +25,18 @@ OMP_NUM_THREADS=1 python -m pytest -q -n logical --dist worksteal \
   test/test_calculator/test_e6a0_system_vmap.py --tb=short
 ```
 
-It collected 658 tests: 657 passed and the only failure was the accepted
-Anderson FULL gradient discrepancy (`2.5007065862503453e-11` versus `2e-13`).
-No test tolerance or Anderson arithmetic was changed.
+Before S12 edits, the accepted-S11 selection collected 658 tests: 657 passed
+and the only failure was the accepted Anderson FULL gradient discrepancy
+(`2.5007065862503453e-11` versus `2e-13`). No test tolerance or Anderson
+arithmetic was changed in S12. After synchronization and the solver
+merge-boundary corrections, the same selection collected 666 tests and all
+666 passed. This includes the published Anderson correction. A focused
+potential/Fock/temperature/S12/S1 rerun passed 115 tests. The W2c11 batch,
+mapped-implicit, invariant-spectral, and W2c6 acceptance files passed 186
+tests. Exact post-sync results are also recorded in the handoff.
+
+The PyTorch 2.8 compatibility slice covering the S12 checks, Broyden/CDIIS
+vmap/JVP/fixed-trip paths, and mapped implicit response passed 14 tests.
 
 ## Result and residual semantics
 
