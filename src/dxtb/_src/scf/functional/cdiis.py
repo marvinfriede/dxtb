@@ -23,6 +23,7 @@ from math import isfinite
 from typing import ClassVar, cast
 
 import torch
+from tad_mctc.tree import Node, child
 
 from dxtb._src.typing import Tensor
 
@@ -77,19 +78,18 @@ class CDIISMethodSettings:
         return torch.finfo(dtype).eps ** 0.75
 
 
-@dataclass(frozen=True, eq=False)
-class CDIISState:
+class CDIISState(Node):
     """Fixed-shape immutable Fock/error history and Pulay diagnostics."""
 
-    fock_history: Tensor
-    error_history: Tensor
-    history_count: Tensor
-    restart_count: Tensor
-    prune_count: Tensor
-    last_condition: Tensor
-    last_regularization: Tensor
-    last_coeff_max: Tensor
-    last_solve_ok: Tensor
+    fock_history: Tensor = child()
+    error_history: Tensor = child()
+    history_count: Tensor = child(keep_dtype=True)
+    restart_count: Tensor = child(keep_dtype=True)
+    prune_count: Tensor = child(keep_dtype=True)
+    last_condition: Tensor = child()
+    last_regularization: Tensor = child()
+    last_coeff_max: Tensor = child()
+    last_solve_ok: Tensor = child(keep_dtype=True)
 
 
 @dataclass(frozen=True, eq=False)

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import ClassVar, cast
 
 import torch
+from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
@@ -53,12 +54,11 @@ class AndersonMethodSettings:
     diagonal_offset: float | None
 
 
-@dataclass(frozen=True, eq=False)
-class AndersonState:
-    """Immutable, fixed-size history for one SCF method transition."""
+class AndersonState(Node):
+    """Immutable, fixed-size PyTree history for one SCF transition."""
 
-    x_hist: Tensor
-    f_hist: Tensor
+    x_hist: Tensor = child()
+    f_hist: Tensor = child()
 
 
 @dataclass(frozen=True, eq=False)

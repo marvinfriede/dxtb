@@ -23,6 +23,7 @@ from math import isfinite, sqrt
 from typing import ClassVar, cast
 
 import torch
+from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
@@ -64,18 +65,17 @@ class BroydenMethodSettings:
             )
 
 
-@dataclass(frozen=True, eq=False)
-class BroydenState:
-    """Immutable fixed-size secant history and update-health diagnostics."""
+class BroydenState(Node):
+    """Immutable fixed-size PyTree secant history and diagnostics."""
 
-    previous_x: Tensor
-    previous_f: Tensor
-    c_history: Tensor
-    d_history: Tensor
-    valid_history: Tensor
-    history_count: Tensor
-    restart_count: Tensor
-    last_update_accepted: Tensor
+    previous_x: Tensor = child()
+    previous_f: Tensor = child()
+    c_history: Tensor = child()
+    d_history: Tensor = child()
+    valid_history: Tensor = child(keep_dtype=True)
+    history_count: Tensor = child(keep_dtype=True)
+    restart_count: Tensor = child(keep_dtype=True)
+    last_update_accepted: Tensor = child(keep_dtype=True)
 
 
 @dataclass(frozen=True, eq=False)
