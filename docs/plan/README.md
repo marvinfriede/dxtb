@@ -36,6 +36,7 @@ API.
 | `23-scf-s6-strategy-switching.md` | Adds eager multi-stage strategy control, compact-to-Fock observation conversion, Broyden/Anderson to CDIIS characterization, and fixed-trip inactive-lane sanitation |
 | `24-scf-s7-legacy-xitorch-retirement.md` | Makes functional iterative SCF authoritative, migrates GFN0's retained generalized eigensolve, fixes switched implicit representation ownership, and removes the vendored xitorch and retired SCF engines |
 | `25-scf-s8-fixed-occupation-soscf.md` | Adds eager Fock-space SOSCF for fixed occupations using xTB orbital gradients, matrix-free physical Hessian-vector products, safeguarded inner Newton steps, and density-consistent Fock seeds |
+| `26-scf-s9-finite-temperature-second-order.md` | Records why orbital-only SOSCF misses thermal occupation response and the evidence-based decision to retain first-order SCF for active smearing |
 
 The design review referenced by the plan is not in the repository.
 
