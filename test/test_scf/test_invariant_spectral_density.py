@@ -26,9 +26,11 @@ from tad_mctc import storch
 from tad_mctc.units import KELVIN2AU
 from torch.func import jacfwd, jacrev, jvp
 
+from dxtb._src.scf.functional import spectral as spectral_module
 from dxtb._src.scf.functional.spectral import (
     _matrix_expm1,
     _matrix_fermi,
+    _prepare_matrix,
     _projector,
     aufbau_density_matrix,
     fermi_density_matrix,
@@ -58,6 +60,206 @@ def _fermi_density(hamiltonian: torch.Tensor) -> torch.Tensor:
         kt,
         state,
         diff_steps=filling._diff_steps(3),
+    )
+
+
+def test_electron_response_guard_matches_always_response_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The primal-only response skip preserves mixed and higher derivatives."""
+    hamiltonian = torch.tensor(
+        [
+            [-0.012, 0.002, 0.001, 0.0],
+            [0.002, -0.001, 0.0004, 0.0],
+            [0.001, 0.0004, 0.0002, 0.001],
+            [0.0, 0.0, 0.001, 0.018],
+        ],
+        dtype=torch.float64,
+    )
+    electrons = torch.tensor([1.2, 0.8], dtype=torch.float64)
+    temperature = torch.tensor(0.004, dtype=torch.float64)
+    energies = torch.linalg.eigvalsh(hamiltonian).expand(2, -1)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        energies,
+        temperature,
+        thr=1.0e-14,
+        maxiter=300,
+        diff_order=3,
+    )
+    weight = torch.tensor(
+        [[0.7, -0.1, 0.2, 0.3], [-0.2, 0.6, 0.1, -0.4]],
+        dtype=torch.float64,
+    )
+
+    def observable(
+        h: torch.Tensor, nel: torch.Tensor, kt: torch.Tensor
+    ) -> torch.Tensor:
+        density = fermi_density_matrix(
+            h, nel, kt, state, diff_steps=filling._diff_steps(3)
+        )
+        return (density.diagonal(dim1=-2, dim2=-1) * weight).sum()
+
+    original_guard = spectral_module._tracks_derivatives
+
+    def evaluate(guard):
+        monkeypatch.setattr(spectral_module, "_tracks_derivatives", guard)
+        value = observable(hamiltonian, electrons, temperature)
+        grad_h, grad_nel, grad_kt = torch.func.grad(
+            observable, argnums=(0, 1, 2)
+        )(hamiltonian, electrons, temperature)
+        tangent_h = torch.tensor(
+            [
+                [0.1, 0.0, 0.0, 0.0],
+                [0.0, -0.2, 0.0, 0.0],
+                [0.0, 0.0, 0.15, 0.0],
+                [0.0, 0.0, 0.0, -0.05],
+            ],
+            dtype=torch.float64,
+        )
+        tangent_nel = torch.tensor([0.3, -0.2], dtype=torch.float64)
+        _, tangent = jvp(
+            observable,
+            (hamiltonian, electrons, temperature),
+            (tangent_h, tangent_nel, torch.tensor(0.2, dtype=torch.float64)),
+        )
+        jacfwd_nel = jacfwd(observable, argnums=1)(
+            hamiltonian, electrons, temperature
+        )
+        jacrev_nel = jacrev(observable, argnums=1)(
+            hamiltonian, electrons, temperature
+        )
+        _, second_mixed = jvp(
+            lambda h: torch.func.grad(observable, argnums=1)(
+                h, electrons, temperature
+            ),
+            (hamiltonian,),
+            (tangent_h,),
+        )
+
+        def along_count(alpha: torch.Tensor) -> torch.Tensor:
+            return observable(
+                hamiltonian,
+                electrons + alpha * tangent_nel,
+                temperature,
+            )
+
+        first = torch.func.grad(along_count)
+        second = torch.func.grad(first)
+        third = torch.func.grad(second)
+        alpha = torch.tensor(0.0, dtype=torch.float64)
+        derivatives = (first(alpha), second(alpha), third(alpha))
+
+        batch_alphas = torch.tensor([-0.02, 0.0, 0.02], dtype=torch.float64)
+        vmapped_first = torch.func.vmap(first)(batch_alphas)
+
+        compiled_obs = torch.compile(along_count, backend="eager")
+        alpha_leaf = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+        compiled_val = compiled_obs(alpha_leaf)
+        compiled_grad = torch.autograd.grad(compiled_val, alpha_leaf)[0]
+
+        return (
+            value,
+            grad_h,
+            grad_nel,
+            grad_kt,
+            tangent,
+            jacfwd_nel,
+            jacrev_nel,
+            second_mixed,
+            *derivatives,
+            vmapped_first,
+            compiled_val,
+            compiled_grad,
+        )
+
+    reference = evaluate(lambda _: True)
+    optimized = evaluate(original_guard)
+    monkeypatch.setattr(spectral_module, "_tracks_derivatives", original_guard)
+    for actual, expected in zip(optimized, reference):
+        torch.testing.assert_close(actual, expected, atol=2.0e-10, rtol=2.0e-10)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize(
+    "spectrum,kt,shift,active",
+    [
+        ([-0.3, -0.3, 0.4, 0.0], 2.0e-4, -0.3, [True, True, True, False]),
+        ([-1.0, -0.02, 0.021, 2.0], 0.004, 0.0, [True, False, True, True]),
+        ([-0.1, -1.0e-7, 1.0e-7, 0.1], 0.02, 0.0, [True, True, True, True]),
+        ([-0.08, -0.02, 0.03, 0.09], 0.06, 0.01, [True, True, True, True]),
+    ],
+    ids=(
+        "saturated-degenerate",
+        "wide-gap-padded",
+        "near-degenerate",
+        "high-temp-partial",
+    ),
+)
+def test_trace_squared_slope_matches_legacy_density_product(
+    dtype: torch.dtype,
+    spectrum: list[float],
+    kt: float,
+    shift: float,
+    active: list[bool],
+) -> None:
+    """Trace-squared Newton slope matches Tr(D-D²), including derivatives."""
+    values = torch.tensor(spectrum, dtype=dtype)
+    matrix = torch.diag(values)
+    matrix[0, 2] = matrix[2, 0] = 0.15 * min(kt, 0.05)
+    active_mask = torch.tensor(active, dtype=torch.bool)
+    direction = torch.tensor(
+        [
+            [0.2, 0.0, -0.1, 0.0],
+            [0.0, -0.3, 0.0, 0.0],
+            [-0.1, 0.0, 0.15, 0.0],
+            [0.0, 0.0, 0.0, -0.05],
+        ],
+        dtype=dtype,
+    )
+    kt_tensor = torch.tensor(kt, dtype=dtype)
+    shift_tensor = torch.tensor(shift, dtype=dtype)
+    _, spectral, prepared_active = _prepare_matrix(matrix, None, active_mask)
+
+    def slopes(alpha: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        candidate = spectral + alpha * direction
+        density = _matrix_fermi(
+            candidate, shift_tensor, kt_tensor, prepared_active
+        )
+        old = (density - density @ density).diagonal().sum() / kt_tensor
+        new = (density.diagonal().sum() - (density * density).sum()) / kt_tensor
+        return old, new
+
+    alpha = torch.tensor(0.0, dtype=dtype)
+    old, new = slopes(alpha)
+    eps = torch.finfo(dtype).eps
+    torch.testing.assert_close(old, new, atol=64.0 * eps / kt, rtol=64.0 * eps)
+    assert bool(torch.isfinite(torch.stack((old, new))).all())
+    assert float(old) >= -64.0 * eps / kt
+    assert float(new) >= -64.0 * eps / kt
+
+    old_first = torch.func.grad(lambda value: slopes(value)[0])(alpha)
+    new_first = torch.func.grad(lambda value: slopes(value)[1])(alpha)
+    old_second = torch.func.grad(
+        torch.func.grad(lambda value: slopes(value)[0])
+    )(alpha)
+    new_second = torch.func.grad(
+        torch.func.grad(lambda value: slopes(value)[1])
+    )(alpha)
+    old_third = torch.func.grad(
+        torch.func.grad(torch.func.grad(lambda value: slopes(value)[0]))
+    )(alpha)
+    new_third = torch.func.grad(
+        torch.func.grad(torch.func.grad(lambda value: slopes(value)[1]))
+    )(alpha)
+    torch.testing.assert_close(
+        old_first, new_first, atol=512.0 * eps / kt, rtol=512.0 * eps
+    )
+    torch.testing.assert_close(
+        old_second, new_second, atol=2048.0 * eps / kt, rtol=2048.0 * eps
+    )
+    torch.testing.assert_close(
+        old_third, new_third, atol=8192.0 * eps / kt, rtol=8192.0 * eps
     )
 
 

@@ -338,6 +338,37 @@ def _tracks_derivatives(x: Tensor) -> bool:
     """Check if a tensor tracks reverse- or forward-mode derivatives."""
     if is_compiling():
         return True
+    try:
+        return _tracks_derivatives_functorch(x)
+    except (AttributeError, RuntimeError):
+        # PyTorch has no public API for asking whether an arbitrary tensor is
+        # active in a torch.func transform. If its private transform inspector
+        # changes, conservatively run the response instead of risking a wrong
+        # derivative.
+        return True
+
+
+def _has_jvp_tangent_at_level(x: Tensor, target_level: int) -> bool:
+    """Check whether a functorch Jvp wrapper at target_level carries a non-None tangent."""
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    popped = []
+    try:
+        while True:
+            raw_stack = ft.get_interpreter_stack()
+            if not raw_stack:
+                break
+            top_level = raw_stack[-1].level()
+            if top_level <= target_level:
+                break
+            popped.append(ft.pop_dynamic_layer_stack())
+        return torch.autograd.forward_ad.unpack_dual(x).tangent is not None
+    finally:
+        while popped:
+            ft.push_dynamic_layer_stack(popped.pop())
+
+
+def _tracks_derivatives_functorch(x: Tensor) -> bool:
+    """Inspect currently supported PyTorch functorch wrapper layers."""
     ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
     raw_stack = ft.get_interpreter_stack()
     stack = (
@@ -345,10 +376,6 @@ def _tracks_derivatives(x: Tensor) -> bool:
         if raw_stack is None
         else {interp.level(): interp.key() for interp in raw_stack}
     )
-    jvp_levels = [
-        lvl for lvl, key in stack.items() if key == ft.TransformType.Jvp
-    ]
-    top_jvp_level = max(jvp_levels) if jvp_levels else None
     current = x
     while True:
         if ft.is_batchedtensor(current):
@@ -364,12 +391,7 @@ def _tracks_derivatives(x: Tensor) -> bool:
             ):
                 return True
         elif stack.get(level) == ft.TransformType.Jvp:
-            if level != top_jvp_level:
-                return True
-            if (
-                torch.autograd.forward_ad.unpack_dual(current).tangent
-                is not None
-            ):
+            if _has_jvp_tangent_at_level(current, level):
                 return True
         if not ft.is_functorch_wrapped_tensor(current):
             break
@@ -522,8 +544,11 @@ def _fermi_free_energy_setup(
     shift = torch.zeros_like(target)
     for _ in range(diff_steps):
         density = _matrix_fermi(relative, shift, safe_kt, active)
-        count = density.diagonal(dim1=-2, dim2=-1).sum(-1)
-        slope = (count - (density * density).sum(dim=(-2, -1))) / safe_kt
+        diag_density = density.diagonal(dim1=-2, dim2=-1)
+        count = diag_density.sum(-1)
+        slope = (diag_density - (density * density).sum(dim=-1)).sum(
+            -1
+        ) / safe_kt
         safe_slope = torch.where(
             slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
         )
