@@ -20,8 +20,10 @@ Reference systems for dispersion models in ``tad_dftd``.
 from __future__ import annotations
 
 from .d3 import Reference, _default_reference, _default_reference_d3s
+from .d4 import D4Reference
 
 __all__ = [
+    "D4Reference",
     "Reference",
     "_default_reference",
     "_default_reference_d3s",

@@ -72,21 +72,21 @@ class DispersionProperties:
 ModelProperties = DispersionProperties
 
 
-class DispersionModel(Node, ABC):
+class DispersionModel(Node):
     """
-    Abstract base class for DFT-D dispersion models.
+    Base class for DFT-D dispersion models.
     """
 
-    @abstractmethod
     def get_properties(
         self,
         structure: Structure,
-        *,
-        cutoff: Cutoff | None = None,
         pairs: Pairs | None = None,
+        *,
+        cn: Tensor | None = None,
         q: Tensor | None = None,
     ) -> DispersionProperties:
         """
         Evaluate coordination numbers, partial charges, pairwise :math:`C_6` and
         :math:`C_8` coefficients, and static polarizabilities for ``structure``.
         """
+        raise NotImplementedError

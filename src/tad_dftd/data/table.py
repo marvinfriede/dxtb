@@ -26,7 +26,11 @@ from __future__ import annotations
 from tad_mctc.data import radii, resolve_table
 from tad_mctc.typing import TableFunction, Tensor
 
+from .en import PAULING_EN
+from .hardness import GAM
 from .r4r2 import R4R2
+from .radii import VDW_PAIRWISE_119
+from .zeff import ZEFF
 
 __all__ = ["TABLES", "element_table"]
 
@@ -34,7 +38,10 @@ __all__ = ["TABLES", "element_table"]
 TABLES: dict[str, tuple[TableFunction, tuple[int, ...]]] = {
     "rcov_table": (radii.COV_D3, (119,)),
     "r4r2_table": (R4R2, (119,)),
-    "rvdw_table": (radii.VDW_PAIRWISE, (104, 104)),
+    "rvdw_table": (VDW_PAIRWISE_119, (119, 119)),
+    "en_table": (PAULING_EN, (119,)),
+    "gam_table": (GAM, (119,)),
+    "zeff_table": (ZEFF, (119,)),
 }
 """Default and required shape of each per-element table, by argument name."""
 
@@ -75,12 +82,24 @@ def element_table(
     """
     if name == "rdamp_table":
         if table is None:
-            return resolve_table(radii.VDW_PAIRWISE, like)
+            return resolve_table(VDW_PAIRWISE_119, like)
         out = resolve_table(table, like)
         if out.ndim != 2 or out.shape[0] != out.shape[1] or out.shape[0] < 11:
             raise ValueError(
                 f"'{name}' is a pairwise table indexed by atomic number, of "
                 f"square shape (n, n), got shape {tuple(out.shape)}."
+            )
+        return out
+
+    if name == "rvdw_table":
+        if table is None:
+            return resolve_table(VDW_PAIRWISE_119, like)
+        out = resolve_table(table, like)
+        if out.shape not in ((104, 104), (119, 119)):
+            raise ValueError(
+                f"'{name}' is a table indexed by atomic number, of shape "
+                f"(104, 104) or (119, 119), not one value per atom or atom pair "
+                f"(got shape {tuple(out.shape)})."
             )
         return out
 

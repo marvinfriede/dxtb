@@ -19,18 +19,27 @@ Reference Weighting and Charge Scaling Functions
 ================================================
 
 Differentiable weighting and interpolation kernels shared across D3, D3S, D4,
-D4S, D4Srev, and D5 dispersion models, following ``dftd/model/utils.f90``.
+D4S, D4Srev, and D5 dispersion models, following ``dftd/model/utils.f90`` and
+``dftd/model/d4/{orig,smooth,srev}.f90``.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, overload
 
 import torch
 from tad_mctc.typing import Tensor
 
+from .. import defaults
+from ..data.hardness import GAM
+from ..data.tanh import TANH_PARAMS
+from ..data.zeff import ZEFF
+
 __all__ = [
     "WeightingFunction",
+    "dzeta",
+    "dzeta_tanh",
     "gaussian_log_weight",
     "gaussian_weight",
     "limit_avg_deriv",
@@ -40,6 +49,8 @@ __all__ = [
     "weight_cn",
     "weight_references",
     "weight_references_d3s",
+    "weight_references_d4",
+    "weight_references_d4s",
     "zeta",
     "zeta_tanh",
 ]
@@ -47,6 +58,13 @@ __all__ = [
 
 class _HasCN(Protocol):
     cn: Tensor
+
+
+class _HasD4Ref(Protocol):
+    refn: Tensor
+    ngw: Tensor
+    cn: Tensor
+    q: Tensor
 
 
 WeightingFunction = Callable[..., Tensor]
@@ -106,25 +124,6 @@ def weight_references_d3s(
     """
     Normalized partner-element-dependent weights of the reference systems for
     DFT-D3S, of shape ``(..., nat, nel, nref)``.
-
-    Parameters
-    ----------
-    numbers : Tensor
-        Atomic numbers of shape ``(..., nat)``.
-    cn : Tensor
-        Coordination numbers of shape ``(..., nat)``.
-    reference : _HasCN
-        D3S reference systems (see :meth:`Reference.load_d3s`).
-    wfpair : Tensor
-        Pairwise weighting factor table ``wf(Z_A, Z_B)`` of shape ``(95, 95)``.
-    elements : Tensor | None, optional
-        1D tensor of partner element atomic numbers ``(nel,)``. Defaults to
-        all elements ``0..wfpair.shape[0]-1``.
-
-    Returns
-    -------
-    Tensor
-        Normalized weights of shape ``(..., nat, nel, nref)``.
     """
     if elements is None:
         elements = torch.arange(wfpair.shape[0], device=numbers.device)
@@ -148,6 +147,332 @@ def weight_references_d3s(
 
     weights = torch.softmax(log_weights, dim=-1)
     return torch.where(mask, weights, torch.zeros_like(weights))
+
+
+def _d4_cngw(
+    cn_diff2: Tensor,
+    wf: Tensor | float,
+    ngw: Tensor,
+    refcn: Tensor,
+    valid_ref: Tensor,
+) -> Tensor:
+    """
+    Evaluate normalized multi-Gaussian CN weights ``gwk`` for D4, D4S, and D4Srev.
+
+    Parameters
+    ----------
+    cn_diff2 : Tensor
+        Squared CN difference ``(cn - refcn)^2`` of shape ``(..., nref)``.
+    wf : Tensor | float
+        Weighting factor broadcastable against ``cn_diff2``.
+    ngw : Tensor
+        Number of Gaussian weights per reference of shape ``(..., nref)``.
+    refcn : Tensor
+        Reference coordination numbers of shape ``(..., nref)``.
+    valid_ref : Tensor
+        Boolean mask of valid references of shape ``(..., nref)``.
+    """
+    igw = torch.arange(1, 7, device=cn_diff2.device, dtype=cn_diff2.dtype)
+    igw_mask = valid_ref.unsqueeze(-1) & (igw <= ngw.unsqueeze(-1))
+
+    wf_t = wf.unsqueeze(-1) if isinstance(wf, Tensor) else wf
+    exponent = -wf_t * cn_diff2.unsqueeze(-1) * igw
+    expw = torch.where(
+        igw_mask,
+        torch.exp(exponent),
+        torch.zeros_like(exponent),
+    ).sum(dim=-1)
+
+    norm = expw.sum(dim=-1, keepdim=True)
+    eps_norm = math.sqrt(torch.finfo(cn_diff2.dtype).tiny)
+    norm_ok = norm > eps_norm
+
+    # Fallback when norm underflows: 1.0 at max(refcn), 0.0 elsewhere (zero derivative)
+    refcn_masked = torch.where(
+        valid_ref, refcn, torch.full_like(refcn, -torch.inf)
+    )
+    max_rcn = torch.amax(refcn_masked, dim=-1, keepdim=True)
+    fallback = torch.where(
+        valid_ref & (torch.abs(refcn - max_rcn) < 1e-12),
+        torch.ones_like(expw),
+        torch.zeros_like(expw),
+    )
+
+    safe_norm = torch.where(norm_ok, norm, torch.ones_like(norm))
+    gwk = torch.where(norm_ok, expw / safe_norm, fallback)
+    return torch.where(valid_ref, gwk, torch.zeros_like(gwk))
+
+
+def _d4_charge_scale(
+    numbers: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    valid_ref: Tensor,
+    *,
+    is_srev: bool = False,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
+    """
+    Evaluate charge-scaling factor ``z`` (and optional ``dz/dq``) of shape
+    ``(..., nat, 7)`` for D4/D4S or D4Srev.
+    """
+    dev = q.device
+    dt = q.dtype
+    ref_q = reference.q[numbers]  # (..., nat, 7)
+
+    if is_srev:
+        t_tab = (
+            TANH_PARAMS(device=dev, dtype=dt)
+            if tanh_table is None
+            else tanh_table.to(device=dev, dtype=dt)
+        )
+        a_i = t_tab[numbers, 0].unsqueeze(-1)
+        b_i = t_tab[numbers, 1].unsqueeze(-1)
+        c_i = t_tab[numbers, 2].unsqueeze(-1)
+        d_i = t_tab[numbers, 3].unsqueeze(-1)
+        q_i = q.unsqueeze(-1)
+        z = zeta_tanh(a_i, b_i, c_i, d_i, ref_q, q_i, mask=valid_ref)
+        if not with_dgwdq:
+            return z
+        dz = dzeta_tanh(a_i, b_i, c_i, d_i, ref_q, q_i, mask=valid_ref)
+        return z, dz
+
+    z_tab = (
+        ZEFF(device=dev, dtype=dt)
+        if zeff_table is None
+        else zeff_table.to(device=dev, dtype=dt)
+    )
+    g_tab = (
+        GAM(device=dev, dtype=dt)
+        if gam_table is None
+        else gam_table.to(device=dev, dtype=dt)
+    )
+    zeff_i = z_tab[numbers].unsqueeze(-1)
+    gi = (g_tab[numbers] * gc).unsqueeze(-1)
+    qref_eff = ref_q + zeff_i
+    qmod_eff = q.unsqueeze(-1) + zeff_i
+    z = zeta(ga, gi, qref_eff, qmod_eff, mask=valid_ref)
+    if not with_dgwdq:
+        return z
+    dz = dzeta(ga, gi, qref_eff, qmod_eff, mask=valid_ref)
+    return z, dz
+
+
+@overload
+def weight_references_d4(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    *,
+    wf: Tensor | float = defaults.D4_WF,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[False] = False,
+) -> Tensor: ...
+
+
+@overload
+def weight_references_d4(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    *,
+    wf: Tensor | float = defaults.D4_WF,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[True],
+) -> tuple[Tensor, Tensor]: ...
+
+
+def weight_references_d4(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    *,
+    wf: Tensor | float = defaults.D4_WF,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
+    """
+    Reference weights ``gw`` of shape ``(..., nat, 7)`` (and optional charge
+    derivative ``dgwdq``) for DFT-D4 (or diagonal polarizability weights for
+    DFT-D4S / DFT-D4Srev).
+    """
+    refn = reference.refn[numbers]  # (..., nat)
+    ngw = reference.ngw[numbers]  # (..., nat, 7)
+    refcn = reference.cn[numbers]  # (..., nat, 7)
+
+    ir_idx = torch.arange(refcn.shape[-1], device=numbers.device)
+    valid_ref = (numbers.unsqueeze(-1) > 0) & (ir_idx < refn.unsqueeze(-1))
+
+    cn_diff2 = (cn.unsqueeze(-1) - refcn) ** 2
+    wf_arg = wf.unsqueeze(-1) if isinstance(wf, Tensor) and wf.ndim == cn.ndim else wf
+    gwk = _d4_cngw(cn_diff2, wf_arg, ngw, refcn, valid_ref)
+
+    if with_dgwdq:
+        z, dz = _d4_charge_scale(
+            numbers,
+            q,
+            reference,
+            valid_ref,
+            is_srev=is_srev,
+            ga=ga,
+            gc=gc,
+            zeff_table=zeff_table,
+            gam_table=gam_table,
+            tanh_table=tanh_table,
+            with_dgwdq=True,
+        )
+        return gwk * z, gwk * dz
+
+    z = _d4_charge_scale(
+        numbers,
+        q,
+        reference,
+        valid_ref,
+        is_srev=is_srev,
+        ga=ga,
+        gc=gc,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        tanh_table=tanh_table,
+        with_dgwdq=False,
+    )
+    return gwk * z
+
+
+@overload
+def weight_references_d4s(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    wfpair: Tensor,
+    elements: Tensor | None = None,
+    *,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[False] = False,
+) -> Tensor: ...
+
+
+@overload
+def weight_references_d4s(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    wfpair: Tensor,
+    elements: Tensor | None = None,
+    *,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[True],
+) -> tuple[Tensor, Tensor]: ...
+
+
+def weight_references_d4s(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    wfpair: Tensor,
+    elements: Tensor | None = None,
+    *,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
+    """
+    Partner-element-dependent reference weights ``gw`` of shape
+    ``(..., nat, nel, 7)`` (and optional ``dgwdq``) for DFT-D4S and DFT-D4Srev.
+    """
+    if elements is None:
+        elements = torch.arange(wfpair.shape[0], device=numbers.device)
+
+    refn = reference.refn[numbers]  # (..., nat)
+    ngw = reference.ngw[numbers]  # (..., nat, 7)
+    refcn = reference.cn[numbers]  # (..., nat, 7)
+
+    ir_idx = torch.arange(refcn.shape[-1], device=numbers.device)
+    valid_ref = (numbers.unsqueeze(-1) > 0) & (ir_idx < refn.unsqueeze(-1))
+
+    wf = wfpair[numbers.unsqueeze(-1), elements]  # (..., nat, nel)
+    valid_pair = (numbers.unsqueeze(-1) > 0) & (elements > 0) & (wf > 0)
+    mask = valid_ref.unsqueeze(-2) & valid_pair.unsqueeze(-1)  # (..., nat, nel, 7)
+
+    cn_diff2 = (cn.unsqueeze(-1).unsqueeze(-1) - refcn.unsqueeze(-2)) ** 2  # (..., nat, 1, 7)
+    gwk = _d4_cngw(
+        cn_diff2.expand_as(mask.to(cn.dtype)),
+        wf.unsqueeze(-1),
+        ngw.unsqueeze(-2).expand_as(mask),
+        refcn.unsqueeze(-2).expand_as(mask.to(cn.dtype)),
+        mask,
+    )
+
+    if with_dgwdq:
+        z, dz = _d4_charge_scale(
+            numbers,
+            q,
+            reference,
+            valid_ref,
+            is_srev=is_srev,
+            ga=ga,
+            gc=gc,
+            zeff_table=zeff_table,
+            gam_table=gam_table,
+            tanh_table=tanh_table,
+            with_dgwdq=True,
+        )
+        return gwk * z.unsqueeze(-2), gwk * dz.unsqueeze(-2)
+
+    z = _d4_charge_scale(
+        numbers,
+        q,
+        reference,
+        valid_ref,
+        is_srev=is_srev,
+        ga=ga,
+        gc=gc,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        tanh_table=tanh_table,
+        with_dgwdq=False,
+    )
+    return gwk * z.unsqueeze(-2)
 
 
 def gaussian_weight(
@@ -185,33 +510,7 @@ def smooth_weight(
     mask: Tensor,
 ) -> Tensor:
     r"""
-    Normalized LogSumExp (softmax) smooth reference coordination number weights
-    for D3S, D4S, and D4Srev:
-
-    .. math::
-
-        w_r = \frac{\exp\!\left(-w_f \, (\mathrm{CN} - \mathrm{CN}_{\mathrm{ref},r})^2\right)}
-                   {\sum_{r'} \exp\!\left(-w_f \, (\mathrm{CN} - \mathrm{CN}_{\mathrm{ref},r'})^2\right)}
-
-    Evaluated in log-space with a shift by the maximum valid log-weight so that
-    exponential underflow never causes ``0 / 0 = NaN`` at large ``wf`` or large
-    ``|CN - CN_ref|``.
-
-    Parameters
-    ----------
-    cn : Tensor
-        Coordination numbers broadcastable against ``cnref`` and ``wf``.
-    cnref : Tensor
-        Reference coordination numbers with the reference axis at ``dim=-1``.
-    wf : Tensor
-        Weighting factor :math:`w_f` broadcastable against ``cnref``.
-    mask : Tensor
-        Boolean mask of valid reference slots along ``dim=-1``.
-
-    Returns
-    -------
-    Tensor
-        Normalized reference weights along ``dim=-1`` (zero for masked slots).
+    Normalized LogSumExp (softmax) smooth reference coordination number weights.
     """
     dcn = cn - cnref
     log_w = -wf * dcn * dcn
@@ -219,7 +518,6 @@ def smooth_weight(
     log_w_masked = torch.where(mask, log_w, neg_inf)
 
     max_log_w = torch.amax(log_w_masked, dim=-1, keepdim=True)
-    # Replace -inf (for padding atoms where all mask entries are False) with 0.0
     max_log_w = torch.where(
         torch.isfinite(max_log_w), max_log_w, torch.zeros_like(max_log_w)
     )
@@ -237,30 +535,49 @@ def zeta(
     c: Tensor | float,
     qref: Tensor,
     qmod: Tensor,
+    *,
+    mask: Tensor | None = None,
 ) -> Tensor:
     r"""
     Charge scaling function :math:`\zeta(a, c, q_{\mathrm{ref}}, q_{\mathrm{mod}})`
-    for D4 and D4S (``dftd/model/utils.f90``):
-
-    .. math::
-
-        \zeta(a, c, q_{\mathrm{ref}}, q_{\mathrm{mod}}) =
-        \begin{cases}
-            \exp(a) & q_{\mathrm{mod}} \le 0, \\
-            \exp\!\left(a \left(1 - \exp\!\left(c \left(1 - \frac{q_{\mathrm{ref}}}{q_{\mathrm{mod}}}\right)\right)\right)\right) & q_{\mathrm{mod}} > 0.
-        \end{cases}
-
-    Differentiated safely via ``torch.where`` with a positive dummy ``qmod`` on
-    the non-positive branch so that ``dzeta = 0`` and ``d2zeta = 0`` for
-    :math:`q_{\mathrm{mod}} \le 0` without ``NaN`` gradients.
+    for D4 and D4S (``dftd/model/utils.f90``).
     """
     pos = qmod > 0.0
+    if mask is not None:
+        pos = pos & mask
     safe_qmod = torch.where(pos, qmod, torch.ones_like(qmod))
     exponent = c * (1.0 - qref / safe_qmod)
-    # Clamp exponent to avoid exp overflow on masked/dummy entries
     val = torch.exp(a * (1.0 - torch.exp(torch.clamp(exponent, max=50.0))))
-    fallback = torch.exp(torch.as_tensor(a, device=qmod.device, dtype=qmod.dtype))
-    return torch.where(pos, val, fallback)
+    fallback = torch.exp(
+        torch.as_tensor(a, device=qmod.device, dtype=qmod.dtype)
+    )
+    out = torch.where(pos, val, fallback)
+    if mask is not None:
+        out = torch.where(mask, out, torch.zeros_like(out))
+    return out
+
+
+def dzeta(
+    a: Tensor | float,
+    c: Tensor | float,
+    qref: Tensor,
+    qmod: Tensor,
+    *,
+    mask: Tensor | None = None,
+) -> Tensor:
+    r"""
+    First derivative of :func:`zeta` with respect to :math:`q_{\mathrm{mod}}`
+    (``dftd/model/utils.f90``).
+    """
+    pos = qmod > 0.0
+    if mask is not None:
+        pos = pos & mask
+    safe_qmod = torch.where(pos, qmod, torch.ones_like(qmod))
+    exponent = c * (1.0 - qref / safe_qmod)
+    exp_term = torch.exp(torch.clamp(exponent, max=50.0))
+    z_val = torch.exp(a * (1.0 - exp_term))
+    dz = -a * c * exp_term * z_val * qref / (safe_qmod * safe_qmod)
+    return torch.where(pos, dz, torch.zeros_like(dz))
 
 
 def zeta_tanh(
@@ -270,40 +587,50 @@ def zeta_tanh(
     d: Tensor,
     qref: Tensor,
     qmod: Tensor,
+    *,
+    mask: Tensor | None = None,
 ) -> Tensor:
     r"""
     Hyperbolic-tangent charge scaling function for D4Srev
-    (``dftd/model/utils.f90``):
-
-    .. math::
-
-        \zeta_{\tanh}(a, b, c, d, q_{\mathrm{ref}}, q_{\mathrm{mod}}) =
-        \frac{a + b \tanh(c \, q_{\mathrm{mod}} + d)}
-             {a + b \tanh(c \, q_{\mathrm{ref}} + d)}.
+    (``dftd/model/utils.f90``).
     """
     zeta_mod = a + b * torch.tanh(c * qmod + d)
     zeta_ref = a + b * torch.tanh(c * qref + d)
-    safe_ref = torch.where(zeta_ref != 0.0, zeta_ref, torch.ones_like(zeta_ref))
-    return torch.where(
-        zeta_ref != 0.0, zeta_mod / safe_ref, torch.zeros_like(zeta_mod)
-    )
+    valid = zeta_ref != 0.0
+    if mask is not None:
+        valid = valid & mask
+    safe_ref = torch.where(valid, zeta_ref, torch.ones_like(zeta_ref))
+    return torch.where(valid, zeta_mod / safe_ref, torch.zeros_like(zeta_mod))
+
+
+def dzeta_tanh(
+    a: Tensor,
+    b: Tensor,
+    c: Tensor,
+    d: Tensor,
+    qref: Tensor,
+    qmod: Tensor,
+    *,
+    mask: Tensor | None = None,
+) -> Tensor:
+    r"""
+    First derivative of :func:`zeta_tanh` with respect to :math:`q_{\mathrm{mod}}`
+    (``dftd/model/utils.f90``).
+    """
+    sech = 1.0 / torch.cosh(torch.clamp(c * qmod + d, min=-50.0, max=50.0))
+    dzeta_mod = c * b * sech * sech
+    zeta_ref = a + b * torch.tanh(c * qref + d)
+    valid = zeta_ref != 0.0
+    if mask is not None:
+        valid = valid & mask
+    safe_ref = torch.where(valid, zeta_ref, torch.ones_like(zeta_ref))
+    return torch.where(valid, dzeta_mod / safe_ref, torch.zeros_like(dzeta_mod))
 
 
 def limit_avg_deriv(dleft: Tensor, dright: Tensor) -> Tensor:
     r"""
     Monotonicity-preserving limited average nodal derivative for two adjacent
-    intervals (``dftd/model/utils.f90``):
-
-    .. math::
-
-        d_{\mathrm{node}} =
-        \begin{cases}
-            0 & d_{\mathrm{left}} \, d_{\mathrm{right}} \le 0, \\
-            \mathrm{sign}(d_{\mathrm{avg}}) \min\!\left(|d_{\mathrm{avg}}|,\, q_{\mathrm{lim}} \min(|d_{\mathrm{left}}|, |d_{\mathrm{right}}|)\right) & \text{otherwise},
-        \end{cases}
-
-    where :math:`d_{\mathrm{avg}} = \tfrac{1}{2}(d_{\mathrm{left}} + d_{\mathrm{right}})`
-    and :math:`q_{\mathrm{lim}} = \frac{15}{7}(1 - 100 \epsilon)`.
+    intervals (``dftd/model/utils.f90``).
     """
     eps = torch.finfo(dleft.dtype).eps
     qlim = (15.0 / 7.0) * (1.0 - 100.0 * eps)
@@ -318,13 +645,7 @@ def limit_avg_deriv(dleft: Tensor, dright: Tensor) -> Tensor:
 def quintic_hermite_basis(t: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     r"""
     Quintic Hermite basis functions :math:`(h_0(t), h_1(t), h_2(t))` on
-    :math:`t \in [0, 1]` (``dftd/model/utils.f90``):
-
-    .. math::
-
-        h_0(t) &= 10 t^3 - 15 t^4 + 6 t^5, \\
-        h_1(t) &= t - 6 t^3 + 8 t^4 - 3 t^5, \\
-        h_2(t) &= -4 t^3 + 7 t^4 - 3 t^5.
+    :math:`t \in [0, 1]` (``dftd/model/utils.f90``).
     """
     t2 = t * t
     t3 = t2 * t

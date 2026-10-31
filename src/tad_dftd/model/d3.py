@@ -60,7 +60,7 @@ from ..threebody import (
     dispersion_atm_sparse,
 )
 from ..twobody import _dispersion2_dense, dispersion2_sparse
-from .base import DispersionProperties
+from .base import DispersionModel, DispersionProperties
 from .c6 import AtomicC6, factored_c6, factored_c6_d3s
 from .catalogue import DispersionModelId, validate_model_damping
 from .weights import (
@@ -92,11 +92,11 @@ class Environment(NamedTuple):
     """Optional atomic partial charges (used by charge-dependent models)."""
 
 
-def default_damping(param: DampingParam) -> Damping:
+def default_damping(param: DampingParam, *, model: str = "d3") -> Damping:
     """
-    The damping named by ``param.damping`` (rational damping if unset), with
-    the zero damping of the three-body term if `s9` is set and not the Python
-    number zero.
+    The damping named by ``param.damping`` (rational damping if unset, or Fermi
+    damping for D1/D2), with the default three-body damping of `model` if `s9`
+    is set and not the Python number zero.
 
     A tensor `s9` always gets the three-body term (even at zero) so that the
     choice is static under ``torch.compile`` and ``vmap`` and the derivative
@@ -104,7 +104,9 @@ def default_damping(param: DampingParam) -> Damping:
     """
     s9 = param.s9
     three_body = s9 is not None and (isinstance(s9, Tensor) or s9 != 0.0)
-    return damping_from_name(param.damping or "rational", three_body)
+    m = model.lower().strip()
+    def_2b = "fermi" if m in ("d1", "d2") else "rational"
+    return damping_from_name(param.damping or def_2b, three_body, model=m)
 
 
 def _matrix(c6: Tensor | AtomicC6) -> Tensor:
@@ -216,7 +218,7 @@ def _eval_dispersion3(
     )
 
 
-class D3Model(Node):
+class D3Model(DispersionModel):
     """
     A DFT-D3 model as an immutable :class:`~tad_mctc.tree.Node` configuration.
 
@@ -401,7 +403,7 @@ class D3Model(Node):
         if damping is None:
             if param.damping is not None:
                 validate_model_damping(model_id, param.damping)
-            damping = default_damping(param)
+            damping = default_damping(param, model=model_id.name.lower())
         three_body = damping.three is not None
 
         if pairs is None:
@@ -429,7 +431,7 @@ class D3Model(Node):
         return param, damping, pairs
 
 
-class D3SModel(Node):
+class D3SModel(DispersionModel):
     """
     A smooth DFT-D3S dispersion model as an immutable :class:`~tad_mctc.tree.Node`
     configuration, following ``dftd/src/dftd/model/d3/smooth.f90``

@@ -24,6 +24,7 @@ correction models (D1, D2, D3, D3S, D4, D4S, D4Srev, D5).
 from __future__ import annotations
 
 from . import (
+    charge,
     cutoff,
     damping,
     data,
@@ -66,23 +67,34 @@ from .damping import (
 from .disp import (
     D3Model,
     D3SModel,
+    D4Model,
+    D4SModel,
+    D4SrevModel,
     Environment,
     default_damping,
     dftd,
     dftd3,
     dftd3s,
+    dftd4,
+    dftd4s,
+    dftd4srev,
     dispersion,
     dispersion2,
     dispersion3,
+    get_properties,
 )
 from .pairs import DensePairs, Pairs, SparsePairs
-from .reference import Reference
+from .reference import D4Reference, Reference
 
 __all__ = [
     "CSOTwoBody",
     "Cutoff",
     "D3Model",
     "D3SModel",
+    "D4Model",
+    "D4Reference",
+    "D4SModel",
+    "D4SrevModel",
     "Damping",
     "DampingParam",
     "DensePairs",
@@ -105,6 +117,7 @@ __all__ = [
     "ZeroThreeBodyD4",
     "ZeroTwoBody",
     "__version__",
+    "charge",
     "cutoff",
     "damping",
     "damping_from_name",
@@ -114,11 +127,15 @@ __all__ = [
     "dftd",
     "dftd3",
     "dftd3s",
+    "dftd4",
+    "dftd4s",
+    "dftd4srev",
     "disp",
     "dispersion",
     "dispersion2",
     "dispersion3",
     "exception",
+    "get_properties",
     "integrator",
     "model",
     "ncoord",

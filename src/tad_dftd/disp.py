@@ -19,8 +19,9 @@ Dispersion energy evaluation
 ============================
 
 High-level entrypoints for evaluating dispersion energies (:func:`dftd`,
-:func:`dftd3`, :func:`dftd3s`, :func:`dispersion`, :func:`dispersion2`,
-:func:`dispersion3`).
+:func:`dftd3`, :func:`dftd3s`, :func:`dftd4`, :func:`dftd4s`,
+:func:`dftd4srev`, :func:`get_properties`, :func:`dispersion`,
+:func:`dispersion2`, :func:`dispersion3`).
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from tad_mctc.neighbor.images import PeriodicShifts
 from tad_mctc.neighbor.list import NeighborList
 from tad_mctc.typing import CountingFunction, TableFunction, Tensor
 
-from . import ncoord
+from . import defaults, ncoord
 from .cutoff import Cutoff
 from .damping import (
     Damping,
@@ -42,6 +43,7 @@ from .damping import (
     ZeroThreeBodyD3,
     as_damping_param,
 )
+from .model.base import DispersionProperties
 from .model.c6 import AtomicC6
 from .model.catalogue import (
     DispersionModelId,
@@ -57,22 +59,31 @@ from .model.d3 import (
     _matrix,
     default_damping,
 )
+from .model.d4 import D4Model, D4SModel, D4SrevModel, _default_d4_cutoff
 from .model.weights import WeightingFunction, gaussian_log_weight
 from .pairs import DensePairs, Pairs, TermPairs
 from .reference.d3 import Reference
+from .reference.d4 import D4Reference
 
 __all__ = [
     "D3Model",
     "D3SModel",
+    "D4Model",
+    "D4SModel",
+    "D4SrevModel",
     "Environment",
     "Param",
     "default_damping",
     "dftd",
     "dftd3",
     "dftd3s",
+    "dftd4",
+    "dftd4s",
+    "dftd4srev",
     "dispersion",
     "dispersion2",
     "dispersion3",
+    "get_properties",
 ]
 
 Param: TypeAlias = DampingParam | Mapping[str, Any]
@@ -142,6 +153,137 @@ def dftd3s(
     )(structure, param, damping=damping, pairs=pairs)
 
 
+def dftd4(
+    structure: Structure,
+    param: Param,
+    *,
+    q: Tensor | None = None,
+    qmodel: str = "eeq",
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    wf: Tensor | float = defaults.D4_WF,
+    damping: Damping | None = None,
+    pairs: Pairs | None = None,
+    max_triples: int = 2_000_000,
+    checkpoint: bool = False,
+    ref: D4Reference | None = None,
+    rcov_table: Tensor | TableFunction | None = None,
+    en_table: Tensor | TableFunction | None = None,
+    rvdw_table: Tensor | TableFunction | None = None,
+    r4r2_table: Tensor | TableFunction | None = None,
+    zeff_table: Tensor | TableFunction | None = None,
+    gam_table: Tensor | TableFunction | None = None,
+    cutoff: Cutoff | None = None,
+    counting_function: CountingFunction = ncoord.erf_count,
+) -> Tensor:
+    """
+    Evaluate atom-resolved DFT-D4 dispersion energy for a structure or batch.
+    """
+    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    return D4Model(
+        ga=ga,
+        gc=gc,
+        wf=wf,
+        qmodel=qmodel,
+        rcov_table=rcov_table,
+        en_table=en_table,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        ref=ref,
+        cutoff=cut,
+        counting_function=counting_function,
+        max_triples=max_triples,
+        checkpoint=checkpoint,
+    )(structure, param, q=q, damping=damping, pairs=pairs)
+
+
+def dftd4s(
+    structure: Structure,
+    param: Param,
+    *,
+    q: Tensor | None = None,
+    qmodel: str = "eeq",
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    damping: Damping | None = None,
+    pairs: Pairs | None = None,
+    max_triples: int = 2_000_000,
+    checkpoint: bool = False,
+    ref: D4Reference | None = None,
+    rcov_table: Tensor | TableFunction | None = None,
+    en_table: Tensor | TableFunction | None = None,
+    rvdw_table: Tensor | TableFunction | None = None,
+    r4r2_table: Tensor | TableFunction | None = None,
+    wfpair_table: Tensor | TableFunction | None = None,
+    zeff_table: Tensor | TableFunction | None = None,
+    gam_table: Tensor | TableFunction | None = None,
+    cutoff: Cutoff | None = None,
+    counting_function: CountingFunction = ncoord.erf_count,
+) -> Tensor:
+    """
+    Evaluate atom-resolved DFT-D4S dispersion energy for a structure or batch.
+    """
+    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    return D4SModel(
+        ga=ga,
+        gc=gc,
+        qmodel=qmodel,
+        rcov_table=rcov_table,
+        en_table=en_table,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        wfpair_table=wfpair_table,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        ref=ref,
+        cutoff=cut,
+        counting_function=counting_function,
+        max_triples=max_triples,
+        checkpoint=checkpoint,
+    )(structure, param, q=q, damping=damping, pairs=pairs)
+
+
+def dftd4srev(
+    structure: Structure,
+    param: Param,
+    *,
+    q: Tensor | None = None,
+    qmodel: str = "eeq",
+    damping: Damping | None = None,
+    pairs: Pairs | None = None,
+    max_triples: int = 2_000_000,
+    checkpoint: bool = False,
+    ref: D4Reference | None = None,
+    rcov_table: Tensor | TableFunction | None = None,
+    rvdw_table: Tensor | TableFunction | None = None,
+    r4r2_table: Tensor | TableFunction | None = None,
+    wfpair_table: Tensor | TableFunction | None = None,
+    tanh_table: Tensor | TableFunction | None = None,
+    cutoff: Cutoff | None = None,
+    counting_function: CountingFunction = ncoord.erf_count,
+) -> Tensor:
+    """
+    Evaluate atom-resolved DFT-D4Srev dispersion energy for a structure or
+    batch.
+    """
+    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    return D4SrevModel(
+        qmodel=qmodel,
+        rcov_table=rcov_table,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        wfpair_table=wfpair_table,
+        tanh_table=tanh_table,
+        ref=ref,
+        cutoff=cut,
+        counting_function=counting_function,
+        max_triples=max_triples,
+        checkpoint=checkpoint,
+    )(structure, param, q=q, damping=damping, pairs=pairs)
+
+
 def dftd(
     structure: Structure,
     param: Param,
@@ -185,8 +327,91 @@ def dftd(
             checkpoint=checkpoint,
             **kwargs,
         )
+    if model_id == DispersionModelId.D4:
+        return dftd4(
+            structure,
+            param,
+            damping=damping,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
+    if model_id == DispersionModelId.D4S:
+        return dftd4s(
+            structure,
+            param,
+            damping=damping,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
+    if model_id == DispersionModelId.D4SREV:
+        return dftd4srev(
+            structure,
+            param,
+            damping=damping,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
     raise NotImplementedError(
         f"Dispersion model '{model}' is not yet wired into dftd()."
+    )
+
+
+def get_properties(
+    structure: Structure,
+    *,
+    model: str | int | DispersionModelId | D3Model | D3SModel | D4Model | D4SModel | D4SrevModel = "d3",
+    pairs: Pairs | None = None,
+    cutoff: Cutoff | None = None,
+    cn: Tensor | None = None,
+    q: Tensor | None = None,
+    **kwargs: Any,
+) -> DispersionProperties:
+    """
+    Evaluate dispersion model properties (`cn`, `c6`, `c8`, and optional `q`,
+    `alphadd`, `alphaqq`) matching ``get_properties`` in ``dftd/disp.f90``.
+    """
+    if isinstance(model, (D3Model, D3SModel)):
+        return model.get_properties(structure, pairs=pairs, cn=cn)
+    if isinstance(model, (D4Model, D4SModel, D4SrevModel)):
+        return model.get_properties(structure, pairs=pairs, cn=cn, q=q)
+
+    model_id = resolve_model_id(model)
+    cut = (
+        get_model_metadata(model_id).default_cutoff
+        if cutoff is None
+        else cutoff
+    )
+    if model_id == DispersionModelId.D3:
+        return D3Model(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn
+        )
+    if model_id == DispersionModelId.D3S:
+        return D3SModel(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn
+        )
+    if model_id == DispersionModelId.D4:
+        return D4Model(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn, q=q
+        )
+    if model_id == DispersionModelId.D4S:
+        return D4SModel(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn, q=q
+        )
+    if model_id == DispersionModelId.D4SREV:
+        return D4SrevModel(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn, q=q
+        )
+    raise NotImplementedError(
+        f"Dispersion model '{model}' is not yet wired into get_properties()."
     )
 
 

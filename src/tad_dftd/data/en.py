@@ -22,7 +22,7 @@ from __future__ import annotations
 import torch
 from tad_mctc.typing import Tensor, get_default_dtype
 
-__all__ = ["EN", "PAULING_EN", "get_electronegativity"]
+__all__ = ["EEQBC_EN", "EN", "PAULING_EN", "get_electronegativity"]
 
 _PAULING_EN_RAW: list[float] = [
     0.0,
@@ -53,6 +53,22 @@ _PAULING_EN_RAW: list[float] = [
 ]
 
 
+def _build_eeqbc_en_raw() -> list[float]:
+    en = list(_PAULING_EN_RAW)
+    for z in range(90, len(en)):
+        en[z] = 1.30
+    en[87] = 0.80
+    en[89] = 1.00
+    for z in (90, 91, 92, 95):
+        en[z] = 1.10
+    for z in (93, 94, 97, 103):
+        en[z] = 1.20
+    return [v / 3.98 for v in en]
+
+
+_EEQBC_EN_RAW: list[float] = _build_eeqbc_en_raw()
+
+
 def PAULING_EN(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
@@ -63,6 +79,16 @@ def PAULING_EN(
         device=device,
         dtype=get_default_dtype() if dtype is None else dtype,
     )
+
+
+def EEQBC_EN(
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> Tensor:
+    """Fluorine-normalized electronegativities for EEQ_BC (Z=0..118)."""
+    dt = get_default_dtype() if dtype is None else dtype
+    t64 = torch.tensor(_EEQBC_EN_RAW, device=device, dtype=torch.float64)
+    return t64.to(dtype=dt)
 
 
 EN = PAULING_EN

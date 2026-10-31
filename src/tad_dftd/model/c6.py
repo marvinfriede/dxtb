@@ -26,18 +26,23 @@ from __future__ import annotations
 
 import torch
 from tad_mctc.autograd import is_functorch_tensor, is_vmapped
+from tad_mctc.tools import is_compiling
 from tad_mctc.tree import Node, child
 from tad_mctc.typing import Tensor
 
+from .. import defaults
 from ..reference.d3 import Reference
-from .weights import weight_references_d3s
+from ..reference.d4 import D4Reference
+from .weights import weight_references_d3s, weight_references_d4s
 
 __all__ = [
     "AtomicC6",
     "atomic_c6",
     "atomic_c6_d3s",
+    "atomic_c6_d4s",
     "factored_c6",
     "factored_c6_d3s",
+    "factored_c6_d4s",
 ]
 
 
@@ -129,12 +134,12 @@ class AtomicC6(Node):
 def factored_c6(
     numbers: Tensor,
     weights: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
 ) -> AtomicC6:
     """
-    Atomic dispersion coefficients for D3, factored per atom.
+    Atomic dispersion coefficients for D3 or D4, factored per atom.
     """
-    if is_vmapped(numbers):
+    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
         elements = torch.arange(reference.c6.shape[0], device=numbers.device)
         return _factors(numbers, weights, reference, elements, numbers)
 
@@ -149,16 +154,16 @@ def factored_c6(
 def atomic_c6(
     numbers: Tensor,
     weights: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
 ) -> Tensor:
-    """Calculate dense ``(..., nat, nat)`` atomic C6 coefficients for D3."""
+    """Calculate dense ``(..., nat, nat)`` atomic C6 coefficients for D3 or D4."""
     return factored_c6(numbers, weights, reference).dense()
 
 
 def factored_c6_d3s(
     numbers: Tensor,
     cn: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
     wfpair: Tensor,
     weights: Tensor | None = None,
 ) -> AtomicC6:
@@ -167,8 +172,13 @@ def factored_c6_d3s(
     element.
     """
     if weights is not None:
-        # Caller supplied full (..., nat, nelem, nref) or (..., nat, nel, nref) weights
-        if weights.shape[-2] == wfpair.shape[0] or weights.shape[-2] == reference.c6.shape[0]:
+        if (
+            is_compiling()
+            or is_vmapped(numbers)
+            or is_functorch_tensor(reference.c6)
+            or weights.shape[-2] == wfpair.shape[0]
+            or weights.shape[-2] == reference.c6.shape[0]
+        ):
             nel = weights.shape[-2]
             elements = torch.arange(nel, device=numbers.device)
             return _factors_d3s(
@@ -186,7 +196,7 @@ def factored_c6_d3s(
             width,
         )
 
-    if is_vmapped(numbers):
+    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
         elements = torch.arange(wfpair.shape[0], device=numbers.device)
         w = weight_references_d3s(numbers, cn, reference, wfpair, elements)
         return _factors_d3s(numbers, w, reference, elements, numbers)
@@ -203,7 +213,7 @@ def factored_c6_d3s(
 def atomic_c6_d3s(
     numbers: Tensor,
     cn: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
     wfpair: Tensor,
     weights: Tensor | None = None,
 ) -> Tensor:
@@ -211,13 +221,111 @@ def atomic_c6_d3s(
     return factored_c6_d3s(numbers, cn, reference, wfpair, weights).dense()
 
 
-def _reference_width(reference: Reference, elements: Tensor) -> int:
+def factored_c6_d4s(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: D4Reference,
+    wfpair: Tensor,
+    weights: Tensor | None = None,
+    *,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+) -> AtomicC6:
+    """
+    Atomic dispersion coefficients for D4S and D4Srev, factored per atom and
+    partner element.
+    """
+    if weights is not None:
+        return factored_c6_d3s(
+            numbers, cn, reference, wfpair, weights=weights
+        )
+
+    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
+        elements = torch.arange(wfpair.shape[0], device=numbers.device)
+        w = weight_references_d4s(
+            numbers,
+            cn,
+            q,
+            reference,
+            wfpair,
+            elements,
+            ga=ga,
+            gc=gc,
+            is_srev=is_srev,
+            zeff_table=zeff_table,
+            gam_table=gam_table,
+            tanh_table=tanh_table,
+        )
+        return _factors_d3s(numbers, w, reference, elements, numbers)
+
+    elements = torch.unique(numbers)
+    element = torch.searchsorted(elements, numbers.contiguous())
+    w = weight_references_d4s(
+        numbers,
+        cn,
+        q,
+        reference,
+        wfpair,
+        elements,
+        ga=ga,
+        gc=gc,
+        is_srev=is_srev,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        tanh_table=tanh_table,
+    )
+    width = _reference_width(reference, elements)
+    return _factors_d3s(
+        numbers, w[..., :width], reference, elements, element, width
+    )
+
+
+def atomic_c6_d4s(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: D4Reference,
+    wfpair: Tensor,
+    weights: Tensor | None = None,
+    *,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+) -> Tensor:
+    """Calculate dense ``(..., nat, nat)`` atomic C6 coefficients for D4S or D4Srev."""
+    return factored_c6_d4s(
+        numbers,
+        cn,
+        q,
+        reference,
+        wfpair,
+        weights=weights,
+        ga=ga,
+        gc=gc,
+        is_srev=is_srev,
+        zeff_table=zeff_table,
+        gam_table=gam_table,
+        tanh_table=tanh_table,
+    ).dense()
+
+
+def _reference_width(
+    reference: Reference | D4Reference, elements: Tensor
+) -> int:
     """
     The number of leading references that hold a non-zero C6 for any pair of
     `elements`.
     """
     nref = reference.c6.shape[-1]
-    if is_functorch_tensor(reference.c6):
+    if is_compiling() or is_functorch_tensor(reference.c6):
         return nref
 
     block = reference.c6[elements.unsqueeze(-1), elements]
@@ -231,7 +339,7 @@ def _reference_width(reference: Reference, elements: Tensor) -> int:
 def _factors(
     numbers: Tensor,
     weights: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
     elements: Tensor,
     element: Tensor,
     width: int | None = None,
@@ -247,7 +355,7 @@ def _factors(
 def _factors_d3s(
     numbers: Tensor,
     weights: Tensor,
-    reference: Reference,
+    reference: Reference | D4Reference,
     elements: Tensor,
     element: Tensor,
     width: int | None = None,

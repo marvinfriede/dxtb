@@ -28,8 +28,10 @@ from .c6 import (
     AtomicC6,
     atomic_c6,
     atomic_c6_d3s,
+    atomic_c6_d4s,
     factored_c6,
     factored_c6_d3s,
+    factored_c6_d4s,
 )
 from .catalogue import (
     CHARGE_MODELS,
@@ -44,8 +46,11 @@ from .catalogue import (
     validate_model_damping,
 )
 from .d3 import D3Model, D3SModel, Environment, default_damping
+from .d4 import D4Model, D4SModel, D4SrevModel
 from .weights import (
     WeightingFunction,
+    dzeta,
+    dzeta_tanh,
     gaussian_log_weight,
     gaussian_weight,
     limit_avg_deriv,
@@ -55,6 +60,8 @@ from .weights import (
     weight_cn,
     weight_references,
     weight_references_d3s,
+    weight_references_d4,
+    weight_references_d4s,
     zeta,
     zeta_tanh,
 )
@@ -67,6 +74,9 @@ __all__ = [
     "ChargeModelId",
     "D3Model",
     "D3SModel",
+    "D4Model",
+    "D4SModel",
+    "D4SrevModel",
     "DispersionModel",
     "DispersionModelId",
     "DispersionProperties",
@@ -76,9 +86,13 @@ __all__ = [
     "WeightingFunction",
     "atomic_c6",
     "atomic_c6_d3s",
+    "atomic_c6_d4s",
     "default_damping",
+    "dzeta",
+    "dzeta_tanh",
     "factored_c6",
     "factored_c6_d3s",
+    "factored_c6_d4s",
     "gaussian_log_weight",
     "gaussian_weight",
     "get_model_metadata",
@@ -92,6 +106,8 @@ __all__ = [
     "weight_cn",
     "weight_references",
     "weight_references_d3s",
+    "weight_references_d4",
+    "weight_references_d4s",
     "zeta",
     "zeta_tanh",
 ]

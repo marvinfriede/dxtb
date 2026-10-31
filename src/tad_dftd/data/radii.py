@@ -35,6 +35,7 @@ __all__ = [
     "EEQBC_COV_RADII",
     "VDW_D3",
     "VDW_PAIRWISE",
+    "VDW_PAIRWISE_119",
     "get_damping_radii",
     "get_damping_radius",
 ]
@@ -177,16 +178,29 @@ def get_damping_radius(
         return torch.where(valid, ri + rj, torch.zeros_like(ri + rj))
 
     if kind_enum == DampingRadii.RV_DW:
-        table = VDW_D3(device=dev, dtype=dt)
-        zi = torch.clamp(numbers_i, min=0, max=table.shape[0] - 1)
-        zj = torch.clamp(numbers_j, min=0, max=table.shape[1] - 1)
+        table = VDW_PAIRWISE(device=dev, dtype=dt)
+        max_vdw = table.shape[0] - 1  # 103
+        zi = torch.clamp(numbers_i, min=0, max=max_vdw)
+        zj = torch.clamp(numbers_j, min=0, max=max_vdw)
         out = table[zi, zj]
-        valid = (
-            (numbers_i > 0)
-            & (numbers_i < table.shape[0])
-            & (numbers_j > 0)
-            & (numbers_j < table.shape[1])
+        # For Z > 103, mctc_data_vdwrad uses cov2vdw * get_covalent_rad(Z)
+        cov_rad = COV_D3(device=dev, dtype=dt) * 0.75
+        cov2vdw = 1.45
+        diag_vdw = 0.5 * torch.diagonal(table)
+        rad_i = torch.where(
+            numbers_i <= max_vdw, diag_vdw[zi], cov2vdw * cov_rad[numbers_i]
         )
+        rad_j = torch.where(
+            numbers_j <= max_vdw, diag_vdw[zj], cov2vdw * cov_rad[numbers_j]
+        )
+        in_table = (
+            (numbers_i > 0)
+            & (numbers_i <= max_vdw)
+            & (numbers_j > 0)
+            & (numbers_j <= max_vdw)
+        )
+        out = torch.where(in_table, out, rad_i + rad_j)
+        valid = (numbers_i > 0) & (numbers_j > 0)
         return torch.where(valid, out, torch.zeros_like(out))
 
     if kind_enum == DampingRadii.R_COV:
@@ -237,3 +251,22 @@ def get_damping_radii(
         device=device,
         dtype=dtype,
     )
+
+
+_VDW_PAIRWISE_119_CPU: Tensor = get_damping_radii(
+    DampingRadii.RV_DW,
+    torch.arange(119, dtype=torch.long),
+    dtype=torch.float64,
+)
+
+
+def VDW_PAIRWISE_119(
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> Tensor:
+    """
+    Pairwise van-der-Waals radii in Bohr extended up to Z=118 (shape ``(119, 119)``),
+    matching ``mctc_data_vdwrad::get_vdw_rad_num``.
+    """
+    dt = get_default_dtype() if dtype is None else dtype
+    return _VDW_PAIRWISE_119_CPU.to(device=device, dtype=dt)

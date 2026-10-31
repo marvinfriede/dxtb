@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from .d1 import D1_C6, D1_RADII, D1_RADII_PAIRWISE, get_d1_c6, get_d1_radius
 from .d2 import D2_C6, D2_RADII, D2_RADII_PAIRWISE, get_d2_c6, get_d2_radius
-from .en import EN, PAULING_EN, get_electronegativity
+from .en import EEQBC_EN, EN, PAULING_EN, get_electronegativity
 from .hardness import GAM, HARDNESS, get_hardness
 from .r4r2 import R4_OVER_R2, R4R2, SQRT_Z_R4_OVER_R2, get_r4r2_val
 from .radii import (
@@ -48,6 +48,7 @@ __all__ = [
     "D2_RADII_PAIRWISE",
     "DampingRadii",
     "EEQBC_COV_RADII",
+    "EEQBC_EN",
     "EN",
     "GAM",
     "HARDNESS",

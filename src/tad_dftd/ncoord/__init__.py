@@ -31,8 +31,6 @@ from tad_mctc.ncoord import (
     cn_d4,
     cn_eeq,
     cn_eeq_en,
-    cn_eeqbc,
-    cn_eeqbc_en,
     cn_gfn2,
     cut_coordination_number,
     d4_en_weight,
@@ -62,6 +60,22 @@ __all__ = [
     "exp_count",
     "gfn2_count",
 ]
+
+#: Coordination number for EEQBC2025 (erf counting, kcn=1.80, norm_exp=1.0, cutoff=25.0)
+cn_eeqbc = CNModel(
+    count=partial(erf_count, kcn=1.80, norm_exp=1.0),
+    cutoff=25.0,
+    rcov=data.EEQBC_COV_RADII,
+)
+
+#: Electronegativity-weighted coordination number (qloc) for EEQBC2025
+cn_eeqbc_en = CNModel(
+    count=partial(erf_count, kcn=1.80, norm_exp=1.0),
+    cutoff=25.0,
+    rcov=data.EEQBC_COV_RADII,
+    en=data.EEQBC_EN,
+    pair_weight=en_difference,
+)
 
 #: Coordination number for DFT-D4Srev (erf counting without EN weight, cutoff 30.0 Bohr)
 cn_d4srev = CNModel(

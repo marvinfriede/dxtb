@@ -126,6 +126,146 @@ def generate_d3s_legacy_c6(dftd_root: Path, ref_dir: Path) -> None:
     torch.save(legacy_c6, ref_dir / "d3s-legacy-c6.pt")
 
 
+def _fortran_nint(x: float) -> int:
+    """Fortran `nint`: round half away from zero."""
+    import math
+
+    return int(math.copysign(math.floor(abs(x) + 0.5), x))
+
+
+def _parse_d4_inc(inc_text: str, *, include_gxtb: bool) -> dict[str, torch.Tensor]:
+    """
+    Parse `dftd/src/dftd/model/d4/reference/{orig,srev}.inc` into a dictionary
+    of tensors for `d4-ref.pt` / `d4srev-ref.pt`.
+    """
+    max_elem = 118
+    mref = 7
+    ngrid = 23
+    nsec = 17
+    max_cn = 19
+
+    sscale = torch.zeros((nsec + 1,), dtype=torch.float64)
+    secaiw = torch.zeros((nsec + 1, ngrid), dtype=torch.float64)
+
+    for m in re.finditer(
+        r"data\s+sscale\s*\(\s*(\d+)\s*\)\s*/\s*([+-]?\d+(?:\.\d+)?(?:[eEdD][+-]?\d+)?)_wp\s*/",
+        inc_text,
+    ):
+        sscale[int(m.group(1))] = float(m.group(2))
+
+    for m in re.finditer(
+        r"data\s+secaiw\s*\(\s*:\s*,\s*(\d+)\s*\)\s*/(.*?)/",
+        inc_text,
+        re.DOTALL,
+    ):
+        isec = int(m.group(1))
+        vals = [
+            float(v)
+            for v in re.findall(
+                r"([+-]?\d+(?:\.\d+)?(?:[eEdD][+-]?\d+)?)_wp", m.group(2)
+            )
+        ]
+        if len(vals) != ngrid:
+            raise ValueError(f"Expected {ngrid} secaiw values for {isec}")
+        secaiw[isec] = torch.tensor(vals, dtype=torch.float64)
+
+    refn = torch.zeros((max_elem + 1,), dtype=torch.long)
+    for m in re.finditer(
+        r"data\s+refn\s*\(\s*(\d+)\s*\)\s*/\s*(\d+)\s*/",
+        inc_text,
+    ):
+        refn[int(m.group(1))] = int(m.group(2))
+
+    refsys = torch.zeros((max_elem + 1, mref), dtype=torch.long)
+    for m in re.finditer(
+        r"data\s+refsys\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*/\s*(\d+)\s*/",
+        inc_text,
+    ):
+        ir, iz = int(m.group(1)) - 1, int(m.group(2))
+        refsys[iz, ir] = int(m.group(3))
+
+    scalar_2d_names = [
+        "refcn",
+        "refcovcn",
+        "ascale",
+        "hcount",
+        "clsq",
+        "clsh",
+        "eeqbcq",
+        "eeqbch",
+        "refq",
+        "refh",
+    ]
+    if include_gxtb:
+        scalar_2d_names.extend(["gxtbq", "gxtbh"])
+
+    arrays_2d: dict[str, torch.Tensor] = {
+        name: torch.zeros((max_elem + 1, mref), dtype=torch.float64)
+        for name in scalar_2d_names
+    }
+    for name in scalar_2d_names:
+        pattern = re.compile(
+            rf"data\s+{name}\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*/\s*([+-]?\d+(?:\.\d+)?(?:[eEdD][+-]?\d+)?)_wp\s*/"
+        )
+        for m in pattern.finditer(inc_text):
+            ir, iz = int(m.group(1)) - 1, int(m.group(2))
+            arrays_2d[name][iz, ir] = float(m.group(3))
+
+    alphaiw = torch.zeros((max_elem + 1, mref, ngrid), dtype=torch.float64)
+    for m in re.finditer(
+        r"data\s+alphaiw\s*\(\s*:\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*/(.*?)/",
+        inc_text,
+        re.DOTALL,
+    ):
+        ir, iz = int(m.group(1)) - 1, int(m.group(2))
+        vals = [
+            float(v)
+            for v in re.findall(
+                r"([+-]?\d+(?:\.\d+)?(?:[eEdD][+-]?\d+)?)_wp", m.group(3)
+            )
+        ]
+        if len(vals) != ngrid:
+            raise ValueError(
+                f"Expected {ngrid} alphaiw values for Z={iz}, ir={ir + 1}"
+            )
+        alphaiw[iz, ir] = torch.tensor(vals, dtype=torch.float64)
+
+    # Precompute `ngw` using Fortran `set_refgw` logic
+    ngw = torch.zeros((max_elem + 1, mref), dtype=torch.long)
+    refcn = arrays_2d["refcn"]
+    for iz in range(1, max_elem + 1):
+        n = int(refn[iz].item())
+        cnc = [1] + [0] * max_cn
+        for ir in range(n):
+            icn = min(_fortran_nint(float(refcn[iz, ir].item())), max_cn)
+            cnc[icn] += 1
+        for ir in range(n):
+            icn = min(_fortran_nint(float(refcn[iz, ir].item())), max_cn)
+            ngw[iz, ir] = cnc[icn] * (cnc[icn] + 1) // 2
+
+    out: dict[str, torch.Tensor] = {
+        "refn": refn,
+        "ngw": ngw,
+        "refsys": refsys,
+        "sscale": sscale,
+        "secaiw": secaiw,
+        "alphaiw": alphaiw,
+        **arrays_2d,
+    }
+    return out
+
+
+def generate_d4_references(dftd_root: Path, ref_dir: Path) -> None:
+    """Generate `d4-ref.pt` and `d4srev-ref.pt`."""
+    orig_inc = (dftd_root / "src/dftd/model/d4/reference/orig.inc").read_text()
+    d4_data = _parse_d4_inc(orig_inc, include_gxtb=False)
+    torch.save(d4_data, ref_dir / "d4-ref.pt")
+
+    srev_inc = (dftd_root / "src/dftd/model/d4/reference/srev.inc").read_text()
+    d4srev_data = _parse_d4_inc(srev_inc, include_gxtb=True)
+    torch.save(d4srev_data, ref_dir / "d4srev-ref.pt")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -143,6 +283,7 @@ def main() -> None:
     ref_dir = REPO_ROOT / "src/tad_dftd/reference"
     ref_dir.mkdir(parents=True, exist_ok=True)
     generate_d3s_legacy_c6(args.dftd_root, ref_dir)
+    generate_d4_references(args.dftd_root, ref_dir)
     print(f"Generated wfpair and reference tables in {data_dir} and {ref_dir}")
 
 

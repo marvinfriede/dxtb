@@ -145,13 +145,14 @@ class ZeroThreeBodyD4(ThreeBodyDamping):
     """
     Zero damping of the three-body term of D4, as in dftd's ``zero_avg``:
     the averaged zero damping on the damping radii of the model, with
-    exponent ``alp / 3``. Needs `s9` and `alp` (or `alp3`); `rs9` defaults to
-    1, `a1` to 1 and `a2` to 0.
+    exponent ``alp / 3``. Needs `s9`; `alp` defaults to ``16.0``, `rs9` to
+    ``1.0``, `a1` to ``1.0`` and `a2` to ``0.0``.
     """
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = (
         *DFTD_RADIUS_DEFAULTS,
         ("rs9", defaults.D4_RS9),
+        ("alp", defaults.D4_ALP),
     )
     label: ClassVar[str] = "D4 zero damping of the three-body term"
 
