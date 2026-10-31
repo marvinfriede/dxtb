@@ -22,7 +22,6 @@ from dataclasses import fields
 from typing import Any
 
 import pytest
-import tad_dftd4 as d4
 import torch
 from tad_mctc.tree import Node, stack
 from torch.utils import _pytree
@@ -36,6 +35,7 @@ from dxtb._src.components.classicals import (
     core_dispersion_d4_setup,
     dispersion_d4_energy,
 )
+from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.classicals.dispersion.d4 import _d4_setup_view
 from dxtb._src.typing import Tensor
 

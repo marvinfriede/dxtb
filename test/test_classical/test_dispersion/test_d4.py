@@ -24,13 +24,13 @@ and are only included for the sake of completeness.
 from __future__ import annotations
 
 import pytest
-import tad_dftd4 as d4
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data import radii
 
 from dxtb._src.components.classicals.dispersion import (
     DispersionD4,
+    _d4_adapter as d4,
     new_dispersion,
 )
 from dxtb._src.param.gfn2 import GFN2_XTB

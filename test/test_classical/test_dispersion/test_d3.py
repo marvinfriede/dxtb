@@ -24,7 +24,7 @@ and are only included for the sake of completeness.
 from __future__ import annotations
 
 import pytest
-import tad_dftd3 as d3
+import tad_dftd as d3
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data import radii
@@ -32,6 +32,7 @@ from tad_mctc.data import radii
 from dxtb import GFN1_XTB
 from dxtb._src.components.classicals.dispersion.d3 import (
     _DXTB_D3_DISPERSION_CUTOFF,
+    _dispersion,
 )
 from dxtb._src.typing import DD, Tensor
 from dxtb.components.dispersion import DispersionD3, new_dispersion
@@ -83,7 +84,7 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         "a2": torch.tensor(5.73083694, **dd),
     }
 
-    energy = d3.disp.dispersion(
+    energy = _dispersion(
         numbers,
         positions,
         param,
@@ -94,7 +95,6 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         cutoff=d3.Cutoff(
             disp2=_DXTB_D3_DISPERSION_CUTOFF,
             disp3=_DXTB_D3_DISPERSION_CUTOFF,
-            **dd,
         ),
     )
     assert energy.dtype == dtype

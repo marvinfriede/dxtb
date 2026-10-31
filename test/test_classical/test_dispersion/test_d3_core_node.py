@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 
 import pytest
-import tad_dftd3 as d3
+import tad_dftd as d3
 import torch
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
@@ -23,8 +23,13 @@ from dxtb._src.components.classicals.dispersion import (
     dispersion_d3_energy,
     new_dispersion,
 )
-from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
-from dxtb._src.ncoord import exp_count
+from dxtb._src.components.classicals.dispersion.d3 import (
+    DispersionD3,
+    _dispersion,
+    _dispersion2,
+    _dispersion3,
+)
+from dxtb._src.ncoord import coordination_number, exp_count
 from dxtb._src.param import ParamModule
 
 from .samples import samples
@@ -105,7 +110,7 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         dtype=torch.double,
     ).requires_grad_(True)
 
-    cn = d3.ncoord.coordination_number(
+    cn = coordination_number(
         numbers,
         positions,
         counting_function=cache.counting_function,
@@ -114,8 +119,8 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
     )
     weights = d3.model.weight_references(numbers, cn, cache.ref)
     c6 = d3.model.atomic_c6(numbers, weights, cache.ref)
-    cutoff_50 = d3.Cutoff(disp2=50.0, disp3=50.0, dtype=positions.dtype)
-    expected = d3.disp.dispersion(
+    cutoff_50 = d3.Cutoff(disp2=50.0, disp3=50.0)
+    expected = _dispersion(
         numbers,
         positions,
         parameters,
@@ -134,8 +139,8 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
     )
 
     narrower_positions = positions.detach().clone().requires_grad_(True)
-    cutoff_40 = d3.Cutoff(disp2=40.0, disp3=40.0, dtype=positions.dtype)
-    narrower = d3.disp.dispersion(
+    cutoff_40 = d3.Cutoff(disp2=40.0, disp3=40.0)
+    narrower = _dispersion(
         numbers,
         narrower_positions,
         parameters,
@@ -152,8 +157,8 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
     assert not torch.equal(actual_gradient, narrower_gradient)
 
     custom_positions = positions.detach().clone().requires_grad_(True)
-    custom_cutoff = d3.Cutoff(disp2=42.0, disp3=48.0, dtype=positions.dtype)
-    custom_combined = d3.disp.dispersion(
+    custom_cutoff = d3.Cutoff(disp2=42.0, disp3=48.0)
+    custom_combined = _dispersion(
         numbers,
         custom_positions,
         parameters,
@@ -163,7 +168,7 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         cache.damping_function,
         cutoff=custom_cutoff,
     )
-    custom_split = d3.disp.dispersion2(
+    custom_split = _dispersion2(
         numbers,
         custom_positions,
         parameters,
@@ -171,7 +176,7 @@ def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
         cache.r4r2,
         cache.damping_function,
         custom_cutoff.disp2,
-    ) + d3.disp.dispersion3(
+    ) + _dispersion3(
         numbers,
         custom_positions,
         parameters,

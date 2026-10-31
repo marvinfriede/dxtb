@@ -45,11 +45,6 @@ timer.start("dxtb", parent_uid="Import")
 
 from dxtb.__version__ import __version__
 
-# temporary: must precede the first import of tad-dftd3/tad-dftd4
-from dxtb._src import mctc_shim as _mctc_shim  # noqa: F401
-
-del _mctc_shim
-
 # order is important here
 from dxtb._src.io import OutputHandler as OutputHandler
 from dxtb._src.basis.indexhelper import IndexHelper as IndexHelper

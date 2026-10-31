@@ -26,9 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import tad_dftd4 as d4
 import torch
-from tad_dftd4.damping import Damping
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import radii
 from tad_mctc.ncoord import erf_count
@@ -40,6 +38,8 @@ from dxtb._src.ncoord import cn_d4
 from dxtb._src.scf.guess import get_eeq_guess
 
 from ..base import ClassicalCache
+from . import _d4_adapter as d4
+from ._d4_adapter import Damping
 from .base import Dispersion
 
 __all__ = [

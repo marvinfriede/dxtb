@@ -26,7 +26,7 @@ from __future__ import annotations
 from abc import abstractmethod
 
 import torch
-from tad_dftd4 import Param as D4Param
+from tad_dftd import Param as D4Param
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Literal, Tensor

@@ -99,19 +99,42 @@ def weight_references(
     mask = refcn >= 0
     dcn = refcn - cn.unsqueeze(-1)
 
-    if weighting_function is gaussian_weight:
+    if (
+        weighting_function is gaussian_log_weight
+        or weighting_function is gaussian_weight
+    ):
         factor = kwargs.get("factor", kwargs.get("wf", 4.0))
         log_w = gaussian_log_weight(dcn, factor=factor)
-    else:
-        log_w = weighting_function(dcn, **kwargs)
+        log_weights = torch.where(mask, log_w, -torch.inf)
 
-    log_weights = torch.where(mask, log_w, -torch.inf)
+        has_reference = mask.any(dim=-1, keepdim=True)
+        log_weights = torch.where(has_reference, log_weights, 0.0)
 
-    has_reference = mask.any(dim=-1, keepdim=True)
-    log_weights = torch.where(has_reference, log_weights, 0.0)
+        weights = torch.softmax(log_weights, dim=-1)
+        return torch.where(mask, weights, torch.zeros_like(weights))
 
-    weights = torch.softmax(log_weights, dim=-1)
-    return torch.where(mask, weights, torch.zeros_like(weights))
+    dcn_double = dcn.to(torch.double)
+    raw = torch.where(
+        mask,
+        weighting_function(dcn_double, **kwargs),
+        torch.zeros_like(dcn_double),
+    )
+    small = torch.tensor(1e-300, device=cn.device, dtype=torch.double)
+    norm = torch.where(mask, torch.sum(raw, dim=-1, keepdim=True), small)
+    safe_norm = torch.where(norm > 0.0, norm, torch.ones_like(norm))
+    gw_temp = (raw / safe_norm).to(cn.dtype)
+    maxcn = torch.max(refcn, dim=-1, keepdim=True)[0]
+    exceptional = (norm == 0.0) | ~torch.isfinite(gw_temp)
+    gw = torch.where(
+        exceptional,
+        torch.where(
+            refcn == maxcn,
+            torch.ones_like(gw_temp),
+            torch.zeros_like(gw_temp),
+        ),
+        gw_temp,
+    )
+    return torch.where(mask, gw, torch.zeros_like(gw))
 
 
 def weight_references_d3s(
@@ -172,11 +195,18 @@ def _d4_cngw(
     valid_ref : Tensor
         Boolean mask of valid references of shape ``(..., nref)``.
     """
-    igw = torch.arange(1, 7, device=cn_diff2.device, dtype=cn_diff2.dtype)
+    orig_dtype = cn_diff2.dtype
+    cn_diff2_64 = cn_diff2.to(torch.float64)
+    refcn_64 = refcn.to(torch.float64)
+    igw = torch.arange(1, 7, device=cn_diff2.device, dtype=torch.float64)
     igw_mask = valid_ref.unsqueeze(-1) & (igw <= ngw.unsqueeze(-1))
 
-    wf_t = wf.unsqueeze(-1) if isinstance(wf, Tensor) else wf
-    exponent = -wf_t * cn_diff2.unsqueeze(-1) * igw
+    wf_t = (
+        wf.to(torch.float64).unsqueeze(-1)
+        if isinstance(wf, Tensor)
+        else float(wf)
+    )
+    exponent = -wf_t * cn_diff2_64.unsqueeze(-1) * igw
     expw = torch.where(
         igw_mask,
         torch.exp(exponent),
@@ -184,22 +214,22 @@ def _d4_cngw(
     ).sum(dim=-1)
 
     norm = expw.sum(dim=-1, keepdim=True)
-    eps_norm = math.sqrt(torch.finfo(cn_diff2.dtype).tiny)
+    eps_norm = math.sqrt(torch.finfo(torch.float64).tiny)
     norm_ok = norm > eps_norm
 
     # Fallback when norm underflows: 1.0 at max(refcn), 0.0 elsewhere (zero derivative)
     refcn_masked = torch.where(
-        valid_ref, refcn, torch.full_like(refcn, -torch.inf)
+        valid_ref, refcn_64, torch.full_like(refcn_64, -torch.inf)
     )
     max_rcn = torch.amax(refcn_masked, dim=-1, keepdim=True)
     fallback = torch.where(
-        valid_ref & (torch.abs(refcn - max_rcn) < 1e-12),
+        valid_ref & (torch.abs(refcn_64 - max_rcn) < 1e-12),
         torch.ones_like(expw),
         torch.zeros_like(expw),
     )
 
     safe_norm = torch.where(norm_ok, norm, torch.ones_like(norm))
-    gwk = torch.where(norm_ok, expw / safe_norm, fallback)
+    gwk = torch.where(norm_ok, expw / safe_norm, fallback).to(orig_dtype)
     return torch.where(valid_ref, gwk, torch.zeros_like(gwk))
 
 

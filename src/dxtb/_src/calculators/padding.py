@@ -31,8 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from tad_dftd3.damping.rational import rational_damping
-from tad_dftd3.model.weights import gaussian_weight
+from tad_dftd.damping.rational import rational_damping
+from tad_dftd.model.weights import gaussian_weight
 from tad_mctc.tree import Node, child
 from torch.utils._pytree import tree_flatten, tree_flatten_with_path
 

@@ -19,12 +19,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data.radii import ATOMIC_RADII
 from tad_mctc.tree import Node, child
-from tad_mctc.typing import Any, Tensor, override
+from tad_mctc.typing import Tensor, override
 
 from dxtb import IndexHelper
 from dxtb._src.constants import xtb

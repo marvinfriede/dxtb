@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import warnings
 
-import tad_dftd3 as d3
+import tad_dftd as d3
 import torch
+from tad_mctc import storch
 from tad_mctc.autograd import is_functorch_tensor
+from tad_mctc.batch import real_pairs, real_triples
 from tad_mctc.data import radii
 from tad_mctc.tree import Node, child, context
 
@@ -77,6 +79,90 @@ def _atomic_c6(
     return d3.model.atomic_c6(numbers, weights, reference)
 
 
+def _dispersion2(
+    numbers: Tensor,
+    positions: Tensor,
+    parameters: dict[str, Any],
+    c6: Tensor,
+    r4r2: Tensor,
+    damping_function: Any,
+    cutoff: Tensor,
+) -> Tensor:
+    """Evaluate the two-body D3 term from per-atom r4r2 expectation values."""
+    dd = {"device": positions.device, "dtype": positions.dtype}
+    mask = real_pairs(numbers, mask_diagonal=True)
+    distances = torch.where(
+        mask,
+        storch.cdist(positions, positions, p=2),
+        torch.tensor(torch.finfo(positions.dtype).eps, **dd),
+    )
+
+    qq = 3.0 * r4r2.unsqueeze(-1) * r4r2.unsqueeze(-2)
+    c8 = c6 * qq
+
+    active = mask * (distances <= cutoff)
+    zero = torch.tensor(0.0, **dd)
+    t6 = torch.where(
+        active,
+        damping_function(6, distances, qq, parameters),
+        zero,
+    )
+    t8 = torch.where(
+        active,
+        damping_function(8, distances, qq, parameters),
+        zero,
+    )
+
+    e6 = -0.5 * torch.sum(c6 * t6, dim=-1)
+    e8 = -0.5 * torch.sum(c8 * t8, dim=-1)
+
+    s6 = parameters.get("s6", torch.tensor(d3.defaults.D3_S6, **dd))
+    s8 = parameters.get("s8", torch.tensor(d3.defaults.D3_S8, **dd))
+    return s6 * e6 + s8 * e8
+
+
+def _dispersion3(
+    numbers: Tensor,
+    positions: Tensor,
+    parameters: dict[str, Any],
+    c6: Tensor,
+    rvdw: Tensor,
+    cutoff: Tensor,
+) -> Tensor:
+    """Evaluate the three-body D3 ATM term from pairwise rvdw radii."""
+    dd = {"device": positions.device, "dtype": positions.dtype}
+    mask_pairs = real_pairs(numbers, mask_diagonal=True)
+    mask_triples = real_triples(numbers, mask_self=True)
+
+    eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
+    distances = torch.pow(
+        torch.where(
+            mask_pairs,
+            storch.cdist(positions, positions, p=2),
+            eps,
+        ),
+        2.0,
+    )
+
+    c9 = storch.safe_sqrt(
+        torch.abs(c6.unsqueeze(-1) * c6.unsqueeze(-2) * c6.unsqueeze(-3))
+    )
+
+    energy = d3.threebody.atm_term(
+        distances.unsqueeze(-1),
+        distances.unsqueeze(-2),
+        distances.unsqueeze(-3),
+        d3.threebody._sides(rvdw),
+        d3.threebody._sides(rvdw),
+        d3.damping.ZeroThreeBodyD3(),
+        d3.damping.as_damping_param(parameters),
+        cutoff,  # type: ignore[arg-type]
+        0.0,
+        mask_triples,
+    )
+    return torch.sum(energy * c9, dim=(-2, -1)) / 6.0
+
+
 def _dispersion(
     numbers: Tensor,
     positions: Tensor,
@@ -85,22 +171,28 @@ def _dispersion(
     rvdw: Tensor,
     r4r2: Tensor,
     damping_function: Any,
+    cutoff: d3.Cutoff | None = None,
 ) -> Tensor:
     """Evaluate both D3 terms without disconnecting a trainable zero s9."""
-    cutoff = positions.new_tensor(_DXTB_D3_DISPERSION_CUTOFF)
-    energy = d3.disp.dispersion2(
+    if cutoff is None:
+        disp2_cutoff = positions.new_tensor(_DXTB_D3_DISPERSION_CUTOFF)
+        disp3_cutoff = disp2_cutoff
+    else:
+        disp2_cutoff = positions.new_tensor(cutoff.disp2)
+        disp3_cutoff = positions.new_tensor(cutoff.disp3)
+
+    energy = _dispersion2(
         numbers,
         positions,
         parameters,
         c6,
         r4r2,
         damping_function,
-        cutoff,
+        disp2_cutoff,
     )
 
     s9 = parameters.get("s9")
-    # The released tad-dftd3 0.7.0 wrapper branches on ``s9 != 0``. A
-    # differentiable or transformed tensor at zero still has a derivative
+    # A differentiable or transformed tensor at zero still has a derivative
     # through the ATM term. For an ordinary non-trainable tensor, inspecting
     # its scalar value is safe and avoids cubic work for constant zero s9.
     if isinstance(s9, Tensor):
@@ -111,13 +203,13 @@ def _dispersion(
         use_atm = s9 is not None and s9 != 0.0
 
     if use_atm:
-        energy = energy + d3.disp.dispersion3(
+        energy = energy + _dispersion3(
             numbers,
             positions,
             parameters,
             c6,
             rvdw,
-            cutoff,
+            disp3_cutoff,
         )
 
     return energy

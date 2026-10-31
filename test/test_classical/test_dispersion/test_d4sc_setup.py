@@ -21,13 +21,13 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, fields
 
 import pytest
-import tad_dftd4 as d4
 import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.dispersion.d4sc import (

@@ -26,9 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import tad_dftd4 as d4
-import tad_dftd4.defaults as d4_defaults
 import torch
+from tad_dftd import defaults as d4_defaults
 from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.math import einsum
@@ -43,6 +42,7 @@ from tad_mctc.typing import (
 )
 
 from dxtb import IndexHelper
+from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Slicers

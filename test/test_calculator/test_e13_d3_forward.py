@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.autograd import is_batched
+from tad_mctc.autograd import is_vmapped as is_batched
 
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
@@ -238,21 +238,23 @@ def test_public_system_vmap_jacfwd_has_one_conformer_axis() -> None:
 
 def test_official_atomic_c6_supports_nested_transforms() -> None:
     """The released composite C6 path handles padding and nested transforms."""
-    import tad_dftd3 as d3
+    import tad_dftd as d3
     from tad_mctc.data import radii
+
+    from dxtb._src.ncoord import coordination_number
 
     numbers = torch.tensor([8, 1, 1, 0], dtype=torch.int64)
     base = _positions((8, 1, 1))
     padded = torch.cat((base, torch.zeros((1, 3), dtype=base.dtype)), dim=0)
     positions = torch.stack((padded, padded + 0.03, padded - 0.02))
-    reference = d3.reference.Reference(dtype=positions.dtype)
+    reference = d3.reference.Reference().to(dtype=positions.dtype)
     rcov = radii.COV_D3(dtype=positions.dtype)[numbers]
 
     def atomic_c6(geometry: torch.Tensor) -> torch.Tensor:
         aligned_numbers = numbers + torch.zeros_like(
             geometry[..., 0], dtype=numbers.dtype
         )
-        cn = d3.ncoord.coordination_number(
+        cn = coordination_number(
             aligned_numbers,
             geometry,
             counting_function=d3.ncoord.exp_count,

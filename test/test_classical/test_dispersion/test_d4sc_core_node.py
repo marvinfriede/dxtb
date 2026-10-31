@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, fields, replace
 from typing import Any
 
-import tad_dftd4 as d4
 import torch
 import pytest
 from tad_mctc.tree import Node, stack
@@ -29,6 +28,7 @@ from torch.utils import _pytree
 
 from dxtb import GFN2_XTB, ParamModule
 from dxtb._src.calculators.model import Model
+from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
     D4SCSetup,

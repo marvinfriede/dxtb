@@ -19,7 +19,7 @@ Torch Autodiff DFT-D (tad-dftd)
 ===============================
 
 Unified, differentiable PyTorch implementation of Grimme-lab DFT-D dispersion
-correction models (D1, D2, D3, D3S, D4, D4S, D4Srev, D5).
+correction models (D1, D2, D3, D3S, D4, D4S, D4Srev).
 """
 from __future__ import annotations
 
@@ -73,6 +73,7 @@ from .disp import (
     D4SModel,
     D4SrevModel,
     Environment,
+    Param,
     default_damping,
     dftd,
     dftd1,
@@ -111,6 +112,7 @@ __all__ = [
     "ModifiedZeroTwoBody",
     "OptimizedPowerTwoBody",
     "Pairs",
+    "Param",
     "RationalThreeBody",
     "RationalTwoBody",
     "Reference",

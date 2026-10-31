@@ -23,7 +23,8 @@ The Becke-Johnson damping for the two-body term and the three-body
 """
 from __future__ import annotations
 
-from typing import ClassVar
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 import torch
 from tad_mctc.typing import Tensor
@@ -90,15 +91,26 @@ def rational_damping(
     order: int,
     distances: Tensor,
     qq: Tensor,
+    param: Mapping[str, Any] | None = None,
     *,
-    a1: Tensor | float = torch.tensor(defaults.A1),
-    a2: Tensor | float = torch.tensor(defaults.A2),
+    a1: Tensor | float | None = None,
+    a2: Tensor | float | None = None,
 ) -> Tensor:
     """
     Rational (Becke-Johnson) damping function (from s-dftd3).
 
-    Kept as a helper of the tests; :func:`tad_dftd.disp.dispersion2` calls
-    :class:`RationalTwoBody`.
+    Accepts damping parameters either via a `param` mapping or as keyword
+    arguments `a1` and `a2`.
     """
+    dd = {"device": distances.device, "dtype": distances.dtype}
+    if param is not None:
+        if a1 is None:
+            a1 = param.get("a1", torch.tensor(defaults.A1, **dd))
+        if a2 is None:
+            a2 = param.get("a2", torch.tensor(defaults.A2, **dd))
+    if a1 is None:
+        a1 = torch.tensor(defaults.A1, **dd)
+    if a2 is None:
+        a2 = torch.tensor(defaults.A2, **dd)
     r0 = a1 * torch.sqrt(qq) + a2
-    return 1.0 / (distances**order + r0**order)
+    return 1.0 / (distances.pow(order) + r0.pow(order))

@@ -22,7 +22,6 @@ from dataclasses import FrozenInstanceError, fields
 from typing import Any
 
 import pytest
-import tad_dftd4 as d4
 import torch
 
 from dxtb import GFN2_XTB, Calculator, ParamModule
@@ -32,6 +31,7 @@ from dxtb._src.components.classicals import (
     DispersionD4CoreSetup,
     DispersionD4Setup,
 )
+from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.classicals.dispersion.d4 import (
     dispersion_d4_energy,
 )
