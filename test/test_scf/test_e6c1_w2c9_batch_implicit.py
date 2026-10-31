@@ -2455,15 +2455,13 @@ def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution()
 
 
 def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
-    """Verify static, adaptive, and spectral primal modes with streaming and thread-local scope safety."""
-    import concurrent.futures
-
+    """Verify static, adaptive, and spectral primal modes with streaming and scope safety."""
     from dxtb._src.scf.functional.spectral import (
         _current_primal_fermi_mode,
         eager_primal_fermi_scope,
     )
 
-    # 1. Nested contexts, exception restoration, invalid mode rejection, and thread isolation.
+    # 1. Nested contexts, exception restoration, and invalid mode rejection.
     assert _current_primal_fermi_mode() == "static"
     with pytest.raises(ValueError, match="eager_primal_fermi must be"):
         with eager_primal_fermi_scope("invalid_mode"):
@@ -2481,24 +2479,6 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
             raise RuntimeError("boom")
     except RuntimeError:
         pass
-    assert _current_primal_fermi_mode() == "static"
-
-    # Multi-thread isolation: another thread entering "spectral" or "adaptive" does not affect main thread.
-    def _worker_scope_check(mode_in: str) -> tuple[str, str]:
-        before = _current_primal_fermi_mode()
-        with eager_primal_fermi_scope(mode_in):
-            inside = _current_primal_fermi_mode()
-        after = _current_primal_fermi_mode()
-        assert before == "static" and after == "static"
-        return before, inside
-
-    with eager_primal_fermi_scope("adaptive"):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            f1 = ex.submit(_worker_scope_check, "spectral")
-            f2 = ex.submit(_worker_scope_check, "static")
-            assert f1.result() == ("static", "spectral")
-            assert f2.result() == ("static", "static")
-        assert _current_primal_fermi_mode() == "adaptive"
     assert _current_primal_fermi_mode() == "static"
 
     # 2. Closed-shell H2O (50K, 300K, 5000K) and open-shell NO2 (300K):
@@ -2601,10 +2581,10 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
         )
 
 
-def test_w2c11_parallel_root_preparation_parity_and_failure_semantics() -> (
+def test_w2c11_direct_system_spectral_prep_parity_and_failure_semantics() -> (
     None
 ):
-    """Process-isolated parallel root preparation preserves deterministic order and failure semantics."""
+    """Direct System streaming and batch evaluation with spectral prep match prepared batch."""
     numbers, base_positions = _h2o_conformers()
     c3 = base_positions[0].clone()
     c3[1, 2] -= 0.05
@@ -2614,90 +2594,51 @@ def test_w2c11_parallel_root_preparation_parity_and_failure_semantics() -> (
         numbers, etemp=300.0, force_convergence=False, trainable_model=True
     )
 
-    with pytest.raises(ValueError, match="positive integer"):
-        prepare_converged_root_batch(system, pos4, num_workers=0)
-
-    prep_w1 = prepare_converged_root_batch(
-        system, pos4, eager_primal_fermi="spectral", num_workers=1, strict=True
+    prep = prepare_converged_root_batch(
+        system, pos4, eager_primal_fermi="spectral", strict=True
     )
-    prep_w2 = prepare_converged_root_batch(
-        system, pos4, eager_primal_fermi="spectral", num_workers=2, strict=True
+    out_prep = stream_batch_value_and_grad(
+        prep, model, pos4, chunk_size=2, strict=True
     )
-    assert prep_w1.preparation_diagnostics is not None
-    assert prep_w2.preparation_diagnostics is not None
-    assert prep_w1.preparation_diagnostics.num_workers == 1
-    assert prep_w2.preparation_diagnostics.num_workers == 2
-    assert prep_w2.preparation_diagnostics.worker_cpu_time_s > 0.0
-    assert (
-        prep_w2.preparation_diagnostics.process_tree_peak_rss_mb
-        >= prep_w2.preparation_diagnostics.parent_peak_rss_mb
-    )
-    assert len(prep_w2.preparation_diagnostics.worker_pids) >= 1
-
-    for l1, l2 in zip(prep_w1.lanes, prep_w2.lanes):
-        assert l1.lane_index == l2.lane_index
-        assert l1.root_valid == l2.root_valid
-        torch.testing.assert_close(l1.root_x, l2.root_x, atol=1e-13, rtol=1e-13)
-        torch.testing.assert_close(
-            l1.raw_residual_l2, l2.raw_residual_l2, atol=1e-13, rtol=1e-13
-        )
-
-    out_w1 = stream_batch_value_and_grad(
-        prep_w1, model, pos4, chunk_size=2, strict=True
-    )
-    out_w2 = stream_batch_value_and_grad(
-        prep_w2, model, pos4, chunk_size=2, strict=True
-    )
-    out_sys_w2 = stream_batch_value_and_grad(
+    out_sys = stream_batch_value_and_grad(
         system,
         model,
         pos4,
         chunk_size=2,
         eager_primal_fermi="spectral",
-        num_workers=2,
         strict=True,
     )
-    eval_sys_w2 = evaluate_converged_root_batch(
+    eval_sys = evaluate_converged_root_batch(
         system,
         pos4,
         eager_primal_fermi="spectral",
-        num_workers=2,
         strict=True,
     )
-    torch.testing.assert_close(out_w1.energy, out_w2.energy, atol=1e-13, rtol=0)
     torch.testing.assert_close(
-        out_w1.energy, out_sys_w2.energy, atol=1e-13, rtol=0
+        out_prep.energy, out_sys.energy, atol=1e-13, rtol=0
     )
     torch.testing.assert_close(
-        out_w1.energy, eval_sys_w2.energy.sum(dim=-1), atol=1e-13, rtol=0
+        out_prep.energy, eval_sys.energy.sum(dim=-1), atol=1e-13, rtol=0
     )
     torch.testing.assert_close(
-        out_w1.position_gradient,
-        out_w2.position_gradient,
-        atol=1e-12,
-        rtol=1e-12,
-    )
-    torch.testing.assert_close(
-        out_w1.position_gradient,
-        out_sys_w2.position_gradient,
+        out_prep.position_gradient,
+        out_sys.position_gradient,
         atol=1e-12,
         rtol=1e-12,
     )
 
-    # Non-strict and strict failure propagation under num_workers=2:
+    # Non-strict and strict failure propagation:
     _, sys_max1 = _build_system(
         numbers, maxiter=1, force_convergence=False, etemp=300.0
     )
     with pytest.warns(SCFConvergenceWarning):
-        prep_fail_w2 = prepare_converged_root_batch(
-            sys_max1, pos4[:2], num_workers=2, strict=False
+        prep_fail = prepare_converged_root_batch(
+            sys_max1, pos4[:2], strict=False
         )
-    assert not prep_fail_w2.all_roots_valid
+    assert not prep_fail.all_roots_valid
     assert all(
         lane.failure_code == int(BatchRootFailureCode.MAXITER_EXCEEDED)
-        for lane in prep_fail_w2.lanes
+        for lane in prep_fail.lanes
     )
     with pytest.raises(SCFConvergenceError, match=r"\[Lane 0\]"):
-        prepare_converged_root_batch(
-            sys_max1, pos4[:2], num_workers=2, strict=True
-        )
+        prepare_converged_root_batch(sys_max1, pos4[:2], strict=True)

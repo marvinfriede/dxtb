@@ -26,10 +26,6 @@ and mapped implicit differentiation.
 from __future__ import annotations
 
 import dataclasses
-import multiprocessing as mp
-import os
-import resource
-import time
 import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -170,7 +166,6 @@ from dxtb._src.wavefunction.filling import FermiStatus
 
 __all__ = [
     "RESPONSE_NOT_RUN",
-    "BatchPreparationDiagnostics",
     "BatchResponseDiagnostics",
     "BatchRootFailureCode",
     "ConvergedRootLaneRecord",
@@ -360,22 +355,6 @@ class _TensorValueSnapshot:
 
 
 @dataclass(frozen=True, eq=False)
-class BatchPreparationDiagnostics:
-    """Timing, CPU, and process-tree memory diagnostics for root preparation."""
-
-    num_workers: int
-    wall_time_s: float
-    parent_cpu_time_s: float
-    worker_cpu_time_s: float
-    total_cpu_time_s: float
-    parent_peak_rss_mb: float
-    worker_peak_rss_sum_mb: float
-    process_tree_peak_rss_mb: float
-    process_tree_pss_mb: float
-    worker_pids: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True, eq=False)
 class PreparedConvergedRootBatch:
     """Validated conformer batch sharing one :class:`System` or padded core owner."""
 
@@ -403,7 +382,6 @@ class PreparedConvergedRootBatch:
     input_tensor_versions: tuple[dict[str, int], ...]
     valid_lane_mask: Tensor
     all_roots_valid: bool
-    preparation_diagnostics: BatchPreparationDiagnostics | None = None
 
 
 def _unwrap_primal_tensor(x: Tensor) -> Tensor:
@@ -1665,122 +1643,6 @@ class _LanePrimalSolveOutcome:
     root_valid: bool
 
 
-def _snapshot_object_tree(obj: Any) -> Any:
-    """Recursively convert Tensor leaves to _TensorValueSnapshot bytes."""
-    if isinstance(obj, torch.Tensor):
-        return _snapshot_required_tensor(obj)
-    if isinstance(obj, CoreIndexData):
-        return (
-            "_CoreIndexData",
-            _snapshot_required_tensor(obj.shells_to_atom),
-            _snapshot_required_tensor(obj.orbitals_to_shell),
-        )
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return (
-            "_Dataclass",
-            type(obj),
-            {
-                f.name: _snapshot_object_tree(getattr(obj, f.name))
-                for f in dataclasses.fields(obj)
-            },
-        )
-    if isinstance(obj, tuple):
-        return tuple(_snapshot_object_tree(item) for item in obj)
-    if isinstance(obj, list):
-        return [_snapshot_object_tree(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _snapshot_object_tree(v) for k, v in obj.items()}
-    return obj
-
-
-def _restore_object_tree(
-    obj: Any, device: torch.device | None = None
-) -> Any:
-    """Recursively restore _TensorValueSnapshot leaves to detached Tensors."""
-    if isinstance(obj, _TensorValueSnapshot):
-        return obj.to_tensor(device=device)
-    if (
-        isinstance(obj, tuple)
-        and len(obj) == 3
-        and obj[0] == "_CoreIndexData"
-        and isinstance(obj[1], _TensorValueSnapshot)
-        and isinstance(obj[2], _TensorValueSnapshot)
-    ):
-        return CoreIndexData(
-            shells_to_atom=obj[1].to_tensor(device=device),
-            orbitals_to_shell=obj[2].to_tensor(device=device),
-        )
-    if (
-        isinstance(obj, tuple)
-        and len(obj) == 3
-        and obj[0] == "_Dataclass"
-        and isinstance(obj[1], type)
-        and isinstance(obj[2], dict)
-    ):
-        cls = obj[1]
-        restored_fields = {
-            k: _restore_object_tree(v, device=device)
-            for k, v in obj[2].items()
-        }
-        return cls(**restored_fields)
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return replace(
-            obj,
-            **{
-                f.name: _restore_object_tree(getattr(obj, f.name), device=device)
-                for f in dataclasses.fields(obj)
-            },
-        )
-    if isinstance(obj, tuple):
-        return tuple(
-            _restore_object_tree(item, device=device) for item in obj
-        )
-    if isinstance(obj, list):
-        return [_restore_object_tree(item, device=device) for item in obj]
-    if isinstance(obj, dict):
-        return {
-            k: _restore_object_tree(v, device=device) for k, v in obj.items()
-        }
-    return obj
-
-
-def _read_process_memory_mb() -> tuple[float, float]:
-    """Return (peak_rss_mb, current_pss_mb) for the current process."""
-    peak_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    pss_kb: float | None = None
-    try:
-        with open("/proc/self/status", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("VmHWM:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        peak_kb = max(peak_kb, float(parts[1]))
-                    break
-    except OSError:
-        pass
-    try:
-        with open("/proc/self/smaps_rollup", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("Pss:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        pss_kb = float(parts[1])
-                    break
-    except OSError:
-        pass
-    if pss_kb is None:
-        pss_kb = peak_kb
-    return peak_kb / 1024.0, pss_kb / 1024.0
-
-
-def _init_primal_worker() -> None:
-    """Enforce single-threaded BLAS/PyTorch execution inside worker processes."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    torch.set_num_threads(1)
-
-
 def _solve_and_validate_lane_primal(
     primal_inputs: SCFInputs,
     guess_charges: SCFCharges,
@@ -2043,52 +1905,6 @@ def _solve_and_validate_lane_primal(
         )
 
 
-def _worker_solve_lane_task(task: tuple[Any, ...]) -> tuple[Any, ...]:
-    """Execute a single lane's detached primal solve inside an isolated worker."""
-    (
-        lane_index,
-        serialized_inputs,
-        serialized_guess,
-        serialized_numbers,
-        representation,
-        settings,
-        lane_padded,
-        effective_mixer,
-        maxiter,
-        damp_default,
-        damp_dynamic_factor,
-        eager_primal_fermi,
-    ) = task
-    torch.set_num_threads(1)
-    cpu_t0 = time.process_time()
-    primal_inputs = _restore_object_tree(serialized_inputs)
-    guess_charges = _restore_object_tree(serialized_guess)
-    numbers = _restore_object_tree(serialized_numbers)
-    _, _, _, solve_outcome = _solve_and_validate_lane_primal(
-        primal_inputs,
-        guess_charges,
-        numbers,
-        representation,
-        settings,
-        lane_padded,
-        effective_mixer,
-        maxiter,
-        damp_default,
-        damp_dynamic_factor,
-        eager_primal_fermi,
-    )
-    cpu_elapsed = time.process_time() - cpu_t0
-    peak_rss_mb, pss_mb = _read_process_memory_mb()
-    return (
-        lane_index,
-        _snapshot_object_tree(solve_outcome),
-        cpu_elapsed,
-        peak_rss_mb,
-        pss_mb,
-        os.getpid(),
-    )
-
-
 def prepare_converged_root_batch(
     system: System | PaddedExactSystemCore,
     positions: Tensor,
@@ -2099,7 +1915,6 @@ def prepare_converged_root_batch(
     *,
     strict: bool | None = None,
     eager_primal_fermi: bool | str = False,
-    num_workers: int = 1,
 ) -> PreparedConvergedRootBatch:
     """Prepare and validate independent physical SCF roots for a conformer batch.
 
@@ -2117,7 +1932,7 @@ def prepare_converged_root_batch(
     field : Tensor | None, default None
         Shared ``(3,)`` or per-lane ``(B, 3)`` electric field.
     field_grad : Tensor | None, default None
-        Shared ``(3, 3)`` or per-lane ``(B, 3, 3)`` electric field gradient.
+        Shared ``(3, 3,)`` or per-lane ``(B, 3, 3)`` electric field gradient.
     strict : bool | None, default None
         ``force_convergence=True`` always raises on a failed lane. Otherwise,
         ``True`` enables strict batch validation and ``False`` or ``None``
@@ -2127,20 +1942,7 @@ def prepare_converged_root_batch(
         solving (``False``/``"static"``, ``True``/``"adaptive"``, or
         ``"spectral"``) while keeping post-preparation residual validation and
         differentiable evaluation on the fixed-depth Fermi formulation.
-    num_workers : int, default 1
-        Number of worker processes for detached physical root solving.
-        When ``> 1``, only detached byte snapshots cross process boundaries,
-        each worker executes single-threaded (`1` thread per worker), and
-        conformer ordering and validation semantics remain deterministic.
     """
-    if (
-        isinstance(num_workers, bool)
-        or not isinstance(num_workers, int)
-        or num_workers < 1
-    ):
-        raise ValueError("num_workers must be a positive integer.")
-    wall_t0 = time.perf_counter()
-    parent_cpu_t0 = time.process_time()
     (
         _core,
         numbers,
@@ -2191,19 +1993,8 @@ def prepare_converged_root_batch(
     eager_no_grad_build = (
         not is_compiling() and ft.get_interpreter_stack() is None
     )
-    if num_workers > 1:
-        if not eager_no_grad_build:
-            raise RuntimeError(
-                "Parallel physical-root preparation (num_workers > 1) is only "
-                "supported in eager execution outside functorch/compile transforms."
-            )
-        if positions.device.type != "cpu":
-            raise RuntimeError(
-                "Parallel physical-root preparation (num_workers > 1) is only "
-                "supported on CPU tensors."
-            )
 
-    lane_prebuilds: list[tuple[Any, ...]] = []
+    lanes: list[ConvergedRootLaneRecord] = []
     for lane_index in range(batch_size):
         lane_pos = positions[lane_index]
         lane_chrg = charges[lane_index]
@@ -2292,72 +2083,12 @@ def prepare_converged_root_batch(
                     )
                 ),
             )
-        lane_prebuilds.append(
-            (
-                lane_index,
-                lane_pos,
-                lane_chrg,
-                lane_spin,
-                lane_field,
-                lane_fgrad,
+
+        layout, adapter, primal_params, solve_outcome = (
+            _solve_and_validate_lane_primal(
                 primal_inputs,
-                primal_refocc,
-                primal_overlap_norm,
-                lane_padded,
                 guess_charges,
-            )
-        )
-
-    effective_workers = min(num_workers, batch_size)
-    worker_cpu_total_s = 0.0
-    worker_peak_rss_by_pid: dict[int, float] = {}
-    worker_pss_by_pid: dict[int, float] = {}
-    solved_lanes: list[
-        tuple[
-            PotentialLayout | None,
-            _SCFMapTensorTree,
-            tuple[Tensor, ...],
-            _LanePrimalSolveOutcome,
-        ]
-    ] = []
-
-    if effective_workers == 1:
-        for (
-            lane_index,
-            _lpos,
-            _lchrg,
-            _lspin,
-            _lfield,
-            _lfgrad,
-            primal_inputs,
-            _prefocc,
-            _ponorm,
-            lane_padded,
-            guess_charges,
-        ) in lane_prebuilds:
-            solved_lanes.append(
-                _solve_and_validate_lane_primal(
-                    primal_inputs,
-                    guess_charges,
-                    numbers,
-                    representation,
-                    settings,
-                    lane_padded,
-                    route.effective_mixer,
-                    effective_scf_config.maxiter,
-                    effective_scf_config.damp,
-                    effective_scf_config.damp_dynamic_factor,
-                    eager_primal_fermi,
-                )
-            )
-    else:
-        serialized_numbers = _snapshot_required_tensor(numbers)
-        tasks = [
-            (
-                lane_index,
-                _snapshot_object_tree(primal_inputs),
-                _snapshot_object_tree(guess_charges),
-                serialized_numbers,
+                numbers,
                 representation,
                 settings,
                 lane_padded,
@@ -2367,104 +2098,8 @@ def prepare_converged_root_batch(
                 effective_scf_config.damp_dynamic_factor,
                 eager_primal_fermi,
             )
-            for (
-                lane_index,
-                _lpos,
-                _lchrg,
-                _lspin,
-                _lfield,
-                _lfgrad,
-                primal_inputs,
-                _prefocc,
-                _ponorm,
-                lane_padded,
-                guess_charges,
-            ) in lane_prebuilds
-        ]
-        start_method = (
-            "fork"
-            if "fork" in mp.get_all_start_methods()
-            and not torch.cuda.is_initialized()
-            else "spawn"
         )
-        ctx = mp.get_context(start_method)
-        prev_threads = torch.get_num_threads()
-        try:
-            torch.set_num_threads(1)
-            with ctx.Pool(
-                processes=effective_workers, initializer=_init_primal_worker
-            ) as pool:
-                worker_outputs = pool.map(
-                    _worker_solve_lane_task, tasks, chunksize=1
-                )
-                parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
-        finally:
-            torch.set_num_threads(prev_threads)
 
-        worker_outputs.sort(key=lambda item: int(item[0]))
-        for (
-            lane_index,
-            _lpos,
-            _lchrg,
-            _lspin,
-            _lfield,
-            _lfgrad,
-            primal_inputs,
-            _prefocc,
-            _ponorm,
-            lane_padded,
-            guess_charges,
-        ), (
-            out_lane_idx,
-            serialized_outcome,
-            w_cpu_s,
-            w_peak_rss_mb,
-            w_pss_mb,
-            w_pid,
-        ) in zip(lane_prebuilds, worker_outputs):
-            assert lane_index == out_lane_idx
-            worker_cpu_total_s += float(w_cpu_s)
-            pid_int = int(w_pid)
-            worker_peak_rss_by_pid[pid_int] = max(
-                worker_peak_rss_by_pid.get(pid_int, 0.0), float(w_peak_rss_mb)
-            )
-            worker_pss_by_pid[pid_int] = max(
-                worker_pss_by_pid.get(pid_int, 0.0), float(w_pss_mb)
-            )
-            with torch.no_grad():
-                _, layout, _, _, _ = _make_representation_projections(
-                    primal_inputs, representation, guess_charges, lane_padded
-                )
-                adapter, primal_params = _SCFMapTensorTree.prepare(
-                    primal_inputs, representation, layout
-                )
-                primal_params = tuple(p.clone() for p in primal_params)
-            solve_outcome = _restore_object_tree(
-                serialized_outcome, device=positions.device
-            )
-            solved_lanes.append(
-                (layout, adapter, primal_params, solve_outcome)
-            )
-
-    lanes: list[ConvergedRootLaneRecord] = []
-    for (
-        lane_index,
-        lane_pos,
-        lane_chrg,
-        lane_spin,
-        lane_field,
-        lane_fgrad,
-        primal_inputs,
-        primal_refocc,
-        primal_overlap_norm,
-        _lane_padded,
-        _guess_charges,
-    ), (
-        layout,
-        adapter,
-        primal_params,
-        solve_outcome,
-    ) in zip(lane_prebuilds, solved_lanes):
         if not solve_outcome.root_valid:
             assert solve_outcome.failure_reason is not None
             if strict_mode:
@@ -2528,27 +2163,6 @@ def prepare_converged_root_batch(
         dtype=torch.bool,
         device=positions.device,
     )
-    wall_elapsed_s = time.perf_counter() - wall_t0
-    parent_cpu_s = time.process_time() - parent_cpu_t0
-    if effective_workers == 1:
-        parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
-    else:
-        latest_peak_rss_mb, _ = _read_process_memory_mb()
-        parent_peak_rss_mb = max(parent_peak_rss_mb, latest_peak_rss_mb)
-    worker_rss_sum_mb = sum(worker_peak_rss_by_pid.values())
-    worker_pss_sum_mb = sum(worker_pss_by_pid.values())
-    prep_diagnostics = BatchPreparationDiagnostics(
-        num_workers=effective_workers,
-        wall_time_s=wall_elapsed_s,
-        parent_cpu_time_s=parent_cpu_s,
-        worker_cpu_time_s=worker_cpu_total_s,
-        total_cpu_time_s=parent_cpu_s + worker_cpu_total_s,
-        parent_peak_rss_mb=parent_peak_rss_mb,
-        worker_peak_rss_sum_mb=worker_rss_sum_mb,
-        process_tree_peak_rss_mb=parent_peak_rss_mb + worker_rss_sum_mb,
-        process_tree_pss_mb=parent_pss_mb + worker_pss_sum_mb,
-        worker_pids=tuple(sorted(worker_peak_rss_by_pid)),
-    )
     return PreparedConvergedRootBatch(
         system=system,
         positions=positions,
@@ -2602,7 +2216,6 @@ def prepare_converged_root_batch(
         ),
         valid_lane_mask=valid_mask,
         all_roots_valid=bool(valid_mask.all()),
-        preparation_diagnostics=prep_diagnostics,
     )
 
 
@@ -3543,7 +3156,6 @@ def evaluate_converged_root_batch(
     *,
     strict: bool | None = None,
     eager_primal_fermi: bool | str = False,
-    num_workers: int = 1,
     response_diagnostics: ResponseDiagnosticCollector | None = None,
 ) -> Result:
     """Evaluate a conformer batch using mapped implicit differentiation.
@@ -3619,7 +3231,6 @@ def evaluate_converged_root_batch(
             field_grad=None if field_grad is _UNSET else field_grad,
             strict=strict,
             eager_primal_fermi=eager_primal_fermi,
-            num_workers=num_workers,
         )
         return evaluate_converged_root_batch(
             prepared,

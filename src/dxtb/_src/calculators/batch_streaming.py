@@ -291,7 +291,6 @@ def stream_batch_value_and_grad(
     field_grad: Any = _UNSET,
     strict: bool | None = None,
     eager_primal_fermi: bool | str = False,
-    num_workers: int = 1,
 ) -> StreamingBatchValueAndGrad:
     """Evaluate a separable objective and accumulate first-order chunk gradients.
 
@@ -333,7 +332,6 @@ def stream_batch_value_and_grad(
             field_grad=None if field_grad is _UNSET else field_grad,
             strict=strict,
             eager_primal_fermi=eager_primal_fermi,
-            num_workers=num_workers,
         )
     elif not isinstance(prepared, PreparedConvergedRootBatch):
         raise TypeError(

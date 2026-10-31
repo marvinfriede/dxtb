@@ -339,7 +339,7 @@ def _matrix_fermi_impl(
     expm1_scaled = _matrix_expm1(exp_argument)
     tangent = dense_solve(expm1_scaled + 2.0 * eye, expm1_scaled)
     if eager:
-        doubling_steps = max(0, int(scale_power.max().item()) - 1)
+        doubling_steps = max(0, int(scale_power.max()) - 1)
     else:
         doubling_steps = _FERMI_MAX_SCALE_POWER - 1
 
