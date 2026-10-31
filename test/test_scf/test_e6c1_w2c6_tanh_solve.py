@@ -31,6 +31,7 @@ from benchmarks.e6c1_w2c6_tanh_solve import (
 from dxtb._src.scf.functional.spectral import (
     _FERMI_MAX_SCALED_NORM,
     _matrix_fermi,
+    _matrix_fermi_eager,
     _prepare_matrix,
 )
 
@@ -78,10 +79,15 @@ def test_direct_rhs_matches_production_on_rotated_spectra(
         rtol=2.0e-11,
         msg="production path uses the direct-RHS recurrence",
     )
+    with torch.no_grad():
+        eager = _matrix_fermi_eager(matrix, shift, kt, active)
+    torch.testing.assert_close(
+        eager, _matrix_fermi(matrix, shift, kt, active), atol=0.0, rtol=0.0
+    )
     torch.testing.assert_close(actual, actual.T, atol=2.0e-14, rtol=0.0)
 
 
-@pytest.mark.parametrize("power", [14, 15, 21, 22, 23, 29, 30])
+@pytest.mark.parametrize("power", [11, 14, 15, 16, 21, 22, 23, 29, 30])
 def test_direct_rhs_preserves_supported_scaling_powers(power: int) -> None:
     """The candidate matches production across accepted scaling boundaries."""
     # Keep the partially occupied state decoupled from the very remote
@@ -103,11 +109,30 @@ def test_direct_rhs_preserves_supported_scaling_powers(power: int) -> None:
     active = torch.ones(2, dtype=torch.bool)
     actual = _matrix_fermi_direct_rhs(matrix, shift, kt, active)
     expected = _matrix_fermi_identity_rhs(matrix, shift, kt, active)
+    with torch.no_grad():
+        eager = _matrix_fermi_eager(matrix, shift, kt, active)
     assert torch.isfinite(actual).all(), f"p{power} must be supported"
     assert torch.isfinite(_matrix_fermi(matrix, shift, kt, active)).all()
     _assert_pair(
+        eager, _matrix_fermi(matrix, shift, kt, active), label=f"eager p{power}"
+    )
+    _assert_pair(
         actual, expected, atol=1.0e-10, rtol=1.0e-10, label=f"p{power}"
     )
+
+
+def test_eager_adaptive_rejects_transformed_or_differentiable_inputs() -> None:
+    """The data-dependent schedule cannot enter differentiable production paths."""
+    matrix, shift, kt, active = _fixture(2, 11)
+    with pytest.raises(RuntimeError, match="detached eager primal"):
+        _matrix_fermi_eager(matrix.requires_grad_(True), shift, kt, active)
+
+    with torch.no_grad(), pytest.raises(RuntimeError, match="torch.func"):
+        torch.func.jvp(
+            lambda value: _matrix_fermi_eager(value, shift, kt, active),
+            (matrix,),
+            (torch.ones_like(matrix),),
+        )
 
 
 @pytest.mark.parametrize("power", [14, 15, 21, 22, 23, 29, 30])
@@ -268,6 +293,11 @@ def test_direct_rhs_preserves_cancellation_and_invalid_range_behavior() -> None:
         unsupported, torch.tensor(0.0, dtype=DTYPE), kt, active
     )
     assert torch.isnan(production_unsupported).all()
+    with torch.no_grad():
+        eager_unsupported = _matrix_fermi_eager(
+            unsupported, torch.tensor(0.0, dtype=DTYPE), kt, active
+        )
+    assert torch.isnan(eager_unsupported).all()
     _assert_pair(
         unsupported_result,
         _matrix_fermi_identity_rhs(
@@ -293,7 +323,10 @@ def test_direct_rhs_preserves_padding_invalid_lanes_and_masks() -> None:
     active = torch.tensor([[True, True], [True, False], [True, True]])
     expected = _matrix_fermi_identity_rhs(matrix, shift, kt, active)
     actual = _matrix_fermi_direct_rhs(matrix, shift, kt, active)
+    with torch.no_grad():
+        eager = _matrix_fermi_eager(matrix, shift, kt, active)
     _assert_pair(actual, expected, label="masked mixed lanes")
+    _assert_pair(eager, actual, label="adaptive masked mixed lanes")
     assert torch.isfinite(actual[0]).all()
     assert torch.isfinite(actual[1]).all()
     assert torch.isnan(actual[2]).all()
@@ -476,7 +509,10 @@ def test_direct_rhs_first_through_third_order_transform_parity() -> None:
         ).sum()
 
     def reference_shift(parameter: torch.Tensor) -> torch.Tensor:
-        return (_matrix_fermi_identity_rhs(matrix, parameter, kt, active) * cotangent).sum()
+        return (
+            _matrix_fermi_identity_rhs(matrix, parameter, kt, active)
+            * cotangent
+        ).sum()
 
     def candidate_temperature(parameter: torch.Tensor) -> torch.Tensor:
         return (
@@ -486,7 +522,8 @@ def test_direct_rhs_first_through_third_order_transform_parity() -> None:
 
     def reference_temperature(parameter: torch.Tensor) -> torch.Tensor:
         return (
-            _matrix_fermi_identity_rhs(matrix, shift, parameter, active) * cotangent
+            _matrix_fermi_identity_rhs(matrix, shift, parameter, active)
+            * cotangent
         ).sum()
 
     for candidate_fn, reference_fn, value in (

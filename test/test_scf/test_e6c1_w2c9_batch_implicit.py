@@ -1313,6 +1313,27 @@ def test_streaming_rejects_changed_nontrainable_model_parameters() -> None:
         )
 
 
+def test_eager_adaptive_fermi_root_is_revalidated_by_fixed_raw_map() -> None:
+    """Adaptive primal maps define roots validated by the unchanged raw map."""
+    numbers, positions = _h2o_conformers()
+    _, system = _build_system(numbers, method=labels.GFN1_XTB, etemp=300.0)
+    prepared = prepare_converged_root_batch(
+        system,
+        positions[:1],
+        strict=True,
+        eager_primal_fermi=True,
+    )
+    lane = prepared.lanes[0]
+    assert lane.inputs.fermi_settings is not None
+    assert lane.inputs.fermi_settings.smear
+    assert lane.root_valid
+    assert float(lane.raw_residual_l2) <= 2.0e-9
+
+    result = evaluate_converged_root_batch(prepared, strict=True)
+    assert bool(result.converged.all())
+    assert bool(torch.isfinite(result.energy).all())
+
+
 def test_transforms_grad_jvp_jacfwd_jacrev_hvp_vmap_and_higher_order() -> None:
     """Supports grad, jvp, jacfwd, jacrev, HVP, nested vmap, 2nd/3rd order, and compile."""
     numbers, base_positions = _h2_conformers()

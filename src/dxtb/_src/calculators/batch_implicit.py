@@ -135,6 +135,7 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf_fock,
     finalize_scf_potential,
 )
+from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.status import SCFStatus
@@ -1207,6 +1208,7 @@ def prepare_converged_root_batch(
     field_grad: Tensor | None = None,
     *,
     strict: bool | None = None,
+    eager_primal_fermi: bool = False,
 ) -> PreparedConvergedRootBatch:
     """Prepare and validate independent physical SCF roots for a conformer batch.
 
@@ -1229,6 +1231,11 @@ def prepare_converged_root_batch(
         ``force_convergence=True`` always raises on a failed lane. Otherwise,
         ``True`` enables strict batch validation and ``False`` or ``None``
         records primal failure metadata so valid lanes can be evaluated.
+    eager_primal_fermi : bool, default False
+        When ``True``, use the eager-only adaptive tanh-doubling Fermi solver
+        exclusively during detached physical root solving while keeping
+        post-preparation residual validation and differentiable evaluation on
+        the fixed-depth Fermi formulation.
     """
     (
         _core,
@@ -1381,22 +1388,23 @@ def prepare_converged_root_batch(
                 primal_inputs, representation, guess_charges, lane_padded
             )
 
-            if isinstance(settings, SCFSolverSettings):
-                outcome = _solve_map(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
-            else:
-                outcome = _solve_map_anderson(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
+            with eager_primal_fermi_scope(eager_primal_fermi):
+                if isinstance(settings, SCFSolverSettings):
+                    outcome = _solve_map(
+                        initial_state,
+                        settings,
+                        map_fn,
+                        state_projection=state_projection,
+                        eager=True,
+                    )
+                else:
+                    outcome = _solve_map_anderson(
+                        initial_state,
+                        settings,
+                        map_fn,
+                        state_projection=state_projection,
+                        eager=True,
+                    )
 
             adapter, primal_params = _SCFMapTensorTree.prepare(
                 primal_inputs, representation, layout

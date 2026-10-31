@@ -18,7 +18,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, NamedTuple
+import threading
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Callable, Iterator, NamedTuple
 
 import numpy as np
 import torch
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = [
     "aufbau_density_matrix",
     "aufbau_free_energy_matrix",
+    "eager_primal_fermi_scope",
     "fermi_density_matrix",
     "fermi_free_energy_matrix",
     "fermi_free_energy_trace",
@@ -45,6 +48,19 @@ _GL_WEIGHTS_NP = 0.5 * _GL_WEIGHTS_NP
 
 _FERMI_MAX_SCALE_POWER = 30
 _FERMI_MAX_SCALED_NORM = 4.0
+
+_EAGER_PRIMAL_STATE = threading.local()
+
+
+@contextmanager
+def eager_primal_fermi_scope(enabled: bool = True) -> Iterator[None]:
+    """Enable eager-only adaptive tanh doubling inside detached primal root solving."""
+    prev = getattr(_EAGER_PRIMAL_STATE, "enabled", False)
+    _EAGER_PRIMAL_STATE.enabled = bool(enabled)
+    try:
+        yield
+    finally:
+        _EAGER_PRIMAL_STATE.enabled = prev
 
 
 def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
@@ -101,6 +117,37 @@ def _matrix_fermi(
     Inputs outside this range produce NaNs lane-locally. The detached scale
     selects an evaluation schedule for the same matrix function.
     """
+    return _matrix_fermi_impl(matrix, shift, kt, active, eager=False)
+
+
+def _matrix_fermi_eager(
+    matrix: Tensor,
+    shift: Tensor,
+    kt: Tensor,
+    active: Tensor,
+) -> Tensor:
+    """Eager-only equivalent that stops after the largest required doubling."""
+    if torch.is_grad_enabled() or is_compiling():
+        raise RuntimeError(
+            "Adaptive matrix-Fermi doubling is restricted to detached eager "
+            "primal evaluation."
+        )
+    if torch._C._functorch.get_interpreter_stack():
+        raise RuntimeError(
+            "Adaptive matrix-Fermi doubling cannot run under torch.func."
+        )
+    return _matrix_fermi_impl(matrix, shift, kt, active, eager=True)
+
+
+def _matrix_fermi_impl(
+    matrix: Tensor,
+    shift: Tensor,
+    kt: Tensor,
+    active: Tensor,
+    *,
+    eager: bool,
+) -> Tensor:
+    """Shared matrix-Fermi algebra with a selected static/eager schedule."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -183,7 +230,12 @@ def _matrix_fermi(
     exp_argument = 2.0 * exponent / scale[..., None, None]
     expm1_scaled = _matrix_expm1(exp_argument)
     tangent = dense_solve(expm1_scaled + 2.0 * eye, expm1_scaled)
-    for index in range(_FERMI_MAX_SCALE_POWER - 1):
+    if eager:
+        doubling_steps = max(0, int(scale_power.max().item()) - 1)
+    else:
+        doubling_steps = _FERMI_MAX_SCALE_POWER - 1
+
+    for index in range(doubling_steps):
         denominator = eye + tangent @ tangent
         doubled = 2.0 * dense_solve(denominator, tangent)
         update = index < (scale_power - 1)
@@ -408,10 +460,23 @@ def fermi_density_matrix(
     l_inv: Tensor | None = None,
     mask: Tensor | None = None,
     diff_steps: int = 2,
+    eager_primal: bool = False,
 ) -> Tensor:
-    """Build an invariant Fermi density from dxtb's shared primal state."""
+    """Build an invariant Fermi density from dxtb's shared primal state.
+
+    ``eager_primal=True`` selects adaptive doubling only for detached eager
+    root preparation. Differentiable and transformed evaluation must use the
+    default fixed schedule.
+    """
     setup = _fermi_free_energy_setup(
-        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
+        hamiltonian,
+        nel,
+        kt,
+        state,
+        l_inv,
+        mask,
+        diff_steps,
+        eager_primal=eager_primal,
     )
     h = setup.h
     active = setup.active
@@ -499,6 +564,8 @@ def _fermi_free_energy_setup(
     l_inv: Tensor | None,
     mask: Tensor | None,
     diff_steps: int,
+    *,
+    eager_primal: bool = False,
 ) -> _FermiFreeEnergySetup:
     work_dtype = torch.float64
     h = hamiltonian.to(dtype=work_dtype)
@@ -542,8 +609,12 @@ def _fermi_free_energy_setup(
 
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
+    use_eager = eager_primal or bool(
+        getattr(_EAGER_PRIMAL_STATE, "enabled", False)
+    )
+    matrix_fermi = _matrix_fermi_eager if use_eager else _matrix_fermi
     for _ in range(diff_steps):
-        density = _matrix_fermi(relative, shift, safe_kt, active)
+        density = matrix_fermi(relative, shift, safe_kt, active)
         diag_density = density.diagonal(dim1=-2, dim2=-1)
         count = diag_density.sum(-1)
         slope = (diag_density - (density * density).sum(dim=-1)).sum(
@@ -558,7 +629,7 @@ def _fermi_free_energy_setup(
     x = (relative - shift[..., None, None] * eye) / safe_kt
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     x = torch.where(pair, x, torch.zeros_like(x))
-    occupation = _matrix_fermi(relative, shift, safe_kt, active)
+    occupation = matrix_fermi(relative, shift, safe_kt, active)
     return _FermiFreeEnergySetup(
         h=h,
         spectral=spectral,
