@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import replace
 
 import pytest
@@ -25,28 +26,70 @@ import torch
 from torch.func import grad, jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
+from dxtb._src.calculators.batch_implicit import (
+    BatchRootFailureCode,
+    _classify_fermi_code,
+    _resolve_strictness,
+    classify_response_failure_status,
+    evaluate_converged_root_batch,
+    prepare_converged_root_batch,
+)
 from dxtb._src.calculators.canonical_padding import (
     bucket_canonical_exact_cores,
     canonicalize_positions,
     pad_canonical_exact_core,
 )
 from dxtb._src.calculators.model import Model
-from dxtb.config import Config
-from dxtb._src.calculators.batch_implicit import (
-    BatchRootFailureCode,
-    evaluate_converged_root_batch,
-    prepare_converged_root_batch,
-)
 from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
 from dxtb._src.scf.functional.implicit import implicit_root
+from dxtb._src.scf.functional.solver import (
+    FERMI_FAILURE_ELECTRON_COUNT,
+    FERMI_FAILURE_INVALID_TEMPERATURE,
+    FERMI_FAILURE_NONCONVERGENCE,
+    FERMI_FAILURE_NONE,
+    FERMI_FAILURE_TOO_MANY_ELECTRONS,
+)
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
     SCFConvergenceWarning,
 )
 from dxtb._src.wavefunction.filling import FermiStatus
+from dxtb.config import Config
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
+
+
+class _InjectedResponseFailure(torch.autograd.Function):
+    """Create a lane-local derivative failure while retaining primal values."""
+
+    generate_vmap_rule = True
+
+    @staticmethod
+    def forward(attached: torch.Tensor, failed: torch.Tensor) -> torch.Tensor:
+        return attached
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        _, failed = inputs
+        ctx.save_for_backward(failed)
+        ctx.save_for_forward(failed)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        (failed,) = ctx.saved_tensors
+        poison = failed & (grad_output != 0.0).any()
+        nan = torch.full_like(grad_output, float("nan"))
+        return torch.where(poison, nan, grad_output), None
+
+    @staticmethod
+    def jvp(ctx, grad_attached, grad_failed):
+        (failed,) = ctx.saved_tensors
+        if grad_attached is None:
+            return torch.zeros_like(failed).expand_as(grad_failed)
+        return torch.where(
+            failed, torch.full_like(grad_attached, float("nan")), grad_attached
+        )
 
 
 def _build_system(
@@ -196,9 +239,13 @@ def test_conformer_batch_matches_serial_and_permutes_cleanly(
 
     # Compare against independent single-conformer evaluations.
     for lane_idx in range(3):
-        single_pos = base_positions[lane_idx : lane_idx + 1].clone().requires_grad_(True)
+        single_pos = (
+            base_positions[lane_idx : lane_idx + 1].clone().requires_grad_(True)
+        )
         single_res = evaluate_converged_root_batch(system, single_pos)
-        single_grad = torch.autograd.grad(single_res.energy.sum(), single_pos)[0]
+        single_grad = torch.autograd.grad(single_res.energy.sum(), single_pos)[
+            0
+        ]
         torch.testing.assert_close(
             result.energy[lane_idx],
             single_res.energy[0],
@@ -275,12 +322,16 @@ def test_open_shell_finite_temperature_partially_occupied_no2(
                 pos_m = base_positions.clone()
                 pos_p[b, a, c] += step
                 pos_m[b, a, c] -= step
-                ep = evaluate_converged_root_batch(
-                    system, pos_p, spin=1.0
-                ).energy[b].sum()
-                em = evaluate_converged_root_batch(
-                    system, pos_m, spin=1.0
-                ).energy[b].sum()
+                ep = (
+                    evaluate_converged_root_batch(system, pos_p, spin=1.0)
+                    .energy[b]
+                    .sum()
+                )
+                em = (
+                    evaluate_converged_root_batch(system, pos_m, spin=1.0)
+                    .energy[b]
+                    .sum()
+                )
                 fd_grad[b, a, c] = (ep - em) / (2.0 * step)
 
     torch.testing.assert_close(analytic_grad, fd_grad, atol=5e-7, rtol=5e-6)
@@ -317,12 +368,8 @@ def test_noncontiguous_padding_preserves_values_and_gradients() -> None:
     """Noncontiguous canonical padding matches unpadded conformer batch."""
     numbers_lih = torch.tensor([3, 1], device=DEVICE)
     numbers_h2o, _ = _h2o_conformers()
-    _, sys_lih = _build_system(
-        numbers_lih, int_level=labels.INTLEVEL_HCORE
-    )
-    _, sys_h2o = _build_system(
-        numbers_h2o, int_level=labels.INTLEVEL_HCORE
-    )
+    _, sys_lih = _build_system(numbers_lih, int_level=labels.INTLEVEL_HCORE)
+    _, sys_h2o = _build_system(numbers_h2o, int_level=labels.INTLEVEL_HCORE)
     assert sys_lih.exact_core is not None
     assert sys_h2o.exact_core is not None
 
@@ -449,7 +496,9 @@ def test_shared_model_parameter_gradients_and_leaf_classification() -> None:
     disconnected = sum(g is None for g in batch_param_grads)
     assert connected_nonzero > 0
     assert connected_zero + disconnected > 0
-    assert connected_nonzero + connected_zero + disconnected == len(param_tensors)
+    assert connected_nonzero + connected_zero + disconnected == len(
+        param_tensors
+    )
 
     # Compare against sum of serial conformer gradients on the SAME Model owner.
     serial_param_accum = [None] * len(param_tensors)
@@ -508,7 +557,9 @@ def test_failure_policy_strict_and_non_strict_mixed_lanes() -> None:
     )
 
     # 3. Mixed valid (Lane 0) and invalid (Lane 1) lanes in non-strict mode.
-    _, system = _build_system(numbers, force_convergence=False)
+    model, system = _build_system(
+        numbers, force_convergence=False, trainable_model=True
+    )
     pos_two = base_positions[:2].clone().requires_grad_(True)
     prepared = prepare_converged_root_batch(system, pos_two, strict=False)
     assert prepared.all_roots_valid
@@ -551,13 +602,66 @@ def test_failure_policy_strict_and_non_strict_mixed_lanes() -> None:
     assert bool(torch.isnan(mixed_result.density[1]).all())
 
     # Differentiating valid lane 0 must be completely uncorrupted by lane 1.
-    grad_lane_0 = torch.autograd.grad(
-        mixed_result.energy[0].sum(), pos_two
-    )[0]
+    grad_lane_0, grad_valid_parameter = torch.autograd.grad(
+        mixed_result.energy[0].sum(),
+        (pos_two, prepared.model_parameter_refs[0]),
+        retain_graph=True,
+    )
     assert bool(torch.isfinite(grad_lane_0[0]).all())
+    assert bool(torch.isfinite(grad_valid_parameter).all())
     torch.testing.assert_close(
         grad_lane_0[1], torch.zeros_like(grad_lane_0[1]), atol=0.0, rtol=0.0
     )
+    grad_invalid = torch.autograd.grad(
+        mixed_result.energy[1].sum(), pos_two, retain_graph=True
+    )[0]
+    assert bool(torch.isfinite(grad_invalid[0]).all())
+    assert bool(torch.isnan(grad_invalid[1]).all())
+    grad_invalid_parameter = torch.autograd.grad(
+        mixed_result.energy[1].sum(),
+        prepared.model_parameter_refs[0],
+        retain_graph=True,
+    )[0]
+    assert bool(torch.isnan(grad_invalid_parameter).all())
+
+    weights = torch.tensor([1.0, 0.0], dtype=DTYPE, device=DEVICE)
+    weighted_obj = (weights * mixed_result.energy.sum(dim=-1)).sum()
+    grad_weighted_pos, grad_weighted_param = torch.autograd.grad(
+        weighted_obj,
+        (pos_two, prepared.model_parameter_refs[0]),
+    )
+    torch.testing.assert_close(
+        grad_weighted_pos[0], grad_lane_0[0], atol=1e-14, rtol=1e-14
+    )
+    torch.testing.assert_close(
+        grad_weighted_pos[1],
+        torch.zeros_like(grad_weighted_pos[1]),
+        atol=0.0,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        grad_weighted_param, grad_valid_parameter, atol=1e-14, rtol=1e-14
+    )
+
+    direction = torch.zeros_like(pos_two)
+    direction[1, 0, 0] = 1.0
+    _, invalid_jvp = jvp(
+        lambda value: evaluate_converged_root_batch(
+            mixed_batch, positions=value, strict=False
+        )
+        .energy[1]
+        .sum(),
+        (pos_two.detach(),),
+        (direction,),
+    )
+    assert bool(torch.isnan(invalid_jvp))
+    lane_jacobian = jacrev(
+        lambda value: evaluate_converged_root_batch(
+            mixed_batch, positions=value, strict=False
+        ).energy.sum(dim=-1)
+    )(pos_two.detach())
+    assert bool(torch.isfinite(lane_jacobian[0]).all())
+    assert bool(torch.isnan(lane_jacobian[1, 1]).all())
 
     pos_single = base_positions[:1].clone().requires_grad_(True)
     res_single = evaluate_converged_root_batch(system, pos_single)
@@ -572,10 +676,219 @@ def test_failure_policy_strict_and_non_strict_mixed_lanes() -> None:
     # 4. Stale prepared root rejected when evaluated at shifted geometry.
     shifted_pos = base_positions[:2].clone()
     shifted_pos[1, 0, 2] += 0.25
-    with pytest.raises(SCFConvergenceError, match=r"\[Lane 1\]"):
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
         evaluate_converged_root_batch(
             prepared, positions=shifted_pos, strict=True
         )
+
+
+def test_strictness_precedence_and_fermi_failure_classification() -> None:
+    """Mandatory force-convergence cannot be weakened and unknown codes fail closed."""
+    numbers, positions = _h2_conformers()
+    for force, requested, expected in (
+        (False, None, False),
+        (False, False, False),
+        (False, True, True),
+        (True, None, True),
+        (True, False, True),
+        (True, True, True),
+    ):
+        config = type("StrictConfig", (), {"force_convergence": force})()
+        assert _resolve_strictness(config, requested) is expected
+
+        # Valid physical root across all 6 combinations
+        _, valid_sys = _build_system(
+            numbers, maxiter=200, force_convergence=force
+        )
+        prep_valid = prepare_converged_root_batch(
+            valid_sys, positions[:1], strict=requested
+        )
+        assert prep_valid.all_roots_valid
+        res_valid = evaluate_converged_root_batch(prep_valid, strict=requested)
+        assert bool(res_valid.converged.all())
+
+        # Invalid physical root across all 6 combinations
+        _, invalid_sys = _build_system(
+            numbers, maxiter=1, force_convergence=force
+        )
+        if expected:
+            with pytest.raises(SCFConvergenceError, match=r"\[Lane 0\]"):
+                prepare_converged_root_batch(
+                    invalid_sys, positions[:1], strict=requested
+                )
+        else:
+            with pytest.warns(SCFConvergenceWarning):
+                prep_inv = prepare_converged_root_batch(
+                    invalid_sys, positions[:1], strict=requested
+                )
+            assert not prep_inv.all_roots_valid
+            res_inv = evaluate_converged_root_batch(prep_inv, strict=requested)
+            assert not bool(res_inv.converged.any())
+            assert bool(torch.isnan(res_inv.energy).all())
+
+    expected_codes = {
+        FERMI_FAILURE_NONE: BatchRootFailureCode.NONE,
+        FERMI_FAILURE_INVALID_TEMPERATURE: BatchRootFailureCode.INVALID_TEMPERATURE,
+        FERMI_FAILURE_TOO_MANY_ELECTRONS: BatchRootFailureCode.TOO_MANY_ELECTRONS,
+        FERMI_FAILURE_NONCONVERGENCE: BatchRootFailureCode.FERMI_NONCONVERGENCE,
+        FERMI_FAILURE_ELECTRON_COUNT: BatchRootFailureCode.ELECTRON_COUNT,
+    }
+    for raw_code, batch_code in expected_codes.items():
+        classified, _ = _classify_fermi_code(raw_code)
+        assert classified == int(batch_code)
+    with pytest.raises(ValueError, match="Unknown nonzero Fermi failure code"):
+        _classify_fermi_code(987654)
+
+
+def test_prepared_root_rejects_mutated_inputs_and_model_parameters() -> None:
+    """Prepared roots cannot outlive changed primal inputs or Model parameters."""
+    numbers, base_positions = _h2o_conformers()
+
+    _, position_system = _build_system(numbers)
+    mutable_positions = base_positions[:1].clone()
+    position_root = prepare_converged_root_batch(
+        position_system, mutable_positions
+    )
+    displaced_for_transform = mutable_positions.clone()
+    displaced_for_transform[0, 0, 0] += 0.1
+
+    def transformed_energy(value: torch.Tensor) -> torch.Tensor:
+        return evaluate_converged_root_batch(
+            position_root, positions=value
+        ).energy.sum()
+
+    tangent = torch.ones_like(displaced_for_transform)
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        grad(transformed_energy)(displaced_for_transform)
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        jvp(
+            transformed_energy,
+            (displaced_for_transform,),
+            (tangent,),
+        )
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        jacfwd(transformed_energy)(displaced_for_transform)
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        jacrev(transformed_energy)(displaced_for_transform)
+
+    compiled_energy = torch.compile(transformed_energy, backend="eager")
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        compiled_energy(displaced_for_transform)
+
+    with torch.no_grad():
+        mutable_positions[0, 0, 0] += 1.0e-3
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        evaluate_converged_root_batch(position_root)
+
+    _, replacement_system = _build_system(numbers)
+    replacement_root = prepare_converged_root_batch(
+        replacement_system, base_positions[:1]
+    )
+    displaced = base_positions[:1].clone()
+    displaced[0, 0, 0] += 0.2
+    with pytest.raises(RuntimeError, match="stale for the supplied positions"):
+        evaluate_converged_root_batch(replacement_root, positions=displaced)
+
+    changed_scf = replace(replacement_system.config.scf, maxiter=199)
+    changed_config = replace(replacement_system.config, scf=changed_scf)
+    changed_system = replace(replacement_system, config=changed_config)
+    changed_prepared = replace(replacement_root, system=changed_system)
+    with pytest.raises(RuntimeError, match="configuration has changed"):
+        evaluate_converged_root_batch(changed_prepared)
+
+    changed_num_system = replace(
+        replacement_system, numbers=torch.tensor([8, 1, 2], device=DEVICE)
+    )
+    changed_num_prepared = replace(replacement_root, system=changed_num_system)
+    with pytest.raises(RuntimeError, match="atomic numbers have changed"):
+        evaluate_converged_root_batch(changed_num_prepared)
+
+    with torch.no_grad():
+        replacement_root.lanes[0].root_x.add_(1.0e-6)
+    with pytest.raises(RuntimeError, match="root tensor was modified"):
+        evaluate_converged_root_batch(replacement_root)
+
+    model, parameter_system = _build_system(numbers, trainable_model=True)
+    parameter_root = prepare_converged_root_batch(
+        parameter_system, base_positions[:1]
+    )
+    parameter = parameter_root.model_parameter_refs[0]
+    assert any(parameter is value for value in model.par.parameters())
+    with torch.no_grad():
+        parameter.add_(1.0e-8)
+    with pytest.raises(
+        RuntimeError, match="stale for the current Model parameters"
+    ):
+        evaluate_converged_root_batch(parameter_root)
+
+
+def test_prepared_root_rejects_mutated_internal_physical_tensor() -> None:
+    """Frozen input records still reject in-place tensor mutation."""
+    numbers, positions = _h2_conformers()
+    _, system = _build_system(numbers, trainable_model=True)
+    prepared = prepare_converged_root_batch(system, positions[:1], strict=True)
+    hcore = prepared.lanes[0].inputs.integrals.hcore
+    with torch.no_grad():
+        hcore.add_(1.0e-3)
+    with pytest.raises(
+        RuntimeError, match="mutated in place at 'integrals.hcore'"
+    ):
+        evaluate_converged_root_batch(prepared, strict=True)
+
+
+def test_prepared_root_snapshots_are_immutable_values() -> None:
+    """Snapshot records cannot be changed to bless a stale prepared root."""
+    numbers, positions = _h2_conformers()
+    _, system = _build_system(numbers, trainable_model=True)
+    prepared = prepare_converged_root_batch(system, positions[:1], strict=True)
+
+    snapshots = (
+        prepared.positions_snapshot,
+        prepared.numbers_snapshot,
+        prepared.model_parameter_snapshot[0],
+        prepared.system_tensor_snapshot[0],
+        prepared.root_snapshots[0],
+    )
+    assert all(isinstance(snapshot.raw_bytes, bytes) for snapshot in snapshots)
+    assert all(not isinstance(snapshot, torch.Tensor) for snapshot in snapshots)
+
+    with torch.no_grad():
+        prepared.lanes[0].root_x.add_(0.1)
+    with pytest.raises(RuntimeError, match="root tensor was modified"):
+        evaluate_converged_root_batch(prepared, strict=True)
+
+
+def test_prepared_root_rejects_mutated_explicit_map_parameter() -> None:
+    """Every explicit physical-map tensor is snapshotted, not just grad leaves."""
+    numbers, positions = _h2o_conformers()
+    _, system = _build_system(numbers, trainable_model=False)
+    prepared = prepare_converged_root_batch(system, positions[:1], strict=True)
+    parameter = prepared.lanes[0].parameters[0]
+    with torch.no_grad():
+        parameter.add_(1.0e-5)
+    with pytest.raises(RuntimeError, match="Prepared physical parameters"):
+        evaluate_converged_root_batch(prepared, strict=True)
+
+
+@pytest.mark.parametrize("mutation", ["charge", "spin", "field"])
+def test_prepared_root_rejects_replaced_physical_inputs(mutation: str) -> None:
+    """Charge, spin, and external-field changes require fresh physical roots."""
+    numbers, positions = _h2o_conformers()
+    _, system = _build_system(numbers, int_level=labels.INTLEVEL_DIPOLE)
+    field = torch.tensor([0.001, 0.0, 0.0], dtype=DTYPE, device=DEVICE)
+    prepared = prepare_converged_root_batch(system, positions[:1], field=field)
+
+    if mutation == "charge":
+        with pytest.raises(RuntimeError):
+            evaluate_converged_root_batch(prepared, chrg=0.25)
+    elif mutation == "spin":
+        with pytest.raises(RuntimeError):
+            evaluate_converged_root_batch(prepared, spin=1.0)
+    else:
+        changed_field = field.clone()
+        changed_field[0] += 1.0e-3
+        with pytest.raises(RuntimeError, match="stale for charge, spin"):
+            evaluate_converged_root_batch(prepared, field=changed_field)
 
 
 def test_fermi_and_linear_response_failure_isolation() -> None:
@@ -612,20 +925,116 @@ def test_fermi_and_linear_response_failure_isolation() -> None:
     )
     scales = torch.tensor([0.5, 1.0], dtype=DTYPE, device=DEVICE)
 
-    def raw_map(x: torch.Tensor, p: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def raw_map(
+        x: torch.Tensor, p: torch.Tensor, s: torch.Tensor
+    ) -> torch.Tensor:
         return s * x + p
 
-    attached = vmap(
-        lambda r, p, s: implicit_root(r, p, s, raw_map=raw_map)
-    )(roots, params, scales)
+    attached = vmap(lambda r, p, s: implicit_root(r, p, s, raw_map=raw_map))(
+        roots, params, scales
+    )
     grad_lane0 = torch.autograd.grad(
         attached[0].sum(), params, retain_graph=True
     )[0]
     grad_lane1 = torch.autograd.grad(attached[1].sum(), params)[0]
     torch.testing.assert_close(
-        grad_lane0[0], torch.full((2,), 2.0, dtype=DTYPE), atol=1e-10, rtol=1e-10
+        grad_lane0[0],
+        torch.full((2,), 2.0, dtype=DTYPE),
+        atol=1e-10,
+        rtol=1e-10,
     )
     assert bool(torch.isnan(grad_lane1[1]).all())
+
+
+def test_batch_backward_response_failure_is_lane_local(monkeypatch) -> None:
+    """Backward response failure is explicit but does not rewrite primal status."""
+    numbers, positions = _h2_conformers()
+    model, system = _build_system(
+        numbers, force_convergence=False, trainable_model=True
+    )
+    prepared = prepare_converged_root_batch(system, positions, strict=False)
+    assert prepared.all_roots_valid
+
+    roots = torch.stack([lane.root_x for lane in prepared.lanes])
+    first_coordinate = roots.reshape(roots.shape[0], -1)[:, 0]
+    assert not torch.isclose(first_coordinate[0], first_coordinate[1])
+    failed_lane = torch.tensor([False, True], device=DEVICE)
+    failed_root_coordinate = first_coordinate[1]
+    fail_all = [False]
+
+    module = importlib.import_module("dxtb._src.calculators.batch_implicit")
+    original = module.implicit_root
+
+    def injected(root: torch.Tensor, *params: torch.Tensor, raw_map):
+        attached = original(root, *params, raw_map=raw_map)
+        return _InjectedResponseFailure.apply(
+            attached,
+            (root.reshape(-1)[0] == failed_root_coordinate)
+            | torch.tensor(fail_all[0], device=root.device),
+        )
+
+    monkeypatch.setattr(module, "implicit_root", injected)
+    result = evaluate_converged_root_batch(prepared, strict=False)
+    assert bool(result.converged.all())
+    assert bool((result.status.final_failure == 0).all())
+
+    positions_leaf = positions.clone().requires_grad_(True)
+    result = evaluate_converged_root_batch(
+        prepared, positions=positions_leaf, strict=False
+    )
+    energy = result.energy.sum(dim=-1)
+    gradients = torch.autograd.grad(
+        energy.sum(), positions_leaf, retain_graph=True
+    )[0]
+    assert bool(torch.isfinite(gradients[~failed_lane]).all())
+    assert bool(torch.isnan(gradients[failed_lane]).all())
+    assert result.status is not None
+    post_status = classify_response_failure_status(
+        result.status, result.converged, gradients
+    )
+    assert int(result.status.final_failure[0].item()) == 0
+    assert int(result.status.final_failure[1].item()) == 0
+    assert int(post_status.final_failure[0].item()) == int(
+        BatchRootFailureCode.NONE
+    )
+    assert int(post_status.final_failure[1].item()) == int(
+        BatchRootFailureCode.RESPONSE_FAILURE
+    )
+    parameter = prepared.model_parameter_refs[0]
+    valid_parameter_gradient = torch.autograd.grad(
+        energy[0], parameter, retain_graph=True
+    )[0]
+    failed_parameter_gradient = torch.autograd.grad(
+        energy[1], parameter, retain_graph=True
+    )[0]
+    assert bool(torch.isfinite(valid_parameter_gradient).all())
+    assert bool(torch.isnan(failed_parameter_gradient).all())
+
+    weights = (~failed_lane).to(dtype=DTYPE)
+    weighted = (energy * weights).sum()
+    masked_grad = torch.autograd.grad(weighted, positions_leaf)[0]
+    assert bool(torch.isfinite(masked_grad).all())
+    assert bool((masked_grad[1] == 0.0).all())
+
+    direction = torch.zeros_like(positions)
+    direction[failed_lane, 0, 0] = 1.0
+    _, tangent = jvp(
+        lambda value: evaluate_converged_root_batch(
+            prepared, positions=value, strict=False
+        ).energy.sum(),
+        (positions,),
+        (direction,),
+    )
+    assert bool(torch.isnan(tangent))
+
+    fail_all[0] = True
+    all_failed = evaluate_converged_root_batch(prepared, strict=True)
+    assert bool(all_failed.converged.all())
+    assert bool((all_failed.status.final_failure == 0).all())
+    all_failed_gradient = torch.autograd.grad(
+        all_failed.energy.sum(), prepared.model_parameter_refs[0]
+    )[0]
+    assert bool(torch.isnan(all_failed_gradient).all())
 
 
 def test_transforms_grad_jvp_jacfwd_jacrev_hvp_vmap_and_higher_order() -> None:
@@ -639,9 +1048,9 @@ def test_transforms_grad_jvp_jacfwd_jacrev_hvp_vmap_and_higher_order() -> None:
     prepared = prepare_converged_root_batch(system, base_positions)
 
     def batch_energy_vec(pos: torch.Tensor) -> torch.Tensor:
-        return evaluate_converged_root_batch(prepared, positions=pos).energy.sum(
-            dim=-1
-        )
+        return evaluate_converged_root_batch(
+            prepared, positions=pos
+        ).energy.sum(dim=-1)
 
     def batch_energy_sum(pos: torch.Tensor) -> torch.Tensor:
         return batch_energy_vec(pos).sum()
@@ -654,9 +1063,7 @@ def test_transforms_grad_jvp_jacfwd_jacrev_hvp_vmap_and_higher_order() -> None:
     _, jvp_val = jvp(batch_energy_vec, (base_positions,), (tangent,))
 
     torch.testing.assert_close(j_rev, j_fwd, atol=1e-10, rtol=1e-10)
-    torch.testing.assert_close(
-        j_rev.sum(dim=0), g_func, atol=1e-10, rtol=1e-10
-    )
+    torch.testing.assert_close(j_rev.sum(dim=0), g_func, atol=1e-10, rtol=1e-10)
     expected_jvp = (j_rev * tangent.unsqueeze(0)).sum(dim=(-3, -2, -1))
     torch.testing.assert_close(jvp_val, expected_jvp, atol=1e-10, rtol=1e-10)
 
@@ -722,7 +1129,9 @@ def test_open_shell_and_charged_conformer_batches() -> None:
     """Open-shell (Li, NH2) and charged (OH-, H3O+) batches preserve prepared chrg/spin."""
     # 1. Li (Z=[3], spin=1.0, 1 conformer)
     numbers_li = torch.tensor([3], device=DEVICE)
-    pos_li = torch.zeros((1, 1, 3), dtype=DTYPE, device=DEVICE, requires_grad=True)
+    pos_li = torch.zeros(
+        (1, 1, 3), dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
     _, sys_li = _build_system(numbers_li, etemp=300.0)
     prep_li = prepare_converged_root_batch(sys_li, pos_li, spin=1.0)
     assert prep_li.all_roots_valid
@@ -956,18 +1365,20 @@ def test_multi_orbital_noncontiguous_padding_and_potential_field(
         p_unpad = pos_unpadded.clone().requires_grad_(True)
         p_pad = pos_padded.clone().requires_grad_(True)
         f_unpad = (
-            None if field_val is None else field_val.clone().requires_grad_(True)
+            None
+            if field_val is None
+            else field_val.clone().requires_grad_(True)
         )
         f_pad = (
-            None if field_val is None else field_val.clone().requires_grad_(True)
+            None
+            if field_val is None
+            else field_val.clone().requires_grad_(True)
         )
 
         res_unpad = evaluate_converged_root_batch(
             sys_hf, p_unpad, field=f_unpad
         )
-        res_pad = evaluate_converged_root_batch(
-            padded_hf, p_pad, field=f_pad
-        )
+        res_pad = evaluate_converged_root_batch(padded_hf, p_pad, field=f_pad)
         assert bool(res_pad.converged.all())
 
         torch.testing.assert_close(
@@ -1034,9 +1445,7 @@ def test_nested_jvp_and_outer_nel_tangent() -> None:
         lambda s: jvp(energy_from_scratch, (s,), (one,))[1], (s0,), (one,)
     )
     d2_grad = grad(grad(energy_from_scratch))(s0)
-    torch.testing.assert_close(
-        d2_nested_jvp, d2_grad, atol=1e-9, rtol=1e-9
-    )
+    torch.testing.assert_close(d2_nested_jvp, d2_grad, atol=1e-9, rtol=1e-9)
 
     # 2. Outer JVP on nel inside inner JVP on hamiltonian in spectral.py
     h0 = torch.tensor(

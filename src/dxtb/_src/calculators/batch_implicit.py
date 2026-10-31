@@ -25,13 +25,15 @@ and mapped implicit differentiation.
 
 from __future__ import annotations
 
+import dataclasses
+import warnings
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from enum import IntEnum
-import warnings
+from types import SimpleNamespace
 
 import torch
-from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.exceptions import DeviceError, DtypeError
 from tad_mctc.tools.compile import is_compiling
 from torch.func import vmap
@@ -147,6 +149,7 @@ __all__ = [
     "BatchRootFailureCode",
     "ConvergedRootLaneRecord",
     "PreparedConvergedRootBatch",
+    "classify_response_failure_status",
     "evaluate_converged_root_batch",
     "prepare_converged_root_batch",
 ]
@@ -156,7 +159,16 @@ _UNSET: Any = object()
 
 
 class BatchRootFailureCode(IntEnum):
-    """Explicit failure categories for converged-root batch validation."""
+    """Failure categories for converged-root batch validation and response.
+
+    Codes ``1`` through ``8`` represent primal root-preparation failures and
+    are recorded in ``Result.status``. Code ``9`` (``RESPONSE_FAILURE``)
+    identifies an implicit linear-response failure during differentiation:
+    because ``Result`` is an immutable primal snapshot constructed prior to
+    derivative execution, ``Result.converged`` and ``Result.status`` remain
+    primal-root diagnostics while failed response solves produce lane-local
+    ``NaN`` derivatives when selected and ``0.0`` when masked.
+    """
 
     NONE = 0
     INVALID_TEMPERATURE = 1
@@ -211,6 +223,35 @@ class ConvergedRootLaneRecord:
 
 
 @dataclass(frozen=True, eq=False)
+class _TensorValueSnapshot:
+    """Immutable exact-value record for a prepared physical tensor."""
+
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    device: torch.device
+    raw_bytes: bytes
+
+    def to_tensor(self, device: torch.device | None = None) -> Tensor:
+        """Reconstruct an ordinary detached tensor from raw snapshot bytes."""
+        target_device = self.device if device is None else device
+        if not self.raw_bytes:
+            return torch.empty(
+                self.shape, dtype=self.dtype, device=target_device
+            )
+        return (
+            torch.frombuffer(bytearray(self.raw_bytes), dtype=torch.uint8)
+            .clone()
+            .view(self.dtype)
+            .reshape(self.shape)
+            .to(device=target_device)
+        )
+
+    def __getitem__(self, index: Any) -> _TensorValueSnapshot:
+        """Slice a snapshot tensor without retaining autograd state."""
+        return _snapshot_required_tensor(self.to_tensor()[index])
+
+
+@dataclass(frozen=True, eq=False)
 class PreparedConvergedRootBatch:
     """Validated conformer batch sharing one :class:`System` or padded core owner."""
 
@@ -220,21 +261,111 @@ class PreparedConvergedRootBatch:
     effective_mixer: int
     lanes: tuple[ConvergedRootLaneRecord, ...]
     parameter_paths: tuple[str, ...]
+    model_parameter_refs: tuple[Tensor, ...]
+    model_parameter_snapshot: tuple[_TensorValueSnapshot, ...]
+    model_parameter_versions: tuple[int | None, ...]
+    system_tensor_refs: tuple[Tensor, ...]
+    system_tensor_snapshot: tuple[_TensorValueSnapshot, ...]
+    system_tensor_versions: tuple[int | None, ...]
+    positions_snapshot: _TensorValueSnapshot
+    positions_version: int | None
+    numbers_snapshot: _TensorValueSnapshot
+    numbers_version: int | None
+    config_identity: int
+    config_repr: str
+    lane_input_snapshots: tuple[tuple[_TensorValueSnapshot | None, ...], ...]
+    parameter_snapshots: tuple[tuple[_TensorValueSnapshot, ...], ...]
+    root_snapshots: tuple[_TensorValueSnapshot, ...]
+    input_tensor_versions: tuple[dict[str, int], ...]
     valid_lane_mask: Tensor
     all_roots_valid: bool
 
 
 def _unwrap_primal_tensor(x: Tensor) -> Tensor:
-    """Peel grad-tracking and dual layers for detached primal root finding."""
+    """Peel grad-tracking, batched, and dual layers for detached primal root finding."""
     if is_compiling():
         return x.detach()
     ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
     current = x
-    while ft.is_functorch_wrapped_tensor(current):
-        current = ft.get_unwrapped(current)
+    while True:
+        if ft.is_functorch_wrapped_tensor(current):
+            current = ft.get_unwrapped(current)
+            continue
+        with torch._C._DisableFuncTorch():  # pyright: ignore[reportAttributeAccessIssue]
+            if not (current.is_floating_point() or current.is_complex()):
+                return current.detach()
+            dual = torch.autograd.forward_ad.unpack_dual(current)
+            if dual.tangent is not None:
+                current = dual.primal
+                continue
+            return current.detach()
+
+
+def _tensor_version(value: Tensor | None) -> int | None:
+    """Return the storage version counter of a primal tensor."""
+    if value is None:
+        return None
+    return int(_unwrap_primal_tensor(value)._version)
+
+
+def _tensor_raw_bytes(value: Tensor) -> bytes:
+    """Extract exact storage bytes from an ordinary detached tensor."""
+    primal = _unwrap_primal_tensor(value)
     with torch._C._DisableFuncTorch():  # pyright: ignore[reportAttributeAccessIssue]
-        primal = torch.autograd.forward_ad.unpack_dual(current).primal
-        return primal.detach()
+        return primal.detach().contiguous().cpu().numpy().tobytes()
+
+
+def _snapshot_tensor(
+    value: Tensor | None,
+) -> _TensorValueSnapshot | None:
+    """Store immutable exact tensor values without retaining autograd graphs."""
+    if value is None:
+        return None
+    primal = _unwrap_primal_tensor(value)
+    with torch._C._DisableFuncTorch():  # pyright: ignore[reportAttributeAccessIssue]
+        detached = primal.detach().contiguous()
+        raw = detached.cpu().numpy().tobytes()
+    return _TensorValueSnapshot(
+        shape=tuple(detached.shape),
+        dtype=detached.dtype,
+        device=detached.device,
+        raw_bytes=raw,
+    )
+
+
+def _snapshot_required_tensor(value: Tensor) -> _TensorValueSnapshot:
+    """Snapshot a tensor known to be present."""
+    snapshot = _snapshot_tensor(value)
+    assert snapshot is not None
+    return snapshot
+
+
+def _matches_snapshot(actual: Tensor, expected: _TensorValueSnapshot) -> bool:
+    """Compare exact metadata and primal values to an immutable snapshot."""
+    primal = _unwrap_primal_tensor(actual)
+    if (
+        tuple(primal.shape) != expected.shape
+        or primal.dtype != expected.dtype
+        or primal.device != expected.device
+    ):
+        return False
+    if not is_compiling():
+        return _tensor_raw_bytes(primal) == expected.raw_bytes
+    reference = expected.to_tensor(device=primal.device)
+    if primal.is_floating_point():
+        return bool(
+            torch.all(
+                (primal == reference)
+                | (torch.isnan(primal) & torch.isnan(reference))
+            )
+        )
+    return bool(torch.equal(primal, reference))
+
+
+def _resolve_strictness(config: object, strict: bool | None) -> bool:
+    """Keep mandatory configured convergence strictness from being weakened."""
+    force = bool(getattr(config, "force_convergence"))
+    return force or (strict is True)
 
 
 def _detach_scf_inputs(inputs: SCFInputs) -> SCFInputs:
@@ -280,6 +411,94 @@ def _detach_scf_inputs(inputs: SCFInputs) -> SCFInputs:
         fermi_settings=fermi_settings,
         **changes,
     )
+
+
+def _collect_object_tensors(
+    obj: object,
+    excluded_ids: set[int],
+    seen_objs: dict[int, object] | None = None,
+    found: dict[int, Tensor] | None = None,
+) -> dict[int, Tensor]:
+    """Recursively collect all Tensor references held by a System or core setup."""
+    if seen_objs is None:
+        seen_objs = {}
+    if found is None:
+        found = {}
+    if obj is None or isinstance(obj, (bool, int, float, str, bytes, type)):
+        return found
+    if isinstance(obj, torch.Tensor):
+        if id(obj) not in excluded_ids:
+            found[id(obj)] = obj
+        return found
+    oid = id(obj)
+    if oid in seen_objs:
+        return found
+    seen_objs[oid] = obj
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _collect_object_tensors(k, excluded_ids, seen_objs, found)
+            _collect_object_tensors(v, excluded_ids, seen_objs, found)
+    elif isinstance(obj, (tuple, list, set, frozenset)):
+        for item in obj:
+            _collect_object_tensors(item, excluded_ids, seen_objs, found)
+    elif dataclasses.is_dataclass(obj):
+        for field_info in dataclasses.fields(obj):
+            _collect_object_tensors(
+                getattr(obj, field_info.name, None),
+                excluded_ids,
+                seen_objs,
+                found,
+            )
+    elif hasattr(obj, "__dict__"):
+        _collect_object_tensors(vars(obj), excluded_ids, seen_objs, found)
+    return found
+
+
+def _collect_system_and_model_tensors(
+    system: System | PaddedExactSystemCore,
+    excluded_ids: set[int],
+) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+    """Collect System setup tensors and connected differentiable Model leaf tensors."""
+    found_sys: dict[int, Tensor] = {}
+    seen_objs: dict[int, object] = {}
+    if isinstance(system, System):
+        for attr in (
+            "h0_setup",
+            "integral_setup",
+            "interactions",
+            "_exact_core",
+            "classicals",
+        ):
+            _collect_object_tensors(
+                getattr(system, attr, None), excluded_ids, seen_objs, found_sys
+            )
+    _collect_object_tensors(system, excluded_ids, seen_objs, found_sys)
+    sys_tensors = tuple(found_sys.values())
+    stack = [t.grad_fn for t in reversed(sys_tensors) if t.grad_fn is not None]
+    seen_nodes: set[Any] = set()
+    leaves: dict[int, Tensor] = {}
+    for t in sys_tensors:
+        if t.is_leaf and t.requires_grad and id(t) not in excluded_ids:
+            leaves[id(t)] = t
+    while stack:
+        node = stack.pop()
+        if node is None or node in seen_nodes:
+            continue
+        seen_nodes.add(node)
+        variable = getattr(node, "variable", None)
+        if (
+            isinstance(variable, torch.Tensor)
+            and variable.is_leaf
+            and variable.requires_grad
+            and id(variable) not in excluded_ids
+        ):
+            leaves[id(variable)] = variable
+        stack.extend(
+            next_node
+            for next_node, _ in reversed(node.next_functions)
+            if next_node is not None
+        )
+    return sys_tensors, tuple(leaves.values())
 
 
 def _normalize_batch_scalar(
@@ -406,7 +625,9 @@ def _validate_system_and_positions(
         if h0_setup is None:
             raise NotImplementedError("Core Hamiltonian setup is missing.")
         if integral_setup is None:
-            raise NotImplementedError("Single-system integral setup is missing.")
+            raise NotImplementedError(
+                "Single-system integral setup is missing."
+            )
         if config.ints.level < labels.INTLEVEL_HCORE:
             raise NotImplementedError(
                 "Core Hamiltonian missing. Please increase the integral level to "
@@ -421,8 +642,6 @@ def _validate_system_and_positions(
             if config.scf.mixer == labels.MIXER_BROYDEN
             else config.scf.mixer
         )
-        from types import SimpleNamespace
-
         route = SimpleNamespace(
             kind="functional",
             representation=config.scf.scp_mode,
@@ -450,7 +669,7 @@ def _validate_system_and_positions(
         )
     if positions.shape[1:] != (numbers.shape[0], 3):
         raise ValueError(
-            f"Converged-root conformer batching expects positions with shape "
+            "Converged-root conformer batching expects positions with shape "
             f"(B, {numbers.shape[0]}, 3); got {tuple(positions.shape)}."
         )
     system_device = numbers.device
@@ -559,7 +778,7 @@ def _build_lane_inputs(
     lane_field: Tensor | None,
     lane_field_grad: Tensor | None,
 ):
-    """Build differentiable call-local integrals, interactions, and SCFInputs."""
+    """Build call-local integrals, interactions, and SCFInputs for one lane."""
     if isinstance(system, PaddedExactSystemCore):
         masked_pos = torch.where(
             system.validity.atoms.unsqueeze(-1), lane_positions, 0.0
@@ -693,11 +912,294 @@ def _classify_fermi_code(code_value: int) -> tuple[int, str]:
             int(BatchRootFailureCode.ELECTRON_COUNT),
             "Number of electrons changed during Fermi smearing.",
         )
-    return int(BatchRootFailureCode.NONE), ""
+    if code_value == FERMI_FAILURE_NONE:
+        return int(BatchRootFailureCode.NONE), ""
+    raise ValueError(f"Unknown nonzero Fermi failure code: {code_value}.")
+
+
+def classify_response_failure_status(
+    status: SCFStatus,
+    converged: Tensor,
+    lane_gradients: Tensor,
+) -> SCFStatus:
+    """Return a post-differentiation SCFStatus classifying nonfinite lane derivatives.
+
+    Because :class:`Result` is an immutable primal snapshot constructed before
+    backward or forward AD executes, ``Result.status`` is never mutated in
+    place during differentiation. Callers that inspect per-lane derivative
+    tensors ``(B, ...)`` can use this helper to obtain a new :class:`SCFStatus`
+    where any primal-converged lane with nonfinite derivatives is marked with
+    :attr:`BatchRootFailureCode.RESPONSE_FAILURE`.
+    """
+    batch_size = int(converged.shape[0])
+    grad_finite = torch.isfinite(lane_gradients.reshape(batch_size, -1)).all(
+        dim=-1
+    )
+    response_failed = (
+        converged.to(dtype=torch.bool)
+        & (status.final_failure == int(BatchRootFailureCode.NONE))
+        & ~grad_finite
+    )
+    updated_final = torch.where(
+        response_failed,
+        torch.full_like(
+            status.final_failure, int(BatchRootFailureCode.RESPONSE_FAILURE)
+        ),
+        status.final_failure,
+    )
+    return SCFStatus(
+        trajectory_failure=status.trajectory_failure.clone(),
+        final_failure=updated_final,
+    )
+
+
+def _make_representation_projections(
+    primal_inputs: SCFInputs,
+    representation: int,
+    guess_charges: SCFCharges,
+    lane_padded: bool,
+) -> tuple[
+    Tensor,
+    PotentialLayout | None,
+    Callable[[Tensor], Tensor] | None,
+    Callable[[Tensor], Tensor] | None,
+    Callable[[Tensor], Any],
+]:
+    """Construct initial state, layout, padding projections, and raw map."""
+    state_projection: Callable[[Tensor], Tensor] | None = None
+    residual_projection: Callable[[Tensor], Tensor] | None = None
+    if representation == labels.SCP_MODE_CHARGE:
+        initial_state = pack_charges(guess_charges, primal_inputs.charge_layout)
+        layout = None
+        if lane_padded:
+            state_projection, residual_projection = _padded_charge_projections(
+                primal_inputs
+            )
+        map_fn = lambda x, _inp=primal_inputs: scf_map(x, _inp)
+    elif representation == labels.SCP_MODE_POTENTIAL:
+        initial_state, layout = potential_initial_guess(
+            guess_charges, primal_inputs
+        )
+        base_proj = lambda val, _lay=layout: _project_potential_padding(
+            val, _lay
+        )
+        if lane_padded:
+            pad_state, residual_projection = _padded_potential_projections(
+                primal_inputs, layout
+            )
+            state_projection = lambda val, _ps=pad_state, _bp=base_proj: _ps(
+                _bp(val)
+            )
+
+            def _potential_map_padded(
+                x: Tensor,
+                _inp: SCFInputs = primal_inputs,
+                _lay: PotentialLayout = layout,
+                _sp: Callable[[Tensor], Tensor] = state_projection,
+            ):
+                res = potential_map(x, _inp, _lay)
+                return replace(res, mapped_x=_sp(res.mapped_x))
+
+            map_fn = _potential_map_padded
+        else:
+            state_projection = base_proj
+            map_fn = lambda x, _inp=primal_inputs, _lay=layout: potential_map(
+                x, _inp, _lay
+            )
+    elif representation == labels.SCP_MODE_FOCK:
+        initial_state = fock_initial_guess(guess_charges, primal_inputs)
+        layout = None
+        if lane_padded:
+            matrix_mask = primal_inputs.orbital_mask.unsqueeze(
+                -1
+            ) & primal_inputs.orbital_mask.unsqueeze(-2)
+            state_projection = lambda val, _mm=matrix_mask, _hc=primal_inputs.integrals.hcore: torch.where(
+                _mm, val, _hc
+            )
+            residual_projection = lambda val, _mm=matrix_mask: torch.where(
+                _mm, val, 0.0
+            )
+        map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
+    else:
+        raise ValueError(
+            f"Unknown convergence target (SCP mode) '{representation}'."
+        )
+
+    if lane_padded and state_projection is not None:
+        initial_state = state_projection(initial_state)
+
+    return initial_state, layout, state_projection, residual_projection, map_fn
+
+
+@torch._dynamo.disable
+def _validate_prepared_primal(
+    prepared: PreparedConvergedRootBatch,
+    positions: Tensor,
+    charges: tuple[Tensor, ...],
+    spins: tuple[Tensor | None, ...],
+    fields: tuple[Tensor | None, ...],
+    field_grads: tuple[Tensor | None, ...],
+    numbers: Tensor,
+    config: object,
+) -> None:
+    """Require exact primal-input identity and untouched versions before reusing roots."""
+
+    def same(
+        actual: Tensor | None,
+        expected: _TensorValueSnapshot | None,
+        expected_version: int | None = None,
+        ref: Tensor | None = None,
+    ) -> bool:
+        if expected is None:
+            return actual is None
+        if actual is None:
+            return False
+        if expected_version is not None and ref is not None:
+            if _tensor_version(ref) != expected_version:
+                return False
+        if expected_version is not None and actual is ref:
+            if _tensor_version(actual) != expected_version:
+                return False
+        return _matches_snapshot(actual, expected)
+
+    system = prepared.system
+    if isinstance(system, System):
+        sys_cfg_mismatch = (
+            id(system.config) != prepared.config_identity
+            or repr(system.config) != prepared.config_repr
+        )
+        sys_num_mismatch = not same(
+            system.numbers,
+            prepared.numbers_snapshot,
+            prepared.numbers_version,
+            system.numbers,
+        )
+    else:
+        sys_cfg_mismatch = False
+        sys_num_mismatch = False
+
+    if (
+        sys_cfg_mismatch
+        or id(config) != prepared.config_identity
+        or repr(config) != prepared.config_repr
+    ):
+        raise RuntimeError(
+            "Prepared physical roots cannot be reused after the System "
+            "configuration has changed; prepare roots again."
+        )
+    if sys_num_mismatch or not same(
+        numbers,
+        prepared.numbers_snapshot,
+        prepared.numbers_version,
+        numbers,
+    ):
+        raise RuntimeError(
+            "Prepared physical roots cannot be reused after atomic numbers "
+            "have changed; prepare roots again."
+        )
+    if not same(
+        positions,
+        prepared.positions_snapshot,
+        (
+            prepared.positions_version
+            if positions is prepared.positions
+            else None
+        ),
+        positions if positions is prepared.positions else None,
+    ):
+        raise RuntimeError(
+            "Prepared physical roots are stale for the supplied positions; "
+            "prepare roots again."
+        )
+    if len(prepared.model_parameter_refs) != len(
+        prepared.model_parameter_snapshot
+    ) or any(
+        not same(value, snapshot, ver, value)
+        for value, snapshot, ver in zip(
+            prepared.model_parameter_refs,
+            prepared.model_parameter_snapshot,
+            prepared.model_parameter_versions,
+        )
+    ):
+        raise RuntimeError(
+            "Prepared physical roots are stale for the current Model "
+            "parameters; prepare roots again."
+        )
+    if len(prepared.system_tensor_refs) != len(
+        prepared.system_tensor_snapshot
+    ) or any(
+        not same(value, snapshot, ver, value)
+        for value, snapshot, ver in zip(
+            prepared.system_tensor_refs,
+            prepared.system_tensor_snapshot,
+            prepared.system_tensor_versions,
+        )
+    ):
+        raise RuntimeError(
+            "Prepared physical roots are stale for the supplied Model or "
+            "because System setup tensors were modified; prepare roots again."
+        )
+    if any(
+        not same(lane.root_x, root_snapshot)
+        for lane, root_snapshot in zip(prepared.lanes, prepared.root_snapshots)
+    ):
+        raise RuntimeError(
+            "A prepared physical root tensor was modified; prepare roots again."
+        )
+
+    for lane, expected_versions in zip(
+        prepared.lanes, prepared.input_tensor_versions
+    ):
+        actual_versions = {
+            path: int(_unwrap_primal_tensor(value)._version)
+            for path, value in tensor_leaves(lane.inputs)
+        }
+        if set(actual_versions) != set(expected_versions):
+            raise RuntimeError(
+                f"Prepared lane {lane.lane_index} SCF input tensor structure "
+                "changed after root preparation."
+            )
+        for path, expected_version in expected_versions.items():
+            if actual_versions[path] != expected_version:
+                raise RuntimeError(
+                    f"Prepared lane {lane.lane_index} SCF input tensor was "
+                    f"mutated in place at '{path}'."
+                )
+
+    for lane, param_snapshots in zip(
+        prepared.lanes, prepared.parameter_snapshots
+    ):
+        if len(lane.parameters) != len(param_snapshots) or any(
+            not same(param, snapshot)
+            for param, snapshot in zip(lane.parameters, param_snapshots)
+        ):
+            raise RuntimeError(
+                f"Prepared physical parameters for lane {lane.lane_index} "
+                "were modified; prepare roots again."
+            )
+
+    current_inputs = tuple(
+        zip(positions.unbind(0), charges, spins, fields, field_grads)
+    )
+    for lane_index, (lane, values, snapshots) in enumerate(
+        zip(
+            prepared.lanes,
+            current_inputs,
+            prepared.lane_input_snapshots,
+        )
+    ):
+        if any(
+            not same(value, snapshot)
+            for value, snapshot in zip(values, snapshots)
+        ):
+            raise RuntimeError(
+                f"Prepared physical root for lane {lane_index} is stale for "
+                "charge, spin, or external fields; prepare roots again."
+            )
 
 
 def prepare_converged_root_batch(
-    system: System,
+    system: System | PaddedExactSystemCore,
     positions: Tensor,
     chrg: Tensor | float | int = defaults.CHRG,
     spin: Tensor | float | int | None = defaults.SPIN,
@@ -710,7 +1212,7 @@ def prepare_converged_root_batch(
 
     Parameters
     ----------
-    system : System
+    system : System | PaddedExactSystemCore
         Single-System owner providing shared atomic numbers, basis/index
         structure, and Model parameters.
     positions : Tensor
@@ -724,11 +1226,9 @@ def prepare_converged_root_batch(
     field_grad : Tensor | None, default None
         Shared ``(3, 3)`` or per-lane ``(B, 3, 3)`` electric field gradient.
     strict : bool | None, default None
-        When ``True`` (or when ``None`` and ``config.scf.force_convergence``
-        is enabled), raise on any lane root or Fermi validation failure.
-        When ``False``, record per-lane failure metadata without raising on
-        primal nonconvergence or residual/state failures so valid lanes can
-        be evaluated independently.
+        ``force_convergence=True`` always raises on a failed lane. Otherwise,
+        ``True`` enables strict batch validation and ``False`` or ``None``
+        records primal failure metadata so valid lanes can be evaluated.
     """
     (
         _core,
@@ -741,11 +1241,7 @@ def prepare_converged_root_batch(
     ) = _validate_system_and_positions(system, positions, field, field_grad)
     batch_size = positions.shape[0]
     effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
-    strict_mode = (
-        bool(effective_scf_config.force_convergence)
-        if strict is None
-        else bool(strict)
-    )
+    strict_mode = _resolve_strictness(effective_scf_config, strict)
 
     charges = _normalize_batch_scalar("charge", chrg, positions, batch_size)
     spins = (
@@ -764,6 +1260,27 @@ def prepare_converged_root_batch(
     settings = _solver_settings(effective_scf_config, positions.dtype)
     has_padding = bool((numbers == 0).any())
 
+    external_input_ids = {
+        id(value)
+        for value in (
+            positions,
+            numbers,
+            *((system.numbers,) if isinstance(system, System) else ()),
+            *charges,
+            *(value for value in spins if value is not None),
+            *(value for value in fields if value is not None),
+            *(value for value in field_grads if value is not None),
+        )
+    }
+    system_tensor_refs, model_parameter_refs = (
+        _collect_system_and_model_tensors(system, external_input_ids)
+    )
+
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    eager_no_grad_build = (
+        not is_compiling() and ft.get_interpreter_stack() is None
+    )
+
     lanes: list[ConvergedRootLaneRecord] = []
     for lane_index in range(batch_size):
         lane_pos = positions[lane_index]
@@ -772,34 +1289,48 @@ def prepare_converged_root_batch(
         lane_field = fields[lane_index]
         lane_fgrad = field_grads[lane_index]
 
-        (
-            matrices,
-            refocc,
-            overlap_norm,
-            n0,
-            occupation,
-            nel,
-            call_interactions,
-            interaction_data,
-            inputs,
-        ) = _build_lane_inputs(
-            system,
-            numbers,
-            config,
-            integral_setup,
-            h0_setup,
-            core_index,
-            effective_scf_config,
-            lane_pos,
-            lane_chrg,
-            lane_spin,
-            lane_field,
-            lane_fgrad,
-        )
-
-        primal_inputs = _detach_scf_inputs(inputs)
         primal_pos = _unwrap_primal_tensor(lane_pos)
         primal_chrg = _unwrap_primal_tensor(lane_chrg)
+        primal_spin = (
+            None if lane_spin is None else _unwrap_primal_tensor(lane_spin)
+        )
+        primal_field = (
+            None if lane_field is None else _unwrap_primal_tensor(lane_field)
+        )
+        primal_fgrad = (
+            None if lane_fgrad is None else _unwrap_primal_tensor(lane_fgrad)
+        )
+
+        build_ctx = torch.no_grad() if eager_no_grad_build else nullcontext()
+        with build_ctx:
+            (
+                matrices,
+                refocc,
+                overlap_norm,
+                n0,
+                occupation,
+                nel,
+                call_interactions,
+                interaction_data,
+                raw_inputs,
+            ) = _build_lane_inputs(
+                system,
+                numbers,
+                config,
+                integral_setup,
+                h0_setup,
+                core_index,
+                effective_scf_config,
+                primal_pos if eager_no_grad_build else lane_pos,
+                primal_chrg if eager_no_grad_build else lane_chrg,
+                primal_spin if eager_no_grad_build else lane_spin,
+                primal_field if eager_no_grad_build else lane_field,
+                primal_fgrad if eager_no_grad_build else lane_fgrad,
+            )
+
+        primal_inputs = _detach_scf_inputs(raw_inputs)
+        primal_refocc = _unwrap_primal_tensor(refocc)
+        primal_overlap_norm = _unwrap_primal_tensor(overlap_norm)
         lane_padded = has_padding or bool((~primal_inputs.orbital_mask).any())
 
         with torch.no_grad():
@@ -840,73 +1371,15 @@ def prepare_converged_root_batch(
                 ),
             )
 
-            state_projection: Callable[[Tensor], Tensor] | None = None
-            residual_projection: Callable[[Tensor], Tensor] | None = None
-            if representation == labels.SCP_MODE_CHARGE:
-                initial_state = pack_charges(
-                    guess_charges, primal_inputs.charge_layout
-                )
-                layout = None
-                if lane_padded:
-                    state_projection, residual_projection = (
-                        _padded_charge_projections(primal_inputs)
-                    )
-                map_fn = lambda x, _inp=primal_inputs: scf_map(x, _inp)
-            elif representation == labels.SCP_MODE_POTENTIAL:
-                initial_state, layout = potential_initial_guess(
-                    guess_charges, primal_inputs
-                )
-                base_proj = lambda val, _lay=layout: _project_potential_padding(
-                    val, _lay
-                )
-                if lane_padded:
-                    pad_state, residual_projection = (
-                        _padded_potential_projections(primal_inputs, layout)
-                    )
-                    state_projection = (
-                        lambda val, _ps=pad_state, _bp=base_proj: _ps(_bp(val))
-                    )
-
-                    def _potential_map_padded(
-                        x: Tensor,
-                        _inp: SCFInputs = primal_inputs,
-                        _lay: PotentialLayout = layout,
-                        _sp: Callable[[Tensor], Tensor] = state_projection,
-                    ):
-                        res = potential_map(x, _inp, _lay)
-                        return replace(res, mapped_x=_sp(res.mapped_x))
-
-                    map_fn = _potential_map_padded
-                else:
-                    state_projection = base_proj
-                    map_fn = (
-                        lambda x, _inp=primal_inputs, _lay=layout: potential_map(
-                            x, _inp, _lay
-                        )
-                    )
-            elif representation == labels.SCP_MODE_FOCK:
-                initial_state = fock_initial_guess(guess_charges, primal_inputs)
-                layout = None
-                if lane_padded:
-                    matrix_mask = primal_inputs.orbital_mask.unsqueeze(
-                        -1
-                    ) & primal_inputs.orbital_mask.unsqueeze(-2)
-                    state_projection = (
-                        lambda val, _mm=matrix_mask, _hc=primal_inputs.integrals.hcore: torch.where(
-                            _mm, val, _hc
-                        )
-                    )
-                    residual_projection = (
-                        lambda val, _mm=matrix_mask: torch.where(_mm, val, 0.0)
-                    )
-                map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
-            else:
-                raise ValueError(
-                    f"Unknown convergence target (SCP mode) '{representation}'."
-                )
-
-            if lane_padded and state_projection is not None:
-                initial_state = state_projection(initial_state)
+            (
+                initial_state,
+                layout,
+                state_projection,
+                residual_projection,
+                map_fn,
+            ) = _make_representation_projections(
+                primal_inputs, representation, guess_charges, lane_padded
+            )
 
             if isinstance(settings, SCFSolverSettings):
                 outcome = _solve_map(
@@ -928,6 +1401,7 @@ def prepare_converged_root_batch(
             adapter, primal_params = _SCFMapTensorTree.prepare(
                 primal_inputs, representation, layout
             )
+            primal_params = tuple(p.clone() for p in primal_params)
             independent_map = adapter.evaluate(outcome.root_x, *primal_params)
             independent_mapped_x = (
                 state_projection(independent_map.mapped_x)
@@ -970,16 +1444,18 @@ def prepare_converged_root_batch(
                 spectral_mask.unsqueeze(-2), final_spectral.occupation, 0.0
             )
             mo_electron_error = (
-                occ_masked.sum(dim=-1) - primal_inputs.nel
-            ).abs().amax()
+                (occ_masked.sum(dim=-1) - primal_inputs.nel).abs().amax()
+            )
             ao_populations = torch.where(
                 active_orb,
                 primal_inputs.n0 - final_spectral.charges.mono,
                 0.0,
             )
             ao_electron_error = (
-                ao_populations.sum(dim=-1) - primal_inputs.nel.sum(dim=-1)
-            ).abs().amax()
+                (ao_populations.sum(dim=-1) - primal_inputs.nel.sum(dim=-1))
+                .abs()
+                .amax()
+            )
             electron_count_error = torch.maximum(
                 mo_electron_error, ao_electron_error
             )
@@ -994,9 +1470,9 @@ def prepare_converged_root_batch(
             if padding_valid and lane_padded and state_projection is not None:
                 projected_root = state_projection(outcome.root_x)
                 projected_mapped = state_projection(independent_mapped_x)
-                ao_matrix_mask = active_orb.unsqueeze(-1) & active_orb.unsqueeze(
-                    -2
-                )
+                ao_matrix_mask = active_orb.unsqueeze(
+                    -1
+                ) & active_orb.unsqueeze(-2)
                 inactive_density_max = (
                     final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
                     .abs()
@@ -1116,9 +1592,6 @@ def prepare_converged_root_batch(
             warnings.warn(msg, SCFConvergenceWarning, stacklevel=2)
             OutputHandler.warn(msg, SCFConvergenceWarning)
 
-        _, parameters = _SCFMapTensorTree.prepare(
-            inputs, representation, layout
-        )
         lanes.append(
             ConvergedRootLaneRecord(
                 lane_index=lane_index,
@@ -1127,18 +1600,18 @@ def prepare_converged_root_batch(
                 spin=lane_spin,
                 field=lane_field,
                 field_grad=lane_fgrad,
-                integrals=matrices,
-                refocc=refocc,
-                overlap_norm=overlap_norm,
-                n0=n0,
-                occupation=occupation,
-                nel=nel,
-                interactions=call_interactions,
-                interaction_data=interaction_data,
-                inputs=inputs,
+                integrals=primal_inputs.integrals,
+                refocc=primal_refocc,
+                overlap_norm=primal_overlap_norm,
+                n0=primal_inputs.n0,
+                occupation=primal_inputs.occupation,
+                nel=primal_inputs.nel,
+                interactions=None,
+                interaction_data=None,
+                inputs=primal_inputs,
                 potential_layout=layout,
                 adapter=adapter,
-                parameters=parameters,
+                parameters=primal_params,
                 root_x=outcome.root_x.detach(),
                 iterations=outcome.iterations,
                 solver_converged=lane_converged,
@@ -1177,6 +1650,50 @@ def prepare_converged_root_batch(
         effective_mixer=route.effective_mixer,
         lanes=tuple(lanes),
         parameter_paths=parameter_paths,
+        model_parameter_refs=model_parameter_refs,
+        model_parameter_snapshot=tuple(
+            _snapshot_required_tensor(value) for value in model_parameter_refs
+        ),
+        model_parameter_versions=tuple(
+            _tensor_version(value) for value in model_parameter_refs
+        ),
+        system_tensor_refs=system_tensor_refs,
+        system_tensor_snapshot=tuple(
+            _snapshot_required_tensor(value) for value in system_tensor_refs
+        ),
+        system_tensor_versions=tuple(
+            _tensor_version(value) for value in system_tensor_refs
+        ),
+        positions_snapshot=_snapshot_required_tensor(positions),
+        positions_version=_tensor_version(positions),
+        numbers_snapshot=_snapshot_required_tensor(numbers),
+        numbers_version=_tensor_version(numbers),
+        config_identity=id(config),
+        config_repr=repr(config),
+        lane_input_snapshots=tuple(
+            (
+                _snapshot_tensor(lane.positions),
+                _snapshot_tensor(lane.charge),
+                _snapshot_tensor(lane.spin),
+                _snapshot_tensor(lane.field),
+                _snapshot_tensor(lane.field_grad),
+            )
+            for lane in lanes
+        ),
+        parameter_snapshots=tuple(
+            tuple(_snapshot_required_tensor(param) for param in lane.parameters)
+            for lane in lanes
+        ),
+        root_snapshots=tuple(
+            _snapshot_required_tensor(lane.root_x) for lane in lanes
+        ),
+        input_tensor_versions=tuple(
+            {
+                path: int(_unwrap_primal_tensor(value)._version)
+                for path, value in tensor_leaves(lane.inputs)
+            }
+            for lane in lanes
+        ),
         valid_lane_mask=valid_mask,
         all_roots_valid=bool(valid_mask.all()),
     )
@@ -1240,7 +1757,10 @@ def _evaluate_lane_classical(
             if d3_setup is None:
                 raise RuntimeError("Single-system D3 setup is missing.")
             classical.append(
-                (component.label, dispersion_d3_energy(d3_setup, lane_positions))
+                (
+                    component.label,
+                    dispersion_d3_energy(d3_setup, lane_positions),
+                )
             )
         elif type(component) is DispersionD4:
             d4_setup = (
@@ -1336,6 +1856,89 @@ def _evaluate_lane_classical(
     return tuple(classical)
 
 
+class _InvalidLaneOutput(torch.autograd.Function):
+    """Return NaN values and NaN derivatives only when the failed lane is selected."""
+
+    generate_vmap_rule = True
+
+    @staticmethod
+    def forward(
+        like: Tensor,
+        shape: tuple[int, ...],
+        *dependencies: Tensor,
+    ) -> Tensor:
+        return torch.full(
+            shape, float("nan"), dtype=like.dtype, device=like.device
+        )
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        like, shape, *dependencies = inputs
+        ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+        ctx.dtype = like.dtype
+        ctx.device = like.device
+        ctx.shape = shape
+        ctx.dep_metas = tuple(
+            (
+                d.shape,
+                d.dtype,
+                d.device,
+                bool(d.requires_grad or ft.is_gradtrackingtensor(d)),
+            )
+            for d in dependencies
+        )
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor):
+        failed_lane_selected = (grad_output != 0.0).any()
+        grad_deps = []
+        for d_shape, d_dtype, d_device, d_req_grad in ctx.dep_metas:
+            if not d_req_grad:
+                grad_deps.append(None)
+            else:
+                nan = torch.full(
+                    d_shape, float("nan"), dtype=d_dtype, device=d_device
+                )
+                zeros = torch.zeros(d_shape, dtype=d_dtype, device=d_device)
+                grad_deps.append(torch.where(failed_lane_selected, nan, zeros))
+        return (None, None, *grad_deps)
+
+    @staticmethod
+    def jvp(ctx, grad_like, grad_shape, *grad_dependencies):
+        active_tangent = torch.zeros((), dtype=torch.bool, device=ctx.device)
+        for tangent in grad_dependencies:
+            if tangent is not None:
+                active_tangent = active_tangent | (tangent != 0.0).any()
+        nan = torch.full(
+            ctx.shape, float("nan"), dtype=ctx.dtype, device=ctx.device
+        )
+        zeros = torch.zeros(ctx.shape, dtype=ctx.dtype, device=ctx.device)
+        return torch.where(active_tangent, nan, zeros)
+
+
+def _invalid_lane_dependencies(
+    lane: ConvergedRootLaneRecord,
+    lane_classical: tuple[tuple[str, Tensor], ...],
+    model_parameter_refs: tuple[Tensor, ...],
+) -> tuple[Tensor, ...]:
+    """Return differentiable inputs whose selected failed-lane gradient is invalid."""
+    values = (
+        lane.positions,
+        lane.charge,
+        lane.spin,
+        lane.field,
+        lane.field_grad,
+        *lane.parameters,
+        *(term_val for _, term_val in lane_classical),
+        *model_parameter_refs,
+    )
+    return tuple(
+        value
+        for value in values
+        if value is not None and value.is_floating_point()
+    )
+
+
 def _refresh_prepared_batch_inputs(
     prepared: PreparedConvergedRootBatch,
     positions: Tensor,
@@ -1346,10 +1949,11 @@ def _refresh_prepared_batch_inputs(
     *,
     strict_mode: bool,
 ) -> tuple[ConvergedRootLaneRecord, ...]:
-    """Rebuild differentiable lane inputs at transformed tensors for an existing root batch."""
+    """Validate prepared primal state and rebuild call-local differentiable lane inputs."""
     system = prepared.system
-    val_field = None if field is _UNSET else field
-    val_fgrad = None if field_grad is _UNSET else field_grad
+    first_lane = prepared.lanes[0]
+    val_field = first_lane.field if field is _UNSET else field
+    val_fgrad = first_lane.field_grad if field_grad is _UNSET else field_grad
     (
         _core,
         numbers,
@@ -1371,7 +1975,6 @@ def _refresh_prepared_batch_inputs(
             f"has {batch_size} lanes."
         )
     effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
-    settings = _solver_settings(effective_scf_config, positions.dtype)
     if chrg is _UNSET:
         charges = tuple(
             lane.charge.to(device=positions.device, dtype=positions.dtype)
@@ -1386,9 +1989,13 @@ def _refresh_prepared_batch_inputs(
         )
     if spin is _UNSET:
         spins = tuple(
-            None
-            if lane.spin is None
-            else lane.spin.to(device=positions.device, dtype=positions.dtype)
+            (
+                None
+                if lane.spin is None
+                else lane.spin.to(
+                    device=positions.device, dtype=positions.dtype
+                )
+            )
             for lane in prepared.lanes
         )
     elif spin is None:
@@ -1402,9 +2009,13 @@ def _refresh_prepared_batch_inputs(
         )
     if field is _UNSET:
         fields = tuple(
-            None
-            if lane.field is None
-            else lane.field.to(device=positions.device, dtype=positions.dtype)
+            (
+                None
+                if lane.field is None
+                else lane.field.to(
+                    device=positions.device, dtype=positions.dtype
+                )
+            )
             for lane in prepared.lanes
         )
     else:
@@ -1417,10 +2028,12 @@ def _refresh_prepared_batch_inputs(
         )
     if field_grad is _UNSET:
         field_grads = tuple(
-            None
-            if lane.field_grad is None
-            else lane.field_grad.to(
-                device=positions.device, dtype=positions.dtype
+            (
+                None
+                if lane.field_grad is None
+                else lane.field_grad.to(
+                    device=positions.device, dtype=positions.dtype
+                )
             )
             for lane in prepared.lanes
         )
@@ -1487,7 +2100,11 @@ def _refresh_prepared_batch_inputs(
                 rtol=0.0,
             )
         )
-        if root_valid and not nel_matches:
+        if (
+            (chrg is not _UNSET or spin is not _UNSET)
+            and root_valid
+            and not nel_matches
+        ):
             root_valid = False
             failure_code = int(BatchRootFailureCode.ELECTRON_COUNT)
             failure_reason = (
@@ -1510,75 +2127,6 @@ def _refresh_prepared_batch_inputs(
                     device=positions.device,
                 ),
             )
-
-        in_transform = is_compiling() or any(
-            is_functorch_tensor(p)
-            or torch.autograd.forward_ad.unpack_dual(p).tangent is not None
-            for p in parameters
-        )
-        if root_valid and not in_transform:
-            with torch.no_grad():
-                primal_params = tuple(p.detach() for p in parameters)
-                mapped_x = lane.adapter(lane.root_x, *primal_params)
-                lane_is_padded = bool((numbers == 0).any()) or bool(
-                    (~inputs.orbital_mask).any()
-                )
-                if (
-                    lane_is_padded
-                    and prepared.representation == labels.SCP_MODE_POTENTIAL
-                ):
-                    assert lane.potential_layout is not None
-                    pad_state, res_proj = _padded_potential_projections(
-                        lane.adapter.template, lane.potential_layout
-                    )
-                    mapped_x = pad_state(
-                        _project_potential_padding(
-                            mapped_x, lane.potential_layout
-                        )
-                    )
-                    raw_diff = res_proj(mapped_x - lane.root_x)
-                else:
-                    raw_diff = mapped_x - lane.root_x
-                    if lane_is_padded:
-                        if prepared.representation == labels.SCP_MODE_CHARGE:
-                            _, res_proj = _padded_charge_projections(
-                                lane.adapter.template
-                            )
-                            raw_diff = res_proj(raw_diff)
-                        elif prepared.representation == labels.SCP_MODE_FOCK:
-                            om = lane.adapter.template.orbital_mask
-                            mm = om.unsqueeze(-1) & om.unsqueeze(-2)
-                            raw_diff = torch.where(mm, raw_diff, 0.0)
-                res_l2 = torch.linalg.vector_norm(raw_diff)
-                res_max = raw_diff.abs().amax()
-                if not bool(
-                    torch.isfinite(raw_diff).all()
-                    & (res_l2 <= settings.x_atol)
-                    & (res_max <= settings.x_atol_max)
-                ):
-                    root_valid = False
-                    failure_code = int(BatchRootFailureCode.RESIDUAL_TOLERANCE)
-                    failure_reason = (
-                        "Prepared physical root is no longer valid for the "
-                        f"supplied physical inputs (L2={float(res_l2):.3e}, "
-                        f"max={float(res_max):.3e})."
-                    )
-                    if strict_mode:
-                        _raise_strict_lane_failure(
-                            lane_index, failure_code, failure_reason
-                        )
-                    msg = f"[Lane {lane_index}] {failure_reason}"
-                    warnings.warn(msg, SCFConvergenceWarning, stacklevel=2)
-                    OutputHandler.warn(msg, SCFConvergenceWarning)
-                    solver_converged = torch.zeros_like(lane.solver_converged)
-                    status = SCFStatus(
-                        trajectory_failure=lane.status.trajectory_failure,
-                        final_failure=torch.tensor(
-                            failure_code,
-                            dtype=torch.int64,
-                            device=positions.device,
-                        ),
-                    )
 
         updated_lanes.append(
             replace(
@@ -1605,104 +2153,284 @@ def _refresh_prepared_batch_inputs(
                 root_valid=root_valid,
             )
         )
+
+    _validate_prepared_primal(
+        prepared,
+        positions,
+        charges,
+        spins,
+        fields,
+        field_grads,
+        numbers,
+        config,
+    )
+    if not is_compiling():
+        for lane, param_snapshots in zip(
+            updated_lanes, prepared.parameter_snapshots
+        ):
+            if len(lane.parameters) != len(param_snapshots) or any(
+                not _matches_snapshot(param, snapshot)
+                for param, snapshot in zip(lane.parameters, param_snapshots)
+            ):
+                raise RuntimeError(
+                    "Prepared physical roots are stale for the supplied Model "
+                    "or System setup; prepare roots again."
+                )
+    if strict_mode:
+        for lane in updated_lanes:
+            if not lane.root_valid:
+                _raise_strict_lane_failure(
+                    lane.lane_index,
+                    lane.failure_code,
+                    lane.failure_reason or "Invalid physical root.",
+                )
     return tuple(updated_lanes)
 
 
-def evaluate_converged_root_batch(
-    batch_or_system: PreparedConvergedRootBatch | System | PaddedExactSystemCore,
-    positions: Tensor | None = None,
-    chrg: Tensor | float | int = _UNSET,
-    spin: Tensor | float | int | None = _UNSET,
-    field: Tensor | None = _UNSET,
-    field_grad: Tensor | None = _UNSET,
-    *,
-    strict: bool | None = None,
-) -> Result:
-    """Evaluate a conformer batch using mapped implicit differentiation.
+def _evaluate_valid_lanes_mapped(
+    valid_lanes: list[ConvergedRootLaneRecord],
+    valid_indices: list[int],
+    representation: int,
+    device: torch.device,
+    strict_mode: bool,
+):
+    """Evaluate valid conformer lanes simultaneously via vmap over implicit_root."""
+    del valid_indices, strict_mode
+    adapter = valid_lanes[0].adapter
+    layout = valid_lanes[0].potential_layout
+    param_count = len(adapter.parameter_paths)
+    pot_state_proj: Callable[[Tensor], Tensor] | None = None
+    if representation == labels.SCP_MODE_POTENTIAL and (
+        bool((adapter.template.numbers == 0).any())
+        or bool((~adapter.template.orbital_mask).any())
+    ):
+        assert layout is not None
+        pad_state, _ = _padded_potential_projections(adapter.template, layout)
+        pot_state_proj = lambda val, _ps=pad_state, _lay=layout: _ps(
+            _project_potential_padding(val, _lay)
+        )
+    raw_map: Callable[..., Tensor] = (
+        (lambda x, *p, _sp=pot_state_proj: _sp(adapter(x, *p)))
+        if pot_state_proj is not None
+        else adapter
+    )
 
-    Can be called either with a :class:`PreparedConvergedRootBatch` (optionally
-    supplying transformed ``positions``, ``chrg``, ``field``, or ``field_grad``
-    at the same primal point) or directly with ``(system, positions, ...)``.
-    Valid lanes are evaluated simultaneously via ``torch.func.vmap`` over
-    :func:`implicit_root` and functional SCF finalization. Invalid lanes in
-    non-strict mode are isolated from :func:`implicit_root` and receive
-    ``NaN`` physical observables without corrupting valid lanes.
-    """
-    if isinstance(batch_or_system, PreparedConvergedRootBatch):
-        prepared = batch_or_system
-        system = prepared.system
-        sys_cfg = (
-            system.core.config
-            if isinstance(system, PaddedExactSystemCore)
-            else system.config
-        )
-        effective_strict = (
-            bool(sys_cfg.scf.force_convergence)
-            if strict is None
-            else bool(strict)
-        )
-        if (
-            positions is not None
-            or chrg is not _UNSET
-            or spin is not _UNSET
-            or field is not _UNSET
-            or field_grad is not _UNSET
-        ):
-            eval_positions = (
-                prepared.positions if positions is None else positions
+    roots = torch.stack([lane.root_x for lane in valid_lanes], dim=0)
+    iterations_v = torch.stack([lane.iterations for lane in valid_lanes], dim=0)
+    converged_v = torch.stack(
+        [lane.solver_converged for lane in valid_lanes], dim=0
+    )
+    residuals_v = torch.stack(
+        [lane.solver_residual for lane in valid_lanes], dim=0
+    )
+    damp_values_v = torch.stack(
+        [lane.damping_state.value for lane in valid_lanes], dim=0
+    )
+    damp_switched_v = torch.stack(
+        [lane.damping_state.switched for lane in valid_lanes], dim=0
+    )
+    stacked_params = tuple(
+        torch.stack([lane.parameters[p_idx] for lane in valid_lanes], dim=0)
+        for p_idx in range(param_count)
+    )
+
+    has_traj = all(lane.trajectory_status is not None for lane in valid_lanes)
+    if has_traj:
+        traj_fields = tuple(
+            torch.stack(
+                [getattr(lane.trajectory_status, name) for lane in valid_lanes],
+                dim=0,
             )
-            lanes = _refresh_prepared_batch_inputs(
-                prepared,
-                eval_positions,
-                chrg,
-                spin,
-                field,
-                field_grad,
-                strict_mode=effective_strict,
+            for name in (
+                "fermi_converged",
+                "electron_count_ok",
+                "invalid_temperature",
+                "too_many_electrons",
+                "first_failure",
+            )
+        )
+    else:
+        bool_zeros = torch.zeros(
+            len(valid_lanes), dtype=torch.bool, device=device
+        )
+        int_zeros = torch.zeros(
+            len(valid_lanes), dtype=torch.int64, device=device
+        )
+        traj_fields = (
+            bool_zeros,
+            bool_zeros,
+            bool_zeros,
+            bool_zeros,
+            int_zeros,
+        )
+
+    def _attach_lane_root(root: Tensor, *params: Tensor) -> Tensor:
+        return implicit_root(root, *params, raw_map=raw_map)
+
+    def _finalize_valid_lane(
+        attached: Tensor,
+        iteration: Tensor,
+        is_converged: Tensor,
+        residual: Tensor,
+        damp_val: Tensor,
+        damp_sw: Tensor,
+        t_fconv: Tensor,
+        t_ecount: Tensor,
+        t_itemp: Tensor,
+        t_tmany: Tensor,
+        t_ffail: Tensor,
+        *params: Tensor,
+    ):
+        lane_inputs, _ = adapter._rebuild(params)
+        mapped_result = adapter.evaluate(attached, *params)
+        if pot_state_proj is not None:
+            mapped_result = replace(
+                mapped_result, mapped_x=pot_state_proj(mapped_result.mapped_x)
+            )
+        traj_status = (
+            SCFTrajectoryStatus(t_fconv, t_ecount, t_itemp, t_tmany, t_ffail)
+            if has_traj
+            else None
+        )
+        damp_state = DampingState(damp_val, damp_sw)
+        if representation == labels.SCP_MODE_CHARGE:
+            finalized = finalize_scf(
+                mapped_result,
+                lane_inputs,
+                iteration,
+                is_converged,
+                residual,
+                traj_status,
+                damp_state,
+            )
+        elif representation == labels.SCP_MODE_POTENTIAL:
+            assert layout is not None
+            finalized = finalize_scf_potential(
+                mapped_result,
+                lane_inputs,
+                layout,
+                iteration,
+                is_converged,
+                residual,
+                traj_status,
+                damp_state,
             )
         else:
-            eval_positions = prepared.positions
-            lanes = prepared.lanes
-            if effective_strict and not prepared.all_roots_valid:
-                for lane in lanes:
-                    if not lane.root_valid:
-                        _raise_strict_lane_failure(
-                            lane.lane_index,
-                            lane.failure_code,
-                            lane.failure_reason or "Invalid physical root.",
-                        )
-        representation = prepared.representation
-    elif isinstance(batch_or_system, (System, PaddedExactSystemCore)):
-        if positions is None:
-            raise ValueError(
-                "positions must be provided when calling "
-                "evaluate_converged_root_batch with a System."
+            finalized = finalize_scf_fock(
+                mapped_result,
+                lane_inputs,
+                iteration,
+                is_converged,
+                residual,
+                traj_status,
+                damp_state,
             )
-        prepared = prepare_converged_root_batch(
-            batch_or_system,
-            positions,
-            chrg=defaults.CHRG if chrg is _UNSET else chrg,
-            spin=defaults.SPIN if spin is _UNSET else spin,
-            field=None if field is _UNSET else field,
-            field_grad=None if field_grad is _UNSET else field_grad,
-            strict=strict,
+        dummy = finalized.energy.new_zeros(())
+        q_dip = (
+            finalized.final_charges.dipole
+            if finalized.final_charges.dipole is not None
+            else dummy
         )
-        system = prepared.system
-        eval_positions = prepared.positions
-        lanes = prepared.lanes
-        representation = prepared.representation
-    else:
-        raise TypeError(
-            "Expected PreparedConvergedRootBatch, System, or PaddedExactSystemCore as first argument."
+        q_quad = (
+            finalized.final_charges.quad
+            if finalized.final_charges.quad is not None
+            else dummy
+        )
+        v_dip = (
+            finalized.final_potential.dipole
+            if finalized.final_potential.dipole is not None
+            else dummy
+        )
+        v_quad = (
+            finalized.final_potential.quad
+            if finalized.final_potential.quad is not None
+            else dummy
+        )
+        return (
+            finalized.energy,
+            finalized.fenergy,
+            finalized.final_charges.mono,
+            q_dip,
+            q_quad,
+            finalized.density,
+            finalized.coefficients,
+            finalized.emo,
+            finalized.occupation,
+            finalized.final_potential.mono,
+            v_dip,
+            v_quad,
+            finalized.hamiltonian,
         )
 
+    attach_in_dims = (0,) * (1 + param_count)
+    finalize_in_dims = (0,) * (11 + param_count)
+
+    @torch._dynamo.disable
+    def _run_mapped_lanes(
+        roots_in: Tensor,
+        iter_in: Tensor,
+        conv_in: Tensor,
+        res_in: Tensor,
+        dval_in: Tensor,
+        dsw_in: Tensor,
+        tfc_in: Tensor,
+        tec_in: Tensor,
+        tit_in: Tensor,
+        ttm_in: Tensor,
+        tff_in: Tensor,
+        *params_in: Tensor,
+    ):
+        attached_roots = vmap(_attach_lane_root, in_dims=attach_in_dims)(
+            roots_in, *params_in
+        )
+        return vmap(_finalize_valid_lane, in_dims=finalize_in_dims)(
+            attached_roots,
+            iter_in,
+            conv_in,
+            res_in,
+            dval_in,
+            dsw_in,
+            tfc_in,
+            tec_in,
+            tit_in,
+            ttm_in,
+            tff_in,
+            *params_in,
+        )
+
+    return _run_mapped_lanes(
+        roots,
+        iterations_v,
+        converged_v,
+        residuals_v,
+        damp_values_v,
+        damp_switched_v,
+        *traj_fields,
+        *stacked_params,
+    )
+
+
+def _assemble_batch_result(
+    system: System | PaddedExactSystemCore,
+    lanes: tuple[ConvergedRootLaneRecord, ...],
+    eval_positions: Tensor,
+    valid_indices: list[int],
+    valid_outputs: tuple[Tensor, ...] | None,
+    model_parameter_refs: tuple[Tensor, ...],
+) -> Result:
+    """Assemble the immutable batched Result from valid and invalid lane outputs."""
     batch_size = len(lanes)
-    valid_indices = [idx for idx, lane in enumerate(lanes) if lane.root_valid]
-
     lane_classicals = [
         _evaluate_lane_classical(system, lane.positions, lane.charge)
         for lane in lanes
     ]
+    invalid_dependencies = {
+        idx: _invalid_lane_dependencies(
+            lane, lane_classicals[idx], model_parameter_refs
+        )
+        for idx, lane in enumerate(lanes)
+        if not lane.root_valid
+    }
     classical_labels = (
         tuple(label for label, _ in lane_classicals[0])
         if lane_classicals and lane_classicals[0]
@@ -1714,10 +2442,11 @@ def evaluate_converged_root_batch(
             (
                 lane_classicals[idx][term_idx][1]
                 if lanes[idx].root_valid
-                else torch.full_like(
-                    lane_classicals[idx][term_idx][1], float("nan")
+                else _InvalidLaneOutput.apply(
+                    lane_classicals[idx][term_idx][1],
+                    tuple(lane_classicals[idx][term_idx][1].shape),
+                    *invalid_dependencies[idx],
                 )
-                + 0.0 * lanes[idx].positions.sum()
             )
             for idx in range(batch_size)
         ]
@@ -1733,201 +2462,6 @@ def evaluate_converged_root_batch(
     first_inputs = lanes[0].inputs
     has_dipole = first_inputs.charge_layout.dipole_shape is not None
     has_quad = first_inputs.charge_layout.quadrupole_shape is not None
-
-    if valid_indices:
-        valid_lanes = [lanes[idx] for idx in valid_indices]
-        adapter = valid_lanes[0].adapter
-        layout = valid_lanes[0].potential_layout
-        param_count = len(adapter.parameter_paths)
-        pot_state_proj: Callable[[Tensor], Tensor] | None = None
-        if representation == labels.SCP_MODE_POTENTIAL and (
-            bool((adapter.template.numbers == 0).any())
-            or bool((~adapter.template.orbital_mask).any())
-        ):
-            assert layout is not None
-            pad_state, _ = _padded_potential_projections(
-                adapter.template, layout
-            )
-            pot_state_proj = lambda val, _ps=pad_state, _lay=layout: _ps(
-                _project_potential_padding(val, _lay)
-            )
-        raw_map: Callable[..., Tensor] = (
-            (lambda x, *p, _sp=pot_state_proj: _sp(adapter(x, *p)))
-            if pot_state_proj is not None
-            else adapter
-        )
-
-        roots = torch.stack([lane.root_x for lane in valid_lanes], dim=0)
-        iterations_v = torch.stack(
-            [lane.iterations for lane in valid_lanes], dim=0
-        )
-        converged_v = torch.stack(
-            [lane.solver_converged for lane in valid_lanes], dim=0
-        )
-        residuals_v = torch.stack(
-            [lane.solver_residual for lane in valid_lanes], dim=0
-        )
-        damp_values_v = torch.stack(
-            [lane.damping_state.value for lane in valid_lanes], dim=0
-        )
-        damp_switched_v = torch.stack(
-            [lane.damping_state.switched for lane in valid_lanes], dim=0
-        )
-        stacked_params = tuple(
-            torch.stack([lane.parameters[p_idx] for lane in valid_lanes], dim=0)
-            for p_idx in range(param_count)
-        )
-
-        has_traj = all(
-            lane.trajectory_status is not None for lane in valid_lanes
-        )
-        if has_traj:
-            traj_fields = tuple(
-                torch.stack(
-                    [getattr(lane.trajectory_status, name) for lane in valid_lanes],
-                    dim=0,
-                )
-                for name in (
-                    "fermi_converged",
-                    "electron_count_ok",
-                    "invalid_temperature",
-                    "too_many_electrons",
-                    "first_failure",
-                )
-            )
-        else:
-            bool_zeros = torch.zeros(
-                len(valid_lanes), dtype=torch.bool, device=eval_positions.device
-            )
-            int_zeros = torch.zeros(
-                len(valid_lanes),
-                dtype=torch.int64,
-                device=eval_positions.device,
-            )
-            traj_fields = (
-                bool_zeros,
-                bool_zeros,
-                bool_zeros,
-                bool_zeros,
-                int_zeros,
-            )
-
-        def _evaluate_valid_lane(
-            root: Tensor,
-            iteration: Tensor,
-            is_converged: Tensor,
-            residual: Tensor,
-            damp_val: Tensor,
-            damp_sw: Tensor,
-            t_fconv: Tensor,
-            t_ecount: Tensor,
-            t_itemp: Tensor,
-            t_tmany: Tensor,
-            t_ffail: Tensor,
-            *params: Tensor,
-        ):
-            lane_inputs, _ = adapter._rebuild(params)
-            attached = implicit_root(root, *params, raw_map=raw_map)
-            mapped_result = adapter.evaluate(attached, *params)
-            if pot_state_proj is not None:
-                mapped_result = replace(
-                    mapped_result, mapped_x=pot_state_proj(mapped_result.mapped_x)
-                )
-            traj_status = (
-                SCFTrajectoryStatus(
-                    t_fconv, t_ecount, t_itemp, t_tmany, t_ffail
-                )
-                if has_traj
-                else None
-            )
-            damp_state = DampingState(damp_val, damp_sw)
-            if representation == labels.SCP_MODE_CHARGE:
-                finalized = finalize_scf(
-                    mapped_result,
-                    lane_inputs,
-                    iteration,
-                    is_converged,
-                    residual,
-                    traj_status,
-                    damp_state,
-                )
-            elif representation == labels.SCP_MODE_POTENTIAL:
-                assert layout is not None
-                finalized = finalize_scf_potential(
-                    mapped_result,
-                    lane_inputs,
-                    layout,
-                    iteration,
-                    is_converged,
-                    residual,
-                    traj_status,
-                    damp_state,
-                )
-            else:
-                finalized = finalize_scf_fock(
-                    mapped_result,
-                    lane_inputs,
-                    iteration,
-                    is_converged,
-                    residual,
-                    traj_status,
-                    damp_state,
-                )
-            dummy = finalized.energy.new_zeros(())
-            q_dip = (
-                finalized.final_charges.dipole
-                if finalized.final_charges.dipole is not None
-                else dummy
-            )
-            q_quad = (
-                finalized.final_charges.quad
-                if finalized.final_charges.quad is not None
-                else dummy
-            )
-            v_dip = (
-                finalized.final_potential.dipole
-                if finalized.final_potential.dipole is not None
-                else dummy
-            )
-            v_quad = (
-                finalized.final_potential.quad
-                if finalized.final_potential.quad is not None
-                else dummy
-            )
-            return (
-                finalized.energy,
-                finalized.fenergy,
-                finalized.final_charges.mono,
-                q_dip,
-                q_quad,
-                finalized.density,
-                finalized.coefficients,
-                finalized.emo,
-                finalized.occupation,
-                finalized.final_potential.mono,
-                v_dip,
-                v_quad,
-                finalized.hamiltonian,
-            )
-
-        in_dims = (0,) * (11 + param_count)
-
-        @torch._dynamo.disable
-        def _run_mapped_lanes(*args: Tensor):
-            return vmap(_evaluate_valid_lane, in_dims=in_dims)(*args)
-
-        valid_outputs = _run_mapped_lanes(
-            roots,
-            iterations_v,
-            converged_v,
-            residuals_v,
-            damp_values_v,
-            damp_switched_v,
-            *traj_fields,
-            *stacked_params,
-        )
-    else:
-        valid_outputs = None
 
     if len(valid_indices) == batch_size and valid_outputs is not None:
         (
@@ -1964,11 +2498,12 @@ def evaluate_converged_root_batch(
                         valid_outputs[out_tuple_idx][valid_pos_map[idx]]
                     )
                 else:
-                    nan_anchor = 0.0 * lanes[idx].positions.sum() + float("nan")
                     items.append(
-                        nan_anchor.expand(shape).clone()
-                        if shape
-                        else nan_anchor
+                        _InvalidLaneOutput.apply(
+                            lanes[idx].positions,
+                            shape,
+                            *invalid_dependencies[idx],
+                        )
                     )
             return torch.stack(items, dim=0)
 
@@ -2058,4 +2593,101 @@ def evaluate_converged_root_batch(
         converged=converged,
         residual=residual,
         status=status,
+    )
+
+
+def evaluate_converged_root_batch(
+    batch_or_system: (
+        PreparedConvergedRootBatch | System | PaddedExactSystemCore
+    ),
+    positions: Tensor | None = None,
+    chrg: Tensor | float | int = _UNSET,
+    spin: Tensor | float | int | None = _UNSET,
+    field: Tensor | None = _UNSET,
+    field_grad: Tensor | None = _UNSET,
+    *,
+    strict: bool | None = None,
+) -> Result:
+    """Evaluate a conformer batch using mapped implicit differentiation.
+
+    Can be called either with a :class:`PreparedConvergedRootBatch` (optionally
+    supplying transformed ``positions``, ``chrg``, ``field``, or ``field_grad``
+    at the exact prepared primal point) or directly with ``(system, positions,
+    ...)``. Reusing prepared roots at changed physical inputs is rejected;
+    call :func:`prepare_converged_root_batch` again for a new primal point.
+    Valid lanes are evaluated simultaneously via ``torch.func.vmap`` over
+    :func:`implicit_root` and functional SCF finalization. Invalid lanes in
+    non-strict mode are isolated from :func:`implicit_root` and receive
+    ``NaN`` physical observables and ``NaN`` derivatives without corrupting
+    valid lanes.
+    """
+    if isinstance(batch_or_system, PreparedConvergedRootBatch):
+        prepared = batch_or_system
+        system = prepared.system
+        sys_cfg = (
+            system.core.config
+            if isinstance(system, PaddedExactSystemCore)
+            else system.config
+        )
+        effective_strict = _resolve_strictness(sys_cfg.scf, strict)
+        eval_positions = prepared.positions if positions is None else positions
+        lanes = _refresh_prepared_batch_inputs(
+            prepared,
+            eval_positions,
+            chrg,
+            spin,
+            field,
+            field_grad,
+            strict_mode=effective_strict,
+        )
+        representation = prepared.representation
+    elif isinstance(batch_or_system, (System, PaddedExactSystemCore)):
+        if positions is None:
+            raise ValueError(
+                "positions must be provided when calling "
+                "evaluate_converged_root_batch with a System."
+            )
+        prepared = prepare_converged_root_batch(
+            batch_or_system,
+            positions,
+            chrg=defaults.CHRG if chrg is _UNSET else chrg,
+            spin=defaults.SPIN if spin is _UNSET else spin,
+            field=None if field is _UNSET else field,
+            field_grad=None if field_grad is _UNSET else field_grad,
+            strict=strict,
+        )
+        return evaluate_converged_root_batch(
+            prepared,
+            positions=positions,
+            chrg=chrg,
+            spin=spin,
+            field=field,
+            field_grad=field_grad,
+            strict=strict,
+        )
+    else:
+        raise TypeError(
+            "Expected PreparedConvergedRootBatch, System, or PaddedExactSystemCore as first argument."
+        )
+
+    valid_indices = [idx for idx, lane in enumerate(lanes) if lane.root_valid]
+    if valid_indices:
+        valid_lanes = [lanes[idx] for idx in valid_indices]
+        valid_outputs = _evaluate_valid_lanes_mapped(
+            valid_lanes,
+            valid_indices,
+            representation,
+            eval_positions.device,
+            effective_strict,
+        )
+    else:
+        valid_outputs = None
+
+    return _assemble_batch_result(
+        system,
+        lanes,
+        eval_positions,
+        valid_indices,
+        valid_outputs,
+        prepared.model_parameter_refs,
     )
