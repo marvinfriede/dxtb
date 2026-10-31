@@ -162,7 +162,10 @@ def test_compile_uses_static_fermi_path(
 
 def test_broyden_vmap_lane_permutation_duplicate_and_isolation() -> None:
     """Batched Broyden keeps geometry lanes independent and ordered."""
-    from .test_e6a0_system_vmap import _positions, _system
+    from test.test_calculator.test_e6a0_system_vmap import (
+        _positions,
+        _system,
+    )
 
     system = _system(maxiter=4, mixer=labels.MIXER_BROYDEN)
     positions = _positions()
