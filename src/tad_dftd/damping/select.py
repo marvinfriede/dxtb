@@ -120,7 +120,7 @@ def damping_from_name(
 
     if three_body is True:
         m = model.lower().strip()
-        if m in ("d4", "d4s", "d4srev"):
+        if m in ("d1", "d2", "d4", "d4s", "d4srev"):
             three_body = "zero_d4"
         elif m == "d5":
             three_body = "koide"

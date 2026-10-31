@@ -19,8 +19,8 @@ Dispersion energy evaluation
 ============================
 
 High-level entrypoints for evaluating dispersion energies (:func:`dftd`,
-:func:`dftd3`, :func:`dftd3s`, :func:`dftd4`, :func:`dftd4s`,
-:func:`dftd4srev`, :func:`get_properties`, :func:`dispersion`,
+:func:`dftd1`, :func:`dftd2`, :func:`dftd3`, :func:`dftd3s`, :func:`dftd4`,
+:func:`dftd4s`, :func:`dftd4srev`, :func:`get_properties`, :func:`dispersion`,
 :func:`dispersion2`, :func:`dispersion3`).
 """
 from __future__ import annotations
@@ -50,6 +50,8 @@ from .model.catalogue import (
     get_model_metadata,
     resolve_model_id,
 )
+from .model.d1 import D1Model, _default_d1_cutoff
+from .model.d2 import D2Model, _default_d2_cutoff
 from .model.d3 import (
     D3Model,
     D3SModel,
@@ -66,6 +68,8 @@ from .reference.d3 import Reference
 from .reference.d4 import D4Reference
 
 __all__ = [
+    "D1Model",
+    "D2Model",
     "D3Model",
     "D3SModel",
     "D4Model",
@@ -75,6 +79,8 @@ __all__ = [
     "Param",
     "default_damping",
     "dftd",
+    "dftd1",
+    "dftd2",
     "dftd3",
     "dftd3s",
     "dftd4",
@@ -87,6 +93,64 @@ __all__ = [
 ]
 
 Param: TypeAlias = DampingParam | Mapping[str, Any]
+
+
+def dftd1(
+    structure: Structure,
+    param: Param,
+    *,
+    damping: Damping | None = None,
+    pairs: Pairs | None = None,
+    max_triples: int = 2_000_000,
+    checkpoint: bool = False,
+    c6_table: Tensor | TableFunction | None = None,
+    rdamp_table: Tensor | TableFunction | None = None,
+    rvdw_table: Tensor | TableFunction | None = None,
+    r4r2_table: Tensor | TableFunction | None = None,
+    cutoff: Cutoff | None = None,
+) -> Tensor:
+    """
+    Evaluate atom-resolved DFT-D1 dispersion energy for a structure or batch.
+    """
+    cut = _default_d1_cutoff() if cutoff is None else cutoff
+    return D1Model(
+        c6_table=c6_table,
+        rdamp_table=rdamp_table,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        cutoff=cut,
+        max_triples=max_triples,
+        checkpoint=checkpoint,
+    )(structure, param, damping=damping, pairs=pairs)
+
+
+def dftd2(
+    structure: Structure,
+    param: Param,
+    *,
+    damping: Damping | None = None,
+    pairs: Pairs | None = None,
+    max_triples: int = 2_000_000,
+    checkpoint: bool = False,
+    c6_table: Tensor | TableFunction | None = None,
+    rdamp_table: Tensor | TableFunction | None = None,
+    rvdw_table: Tensor | TableFunction | None = None,
+    r4r2_table: Tensor | TableFunction | None = None,
+    cutoff: Cutoff | None = None,
+) -> Tensor:
+    """
+    Evaluate atom-resolved DFT-D2 dispersion energy for a structure or batch.
+    """
+    cut = _default_d2_cutoff() if cutoff is None else cutoff
+    return D2Model(
+        c6_table=c6_table,
+        rdamp_table=rdamp_table,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        cutoff=cut,
+        max_triples=max_triples,
+        checkpoint=checkpoint,
+    )(structure, param, damping=damping, pairs=pairs)
 
 
 def dftd3(
@@ -305,6 +369,28 @@ def dftd(
         if cutoff is None
         else cutoff
     )
+    if model_id == DispersionModelId.D1:
+        return dftd1(
+            structure,
+            param,
+            damping=damping,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
+    if model_id == DispersionModelId.D2:
+        return dftd2(
+            structure,
+            param,
+            damping=damping,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
     if model_id == DispersionModelId.D3:
         return dftd3(
             structure,
@@ -368,7 +454,18 @@ def dftd(
 def get_properties(
     structure: Structure,
     *,
-    model: str | int | DispersionModelId | D3Model | D3SModel | D4Model | D4SModel | D4SrevModel = "d3",
+    model: (
+        str
+        | int
+        | DispersionModelId
+        | D1Model
+        | D2Model
+        | D3Model
+        | D3SModel
+        | D4Model
+        | D4SModel
+        | D4SrevModel
+    ) = "d3",
     pairs: Pairs | None = None,
     cutoff: Cutoff | None = None,
     cn: Tensor | None = None,
@@ -379,7 +476,7 @@ def get_properties(
     Evaluate dispersion model properties (`cn`, `c6`, `c8`, and optional `q`,
     `alphadd`, `alphaqq`) matching ``get_properties`` in ``dftd/disp.f90``.
     """
-    if isinstance(model, (D3Model, D3SModel)):
+    if isinstance(model, (D1Model, D2Model, D3Model, D3SModel)):
         return model.get_properties(structure, pairs=pairs, cn=cn)
     if isinstance(model, (D4Model, D4SModel, D4SrevModel)):
         return model.get_properties(structure, pairs=pairs, cn=cn, q=q)
@@ -390,6 +487,14 @@ def get_properties(
         if cutoff is None
         else cutoff
     )
+    if model_id == DispersionModelId.D1:
+        return D1Model(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn
+        )
+    if model_id == DispersionModelId.D2:
+        return D2Model(cutoff=cut, **kwargs).get_properties(
+            structure, pairs=pairs, cn=cn
+        )
     if model_id == DispersionModelId.D3:
         return D3Model(cutoff=cut, **kwargs).get_properties(
             structure, pairs=pairs, cn=cn

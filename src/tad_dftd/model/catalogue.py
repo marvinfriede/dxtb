@@ -398,14 +398,29 @@ _DAMPING_ALIASES: dict[str, str] = {
 
 def validate_model_damping(
     model: str | DispersionModelId,
-    damping: str,
+    damping: str | object,
 ) -> None:
     """
     Validate that ``damping`` is supported for ``model``.
     """
     meta = get_model_metadata(model)
-    key = damping.lower().strip()
-    key = _DAMPING_ALIASES.get(key, key)
+    if not isinstance(damping, str):
+        from ..damping.select import TWO_BODY_DAMPINGS
+
+        matched: str | None = None
+        for name, cls in TWO_BODY_DAMPINGS:
+            if isinstance(damping, cls):
+                matched = name
+                break
+        if matched is None:
+            raise ValueError(
+                f"Unknown two-body damping '{type(damping).__name__}' for "
+                f"dispersion model '{meta.label}'."
+            )
+        key = matched
+    else:
+        key = damping.lower().strip()
+        key = _DAMPING_ALIASES.get(key, key)
     if key not in meta.allowed_dampings:
         allowed = ", ".join(meta.allowed_dampings)
         raise ValueError(

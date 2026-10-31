@@ -81,14 +81,24 @@ def D2_RADII(
     return rad_64.to(dtype=dt)
 
 
+def _build_d2_radii_pairwise_cpu() -> Tensor:
+    rad = torch.tensor(_D2_RADIUS_AA, dtype=torch.float64) * _AATOAU
+    valid = (rad.unsqueeze(-1) > 0) & (rad.unsqueeze(-2) > 0)
+    return torch.where(
+        valid, rad.unsqueeze(-1) + rad.unsqueeze(-2), torch.zeros_like(rad)
+    )
+
+
+_D2_RADII_PAIRWISE_CPU: Tensor = _build_d2_radii_pairwise_cpu()
+
+
 def D2_RADII_PAIRWISE(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> Tensor:
-    """Pairwise D2 damping radii ``r_i + r_j`` in Bohr of shape ``(104, 104)``."""
-    rad = D2_RADII(device=device, dtype=dtype)[:104]
-    valid = (rad.unsqueeze(-1) > 0) & (rad.unsqueeze(-2) > 0)
-    return torch.where(valid, rad.unsqueeze(-1) + rad.unsqueeze(-2), 0.0)
+    """Pairwise D2 damping radii ``r_i + r_j`` in Bohr of shape ``(119, 119)``."""
+    dt = get_default_dtype() if dtype is None else dtype
+    return _D2_RADII_PAIRWISE_CPU.to(device=device, dtype=dt)
 
 
 def D2_C6(

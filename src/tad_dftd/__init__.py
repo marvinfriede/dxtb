@@ -65,6 +65,8 @@ from .damping import (
     damping_from_name,
 )
 from .disp import (
+    D1Model,
+    D2Model,
     D3Model,
     D3SModel,
     D4Model,
@@ -73,6 +75,8 @@ from .disp import (
     Environment,
     default_damping,
     dftd,
+    dftd1,
+    dftd2,
     dftd3,
     dftd3s,
     dftd4,
@@ -89,6 +93,8 @@ from .reference import D4Reference, Reference
 __all__ = [
     "CSOTwoBody",
     "Cutoff",
+    "D1Model",
+    "D2Model",
     "D3Model",
     "D3SModel",
     "D4Model",
@@ -125,6 +131,8 @@ __all__ = [
     "default_damping",
     "defaults",
     "dftd",
+    "dftd1",
+    "dftd2",
     "dftd3",
     "dftd3s",
     "dftd4",

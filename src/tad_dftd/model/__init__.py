@@ -45,6 +45,8 @@ from .catalogue import (
     resolve_model_id,
     validate_model_damping,
 )
+from .d1 import D1Model
+from .d2 import D2Model
 from .d3 import D3Model, D3SModel, Environment, default_damping
 from .d4 import D4Model, D4SModel, D4SrevModel
 from .weights import (
@@ -72,6 +74,8 @@ __all__ = [
     "MODEL_ALLOWED_DAMPINGS",
     "AtomicC6",
     "ChargeModelId",
+    "D1Model",
+    "D2Model",
     "D3Model",
     "D3SModel",
     "D4Model",
