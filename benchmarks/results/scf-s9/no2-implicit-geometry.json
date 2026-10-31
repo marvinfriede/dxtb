@@ -1,0 +1,26 @@
+{
+  "case": "NO2/GFN2/2000K",
+  "coordinate": "atom 0, x",
+  "records": [
+    {
+      "strategy": "CDIIS",
+      "certified": true,
+      "maps": 26,
+      "energy": -10.906375813027564,
+      "fixed_point_l2": 8.122749698343696e-09,
+      "dE_dx00": -4.320804188990286e-05,
+      "dE_dfield_y": -0.027329684837228668,
+      "d2E_dx00": 0.1616226223729646
+    },
+    {
+      "strategy": "Broyden->NewtonKrylov",
+      "certified": true,
+      "maps": 9,
+      "energy": -10.906375813027566,
+      "fixed_point_l2": 8.296373341897889e-12,
+      "dE_dx00": -4.320804189380859e-05,
+      "dE_dfield_y": -0.027329684837248736,
+      "d2E_dx00": 0.16162262237300512
+    }
+  ]
+}

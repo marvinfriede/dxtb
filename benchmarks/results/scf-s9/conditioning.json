@@ -1,0 +1,130 @@
+[
+  {
+    "case": "h2o-300k",
+    "conditioning": [
+      {
+        "certified": true,
+        "condition_number": 3.14060855180275,
+        "dimension": 54,
+        "maximum_singular_value": 2.310946689241622,
+        "minimum_singular_value": 0.735827675153947,
+        "representation": "charge",
+        "root_residual_l2": 9.451722334179055e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 3.140608551779378,
+        "dimension": 54,
+        "maximum_singular_value": 2.310946689091024,
+        "minimum_singular_value": 0.7358276751114712,
+        "representation": "potential",
+        "root_residual_l2": 6.13674552165219e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 3.950986587293168,
+        "dimension": 36,
+        "maximum_singular_value": 2.5630953344545504,
+        "minimum_singular_value": 0.6487228639797874,
+        "representation": "fock",
+        "root_residual_l2": 5.997832471918173e-10
+      }
+    ]
+  },
+  {
+    "case": "no2-2000k",
+    "conditioning": [
+      {
+        "certified": true,
+        "condition_number": 8.279823698380932,
+        "dimension": 54,
+        "maximum_singular_value": 5.648416112697153,
+        "minimum_singular_value": 0.6821903845370121,
+        "representation": "charge",
+        "root_residual_l2": 6.950811497493674e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 8.279823704066688,
+        "dimension": 54,
+        "maximum_singular_value": 5.6484161158430455,
+        "minimum_singular_value": 0.6821903844484986,
+        "representation": "potential",
+        "root_residual_l2": 9.810928617452348e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 13.062553605135903,
+        "dimension": 144,
+        "maximum_singular_value": 7.032454633119698,
+        "minimum_singular_value": 0.5383675233573545,
+        "representation": "fock",
+        "root_residual_l2": 5.18089112484895e-10
+      }
+    ]
+  },
+  {
+    "case": "no2-5000k",
+    "conditioning": [
+      {
+        "certified": true,
+        "condition_number": 8.128589035432174,
+        "dimension": 54,
+        "maximum_singular_value": 5.5844486623518295,
+        "minimum_singular_value": 0.6870132858248159,
+        "representation": "charge",
+        "root_residual_l2": 6.843117614176248e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 8.12858904104106,
+        "dimension": 54,
+        "maximum_singular_value": 5.584448665470341,
+        "minimum_singular_value": 0.6870132857344107,
+        "representation": "potential",
+        "root_residual_l2": 9.851139226080819e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 12.643790623290293,
+        "dimension": 144,
+        "maximum_singular_value": 6.916087671802842,
+        "minimum_singular_value": 0.5469947959327303,
+        "representation": "fock",
+        "root_residual_l2": 5.194861193232846e-10
+      }
+    ]
+  },
+  {
+    "case": "h2o-frac",
+    "conditioning": [
+      {
+        "certified": true,
+        "condition_number": 2.6590423789942412,
+        "dimension": 54,
+        "maximum_singular_value": 2.1054448850250265,
+        "minimum_singular_value": 0.7918056897691838,
+        "representation": "charge",
+        "root_residual_l2": 8.022590727523816e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 2.5280362312357325,
+        "dimension": 8,
+        "maximum_singular_value": 2.0527591062020827,
+        "minimum_singular_value": 0.8119975025827344,
+        "representation": "potential",
+        "root_residual_l2": 7.363033613363139e-10
+      },
+      {
+        "certified": true,
+        "condition_number": 3.2672873055367435,
+        "dimension": 64,
+        "maximum_singular_value": 2.333229246495028,
+        "minimum_singular_value": 0.7141181745912394,
+        "representation": "fock",
+        "root_residual_l2": 7.763336890675355e-10
+      }
+    ]
+  }
+]

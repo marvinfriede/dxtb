@@ -1,0 +1,33 @@
+{
+  "scf_base_sha": "be0e0c7679fa20c9c9e4096a0b30acf96ca6edaa",
+  "w2c10_synchronization_sha": "8ed902f762804a9da7f4537e8d40bab80822ed1d",
+  "branch": "scf/redesign",
+  "worktree_state_during_runs": "dirty: S9 prototype, tests, and documentation were under development",
+  "runtime": {
+    "python": "3.14.8",
+    "torch": "2.14.1+cpu",
+    "threads": 1,
+    "dtype": "float64",
+    "device": "cpu",
+    "timing_repetitions": 1
+  },
+  "source_sha256": {
+    "benchmarks/prototypes/scf_newton_krylov.py": "c0831060107d2dc254e0b9c863a8d8e39ec21234b2fd78c181cd26363516daa7",
+    "benchmarks/scf_s9_finite_temperature.py": "78356126b455831b5b91991c51d86dbbc76bfe17742b60c1a06c663234b98dc6",
+    "benchmarks/scf_s9_implicit_geometry.py": "6c3b0802a582683e04b44eb57d59ad7cfc3bcbdc5746c0456d929c6c471acb1b"
+  },
+  "result_sha256": {
+    "alternative-strategies.json": "46061736eb21391fd51fb2bdcbd368c69f77496fd2099a1fd654ba724f1369ea",
+    "broyden-newton-matrix.json": "951a8efc034ef1429c7b39851832319e18d2062deb0b165e976af3cd91302bca",
+    "conditioning.json": "0ab2b1a260f5462d4e449b40f30f7056992c992cb50aa1cbfbadc22b67070c1d",
+    "no2-implicit-geometry.json": "a3fded2e64cad0fb29f9b8f0665be980b5e1f422f9fde264f1c83777a2a2bd52",
+    "no2-switch-thresholds.json": "11f47a622da30c239c98283ff79ca71242aa19891dac57ad09ba7181e953c08a"
+  },
+  "commands": [
+    "python benchmarks/scf_s9_finite_temperature.py --case h2o-300k --case no2-2000k --case no2-5000k --case h2o-frac --strategy broyden --strategy broyden-newton",
+    "python benchmarks/scf_s9_finite_temperature.py --case no2-2000k --strategy anderson --strategy anderson-newton --strategy cdiis --strategy cdiis-newton",
+    "python benchmarks/scf_s9_finite_temperature.py --case no2-2000k --strategy broyden-newton --switch-threshold 0.01 --switch-threshold 0.001 --switch-threshold 0.0001",
+    "python benchmarks/scf_s9_finite_temperature.py --conditioning --case h2o-300k --case no2-2000k --case no2-5000k --case h2o-frac",
+    "python benchmarks/scf_s9_implicit_geometry.py"
+  ]
+}

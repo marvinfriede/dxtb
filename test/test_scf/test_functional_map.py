@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -2602,17 +2603,37 @@ def test_functional_modules_have_no_legacy_stateful_hooks() -> None:
 def test_transform_capable_functional_paths_avoid_host_tensor_extraction() -> (
     None
 ):
-    """Transform-capable paths avoid host extraction; eager SOSCF is exempt."""
+    """Transform-capable paths avoid host extraction at eager-only boundaries."""
     root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
-    # The implicit-root adapter owns a custom transform boundary. SOSCF is an
-    # eager-only method in S8; orbital.py contains its eager-only fixed-sector
-    # pair construction. The capability and fixed-trip rejection are locked
-    # by test_functional_soscf.py; removing host setup is S12.
-    source = "\n".join(
-        path.read_text()
-        for path in root.glob("*.py")
-        if path.name not in ("implicit.py", "orbital.py", "soscf.py")
-    )
+    excluded_modules = {"implicit.py", "orbital.py", "soscf.py"}
+    sources = []
+    for path in root.glob("*.py"):
+        if path.name in excluded_modules:
+            continue
+        lines = path.read_text().splitlines()
+        if path.name == "spectral.py":
+            # The shared implementation's `if eager` arm is the sole detached
+            # host-selected schedule. Remove only that arm and retain its
+            # static counterpart under the transform-safety source guard.
+            tree = ast.parse("\n".join(lines))
+            implementation = next(
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "_matrix_fermi_impl"
+            )
+            eager_schedule = next(
+                node
+                for node in ast.walk(implementation)
+                if isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "eager"
+            )
+            lines[eager_schedule.lineno - 1 : eager_schedule.end_lineno] = [
+                "    doubling_steps = _FERMI_MAX_SCALE_POWER - 1"
+            ]
+        sources.append("\n".join(lines))
+    source = "\n".join(sources)
     for forbidden in (
         ".item(",
         ".tolist(",
