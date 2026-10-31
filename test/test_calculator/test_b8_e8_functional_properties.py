@@ -41,9 +41,7 @@ def _setup_model_and_calculator(method: object, numbers: tuple[int, ...]):
         "scp_mode": (
             labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
         ),
-        "mixer": (
-            labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR
-        ),
+        "mixer": (labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR),
         "maxiter": 3,
         "x_atol": 0.0,
         "x_atol_max": 0.0,
@@ -111,17 +109,13 @@ def test_b8a_first_and_second_order_functional_properties(
     )
     torch.testing.assert_close(
         system.polarizability(pos),
-        calc.polarizability(
-            pos_req, use_analytical=False, field=field0
-        ),
+        calc.polarizability(pos_req, use_analytical=False, field=field0),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
     torch.testing.assert_close(
         system.dipole_deriv(pos),
-        calc.dipole_deriv(
-            pos_req, use_analytical_dipmom=False, field=field0
-        ),
+        calc.dipole_deriv(pos_req, use_analytical_dipmom=False, field=field0),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
@@ -184,17 +178,13 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
     beta_calc = calc.hyperpolarizability(pos_req, field=field0)
     assert beta_sys.shape == (3, 3, 3)
     assert bool(torch.isfinite(beta_sys).all())
-    torch.testing.assert_close(
-        beta_sys, beta_calc, atol=1.0e-9, rtol=1.0e-9
-    )
+    torch.testing.assert_close(beta_sys, beta_calc, atol=1.0e-9, rtol=1.0e-9)
 
     # 2. Polarizability derivative d(alpha)/dR and Raman spectrum
     chi_sys = system.pol_deriv(pos, field=field0.detach())
     chi_calc = calc.pol_deriv(pos_req, field=field0)
     assert chi_sys.shape == (3, 3, 2, 3)
-    torch.testing.assert_close(
-        chi_sys, chi_calc, atol=1.0e-9, rtol=1.0e-9
-    )
+    torch.testing.assert_close(chi_sys, chi_calc, atol=1.0e-9, rtol=1.0e-9)
 
     raman_sys = system.raman(pos, field=field0.detach())
     raman_calc = calc.raman(pos_req, field=field0)
@@ -222,12 +212,10 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
         ).sum()
         for mult in (-2.0, -1.0, 1.0, 2.0)
     ]
-    fd_third = (
-        h_vals[0] - 8.0 * h_vals[1] + 8.0 * h_vals[2] - h_vals[3]
-    ) / (12.0 * step)
-    torch.testing.assert_close(
-        third_sys, fd_third, atol=1.0e-8, rtol=1.0e-8
+    fd_third = (h_vals[0] - 8.0 * h_vals[1] + 8.0 * h_vals[2] - h_vals[3]) / (
+        12.0 * step
     )
+    torch.testing.assert_close(third_sys, fd_third, atol=1.0e-8, rtol=1.0e-8)
 
     # 4. Mixed parameter-force Jacobian dF(R, theta)/d(theta)
     param_key = "parameter_tree.hamiltonian.xtb.shell.ss.param"
@@ -280,3 +268,314 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
         atol=1.0e-9,
         rtol=1.0e-9,
     )
+
+
+def _setup_converged_model_and_calculator(
+    method: object, numbers: tuple[int, ...]
+):
+    """Build Contract B genuinely converged GFN1/GFN2 System and Calculator."""
+    is_gfn2 = method is GFN2_XTB
+    maxiter = 10 if numbers == (1, 1) else (15 if is_gfn2 else 12)
+    opts = {
+        "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": (
+            labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
+        ),
+        "mixer": labels.MIXER_ANDERSON,
+        "maxiter": maxiter,
+        "x_atol": 1.0e-12,
+        "x_atol_max": 1.0e-12,
+    }
+    config = Config.create(**opts)
+    par = ParamModule(method, **_DD)
+    model = Model(par=par, config=config)
+    num_tensor = torch.tensor(numbers, dtype=torch.int64)
+    system = model.setup(num_tensor)
+    calc = Calculator(num_tensor, par, opts=opts | {"verbosity": 0}, **_DD)
+    return model, num_tensor, system, calc
+
+
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
+    method: object,
+) -> None:
+    """Contract B: Converged GFN1/GFN2 H2O properties, symmetries, FD, and mixed-derivative identities."""
+    from dxtb._src.calculators.properties.functional import (
+        system_dipole,
+        system_dipole_deriv,
+        system_energy,
+        system_forces,
+        system_polarizability,
+    )
+
+    _, _, system, calc = _setup_converged_model_and_calculator(
+        method, (8, 1, 1)
+    )
+    pos = torch.tensor(
+        [[0.0, 0.0, -0.72], [-1.43, 0.0, 0.36], [1.43, 0.0, 0.36]], **_DD
+    )
+    res = system.singlepoint(pos)
+    assert res.converged is not None and bool(res.converged)
+    assert (
+        res.residual is not None and float(res.residual.abs().max()) < 1.0e-12
+    )
+
+    field0 = torch.tensor([0.0015, -0.001, 0.002], **_DD, requires_grad=True)
+    fgrad0 = torch.zeros((3, 3), **_DD, requires_grad=True)
+    pos_req = pos.clone().requires_grad_(True)
+
+    # 1. Converged parity against Calculator across 1st, 2nd, and 3rd order properties
+    e_sys = system.energy(pos, field=field0.detach())
+    f_sys = system.forces(pos, field=field0.detach())
+    h_sys = system.hessian(pos, field=field0.detach())
+    h_mat = system.hessian(pos, field=field0.detach(), matrix=True)
+    mu_sys = system.dipole(pos, field=field0.detach())
+    q_sys = system.quadrupole(pos, field=field0.detach())
+    alpha_sys = system.polarizability(pos, field=field0.detach())
+    dmu_dr_sys = system.dipole_deriv(pos, field=field0.detach())
+    chi_sys = system.pol_deriv(pos, field=field0.detach())
+    beta_sys = system.hyperpolarizability(pos, field=field0.detach())
+
+    torch.testing.assert_close(
+        e_sys, calc.energy(pos_req, field=field0), atol=1e-11, rtol=1e-11
+    )
+    torch.testing.assert_close(
+        f_sys, calc.forces(pos_req, field=field0), atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        h_sys, calc.hessian(pos_req, field=field0), atol=1e-7, rtol=1e-7
+    )
+    torch.testing.assert_close(
+        mu_sys, calc.dipole(pos_req, field=field0), atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        q_sys,
+        calc.quadrupole(pos_req, field=field0, field_grad=fgrad0),
+        atol=1e-9,
+        rtol=1e-9,
+    )
+    torch.testing.assert_close(
+        alpha_sys,
+        calc.polarizability(pos_req, use_analytical=False, field=field0),
+        atol=1e-8,
+        rtol=1e-8,
+    )
+    torch.testing.assert_close(
+        dmu_dr_sys,
+        calc.dipole_deriv(pos_req, use_analytical_dipmom=False, field=field0),
+        atol=1e-8,
+        rtol=1e-8,
+    )
+    if method is GFN1_XTB:
+        torch.testing.assert_close(
+            chi_sys, calc.pol_deriv(pos_req, field=field0), atol=1e-7, rtol=1e-7
+        )
+    torch.testing.assert_close(
+        beta_sys,
+        calc.hyperpolarizability(pos_req, field=field0),
+        atol=1e-7,
+        rtol=1e-7,
+    )
+
+    # 2. Physical symmetries: Hessian, polarizability, and hyperpolarizability Kleinman permutation symmetry
+    torch.testing.assert_close(h_mat, h_mat.T, atol=1e-10, rtol=1e-10)
+    torch.testing.assert_close(alpha_sys, alpha_sys.T, atol=1e-10, rtol=1e-10)
+    for perm in (
+        (1, 0, 2),
+        (0, 2, 1),
+        (2, 1, 0),
+        (1, 2, 0),
+        (2, 0, 1),
+    ):
+        torch.testing.assert_close(
+            beta_sys, beta_sys.permute(*perm), atol=1e-9, rtol=1e-9
+        )
+    # Polarizability derivative symmetry in its two field indices: chi_{ab,ic} == chi_{ba,ic}
+    torch.testing.assert_close(
+        chi_sys, chi_sys.transpose(0, 1), atol=1e-9, rtol=1e-9
+    )
+
+    # 3. Translational invariance (neutral system in uniform external field)
+    torch.testing.assert_close(
+        f_sys.sum(dim=0), torch.zeros(3, **_DD), atol=1e-11, rtol=1e-11
+    )
+    torch.testing.assert_close(
+        h_sys.sum(dim=2), torch.zeros((3, 3, 3), **_DD), atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        dmu_dr_sys.sum(dim=1), torch.zeros((3, 3), **_DD), atol=1e-9, rtol=1e-9
+    )
+
+    # 4. Equivalent mixed-derivative constructions
+    # (a) Hessian via jacrev(grad(E)) vs jacfwd(grad(E))
+    hess_rev = torch.func.jacrev(
+        torch.func.grad(
+            lambda p: system_energy(system, p, field=field0.detach())
+        )
+    )(pos)
+    torch.testing.assert_close(h_sys, hess_rev, atol=1e-10, rtol=1e-10)
+
+    # (b) Dipole derivative d(mu)/dR == d(forces)/dF
+    df_dfield = torch.func.jacfwd(
+        lambda f: system_forces(system, pos, field=f)
+    )(field0.detach()).permute(2, 0, 1)
+    torch.testing.assert_close(dmu_dr_sys, df_dfield, atol=1e-9, rtol=1e-9)
+
+    # (c) Polarizability derivative d(alpha)/dR == d(dipole_deriv)/dF
+    ddmudr_df = torch.func.jacfwd(
+        lambda f: system_dipole_deriv(system, pos, field=f)
+    )(field0.detach()).permute(0, 3, 1, 2)
+    torch.testing.assert_close(chi_sys, ddmudr_df, atol=1e-8, rtol=1e-8)
+
+    # 5. Independent central finite-difference checks on converged root
+    eps_f = 1.0e-4
+    fd_alpha = torch.empty((3, 3), **_DD)
+    fd_beta = torch.empty((3, 3, 3), **_DD)
+    for k in range(3):
+        df = torch.zeros(3, **_DD)
+        df[k] = eps_f
+        f_p = field0.detach() + df
+        f_m = field0.detach() - df
+        fd_alpha[:, k] = (
+            system_dipole(system, pos, field=f_p)
+            - system_dipole(system, pos, field=f_m)
+        ) / (2.0 * eps_f)
+        fd_beta[:, :, k] = (
+            system_polarizability(system, pos, field=f_p)
+            - system_polarizability(system, pos, field=f_m)
+        ) / (2.0 * eps_f)
+    torch.testing.assert_close(alpha_sys, fd_alpha, atol=1e-7, rtol=1e-7)
+    torch.testing.assert_close(beta_sys, fd_beta, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
+    method: object,
+) -> None:
+    """Contract B: Converged equilibrium H2 and H2O vibrational zero modes, IR, Raman, and 3rd-order FD."""
+    is_gfn2 = method is GFN2_XTB
+    # 1. Converged H2 at exact stationary equilibrium geometry (dE/dR == 0)
+    _, _, sys_h2, calc_h2 = _setup_converged_model_and_calculator(
+        method, (1, 1)
+    )
+    z_h2 = 1.4677462454976220 if is_gfn2 else 1.4467531706758971
+    pos_h2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, z_h2]], **_DD)
+    res_h2 = sys_h2.singlepoint(pos_h2)
+    assert res_h2.converged is not None and bool(res_h2.converged)
+    assert (
+        res_h2.residual is not None
+        and float(res_h2.residual.abs().max()) < 1.0e-12
+    )
+    assert float(sys_h2.forces(pos_h2).abs().max()) < 1.0e-11
+
+    # At equilibrium: unprojected vibration has 5 zero modes (3 translational + 2 rotational) and 1 positive mode
+    vib_unproj = sys_h2.vibration(
+        pos_h2, project_translational=False, project_rotational=False
+    )
+    assert vib_unproj.freqs.shape == (6,)
+    assert float(vib_unproj.freqs[:5].abs().max()) < 1.0e-6
+    assert float(vib_unproj.freqs[5]) > 1.0e-2
+
+    # Projected vibration has exactly 1 stretching mode matching unprojected mode 5
+    vib_proj = sys_h2.vibration(
+        pos_h2, project_translational=True, project_rotational=True
+    )
+    assert vib_proj.freqs.shape == (1,)
+    torch.testing.assert_close(
+        vib_proj.freqs[0], vib_unproj.freqs[5], atol=1e-8, rtol=1e-8
+    )
+
+    # IR and Raman at equilibrium H2: homonuclear diatomic has zero IR intensity and positive Raman intensity
+    ir_h2 = sys_h2.ir(pos_h2)
+    raman_h2 = sys_h2.raman(pos_h2)
+    assert float(ir_h2.ints.abs().max()) < 1.0e-12
+    assert float(raman_h2.ints[0]) > 1.0e-2
+
+    pos_h2_req = pos_h2.clone().requires_grad_(True)
+    field0 = torch.zeros(3, **_DD, requires_grad=True)
+    raman_calc = calc_h2.raman(pos_h2_req, field=field0)
+    torch.testing.assert_close(
+        raman_h2.freqs, raman_calc.freqs, atol=1e-8, rtol=1e-8
+    )
+    torch.testing.assert_close(
+        raman_h2.ints, raman_calc.ints, atol=1e-7, rtol=1e-7
+    )
+    torch.testing.assert_close(
+        raman_h2.depol, raman_calc.depol, atol=1e-7, rtol=1e-7
+    )
+
+    # Third directional derivative on converged H2 vs 4-point central FD of Hessian
+    direction = torch.tensor([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], **_DD)
+    direction = direction / torch.linalg.vector_norm(direction)
+    third_h2 = sys_h2.third_order_directional(pos_h2, direction)
+    step = 1.0e-3
+    h_vals = [
+        (
+            sys_h2.hessian(pos_h2 + mult * step * direction, matrix=True)
+            @ direction.reshape(-1)
+            * direction.reshape(-1)
+        ).sum()
+        for mult in (-2.0, -1.0, 1.0, 2.0)
+    ]
+    fd_third = (h_vals[0] - 8.0 * h_vals[1] + 8.0 * h_vals[2] - h_vals[3]) / (
+        12.0 * step
+    )
+    torch.testing.assert_close(third_h2, fd_third, atol=1e-8, rtol=1e-8)
+
+    # 2. Converged H2O at stationary equilibrium geometry (3N-6 = 3 internal modes)
+    _, _, sys_h2o, calc_h2o = _setup_converged_model_and_calculator(
+        method, (8, 1, 1)
+    )
+    x_h2o, z_h2o = (
+        (1.4592259594119610, 1.0753387019858363)
+        if is_gfn2
+        else (1.4567035315471497, 1.0752902294683269)
+    )
+    pos_h2o = torch.tensor(
+        [[0.0, 0.0, 0.0], [-x_h2o, 0.0, z_h2o], [x_h2o, 0.0, z_h2o]], **_DD
+    )
+    assert float(sys_h2o.forces(pos_h2o).abs().max()) < 1.0e-11
+    res_h2o = sys_h2o.singlepoint(pos_h2o)
+    assert res_h2o.converged is not None and bool(res_h2o.converged)
+    assert (
+        res_h2o.residual is not None
+        and float(res_h2o.residual.abs().max()) < 1.0e-12
+    )
+
+    vib_h2o_unproj = sys_h2o.vibration(
+        pos_h2o, project_translational=False, project_rotational=False
+    )
+    vib_h2o_proj = sys_h2o.vibration(
+        pos_h2o, project_translational=True, project_rotational=True
+    )
+    assert vib_h2o_unproj.freqs.shape == (9,)
+    assert vib_h2o_proj.freqs.shape == (3,)
+    # 6 translational + rotational zero modes at equilibrium
+    assert float(vib_h2o_unproj.freqs[:6].abs().max()) < 1.0e-5
+    torch.testing.assert_close(
+        vib_h2o_proj.freqs, vib_h2o_unproj.freqs[6:], atol=1e-6, rtol=1e-6
+    )
+
+    ir_h2o = sys_h2o.ir(pos_h2o)
+    raman_h2o = sys_h2o.raman(pos_h2o)
+    pos_h2o_req = pos_h2o.clone().requires_grad_(True)
+    ir_h2o_calc = calc_h2o.ir(
+        pos_h2o_req, use_analytical_dipmom=False, field=field0
+    )
+    torch.testing.assert_close(
+        ir_h2o.ints, ir_h2o_calc.ints, atol=1e-6, rtol=1e-6
+    )
+    torch.testing.assert_close(
+        raman_h2o.freqs, vib_h2o_proj.freqs, atol=1e-8, rtol=1e-8
+    )
+    if not is_gfn2:
+        raman_h2o_calc = calc_h2o.raman(pos_h2o_req, field=field0)
+        torch.testing.assert_close(
+            raman_h2o.ints, raman_h2o_calc.ints, atol=1e-6, rtol=1e-6
+        )
+    assert (ir_h2o.ints > 0.0).all()
+    assert (raman_h2o.ints > 0.0).all()
+    assert (raman_h2o.depol >= 0.0).all()
