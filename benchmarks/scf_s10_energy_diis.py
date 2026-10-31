@@ -298,7 +298,7 @@ def main() -> None:
         "capacity": args.capacity,
         "switch_l2": args.switch,
         "iterations": int(outcome.iterations),
-        "physical_maps": int(outcome.iterations) + 1,
+        "physical_maps": len(map_diagnostics),
         "certified": bool(outcome.converged),
         "residual_l2": float(outcome.residual[0]),
         "residual_max": float(outcome.residual[1]),
