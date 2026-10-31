@@ -108,8 +108,16 @@ capture as one graph with no graph breaks and preserve proposal/state values.
 A tensor-only affine controller loop captures into one graph for static trip
 counts 4, 8, and 16. Capture/first-call time grows with the unrolled trip count;
 this is not evidence that compiling the complete physical SCF is beneficial.
-The probe records graph counts and latency separately. It does not treat the
-`backend="eager"` result as an optimized-compiler speedup.
+The added whole-solver probe compiled actual H2/GFN1 fixed-trip Linear solves
+at budgets 4, 8, and 16, and Broyden/CDIIS at budget 4, with value parity.
+Each produced 29 graphs and 28 graph breaks; explain plus first-call latency
+was approximately 24–28 seconds per run. Anderson's eager four-trip
+reference itself failed with a singular DIIS solve, so compilation was not
+attempted for that case. The probe records graph counts and latency
+separately. It does not treat the `backend="eager"` result as an
+optimized-compiler speedup.
+The whole-solver compile check is value-only; derivative parity was tested
+for compiled raw maps, not for the complete compiled solver trajectory.
 
 An active-smearing compile regression explicitly disables W2c11's detached
 adaptive `_matrix_fermi_eager` path and checks that the compiled raw Fock map
@@ -160,6 +168,15 @@ remain the S11/W2c11 boundaries. CPU transform compatibility is validated on
 PyTorch 2.14.1 and the focused S12 state/capability/active-smearing compile
 checks also run on PyTorch 2.8.0; the wider S11/SOSCF regression results are
 recorded with the package handoff.
+
+## Independent review
+
+Requested read-only review: Luna / high (runtime model identity is not
+exposed). The review found no blocker or major finding. Its minor evidence note
+is reflected above: full physical solver compilation has value parity only,
+while compiled raw maps carry the reverse/JVP checks. Anderson's budget-4
+whole-solver compile attempt is skipped because its eager reference hits a
+singular DIIS solve.
 
 S12 is evidence for S13 benchmark-driven choices, not a selection of those
 choices. No spectral mathematics, S9/S10 decision, S2 certification, public
