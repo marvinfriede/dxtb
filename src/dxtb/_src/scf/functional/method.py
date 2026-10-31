@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 import torch
 
@@ -62,6 +62,8 @@ class SCFMethodProposal:
 class SCFMethod(Protocol):
     """Local numerical method acting on a paired physical observation."""
 
+    supports_fixed_trip: ClassVar[bool]
+
     def propose(
         self,
         problem: SCFProblem,
@@ -74,6 +76,8 @@ class SCFMethod(Protocol):
 @dataclass(frozen=True, eq=False)
 class LinearMethod:
     """Stateless linear mixing with the accepted simple-mixer semantics."""
+
+    supports_fixed_trip: ClassVar[bool] = True
 
     def propose(
         self,

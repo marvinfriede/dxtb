@@ -96,6 +96,8 @@ class CDIISState:
 class CDIISMethod:
     """Conventional commutator CDIIS operating on the Fock representation."""
 
+    supports_fixed_trip: ClassVar[bool] = True
+
     required_representation: ClassVar[SCFRepresentation] = (
         SCFRepresentation.FOCK
     )

@@ -931,6 +931,13 @@ def _solve_map(
         stages = selected_strategy.stages
 
     first_stage = stages[0]
+    if not eager and not getattr(
+        first_stage.method, "supports_fixed_trip", True
+    ):
+        raise NotImplementedError(
+            f"{type(first_stage.method).__name__} supports eager execution "
+            "only; fixed-trip execution is not available."
+        )
     common = dict(
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,

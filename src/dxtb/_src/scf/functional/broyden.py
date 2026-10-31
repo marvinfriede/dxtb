@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
-from typing import cast
+from typing import ClassVar, cast
 
 import torch
 
@@ -81,6 +81,8 @@ class BroydenState:
 @dataclass(frozen=True, eq=False)
 class BroydenMethod:
     """Broyden's first inverse update with bounded low-rank history."""
+
+    supports_fixed_trip: ClassVar[bool] = True
 
     settings: BroydenMethodSettings = BroydenMethodSettings()
 

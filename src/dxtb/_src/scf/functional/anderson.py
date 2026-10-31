@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import ClassVar, cast
 
 import torch
 
@@ -64,6 +64,8 @@ class AndersonState:
 @dataclass(frozen=True, eq=False)
 class AndersonMethod:
     """Anderson proposal rule with explicit immutable history."""
+
+    supports_fixed_trip: ClassVar[bool] = True
 
     settings: AndersonMethodSettings
 
@@ -136,7 +138,9 @@ def anderson_mix(
             ),
             dim=0,
         )
-        f_hist = flat_old.new_zeros((settings.generations + 1, flat_old.numel()))
+        f_hist = flat_old.new_zeros(
+            (settings.generations + 1, flat_old.numel())
+        )
         previous = AndersonState(x_hist=x_hist, f_hist=f_hist)
     else:
         previous = state
@@ -145,7 +149,9 @@ def anderson_mix(
     f_current = torch.cat((raw.unsqueeze(0), previous.f_hist[1:]), dim=0)
     x_current = torch.cat((flat_old.unsqueeze(0), previous.x_hist[1:]), dim=0)
 
-    accelerate = step > settings.generations or (step > 1 and not settings.soft_start)
+    accelerate = step > settings.generations or (
+        step > 1 and not settings.soft_start
+    )
     if accelerate:
         n = min(step - 1, settings.generations)
         df = f_current[0] - f_current[1 : n + 1]
@@ -166,7 +172,9 @@ def anderson_mix(
             a = torch.where(transition_active, a, eye)
             b = torch.where(transition_active, b, torch.zeros_like(b))
         theta = torch.linalg.solve(a, b.unsqueeze(-1)).squeeze(-1)
-        x_bar = torch.einsum("h,hv->v", theta, x_current[1 : n + 1] - x_current[0])
+        x_bar = torch.einsum(
+            "h,hv->v", theta, x_current[1 : n + 1] - x_current[0]
+        )
         f_bar = torch.einsum("h,hv->v", theta, -df)
         x_bar = x_bar + x_current[0]
         f_bar = f_bar + f_current[0]
