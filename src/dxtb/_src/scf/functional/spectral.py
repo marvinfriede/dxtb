@@ -52,15 +52,68 @@ _FERMI_MAX_SCALED_NORM = 4.0
 _EAGER_PRIMAL_STATE = threading.local()
 
 
+def _normalize_primal_fermi_mode(mode: bool | str) -> str:
+    """Normalize a primal Fermi execution strategy identifier."""
+    if isinstance(mode, bool):
+        return "adaptive" if mode else "static"
+    if isinstance(mode, str) and mode in ("static", "adaptive", "spectral"):
+        return mode
+    raise ValueError(
+        "eager_primal_fermi must be a bool or one of 'static', 'adaptive', "
+        f"or 'spectral'; got {mode!r}."
+    )
+
+
+def _current_primal_fermi_mode(explicit: bool | str = False) -> str:
+    """Resolve the active primal Fermi mode from explicit argument or scope."""
+    explicit_mode = _normalize_primal_fermi_mode(explicit)
+    if explicit_mode != "static":
+        return explicit_mode
+    scope_mode = getattr(_EAGER_PRIMAL_STATE, "mode", None)
+    if scope_mode is not None:
+        return _normalize_primal_fermi_mode(scope_mode)
+    if bool(getattr(_EAGER_PRIMAL_STATE, "enabled", False)):
+        return "adaptive"
+    return "static"
+
+
 @contextmanager
-def eager_primal_fermi_scope(enabled: bool = True) -> Iterator[None]:
-    """Enable eager-only adaptive tanh doubling inside detached primal root solving."""
-    prev = getattr(_EAGER_PRIMAL_STATE, "enabled", False)
-    _EAGER_PRIMAL_STATE.enabled = bool(enabled)
+def eager_primal_fermi_scope(enabled: bool | str = True) -> Iterator[None]:
+    """Configure the thread-local primal Fermi evaluation strategy."""
+    mode = _normalize_primal_fermi_mode(enabled)
+    prev_enabled = getattr(_EAGER_PRIMAL_STATE, "enabled", False)
+    prev_mode = getattr(
+        _EAGER_PRIMAL_STATE,
+        "mode",
+        "adaptive" if prev_enabled else "static",
+    )
+    _EAGER_PRIMAL_STATE.mode = mode
+    _EAGER_PRIMAL_STATE.enabled = mode != "static"
     try:
         yield
     finally:
-        _EAGER_PRIMAL_STATE.enabled = prev
+        _EAGER_PRIMAL_STATE.mode = prev_mode
+        _EAGER_PRIMAL_STATE.enabled = prev_enabled
+
+
+def _require_detached_eager_primal(name: str, *tensors: Tensor) -> None:
+    """Ensure a detached-primal helper never runs with gradients or transforms."""
+    if torch.is_grad_enabled() or is_compiling():
+        raise RuntimeError(
+            f"{name} is restricted to detached eager primal evaluation."
+        )
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    if ft.get_interpreter_stack():
+        raise RuntimeError(f"{name} cannot run under torch.func.")
+    for tensor in tensors:
+        if ft.is_functorch_wrapped_tensor(tensor):
+            raise RuntimeError(
+                f"{name} cannot run on functorch-wrapped tensors."
+            )
+        if (
+            tensor.is_floating_point() or tensor.is_complex()
+        ) and torch.autograd.forward_ad.unpack_dual(tensor).tangent is not None:
+            raise RuntimeError(f"{name} cannot run on forward-AD dual tensors.")
 
 
 def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
@@ -127,16 +180,40 @@ def _matrix_fermi_eager(
     active: Tensor,
 ) -> Tensor:
     """Eager-only equivalent that stops after the largest required doubling."""
-    if torch.is_grad_enabled() or is_compiling():
-        raise RuntimeError(
-            "Adaptive matrix-Fermi doubling is restricted to detached eager "
-            "primal evaluation."
-        )
-    if torch._C._functorch.get_interpreter_stack():
-        raise RuntimeError(
-            "Adaptive matrix-Fermi doubling cannot run under torch.func."
-        )
+    _require_detached_eager_primal(
+        "Adaptive matrix-Fermi doubling", matrix, shift, kt
+    )
     return _matrix_fermi_impl(matrix, shift, kt, active, eager=True)
+
+
+def _matrix_fermi_spectral(
+    matrix: Tensor,
+    shift: Tensor,
+    kt: Tensor,
+    active: Tensor,
+    *,
+    precomputed_eigh: tuple[Tensor, Tensor] | None = None,
+) -> Tensor:
+    """Detached-primal spectral Fermi evaluation ``U diag(f(e_i)) U^T``.
+
+    Strictly restricted to detached eager primal execution. Preserves the
+    exact S0.1b supported-range and nonfinite-input semantics of
+    :func:`_matrix_fermi` and projects onto the active AO block so that
+    degenerate subspaces and noncontiguous padding are rotation- and
+    ordering-invariant.
+    """
+    _require_detached_eager_primal(
+        "Detached-primal spectral matrix-Fermi evaluation", matrix, shift, kt
+    )
+    return _matrix_fermi_impl(
+        matrix,
+        shift,
+        kt,
+        active,
+        eager=True,
+        spectral=True,
+        precomputed_eigh=precomputed_eigh,
+    )
 
 
 def _matrix_fermi_impl(
@@ -146,8 +223,10 @@ def _matrix_fermi_impl(
     active: Tensor,
     *,
     eager: bool,
+    spectral: bool = False,
+    precomputed_eigh: tuple[Tensor, Tensor] | None = None,
 ) -> Tensor:
-    """Shared matrix-Fermi algebra with a selected static/eager schedule."""
+    """Shared matrix-Fermi algebra with a selected static/eager/spectral schedule."""
     eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
     eye = eye.expand(matrix.shape)
     active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -220,6 +299,35 @@ def _matrix_fermi_impl(
 
     base_power = torch.where(low_temperature, 22, 11)
     in_range = safe_inputs & (required_power <= _FERMI_MAX_SCALE_POWER)
+    if spectral:
+        if precomputed_eigh is not None:
+            evals, active_evecs = precomputed_eigh
+        else:
+            sym_matrix = 0.5 * (safe_matrix + safe_matrix.transpose(-2, -1))
+            count = active.sum(-1).clamp_min(1).to(matrix.dtype)
+            center = sym_matrix.diagonal(dim1=-2, dim2=-1).sum(-1) / count
+            centered = sym_matrix - center[..., None, None] * eye
+            bound = torch.where(active, centered.abs().sum(-1), 0.0).amax(-1)
+            sentinel = (center + bound + 1.0).unsqueeze(-1)
+            eig_input = sym_matrix + torch.diag_embed(
+                torch.where(active, torch.zeros_like(sentinel), sentinel)
+            )
+            evals, evecs = torch.linalg.eigh(eig_input)
+            active_evecs = torch.where(
+                active.unsqueeze(-1), evecs, torch.zeros_like(evecs)
+            )
+        scaled_arg = (evals - safe_shift.unsqueeze(-1)) / (
+            2.0 * safe_kt.unsqueeze(-1)
+        )
+        occ = 0.5 * (1.0 - torch.tanh(scaled_arg))
+        density = (active_evecs * occ.unsqueeze(-2)) @ active_evecs.transpose(
+            -2, -1
+        )
+        density = 0.5 * (density + density.transpose(-2, -1))
+        density = torch.where(active_pair, density, torch.zeros_like(density))
+        nan = torch.full_like(density, float("nan"))
+        return torch.where(in_range[..., None, None], density, nan)
+
     exponent = torch.where(
         in_range[..., None, None], exponent, torch.zeros_like(exponent)
     )
@@ -460,7 +568,7 @@ def fermi_density_matrix(
     l_inv: Tensor | None = None,
     mask: Tensor | None = None,
     diff_steps: int = 2,
-    eager_primal: bool = False,
+    eager_primal: bool | str = False,
 ) -> Tensor:
     """Build an invariant Fermi density from dxtb's shared primal state.
 
@@ -565,7 +673,7 @@ def _fermi_free_energy_setup(
     mask: Tensor | None,
     diff_steps: int,
     *,
-    eager_primal: bool = False,
+    eager_primal: bool | str = False,
 ) -> _FermiFreeEnergySetup:
     work_dtype = torch.float64
     h = hamiltonian.to(dtype=work_dtype)
@@ -577,11 +685,11 @@ def _fermi_free_energy_setup(
         structural_mask = state.orbital_mask
         if structural_mask is not None and structural_mask.ndim == h.ndim:
             structural_mask = structural_mask.select(-2, 0)
-    h, spectral, active = _prepare_matrix(h, li, structural_mask)
+    h_base, spectral_base, active_base = _prepare_matrix(h, li, structural_mask)
 
-    h = h.unsqueeze(-3).expand(*nel.shape, h.shape[-2], h.shape[-1])
-    spectral = spectral.unsqueeze(-3).expand_as(h)
-    active = active.unsqueeze(-2).expand(*nel.shape, active.shape[-1])
+    h = h_base.unsqueeze(-3).expand(*nel.shape, h_base.shape[-2], h_base.shape[-1])
+    spectral = spectral_base.unsqueeze(-3).expand_as(h)
+    active = active_base.unsqueeze(-2).expand(*nel.shape, active_base.shape[-1])
     if li is not None:
         li = li.unsqueeze(-3).expand_as(h)
         pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -609,27 +717,188 @@ def _fermi_free_energy_setup(
 
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
-    use_eager = eager_primal or bool(
-        getattr(_EAGER_PRIMAL_STATE, "enabled", False)
-    )
-    matrix_fermi = _matrix_fermi_eager if use_eager else _matrix_fermi
-    for _ in range(diff_steps):
-        density = matrix_fermi(relative, shift, safe_kt, active)
-        diag_density = density.diagonal(dim1=-2, dim2=-1)
-        count = diag_density.sum(-1)
-        slope = (diag_density - (density * density).sum(dim=-1)).sum(
-            -1
-        ) / safe_kt
-        safe_slope = torch.where(
-            slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+    primal_mode = _current_primal_fermi_mode(eager_primal)
+    if primal_mode == "spectral":
+        _require_detached_eager_primal(
+            "Detached-primal spectral matrix-Fermi evaluation",
+            hamiltonian,
+            nel,
+            kt,
+            *((l_inv,) if l_inv is not None else ()),
         )
-        correction = torch.where(diff_mask, (target - count) / safe_slope, 0.0)
-        shift = shift + correction
+        base_pair = active_base.unsqueeze(-1) & active_base.unsqueeze(-2)
+        finite_base = torch.where(
+            base_pair, torch.isfinite(h_base), torch.ones_like(base_pair)
+        ).all(dim=(-1, -2))
+        safe_spectral_base = torch.where(
+            finite_base[..., None, None],
+            spectral_base,
+            torch.zeros_like(spectral_base),
+        )
+        evals_base, evecs_base = torch.linalg.eigh(safe_spectral_base)
+        active_evecs_base = torch.where(
+            active_base.unsqueeze(-1), evecs_base, torch.zeros_like(evecs_base)
+        )
+        active_evecs = active_evecs_base.unsqueeze(-3).expand_as(h)
+        col_norm_sq = (
+            (active_evecs_base * active_evecs_base)
+            .sum(dim=-2)
+            .unsqueeze(-2)
+            .expand(*nel.shape, evals_base.shape[-1])
+        )
+        ref_offset = (ref + offset).unsqueeze(-1)
+        safe_ref_offset = torch.where(
+            torch.isfinite(ref_offset), ref_offset, torch.zeros_like(ref_offset)
+        )
+        evals_rel = (
+            evals_base.unsqueeze(-2).expand(*nel.shape, evals_base.shape[-1])
+            - safe_ref_offset
+        )
+        precomputed_eigh = (evals_rel, active_evecs)
+        active_any = active.any(-1)
+        active_pair = active.unsqueeze(-1) & active_any.unsqueeze(-1).unsqueeze(
+            -1
+        )
+        active_rel = torch.where(
+            active.unsqueeze(-1) & active.unsqueeze(-2),
+            relative,
+            torch.zeros_like(relative),
+        )
+        finite_rel = torch.where(
+            active.unsqueeze(-1) & active.unsqueeze(-2),
+            torch.isfinite(relative),
+            torch.ones_like(active.unsqueeze(-1) & active.unsqueeze(-2)),
+        ).all(dim=(-1, -2))
+        safe_rel_diag = torch.where(
+            finite_rel.unsqueeze(-1) & active,
+            active_rel.diagonal(dim1=-2, dim2=-1),
+            torch.zeros_like(evals_rel),
+        )
+        off_diag_row_sum = (
+            torch.where(
+                finite_rel[..., None, None],
+                active_rel.abs(),
+                torch.zeros_like(active_rel),
+            ).sum(dim=-1)
+            - safe_rel_diag.abs()
+        )
+        max_off_diag = (
+            torch.where(
+                finite_rel[..., None, None],
+                active_rel.abs(),
+                torch.zeros_like(active_rel),
+            )
+            .masked_fill(
+                torch.eye(
+                    h.shape[-1], dtype=torch.bool, device=h.device
+                ).expand_as(active_rel),
+                0.0,
+            )
+            .amax(dim=(-1, -2))
+        )
+        del active_pair
+        maximum_value = torch.finfo(work_dtype).max
+        maximum_exponent = _FERMI_MAX_SCALED_NORM * float(
+            2**_FERMI_MAX_SCALE_POWER
+        )
+
+        for _ in range(diff_steps):
+            finite_sh_kt = (
+                torch.isfinite(shift) & torch.isfinite(safe_kt) & (safe_kt > 0.0)
+            )
+            fin_in = finite_rel & torch.where(
+                active_any, finite_sh_kt, torch.ones_like(active_any)
+            )
+            s_shift = torch.where(
+                fin_in & active_any, shift, torch.zeros_like(shift)
+            )
+            s_kt = torch.where(
+                fin_in & active_any, safe_kt, torch.ones_like(safe_kt)
+            )
+            sh_diag = s_shift.unsqueeze(-1)
+            opp_signs = ((safe_rel_diag < 0.0) & (sh_diag > 0.0)) | (
+                (safe_rel_diag > 0.0) & (sh_diag < 0.0)
+            )
+            sub_ovf = (
+                active
+                & opp_signs
+                & (
+                    safe_rel_diag.abs()
+                    > maximum_value - s_shift.abs().unsqueeze(-1)
+                )
+            ).any(-1)
+            s_in = fin_in & ~sub_ovf
+            s_shift = torch.where(s_in, s_shift, torch.zeros_like(s_shift))
+            s_kt = torch.where(s_in, s_kt, torch.ones_like(s_kt))
+            diag_diff = torch.where(
+                active,
+                (safe_rel_diag - s_shift.unsqueeze(-1)).abs(),
+                torch.zeros_like(safe_rel_diag),
+            )
+            max_entry = torch.maximum(diag_diff.amax(dim=-1), max_off_diag)
+            entry_ok = (max_entry / maximum_exponent <= s_kt) | ~active_any
+            s_in = s_in & entry_ok
+            s_kt = torch.where(s_in, s_kt, torch.ones_like(s_kt))
+            row_abs_sum = torch.where(
+                active,
+                diag_diff + off_diag_row_sum,
+                torch.zeros_like(diag_diff),
+            )
+            exp_bound = torch.where(
+                s_in, row_abs_sum.amax(dim=-1) / s_kt, torch.zeros_like(s_kt)
+            )
+            req_pow = torch.ceil(
+                torch.log2(exp_bound.clamp_min(1.0) / _FERMI_MAX_SCALED_NORM)
+            ).to(torch.long)
+            step_in_range = s_in & (req_pow <= _FERMI_MAX_SCALE_POWER)
+            scaled_arg = (evals_rel - s_shift.unsqueeze(-1)) / (
+                2.0 * s_kt.unsqueeze(-1)
+            )
+            occ_1d = 0.5 * (1.0 - torch.tanh(scaled_arg))
+            count = (col_norm_sq * occ_1d).sum(dim=-1)
+            slope = (col_norm_sq * occ_1d * (1.0 - occ_1d)).sum(
+                dim=-1
+            ) / s_kt
+            count = torch.where(
+                step_in_range, count, torch.full_like(count, float("nan"))
+            )
+            slope = torch.where(
+                step_in_range, slope, torch.full_like(slope, float("nan"))
+            )
+            safe_slope = torch.where(
+                slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+            )
+            correction = torch.where(
+                diff_mask, (target - count) / safe_slope, 0.0
+            )
+            shift = shift + correction
+
+        occupation = _matrix_fermi_spectral(
+            relative, shift, safe_kt, active, precomputed_eigh=precomputed_eigh
+        )
+    else:
+        matrix_fermi: Callable[[Tensor, Tensor, Tensor, Tensor], Tensor] = (
+            _matrix_fermi_eager if primal_mode == "adaptive" else _matrix_fermi
+        )
+        for _ in range(diff_steps):
+            density = matrix_fermi(relative, shift, safe_kt, active)
+            diag_density = density.diagonal(dim1=-2, dim2=-1)
+            count = diag_density.sum(-1)
+            slope = (diag_density - (density * density).sum(dim=-1)).sum(
+                -1
+            ) / safe_kt
+            safe_slope = torch.where(
+                slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+            )
+            correction = torch.where(
+                diff_mask, (target - count) / safe_slope, 0.0
+            )
+            shift = shift + correction
+        occupation = matrix_fermi(relative, shift, safe_kt, active)
 
     x = (relative - shift[..., None, None] * eye) / safe_kt
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
     x = torch.where(pair, x, torch.zeros_like(x))
-    occupation = matrix_fermi(relative, shift, safe_kt, active)
     return _FermiFreeEnergySetup(
         h=h,
         spectral=spectral,
@@ -725,10 +994,18 @@ def fermi_free_energy_matrix(
     l_inv: Tensor | None = None,
     mask: Tensor | None = None,
     diff_steps: int = 2,
+    eager_primal: bool | str = False,
 ) -> Tensor:
     """Build the invariant finite-temperature free-energy spectral matrix."""
     setup = _fermi_free_energy_setup(
-        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
+        hamiltonian,
+        nel,
+        kt,
+        state,
+        l_inv,
+        mask,
+        diff_steps,
+        eager_primal=eager_primal,
     )
     active = setup.active
     entropy = _binary_entropy_matrix(setup.x, setup.occupation, active)
@@ -771,6 +1048,7 @@ def fermi_free_energy_trace(
     l_inv: Tensor,
     mask: Tensor | None = None,
     diff_steps: int = 2,
+    eager_primal: bool | str = False,
 ) -> Tensor:
     """
     Overlap-weighted trace of :func:`fermi_free_energy_matrix`.
@@ -785,7 +1063,14 @@ def fermi_free_energy_trace(
     to its quadrature error (about 1e-10 relative).
     """
     setup = _fermi_free_energy_setup(
-        hamiltonian, nel, kt, state, l_inv, mask, diff_steps
+        hamiltonian,
+        nel,
+        kt,
+        state,
+        l_inv,
+        mask,
+        diff_steps,
+        eager_primal=eager_primal,
     )
     active = setup.active
     identity = torch.diag_embed(active.to(torch.float64))

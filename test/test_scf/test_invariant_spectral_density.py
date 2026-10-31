@@ -1912,3 +1912,371 @@ def test_aufbau_vmap_preserves_lane_specific_orbital_masks() -> None:
         (inactive_h, inactive_li),
     )
     assert torch.equal(inactive_tangent, torch.zeros_like(inactive_tangent))
+
+
+@pytest.mark.parametrize(
+    "case_name,evals,active",
+    [
+        (
+            "well-separated",
+            [-0.45, -0.18, 0.03, 0.27, 0.61],
+            [True, True, True, True, True],
+        ),
+        (
+            "exact-2fold",
+            [-0.35, -0.05, -0.05, 0.22, 0.55],
+            [True, True, True, True, True],
+        ),
+        (
+            "exact-3fold",
+            [-0.40, 0.02, 0.02, 0.02, 0.50],
+            [True, True, True, True, True],
+        ),
+        (
+            "near-1e-14",
+            [-0.30, -0.01, -0.01 + 1.0e-14, 0.15, 0.45],
+            [True, True, True, True, True],
+        ),
+        (
+            "near-1e-12",
+            [-0.30, -0.01, -0.01 + 1.0e-12, 0.15, 0.45],
+            [True, True, True, True, True],
+        ),
+        (
+            "near-1e-10",
+            [-0.30, -0.01, -0.01 + 1.0e-10, 0.15, 0.45],
+            [True, True, True, True, True],
+        ),
+        (
+            "near-1e-8",
+            [-0.30, -0.01, -0.01 + 1.0e-8, 0.15, 0.45],
+            [True, True, True, True, True],
+        ),
+        (
+            "noncontiguous-padded",
+            [-0.38, 12.0, -0.04, -0.04, 15.0, 0.29],
+            [True, False, True, True, False, True],
+        ),
+    ],
+)
+@pytest.mark.parametrize("etemp_k", [50.0, 300.0, 5000.0])
+def test_detached_spectral_fermi_matches_static_across_degeneracy_and_temperature(
+    case_name: str,
+    evals: list[float],
+    active: list[bool],
+    etemp_k: float,
+) -> None:
+    """Detached spectral matrix-Fermi matches static matrix-Fermi across degeneracies and temperatures."""
+    del case_name
+    gen = torch.Generator().manual_seed(42)
+    n = len(evals)
+    active_mask = torch.tensor(active, dtype=torch.bool)
+    n_act = int(active_mask.sum().item())
+    q_act, _ = torch.linalg.qr(
+        torch.randn((n_act, n_act), generator=gen, dtype=torch.float64)
+    )
+    u = torch.eye(n, dtype=torch.float64)
+    act_idx = torch.nonzero(active_mask, as_tuple=False).squeeze(-1)
+    u[act_idx.unsqueeze(-1), act_idx.unsqueeze(0)] = q_act
+    diag_e = torch.diag(torch.tensor(evals, dtype=torch.float64))
+    h_orth = u @ diag_e @ u.mT
+
+    # Generalized overlap with nontrivial lower-triangular L^-1 on active indices.
+    l_inv = torch.eye(n, dtype=torch.float64)
+    l_inv[act_idx[1], act_idx[0]] = 0.08
+    l_inv[act_idx[2], act_idx[0]] = -0.04
+    l_inv[act_idx[2], act_idx[1]] = 0.06
+    l_factor = torch.linalg.inv(l_inv)
+    h_ao = l_factor @ h_orth @ l_factor.mT
+
+    kt = torch.tensor(etemp_k * KELVIN2AU, dtype=torch.float64)
+    electrons = torch.tensor([2.0, 1.0], dtype=torch.float64)
+    _, spectral_base, prepared_active = _prepare_matrix(
+        h_ao, l_inv, active_mask
+    )
+    act_evals = torch.tensor(
+        [e for e, a in zip(evals, active) if a], dtype=torch.float64
+    )
+    padded_evals = torch.cat(
+        (
+            act_evals,
+            torch.zeros(n - n_act, dtype=torch.float64),
+        )
+    ).expand(2, -1)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        padded_evals,
+        kt,
+        thr=1.0e-14,
+        maxiter=300,
+        diff_order=3,
+        mask=(torch.arange(n) < n_act).expand(2, -1),
+    )
+
+    with torch.no_grad():
+        d_static = fermi_density_matrix(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="static",
+        )
+        d_spectral = fermi_density_matrix(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="spectral",
+        )
+        f_static = fermi_free_energy_matrix(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="static",
+        )
+        f_spectral = fermi_free_energy_matrix(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="spectral",
+        )
+        tr_static = fermi_free_energy_trace(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="static",
+        )
+        tr_spectral = fermi_free_energy_trace(
+            h_ao,
+            electrons,
+            kt,
+            state,
+            l_inv=l_inv,
+            mask=active_mask,
+            eager_primal="spectral",
+        )
+    torch.testing.assert_close(d_spectral, d_static, atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(f_spectral, f_static, atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(
+        tr_spectral, tr_static, atol=1.0e-11, rtol=1.0e-11
+    )
+
+    # Also check direct _matrix_fermi_spectral vs _matrix_fermi with basis rotation of degenerate subspace.
+    shift = state.chemical_potential_ref
+    with torch.no_grad():
+        m_static = _matrix_fermi(
+            spectral_base.expand(2, -1, -1), shift, kt, prepared_active
+        )
+        m_spectral = spectral_module._matrix_fermi_spectral(
+            spectral_base.expand(2, -1, -1), shift, kt, prepared_active
+        )
+    torch.testing.assert_close(m_spectral, m_static, atol=1.0e-11, rtol=1.0e-11)
+
+
+def test_detached_spectral_fermi_degenerate_subspace_rotation_invariance() -> (
+    None
+):
+    """Random orthogonal rotations within a 3-fold degenerate subspace leave D invariant."""
+    evals = torch.tensor([-0.4, 0.05, 0.05, 0.05, 0.6], dtype=torch.float64)
+    active = torch.ones(5, dtype=torch.bool)
+    kt = torch.tensor(300.0 * KELVIN2AU, dtype=torch.float64)
+    shift = torch.tensor([0.05], dtype=torch.float64)
+
+    gen = torch.Generator().manual_seed(7)
+    q1, _ = torch.linalg.qr(
+        torch.randn((5, 5), generator=gen, dtype=torch.float64)
+    )
+    rot_sub, _ = torch.linalg.qr(
+        torch.randn((3, 3), generator=gen, dtype=torch.float64)
+    )
+    rot_full = torch.eye(5, dtype=torch.float64)
+    rot_full[1:4, 1:4] = rot_sub
+    q2 = q1 @ rot_full
+
+    h1 = q1 @ torch.diag(evals) @ q1.mT
+    h2 = q2 @ torch.diag(evals) @ q2.mT
+    with torch.no_grad():
+        d1 = spectral_module._matrix_fermi_spectral(
+            h1.unsqueeze(0), shift, kt, active
+        )
+        d2 = spectral_module._matrix_fermi_spectral(
+            h2.unsqueeze(0), shift, kt, active
+        )
+        d_ref = _matrix_fermi(h1.unsqueeze(0), shift, kt, active)
+    torch.testing.assert_close(d1, d2, atol=1.0e-13, rtol=1.0e-13)
+    torch.testing.assert_close(d1, d_ref, atol=1.0e-12, rtol=1.0e-12)
+
+
+def test_detached_spectral_fermi_wide_spectra_saturation_s01b_and_nonfinite() -> (
+    None
+):
+    """Cover wide spectra, saturated 0/1 occupations, S0.1b powers 30/31, and NaN/Inf inputs."""
+    active = torch.tensor([True, True, True, False], dtype=torch.bool)
+    kt = torch.tensor(1.0e-3, dtype=torch.float64)
+
+    # 1. Wide spectrum + large positive/negative chemical potential shifts (saturated 1.0 and 0.0).
+    wide_evals = torch.tensor([-25.0, 0.0, 25.0, 0.0], dtype=torch.float64)
+    _, wide_spec, prep_act = _prepare_matrix(torch.diag(wide_evals), None, active)
+    for shift_val in (-50.0, 0.0, 50.0):
+        shift = torch.tensor(shift_val, dtype=torch.float64)
+        with torch.no_grad():
+            d_spec = spectral_module._matrix_fermi_spectral(
+                wide_spec, shift, kt, prep_act
+            )
+            d_stat = _matrix_fermi(wide_spec, shift, kt, prep_act)
+        torch.testing.assert_close(d_spec, d_stat, atol=1.0e-12, rtol=1.0e-12)
+    # Saturated 0.0 at shift = -50.0 and saturated 1.0 on active block at shift = +50.0
+    with torch.no_grad():
+        d_zero = spectral_module._matrix_fermi_spectral(
+            wide_spec, torch.tensor(-50.0, dtype=torch.float64), kt, prep_act
+        )
+        d_one = spectral_module._matrix_fermi_spectral(
+            wide_spec, torch.tensor(50.0, dtype=torch.float64), kt, prep_act
+        )
+    torch.testing.assert_close(
+        d_zero, torch.zeros_like(d_zero), atol=1.0e-14, rtol=0.0
+    )
+    expected_one = torch.diag(
+        torch.tensor([1.0, 1.0, 1.0, 0.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(d_one, expected_one, atol=1.0e-14, rtol=0.0)
+
+    # 2. S0.1b regime boundaries: required_power == 30 (in range) vs required_power == 31 (out of range -> NaN).
+    max_norm = float(spectral_module._FERMI_MAX_SCALED_NORM)
+    for power in (30, 31):
+        target_scaled_norm = max_norm * (2.0 ** (power - 0.5))
+        e_max = float(kt.item()) * target_scaled_norm
+        s01b_evals = torch.tensor(
+            [-e_max, 0.0, 0.5 * e_max, 0.0], dtype=torch.float64
+        )
+        _, s01b_spec, s01b_act = _prepare_matrix(
+            torch.diag(s01b_evals), None, active
+        )
+        act_pair = s01b_act.unsqueeze(-1) & s01b_act.unsqueeze(-2)
+        exp_mat = torch.where(act_pair, s01b_spec / kt, 0.0)
+        exp_bound = exp_mat.abs().sum(-1).amax(-1)
+        req_pow = int(
+            torch.ceil(torch.log2(exp_bound.clamp_min(1.0) / max_norm)).item()
+        )
+        assert req_pow == power
+        with torch.no_grad():
+            d_spec_p = spectral_module._matrix_fermi_spectral(
+                s01b_spec,
+                torch.tensor(0.0, dtype=torch.float64),
+                kt,
+                s01b_act,
+            )
+            d_stat_p = _matrix_fermi(
+                s01b_spec,
+                torch.tensor(0.0, dtype=torch.float64),
+                kt,
+                s01b_act,
+            )
+        if power == 30:
+            assert bool(torch.isfinite(d_spec_p).all())
+            torch.testing.assert_close(
+                d_spec_p, d_stat_p, atol=1.0e-12, rtol=1.0e-12
+            )
+        else:
+            assert bool(torch.isnan(d_spec_p).all())
+            assert bool(torch.isnan(d_stat_p).all())
+
+    # 3. Invalid active inputs (NaN / Inf) return NaN matching _matrix_fermi.
+    for bad_val in (float("nan"), float("inf")):
+        bad_h = torch.diag(
+            torch.tensor([-0.2, 0.1, 0.3, 0.0], dtype=torch.float64)
+        )
+        bad_h[0, 0] = bad_val
+        _, bad_spec, bad_act = _prepare_matrix(bad_h, None, active)
+        with torch.no_grad():
+            d_bad = spectral_module._matrix_fermi_spectral(
+                bad_spec,
+                torch.tensor(0.0, dtype=torch.float64),
+                kt,
+                bad_act,
+            )
+            d_bad_stat = _matrix_fermi(
+                bad_spec,
+                torch.tensor(0.0, dtype=torch.float64),
+                kt,
+                bad_act,
+            )
+        assert bool(torch.isnan(d_bad).all())
+        assert bool(torch.isnan(d_bad_stat).all())
+
+    # 4. Guard rejects grad-enabled, functorch, forward-AD on l_inv, or compile calls to spectral primal mode, and supports float32.
+    h_grad = torch.diag(
+        torch.tensor([-0.2, 0.1, 0.3, 0.0], dtype=torch.float64)
+    ).requires_grad_(True)
+    with pytest.raises(RuntimeError, match="detached eager"):
+        spectral_module._matrix_fermi_spectral(
+            h_grad, torch.tensor(0.0, dtype=torch.float64), kt, active
+        )
+
+    h_det = h_grad.detach()
+    shift_det = torch.tensor(0.0, dtype=torch.float64)
+    with torch.no_grad():
+        with pytest.raises(RuntimeError, match="torch.func"):
+            torch.func.jvp(
+                lambda x: spectral_module._matrix_fermi_spectral(
+                    x, shift_det, kt, active
+                ),
+                (h_det,),
+                (torch.ones_like(h_det),),
+            )
+        with pytest.raises(RuntimeError, match="torch.func"):
+            torch.func.vmap(
+                lambda x: spectral_module._matrix_fermi_spectral(
+                    x, shift_det, kt, active
+                )
+            )(h_det.unsqueeze(0))
+        from dxtb._src.wavefunction.filling import (
+            _get_fermi_occupation_core_state,
+        )
+
+        l_inv_eye = torch.eye(4, dtype=torch.float64)
+        st_det = _get_fermi_occupation_core_state(
+            torch.tensor([1.5], dtype=torch.float64),
+            torch.tensor([[-0.2, 0.1, 0.3, 0.0]], dtype=torch.float64),
+            kt,
+            mask=active.unsqueeze(0),
+        )
+        with torch.autograd.forward_ad.dual_level():
+            l_inv_dual = torch.autograd.forward_ad.make_dual(
+                l_inv_eye, torch.ones_like(l_inv_eye)
+            )
+            with pytest.raises(RuntimeError, match="forward-AD dual"):
+                fermi_density_matrix(
+                    h_det,
+                    torch.tensor([1.5], dtype=torch.float64),
+                    kt,
+                    st_det,
+                    l_inv=l_inv_dual,
+                    mask=active,
+                    eager_primal="spectral",
+                )
+
+        # Verify float32 detached-primal spectral parity.
+        h_f32 = h_det.to(torch.float32)
+        kt_f32 = kt.to(torch.float32)
+        shift_f32 = torch.tensor(0.0, dtype=torch.float32)
+        d_spec_f32 = spectral_module._matrix_fermi_spectral(
+            h_f32, shift_f32, kt_f32, active
+        )
+        d_stat_f32 = _matrix_fermi(h_f32, shift_f32, kt_f32, active)
+        torch.testing.assert_close(
+            d_spec_f32, d_stat_f32, atol=5.0e-6, rtol=5.0e-5
+        )
