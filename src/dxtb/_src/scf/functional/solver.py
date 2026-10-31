@@ -1098,9 +1098,7 @@ def _solve_map_control(
 ) -> _SolverOutcome:
     """Run transform-compatible fixed-trip control around a raw map."""
     record_initial = (
-        maxiter > 0
-        if record_initial_status is None
-        else record_initial_status
+        maxiter > 0 if record_initial_status is None else record_initial_status
     )
     state = _initialize_solver_control(
         guess,
