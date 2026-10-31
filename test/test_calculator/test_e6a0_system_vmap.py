@@ -233,38 +233,37 @@ def test_system_fixed_trip_and_calculator_eager_force_policy() -> None:
         calculator.singlepoint(positions)
 
 
-def test_system_legacy_fallback_constructs_only_eager_guess(
+def test_system_negative_temperature_fails_before_transform_guess(
     monkeypatch,
 ) -> None:
-    """Legacy-owned temperature routes do not build an unused fixed guess."""
+    """An invalid electronic temperature fails before SCF preparation."""
     import dxtb._src.scf.functional.eager as eager
 
     system = _system(maxiter=1, temperature=-1.0)
     positions = _positions()[0]
-    original_get_guess = eager.get_guess
-    original_eager_runner = eager.run_functional_full_eager
-    guess_validation: list[bool] = []
-    eager_calls = 0
+    guess_calls = 0
+    solve_calls = 0
 
-    def tracked_get_guess(*args, validate: bool = True, **kwargs):
-        guess_validation.append(validate)
-        return original_get_guess(*args, validate=validate, **kwargs)
+    def unexpected_guess(*args, **kwargs):
+        nonlocal guess_calls
+        guess_calls += 1
+        pytest.fail("invalid temperature must fail before SCF guessing")
 
-    def tracked_eager_runner(*args, **kwargs):
-        nonlocal eager_calls
-        eager_calls += 1
-        return original_eager_runner(*args, **kwargs)
+    def unexpected_solve(*args, **kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        pytest.fail("invalid temperature must fail before SCF solving")
 
-    monkeypatch.setattr(eager, "get_guess", tracked_get_guess)
-    monkeypatch.setattr(
-        eager, "run_functional_full_eager", tracked_eager_runner
-    )
+    monkeypatch.setattr(eager, "get_guess", unexpected_guess)
+    monkeypatch.setattr(eager, "run_prepared_functional_full", unexpected_solve)
 
-    result = system.singlepoint(positions)
+    with pytest.raises(
+        ValueError, match="Electronic Temperature must be non-negative"
+    ):
+        system.singlepoint(positions)
 
-    assert eager_calls == 1
-    assert guess_validation == [True]
-    assert result.status is None
+    assert guess_calls == 0
+    assert solve_calls == 0
 
 
 def test_system_functional_fixed_trip_constructs_one_transform_guess(
@@ -288,57 +287,80 @@ def test_system_functional_fixed_trip_constructs_one_transform_guess(
     assert result.status is not None
 
 
-@pytest.mark.parametrize(
-    "route_options",
-    [
-        {"fermi_maxiter": -1},
-        {"scf_mode": labels.SCF_MODE_EXPERIMENTAL},
-    ],
-    ids=["negative-fermi-maxiter", "non-full-mode"],
-)
-def test_system_static_legacy_routes_skip_transform_guess(
-    monkeypatch, route_options
+def test_system_negative_fermi_maxiter_fails_before_transform_guess(
+    monkeypatch,
 ) -> None:
-    """Legacy Fermi and SCF-mode routes dispatch before fixed-trip guessing."""
+    """An invalid Fermi iteration limit fails before SCF preparation."""
     import dxtb._src.scf.functional.eager as eager
 
-    class LegacyRouteReached(Exception):
-        pass
-
-    system = _system(maxiter=1, **route_options)
-    eager_calls = 0
+    system = _system(maxiter=1, fermi_maxiter=-1)
+    guess_calls = 0
+    solve_calls = 0
 
     def unexpected_guess(*args, **kwargs):
-        pytest.fail("legacy route must not build the transform-only guess")
+        nonlocal guess_calls
+        guess_calls += 1
+        pytest.fail("invalid Fermi settings must fail before SCF guessing")
 
-    def legacy_adapter(*args, **kwargs):
-        nonlocal eager_calls
-        eager_calls += 1
-        raise LegacyRouteReached
+    def unexpected_solve(*args, **kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        pytest.fail("invalid Fermi settings must fail before SCF solving")
 
     monkeypatch.setattr(eager, "get_guess", unexpected_guess)
-    monkeypatch.setattr(eager, "run_functional_full_eager", legacy_adapter)
+    monkeypatch.setattr(eager, "run_prepared_functional_full", unexpected_solve)
 
-    with pytest.raises(LegacyRouteReached):
+    with pytest.raises(ValueError, match="Fermi maxiter must be non-negative"):
         system.singlepoint(_positions()[0])
-    assert eager_calls == 1
+
+    assert guess_calls == 0
+    assert solve_calls == 0
 
 
-def test_system_strict_mixer_error_precedes_initial_guess(monkeypatch) -> None:
-    """Static strict configuration errors do not construct any SCF guess."""
+def test_system_experimental_mode_is_retired_before_guess(monkeypatch) -> None:
+    """The retired single-shot mode fails before constructing an SCF guess."""
     import dxtb._src.scf.functional.eager as eager
 
-    system = _system(mixer=labels.MIXER_BROYDEN, strict=True)
+    system = _system(maxiter=1, scf_mode=labels.SCF_MODE_EXPERIMENTAL)
+    guess_calls = 0
 
     def unexpected_guess(*args, **kwargs):
-        pytest.fail("invalid static configuration must fail before guessing")
+        nonlocal guess_calls
+        guess_calls += 1
+        pytest.fail("retired experimental mode must fail before guessing")
 
     monkeypatch.setattr(eager, "get_guess", unexpected_guess)
 
     with pytest.raises(
-        NotImplementedError, match="Broyden mixer is not implemented"
+        NotImplementedError,
+        match="Experimental single-shot SCF derivatives were not exact.*use FULL or IMPLICIT",
     ):
         system.singlepoint(_positions()[0])
+
+    assert guess_calls == 0
+
+
+def test_system_strict_broyden_uses_native_functional_route(
+    monkeypatch,
+) -> None:
+    """Strict Broyden reaches the native method without substitution."""
+    from dxtb._src.scf.functional.broyden import BroydenMethod
+
+    system = _system(maxiter=2, mixer=labels.MIXER_BROYDEN, strict=True)
+    original_propose = BroydenMethod.propose
+    propose_calls = 0
+
+    def tracked_propose(self, *args, **kwargs):
+        nonlocal propose_calls
+        propose_calls += 1
+        return original_propose(self, *args, **kwargs)
+
+    monkeypatch.setattr(BroydenMethod, "propose", tracked_propose)
+    result = system.singlepoint(_positions()[0])
+
+    assert propose_calls > 0
+    assert result.status is not None
+    assert isinstance(result.iterations, torch.Tensor)
 
 
 def test_public_system_jacfwd_with_official_d3_release() -> None:
