@@ -1,0 +1,349 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "C4H5NCS",
+  "model": "gfn2",
+  "charge": 0.0,
+  "spin": 0.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "exact-cdiis",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 26,
+  "physical_maps": 16,
+  "certified": true,
+  "residual_l2": 1.7575498877708133e-08,
+  "residual_max": 3.9698045961600315e-09,
+  "energy": -19.694059708019168,
+  "wall_seconds": 3.7786120353266597,
+  "instrumented_wall_seconds": 3.8143056239932775,
+  "physical_map_seconds": 0.16379916272126138,
+  "map_diagnostic_seconds_removed": 0.03569358866661787,
+  "physical_map_trajectory": [
+    {
+      "energy": -19.564585122170094,
+      "fixed_point_l2": 0.9821248254995001,
+      "fixed_point_max": 0.3272834403686219
+    },
+    {
+      "energy": -17.774860751182366,
+      "fixed_point_l2": 3.9046494971860004,
+      "fixed_point_max": 0.9028822893028495
+    },
+    {
+      "energy": 14.093695616960408,
+      "fixed_point_l2": 18.34019555370003,
+      "fixed_point_max": 4.35671689864067
+    },
+    {
+      "energy": -18.694538948248773,
+      "fixed_point_l2": 3.500286856467106,
+      "fixed_point_max": 0.9741815434866126
+    },
+    {
+      "energy": -19.01079394058436,
+      "fixed_point_l2": 2.1003144872018282,
+      "fixed_point_max": 0.4596107871651439
+    },
+    {
+      "energy": -19.523951933878912,
+      "fixed_point_l2": 1.0022014751036243,
+      "fixed_point_max": 0.28924296039440406
+    },
+    {
+      "energy": -19.58358450984853,
+      "fixed_point_l2": 0.7372038081395004,
+      "fixed_point_max": 0.23209018115591945
+    },
+    {
+      "energy": -19.605355794210592,
+      "fixed_point_l2": 0.6051816960958405,
+      "fixed_point_max": 0.2725385480573016
+    },
+    {
+      "energy": -19.680973274726306,
+      "fixed_point_l2": 0.2393571634800571,
+      "fixed_point_max": 0.07986911859401274
+    },
+    {
+      "energy": -19.648893010373378,
+      "fixed_point_l2": 0.46472183499501024,
+      "fixed_point_max": 0.16583167519402114
+    },
+    {
+      "energy": -19.683940064443142,
+      "fixed_point_l2": 0.20979125163681703,
+      "fixed_point_max": 0.09150630493678474
+    },
+    {
+      "energy": -19.68575198047555,
+      "fixed_point_l2": 0.21361835750377062,
+      "fixed_point_max": 0.04690376034786975
+    },
+    {
+      "energy": -19.693634161166763,
+      "fixed_point_l2": 0.051956055318495814,
+      "fixed_point_max": 0.014906446833097275
+    },
+    {
+      "energy": -19.690761562663692,
+      "fixed_point_l2": 0.14518946158436713,
+      "fixed_point_max": 0.03996896293529817
+    },
+    {
+      "energy": -19.693704616176845,
+      "fixed_point_l2": 0.046577006382960966,
+      "fixed_point_max": 0.0137951459129802
+    },
+    {
+      "energy": -19.69404557573229,
+      "fixed_point_l2": 0.009803032644311187,
+      "fixed_point_max": 0.002412012005637232
+    }
+  ],
+  "physical_maps_recorded": 16,
+  "coefficient_optimizer_seconds": 3.2367892945185304,
+  "coefficient_optimizer_evaluations": 466,
+  "coefficient_optimization": [
+    {
+      "history_size": 2,
+      "coefficients": [
+        0.12377284703314423,
+        0.8762271529668557
+      ],
+      "selected_energy": -18.320625901987164,
+      "best_vertex_energy": -17.774860751182366,
+      "optimizer_evaluations": 21,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.14445331203751266
+    },
+    {
+      "history_size": 3,
+      "coefficients": [
+        0.6408772908059689,
+        0.0,
+        0.359122709194031
+      ],
+      "selected_energy": -19.29269946312957,
+      "best_vertex_energy": -18.694538948248773,
+      "optimizer_evaluations": 21,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.1435686380136758
+    },
+    {
+      "history_size": 4,
+      "coefficients": [
+        0.34537648987850267,
+        0.42631202488660386,
+        0.0,
+        0.2283114852348934
+      ],
+      "selected_energy": -19.402683500855133,
+      "best_vertex_energy": -19.01079394058436,
+      "optimizer_evaluations": 27,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.18683604686520994
+    },
+    {
+      "history_size": 5,
+      "coefficients": [
+        0.728385053723559,
+        0.2716149462764288,
+        5.425264515755286e-15,
+        0.0,
+        6.88862235235525e-15
+      ],
+      "selected_energy": -19.607428633152733,
+      "best_vertex_energy": -19.523951933878912,
+      "optimizer_evaluations": 19,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.12901094905100763
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.5790132840653134,
+        0.4209867159346846,
+        0.0,
+        0.0,
+        3.104181129626866e-16,
+        1.7996154334112553e-15
+      ],
+      "selected_energy": -19.654341084606838,
+      "best_vertex_energy": -19.58358450984853,
+      "optimizer_evaluations": 23,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.15860474505461752
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.3107638916918871,
+        0.43143139636111655,
+        0.25780471194699645,
+        2.40351106214934e-17,
+        0.0,
+        7.372789206907368e-19
+      ],
+      "selected_energy": -19.66494142899451,
+      "best_vertex_energy": -19.605355794210592,
+      "optimizer_evaluations": 33,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.2256877119652927
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.7799060356577207,
+        0.1747209255068363,
+        0.04537303883544299,
+        2.7591615214520142e-17,
+        0.0,
+        0.0
+      ],
+      "selected_energy": -19.68456907071354,
+      "best_vertex_energy": -19.680973274726306,
+      "optimizer_evaluations": 34,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.2334476700052619
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.3000496134514851,
+        0.6999503865485147,
+        1.5722109655869842e-16,
+        1.1099921542526002e-16,
+        6.157314624113183e-17,
+        0.0
+      ],
+      "selected_energy": -19.6883605148868,
+      "best_vertex_energy": -19.680973274726306,
+      "optimizer_evaluations": 41,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.28260231483727694
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.4696773645552569,
+        0.05874235944156066,
+        0.4715802760031825,
+        3.176692063788112e-17,
+        3.794504587755547e-18,
+        0.0
+      ],
+      "selected_energy": -19.690430143110913,
+      "best_vertex_energy": -19.683940064443142,
+      "optimizer_evaluations": 40,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.2753930778708309
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.32004917308019565,
+        0.3801218157532662,
+        0.0,
+        0.2998290111665382,
+        8.510176348711488e-17,
+        0.0
+      ],
+      "selected_energy": -19.691656000856497,
+      "best_vertex_energy": -19.68575198047555,
+      "optimizer_evaluations": 52,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.36310357390902936
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.9609419490924981,
+        0.03905805090750152,
+        2.897013047186118e-16,
+        6.393663824586879e-17,
+        9.436897659973634e-17,
+        0.0
+      ],
+      "selected_energy": -19.6936472306119,
+      "best_vertex_energy": -19.693634161166763,
+      "optimizer_evaluations": 33,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.23670896096155047
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.1920831458248711,
+        0.8079168541751289,
+        8.418685145489518e-19,
+        2.2513313387801083e-18,
+        0.0,
+        3.0631806502020602e-18
+      ],
+      "selected_energy": -19.693806460916157,
+      "best_vertex_energy": -19.693634161166763,
+      "optimizer_evaluations": 48,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.3424328330438584
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.5294604237668902,
+        2.552550377954902e-18,
+        0.47053957623310994,
+        0.0,
+        0.0,
+        7.841184310156599e-19
+      ],
+      "selected_energy": -19.693968394710105,
+      "best_vertex_energy": -19.693704616176845,
+      "optimizer_evaluations": 39,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.2702263130340725
+    },
+    {
+      "history_size": 6,
+      "coefficients": [
+        0.2647298923055259,
+        0.26472989230561494,
+        8.501777284072614e-18,
+        0.47054021538885926,
+        0.0,
+        9.546104493416012e-18
+      ],
+      "selected_energy": -19.693968394710105,
+      "best_vertex_energy": -19.693704616176845,
+      "optimizer_evaluations": 35,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.24471314786933362
+    }
+  ],
+  "stage_iterations": [
+    16,
+    10
+  ]
+}

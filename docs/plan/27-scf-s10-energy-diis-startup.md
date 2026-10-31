@@ -19,7 +19,8 @@ the existing first-order choices and optional near-root SOSCF.
 - Starting S10 commit: `23c3fda56d4718dbf4ca7698dd9a70240bdd9d4c`.
 - General-refactor synchronization: `8ed902f762804a9da7f4537e8d40bab80822ed1d`.
   The published general branch had not advanced, so no rebase was needed.
-- Final benchmark-source commit: `c04728db6ccaa2aa83e702eb72a7f07305d2ffdf`.
+- Objective-audit source commit: `c04728db6ccaa2aa83e702eb72a7f07305d2ffdf`.
+- Final strategy-benchmark source commit: `4facb57b32a65e42c8ce64249ff031f7d2121e85`.
 - Benchmarks ran on Python 3.14.8, PyTorch 2.14.1+cpu, float64, one thread,
   Linux x86_64 (`Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38`).
   JSON records the source SHA and a clean source-tree flag for each run.
@@ -135,23 +136,32 @@ the case. Counts are physical maps, not coefficient objective evaluations.
 Timings include the method's total wall time after subtracting benchmark-only
 map-diagnostic overhead; the coefficient optimizer cost remains included.
 
-| Case / method | Physical maps | Wall seconds |
-|---|---:|---:|
-| H2O/GFN2 Broyden -> CDIIS | 5 | 0.111 |
-| H2O/GFN2 Anderson -> CDIIS | 8 | 0.133 |
-| H2O/GFN2 exact EDIIS -> CDIIS | 5 | 0.542 |
-| H2O/GFN2 ADIIS -> CDIIS | 4 | 0.130 |
-| NO2/GFN2 Broyden -> CDIIS | 8 | 0.179 |
-| NO2/GFN2 exact EDIIS -> CDIIS | 8 | 1.194 |
-| NO2/GFN2 ADIIS -> CDIIS | 8 | 0.249 |
-| H2O+/GFN2 Broyden -> CDIIS | 4 | 0.091 |
-| H2O+/GFN2 exact EDIIS | 3 | 0.125 |
-| Issue #187 H2O/GFN1 Anderson | 10 | 0.057 |
-| Issue #187 H2O/GFN1 exact EDIIS -> CDIIS | 4 | 0.194 |
-| Issue #187 H2O/GFN1 ADIIS -> CDIIS | 4 | 0.081 |
-| C4H5NCS/GFN2 Broyden -> CDIIS | 11 | 0.393 |
-| C4H5NCS/GFN2 exact EDIIS -> CDIIS, capacity 4 | 16 | 3.439 |
-| C4H5NCS/GFN2 ADIIS -> CDIIS, capacity 4 | 23 | 2.152 |
+| Case / method | Physical maps | Map seconds | Coefficient optimizer seconds | Total wall seconds |
+|---|---:|---:|---:|---:|
+| H2O/GFN2 Broyden -> CDIIS | 5 | 0.034 | 0 | 0.108 |
+| H2O/GFN2 Anderson -> CDIIS | 8 | see JSON | 0 | 0.133 |
+| H2O/GFN2 exact EDIIS -> CDIIS | 5 | 0.035 | 0.415 | 0.545 |
+| H2O/GFN2 ADIIS -> CDIIS | 4 | 0.027 | 0.015 | 0.128 |
+| NO2/GFN2 Broyden -> CDIIS | 8 | 0.057 | 0 | 0.171 |
+| NO2/GFN2 exact EDIIS -> CDIIS | 8 | 0.060 | 1.016 | 1.257 |
+| NO2/GFN2 ADIIS -> CDIIS | 8 | 0.059 | 0.044 | 0.258 |
+| H2O+/GFN2 Broyden -> CDIIS | 4 | see JSON | 0 | 0.091 |
+| H2O+/GFN2 exact EDIIS | 3 | see JSON | see JSON | 0.125 |
+| Issue #187 H2O/GFN1 Anderson | 10 | 0.046 | 0 | 0.058 |
+| Issue #187 H2O/GFN1 exact EDIIS -> CDIIS | 4 | 0.019 | 0.129 | 0.198 |
+| Issue #187 H2O/GFN1 ADIIS -> CDIIS | 4 | 0.019 | 0.016 | 0.081 |
+| C4H5NCS/GFN2 Broyden -> CDIIS | 11 | 0.109 | 0 | 0.385 |
+| C4H5NCS/GFN2 exact EDIIS -> CDIIS, capacity 4 | 16 | 0.166 | 2.879 | 3.429 |
+| C4H5NCS/GFN2 ADIIS -> CDIIS, capacity 4 | 23 | 0.231 | 1.480 | 2.115 |
+
+The map timer wraps the ordinary physical `problem.map()` call, including its
+generalized eigensolve. Optimizer time is summed from the coefficient-solve
+records and includes objective/gradient evaluations made by SLSQP. Total wall
+time includes controller and method work, excluding only the benchmark's
+additional residual/energy diagnostic calculation. Per-run values, objective
+evaluation counts, and provenance are in the linked JSON artifacts. `see JSON`
+denotes measurements retained in the artifact but omitted from this summary
+table.
 
 Additional runs cover NO2, perturbed NO2/H2O/stretched-H2 starts, switch
 thresholds, and EDIIS history capacities 4/6/8/12. Perturbation can improve

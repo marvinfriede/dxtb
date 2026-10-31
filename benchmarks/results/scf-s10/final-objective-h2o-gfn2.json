@@ -1,0 +1,164 @@
+{
+  "source_sha": "c04728db6ccaa2aa83e702eb72a7f07305d2ffdf",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn2",
+  "charge": 0.0,
+  "spin": 0.0,
+  "source_history": "first CDIIS macro-observations from functional controller",
+  "results": [
+    {
+      "history_size": 2,
+      "energies": [
+        -5.102145940270505,
+        -5.103174885851274
+      ],
+      "random_simplex_samples": 500,
+      "classic_objective_abs_error_max": 0.0017352876423721852,
+      "classic_objective_abs_error_mean": 0.001136548687444753,
+      "classic_objective_relative_to_history_range_max": 1.6864717384521042,
+      "quadratic_objective_abs_error_max": 2.2532810657338587e-06,
+      "quadratic_objective_relative_to_history_range_max": 0.0021898933314332594,
+      "exact_minimum_energy": -5.103351170849059,
+      "exact_minimum_coefficients": [
+        0.2786937430517239,
+        0.7213062569482762
+      ],
+      "classic_minimum_coefficients": [
+        0.4444124680198719,
+        0.5555875319801282
+      ],
+      "classic_minimum_exact_energy": -5.103288268058703,
+      "classic_energy_gap_to_exact_minimum": 6.290279035603419e-05,
+      "quadratic_minimum_coefficients": [
+        0.27764987208007597,
+        0.722350127919924
+      ],
+      "quadratic_minimum_exact_energy": -5.103351168361898,
+      "quadratic_energy_gap_to_exact_minimum": 2.487161587794162e-09,
+      "classic_model_value_at_exact_minimum": -5.104748634845824,
+      "coefficient_l2_displacement": 0.23436166838913175,
+      "exact_optimizer_evaluations": 27,
+      "classic_optimizer_evaluations": 10,
+      "quadratic_optimizer_evaluations": 12,
+      "fock_interpolation_error_at_0.37": 0.00025888701068210913,
+      "max_electron_count_error": 3.552713678800501e-15,
+      "max_padding_density": 0.0,
+      "max_padding_fock": 0.0,
+      "fock_interpolation_error_without_es3_d4sc": 2.8044988831931056e-16,
+      "adiis_local_gradient_error": 0.003366150614189947,
+      "adiis_local_hessian_error": 0.004487187732448775,
+      "simplex_grid_points": 1001,
+      "simplex_grid_minimum_energy": -5.103351170634897,
+      "optimizer_minus_grid_energy": -2.141620214501927e-10
+    },
+    {
+      "history_size": 3,
+      "energies": [
+        -5.102145940270505,
+        -5.103174885851274,
+        -5.104137736723877
+      ],
+      "random_simplex_samples": 500,
+      "classic_objective_abs_error_max": 0.001706427995310733,
+      "classic_objective_abs_error_mean": 0.0008958439371645532,
+      "classic_objective_relative_to_history_range_max": 0.8567281021220059,
+      "quadratic_objective_abs_error_max": 2.2377450177302194e-06,
+      "quadratic_objective_relative_to_history_range_max": 0.0011234807723157886,
+      "exact_minimum_energy": -5.104137736723877,
+      "exact_minimum_coefficients": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "classic_minimum_coefficients": [
+        0.4444124680199895,
+        0.5555875319800105,
+        0.0
+      ],
+      "classic_minimum_exact_energy": -5.103288268058703,
+      "classic_energy_gap_to_exact_minimum": 0.0008494686651738803,
+      "quadratic_minimum_coefficients": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "quadratic_minimum_exact_energy": -5.104137736723877,
+      "quadratic_energy_gap_to_exact_minimum": 0.0,
+      "classic_model_value_at_exact_minimum": -5.104137736723877,
+      "coefficient_l2_displacement": 1.2272652310822048,
+      "exact_optimizer_evaluations": 30,
+      "classic_optimizer_evaluations": 21,
+      "quadratic_optimizer_evaluations": 23,
+      "fock_interpolation_error_at_0.37": 0.00025888701068210913,
+      "max_electron_count_error": 3.552713678800501e-15,
+      "max_padding_density": 0.0,
+      "max_padding_fock": 0.0,
+      "fock_interpolation_error_without_es3_d4sc": 2.8044988831931056e-16,
+      "adiis_local_gradient_error": 0.004475163028297075,
+      "adiis_local_hessian_error": 0.006352817599938408,
+      "simplex_grid_points": 1326,
+      "simplex_grid_minimum_energy": -5.104137736723877,
+      "optimizer_minus_grid_energy": 0.0
+    },
+    {
+      "history_size": 4,
+      "energies": [
+        -5.102145940270505,
+        -5.103174885851274,
+        -5.104137736723877,
+        -5.104153572367793
+      ],
+      "random_simplex_samples": 500,
+      "classic_objective_abs_error_max": 0.0015785432027417556,
+      "classic_objective_abs_error_mean": 0.0007122115562395397,
+      "classic_objective_relative_to_history_range_max": 0.7862711524058607,
+      "quadratic_objective_abs_error_max": 1.9539849809291354e-06,
+      "quadratic_objective_relative_to_history_range_max": 0.0009732784126974817,
+      "exact_minimum_energy": -5.104153572367794,
+      "exact_minimum_coefficients": [
+        0.0,
+        0.0,
+        2.1649348980190537e-15,
+        0.9999999999999978
+      ],
+      "classic_minimum_coefficients": [
+        0.44441246801987766,
+        0.5555875319801223,
+        0.0,
+        0.0
+      ],
+      "classic_minimum_exact_energy": -5.103288268058702,
+      "classic_energy_gap_to_exact_minimum": 0.0008653043090918189,
+      "quadratic_minimum_coefficients": [
+        0.0,
+        0.0,
+        4.440892098500624e-16,
+        0.9999999999999994
+      ],
+      "quadratic_minimum_exact_energy": -5.104153572367793,
+      "quadratic_energy_gap_to_exact_minimum": 8.881784197001252e-16,
+      "classic_model_value_at_exact_minimum": -5.104153572367792,
+      "coefficient_l2_displacement": 1.227265231082213,
+      "exact_optimizer_evaluations": 44,
+      "classic_optimizer_evaluations": 29,
+      "quadratic_optimizer_evaluations": 38,
+      "fock_interpolation_error_at_0.37": 0.00025888701068210913,
+      "max_electron_count_error": 3.552713678800501e-15,
+      "max_padding_density": 0.0,
+      "max_padding_fock": 0.0,
+      "fock_interpolation_error_without_es3_d4sc": 2.8044988831931056e-16,
+      "adiis_local_gradient_error": 0.005318689409495756,
+      "adiis_local_hessian_error": 0.008043752609177585,
+      "simplex_grid_points": 1771,
+      "simplex_grid_minimum_energy": -5.104153572367793,
+      "optimizer_minus_grid_energy": -8.881784197001252e-16
+    }
+  ]
+}
