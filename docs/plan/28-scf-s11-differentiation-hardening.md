@@ -105,13 +105,31 @@ Initial float64/one-thread measurements show:
 
 The reported adjoint iteration counts are for the nonzero weighted Mulliken
 monopole-charge observable; the benchmark separately records the total-energy
-adjoint, whose right-hand side can be much smaller. H2 dense tangent/adjoint solutions agree with matrix-free results to about
+adjoint, whose right-hand side can be much smaller. H2 dense tangent/adjoint
+solutions agree with matrix-free results to about
 `1e-15` across response `rtol` values `1e-8`, `1e-10`, and `1e-12`; the small
 systems converge in one to two iterations, so this tolerance sweep is not a
 stress test of a poorly conditioned solve. H2O dense matrix-free parity is
 also within a few `1e-15`. The NO2 runs use a 1e-13 primal solve and the
 configured 1e-12 response-root certification. At 2000 K the thermal occupations
 are fractional and the electron-count error is at roundoff.
+
+The regenerated JSON measurements use source commit
+`8ba82be24201a3c5c85607d7ed589c22d7f9ecd2`, Python 3.14/PyTorch 2.14.1,
+float64, one thread, and a clean worktree (`dirty=false`). The nonzero adjoint
+iteration column above is the weighted Mulliken-charge solve; energy-adjoint
+iterations and residuals are separately recorded in each JSON. H2/H2O use
+dense Jacobians only for small-system condition and parity references. NO2 and
+C4H5NCS remain matrix-free.
+
+The certified primal map counts were 2 for H2/GFN1, 42 for H2O/GFN2, and 45
+for both NO2/GFN2 temperatures. The 2000 K NO2 root had five fractional
+occupation channels (minimum fractional occupation `1.104e-5`, maximum
+fractionality `2.119e-2`) and electron-count error `3.55e-15`. C4H5NCS/GFN2
+used 48 maps, `nao=38`, and full-Fock response dimension 1444; tangent/weighted
+charge-adjoint iterations were 12/12 in that representation. Peak process RSS
+was `1,799,236 KiB`; no dense Jacobian was allocated. All result JSONs are
+stored under `benchmarks/results/scf-s11/`.
 
 ## Derivative and failure contract
 
