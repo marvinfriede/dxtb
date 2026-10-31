@@ -1,0 +1,65 @@
+{
+  "energy_eh": [
+    -29.758437462176385,
+    -11.312642703835799,
+    -21.69298142196775,
+    -33.76232103072938,
+    -32.87042088664806,
+    -18.886485525778273,
+    -16.61109475677673,
+    -16.44118622572591
+  ],
+  "environment": {
+    "benchmark_script_sha256": "cab8ec376d0c604b888fe7c3a920ab4f5d08177f5d3dc19a01c3eef28c72d2e6",
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "hostname": "m199",
+    "mkl": "1",
+    "omp": "1",
+    "openblas": "1",
+    "production_source_sha256": "39e79c56ff81095ab636cf3d8fe2fb030db16f71d5e0ba0bf6de0e240aee2898",
+    "python": "3.11.15",
+    "source_dirty": true,
+    "source_sha": "8ed902f762804a9da7f4537e8d40bab80822ed1d",
+    "torch": "2.8.0+cpu",
+    "torch_num_threads": 1,
+    "tracked_diff_sha256": "3a71b2a86d44bbc7ccaeaacbf2c08fa75c0488f0306b415324f6ecbdf26c62a9"
+  },
+  "free_energy_eh": [
+    -0.0013913114774318342,
+    -0.0018869927354641862,
+    -0.0026037117226818014,
+    -0.0020965520793329185,
+    -0.002620546866809969,
+    -0.00321126642057793,
+    -0.00319301431477299,
+    -0.002717394447494629
+  ],
+  "iterations": 205,
+  "memory_mib": {
+    "peak_rss": 5185.26953125,
+    "phase_peak_rss": {
+      "backward": 5185.26953125,
+      "forward": 5138.4375,
+      "setup": 325.25
+    },
+    "rss_after_forward": 5142.4375
+  },
+  "nconformers": 8,
+  "parity_vs_functional": {
+    "energy_max_abs_diff": 2.5224267119483557e-13,
+    "energy_max_abs_diff_vs_functional": 2.5224267119483557e-13,
+    "free_energy_max_abs_diff": 2.8674166470052387e-10,
+    "pos_grad_max_abs_diff_vs_functional": 1.2200521837257838e-07,
+    "position_gradient_norm_abs_diff": 1.2200521837257838e-07
+  },
+  "position_gradient_norm": 157.31439124060088,
+  "route": "legacy-packed",
+  "scp_mode": "potential",
+  "stage": "legacy-audit",
+  "timings_s": {
+    "backward_s": 17.345848738914356,
+    "forward_s": 17.69338428415358,
+    "setup_s": 0.23008335707709193,
+    "total_s": 35.26931638014503
+  }
+}
