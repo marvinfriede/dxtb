@@ -37,6 +37,10 @@ tests. Exact post-sync results are also recorded in the handoff.
 
 The PyTorch 2.8 compatibility slice covering the S12 checks, Broyden/CDIIS
 vmap/JVP/fixed-trip paths, and mapped implicit response passed 14 tests.
+After adding the float32 Broyden/CDIIS fixed-trip vmap/JVP smoke, the full S12
+transform file passed 10/10 on both PyTorch 2.14.1 and 2.8.0. The float32
+smoke checks finite primal values, tangents, and vmapped outputs; it does not
+assert float64-level root accuracy.
 
 ## Result and residual semantics
 
@@ -181,3 +185,9 @@ singular DIIS solve.
 S12 is evidence for S13 benchmark-driven choices, not a selection of those
 choices. No spectral mathematics, S9/S10 decision, S2 certification, public
 configuration, or Python-level parallelism was changed.
+
+Final benchmark artifacts are stored under `benchmarks/results/scf-s12/`.
+The complete eager, fixed-trip, vmap, and compile JSON set records source SHA
+`d53f7fba6693347889928a71313afb05bc8eb0d4`, a clean worktree, Python 3.14.8,
+PyTorch 2.14.1+cpu, and one intra/inter-op thread. The source SHA predates only
+the final test/documentation-only float32 smoke addition.

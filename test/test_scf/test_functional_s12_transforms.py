@@ -246,3 +246,72 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
     assert torch.equal(result.residual, primal.reported_residual)
     assert result.diagnostics is not None
     assert result.diagnostics.strategy is not None
+
+
+@pytest.mark.parametrize("name", ("Broyden", "CDIIS"))
+def test_float32_fixed_trip_vmap_and_jvp_are_finite(name: str) -> None:
+    """Float32 method histories remain finite under fixed-trip transforms."""
+    from dxtb import GFN1_XTB
+    from dxtb._src.scf.functional.broyden import BroydenMethod
+    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
+    from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+
+    from .test_functional_root_derivatives import _case, _initial_state
+
+    mode = (
+        labels.SCP_MODE_POTENTIAL if name == "Broyden" else labels.SCP_MODE_FOCK
+    )
+    mixer = labels.MIXER_BROYDEN if name == "Broyden" else labels.MIXER_LINEAR
+    case = _case(
+        "H2",
+        method=GFN1_XTB,
+        representation=mode,
+        mixer=mixer,
+        maxiter=1,
+        tolerance=1.0e-4,
+        dtype=torch.float32,
+    )
+    guess, layout = _initial_state(case, case.inputs)
+    representation = (
+        SCFRepresentation.POTENTIAL
+        if name == "Broyden"
+        else SCFRepresentation.FOCK
+    )
+    problem = SCFProblem(
+        case.inputs,
+        representation,
+        potential_layout=layout,
+    )
+    method = BroydenMethod() if name == "Broyden" else CDIISMethod()
+    strategy = SCFStrategy((SCFStage(method),))
+    settings = SCFSolverSettings(
+        maxiter=1,
+        mix_guess=True,
+        damp=0.4,
+        x_atol=0.0,
+        x_atol_max=0.0,
+    )
+
+    def fixed_trip(value: torch.Tensor) -> torch.Tensor:
+        outcome = _solve_map(
+            value,
+            settings,
+            problem.map,
+            problem=problem,
+            strategy=strategy,
+        )
+        return outcome.root_x
+
+    tangent = torch.full_like(guess, 1.0e-3)
+    value, derivative = torch.func.jvp(fixed_trip, (guess,), (tangent,))
+    vmapped = torch.func.vmap(fixed_trip)(torch.stack((guess, guess)))
+
+    assert value.dtype == torch.float32
+    assert derivative.dtype == torch.float32
+    assert vmapped.dtype == torch.float32
+    assert torch.isfinite(value).all()
+    assert torch.isfinite(derivative).all()
+    assert torch.isfinite(vmapped).all()
+    torch.testing.assert_close(vmapped[0], value)
+    torch.testing.assert_close(vmapped[1], value)
