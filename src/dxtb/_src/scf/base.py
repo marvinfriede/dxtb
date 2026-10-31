@@ -247,13 +247,14 @@ class BaseSCF:
             self.config = ConfigSCF()
 
         # validate early; the iteration function is selected in `_fcn`
-        if self.config.scp_mode not in (
+        if self.config._legacy_representation_code not in (
             labels.SCP_MODE_CHARGE,
             labels.SCP_MODE_POTENTIAL,
             labels.SCP_MODE_FOCK,
         ):
             raise ValueError(
-                f"Unknown convergence target (SCP mode) '{self.config.scp_mode}'."
+                "Unknown SCF strategy representation "
+                f"'{self.config.initial_representation.value}'."
             )
 
         self._data = self._Data(*args, **kwargs)
@@ -263,12 +264,13 @@ class BaseSCF:
         dtype = self.dtype
 
         # TODO: Move these settings to config
+        anderson = self.config._anderson_settings
         self.fwd_options = {
             "damp": self.config.damp,
-            "damp_init": self.config.damp_init,
-            "damp_generations": self.config.damp_generations,
-            "damp_diagonal_offset": self.config.damp_diagonal_offset,
-            "damp_soft_start": self.config.damp_soft_start,
+            "damp_init": anderson.damp_init,
+            "damp_generations": anderson.generations,
+            "damp_diagonal_offset": anderson.diagonal_offset,
+            "damp_soft_start": anderson.soft_start,
             "x_tol": check_tols(self.config.x_atol, dtype),
             "x_tol_max": check_tols(self.config.x_atol_max, dtype),
             "maxiter": self.config.maxiter,
@@ -386,14 +388,14 @@ class BaseSCF:
                 charges.quad = zeros
                 self._data.charges["quad"] = charges.quad_shape
 
-        if self.config.scp_mode == labels.SCP_MODE_CHARGE:
+        if self.config._legacy_representation_code == labels.SCP_MODE_CHARGE:
             return charges.as_tensor()
 
-        if self.config.scp_mode == labels.SCP_MODE_POTENTIAL:
+        if self.config._legacy_representation_code == labels.SCP_MODE_POTENTIAL:
             potential = self.charges_to_potential(charges)
             return potential.as_tensor()
 
-        if self.config.scp_mode == labels.SCP_MODE_FOCK:
+        if self.config._legacy_representation_code == labels.SCP_MODE_FOCK:
             potential = self.charges_to_potential(charges)
             return self.potential_to_hamiltonian(potential)
 
@@ -404,7 +406,7 @@ class BaseSCF:
         )
         raise ValueError(
             "Unknown convergence target (SCP mode) '"
-            f"{self.config.scp_mode}'. Use one of {', '.join(lbls)}."
+            f"{self.config.initial_representation.value}'. Use one of {', '.join(lbls)}."
         )
 
     def __call__(self, charges: Tensor | Charges | None = None) -> SCFResult:
@@ -597,14 +599,15 @@ class BaseSCF:
         (``self -> bound method -> self``) that only the garbage collector
         can free.
         """
-        if self.config.scp_mode == labels.SCP_MODE_CHARGE:
+        if self.config._legacy_representation_code == labels.SCP_MODE_CHARGE:
             return self.iterate_charges
-        if self.config.scp_mode == labels.SCP_MODE_POTENTIAL:
+        if self.config._legacy_representation_code == labels.SCP_MODE_POTENTIAL:
             return self.iterate_potential
-        if self.config.scp_mode == labels.SCP_MODE_FOCK:
+        if self.config._legacy_representation_code == labels.SCP_MODE_FOCK:
             return self.iterate_fockian
         raise ValueError(
-            f"Unknown convergence target (SCP mode) '{self.config.scp_mode}'."
+            "Unknown SCF strategy representation "
+            f"'{self.config.initial_representation.value}'."
         )
 
     def iterate_charges(self, charges: Tensor) -> Tensor:

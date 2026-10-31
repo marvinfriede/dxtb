@@ -55,7 +55,6 @@ opts = {
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1.0e-9,
     "x_atol": 1.0e-9,
     # an electric field alone only raises the integral level to the dipole
     "int_level": 4,

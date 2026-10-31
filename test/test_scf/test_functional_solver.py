@@ -109,11 +109,17 @@ def _compare_legacy_simple(
     assert len(calls) == legacy.engine._data.iter
     assert int(actual.iterations) == len(calls)
     _assert_tensor_equal(actual.map_result.mapped_x, legacy_x)
-    _assert_tensor_equal(actual.map_result.hamiltonian, legacy.engine._data.hamiltonian)
+    _assert_tensor_equal(
+        actual.map_result.hamiltonian, legacy.engine._data.hamiltonian
+    )
     _assert_tensor_equal(actual.map_result.density, legacy.engine._data.density)
     _assert_tensor_equal(actual.map_result.emo, legacy.engine._data.evals)
-    _assert_tensor_equal(actual.map_result.occupation, legacy.engine._data.occupation)
-    _assert_tensor_equal(actual.map_result.orbital_energy, legacy.engine._data.energy)
+    _assert_tensor_equal(
+        actual.map_result.occupation, legacy.engine._data.occupation
+    )
+    _assert_tensor_equal(
+        actual.map_result.orbital_energy, legacy.engine._data.energy
+    )
     legacy_charges = legacy.engine.converged_to_charges(legacy_x)
     _assert_tensor_equal(actual.final_charges.mono, legacy_charges.mono)
     if legacy_charges.dipole is not None:
@@ -127,12 +133,18 @@ def _compare_legacy_simple(
     _assert_tensor_equal(actual.final_potential.mono, legacy_potential.mono)
     if legacy_potential.dipole is not None:
         assert actual.final_potential.dipole is not None
-        _assert_tensor_equal(actual.final_potential.dipole, legacy_potential.dipole)
+        _assert_tensor_equal(
+            actual.final_potential.dipole, legacy_potential.dipole
+        )
     if legacy_potential.quad is not None:
         assert actual.final_potential.quad is not None
         _assert_tensor_equal(actual.final_potential.quad, legacy_potential.quad)
-    _assert_tensor_equal(actual.energy, legacy.engine.get_energy(legacy_charges))
-    _assert_tensor_equal(actual.fenergy, legacy.engine.get_electronic_free_energy())
+    _assert_tensor_equal(
+        actual.energy, legacy.engine.get_energy(legacy_charges)
+    )
+    _assert_tensor_equal(
+        actual.fenergy, legacy.engine.get_electronic_free_energy()
+    )
     if functional.inputs.fermi_settings is None:
         assert torch.count_nonzero(actual.fenergy) == 0
 
@@ -193,7 +205,9 @@ def test_simple_solver_initial_mix_is_not_convergence_tested() -> None:
     expected_first_iterate = simple_mix(
         case.x, result.trace.raw_mapped[0], case.x.new_tensor(0.2)
     )
-    torch.testing.assert_close(result.trace.map_inputs[1], expected_first_iterate)
+    torch.testing.assert_close(
+        result.trace.map_inputs[1], expected_first_iterate
+    )
     assert int(result.iterations) > 1
 
 
@@ -206,7 +220,9 @@ def test_simple_solver_nonconverged_result_uses_last_raw_map() -> None:
         x_atol_max=1.0e-30,
     )
     assert comparison.actual.converged.item() is False
-    _assert_tensor_equal(comparison.actual.map_result.mapped_x, comparison.legacy_x)
+    _assert_tensor_equal(
+        comparison.actual.map_result.mapped_x, comparison.legacy_x
+    )
 
 
 def test_simple_solver_converges_and_freezes_first_map_result() -> None:
@@ -240,13 +256,18 @@ def test_finite_temperature_simple_solver_matches_legacy(
             "fermi_partition": partition,
         },
     )
-    assert comparison.actual.fenergy.shape == comparison.functional.system.numbers.shape
+    assert (
+        comparison.actual.fenergy.shape
+        == comparison.functional.system.numbers.shape
+    )
     assert torch.isfinite(comparison.actual.fenergy).all()
 
 
 @pytest.mark.parametrize("maxiter", [0, 1, 2])
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_finite_temperature_simple_budget_matrix(maxiter: int, mix_guess: bool) -> None:
+def test_finite_temperature_simple_budget_matrix(
+    maxiter: int, mix_guess: bool
+) -> None:
     """Finite-T Simple preserves the six legacy map-evaluation budgets."""
     comparison = _compare_legacy_simple(
         maxiter=maxiter,
@@ -330,21 +351,23 @@ def test_simple_solver_tolerance_resolution_matches_legacy(
 
 def test_common_solver_settings_resolve_independent_of_mixer() -> None:
     """Controller settings are shared and independent of method choice."""
+    from dxtb.scf import strategy_preset
+
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
     linear = setup_solver_settings(case.system.config.scf, torch.float64)
     anderson = setup_solver_settings(
-        replace(case.system.config.scf, mixer=labels.MIXER_ANDERSON),
+        replace(case.system.config.scf, strategy=strategy_preset("anderson")),
         torch.float64,
     )
     broyden = setup_solver_settings(
-        replace(case.system.config.scf, mixer=labels.MIXER_BROYDEN),
+        replace(case.system.config.scf, strategy=strategy_preset("broyden")),
         torch.float64,
     )
     assert linear.maxiter == anderson.maxiter == broyden.maxiter
     dynamic = setup_solver_settings(
         replace(
             case.system.config.scf,
-            mixer=labels.MIXER_LINEAR,
+            strategy=strategy_preset("linear"),
             damp_dynamic=True,
         ),
         torch.float64,
@@ -405,7 +428,9 @@ def test_affine_solver_reverse_jvp_jacfwd_and_vmap() -> None:
             outcome.residual,
         )
 
-    status_guesses = torch.tensor([[[0.99]], [[0.1]], [[0.7]]], dtype=torch.float64)
+    status_guesses = torch.tensor(
+        [[[0.99]], [[0.1]], [[0.7]]], dtype=torch.float64
+    )
     status_mapped = vmap(status_solve)(status_guesses)
     status_looped = tuple(
         torch.stack(items)
@@ -415,7 +440,9 @@ def test_affine_solver_reverse_jvp_jacfwd_and_vmap() -> None:
         _assert_tensor_equal(actual, expected)
 
 
-def test_functional_solver_real_position_parameter_and_field_gradients() -> None:
+def test_functional_solver_real_position_parameter_and_field_gradients() -> (
+    None
+):
     """Geometry, ParamModule, and explicit field graphs reach final energy."""
     positions = (
         samples["H2O"]["positions"]
@@ -434,7 +461,9 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> None
             "x_atol_max": 1.0e-30,
         },
     )
-    settings = setup_simple_solver_settings(case.system.config.scf, positions.dtype)
+    settings = setup_simple_solver_settings(
+        case.system.config.scf, positions.dtype
+    )
     result = solve_scf_simple(case.x, case.inputs, settings)
     position_gradient = torch.autograd.grad(
         result.energy.sum(), positions, create_graph=True
@@ -459,7 +488,9 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> None
         local_settings = setup_simple_solver_settings(
             local_case.system.config.scf, value.dtype
         )
-        local_result = solve_scf_simple(local_case.x, local_case.inputs, local_settings)
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
         return local_result.energy.sum()
 
     _assert_directional_fd(energy_at_positions, positions, position_gradient)
@@ -507,7 +538,9 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> None
     assert torch.count_nonzero(field_gradient) > 0
 
     def energy_at_field(value: torch.Tensor) -> torch.Tensor:
-        local_case = _prepare_case(GFN1_XTB, field=value, scf_options=position_options)
+        local_case = _prepare_case(
+            GFN1_XTB, field=value, scf_options=position_options
+        )
         local_settings = setup_simple_solver_settings(
             local_case.system.config.scf, value.dtype
         )
@@ -621,7 +654,9 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
         case.system.config.scf, case.positions.dtype
     )
     result = solve_scf_simple(case.x, case.inputs, settings)
-    gradient = torch.autograd.grad((result.energy + result.fenergy).sum(), charge)[0]
+    gradient = torch.autograd.grad(
+        (result.energy + result.fenergy).sum(), charge
+    )[0]
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
 
@@ -630,7 +665,9 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
         local_settings = setup_simple_solver_settings(
             local_case.system.config.scf, local_case.positions.dtype
         )
-        local_result = solve_scf_simple(local_case.x, local_case.inputs, local_settings)
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
         return (local_result.energy + local_result.fenergy).sum()
 
     _assert_directional_fd(free_energy_at_charge, charge, gradient)
@@ -652,26 +689,36 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
         "x_atol_max": 1.0e-30,
         "fermi_etemp": 300.0,
     }
-    position_case = _prepare_case(GFN1_XTB, positions=positions, scf_options=options)
+    position_case = _prepare_case(
+        GFN1_XTB, positions=positions, scf_options=options
+    )
     settings = setup_simple_solver_settings(
         position_case.system.config.scf, positions.dtype
     )
-    position_result = solve_scf_simple(position_case.x, position_case.inputs, settings)
+    position_result = solve_scf_simple(
+        position_case.x, position_case.inputs, settings
+    )
     gradient = torch.autograd.grad(
         (position_result.energy + position_result.fenergy).sum(),
         positions,
         create_graph=True,
     )[0]
-    hessian_projection = torch.autograd.grad(gradient.square().sum(), positions)[0]
+    hessian_projection = torch.autograd.grad(
+        gradient.square().sum(), positions
+    )[0]
     assert torch.isfinite(gradient).all()
     assert torch.isfinite(hessian_projection).all()
 
     def free_energy_at_positions(value: torch.Tensor) -> torch.Tensor:
-        local_case = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
+        local_case = _prepare_case(
+            GFN1_XTB, positions=value, scf_options=options
+        )
         local_settings = setup_simple_solver_settings(
             local_case.system.config.scf, value.dtype
         )
-        local_result = solve_scf_simple(local_case.x, local_case.inputs, local_settings)
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
         return (local_result.energy + local_result.fenergy).sum()
 
     _assert_directional_fd(free_energy_at_positions, positions, gradient)
@@ -703,7 +750,9 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
     field_settings = setup_simple_solver_settings(
         field_case.system.config.scf, torch.float64
     )
-    field_result = solve_scf_simple(field_case.x, field_case.inputs, field_settings)
+    field_result = solve_scf_simple(
+        field_case.x, field_case.inputs, field_settings
+    )
     field_gradient = torch.autograd.grad(
         (field_result.energy + field_result.fenergy).sum(), field
     )[0]
@@ -715,7 +764,9 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
         local_settings = setup_simple_solver_settings(
             local_case.system.config.scf, value.dtype
         )
-        local_result = solve_scf_simple(local_case.x, local_case.inputs, local_settings)
+        local_result = solve_scf_simple(
+            local_case.x, local_case.inputs, local_settings
+        )
         return (local_result.energy + local_result.fenergy).sum()
 
     _assert_directional_fd(free_energy_at_field, field, field_gradient)
@@ -756,11 +807,15 @@ def test_real_functional_solver_jvp_and_jacfwd_characterization() -> None:
     # spectral-density path; the output stays finite in each AD mode.
 
 
-def test_functional_solver_has_no_mutable_mixer_or_tensor_control_flow() -> None:
+def test_functional_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (
+    None
+):
     """The new solver avoids legacy mixer state and host tensor decisions."""
     from pathlib import Path
 
-    source = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/solver.py"
+    source = (
+        Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/solver.py"
+    )
     text = source.read_text()
     for forbidden in (
         "Mixer",

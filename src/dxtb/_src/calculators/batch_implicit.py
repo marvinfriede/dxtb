@@ -360,7 +360,7 @@ class PreparedConvergedRootBatch:
     system: System | PaddedExactSystemCore
     positions: Tensor
     representation: int
-    effective_mixer: int
+    strategy_label: str
     lanes: tuple[ConvergedRootLaneRecord, ...]
     parameter_paths: tuple[str, ...]
     model_parameter_refs: tuple[Tensor, ...]
@@ -739,15 +739,15 @@ def _validate_system_and_positions(
             raise SCFConvergenceError(
                 "Implicit physical-root differentiation requires maxiter > 0."
             )
-        effective_mixer = (
-            labels.MIXER_ANDERSON
-            if config.scf.mixer == labels.MIXER_BROYDEN
-            else config.scf.mixer
+        strategy_label = " -> ".join(
+            type(stage.method).__name__.removesuffix("Method").lower()
+            for stage in config.scf.strategy.stages
         )
         route = SimpleNamespace(
             kind="functional",
-            representation=config.scf.scp_mode,
-            effective_mixer=effective_mixer,
+            representation=config.scf._legacy_representation_code,
+            strategy_label=strategy_label,
+            strategy=config.scf.strategy,
             reason=None,
             warning=None,
         )
@@ -1638,7 +1638,6 @@ class _LanePrimalSolveOutcome:
     root_valid: bool
 
 
-
 def _solve_and_validate_lane_primal(
     primal_inputs: SCFInputs,
     guess_charges: SCFCharges,
@@ -1647,7 +1646,7 @@ def _solve_and_validate_lane_primal(
     settings: Any,
     strategy: SCFStrategy,
     lane_padded: bool,
-    effective_mixer: int,
+    strategy_label: str,
     maxiter: int,
     damp_default: float,
     damp_dynamic_factor: float,
@@ -1810,20 +1809,15 @@ def _solve_and_validate_lane_primal(
             )
         elif not bool(outcome.converged):
             failure_code = int(BatchRootFailureCode.MAXITER_EXCEEDED)
-            mixer_label = (
-                "Simple"
-                if effective_mixer == labels.MIXER_LINEAR
-                else "Anderson"
-            )
             damp = (
                 damp_dynamic_factor
                 if bool(outcome.damping_state.switched)
                 else damp_default
             )
             failure_reason = (
-                f"SCF does not converge after {maxiter} "
-                f"cycles using {mixer_label} mixing with a damping factor "
-                f"of {damp} (residual L2={float(raw_residual_l2):.3e}, "
+                f"SCF did not certify after {maxiter} iterations using "
+                f"strategy '{strategy_label}' (damping {damp}; "
+                f"residual L2={float(raw_residual_l2):.3e}, "
                 f"max={float(raw_residual_max):.3e})."
             )
         elif not bool(
@@ -1888,8 +1882,6 @@ def _solve_and_validate_lane_primal(
         )
 
 
-
-
 def prepare_converged_root_batch(
     system: System | PaddedExactSystemCore,
     positions: Tensor,
@@ -1938,7 +1930,7 @@ def prepare_converged_root_batch(
         core_index,
     ) = _validate_system_and_positions(system, positions, field, field_grad)
     batch_size = positions.shape[0]
-    effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
+    effective_scf_config = config.scf
     strict_mode = _resolve_strictness(effective_scf_config, strict)
 
     charges = _normalize_batch_scalar("charge", chrg, positions, batch_size)
@@ -2078,7 +2070,7 @@ def prepare_converged_root_batch(
                 settings,
                 strategy,
                 lane_padded,
-                route.effective_mixer,
+                route.strategy_label,
                 effective_scf_config.maxiter,
                 effective_scf_config.damp,
                 effective_scf_config.damp_dynamic_factor,
@@ -2153,7 +2145,7 @@ def prepare_converged_root_batch(
         system=system,
         positions=positions,
         representation=representation,
-        effective_mixer=route.effective_mixer,
+        strategy_label=route.strategy_label,
         lanes=tuple(lanes),
         parameter_paths=parameter_paths,
         model_parameter_refs=model_parameter_refs,
@@ -2480,7 +2472,7 @@ def _refresh_prepared_batch_inputs(
             f"Prepared batch has {len(prepared.lanes)} lanes, but positions "
             f"has {batch_size} lanes."
         )
-    effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
+    effective_scf_config = config.scf
     if chrg is _UNSET:
         charges = tuple(
             lane.charge.to(device=positions.device, dtype=positions.dtype)

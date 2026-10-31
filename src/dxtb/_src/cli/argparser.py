@@ -272,11 +272,6 @@ def parser(name: str = "dxtb", **kwargs: Any) -> argparse.ArgumentParser:
         help="R|Molecular spin.",
     )
     p.add_argument(
-        "--strict",
-        action="store_true",
-        help="R|Whether to use strict mode. Throws errors on warnings.",
-    )
-    p.add_argument(
         "--timer",
         action="store_true",
         help=(
@@ -370,11 +365,21 @@ def parser(name: str = "dxtb", **kwargs: Any) -> argparse.ArgumentParser:
         help="R|Maximum number of SCF iterations.",
     )
     p.add_argument(
-        "--mixer",
+        "--scf-strategy",
+        dest="strategy",
         type=str,
-        default=defaults.MIXER,
-        choices=defaults.MIXER_CHOICES,
-        help="R|Mixing algorithm for convergence acceleration.",
+        default="anderson",
+        choices=(
+            "linear",
+            "anderson",
+            "broyden",
+            "cdiis",
+            "broyden-cdiis",
+            "anderson-cdiis",
+            "cdiis-soscf",
+            "broyden-cdiis-soscf",
+        ),
+        help="R|Named physical SCF strategy.",
     )
     p.add_argument(
         "--damp",
@@ -383,31 +388,20 @@ def parser(name: str = "dxtb", **kwargs: Any) -> argparse.ArgumentParser:
         help="R|Damping factor for mixing in SCF iterations.",
     )
     p.add_argument(
-        "--scf-mode",
+        "--scf-differentiation",
+        dest="differentiation",
         type=str,
-        default=defaults.SCF_MODE,
-        choices=defaults.SCF_MODE_CHOICES,
-        help=(
-            "R|Method of gradient tracking in SCF iterations.\n"
-            " - 'default' is equivalent to 'implicit' and requests SCF\n"
-            "   gradient computation via a single derivative facilitated\n"
-            "   by the implicit function theorem (exact first and second\n"
-            "   derivatives).\n"
-            " - 'full' and 'full_tracking' both request complete gradient\n"
-            "   tracking through all SCF iterations.\n"
-            " - 'experimental' converges the SCF without gradient tracking\n"
-            "   then runs a single additional iteration to reconnect gradients."
-        ),
+        default="unrolled",
+        choices=("unrolled", "implicit"),
+        help="R|Derivative policy for the certified physical SCF root.",
     )
     p.add_argument(
-        "--scp-mode",
+        "--scf-convergence",
+        dest="convergence",
         type=str,
-        default=defaults.SCP_MODE,
-        choices=defaults.SCP_MODE_CHOICES,
-        help=(
-            "R|Self-consistent parameter, i.e., which variable is converged\n"
-            "in the SCF. Note that 'charge' and 'charges' is identical."
-        ),
+        default="standard",
+        choices=("standard", "tight", "higher_order"),
+        help="R|Physical SCF convergence profile.",
     )
 
     # Integrals
@@ -508,14 +502,14 @@ def parser(name: str = "dxtb", **kwargs: Any) -> argparse.ArgumentParser:
     p.add_argument(
         "--xtol",
         type=float,
-        default=defaults.X_ATOL,
-        help="R|Set absolute tolerance for SCF (input).",
+        default=None,
+        help="R|Override the profile fixed-point L2 threshold.",
     )
     p.add_argument(
-        "--ftol",
+        "--xtol-max",
         type=float,
-        default=defaults.F_ATOL,
-        help="R|Set absolute tolerance for SCF (output).",
+        default=None,
+        help="R|Override the profile fixed-point maximum threshold.",
     )
     p.add_argument(
         "--detect-anomaly",

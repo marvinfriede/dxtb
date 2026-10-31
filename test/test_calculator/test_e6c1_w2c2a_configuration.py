@@ -26,8 +26,12 @@ from benchmarks.e6c1_w2c2_implicit import (
     floating_parameter_counts,
     setup_model_system,
 )
-from dxtb import labels
 from dxtb._src.constants import defaults
+from dxtb.scf import (
+    AndersonMethod,
+    SCFDifferentiation,
+    SCFRepresentation,
+)
 
 
 def test_w2c2_configuration_and_gradient_modes_match_frozen_workload() -> None:
@@ -49,13 +53,12 @@ def test_w2c2_configuration_and_gradient_modes_match_frozen_workload() -> None:
         gradient_mode="positions-only",
     )
     scf = system.config.scf
-    assert scf.scp_mode == labels.SCP_MODE_CHARGE
-    assert scf.scf_mode == labels.SCF_MODE_FULL
-    assert scf.mixer == labels.MIXER_ANDERSON
+    assert scf.initial_representation is SCFRepresentation.POTENTIAL
+    assert scf.differentiation is SCFDifferentiation.UNROLLED
+    assert isinstance(scf.strategy.stages[0].method, AndersonMethod)
     assert scf.maxiter == 300
     assert scf.x_atol == 1.0e-8
     assert scf.x_atol_max == defaults.X_ATOL_MAX
-    assert scf.f_atol == 1.0e-8
     assert scf.fermi.etemp == 300.0
     assert floating_parameter_counts(model)[1] == 0
 

@@ -20,12 +20,14 @@ Config: Main
 
 Main configuration of the calculation.
 
-The configuration is immutable. A changed setting is a new object, created
-with :func:`dataclasses.replace`, e.g., to change the SCF mixer::
+    The configuration is immutable. A changed setting is a new object, created
+    with :func:`dataclasses.replace`, e.g., to change the SCF strategy::
 
-    cfg = dataclasses.replace(
-        cfg, scf=dataclasses.replace(cfg.scf, mixer=labels.MIXER_ANDERSON)
-    )
+    from dxtb.scf import strategy_preset
+
+    cfg = dataclasses.replace(cfg, scf=dataclasses.replace(
+        cfg.scf, strategy=strategy_preset("anderson")
+    ))
 
 User input (strings, lists) is converted by :meth:`Config.create`, the
 constructor only accepts the final values. The configuration holds neither the
@@ -59,9 +61,6 @@ class Config:
 
     file: PathLike | None = None
     """The input file or directory."""
-
-    strict: bool = defaults.STRICT
-    """Strict mode for SCF configuration. Always throws errors if ``True``."""
 
     exclude: tuple[str, ...] = ()
     """The tight-binding components to exclude from the calculation."""
@@ -108,7 +107,6 @@ class Config:
         cls,
         *,
         file: PathLike | None = None,
-        strict: bool = defaults.STRICT,
         exclude: str | list[str] | tuple[str, ...] = defaults.EXCLUDE,
         method: str | int = defaults.METHOD,
         grad: bool = False,
@@ -122,21 +120,27 @@ class Config:
         anomaly: bool = False,
         # SCF
         maxiter: int = defaults.MAXITER,
-        mixer: str | int = defaults.MIXER,
+        strategy: str | object | None = None,
+        differentiation: str = "unrolled",
+        convergence: str = "standard",
+        response: object | None = None,
+        # Transitional input adapters are parsed into the strategy and
+        # discarded; they are not fields of ConfigSCF.
+        mixer: str | int | None = None,
         mix_guess: bool = defaults.MIX_GUESS,
         damp: float = defaults.DAMP,
-        damp_init: float = defaults.DAMP_INIT,
+        damp_init: float | None = None,
         damp_dynamic: bool = defaults.DAMP_DYNAMIC,
         damp_dynamic_factor: float = defaults.DAMP_DYNAMIC_FACTOR,
-        damp_soft_start: bool = defaults.DAMP_SOFT_START,
-        damp_generations: int = defaults.DAMP_GENERATIONS,
-        damp_diagonal_offset: float = defaults.DAMP_DIAGONAL_OFFSET,
+        damp_soft_start: bool | None = None,
+        damp_generations: int | None = None,
+        damp_diagonal_offset: float | None = None,
         guess: str | int = defaults.GUESS,
-        scf_mode: str | int = defaults.SCF_MODE,
-        scp_mode: str | int = defaults.SCP_MODE,
-        x_atol: float = defaults.X_ATOL,
-        x_atol_max: float = defaults.X_ATOL_MAX,
-        f_atol: float = defaults.F_ATOL,
+        scf_mode: str | int | None = None,
+        scp_mode: str | int | None = None,
+        x_atol: float | None = None,
+        x_atol_max: float | None = None,
+        f_atol: float | None = None,
         force_convergence: bool = False,
         fermi_etemp: float = defaults.FERMI_ETEMP,
         fermi_maxiter: int = defaults.FERMI_MAXITER,
@@ -178,10 +182,13 @@ class Config:
             exclude = (exclude,)
 
         scf = ConfigSCF.create(
-            strict=strict,
             method=method,
             guess=guess,
             maxiter=maxiter,
+            strategy=strategy,
+            differentiation=differentiation,
+            convergence=convergence,
+            response=response,
             mixer=mixer,
             mix_guess=mix_guess,
             damp=damp,
@@ -195,7 +202,6 @@ class Config:
             scp_mode=scp_mode,
             x_atol=x_atol,
             x_atol_max=x_atol_max,
-            f_atol=f_atol,
             force_convergence=force_convergence,
             fermi_etemp=fermi_etemp,
             fermi_maxiter=fermi_maxiter,
@@ -204,9 +210,14 @@ class Config:
             fermi_partition=fermi_partition,
         )
 
+        if f_atol is not None:
+            raise ValueError(
+                "f_atol is retired; SCF convergence uses physical fixed-point "
+                "and stationarity certification."
+            )
+
         return cls(
             file=file,
-            strict=strict,
             exclude=tuple(exclude),
             method=method,
             grad=grad,
@@ -240,7 +251,6 @@ class Config:
         return cls.create(
             # general
             file=args.file,
-            strict=args.strict,
             exclude=args.exclude,
             method=args.method,
             grad=args.grad,
@@ -254,13 +264,13 @@ class Config:
             anomaly=args.detect_anomaly,
             # SCF
             maxiter=args.maxiter,
-            mixer=args.mixer,
+            strategy=getattr(args, "strategy", "anderson"),
+            differentiation=getattr(args, "differentiation", "unrolled"),
+            convergence=getattr(args, "convergence", "standard"),
             damp=args.damp,
             guess=args.guess,
-            scf_mode=args.scf_mode,
-            scp_mode=args.scp_mode,
             x_atol=args.xtol,
-            f_atol=args.ftol,
+            x_atol_max=args.xtol_max,
             force_convergence=args.force_convergence,
             # SCF: Fermi
             fermi_etemp=args.fermi_etemp,

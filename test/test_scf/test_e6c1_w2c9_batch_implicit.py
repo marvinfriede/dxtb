@@ -104,7 +104,6 @@ def _build_system(
     maxiter: int = 200,
     x_atol: float = 1.0e-10,
     x_atol_max: float = 1.0e-10,
-    f_atol: float = 1.0e-10,
     force_convergence: bool = True,
     int_level: int | None = None,
     trainable_model: bool = False,
@@ -120,7 +119,6 @@ def _build_system(
         maxiter=maxiter,
         x_atol=x_atol,
         x_atol_max=x_atol_max,
-        f_atol=f_atol,
         fermi_etemp=etemp,
         fermi_partition=partition,
         force_convergence=force_convergence,
@@ -2030,9 +2028,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                 return grad_out, torch.full(
                     (3, 3), float("nan"), dtype=DTYPE, device=DEVICE
                 )
-            return grad_out, torch.zeros(
-                (3, 3), dtype=DTYPE, device=DEVICE
-            )
+            return grad_out, torch.zeros((3, 3), dtype=DTYPE, device=DEVICE)
 
     def _hooked_classical_pos(sys_obj, l_pos, l_chrg):
         terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
@@ -2115,7 +2111,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_chrg
     )
-    chrg_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    chrg_leaf = torch.tensor(
+        0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
     for cs in (1, 2, 4):
         out_chrg_nan = stream_batch_value_and_grad(
             prepared,
@@ -2163,7 +2161,11 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     def _hooked_refresh_field(
         prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
     ):
-        if isinstance(f_in, torch.Tensor) and f_in.requires_grad and f_in.ndim == 2:
+        if (
+            isinstance(f_in, torch.Tensor)
+            and f_in.requires_grad
+            and f_in.ndim == 2
+        ):
             hooked_rows = []
             for row_idx in range(f_in.shape[0]):
                 is_l3 = bool(
@@ -2173,7 +2175,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                         atol=1e-12,
                     )
                 )
-                hooked_rows.append(_NanGradOnLane3Field.apply(f_in[row_idx], is_l3))
+                hooked_rows.append(
+                    _NanGradOnLane3Field.apply(f_in[row_idx], is_l3)
+                )
             f_in = torch.stack(hooked_rows, dim=0)
         return orig_refresh(
             prep_obj,
@@ -2220,7 +2224,11 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     def _hooked_refresh_spin(
         prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
     ):
-        if isinstance(s_in, torch.Tensor) and s_in.requires_grad and s_in.ndim == 1:
+        if (
+            isinstance(s_in, torch.Tensor)
+            and s_in.requires_grad
+            and s_in.ndim == 1
+        ):
             hooked_s = []
             for row_idx in range(s_in.shape[0]):
                 is_l1 = bool(
@@ -2230,7 +2238,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                         atol=1e-12,
                     )
                 )
-                hooked_s.append(_NanGradOnLane3Field.apply(s_in[row_idx], is_l1))
+                hooked_s.append(
+                    _NanGradOnLane3Field.apply(s_in[row_idx], is_l1)
+                )
             s_in = torch.stack(hooked_s, dim=0)
         return orig_refresh(
             prep_obj,
@@ -2248,7 +2258,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_spin
     )
-    spin_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    spin_leaf = torch.tensor(
+        0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
     for cs in (1, 2):
         out_spin_nan = stream_batch_value_and_grad(
             prep_spin,
@@ -2308,9 +2320,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
         terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
         if terms:
             lbl, val = terms[0]
-            val = _NanGradOnLane2ModelParam.apply(
-                val, l_pos, target_model_leaf
-            )
+            val = _NanGradOnLane2ModelParam.apply(val, l_pos, target_model_leaf)
             return ((lbl, val), *terms[1:])
         return terms
 
@@ -2529,9 +2539,7 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
                     assert g_m is None
                 else:
                     assert g_m is not None
-                    torch.testing.assert_close(
-                        g_m, g_s, atol=1e-9, rtol=1e-8
-                    )
+                    torch.testing.assert_close(g_m, g_s, atol=1e-9, rtol=1e-8)
 
     # Open-shell NO2 radical (Z=[7, 8, 8], spin=1.0)
     numbers_no2 = torch.tensor([7, 8, 8], device=DEVICE)

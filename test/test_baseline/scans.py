@@ -81,7 +81,7 @@ def convergence_scan(method: str) -> dict[str, dict[str, float]]:
     original = dict(mx.SCF_OPTIONS)
     try:
         for thr in THRESHOLDS:
-            mx.SCF_OPTIONS.update(f_atol=thr, x_atol=thr)
+            mx.SCF_OPTIONS.update(x_atol=thr, x_atol_max=thr)
             for q in ("third_order", "hyperpolarizability", "pol_deriv"):
                 cell = mx.Cell(
                     q, "autograd", method, "pytorch", "full", "single"

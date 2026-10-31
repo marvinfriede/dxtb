@@ -48,10 +48,10 @@ __all__ = [
 class AndersonMethodSettings:
     """Static numerical policy owned specifically by the Anderson method."""
 
-    damp_init: float
-    generations: int
-    soft_start: bool
-    diagonal_offset: float | None
+    damp_init: float = 0.1
+    generations: int = 5
+    soft_start: bool = True
+    diagonal_offset: float | None = 0.01
 
 
 class AndersonState(Node):
@@ -94,18 +94,14 @@ def setup_anderson_method_settings(
     config: ConfigSCF,
 ) -> AndersonMethodSettings:
     """Resolve and validate only the effective Anderson method options."""
-    if config.mixer != labels.MIXER_ANDERSON:
+    if not isinstance(config.strategy.stages[0].method, AndersonMethod):
         raise NotImplementedError(
-            "Anderson settings require the effective Anderson mixer."
+            "Anderson settings require an Anderson strategy stage."
         )
-    if config.damp_generations < 1:
+    settings = config.strategy.stages[0].method.settings
+    if settings.generations < 1:
         raise ValueError("Anderson generations must be at least 1.")
-    return AndersonMethodSettings(
-        damp_init=config.damp_init,
-        generations=config.damp_generations,
-        soft_start=config.damp_soft_start,
-        diagonal_offset=config.damp_diagonal_offset,
-    )
+    return settings
 
 
 def _select_state(
@@ -127,7 +123,7 @@ def anderson_mix(
     *,
     damp: Tensor | float,
 ) -> tuple[Tensor, AndersonState]:
-    """Apply one out-of-place transition matching the legacy Anderson mixer."""
+    """Apply one out-of-place Anderson transition."""
     flat_old = old.reshape(-1)
     flat_mapped = mapped.reshape(-1)
     if state is None:

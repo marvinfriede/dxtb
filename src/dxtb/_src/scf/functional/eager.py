@@ -44,6 +44,7 @@ from dxtb._src.wavefunction.filling import FermiStatus
 
 from .anderson import AndersonMethod, setup_anderson_method_settings
 from .broyden import BroydenMethod, setup_broyden_method_settings
+from .certification import SCFInternalCertificationProfile
 from .core import CoreIndexData
 from .data import (
     PotentialLayout,
@@ -107,7 +108,8 @@ class FullSCFRoute:
 
     kind: str
     representation: int
-    effective_mixer: int
+    strategy_label: str
+    strategy: SCFStrategy | None = None
     warning: str | None = None
     reason: str | None = None
 
@@ -149,7 +151,7 @@ def resolve_full_scf_route(
     legacy_engine_overrides: bool = False,
 ) -> FullSCFRoute:
     """Resolve a supported functional route or its explicit batch boundary."""
-    if config.scf_mode != labels.SCF_MODE_FULL:
+    if config._legacy_mode_code != labels.SCF_MODE_FULL:
         raise ValueError("FULL route resolution requires SCF_MODE_FULL.")
     if not config.requires_iterations:
         raise ValueError("FULL route resolution requires iterative SCF.")
@@ -176,18 +178,31 @@ def resolve_full_scf_route(
             f"{names}."
         )
 
+    stage = config.strategy.stages[0]
+    representation = config._legacy_representation_code
+    strategy_label = " -> ".join(
+        type(item.method).__name__.removesuffix("Method").lower()
+        for item in config.strategy.stages
+    )
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
+        if len(config.strategy.stages) != 1 or type(stage.method).__name__ in (
+            "CDIISMethod",
+            "SOSCFMethod",
+        ):
+            raise NotImplementedError(
+                "The packed FULL compatibility route supports only a single "
+                "Linear, Anderson, or Broyden stage."
+            )
         return FullSCFRoute(
             "batch_compat",
-            config.scp_mode,
-            config.mixer,
+            representation,
+            strategy_label,
+            config.strategy,
             reason="public packed batch FULL compatibility route",
         )
-    if config.mixer == labels.MIXER_BROYDEN:
-        return FullSCFRoute("functional", config.scp_mode, config.mixer)
-    if config.mixer not in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
-        raise ValueError(f"Unknown mixer '{config.mixer}'.")
-    return FullSCFRoute("functional", config.scp_mode, config.mixer)
+    return FullSCFRoute(
+        "functional", representation, strategy_label, config.strategy
+    )
 
 
 def functional_core_result(result: SCFSolveResult) -> FunctionalCoreResult:
@@ -263,15 +278,14 @@ def _nonconvergence_message(
     config: ConfigSCF, route: FullSCFRoute, switched: bool
 ) -> str:
     """Format the legacy warning from configured Python values."""
-    mixer_label = {
-        labels.MIXER_LINEAR: "Simple",
-        labels.MIXER_ANDERSON: "Anderson",
-        labels.MIXER_BROYDEN: "Broyden",
-    }[route.effective_mixer]
     damp = config.damp_dynamic_factor if switched else config.damp
+    strategy = " -> ".join(
+        type(stage.method).__name__.removesuffix("Method").lower()
+        for stage in config.strategy.stages
+    )
     return (
-        f"SCF does not converge after {config.maxiter} cycles using "
-        f"{mixer_label} mixing with a damping factor of {damp}."
+        f"SCF did not certify after {config.maxiter} iterations using "
+        f"strategy '{strategy}' (damping {damp})."
     )
 
 
@@ -305,17 +319,25 @@ def _prepare_solver(
 ) -> tuple[SCFSolverSettings, SCFStrategy]:
     """Translate the effective configuration into common settings and method."""
     settings = setup_solver_settings(config, dtype)
-    if config.mixer == labels.MIXER_LINEAR:
-        method = LinearMethod()
-    elif config.mixer == labels.MIXER_ANDERSON:
-        method = AndersonMethod(setup_anderson_method_settings(config))
-    elif config.mixer == labels.MIXER_BROYDEN:
-        method = BroydenMethod(setup_broyden_method_settings(config))
-    else:
-        raise NotImplementedError(
-            f"Unsupported functional mixer {config.mixer}."
-        )
-    return settings, SCFStrategy((SCFStage(method),))
+    return settings, config.strategy
+
+
+def _certification_profile(
+    config: ConfigSCF,
+) -> SCFInternalCertificationProfile:
+    """Resolve profile stationarity while honoring explicit root tolerances."""
+    stationarity = {
+        "standard": 1.0e-5,
+        "tight": 1.0e-9,
+        "higher_order": 1.0e-12,
+    }[config.convergence.value]
+    return SCFInternalCertificationProfile(
+        name=config.convergence.value,
+        fixed_point_l2=float(config.x_atol),
+        fixed_point_max=float(config.x_atol_max),
+        stationarity_orthogonalized_per_sqrt_orbital=stationarity,
+        inherit_solver_root_tolerances=True,
+    )
 
 
 def _solve_representation(
@@ -329,7 +351,7 @@ def _solve_representation(
 ) -> SCFSolveResult:
     """Run one representation with eager or transform-fixed control."""
     settings, strategy = _prepare_solver(config, guess.dtype)
-    mode = config.scp_mode
+    mode = config._legacy_representation_code
     padded_state: Callable[[Tensor], Tensor] | None = None
     padded_residual: Callable[[Tensor], Tensor] | None = None
     if mode == labels.SCP_MODE_CHARGE:
@@ -358,6 +380,7 @@ def _solve_representation(
             strategy,
             eager=eager,
             record_trace=record_trace,
+            certification_profile=_certification_profile(config),
             state_projection=padded_state,
             residual_projection=padded_residual,
             project_initial_state=padded,
@@ -388,6 +411,7 @@ def _solve_representation(
             strategy,
             eager=eager,
             record_trace=record_trace,
+            certification_profile=_certification_profile(config),
             state_projection=padded_state,
             residual_projection=padded_residual,
             project_initial_state=padded,
@@ -410,6 +434,7 @@ def _solve_representation(
             strategy,
             eager=eager,
             record_trace=record_trace,
+            certification_profile=_certification_profile(config),
             state_projection=padded_state,
             residual_projection=padded_residual,
             project_initial_state=padded,
@@ -512,7 +537,11 @@ def run_functional_full_eager(
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
         route = FullSCFRoute(
-            "non_scf", config.scp_mode, config.mixer, reason="non-SCF method"
+            "non_scf",
+            config._legacy_representation_code,
+            "none",
+            config.strategy,
+            reason="non-SCF method",
         )
         legacy = solve_nonselfconsistent(
             numbers,
@@ -596,12 +625,12 @@ def run_prepared_functional_full(
         raise ValueError(
             "The prepared functional runner requires a functional route."
         )
-    if route.representation != config.scp_mode:
+    if route.representation != config._legacy_representation_code:
         raise ValueError(
             "The prepared functional route representation does not match "
             "the SCF configuration."
         )
-    effective_config = replace(config, mixer=route.effective_mixer)
+    effective_config = config
     inputs = setup_scf_inputs(
         numbers,
         integrals,
@@ -634,10 +663,9 @@ def run_system_fixed_trip(
     core_index_owner: object | None = None,
 ) -> FunctionalCoreResult | dict[str, object]:
     """Run fixed trips for supported functional single-System SCF routes."""
-    if config.scf_mode == labels.SCF_MODE_EXPERIMENTAL:
-        raise NotImplementedError(
-            "Experimental single-shot SCF derivatives were not exact and the "
-            "legacy implementation has been retired; use FULL or IMPLICIT."
+    if config.differentiation.value == "implicit":
+        raise ValueError(
+            "The fixed-trip System route requires differentiation='unrolled'."
         )
     if not config.requires_iterations:
         n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
@@ -742,7 +770,7 @@ def run_prepared_functional_implicit(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
-    initial_representation = config.scp_mode
+    initial_representation = config._legacy_representation_code
     if initial_representation == labels.SCP_MODE_CHARGE:
         state = pack_charges(charges, inputs.charge_layout)
         initial_layout = None
@@ -776,6 +804,7 @@ def run_prepared_functional_implicit(
         eager=True,
         problem=problem,
         strategy=strategy,
+        certification_profile=_certification_profile(config),
     )
 
     # The strategy may change representation. The selected physical problem is
@@ -817,6 +846,9 @@ def run_prepared_functional_implicit(
             "did not pass physical certification."
         )
 
+    response_settings = (
+        config.response if response_settings is None else response_settings
+    )
     response_root = prepare_response_root(outcome, settings, response_settings)
     final_problem = response_root.problem
     final_representation = final_problem.representation

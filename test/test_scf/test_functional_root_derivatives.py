@@ -65,6 +65,11 @@ from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
+from dxtb.scf import (
+    AndersonMethod,
+    AndersonMethodSettings,
+    LinearMethod,
+)
 
 from ..test_baseline.molecules import SYSTEMS
 from ..test_baseline.test_e30_diagnostics import (
@@ -152,10 +157,22 @@ def _case(
         )
     if positions_override is not None:
         positions = positions_override
+    representation_value = {
+        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+    }[representation]
+    method_value = {
+        labels.MIXER_LINEAR: LinearMethod(),
+        labels.MIXER_ANDERSON: AndersonMethod(AndersonMethodSettings()),
+        labels.MIXER_BROYDEN: BroydenMethod(BroydenMethodSettings()),
+    }[mixer]
+    strategy = SCFStrategy(
+        (SCFStage(method_value, representation=representation_value),)
+    )
     options = {
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": representation,
-        "mixer": mixer,
+        "strategy": strategy,
+        "differentiation": "unrolled",
         "maxiter": maxiter,
         "x_atol": tolerance,
         "x_atol_max": tolerance,
@@ -225,6 +242,7 @@ def _case(
         charge=charge,
         spin=spin,
         integrals=integrals,
+        refocc=refocc,
         n0=n0,
         occupation=occupation,
         nel=nel,
@@ -274,24 +292,24 @@ def _initial_state(case, inputs) -> tuple[Tensor, object | None]:
             else case.initial_charges.new_zeros(layout.quadrupole_shape)
         ),
     )
-    representation = case.system.config.scf.scp_mode
-    if representation == labels.SCP_MODE_CHARGE:
+    representation = case.system.config.scf.initial_representation
+    if representation is SCFRepresentation.CHARGE:
         return pack_charges(initial, layout), None
-    if representation == labels.SCP_MODE_POTENTIAL:
+    if representation is SCFRepresentation.POTENTIAL:
         return potential_initial_guess(initial, inputs)
-    if representation == labels.SCP_MODE_FOCK:
+    if representation is SCFRepresentation.FOCK:
         return fock_initial_guess(initial, inputs), None
     raise ValueError(f"Unknown SCF representation: {representation}")
 
 
 def _map_fn(case, inputs, layout):
-    representation = case.system.config.scf.scp_mode
-    if representation == labels.SCP_MODE_CHARGE:
+    representation = case.system.config.scf.initial_representation
+    if representation is SCFRepresentation.CHARGE:
         return lambda x: scf_map(x, inputs)
-    if representation == labels.SCP_MODE_POTENTIAL:
+    if representation is SCFRepresentation.POTENTIAL:
         assert layout is not None
         return lambda x: potential_map(x, inputs, layout)
-    if representation == labels.SCP_MODE_FOCK:
+    if representation is SCFRepresentation.FOCK:
         return lambda x: fock_map(x, inputs)
     raise ValueError(f"Unknown SCF representation: {representation}")
 
@@ -309,8 +327,8 @@ def _finalize_map_result(
     root_x: Tensor,
 ):
     """Apply the configured representation's ordinary finalization."""
-    representation = case.system.config.scf.scp_mode
-    if representation == labels.SCP_MODE_CHARGE:
+    representation = case.system.config.scf.initial_representation
+    if representation is SCFRepresentation.CHARGE:
         return finalize_scf(
             map_result,
             inputs,
@@ -321,7 +339,7 @@ def _finalize_map_result(
             damping_state,
             root_x=root_x,
         )
-    if representation == labels.SCP_MODE_POTENTIAL:
+    if representation is SCFRepresentation.POTENTIAL:
         _, layout = _initial_state(case, inputs)
         assert layout is not None
         return finalize_scf_potential(
@@ -335,7 +353,7 @@ def _finalize_map_result(
             damping_state,
             root_x=root_x,
         )
-    if representation == labels.SCP_MODE_FOCK:
+    if representation is SCFRepresentation.FOCK:
         return finalize_scf_fock(
             map_result,
             inputs,
@@ -360,7 +378,28 @@ def _run_root(
 ) -> _RootRecord:
     config = replace(
         case.system.config.scf,
-        mixer=case.system.config.scf.mixer if mixer is None else mixer,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    case.system.config.scf.strategy.stages[0],
+                    method={
+                        labels.MIXER_LINEAR: LinearMethod(),
+                        labels.MIXER_ANDERSON: AndersonMethod(
+                            AndersonMethodSettings()
+                        ),
+                        labels.MIXER_BROYDEN: BroydenMethod(
+                            BroydenMethodSettings()
+                        ),
+                    }[
+                        (
+                            case.system.config.scf._legacy_method_code
+                            if mixer is None
+                            else mixer
+                        )
+                    ],
+                ),
+            )
+        ),
         maxiter=maxiter,
         x_atol=tolerance,
         x_atol_max=tolerance,
@@ -376,16 +415,17 @@ def _run_root(
 
     projection = (
         (lambda value: _project_potential_padding(value, layout))
-        if config.scp_mode == labels.SCP_MODE_POTENTIAL
+        if config.initial_representation is SCFRepresentation.POTENTIAL
         else None
     )
     representation = {
         labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
         labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
         labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-    }[config.scp_mode]
+    }[case.system.config.scf._legacy_representation_code]
     problem = SCFProblem(inputs, representation, layout)
-    if config.mixer == labels.MIXER_ANDERSON:
+    method_code = config._legacy_method_code
+    if method_code == labels.MIXER_ANDERSON:
         settings = setup_anderson_solver_settings(config, initial.dtype)
         outcome = solve_common(
             initial,
@@ -395,7 +435,7 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif config.mixer == labels.MIXER_LINEAR:
+    elif method_code == labels.MIXER_LINEAR:
         settings = setup_simple_solver_settings(config, initial.dtype)
         outcome = _solve_map(
             initial,
@@ -405,7 +445,7 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif config.mixer == labels.MIXER_BROYDEN:
+    elif method_code == labels.MIXER_BROYDEN:
         settings = setup_solver_settings(config, initial.dtype)
         strategy = SCFStrategy(
             (SCFStage(BroydenMethod(BroydenMethodSettings())),)
@@ -420,7 +460,7 @@ def _run_root(
             strategy=strategy,
         )
     else:
-        raise ValueError(f"Unsupported reference mixer: {config.mixer}")
+        raise ValueError(f"Unsupported reference method: {method_code}")
 
     finalized = _finalize_map_result(
         case,
@@ -1415,7 +1455,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
         map_fn = _map_fn(case, inputs, unrolled_layout)
         projection = (
             (lambda value: _project_potential_padding(value, unrolled_layout))
-            if config.scp_mode == labels.SCP_MODE_POTENTIAL
+            if config.initial_representation is SCFRepresentation.POTENTIAL
             else None
         )
         outcome = solve_common(

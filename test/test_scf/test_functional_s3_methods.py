@@ -19,6 +19,7 @@ from dxtb._src.scf.functional.data import SCFMapResult
 from dxtb._src.scf.functional.method import SCFMethodContext
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.strategy import SCFStrategy
+from dxtb.scf import strategy_preset
 
 from ._anderson_helpers import AndersonTestSettings, solve_common
 from .test_functional_map import _prepare_case
@@ -88,8 +89,12 @@ def test_anderson_inactive_transition_freezes_fixed_size_history() -> None:
     )
     frozen = method.propose(problem, state, initialized, frozen_context).state
     assert isinstance(frozen, AndersonState)
-    torch.testing.assert_close(frozen.x_hist, initialized.x_hist, rtol=0.0, atol=0.0)
-    torch.testing.assert_close(frozen.f_hist, initialized.f_hist, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        frozen.x_hist, initialized.x_hist, rtol=0.0, atol=0.0
+    )
+    torch.testing.assert_close(
+        frozen.f_hist, initialized.f_hist, rtol=0.0, atol=0.0
+    )
 
 
 def test_effective_configuration_builds_a_single_method_strategy() -> None:
@@ -99,10 +104,11 @@ def test_effective_configuration_builds_a_single_method_strategy() -> None:
     case = _prepare_case(GFN1_XTB)
     config = case.system.config.scf
     _, linear_strategy = _prepare_solver(
-        replace(config, mixer=labels.MIXER_LINEAR), case.positions.dtype
+        replace(config, strategy=strategy_preset("linear")),
+        case.positions.dtype,
     )
     _, anderson_strategy = _prepare_solver(
-        replace(config, mixer=labels.MIXER_ANDERSON),
+        replace(config, strategy=strategy_preset("anderson")),
         case.positions.dtype,
     )
     assert isinstance(linear_strategy, SCFStrategy)
@@ -161,7 +167,9 @@ def test_terminal_map_does_not_advance_anderson_history(
             )
         return mapped
 
-    def record(old, mapped, state, settings, step, transition_active=None, damp=None):
+    def record(
+        old, mapped, state, settings, step, transition_active=None, damp=None
+    ):
         mixed, next_state = original(
             old,
             mapped,

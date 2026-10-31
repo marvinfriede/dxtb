@@ -346,7 +346,6 @@ def test_parammodule_field_mixed_derivative() -> None:
                     int_driver="pytorch",
                     int_level=labels.INTLEVEL_DIPOLE,
                     maxiter=150,
-                    f_atol=1.0e-10,
                     x_atol=1.0e-10,
                 ),
             )

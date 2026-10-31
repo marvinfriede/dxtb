@@ -127,7 +127,6 @@ def test_quadrupole_matches_tblite(
             "int_driver": "pytorch",
             "int_algorithm": algorithm,
             "scf_mode": "full",
-            "f_atol": 1e-11,
             "x_atol": 1e-11,
         },
         **dd,

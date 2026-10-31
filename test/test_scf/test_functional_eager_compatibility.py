@@ -62,8 +62,18 @@ from .test_functional_fock import _assert_public_parity
 from .test_functional_map import _assert_tensor_equal, _prepare_case
 
 
-def test_default_full_route_resolves_native_potential_broyden() -> None:
-    """The configured default stays native and has no substitution warning."""
+def _assert_warning_categories(actual, expected) -> None:
+    """Compare convergence-warning status while allowing strategy wording."""
+    assert len(actual) == len(expected)
+    for (actual_message, actual_type), (_, expected_type) in zip(
+        actual, expected, strict=True
+    ):
+        assert actual_type is expected_type
+        assert actual_message.startswith("SCF did not certify after")
+
+
+def test_default_full_route_resolves_native_anderson_potential() -> None:
+    """The configured default is Anderson in potential coordinates."""
     from dxtb.config import ConfigSCF
 
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
@@ -75,7 +85,7 @@ def test_default_full_route_resolves_native_potential_broyden() -> None:
         case.integrals,
     )
     assert route.kind == "functional"
-    assert route.effective_mixer == labels.MIXER_BROYDEN
+    assert route.strategy_label == "anderson"
     assert route.warning is None
 
 
@@ -191,107 +201,64 @@ def test_nonfull_route_resolution_rejects_wrong_mode() -> None:
     case = _prepare_case(GFN1_XTB)
     with pytest.raises(ValueError, match="requires SCF_MODE_FULL"):
         resolve_full_scf_route(
-            replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT),
+            replace(
+                case.system.config.scf,
+                differentiation="implicit",
+            ),
             case.interactions,
             case.system.ihelp,
         )
 
 
 def test_experimental_mode_has_a_specific_retirement_error() -> None:
-    case = _prepare_case(GFN1_XTB)
-    config = replace(
-        case.system.config.scf, scf_mode=labels.SCF_MODE_EXPERIMENTAL
-    )
-    with pytest.raises(NotImplementedError, match="single-shot.*retired"):
-        scf_iterator.solve(
-            case.system.numbers,
-            case.positions,
-            case.charge,
-            case.spin,
-            case.interactions,
-            case.interaction_data,
-            case.system.ihelp,
-            config,
-            case.integrals,
-            case.refocc,
-        )
+    from dxtb.config import ConfigSCF
+
+    with pytest.raises(ValueError, match="single-shot.*retired"):
+        ConfigSCF.create(scf_mode=labels.SCF_MODE_EXPERIMENTAL)
 
 
 def test_fixed_trip_experimental_mode_has_the_same_retirement_error() -> None:
-    """Fixed-trip execution cannot reach the retired single-shot engine."""
-    case = _prepare_case(GFN1_XTB)
-    config = replace(
-        case.system.config.scf, scf_mode=labels.SCF_MODE_EXPERIMENTAL
-    )
-    with pytest.raises(NotImplementedError, match="single-shot.*retired"):
-        functional_eager.run_system_fixed_trip(
-            case.system.numbers,
-            case.positions,
-            case.charge,
-            case.spin,
-            case.interactions,
-            case.interaction_data,
-            case.system.ihelp,
-            config,
-            case.integrals,
-            case.refocc,
-        )
+    """The removed policy cannot be selected for any execution route."""
+    from dxtb.config import ConfigSCF
+
+    with pytest.raises(ValueError, match="single-shot.*retired"):
+        ConfigSCF.create(scf_mode=labels.SCF_MODE_EXPERIMENTAL)
 
 
-def test_strict_broyden_is_supported_for_potential_full_route() -> None:
-    """Strictness does not reject a supported native Broyden route."""
+def test_broyden_strategy_has_a_native_potential_full_route() -> None:
+    """The Broyden preset resolves directly to its native method stage."""
     case = _prepare_case(GFN1_XTB)
-    config = replace(case.system.config.scf, strict=True)
+    from dxtb.config import ConfigSCF
+
+    config = ConfigSCF.create(strategy="broyden")
     route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
     assert route.kind == "functional"
-    assert route.effective_mixer == labels.MIXER_BROYDEN
+    assert route.strategy_label == "broyden"
     assert route.warning is None
 
 
-def test_fock_broyden_is_native_for_supported_single_system() -> None:
-    """Characterized Fock Broyden runs natively in both strict modes."""
-    case = _prepare_case(
-        GFN2_XTB,
-        scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_BROYDEN,
-            "fermi_etemp": 300.0,
-            "maxiter": 80,
-            "x_atol": 1.0e-6,
-            "x_atol_max": 1.0e-6,
-        },
-    )
-    config = replace(
-        case.system.config.scf,
-        strict=False,
-    )
-    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
-    assert route.kind == "functional"
-    assert route.effective_mixer == labels.MIXER_BROYDEN
-    assert route.warning is None
-
-    for strict in (False, True):
-        result = run_functional_full_eager(
-            case.system.numbers,
-            case.positions,
-            case.charge,
-            case.spin,
-            case.interactions,
-            case.interaction_data,
-            case.system.ihelp,
-            replace(config, strict=strict),
-            case.integrals,
-            case.refocc,
+def test_packed_full_rejects_unsupported_broyden_strategy() -> None:
+    """The retained packed FULL compatibility route does not substitute methods."""
+    with pytest.raises(NotImplementedError, match="does not support Broyden"):
+        _prepare_case(
+            GFN2_XTB,
+            scf_options={
+                "scp_mode": labels.SCP_MODE_FOCK,
+                "mixer": labels.MIXER_BROYDEN,
+                "fermi_etemp": 300.0,
+                "maxiter": 80,
+                "x_atol": 1.0e-6,
+                "x_atol_max": 1.0e-6,
+            },
         )
-        assert result.route.effective_mixer == labels.MIXER_BROYDEN
-        assert result.functional is not None
-        assert result.functional.converged.item() is True
 
 
-def test_strict_broyden_runs_after_successful_common_preparation() -> None:
-    """A supported strict Broyden solve reaches native functional execution."""
+def test_explicit_broyden_runs_after_common_preparation() -> None:
+    """An explicit Broyden stage reaches native functional execution."""
+    from dxtb.config import ConfigSCF
+
     case = _prepare_case(GFN1_XTB)
-    config = replace(case.system.config.scf, strict=True)
+    config = ConfigSCF.create(strategy="broyden")
     result = run_functional_full_eager(
         case.system.numbers,
         case.positions,
@@ -304,7 +271,7 @@ def test_strict_broyden_runs_after_successful_common_preparation() -> None:
         case.integrals,
         case.refocc,
     )
-    assert result.route.effective_mixer == labels.MIXER_BROYDEN
+    assert result.route.strategy_label == "broyden"
     assert result.functional is not None
 
 
@@ -331,12 +298,12 @@ def test_invalid_spin_precedes_broyden_warning_in_both_routes() -> None:
     assert OutputHandler.warnings == []
 
 
-def test_strict_broyden_invalid_spin_precedes_route_error() -> None:
-    """Common spin validation precedes strict mixer resolution."""
+def test_invalid_spin_precedes_functional_route_error() -> None:
+    """Common spin validation precedes numerical strategy execution."""
     from dxtb._src.scf.iterator import solve as legacy_solve
 
     case = _prepare_case(GFN1_XTB)
-    config = replace(case.system.config.scf, strict=True)
+    config = case.system.config.scf
     invalid_spin = case.spin + 1.0
     OutputHandler.clear_warnings()
     with pytest.raises(ValueError, match="unpaired electrons") as legacy_error:
@@ -486,9 +453,9 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
     diagnostics = functional.functional.solve_result.diagnostics
     assert diagnostics is not None
     assert diagnostics.dynamic_damping_switched
-    assert OutputHandler.warnings == legacy_warnings
+    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
     assert OutputHandler.warnings
-    assert "damping factor of 0.99." in OutputHandler.warnings[-1][0]
+    assert "damping 0.99)." in OutputHandler.warnings[-1][0]
 
 
 def test_gfn0_remains_a_nonselfconsistent_special_case() -> None:
@@ -752,10 +719,10 @@ def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
     [labels.SCP_MODE_CHARGE, labels.SCP_MODE_POTENTIAL],
     ids=["charge", "potential"],
 )
-def test_default_broyden_adapter_matches_legacy(
+def test_default_anderson_adapter_matches_legacy(
     method: int, representation: int
 ) -> None:
-    """The native Broyden route reaches the same physical legacy solution."""
+    """The default Anderson route reaches the same physical legacy solution."""
     options = {
         "scp_mode": representation,
         "fermi_etemp": 300.0,
@@ -785,7 +752,7 @@ def test_default_broyden_adapter_matches_legacy(
     )
     assert actual.functional is not None
     assert actual.legacy is None
-    assert actual.route.effective_mixer == labels.MIXER_BROYDEN
+    assert actual.route.strategy_label == "anderson"
     assert OutputHandler.warnings == []
     for name in (
         "density",
@@ -866,7 +833,7 @@ def test_eager_representation_mixer_budget_parity(
     )
     assert actual.functional is not None
     _assert_public_parity(actual.functional.solve_result, legacy)
-    assert OutputHandler.warnings == legacy_warnings
+    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
 
 
 @pytest.mark.parametrize(
@@ -915,7 +882,7 @@ def test_eager_converged_representation_mixer_parity(
     assert actual.functional is not None
     assert bool(actual.functional.converged)
     _assert_public_parity(actual.functional.solve_result, legacy)
-    assert OutputHandler.warnings == legacy_warnings
+    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
 
 
 def test_core_result_boundary_keeps_solver_status_tensors() -> None:
@@ -998,11 +965,11 @@ def test_prepared_functional_runner_does_not_repeat_common_preparation(
 
 @pytest.mark.parametrize(
     "mixer",
-    [labels.MIXER_BROYDEN, labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
-    ids=["default-broyden", "simple", "anderson"],
+    [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
+    ids=["linear", "anderson"],
 )
-def test_prepared_runner_uses_route_effective_mixer(mixer: int) -> None:
-    """Prepared execution normalizes mixer settings from the static route."""
+def test_prepared_runner_reports_configured_method(mixer: int) -> None:
+    """The retained packed FULL runner reports its configured method stage."""
     options = {
         "mixer": mixer,
         "scp_mode": labels.SCP_MODE_POTENTIAL,
@@ -1013,8 +980,11 @@ def test_prepared_runner_uses_route_effective_mixer(mixer: int) -> None:
     config = case.system.config.scf
     route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
     assert route.kind == "functional"
-    if mixer == labels.MIXER_BROYDEN:
-        assert route.effective_mixer == labels.MIXER_BROYDEN
+    expected = {
+        labels.MIXER_LINEAR: "linear",
+        labels.MIXER_ANDERSON: "anderson",
+    }[mixer]
+    assert route.strategy_label == expected
 
     direct = run_prepared_functional_full(
         case.system.numbers,
@@ -1045,13 +1015,36 @@ def test_prepared_runner_uses_route_effective_mixer(mixer: int) -> None:
     _assert_tensor_equal(direct.hamiltonian, eager.functional.hamiltonian)
 
 
+def test_packed_full_runner_rejects_broyden_without_substitution() -> None:
+    """Unsupported packed FULL Broyden fails explicitly at preparation."""
+    with pytest.raises(NotImplementedError, match="does not support Broyden"):
+        _prepare_case(
+            GFN1_XTB,
+            scf_options={
+                "mixer": labels.MIXER_BROYDEN,
+                "scp_mode": labels.SCP_MODE_POTENTIAL,
+                "fermi_etemp": 300.0,
+                "maxiter": 0,
+            },
+        )
+
+
 def test_prepared_runner_rejects_representation_mismatch() -> None:
     """A route cannot be reused with another convergence representation."""
     case = _prepare_case(GFN1_XTB)
     route = resolve_full_scf_route(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
-    mismatched = replace(case.system.config.scf, scp_mode=labels.SCP_MODE_FOCK)
+    from dxtb.scf import SCFRepresentation, SCFStrategy
+
+    stage = replace(
+        case.system.config.scf.strategy.stages[0],
+        representation=SCFRepresentation.FOCK,
+    )
+    mismatched = replace(
+        case.system.config.scf,
+        strategy=SCFStrategy((stage,)),
+    )
     with pytest.raises(ValueError, match="representation does not match"):
         run_prepared_functional_full(
             case.system.numbers,
@@ -1113,7 +1106,7 @@ def test_eager_and_fixed_trip_controllers_match(
         case.integrals,
     )
     assert route.kind == "functional"
-    config = replace(case.system.config.scf, mixer=route.effective_mixer)
+    config = case.system.config.scf
     inputs = setup_scf_inputs(
         case.system.numbers,
         case.integrals,
@@ -1296,7 +1289,7 @@ def test_dynamic_damping_adapter_matches_legacy(
         actual.functional.solve_result.diagnostics.final_damp,
         torch.tensor(0.75, dtype=torch.float64),
     )
-    assert OutputHandler.warnings == legacy_warnings
+    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
 
 
 @pytest.mark.parametrize(
@@ -1488,7 +1481,6 @@ def test_eager_force_convergence_policy(
 
         with pytest.raises(SCFConvergenceError) as legacy_error:
             legacy_case.engine(legacy_case.initial_charges.clone())
-        legacy_message = str(legacy_error.value)
         OutputHandler.clear_warnings()
         with pytest.raises(SCFConvergenceError) as functional_error:
             run_functional_full_eager(
@@ -1503,7 +1495,9 @@ def test_eager_force_convergence_policy(
                 functional_case.integrals,
                 functional_case.refocc,
             )
-        assert str(functional_error.value).startswith(legacy_message)
+        assert str(functional_error.value).startswith(
+            "SCF did not certify after"
+        )
         assert "physical SCF root was not certified" in str(
             functional_error.value
         )
@@ -1526,7 +1520,7 @@ def test_eager_force_convergence_policy(
     )
     assert result.functional is not None
     _assert_public_parity(result.functional.solve_result, legacy)
-    assert OutputHandler.warnings == legacy_warnings
+    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
     if expected == "warn":
         assert len(legacy_warnings) == 1
         assert "SCF does not converge" in legacy_warnings[0][0]

@@ -79,18 +79,18 @@ def converged_to_charges(
         Unknown `scp_mode` given.
     """
 
-    if config.scp_mode == labels.SCP_MODE_CHARGE:
+    if config._legacy_representation_code == labels.SCP_MODE_CHARGE:
         return Charges.from_tensor(
             x, data.charges, batch_mode=data.ihelp.batch_mode
         )
 
-    if config.scp_mode == labels.SCP_MODE_POTENTIAL:
+    if config._legacy_representation_code == labels.SCP_MODE_POTENTIAL:
         pot = Potential.from_tensor(
             x, data.potential, batch_mode=data.ihelp.batch_mode
         )
         return potential_to_charges(pot, data, config, diagonalizer)
 
-    if config.scp_mode == labels.SCP_MODE_FOCK:
+    if config._legacy_representation_code == labels.SCP_MODE_FOCK:
         zero = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         x = torch.where(x != defaults.PADNZ, x, zero)
 
@@ -98,7 +98,8 @@ def converged_to_charges(
         return density_to_charges(data.density, data, config)
 
     raise ValueError(
-        f"Unknown convergence target (SCP mode) '{config.scp_mode}'."
+        "Unknown SCF strategy representation "
+        f"'{config.initial_representation.value}'."
     )
 
 

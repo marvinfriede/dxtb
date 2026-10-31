@@ -666,7 +666,7 @@ def evaluate_padded_fixed_trip(
         raise TypeError(
             "Padded fixed-trip evaluation supports GFN1 and GFN2 only."
         )
-    if core.config.scf.scf_mode != labels.SCF_MODE_FULL:
+    if core.config.scf.differentiation.value != "unrolled":
         raise TypeError("Padded fixed-trip evaluation requires FULL SCF mode.")
     if not core.config.scf.requires_iterations:
         raise TypeError(

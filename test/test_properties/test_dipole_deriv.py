@@ -46,7 +46,6 @@ opts = {
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
 }
 

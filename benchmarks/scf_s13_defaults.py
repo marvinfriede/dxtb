@@ -147,14 +147,10 @@ def _case_specifications() -> list[dict[str, object]]:
 
 def _build_method(name: str, config):
     if name == "Anderson":
-        return AndersonMethod(
-            AndersonMethodSettings(
-                damp_init=config.damp_init,
-                generations=config.damp_generations,
-                soft_start=config.damp_soft_start,
-                diagonal_offset=config.damp_diagonal_offset,
-            )
-        )
+        configured = config.strategy.stages[0].method
+        if isinstance(configured, AndersonMethod):
+            return AndersonMethod(configured.settings)
+        return AndersonMethod(AndersonMethodSettings())
     if name == "Broyden":
         return BroydenMethod()
     if name == "CDIIS":

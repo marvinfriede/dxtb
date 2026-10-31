@@ -74,6 +74,13 @@ def _use_functional_implicit_route(
     from .functional.data import functional_scf_interactions_eligible
 
     eligible, _ = functional_scf_interactions_eligible(interactions)
+    is_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
+    strategy = config.strategy
+    if is_batch and (
+        len(strategy.stages) != 1
+        or not getattr(strategy.stages[0].method, "supports_fixed_trip", True)
+    ):
+        return False
     return (
         not legacy_engine_overrides
         and eligible
@@ -82,8 +89,6 @@ def _use_functional_implicit_route(
         and config.maxiter >= 0
         and integrals.hcore is not None
         and integrals.overlap is not None
-        and config.mixer
-        in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON, labels.MIXER_BROYDEN)
     )
 
 
@@ -225,13 +230,7 @@ def _solve_impl(
 
     charges = get_guess(numbers, positions, chrg, ihelp, config.guess)
 
-    if not isinstance(config.scf_mode, int):
-        raise ValueError(
-            "SCF mode must be an integer within `solve`. This can only "
-            "happen if you explicitly change the configuration object."
-        )
-
-    if config.scf_mode == labels.SCF_MODE_IMPLICIT:
+    if config.differentiation.value == "implicit":
         is_public_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
         route_name = (
             "public packed implicit compatibility"
@@ -266,7 +265,10 @@ def _solve_impl(
                 raise ValueError(
                     f"{route_name} requires hcore and overlap integrals."
                 )
-            raise ValueError(f"Unsupported {route_name} mixer {config.mixer}.")
+            raise ValueError(
+                f"Unsupported {route_name} strategy "
+                f"'{type(config.strategy.stages[0].method).__name__}'."
+            )
 
         from .functional.eager import (
             functional_core_result,
@@ -288,7 +290,7 @@ def _solve_impl(
             core_index_owner=core_index_owner,
         )
         return functional_core_result(result)
-    elif config.scf_mode == labels.SCF_MODE_FULL:
+    elif config.differentiation.value == "unrolled":
         # pylint: disable=import-outside-toplevel
         from dxtb import OutputHandler
 
@@ -328,13 +330,10 @@ def _solve_impl(
         if route.kind != "batch_compat":
             raise RuntimeError(f"Unknown FULL route kind {route.kind}.")
         from .unrolling import SelfConsistentFieldFull as SCF
-    elif config.scf_mode == labels.SCF_MODE_EXPERIMENTAL:
-        raise NotImplementedError(
-            "Experimental single-shot SCF derivatives were not exact and the "
-            "legacy implementation has been retired; use FULL or IMPLICIT."
-        )
     else:
-        raise ValueError(f"Unknown SCF mode '{config.scf_mode}'.")
+        raise ValueError(
+            f"Unknown differentiation policy '{config.differentiation}'."
+        )
 
     return SCF(
         interactions,

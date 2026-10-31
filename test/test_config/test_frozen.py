@@ -28,8 +28,8 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.constants import labels
 from dxtb.config import Config
+from dxtb.scf import strategy_preset
 
 
 def test_frozen() -> None:
@@ -38,19 +38,18 @@ def test_frozen() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.grad = True  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        cfg.scf.mixer = labels.MIXER_LINEAR  # type: ignore[misc]
+        cfg.scf.strategy = strategy_preset("linear")  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.scf.fermi.etemp = 1.0  # type: ignore[misc]
 
 
 def test_replace_and_equality() -> None:
-    cfg = Config.create(scf_mode="full", exclude="disp")
-    assert cfg == Config.create(scf_mode=labels.SCF_MODE_FULL, exclude=["disp"])
-    assert hash(cfg) == hash(Config.create(scf_mode="full", exclude=("disp",)))
+    cfg = Config.create(differentiation="unrolled", exclude="disp")
+    equivalent = Config.create(differentiation="unrolled", exclude=["disp"])
+    assert cfg == equivalent
+    assert hash(cfg) == hash(equivalent)
 
-    new = dataclasses.replace(
-        cfg, scf=dataclasses.replace(cfg.scf, maxiter=7)
-    )
+    new = dataclasses.replace(cfg, scf=dataclasses.replace(cfg.scf, maxiter=7))
     assert new.scf.maxiter == 7
     assert cfg.scf.maxiter != 7
     assert new != cfg

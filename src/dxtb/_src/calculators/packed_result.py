@@ -253,8 +253,7 @@ def pack_system_results(
         pmono = (
             None
             if all(
-                r.potential is None or r.potential.mono is None
-                for r in results
+                r.potential is None or r.potential.mono is None for r in results
             )
             else _pad_last_dim(
                 [
@@ -462,29 +461,16 @@ def _normalize_system_for_e6bcompat(
     *,
     strict_e6bcompat: bool,
 ) -> System:
-    """Apply E6bcompat GFN2 Fock-mode policy to a single-System instance."""
+    """Reject strategies unsupported by the retained packed GFN2 route."""
     if (
         system.config.method == labels.GFN2_XTB
-        and system.config.scf.scp_mode != labels.SCP_MODE_FOCK
+        and system.config.scf._legacy_representation_code
+        != labels.SCP_MODE_FOCK
     ):
-        if strict_e6bcompat:
-            raise NotImplementedError(
-                "GFN2-xTB mapped batch evaluation requires Fock-mode SCF "
-                "(scp_mode='fock')."
-            )
-        OutputHandler.warn(
-            "Resetting 'scp_mode' to 'fock' because GFN2-xTB requires Fock "
-            "matrix mixing.",
-            UserWarning,
+        raise NotImplementedError(
+            "GFN2-xTB mapped batch evaluation requires an explicit Fock "
+            "strategy stage. Set representation=SCFRepresentation.FOCK."
         )
-        new_scf = replace(system.config.scf, scp_mode=labels.SCP_MODE_FOCK)
-        new_config = replace(system.config, scf=new_scf)
-        new_core = (
-            None
-            if system.exact_core is None
-            else replace(system.exact_core, config=new_config)
-        )
-        return replace(system, config=new_config, exact_core=new_core)
     return system
 
 
@@ -518,12 +504,13 @@ def _enforce_decoded_eager_policy(
         and result.converged is not None
         and not bool(result.converged.detach())
     ):
-        mixer_label = (
-            "Simple" if config.mixer == labels.MIXER_LINEAR else "Anderson"
+        strategy_label = " -> ".join(
+            type(stage.method).__name__.removesuffix("Method").lower()
+            for stage in config.strategy.stages
         )
         message = (
-            f"SCF does not converge after {config.maxiter} cycles using "
-            f"{mixer_label} mixing with a damping factor of {config.damp}."
+            f"SCF did not certify after {config.maxiter} iterations using "
+            f"strategy '{strategy_label}'."
         )
         if config.force_convergence:
             error = SCFConvergenceError(message)
@@ -561,7 +548,9 @@ def evaluate_packed_systems(
     """
     count = len(systems)
     if count == 0:
-        raise ValueError("evaluate_packed_systems requires at least one System.")
+        raise ValueError(
+            "evaluate_packed_systems requires at least one System."
+        )
 
     if legacy_options is not None and legacy_options.kwargs:
         if strict_e6bcompat:
@@ -571,9 +560,7 @@ def evaluate_packed_systems(
             )
 
     normalized_systems = [
-        _normalize_system_for_e6bcompat(
-            sys, strict_e6bcompat=strict_e6bcompat
-        )
+        _normalize_system_for_e6bcompat(sys, strict_e6bcompat=strict_e6bcompat)
         for sys in systems
     ]
 
@@ -670,18 +657,14 @@ def evaluate_packed_systems(
                 for local_idx, core in enumerate(group_cores)
             )
             padded_pos = tuple(
-                canonicalize_positions(
-                    lane_positions[sid], bucket, local_idx
-                )
+                canonicalize_positions(lane_positions[sid], bucket, local_idx)
                 for local_idx, sid in enumerate(group_source_ids)
             )
             from dxtb._src.scf.functional.padded import (
                 validate_padded_charge_spin,
             )
 
-            padded_chrg = tuple(
-                lane_charges[sid] for sid in group_source_ids
-            )
+            padded_chrg = tuple(lane_charges[sid] for sid in group_source_ids)
             padded_spin_list: list[Tensor] = []
             for p_core, sid in zip(padded_cores, group_source_ids):
                 s_opt = lane_spins[sid]
@@ -690,7 +673,9 @@ def evaluate_packed_systems(
                         p_core, lane_charges[sid], None
                     )
                     padded_spin_list.append(
-                        (nab[0] - nab[1]).reshape(()).to(
+                        (nab[0] - nab[1])
+                        .reshape(())
+                        .to(
                             device=lane_charges[sid].device,
                             dtype=lane_charges[sid].dtype,
                         )

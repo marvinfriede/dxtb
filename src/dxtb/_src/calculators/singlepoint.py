@@ -838,7 +838,7 @@ def _singlepoint_impl(
         if core is not None and core_index is not None
         else {}
     )
-    if fixed_trip and config.scf.scf_mode == labels.SCF_MODE_IMPLICIT:
+    if fixed_trip and config.scf.differentiation.value == "implicit":
         scf_results = scf_solve(
             numbers,
             positions,

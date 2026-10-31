@@ -90,7 +90,6 @@ PARAMS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
 
 SCF_OPTIONS: dict[str, Any] = {
     "maxiter": 300,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "verbosity": 0,
 }

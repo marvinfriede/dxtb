@@ -67,10 +67,9 @@ METHODS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
 DRIVERS = ("libcint", "pytorch")
 
 SCF_OPTIONS: dict[str, Any] = {
-    "scf_mode": "full",
-    "mixer": "anderson",
+    "strategy": "anderson",
+    "differentiation": "unrolled",
     "maxiter": 300,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "verbosity": 0,
 }

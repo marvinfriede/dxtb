@@ -73,7 +73,6 @@ OPTS = {
     "scf_mode": "full",
     "mixer": "anderson",
     "maxiter": 300,
-    "f_atol": 1e-8,
     "x_atol": 1e-8,
 }
 

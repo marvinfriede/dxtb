@@ -90,7 +90,6 @@ def run_grad_backwards(
         **{
             "scf_mode": scf_mode,
             "scp_mode": scp_mode,
-            "f_atol": tol * 0.1,
             "x_atol": tol * 0.1,
             "mixer": "anderson" if scf_mode == "full" else "broyden",
         },
@@ -144,7 +143,7 @@ def run_grad_autograd(name: str, dtype: torch.dtype):
 
     assert pytest.approx(ref_full, abs=tol, rel=1e-5) == ref
 
-    options = dict(opts, **{"f_atol": tol, "x_atol": tol})
+    options = dict(opts, **{"x_atol": tol})
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
@@ -183,7 +182,7 @@ def test_grad_large(name: str, dtype: torch.dtype):
     # variable to be differentiated
     pos = positions.clone().requires_grad_(True)
 
-    options = dict(opts, **{"f_atol": tol**2, "x_atol": tol**2})
+    options = dict(opts, **{"x_atol": tol**2})
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
@@ -227,7 +226,7 @@ def run_param_grad_energy(name: str, dtype: torch.dtype = torch.float):
     pos = positions.clone().requires_grad_(True)
     charges = torch.tensor(0.0, **dd)
 
-    options = dict(opts, **{"f_atol": tol**2, "x_atol": tol**2})
+    options = dict(opts, **{"x_atol": tol**2})
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
@@ -270,7 +269,7 @@ def skip_test_param_grad_force(name: str, dtype: torch.dtype = torch.float):
     pos = positions.clone().requires_grad_(True)
     charges = torch.tensor(0.0, **dd)
 
-    options = dict(opts, **{"f_atol": tol**2, "x_atol": tol**2})
+    options = dict(opts, **{"x_atol": tol**2})
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )

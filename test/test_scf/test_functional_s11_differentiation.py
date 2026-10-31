@@ -33,10 +33,67 @@ from dxtb._src.scf.functional.response import (
     prepare_response_root,
 )
 from dxtb._src.scf.functional.solver import setup_solver_settings
+from dxtb.scf import (
+    AndersonMethod,
+    AndersonMethodSettings,
+    BroydenMethod,
+    BroydenMethodSettings,
+    LinearMethod,
+    SCFDifferentiation,
+    SCFStage,
+    SCFStrategy,
+)
 
 from .test_functional_root_derivatives import _case, _run_root
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
+
+
+def _implicit_config(
+    config,
+    *,
+    mixer: int,
+    representation: int | None = None,
+    **changes,
+):
+    """Build an implicit test configuration through the public strategy API."""
+    stage = config.strategy.stages[0]
+    if mixer == labels.MIXER_LINEAR:
+        method = LinearMethod()
+    elif mixer == labels.MIXER_ANDERSON:
+        settings = (
+            stage.method.settings
+            if isinstance(stage.method, AndersonMethod)
+            else AndersonMethodSettings()
+        )
+        method = AndersonMethod(settings)
+    else:
+        settings = (
+            stage.method.settings
+            if isinstance(stage.method, BroydenMethod)
+            else BroydenMethodSettings()
+        )
+        method = BroydenMethod(settings)
+    if representation is not None:
+        stage_representation = {
+            labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+            labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+            labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+        }[representation]
+    else:
+        stage_representation = stage.representation
+    return replace(
+        config,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    stage, method=method, representation=stage_representation
+                ),
+            )
+        ),
+        differentiation=SCFDifferentiation.IMPLICIT,
+        **changes,
+    )
 
 
 def _root_record(representation: int = labels.SCP_MODE_POTENTIAL):
@@ -231,9 +288,8 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
             tolerance=1.0e-12,
             field=field,
         )
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=mixer,
             maxiter=120,
             x_atol=1.0e-12,
@@ -344,9 +400,8 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             field=field,
             positions_override=positions,
         )
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=labels.MIXER_BROYDEN,
             maxiter=120,
             x_atol=1.0e-12,
@@ -409,9 +464,8 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
             tolerance=1.0e-12,
             field=field,
         )
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=labels.MIXER_BROYDEN,
             maxiter=120,
             x_atol=1.0e-12,
@@ -532,11 +586,10 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             maxiter=300,
             field=field,
         )
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=labels.MIXER_BROYDEN,
-            scp_mode=representation,
+            representation=representation,
             maxiter=300,
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
@@ -682,11 +735,10 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         )
         assert case.inputs.fermi_settings is not None
         assert case.inputs.fermi_settings.smear
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=mixer,
-            scp_mode=labels.SCP_MODE_FOCK,
+            representation=labels.SCP_MODE_FOCK,
             maxiter=300,
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
@@ -758,9 +810,8 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
             temperature=0.0,
             field=field,
         )
-        config = replace(
+        config = _implicit_config(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
             mixer=labels.MIXER_BROYDEN,
             maxiter=300,
             x_atol=1.0e-12,
@@ -857,9 +908,8 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
         tolerance=1.0e-12,
         parameter_module=parameter_module,
     )
-    config = replace(
+    config = _implicit_config(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
         mixer=labels.MIXER_BROYDEN,
         maxiter=300,
         x_atol=1.0e-12,
@@ -901,9 +951,8 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
         tolerance=1.0e-12,
         field=field,
     )
-    config = replace(
+    config = _implicit_config(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
         mixer=labels.MIXER_BROYDEN,
         maxiter=200,
         x_atol=1.0e-12,

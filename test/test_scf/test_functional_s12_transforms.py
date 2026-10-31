@@ -33,6 +33,7 @@ from dxtb._src.scf.functional.cdiis import CDIISState
 from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.soscf import SOSCFMethod
+from dxtb.scf import SCFDifferentiation
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
@@ -220,8 +221,7 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
     )
     config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
-        mixer=labels.MIXER_BROYDEN,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=120,
         x_atol=1.0e-11,
         x_atol_max=1.0e-11,

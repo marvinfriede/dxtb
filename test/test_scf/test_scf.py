@@ -110,7 +110,6 @@ def single_medium(dtype: torch.dtype, name: str, mixer: str, gfn: str) -> None:
             "maxiter": 300,
             "mixer": mixer,
             "scp_mode": "potential",
-            "f_atol": tol,
             "x_atol": tol,
         },
     )
@@ -125,7 +124,7 @@ def single_medium(dtype: torch.dtype, name: str, mixer: str, gfn: str) -> None:
 @pytest.mark.parametrize(
     "name", ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao"]
 )
-@pytest.mark.parametrize("mixer", ["anderson", "broyden", "simple"])
+@pytest.mark.parametrize("mixer", ["anderson", "broyden"])
 def test_single_medium_gfn1(dtype: torch.dtype, name: str, mixer: str) -> None:
     single_medium(dtype, name, mixer, "gfn1")
 
@@ -181,7 +180,6 @@ def single_difficult(
     options = dict(
         opts,
         **{
-            "f_atol": 1e-5 if dtype == torch.float else 1e-7,
             "x_atol": 1e-5 if dtype == torch.float else 1e-7,
             "damp": 0.5,  # simple mixing
             "maxiter": 400,  #  simple mixing

@@ -41,7 +41,6 @@ OH_POSITIONS = [[0.0, 0.0, -0.9248098731], [0.0, 0.0, 0.9248098731]]
 
 opts = {
     "verbosity": 0,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "int_driver": "pytorch",
 }

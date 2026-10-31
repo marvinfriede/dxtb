@@ -22,6 +22,7 @@ A fully differentiable extended tight-binding package.
 """
 
 # pylint: disable=C0411,C0412,C0413,C0414
+# isort: skip_file
 
 # import timer first to get correct total time
 from dxtb._src.timing import timer, kill_timer
@@ -69,6 +70,7 @@ from dxtb import config as config
 from dxtb import integrals as integrals
 from dxtb import labels as labels
 from dxtb import typing as typing
+from dxtb import scf as scf
 
 ###############################################################################
 
@@ -85,6 +87,7 @@ __all__ = [
     "calculators",
     "Calculator",
     "Result",
+    "scf",
     "SCFFailureCode",
     "GFN0_XTB",
     "GFN1_XTB",

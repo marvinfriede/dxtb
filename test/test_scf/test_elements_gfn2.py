@@ -177,7 +177,6 @@ def test_element(dtype: torch.dtype, number: int) -> None:
     options = dict(
         opts,
         **{
-            "f_atol": atol,
             "x_atol": atol,
             "fermi_thresh": 1e-4 if dtype == torch.float32 else 1e-10,
             "damp": 0.95,
@@ -214,7 +213,6 @@ def test_element_cation(dtype: torch.dtype, number: int) -> None:
     options = dict(
         opts,
         **{
-            "f_atol": 1e-5,  # avoids Jacobian inversion error
             "x_atol": 1e-5,  # avoids Jacobian inversion error
             "fermi_thresh": 1e-4 if dtype == torch.float32 else 1e-10,
             "scp_mode": scp_mode,
@@ -250,7 +248,6 @@ def test_element_anion(dtype: torch.dtype, number: int) -> None:
     options = dict(
         opts,
         **{
-            "f_atol": 1e-5,  # avoid Jacobian inversion error
             "x_atol": 1e-5,  # avoid Jacobian inversion error
             "fermi_thresh": 1e-4 if dtype == torch.float32 else 1e-10,
             "damp": 0.95,

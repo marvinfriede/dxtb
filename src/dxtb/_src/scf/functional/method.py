@@ -75,7 +75,7 @@ class SCFMethod(Protocol):
 
 @dataclass(frozen=True, eq=False)
 class LinearMethod:
-    """Stateless linear mixing with the accepted simple-mixer semantics."""
+    """Stateless linear mixing under the shared SCF controller."""
 
     supports_fixed_trip: ClassVar[bool] = True
 

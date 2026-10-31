@@ -41,7 +41,7 @@ displacement of 0.01 bohr already gives correct derivatives).
 Implicit SCF uses a prepared physical-root boundary
 --------------------------------------------------
 
-``scf_mode="implicit"`` uses the functional physical-root derivative. Root
+``differentiation="implicit"`` uses the functional physical-root derivative. Root
 acquisition and physical validation happen eagerly; the prepared-root response
 supports ordinary ``torch.autograd`` and its documented ``torch.func``
 transforms. FULL and IMPLICIT iterative routes use the functional SCF
@@ -50,7 +50,8 @@ unrolled compatibility implementation. Unsupported interaction extensions
 and legacy solver overrides fail explicitly instead of selecting another
 engine. The experimental single-shot mode is retired because its derivatives
 were not exact. An implicit route rejects a nonconverged primal with
-``SCFConvergenceError`` regardless of ``force_convergence`` or ``strict``.
+``SCFConvergenceError`` for an uncertified primal root. The removed global
+``strict`` configuration flag does not alter single-System SCF policy.
 
 In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
 modes, and ``scf_mode="nonpure"`` existed; that mode was removed.

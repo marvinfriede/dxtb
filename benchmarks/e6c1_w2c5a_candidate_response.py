@@ -177,7 +177,6 @@ def run(output: Path, baseline_path: Path, mode: str) -> None:
                     "maxiter": 300,
                     "x_atol": 1.0e-8,
                     "x_atol_max": 1.0e-5,
-                    "f_atol": 1.0e-8,
                 },
             )
             outcome, map_evaluations, root_seconds = w2c2.prepare_primal_root(

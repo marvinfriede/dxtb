@@ -35,7 +35,6 @@ def _system(
     force_convergence: bool = False,
     scf_mode: int = labels.SCF_MODE_FULL,
     mixer: int = labels.MIXER_LINEAR,
-    strict: bool = False,
     fermi_maxiter: int | None = None,
 ):
     """Construct an independent PyTorch-backed GFN1/H2 System."""
@@ -47,7 +46,6 @@ def _system(
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=(labels.INTLEVEL_HCORE if intlevel is None else intlevel),
         mixer=mixer,
-        strict=strict,
         scf_mode=scf_mode,
         maxiter=maxiter,
         force_convergence=force_convergence,
@@ -317,11 +315,12 @@ def test_system_negative_fermi_maxiter_fails_before_transform_guess(
     assert solve_calls == 0
 
 
-def test_system_experimental_mode_is_retired_before_guess(monkeypatch) -> None:
-    """The retired single-shot mode fails before constructing an SCF guess."""
+def test_experimental_single_shot_is_rejected_during_config_parsing(
+    monkeypatch,
+) -> None:
+    """The removed single-shot policy fails before any SCF setup."""
     import dxtb._src.scf.functional.eager as eager
 
-    system = _system(maxiter=1, scf_mode=labels.SCF_MODE_EXPERIMENTAL)
     guess_calls = 0
 
     def unexpected_guess(*args, **kwargs):
@@ -332,21 +331,25 @@ def test_system_experimental_mode_is_retired_before_guess(monkeypatch) -> None:
     monkeypatch.setattr(eager, "get_guess", unexpected_guess)
 
     with pytest.raises(
-        NotImplementedError,
-        match="Experimental single-shot SCF derivatives were not exact.*use FULL or IMPLICIT",
+        ValueError,
+        match="Experimental single-shot SCF was retired",
     ):
-        system.singlepoint(_positions()[0])
+        Config.create(
+            method=labels.GFN1_XTB,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            scf_mode=labels.SCF_MODE_EXPERIMENTAL,
+        )
 
     assert guess_calls == 0
 
 
-def test_system_strict_broyden_uses_native_functional_route(
+def test_system_broyden_uses_native_functional_route(
     monkeypatch,
 ) -> None:
-    """Strict Broyden reaches the native method without substitution."""
+    """Broyden reaches its native method without mixer substitution."""
     from dxtb._src.scf.functional.broyden import BroydenMethod
 
-    system = _system(maxiter=2, mixer=labels.MIXER_BROYDEN, strict=True)
+    system = _system(maxiter=2, mixer=labels.MIXER_BROYDEN)
     original_propose = BroydenMethod.propose
     propose_calls = 0
 

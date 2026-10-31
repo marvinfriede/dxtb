@@ -1133,9 +1133,7 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     assert not hasattr(case.inputs, "config")
     baseline = scf_map(case.x, case.inputs)
 
-    potential_config = replace(
-        case.system.config.scf, scp_mode=labels.SCP_MODE_POTENTIAL
-    )
+    potential_config = case.system.config.scf
     potential_inputs = setup_scf_inputs(
         case.system.numbers,
         case.integrals,
@@ -1207,7 +1205,6 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     # SCFInputs does not retain that config or the engine.
     case.engine.config = replace(
         case.engine.config,
-        scp_mode=labels.SCP_MODE_POTENTIAL,
         fermi=replace(case.engine.config.fermi, etemp=250.0),
     )
     after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(

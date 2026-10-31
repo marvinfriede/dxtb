@@ -40,7 +40,6 @@ def test_result_hamiltonian_matches_full(scp_mode: str) -> None:
             "verbosity": 0,
             "scf_mode": mode,
             "scp_mode": scp_mode,
-            "f_atol": tolerance,
             "x_atol": tolerance,
             "x_atol_max": tolerance,
         }

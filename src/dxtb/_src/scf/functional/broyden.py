@@ -128,10 +128,10 @@ class BroydenMethod:
 
 
 def setup_broyden_method_settings(config: ConfigSCF) -> BroydenMethodSettings:
-    """Validate that the effective configuration selects native Broyden."""
-    if config.mixer != labels.MIXER_BROYDEN:
-        raise NotImplementedError("Broyden settings require the Broyden mixer.")
-    return BroydenMethodSettings()
+    """Resolve settings from the configured native Broyden stage."""
+    if not isinstance(config.strategy.stages[0].method, BroydenMethod):
+        raise NotImplementedError("Broyden settings require a Broyden stage.")
+    return config.strategy.stages[0].method.settings
 
 
 def _empty_state(vector: Tensor, max_rank: int) -> BroydenState:

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from test.test_baseline.molecules import get_system
 
 import torch
 from torch import nn
@@ -26,7 +27,6 @@ from torch import nn
 from dxtb import GFN1_XTB, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config
-from test.test_baseline.molecules import get_system
 
 from ..conftest import DEVICE
 
@@ -50,7 +50,6 @@ class _TrainingEnergy(nn.Module):
                 method="gfn1-xtb",
                 int_driver="pytorch",
                 maxiter=150,
-                f_atol=1.0e-10,
                 x_atol=1.0e-10,
             ),
         )

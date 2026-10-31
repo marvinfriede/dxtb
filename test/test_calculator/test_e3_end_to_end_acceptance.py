@@ -32,6 +32,13 @@ from dxtb._src.scf.functional.implicit import implicit_root
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb.config import Config
+from dxtb.scf import (
+    SCFDifferentiation,
+    SCFRepresentation,
+    SCFStage,
+    SCFStrategy,
+    strategy_preset,
+)
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
@@ -40,8 +47,8 @@ def _build_system(
     method: object,
     numbers: tuple[int, ...],
     *,
-    mixer: int | None = None,
-    scp_mode: int | None = None,
+    strategy: str | None = None,
+    representation: SCFRepresentation | None = None,
     maxiter: int = 3,
     temperature: float = 0.0,
     int_level: int = labels.INTLEVEL_QUADRUPOLE,
@@ -49,25 +56,30 @@ def _build_system(
 ):
     """Build a pure functional Model and System for transform testing."""
     is_gfn2 = method is GFN2_XTB
+    selected_strategy = strategy_preset(
+        strategy or ("anderson" if is_gfn2 else "linear")
+    )
+    selected_representation = representation or (
+        SCFRepresentation.FOCK if is_gfn2 else SCFRepresentation.CHARGE
+    )
+    selected_strategy = SCFStrategy(
+        (
+            SCFStage(
+                selected_strategy.stages[0].method,
+                representation=selected_representation,
+            ),
+        )
+    )
     config = Config.create(
         method=labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=int_level,
-        mixer=(
-            mixer
-            if mixer is not None
-            else labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR
-        ),
-        scp_mode=(
-            scp_mode
-            if scp_mode is not None
-            else labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
-        ),
+        strategy=selected_strategy,
+        differentiation="unrolled",
         maxiter=maxiter,
         fermi_etemp=temperature,
         x_atol=tolerance,
         x_atol_max=tolerance,
-        f_atol=tolerance,
     )
     parameters = ParamModule(method, **_DD)
     model = Model(par=parameters, config=config)
@@ -84,6 +96,7 @@ def _central_fd_4pt(fn, step: float = 1.0e-3) -> torch.Tensor:
 
 def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
     """Scalar and generalized-overlap 2x2 matrix fixed points satisfy E3 transforms."""
+
     # 1. Scalar contraction x = tanh(0.4 * x + theta)
     def scalar_solve_primal(theta: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -148,13 +161,19 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
     )
 
     for candidate in (grad_auto, grad_func, jac_rev, jac_fwd, jvp_1):
-        torch.testing.assert_close(candidate, exact_1, atol=1.0e-11, rtol=1.0e-11)
+        torch.testing.assert_close(
+            candidate, exact_1, atol=1.0e-11, rtol=1.0e-11
+        )
     for candidate in (hess_fwd_rev, hess_rev_rev, jvp_2):
-        torch.testing.assert_close(candidate, exact_2, atol=1.0e-10, rtol=1.0e-10)
+        torch.testing.assert_close(
+            candidate, exact_2, atol=1.0e-10, rtol=1.0e-10
+        )
     torch.testing.assert_close(jvp_3, fd_3, atol=1.0e-8, rtol=1.0e-8)
 
     batch_thetas = torch.tensor([0.1, 0.25, -0.2], **_DD)
-    vmapped_grad = torch.func.vmap(torch.func.grad(scalar_objective))(batch_thetas)
+    vmapped_grad = torch.func.vmap(torch.func.grad(scalar_objective))(
+        batch_thetas
+    )
     vmapped_hess = torch.func.vmap(
         torch.func.jacfwd(torch.func.grad(scalar_objective))
     )(batch_thetas)
@@ -187,7 +206,11 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
                 torch.stack([-0.35 + 0.1 * theta[1], 0.4 - 0.15 * theta[0]]),
             ]
         )
-        fock = h0 + 0.3 * torch.diag(state) @ overlap + 0.3 * overlap @ torch.diag(state)
+        fock = (
+            h0
+            + 0.3 * torch.diag(state) @ overlap
+            + 0.3 * overlap @ torch.diag(state)
+        )
         # Orthonormalize via S^{-1/2}
         evals_s, evecs_s = torch.linalg.eigh(overlap)
         sinv_sqrt = (evecs_s * evals_s.rsqrt().unsqueeze(-2)) @ evecs_s.T
@@ -211,7 +234,9 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
         root = matrix_solve_primal(theta)
         attached = implicit_root(root, theta, raw_map=matrix_step)
         return (
-            attached[0] ** 2 - 0.7 * attached[1] ** 2 + 0.2 * (attached * theta).sum()
+            attached[0] ** 2
+            - 0.7 * attached[1] ** 2
+            + 0.2 * (attached * theta).sum()
         )
 
     th_vec = torch.tensor([0.15, -0.2], **_DD)
@@ -239,8 +264,12 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
         step=1.0e-3,
     )
     torch.testing.assert_close(g_rev, g_fwd, atol=1.0e-11, rtol=1.0e-11)
-    torch.testing.assert_close(d1, (g_rev * direction).sum(), atol=1.0e-11, rtol=1.0e-11)
-    torch.testing.assert_close(d2, h_mat @ direction, atol=1.0e-10, rtol=1.0e-10)
+    torch.testing.assert_close(
+        d1, (g_rev * direction).sum(), atol=1.0e-11, rtol=1.0e-11
+    )
+    torch.testing.assert_close(
+        d2, h_mat @ direction, atol=1.0e-10, rtol=1.0e-10
+    )
     torch.testing.assert_close(d3, fd_d3, atol=1.0e-8, rtol=1.0e-8)
 
 
@@ -248,7 +277,9 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
 def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
     """Charged (OH-) and open-shell (OH radical) systems pass 1st-3rd order and vmap."""
     # 1. Charged closed-shell OH- (chrg = -1.0)
-    _, _, sys_charged = _build_system(method, (8, 1), maxiter=2, temperature=0.0)
+    _, _, sys_charged = _build_system(
+        method, (8, 1), maxiter=2, temperature=0.0
+    )
     pos_batch = torch.tensor(
         [
             [[0.0, 0.0, 0.0], [0.0, 0.0, 1.82]],
@@ -295,7 +326,9 @@ def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
     )
     torch.testing.assert_close(g_auto, g_func, atol=1.0e-12, rtol=1.0e-12)
     torch.testing.assert_close(j_rev, j_fwd, atol=1.0e-11, rtol=1.0e-11)
-    torch.testing.assert_close(d1, (g_func * tangent).sum(), atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(
+        d1, (g_func * tangent).sum(), atol=1.0e-11, rtol=1.0e-11
+    )
     torch.testing.assert_close(d3, fd_d3, atol=1.0e-8, rtol=1.0e-8)
 
     vmap_g = torch.func.vmap(torch.func.grad(charged_energy))(pos_batch)
@@ -308,9 +341,7 @@ def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
     torch.testing.assert_close(vmap_h_dir[0], d2, atol=1.0e-11, rtol=1.0e-11)
 
     # 2. Open-shell OH radical (spin = 1.0, finite temperature = 300 K)
-    _, _, sys_open = _build_system(
-        method, (8, 1), maxiter=2, temperature=300.0
-    )
+    _, _, sys_open = _build_system(method, (8, 1), maxiter=2, temperature=300.0)
     res_open = sys_open.singlepoint(pos0, chrg=0.0, spin=1.0)
     # 7 valence electrons -> fractional / open-shell occupation
     torch.testing.assert_close(
@@ -319,7 +350,9 @@ def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
         atol=1.0e-11,
         rtol=1.0e-11,
     )
-    assert bool(((res_open.occupation > 0.1) & (res_open.occupation < 1.9)).any())
+    assert bool(
+        ((res_open.occupation > 0.1) & (res_open.occupation < 1.9)).any()
+    )
 
     def openshell_energy(p: torch.Tensor) -> torch.Tensor:
         out = sys_open.singlepoint(p, chrg=0.0, spin=1.0)
@@ -457,7 +490,9 @@ def test_field_fieldgrad_parameter_and_mixed_derivatives() -> None:
         efield: torch.Tensor,
         efgrad: torch.Tensor,
     ) -> torch.Tensor:
-        return sys_base.singlepoint(pos, field=efield, field_grad=efgrad).energy.sum()
+        return sys_base.singlepoint(
+            pos, field=efield, field_grad=efgrad
+        ).energy.sum()
 
     def param_energy_fn(
         pos: torch.Tensor,
@@ -518,7 +553,9 @@ def test_field_fieldgrad_parameter_and_mixed_derivatives() -> None:
         torch.func.grad(param_energy_fn, argnums=0), argnums=2
     )(pos0, field0, base_k_sh)
     assert d2_r_theta.shape == (*pos0.shape, *base_k_sh.shape)
-    assert bool(torch.isfinite(d2_r_theta).all()) and d2_r_theta.abs().max() > 0.0
+    assert (
+        bool(torch.isfinite(d2_r_theta).all()) and d2_r_theta.abs().max() > 0.0
+    )
 
     # 3rd-order mixed directional derivative: d^3E / dR dF dtheta
     v_pos = torch.linspace(-0.2, 0.2, pos0.numel(), **_DD).reshape_as(pos0)
@@ -533,7 +570,9 @@ def test_field_fieldgrad_parameter_and_mixed_derivatives() -> None:
         )
         return (g_pos * v_pos).sum()
 
-    def mixed_2nd(efield: torch.Tensor, k_sh_param: torch.Tensor) -> torch.Tensor:
+    def mixed_2nd(
+        efield: torch.Tensor, k_sh_param: torch.Tensor
+    ) -> torch.Tensor:
         return torch.func.jvp(
             lambda f: grad_pos_dot(pos0, f, k_sh_param), (efield,), (v_field,)
         )[1]
@@ -554,16 +593,16 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
     _, numbers, sys_low = _build_system(
         GFN1_XTB,
         (8, 1, 1),
-        mixer=labels.MIXER_LINEAR,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        strategy="linear",
+        representation=SCFRepresentation.CHARGE,
         maxiter=1,
         tolerance=0.0,
     )
     _, _, sys_conv = _build_system(
         GFN1_XTB,
         (8, 1, 1),
-        mixer=labels.MIXER_ANDERSON,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        strategy="anderson",
+        representation=SCFRepresentation.CHARGE,
         maxiter=50,
         tolerance=1.0e-12,
     )
@@ -590,15 +629,13 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
             sys_conv.integral_setup, sys_conv.h0_setup, p, chrg
         )
         n0, occupation, nel = get_refocc(refocc, chrg, spin, sys_conv.ihelp)
-        interaction_data = _interaction_data(
-            sys_conv, p, sys_conv.interactions
-        )
+        interaction_data = _interaction_data(sys_conv, p, sys_conv.interactions)
         initial_charges = get_guess(
             numbers, p, chrg, sys_conv.ihelp, sys_conv.config.scf.guess
         )
         implicit_cfg = replace(
             sys_conv.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
+            differentiation=SCFDifferentiation.IMPLICIT,
             maxiter=50,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,

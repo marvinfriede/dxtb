@@ -1358,10 +1358,12 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
     assert metrics.fixed_point.l2.dtype is torch.float32
     assert metrics.stationarity_ao_l2.dtype is torch.float32
     assert metrics.electron_count_error.dtype is torch.float32
+    from dxtb.scf import strategy_preset
+
     config = replace(
         case.system.config.scf,
         maxiter=1,
-        mixer=labels.MIXER_LINEAR,
+        strategy=strategy_preset("linear"),
         x_atol=requested,
         x_atol_max=requested,
     )

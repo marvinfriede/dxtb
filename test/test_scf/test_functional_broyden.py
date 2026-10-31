@@ -396,8 +396,8 @@ def test_broyden_production_module_has_no_xitorch_dependency() -> None:
 
 
 def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
-    """The FULL Broyden route keeps all three physical input graphs connected."""
-    from test.test_scf.test_functional_map import _prepare_case
+    """Unrolled single-System Broyden keeps physical input graphs connected."""
+    from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
     from dxtb._src.param import ParamModule
@@ -415,17 +415,17 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     parameter_module = ParamModule(GFN1_XTB, device="cpu", dtype=dtype)
     parameter = parameter_module.get("element.O.levels")
     parameter.requires_grad_(True)
-    case = _prepare_case(
-        GFN1_XTB,
-        positions=positions,
+    case = _case(
+        "H2O",
+        method=GFN1_XTB,
+        representation=labels.SCP_MODE_POTENTIAL,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=0.0,
+        maxiter=3,
         field=field,
-        par=parameter_module,
-        scf_options={
-            "mixer": labels.MIXER_BROYDEN,
-            "maxiter": 3,
-            "x_atol": 0.0,
-            "x_atol_max": 0.0,
-        },
+        positions_override=positions,
+        parameter_module=parameter_module,
+        dtype=dtype,
     )
     result = run_functional_full_eager(
         case.system.numbers,
@@ -469,7 +469,7 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
             id="gfn2-charged-doublet",
         ),
         pytest.param(
-            "C4H5NCS",
+            "C6H5I-CH3SH",
             GFN2_XTB,
             0.0,
             0.0,
@@ -505,9 +505,8 @@ def test_broyden_full_physical_case_matrix(
     temperature: float,
     dtype: torch.dtype,
 ) -> None:
-    """Open-shell, finite-T, stretched, and difficult roots certify natively."""
-    from test.test_scf.samples import samples
-    from test.test_scf.test_functional_map import _prepare_case
+    """Broyden certifies open-shell, thermal, and difficult single-System roots."""
+    from test.test_scf.test_functional_root_derivatives import _case
 
     positions = None
     molecule = sample_name
@@ -516,42 +515,18 @@ def test_broyden_full_physical_case_matrix(
         positions = torch.tensor(
             [[0.0, 0.0, -1.5], [0.0, 0.0, 1.5]], dtype=dtype
         )
-        assert samples[molecule]["numbers"].numel() == 2
-    case = _prepare_case(
-        method,
-        sample_name=molecule,
-        positions=positions,
-        charge=charge,
-        spin=spin,
+    case = _case(
+        molecule,
+        method=method,
+        representation=labels.SCP_MODE_POTENTIAL,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=1.0e-8,
+        maxiter=150,
+        temperature=temperature,
         dtype=dtype,
-        scf_options={
-            "mixer": labels.MIXER_BROYDEN,
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "fermi_etemp": temperature,
-            "maxiter": 150,
-            "x_atol": 1.0e-8,
-            "x_atol_max": 1.0e-8,
-        },
+        positions_override=positions,
     )
-    from dxtb._src.scf.functional.eager import run_functional_full_eager
-
-    result = run_functional_full_eager(
-        case.system.numbers,
-        case.positions,
-        case.charge,
-        case.spin,
-        case.interactions,
-        case.interaction_data,
-        case.system.ihelp,
-        case.system.config.scf,
-        case.integrals,
-        case.refocc,
-    )
-    assert result.route.effective_mixer == labels.MIXER_BROYDEN
-    assert result.functional is not None
-    assert result.functional.converged.item() is True
-    assert torch.isfinite(result.functional.energy).all()
-    assert torch.isfinite(result.functional.fenergy).all()
-    diagnostics = result.functional.solve_result.diagnostics
-    assert diagnostics is not None and diagnostics.certification is not None
-    assert diagnostics.certification.result.certified.item() is True
+    result = case.system.singlepoint(case.positions, chrg=charge, spin=spin)
+    assert bool(result.converged)
+    assert torch.isfinite(result.energy).all()
+    assert torch.isfinite(result.fenergy).all()

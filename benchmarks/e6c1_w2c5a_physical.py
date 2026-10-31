@@ -213,7 +213,6 @@ def _model_and_case(
         scf_mode=labels.SCF_MODE_FULL,
         scp_mode=scp_mode,
         maxiter=300,
-        f_atol=1.0e-8,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
         fermi_etemp=temperature,
@@ -627,7 +626,6 @@ def run_case(
         maxiter=system.config.scf.maxiter,
         x_atol=system.config.scf.x_atol,
         x_atol_max=system.config.scf.x_atol_max,
-        f_atol=system.config.scf.f_atol,
     )
     _check_invalid_shift_safety(recorder.stream)
 

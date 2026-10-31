@@ -83,7 +83,6 @@ def single(
             "int_driver": intdriver,
             "mixer": mixer,
             "scp_mode": scp_mode,
-            "f_atol": tol,
             "x_atol": tol,
         },
     )
@@ -244,7 +243,6 @@ def batched(
             "mixer": mixer,
             "scp_mode": scp_mode,
             "int_driver": intdriver,
-            "f_atol": 0.1 * tol,
             "x_atol": 0.1 * tol,
         },
     )
@@ -348,7 +346,6 @@ def batched_unconverged(
             "mix_guess": False,
             "scf_mode": "full",
             "scp_mode": scp_mode,
-            "f_atol": tol,
             "x_atol": tol,
         },
     )
@@ -485,7 +482,6 @@ def batch_three(
             "mixer": mixer,
             "scf_mode": "full",
             "scp_mode": "fock",
-            "f_atol": tol,
             "x_atol": tol,
         },
     )

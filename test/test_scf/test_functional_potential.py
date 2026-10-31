@@ -47,6 +47,7 @@ from dxtb._src.scf.functional import (
     solve_scf_potential_simple,
 )
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
+from dxtb.scf import LinearMethod
 
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_physical as solve_scf_anderson
@@ -137,9 +138,11 @@ def _run_legacy_and_functional(
     legacy.engine.iterate_potential = record_map
     legacy_result = legacy.engine(legacy.initial_charges.clone())
     config = functional.system.config.scf
-    if config.mixer == labels.MIXER_LINEAR:
+    if isinstance(config.strategy.stages[0].method, LinearMethod):
         settings = setup_simple_solver_settings(config, guess.dtype)
-        result = solve_scf_potential_simple(guess, functional.inputs, layout, settings)
+        result = solve_scf_potential_simple(
+            guess, functional.inputs, layout, settings
+        )
     else:
         settings = setup_anderson_solver_settings(config, guess.dtype)
         result = solve_scf_potential_anderson(
@@ -168,7 +171,9 @@ def test_potential_simple_finite_budget_matches_legacy(
     _assert_public_parity(result, legacy)
     assert legacy["iterations"] == len(legacy["mapped_states"])
     assert len(legacy["mapped_states"]) == maxiter + 1
-    _assert_tensor_equal(result.map_result.mapped_x, legacy["mapped_states"][-1])
+    _assert_tensor_equal(
+        result.map_result.mapped_x, legacy["mapped_states"][-1]
+    )
     assert not bool(result.converged)
     assert result.final_evaluation is not result.map_result.spectral
 
@@ -266,7 +271,9 @@ def test_potential_solver_converged_matches_legacy(
     _assert_public_parity(result, legacy)
     assert bool(result.converged)
     assert legacy["iterations"] == len(legacy["mapped_states"])
-    _assert_tensor_equal(result.map_result.mapped_x, legacy["mapped_states"][-1])
+    _assert_tensor_equal(
+        result.map_result.mapped_x, legacy["mapped_states"][-1]
+    )
 
 
 def test_potential_anderson_gfn2_multipole_finite_budget() -> None:
@@ -344,7 +351,9 @@ def test_gfn2_potential_padding_is_invariant_under_mixing(
         return result
 
     monkeypatch.setattr(functional_problem, "potential_map", record)
-    settings = setup_anderson_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_anderson_solver_settings(
+        case.system.config.scf, guess.dtype
+    )
     result = solve_scf_potential_anderson(guess, case.inputs, layout, settings)
     assert result.iterations.item() == 3
     assert len(mapped_pairs) == 3  # initial, warm-up, accelerated transition
@@ -389,11 +398,15 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
 
     failed_status = replace(
         result.final_evaluation.fermi_status,
-        converged=torch.zeros_like(result.final_evaluation.fermi_status.converged),
+        converged=torch.zeros_like(
+            result.final_evaluation.fermi_status.converged
+        ),
     )
     failed_final = replace(
         result,
-        final_evaluation=replace(result.final_evaluation, fermi_status=failed_status),
+        final_evaluation=replace(
+            result.final_evaluation, fermi_status=failed_status
+        ),
     )
     assert bool(result.map_result.fermi_status.converged.all())
     assert not bool(result.converged)
@@ -474,11 +487,15 @@ def test_potential_solver_vmap_over_fixed_system_guesses() -> None:
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
 
     def solve(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        result = solve_scf_potential_simple(value, case.inputs, layout, settings)
+        result = solve_scf_potential_simple(
+            value, case.inputs, layout, settings
+        )
         return result.energy, result.iterations
 
     mapped = vmap(solve)(guesses)
-    loop = tuple(torch.stack(values) for values in zip(*(solve(g) for g in guesses)))
+    loop = tuple(
+        torch.stack(values) for values in zip(*(solve(g) for g in guesses))
+    )
     _assert_tensor_equal(mapped[0], loop[0])
     _assert_tensor_equal(mapped[1], loop[1])
 
@@ -503,11 +520,15 @@ def test_potential_atomic_partition_vmap() -> None:
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
 
     def solve(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        result = solve_scf_potential_simple(value, case.inputs, layout, settings)
+        result = solve_scf_potential_simple(
+            value, case.inputs, layout, settings
+        )
         return result.energy + result.fenergy, result.iterations
 
     mapped = vmap(solve)(guesses)
-    loop = tuple(torch.stack(values) for values in zip(*(solve(g) for g in guesses)))
+    loop = tuple(
+        torch.stack(values) for values in zip(*(solve(g) for g in guesses))
+    )
     _assert_tensor_equal(mapped[0], loop[0])
     _assert_tensor_equal(mapped[1], loop[1])
 
@@ -523,7 +544,9 @@ def test_potential_position_parameter_and_field_gradients() -> None:
         "x_atol_max": 0.0,
     }
     positions = _prepare_case(GFN1_XTB).positions.clone().requires_grad_(True)
-    functional = _prepare_case(GFN1_XTB, positions=positions, scf_options=options)
+    functional = _prepare_case(
+        GFN1_XTB, positions=positions, scf_options=options
+    )
     guess, layout = _initial_guess(functional)
     settings = setup_simple_solver_settings(
         functional.system.config.scf, positions.dtype
@@ -532,7 +555,9 @@ def test_potential_position_parameter_and_field_gradients() -> None:
         guess, functional.inputs, layout, settings
     ).energy.sum()
     gradient = torch.autograd.grad(energy, positions, create_graph=True)[0]
-    hessian_projection = torch.autograd.grad(gradient.square().sum(), positions)[0]
+    hessian_projection = torch.autograd.grad(
+        gradient.square().sum(), positions
+    )[0]
     assert torch.isfinite(gradient).all()
     assert torch.isfinite(hessian_projection).all()
 
@@ -552,7 +577,9 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     leaf = par.get("element.O.levels")
     leaf.requires_grad_(True)
     finite_options = {**options, "fermi_etemp": 300.0}
-    parameter_case = _prepare_case(GFN1_XTB, par=par, scf_options=finite_options)
+    parameter_case = _prepare_case(
+        GFN1_XTB, par=par, scf_options=finite_options
+    )
     parameter_guess, parameter_layout = _initial_guess(parameter_case)
     parameter_settings = setup_simple_solver_settings(
         parameter_case.system.config.scf, torch.float64
@@ -571,7 +598,9 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     field = torch.tensor(
         [0.001, -0.0007, 0.0004], dtype=torch.float64, requires_grad=True
     )
-    field_case = _prepare_case(GFN1_XTB, field=field, scf_options=finite_options)
+    field_case = _prepare_case(
+        GFN1_XTB, field=field, scf_options=finite_options
+    )
     field_guess, field_layout = _initial_guess(field_case)
     field_settings = setup_simple_solver_settings(
         field_case.system.config.scf, torch.float64
@@ -619,8 +648,12 @@ def test_potential_fractional_charge_gradient_at_finite_temperature(
     }
     functional = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
     guess, layout = _initial_guess(functional)
-    settings = setup_simple_solver_settings(functional.system.config.scf, torch.float64)
-    total = solve_scf_potential_simple(guess, functional.inputs, layout, settings)
+    settings = setup_simple_solver_settings(
+        functional.system.config.scf, torch.float64
+    )
+    total = solve_scf_potential_simple(
+        guess, functional.inputs, layout, settings
+    )
     if temperature < 3.0e-7 / KELVIN2AU:
         assert torch.count_nonzero(total.fenergy) > 0
     functional_gradient = torch.autograd.grad(
@@ -658,8 +691,12 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
     def mapped(value: torch.Tensor) -> torch.Tensor:
         return apply_potential_map(value, case.inputs, layout).mapped_x
 
-    reverse = torch.autograd.grad(mapped(guess.requires_grad_(True)).sum(), guess)[0]
-    primal, tangent = torch.func.jvp(mapped, (guess,), (torch.ones_like(guess),))
+    reverse = torch.autograd.grad(
+        mapped(guess.requires_grad_(True)).sum(), guess
+    )[0]
+    primal, tangent = torch.func.jvp(
+        mapped, (guess,), (torch.ones_like(guess),)
+    )
     forward_jacobian = torch.func.jacfwd(mapped)(guess)
     assert torch.isfinite(reverse).all()
     assert torch.isfinite(tangent).all()
@@ -669,9 +706,9 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
     from dxtb._src.scf.functional.data import unpack_potential
     from dxtb._src.scf.functional.map import potential_to_hamiltonian
 
-    direction = torch.linspace(-0.7, 0.9, guess.numel(), dtype=guess.dtype).reshape_as(
-        guess
-    )
+    direction = torch.linspace(
+        -0.7, 0.9, guess.numel(), dtype=guess.dtype
+    ).reshape_as(guess)
     weights = torch.linspace(
         0.3,
         1.1,
@@ -695,7 +732,9 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
     reverse_gradient = torch.autograd.grad(
         smooth_spectral_input(smooth_input), smooth_input
     )[0]
-    _, smooth_tangent = torch.func.jvp(smooth_spectral_input, (guess,), (direction,))
+    _, smooth_tangent = torch.func.jvp(
+        smooth_spectral_input, (guess,), (direction,)
+    )
     smooth_jacfwd = torch.func.jacfwd(smooth_spectral_input)(guess)
     _assert_tensor_equal(smooth_tangent, (reverse_gradient * direction).sum())
     _assert_tensor_equal(smooth_jacfwd, reverse_gradient)

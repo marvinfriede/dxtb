@@ -38,6 +38,9 @@ API.
 | `25-scf-s8-fixed-occupation-soscf.md` | Adds eager Fock-space SOSCF for fixed occupations using xTB orbital gradients, matrix-free physical Hessian-vector products, safeguarded inner Newton steps, and density-consistent Fock seeds |
 | `26-scf-s9-finite-temperature-second-order.md` | Records why orbital-only SOSCF misses thermal occupation response and the evidence-based decision to retain first-order SCF for active smearing |
 | `27-scf-s10-energy-diis-startup.md` | Tests xTB density-energy/Fock consistency, audits conventional EDIIS and ADIIS models, benchmarks exact-energy density interpolation, and rejects production adoption because optimizer cost outweighs startup gains |
+| `28-scf-s11-differentiation-hardening.md` | Decouples certified-root response coordinates from primal strategy history and validates first-, second-, and third-order implicit response |
+| `29-scf-s12-transform-performance-hardening.md` | Records fixed-trip and vmap support boundaries, state isolation, compilation characterization, and performance evidence |
+| `30-scf-s13-defaults-api-closure.md` | Freezes the benchmark-backed default candidate, public strategy/differentiation vocabulary, convergence profiles, and remaining support boundaries |
 
 The design review referenced by the plan is not in the repository.
 

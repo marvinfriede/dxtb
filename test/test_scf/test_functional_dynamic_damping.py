@@ -60,7 +60,9 @@ def _map_result(mapped: torch.Tensor) -> SCFMapResult:
     return SCFMapResult(mapped_x=mapped, spectral=spectral)
 
 
-def _run_simple(initial: torch.Tensor, offset: torch.Tensor, slope: torch.Tensor):
+def _run_simple(
+    initial: torch.Tensor, offset: torch.Tensor, slope: torch.Tensor
+):
     def map_fn(value: torch.Tensor) -> SCFMapResult:
         return _map_result(slope * value + offset)
 
@@ -123,7 +125,9 @@ def test_dynamic_damping_switches_after_transition_for_next_step() -> None:
     )
     torch.testing.assert_close(seen[0], torch.tensor(0.0, dtype=torch.float64))
     torch.testing.assert_close(seen[1], torch.tensor(0.04, dtype=torch.float64))
-    torch.testing.assert_close(seen[2], torch.tensor(0.044, dtype=torch.float64))
+    torch.testing.assert_close(
+        seen[2], torch.tensor(0.044, dtype=torch.float64)
+    )
     torch.testing.assert_close(
         outcome.damping_state.value, torch.tensor(0.8, dtype=torch.float64)
     )
@@ -152,7 +156,9 @@ def test_mix_guess_does_not_switch_and_convergence_freezes_damping() -> None:
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
-    torch.testing.assert_close(seen[1], torch.tensor(0.008, dtype=torch.float64))
+    torch.testing.assert_close(
+        seen[1], torch.tensor(0.008, dtype=torch.float64)
+    )
     assert bool(outcome.converged)
     assert not outcome.damping_state.switched
     torch.testing.assert_close(
@@ -166,7 +172,9 @@ def test_dynamic_damping_is_lane_local_under_vmap() -> None:
     offsets = torch.tensor([0.25, 0.18, 0.30], dtype=torch.float64)
     slopes = torch.tensor([1.0, 0.5, 0.5], dtype=torch.float64)
     mapped = vmap(_run_simple_values)(initials, offsets, slopes)
-    looped = [_run_simple_values(initials[i], offsets[i], slopes[i]) for i in range(3)]
+    looped = [
+        _run_simple_values(initials[i], offsets[i], slopes[i]) for i in range(3)
+    ]
     for mapped_value, index in zip(mapped, range(6)):
         torch.testing.assert_close(
             mapped_value, torch.stack([value[index] for value in looped])
@@ -227,18 +235,36 @@ def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
 
 
 def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
-    """Both functional mixers freeze the configured dynamic factor."""
+    """Linear and Anderson stages freeze the configured dynamic factor."""
+    from dxtb.scf import (
+        LinearMethod,
+        SCFRepresentation,
+        SCFStage,
+        SCFStrategy,
+        strategy_preset,
+    )
+
     case = _prepare_case(GFN1_XTB)
-    config = replace(
+    linear = replace(
         case.system.config.scf,
-        mixer=labels.MIXER_LINEAR,
+        strategy=SCFStrategy(
+            (
+                SCFStage(
+                    LinearMethod(), representation=SCFRepresentation.POTENTIAL
+                ),
+            )
+        ),
         damp_dynamic=True,
         damp_dynamic_factor=0.73,
     )
-    simple = setup_simple_solver_settings(config, torch.float64)
-    anderson = setup_anderson_solver_settings(
-        replace(config, mixer=labels.MIXER_ANDERSON), torch.float64
+    anderson_config = replace(
+        case.system.config.scf,
+        strategy=strategy_preset("anderson"),
+        damp_dynamic=True,
+        damp_dynamic_factor=0.73,
     )
+    simple = setup_simple_solver_settings(linear, torch.float64)
+    anderson = setup_anderson_solver_settings(anderson_config, torch.float64)
     assert simple.dynamic_damping.enabled
     assert anderson.dynamic_damping.enabled
     assert simple.dynamic_damping.factor == 0.73
@@ -291,7 +317,13 @@ def test_anderson_warmup_uses_damp_init_not_runtime_damping() -> None:
     )
     old = torch.zeros(2, dtype=torch.float64)
     mapped = torch.ones_like(old)
-    first, state = anderson_mix(old, mapped, None, settings.method(), 1, damp=0.8)
+    first, state = anderson_mix(
+        old, mapped, None, settings.method(), 1, damp=0.8
+    )
     torch.testing.assert_close(first, torch.full_like(old, 0.1))
-    second, _ = anderson_mix(first, mapped, state, settings.method(), 2, damp=0.8)
-    torch.testing.assert_close(second, first + (mapped - first) * settings.damp_init)
+    second, _ = anderson_mix(
+        first, mapped, state, settings.method(), 2, damp=0.8
+    )
+    torch.testing.assert_close(
+        second, first + (mapped - first) * settings.damp_init
+    )
