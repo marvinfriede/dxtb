@@ -287,7 +287,7 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
 
 
 def test_geometry_response_is_independent_of_primal_strategy() -> None:
-    """The same physical geometry derivative follows Broyden or CDIIS."""
+    """Geometry, field, and mixed responses agree for Broyden and CDIIS."""
     from dxtb._src.scf.functional.broyden import BroydenMethod
     from dxtb._src.scf.functional.cdiis import CDIISMethod
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
@@ -301,6 +301,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
     displacement_direction = torch.zeros_like(base_positions)
     displacement_direction[1] = bond
     derivatives = []
+    field_direction = torch.tensor([0.0, 1.0, 0.0], **_DD)
 
     strategies = (
         (
@@ -327,7 +328,9 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
     )
     for primal_representation, strategy in strategies:
         displacement = torch.zeros((), **_DD, requires_grad=True)
+        field_parameter = torch.zeros((), **_DD, requires_grad=True)
         positions = base_positions + displacement * displacement_direction
+        field = field_parameter * field_direction
         case = _case(
             "H2",
             method=GFN1_XTB,
@@ -338,6 +341,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             ),
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
+            field=field,
             positions_override=positions,
         )
         config = replace(
@@ -366,9 +370,24 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
         )
         assert bool(result.converged)
         energy = result.energy.sum() + result.fenergy.sum()
-        derivative = torch.autograd.grad(energy, displacement)[0]
-        assert torch.isfinite(derivative)
-        derivatives.append(derivative.detach())
+        geometry_gradient = torch.autograd.grad(
+            energy, displacement, create_graph=True, retain_graph=True
+        )[0]
+        geometry_hessian = torch.autograd.grad(
+            geometry_gradient, displacement, retain_graph=True
+        )[0]
+        field_gradient = torch.autograd.grad(
+            energy, field_parameter, create_graph=True, retain_graph=True
+        )[0]
+        field_hessian = torch.autograd.grad(
+            field_gradient, field_parameter, retain_graph=True
+        )[0]
+        mixed_response = torch.autograd.grad(field_gradient, displacement)[0]
+        response = torch.stack(
+            (geometry_gradient, geometry_hessian, field_hessian, mixed_response)
+        )
+        assert torch.isfinite(response).all()
+        derivatives.append(response.detach())
 
     torch.testing.assert_close(
         derivatives[0], derivatives[1], atol=2.0e-9, rtol=2.0e-8

@@ -136,8 +136,9 @@ stored under `benchmarks/results/scf-s11/`.
 Tests compare Broyden and Anderson roots across all three response
 representations for energy/free energy, density, charges, first field
 derivatives, and a nested second field derivative. A separate H2/GFN1
-geometry-coordinate comparison checks first-derivative agreement between
-Broyden and CDIIS in common potential response coordinates. A genuine
+geometry-coordinate comparison checks the geometry Hessian, field
+polarizability, and mixed geometry/field derivative between Broyden and CDIIS
+in common potential response coordinates. A genuine
 differentiable GFN2 parameter (`charge.effective.gexp.param`) is exercised
 through second order. The hybrid fixed-occupation strategy comparison covers
 field derivatives through third order; the active-smearing NO2 strategy matrix
