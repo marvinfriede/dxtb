@@ -237,6 +237,14 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
     }
     try:
         expected = physical_fixed_trip(initial)
+    except Exception as exc:  # distinguish solver from compiler failures
+        result["eager_reference_failed"] = True
+        result["eager_reference_error"] = f"{type(exc).__name__}: {exc}"
+        result["compile_attempted"] = False
+        return result
+
+    result["compile_attempted"] = True
+    try:
         started = time.perf_counter()
         explanation = torch._dynamo.explain(physical_fixed_trip)(initial)
         result["explain_seconds"] = time.perf_counter() - started
@@ -260,7 +268,7 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
         result["value_parity"] = True
     except Exception as exc:  # benchmark records unsupported routes
         result["supported"] = False
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        result["compile_error"] = f"{type(exc).__name__}: {exc}"
     else:
         result["supported"] = True
     return result
