@@ -37,6 +37,7 @@ API.
 | `24-scf-s7-legacy-xitorch-retirement.md` | Makes functional iterative SCF authoritative, migrates GFN0's retained generalized eigensolve, fixes switched implicit representation ownership, and removes the vendored xitorch and retired SCF engines |
 | `25-scf-s8-fixed-occupation-soscf.md` | Adds eager Fock-space SOSCF for fixed occupations using xTB orbital gradients, matrix-free physical Hessian-vector products, safeguarded inner Newton steps, and density-consistent Fock seeds |
 | `26-scf-s9-finite-temperature-second-order.md` | Records why orbital-only SOSCF misses thermal occupation response and the evidence-based decision to retain first-order SCF for active smearing |
+| `27-scf-s10-energy-diis-startup.md` | Tests xTB density-energy/Fock consistency, audits conventional EDIIS and ADIIS models, benchmarks exact-energy density interpolation, and rejects production adoption because optimizer cost outweighs startup gains |
 
 The design review referenced by the plan is not in the repository.
 

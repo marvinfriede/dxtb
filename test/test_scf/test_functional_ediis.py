@@ -32,6 +32,8 @@ from benchmarks.prototypes.scf_energy_diis import (
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.constants import labels
 from dxtb._src.scf.functional import unpack_charges
+from dxtb._src.scf.functional.broyden import BroydenMethod
+from dxtb._src.scf.functional.cdiis import CDIISMethod
 from dxtb._src.scf.functional.core import FunctionalInteractionSet
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_density,
@@ -44,7 +46,11 @@ from dxtb._src.scf.functional.map import (
 from dxtb._src.scf.functional.method import SCFMethodContext
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.functional.strategy import (
+    SCFStage,
+    SCFStrategy,
+    SCFSwitchPolicy,
+)
 
 from .test_functional_map import _prepare_case
 
@@ -167,7 +173,7 @@ def test_rebuilt_fock_is_nonlinear_in_density_interpolation(
 
 
 def test_quadratic_density_energy_interpolation_is_exact() -> None:
-    """The pairwise quadratic correction reproduces a quadratic toy energy."""
+    """The exact pairwise correction reproduces a quadratic toy energy."""
     torch.manual_seed(403)
     dtype = torch.float64
     densities = torch.randn((3, 4, 4), dtype=dtype)
@@ -198,6 +204,19 @@ def test_quadratic_density_energy_interpolation_is_exact() -> None:
     )
     torch.testing.assert_close(
         quadratic_reference, energy(interpolated), rtol=1.0e-13, atol=1.0e-13
+    )
+
+    # PySCF's historical EDIIS heuristic uses coefficient 1 for this
+    # pairwise term. Under dxtb's tested dE = <F, dP> convention, that
+    # heuristic is not the exact energy of even this quadratic toy model.
+    pyscf_ediis_reference = coefficients @ energies - (
+        coefficients @ pair @ coefficients
+    )
+    assert not torch.isclose(
+        pyscf_ediis_reference,
+        energy(interpolated),
+        rtol=1.0e-8,
+        atol=1.0e-8,
     )
 
 
@@ -400,6 +419,90 @@ def test_subcutoff_fixed_occupation_entropy_is_constant_in_density_history(
         rtol=0.0,
         atol=2.0e-13,
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "sample", "spin"),
+    [
+        (GFN2_XTB, "H2O", 0.0),
+        (GFN2_XTB, "NO2", 1.0),
+    ],
+    ids=["h2o", "no2-open-shell"],
+)
+def test_exact_ediis_hybrid_reaches_first_order_reference_root(
+    method: int, sample: str, spin: float
+) -> None:
+    """Exact-energy startup agrees with independently run physical roots."""
+    case = _prepare_case(
+        method,
+        sample_name=sample,
+        spin=spin,
+        dtype=torch.float64,
+    )
+    inputs = case.inputs
+    problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+    initial = fock_initial_guess(
+        unpack_charges(case.x, inputs.charge_layout), inputs
+    )
+    settings = SCFSolverSettings(160, False, 0.5, 1.0e-7, 1.0e-7)
+
+    def solve(strategy: SCFStrategy):
+        return _solve_map(
+            initial,
+            settings,
+            problem.map,
+            problem=problem,
+            strategy=strategy,
+            eager=True,
+        )
+
+    switch = SCFSwitchPolicy(
+        min_stage_iterations=3,
+        fixed_point_l2=1.0e-2,
+        max_stage_iterations=30,
+    )
+    candidate = solve(
+        SCFStrategy(
+            (
+                SCFStage(
+                    ResearchDIISMethod(mode="exact", capacity=6),
+                    SCFRepresentation.FOCK,
+                    switch,
+                    initial_damp=1.0,
+                ),
+                SCFStage(
+                    CDIISMethod(),
+                    SCFRepresentation.FOCK,
+                    initial_damp=1.0,
+                ),
+            )
+        )
+    )
+    broyden = solve(
+        SCFStrategy((SCFStage(BroydenMethod(), SCFRepresentation.FOCK),))
+    )
+    cdiis = solve(
+        SCFStrategy((SCFStage(CDIISMethod(), SCFRepresentation.FOCK),))
+    )
+
+    assert candidate.converged and broyden.converged and cdiis.converged
+    actual = candidate.map_result.spectral
+    for reference in (broyden.map_result.spectral, cdiis.map_result.spectral):
+        torch.testing.assert_close(
+            actual.density, reference.density, rtol=2.0e-7, atol=2.0e-7
+        )
+        for name in ("mono", "dipole", "quad"):
+            torch.testing.assert_close(
+                getattr(actual.charges, name),
+                getattr(reference.charges, name),
+                rtol=2.0e-7,
+                atol=2.0e-7,
+            )
+        actual_fock = _fock_from_density(problem, actual.density)
+        reference_fock = _fock_from_density(problem, reference.density)
+        torch.testing.assert_close(
+            actual_fock, reference_fock, rtol=2.0e-7, atol=2.0e-7
+        )
 
 
 def _density_and_fock(
