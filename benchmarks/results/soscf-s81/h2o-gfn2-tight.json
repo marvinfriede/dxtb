@@ -1,0 +1,129 @@
+{
+  "sample": "H2O",
+  "charge": 0.0,
+  "spin": 0.0,
+  "method": "GFN2-xTB",
+  "temperature": 0.0,
+  "dtype": "torch.float64",
+  "torch": "2.14.1+cpu",
+  "python": "3.14.8",
+  "hostname": "m199",
+  "threads": 1,
+  "omp_threads": "1",
+  "maxiter": 120,
+  "tolerance": 1e-10,
+  "switch_stationarity": 0.001,
+  "converged": true,
+  "iterations": 9,
+  "stage_iterations": [
+    3,
+    6
+  ],
+  "switch_count": 1,
+  "n_orbitals": 6,
+  "soscf_macroiterations": 6,
+  "soscf_events": [
+    {
+      "gradient_norm": 0.0011213540652920732,
+      "step_norm": 0.00037959065583200347,
+      "hvp_count": 2,
+      "microiterations": 2,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18385698612494614
+    },
+    {
+      "gradient_norm": 6.987418304437187e-05,
+      "step_norm": 2.403508896278233e-05,
+      "hvp_count": 3,
+      "microiterations": 3,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18384454987522403
+    },
+    {
+      "gradient_norm": 4.4193063543754695e-06,
+      "step_norm": 1.5299508218155432e-06,
+      "hvp_count": 3,
+      "microiterations": 3,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18384378727465883
+    },
+    {
+      "gradient_norm": 2.812741732011323e-07,
+      "step_norm": 9.77444651423997e-08,
+      "hvp_count": 3,
+      "microiterations": 3,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18384374021130276
+    },
+    {
+      "gradient_norm": 1.7969716380236604e-08,
+      "step_norm": 6.263242479271256e-09,
+      "hvp_count": 3,
+      "microiterations": 3,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18384373725823616
+    },
+    {
+      "gradient_norm": 1.1514576326619357e-09,
+      "step_norm": 4.0244586151442145e-10,
+      "hvp_count": 3,
+      "microiterations": 3,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.18384373707102364
+    }
+  ],
+  "total_hvp_calls": 17,
+  "total_microiterations": 17,
+  "total_line_search_trials": 6,
+  "fallback_count": 0,
+  "negative_curvature_events": 0,
+  "fixed_point_l2": 2.2621527683319436e-11,
+  "fixed_point_max": 8.226586079018716e-12,
+  "stationarity": 2.135793809450942e-11,
+  "electron_count_error": 0.0,
+  "energy": -5.104158799409648,
+  "free_energy": 0.0,
+  "wall_seconds": 0.7244990619365126,
+  "peak_rss_mib": 1757.06640625,
+  "ao_matrix_float64_bytes": 288,
+  "largest_persistent_orbital_hessian": null,
+  "source_sha": "2167f194b9510e89256e1680b78ddede3fd08b3c",
+  "nrot": 8,
+  "final_orbital_gradient_norm": 7.398638404183418e-11,
+  "occupation_sector_spectra": [
+    {
+      "occupation": 2.0,
+      "minimum": -0.6812042943003669,
+      "maximum": -0.44736364304422377
+    },
+    {
+      "occupation": 0.0,
+      "minimum": 0.08471704409461467,
+      "maximum": 0.23801439099502536
+    }
+  ],
+  "adjacent_sector_gaps": [
+    0.5320806871388384
+  ],
+  "switch_metrics": [
+    {
+      "fixed_point_l2": 0.001533663313627243,
+      "fixed_point_max": 0.0005765667899367993,
+      "stationarity": 0.0003237070357265226
+    }
+  ],
+  "worktree_dirty": true,
+  "tracked_diff_sha256": "26813a66966abf66eb67bb79c7fb119833ae8ff3c86311d30990790cf7c97fbc"
+}

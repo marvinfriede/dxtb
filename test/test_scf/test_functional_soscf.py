@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import replace
 from test.test_scf.test_functional_map import _prepare_case
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -58,9 +59,15 @@ from dxtb._src.scf.functional.solver import (
 )
 from dxtb._src.scf.functional.soscf import (
     SOSCFMethod,
+    SOSCFMethodSettings,
     SOSCFState,
+    _backtracking_step,
     _build_fock_seed,
+    _occupation_sector_order_valid,
+    _occupation_sector_spectra,
     _pcg_newton_step,
+    _positive_preconditioner,
+    _stationary_gradient_floor,
 )
 from dxtb._src.scf.functional.stationarity import (
     ao_stationarity_matrix,
@@ -272,6 +279,127 @@ def test_soscf_open_shell_pairs_cover_all_unequal_occupation_sectors() -> None:
     assert {(2.0, 1.0), (2.0, 0.0), (1.0, 0.0)} <= sectors
 
 
+def test_soscf_sector_order_uses_gauge_invariant_block_spectra() -> None:
+    """A safe diagonal can hide a crossing in a retained occupation block."""
+    occupations = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]])
+    model = SimpleNamespace(
+        occupation=occupations,
+        problem=SimpleNamespace(
+            inputs=SimpleNamespace(orbital_mask=torch.ones(3, dtype=torch.bool))
+        ),
+    )
+    fock_mo = torch.tensor(
+        [[-1.0, 2.0, 0.0], [2.0, -1.0, 0.0], [0.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    gap_floor = torch.tensor(1.0e-8, dtype=torch.float64)
+
+    # The old diagonal-only check sees both occupied diagonal values below
+    # the virtual value and would accept this seed.
+    assert torch.all(torch.diagonal(fock_mo)[:2] < fock_mo[2, 2])
+    spectra = _occupation_sector_spectra(model, fock_mo)
+    assert [sector for sector, _ in spectra] == [2.0, 0.0]
+    torch.testing.assert_close(
+        spectra[0][1], torch.tensor([-3.0, 1.0], dtype=torch.float64)
+    )
+    assert not _occupation_sector_order_valid(model, fock_mo, gap_floor)
+
+    # Diagonalizing the old-style block-preserving seed globally interleaves
+    # one virtual orbital between the two occupied block eigenvectors. Aufbau
+    # filling the sorted spectrum therefore changes the density represented
+    # by the seed, despite its apparently safe diagonal entries.
+    _, eigenvectors = torch.linalg.eigh(fock_mo)
+    occupation = occupations.sum(dim=0).to(fock_mo)
+    reassigned_density = eigenvectors @ torch.diag(occupation) @ eigenvectors.mT
+    original_density = torch.diag(occupation)
+    assert not torch.allclose(
+        reassigned_density, original_density, rtol=0.0, atol=1.0e-12
+    )
+
+    angle = torch.tensor(0.37, dtype=torch.float64)
+    rotation = torch.eye(3, dtype=torch.float64)
+    rotation[:2, :2] = torch.stack(
+        (
+            torch.stack((torch.cos(angle), -torch.sin(angle))),
+            torch.stack((torch.sin(angle), torch.cos(angle))),
+        )
+    )
+    rotated = rotation.mT @ fock_mo @ rotation
+    rotated_spectra = _occupation_sector_spectra(model, rotated)
+    assert _occupation_sector_order_valid(model, fock_mo, gap_floor) == (
+        _occupation_sector_order_valid(model, rotated, gap_floor)
+    )
+    for (_, expected), (_, actual) in zip(spectra, rotated_spectra):
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=2.0e-15)
+
+    class _UnsafeSeedModel:
+        coefficients = torch.eye(3, dtype=torch.float64)
+        occupation = occupations
+        problem = model.problem
+
+        @staticmethod
+        def coefficients_at(_: torch.Tensor) -> torch.Tensor:
+            return torch.eye(3, dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="overlapping occupation-sector"):
+        _build_fock_seed(
+            _UnsafeSeedModel(), torch.zeros(1, dtype=torch.float64), fock_mo
+        )
+
+
+def test_soscf_backtracking_rejects_block_crossing_before_seed() -> None:
+    """An energy-decreasing unsafe block step backtracks to safe spectra."""
+    occupations = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]])
+
+    class _SyntheticModel:
+        coefficients = torch.eye(3, dtype=torch.float64)
+        occupation = occupations
+        problem = SimpleNamespace(
+            inputs=SimpleNamespace(orbital_mask=torch.ones(3, dtype=torch.bool))
+        )
+
+        @staticmethod
+        def coefficients_at(_: torch.Tensor) -> torch.Tensor:
+            return torch.eye(3, dtype=torch.float64)
+
+        @staticmethod
+        def energy_at(rotation: torch.Tensor) -> torch.Tensor:
+            return -rotation[0]
+
+        @staticmethod
+        def fock_at(rotation: torch.Tensor) -> torch.Tensor:
+            alpha = rotation[0]
+            return torch.stack(
+                (
+                    torch.stack(
+                        (-alpha.new_tensor(1.0), 4.0 * alpha, alpha * 0.0)
+                    ),
+                    torch.stack(
+                        (4.0 * alpha, -alpha.new_tensor(1.0), alpha * 0.0)
+                    ),
+                    torch.stack((alpha * 0.0, alpha * 0.0, alpha * 0.0)),
+                )
+            )
+
+    settings = SOSCFMethodSettings(max_backtracks=6)
+    rotation, _, _, alpha, trials = _backtracking_step(
+        _SyntheticModel(),
+        torch.ones(1, dtype=torch.float64),
+        torch.tensor(0.0, dtype=torch.float64),
+        torch.tensor(1.0e-8, dtype=torch.float64),
+        torch.tensor(1.0, dtype=torch.float64),
+        torch.tensor(1.0, dtype=torch.float64),
+        settings,
+    )
+    assert trials > 1
+    assert alpha < 1.0
+    assert _occupation_sector_order_valid(
+        _SyntheticModel(),
+        _SyntheticModel.fock_at(rotation),
+        torch.tensor(1.0e-8, dtype=torch.float64),
+    )
+
+
 def test_soscf_rotation_preserves_orthogonality_and_electron_count() -> None:
     """Finite matrix-exponential rotations preserve metric and particle count."""
     _, problem, physical, model = _orbital_model(GFN2_XTB, "H2O")
@@ -319,6 +447,69 @@ def test_soscf_fock_seed_reproduces_accepted_orbital_observation() -> None:
     )
 
 
+def test_soscf_open_shell_no2_seed_reproduces_all_occupation_sectors() -> None:
+    """A rotated NO2 seed preserves its 2/1/0-occupation physical state."""
+    case = _prepare_case(
+        GFN2_XTB, sample_name="NO2", spin=1.0, dtype=torch.float64
+    )
+    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    initial = fock_initial_guess(
+        unpack_charges(case.x, case.inputs.charge_layout), case.inputs
+    )
+    root = solve_scf_problem(
+        initial,
+        problem,
+        SCFSolverSettings(240, True, 1.0, 1.0e-9, 1.0e-9),
+        SCFStrategy((SCFStage(CDIISMethod()),)),
+        eager=True,
+    )
+    assert bool(root.converged)
+    model = build_orbital_model(problem, root.map_result.spectral)
+    total = model.occupation.sum(dim=-2)
+    pair_sectors = [
+        (float(total[i]), float(total[a]))
+        for i, a in zip(model.pair_i.tolist(), model.pair_a.tolist())
+    ]
+    rotation = root.root_x.new_zeros(model.nrot)
+    for sector in ((2.0, 1.0), (2.0, 0.0), (1.0, 0.0)):
+        rotation[pair_sectors.index(sector)] = 1.0e-4
+
+    expected_density = model.density_at(rotation)
+    expected_charges, _ = density_to_charges_and_core_energy(
+        expected_density, problem.inputs
+    )
+    fresh_fock = model.fock_at(rotation)
+    coefficients = model.coefficients_at(rotation)
+    fock_mo = coefficients.mT @ fresh_fock @ coefficients
+    spectra = _occupation_sector_spectra(model, fock_mo)
+    gaps = tuple(
+        float(low_values[0] - high_values[-1])
+        for (_, high_values), (_, low_values) in zip(spectra, spectra[1:])
+    )
+    seed = _build_fock_seed(model, rotation, fresh_fock)
+    seeded = problem.evaluate(seed)
+
+    assert gaps and min(gaps) > 0.0
+    torch.testing.assert_close(
+        seeded.map_result.spectral.density,
+        expected_density,
+        rtol=0.0,
+        atol=2.0e-8,
+    )
+    torch.testing.assert_close(
+        seeded.map_result.spectral.charges.mono,
+        expected_charges.mono,
+        rtol=0.0,
+        atol=2.0e-8,
+    )
+    torch.testing.assert_close(
+        seeded.map_result.mapped_x,
+        fresh_fock,
+        rtol=0.0,
+        atol=2.0e-8,
+    )
+
+
 def test_soscf_stationary_seed_matches_certified_fock_root() -> None:
     """At an S2 root the gauge-block seed equals its fresh physical Fock."""
     _, problem, physical, _ = _orbital_model(GFN2_XTB, "H2O")
@@ -346,7 +537,7 @@ def test_soscf_stationary_orbitals_reseed_stale_input_fock() -> None:
     outcome = solve_scf_problem(
         physical.x,
         problem,
-        SCFSolverSettings(120, True, 1.0, 1.0e-10, 1.0e-10),
+        SCFSolverSettings(160, True, 1.0, 1.0e-12, 1.0e-12),
         SCFStrategy((SCFStage(CDIISMethod()),)),
         eager=True,
     )
@@ -384,7 +575,97 @@ def test_soscf_stationary_orbitals_reseed_stale_input_fock() -> None:
         atol=2.0e-9,
     )
     assert proposal.state.last_gradient_norm < 1.0e-7
+    root_model = build_orbital_model(
+        problem, physical_stale.map_result.spectral
+    )
+    assert proposal.state.last_gradient_norm <= _stationary_gradient_floor(
+        physical_stale.map_result.mapped_x,
+        root_model.nrot,
+        SOSCFMethod().settings,
+    )
     assert proposal.state.last_hvp_count == 0
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+@pytest.mark.parametrize("factor", [10.0, 32.0, 100.0])
+def test_soscf_stationary_floor_is_dtype_epsilon_scaled(
+    dtype: torch.dtype, factor: float
+) -> None:
+    """The stationary shortcut scales with epsilon and rotation dimension."""
+    fock = torch.tensor([[0.5, 0.1], [0.1, -0.2]], dtype=dtype)
+    settings = SOSCFMethodSettings(stationary_atol_factor=factor)
+    floor = _stationary_gradient_floor(fock, 4, settings)
+    expected = (
+        factor * torch.finfo(dtype).eps * fock.abs().amax().clamp_min(1.0) * 2.0
+    )
+    torch.testing.assert_close(floor, expected, rtol=0.0, atol=0.0)
+
+
+def test_soscf_refines_gradients_above_float64_resolution_floor() -> None:
+    """A 1e-9 orbital gradient must take Newton steps for a 1e-10 root."""
+    _, problem, physical, _ = _orbital_model(GFN2_XTB, "H2O")
+    root = solve_scf_problem(
+        physical.x,
+        problem,
+        SCFSolverSettings(160, True, 1.0, 1.0e-10, 1.0e-10),
+        SCFStrategy((SCFStage(CDIISMethod()),)),
+        eager=True,
+    )
+    assert bool(root.converged)
+
+    model = build_orbital_model(problem, root.map_result.spectral)
+    rotation = root.root_x.new_zeros(model.nrot)
+    rotation[0] = 1.0e-9
+    displaced_seed = _build_fock_seed(model, rotation, model.fock_at(rotation))
+    displaced = problem.evaluate(displaced_seed)
+    displaced_model = build_orbital_model(
+        problem, displaced.map_result.spectral
+    )
+    gradient = displaced_model.physical_gradient_at(
+        displaced.x.new_zeros(displaced_model.nrot),
+        displaced.map_result.mapped_x,
+    )
+    gradient_norm = torch.linalg.vector_norm(gradient)
+    old_floor = torch.finfo(
+        gradient.dtype
+    ).eps ** 0.5 * displaced.map_result.mapped_x.abs().amax().clamp_min(1.0)
+    assert 1.0e-10 < gradient_norm < old_floor
+    assert torch.linalg.vector_norm(displaced.delta) > 1.0e-10
+
+    context = SCFMethodContext(
+        step=1,
+        transition_active=torch.tensor(True),
+        damp=displaced.x.new_tensor(1.0),
+        proposal_x=displaced.map_result.mapped_x,
+    )
+    proposal = SOSCFMethod().propose(problem, displaced, None, context)
+    assert isinstance(proposal.state, SOSCFState)
+    assert int(proposal.state.last_hvp_count) > 0
+
+    next_state = problem.evaluate(proposal.x)
+    assert torch.linalg.vector_norm(
+        next_state.delta
+    ) < torch.linalg.vector_norm(displaced.delta)
+
+    refined = solve_scf_problem(
+        displaced_seed,
+        problem,
+        SCFSolverSettings(24, False, 1.0, 1.0e-10, 1.0e-10),
+        SCFStrategy((SCFStage(SOSCFMethod()),)),
+        eager=True,
+    )
+    assert bool(refined.converged)
+    assert (
+        torch.linalg.vector_norm(refined.root_x - refined.map_result.mapped_x)
+        <= 1.0e-10
+    )
+    assert refined.diagnostics is not None
+    assert refined.diagnostics.certification is not None
+    tight_metrics = refined.diagnostics.certification.result.metrics
+    assert tight_metrics.fixed_point.l2 <= 1.0e-10
+    assert (
+        tight_metrics.stationarity_orthogonalized_l2_per_sqrt_orbital <= 1.0e-10
+    )
 
 
 def test_soscf_equal_occupation_gauge_rotation_is_physically_invariant() -> (
@@ -416,6 +697,66 @@ def test_soscf_equal_occupation_gauge_rotation_is_physically_invariant() -> (
     torch.testing.assert_close(
         electronic_energy_from_density(density0, problem.inputs).sum(),
         electronic_energy_from_density(density1, problem.inputs).sum(),
+        rtol=0.0,
+        atol=2.0e-12,
+    )
+
+
+def test_soscf_same_sector_gauge_preserves_seed_spectrum_and_map() -> None:
+    """Gauge rotation leaves sector spectra and the seeded next map intact."""
+    _, problem, physical, model = _orbital_model(GFN2_XTB, "H2O")
+    total = model.occupation.sum(dim=-2)
+    occupied = torch.nonzero(total == 2.0).flatten()
+    angle = torch.tensor(0.31, dtype=torch.float64)
+    generator = torch.zeros_like(model.coefficients)
+    i, j = int(occupied[0]), int(occupied[1])
+    generator[i, j] = -angle
+    generator[j, i] = angle
+    gauge = torch.matrix_exp(generator)
+    rotated_model = replace(model, coefficients=model.coefficients @ gauge)
+    fresh = model.fock_at(physical.x.new_zeros(model.nrot))
+    fock_mo = model.coefficients.mT @ fresh @ model.coefficients
+    rotated_fock_mo = (
+        rotated_model.coefficients.mT @ fresh @ rotated_model.coefficients
+    )
+    gap_floor = torch.finfo(
+        fresh.dtype
+    ).eps ** 0.5 * fock_mo.abs().amax().clamp_min(1.0)
+    _, original_gap_floor = _positive_preconditioner(
+        model, fresh, SOSCFMethod().settings
+    )
+    _, rotated_gap_floor = _positive_preconditioner(
+        rotated_model, fresh, SOSCFMethod().settings
+    )
+    torch.testing.assert_close(
+        rotated_gap_floor, original_gap_floor, rtol=0.0, atol=0.0
+    )
+    assert _occupation_sector_order_valid(model, fock_mo, gap_floor)
+    assert _occupation_sector_order_valid(
+        rotated_model, rotated_fock_mo, gap_floor
+    )
+    spectra = _occupation_sector_spectra(model, fock_mo)
+    rotated_spectra = _occupation_sector_spectra(rotated_model, rotated_fock_mo)
+    for (_, expected), (_, actual) in zip(spectra, rotated_spectra):
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=2.0e-15)
+
+    seed = _build_fock_seed(
+        model, physical.x.new_zeros(model.nrot), fresh, gap_floor
+    )
+    rotated_seed = _build_fock_seed(
+        rotated_model, physical.x.new_zeros(model.nrot), fresh, gap_floor
+    )
+    seeded = problem.evaluate(seed)
+    rotated_seeded = problem.evaluate(rotated_seed)
+    torch.testing.assert_close(
+        seeded.map_result.spectral.density,
+        rotated_seeded.map_result.spectral.density,
+        rtol=0.0,
+        atol=2.0e-12,
+    )
+    torch.testing.assert_close(
+        seeded.map_result.mapped_x,
+        rotated_seeded.map_result.mapped_x,
         rtol=0.0,
         atol=2.0e-12,
     )
@@ -558,11 +899,13 @@ def test_soscf_production_is_matrix_free_and_eager_only() -> None:
     from dxtb._src.scf.functional import soscf
 
     source = inspect.getsource(soscf)
+    propose_source = inspect.getsource(SOSCFMethod.propose)
     controller_source = inspect.getsource(solver_module)
     assert SOSCFMethod.supports_fixed_trip is False
     assert "torch.func.hessian" not in source
     assert "torch.func.jacfwd" not in source
     assert "torch.linalg.solve(" not in source
+    assert "torch.func.grad" not in propose_source
     assert "SOSCFMethod" not in controller_source
 
 
@@ -978,7 +1321,7 @@ def test_soscf_open_shell_no2_strategy_reaches_certified_root() -> None:
     outcome = solve_scf_problem(
         initial,
         problem,
-        SCFSolverSettings(120, True, 1.0, 1.0e-7, 1.0e-7),
+        SCFSolverSettings(160, True, 1.0, 1.0e-9, 1.0e-9),
         strategy,
         eager=True,
     )
@@ -986,8 +1329,8 @@ def test_soscf_open_shell_no2_strategy_reaches_certified_root() -> None:
     assert outcome.diagnostics is not None
     assert outcome.diagnostics.certification is not None
     metrics = outcome.diagnostics.certification.result.metrics
-    assert metrics.stationarity_orthogonalized_l2_per_sqrt_orbital < 1.0e-7
-    assert metrics.fixed_point.l2 < 1.0e-7
+    assert metrics.stationarity_orthogonalized_l2_per_sqrt_orbital < 1.0e-9
+    assert metrics.fixed_point.l2 < 1.0e-9
 
 
 def test_soscf_no2_implicit_response_matches_cdiis() -> None:
@@ -1076,6 +1419,170 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
     )
     torch.testing.assert_close(
         tangent_cdiis, tangent_soscf, rtol=3.0e-4, atol=3.0e-6
+    )
+
+
+def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
+    None
+):
+    """Tight NO2 roots give method-independent geometry root derivatives."""
+    from test.test_scf.test_functional_root_derivatives import (
+        _case,
+        _initial_state,
+    )
+
+    from dxtb._src.calculators.singlepoint import _interaction_data
+    from dxtb._src.components.interactions import InteractionList
+    from dxtb._src.components.interactions.field.efield import ElectricField
+    from dxtb._src.integral.evaluation import build_integral_matrices
+    from dxtb._src.scf.functional import setup_scf_inputs
+
+    case = _case(
+        "NO2",
+        method=GFN2_XTB,
+        representation=labels.SCP_MODE_FOCK,
+        tolerance=1.0e-9,
+        maxiter=200,
+        dtype=torch.float64,
+        int_driver=labels.INTDRIVER_PYTORCH,
+    )
+    initial, _ = _initial_state(case, case.inputs)
+    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    settings = SCFSolverSettings(200, True, 1.0, 1.0e-9, 1.0e-9)
+    cdiis = _solve_map(
+        initial,
+        settings,
+        problem.map,
+        eager=True,
+        problem=problem,
+        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+    )
+    switched = _solve_map(
+        initial,
+        settings,
+        problem.map,
+        eager=True,
+        problem=problem,
+        strategy=SCFStrategy(
+            (
+                SCFStage(
+                    CDIISMethod(),
+                    switch_policy=SCFSwitchPolicy(
+                        min_stage_iterations=2, stationarity=1.0e-3
+                    ),
+                    initial_damp=1.0,
+                ),
+                SCFStage(SOSCFMethod(), initial_damp=1.0),
+            )
+        ),
+    )
+    assert bool(cdiis.converged)
+    assert bool(switched.converged)
+    assert int(switched.strategy_diagnostics.final_stage_index) == 1
+    assert (
+        float(
+            torch.linalg.vector_norm(cdiis.root_x - cdiis.map_result.mapped_x)
+        )
+        < 1.0e-9
+    )
+    assert (
+        float(
+            torch.linalg.vector_norm(
+                switched.root_x - switched.map_result.mapped_x
+            )
+        )
+        < 1.0e-9
+    )
+
+    adapter, parameters = _SCFMapTensorTree.prepare(
+        case.inputs, labels.SCP_MODE_FOCK
+    )
+    prepared_cdiis = _prepare_scf_root(
+        cdiis,
+        maxiter=settings.maxiter,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
+        final_valid=torch.tensor(True),
+        raw_map=adapter,
+        parameters=parameters,
+    )
+    prepared_switched = _prepare_scf_root(
+        switched,
+        maxiter=settings.maxiter,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
+        final_valid=torch.tensor(True),
+        raw_map=adapter,
+        parameters=parameters,
+    )
+
+    def inputs_at_positions(positions: torch.Tensor):
+        integrals, _, _ = build_integral_matrices(
+            case.system.integral_setup,
+            case.system.h0_setup,
+            positions,
+            case.charge,
+        )
+        interactions = InteractionList(
+            *case.system.interactions.components,
+            ElectricField(positions.new_zeros(3)),
+            device=positions.device,
+            dtype=positions.dtype,
+        )
+        interaction_data = _interaction_data(
+            case.system, positions, interactions
+        )
+        return setup_scf_inputs(
+            case.numbers,
+            integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            interactions,
+            interaction_data,
+            case.system.ihelp,
+            case.system.config.scf,
+        )
+
+    def attached_geometry(
+        root_x: torch.Tensor, positions: torch.Tensor
+    ) -> Tensor:
+        inputs = inputs_at_positions(positions)
+        raw_map, updated_parameters = _SCFMapTensorTree.prepare(
+            inputs, labels.SCP_MODE_FOCK
+        )
+        return implicit_root(root_x, *updated_parameters, raw_map=raw_map).sum()
+
+    origin = case.positions.new_zeros(())
+    position_direction = torch.zeros_like(case.positions)
+    position_direction[0, 0] = 1.0
+    tangent_values = []
+    second_values = []
+    for prepared in (prepared_cdiis, prepared_switched):
+        _, tangent = torch.func.jvp(
+            lambda delta: attached_geometry(
+                prepared.root_x,
+                case.positions + delta * position_direction,
+            ),
+            (origin,),
+            (origin.new_ones(()),),
+        )
+        positions = case.positions.clone().requires_grad_(True)
+        root_sum = attached_geometry(prepared.root_x, positions)
+        position_gradient = torch.autograd.grad(
+            root_sum, positions, create_graph=True
+        )[0][0, 0]
+        second = torch.autograd.grad(position_gradient, positions)[0][0, 0]
+        assert torch.isfinite(tangent)
+        assert torch.isfinite(second)
+        tangent_values.append(tangent)
+        second_values.append(second)
+
+    torch.testing.assert_close(
+        tangent_values[0], tangent_values[1], rtol=5.0e-4, atol=5.0e-6
+    )
+    torch.testing.assert_close(
+        second_values[0], second_values[1], rtol=2.0e-3, atol=2.0e-5
     )
 
 

@@ -1,0 +1,139 @@
+{
+  "sample": "C4H5NCS",
+  "charge": 0.0,
+  "spin": 0.0,
+  "method": "GFN2-xTB",
+  "temperature": 0.0,
+  "dtype": "torch.float64",
+  "torch": "2.14.1+cpu",
+  "python": "3.14.8",
+  "hostname": "m199",
+  "threads": 1,
+  "omp_threads": "1",
+  "maxiter": 180,
+  "tolerance": 1e-07,
+  "switch_stationarity": 0.001,
+  "converged": true,
+  "iterations": 17,
+  "stage_iterations": [
+    10,
+    7
+  ],
+  "switch_count": 1,
+  "n_orbitals": 38,
+  "soscf_macroiterations": 7,
+  "soscf_events": [
+    {
+      "gradient_norm": 0.003008121939164767,
+      "step_norm": 0.0010012885608848751,
+      "hvp_count": 8,
+      "microiterations": 8,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.2731720001606242
+    },
+    {
+      "gradient_norm": 0.0002727875370012413,
+      "step_norm": 0.0002077354578028332,
+      "hvp_count": 8,
+      "microiterations": 8,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.27311788899272726
+    },
+    {
+      "gradient_norm": 5.671988909663991e-05,
+      "step_norm": 5.679278686844214e-05,
+      "hvp_count": 9,
+      "microiterations": 9,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.27311149111014715
+    },
+    {
+      "gradient_norm": 1.550919095587185e-05,
+      "step_norm": 1.7953656919447454e-05,
+      "hvp_count": 9,
+      "microiterations": 9,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.27311027846228386
+    },
+    {
+      "gradient_norm": 4.903171824759214e-06,
+      "step_norm": 6.292194948668803e-06,
+      "hvp_count": 9,
+      "microiterations": 9,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.27310998185712465
+    },
+    {
+      "gradient_norm": 1.7184449288677493e-06,
+      "step_norm": 2.348488496844261e-06,
+      "hvp_count": 9,
+      "microiterations": 9,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.2731098988306854
+    },
+    {
+      "gradient_norm": 6.413937652060039e-07,
+      "step_norm": 9.054745021631645e-07,
+      "hvp_count": 8,
+      "microiterations": 8,
+      "line_search_trials": 1,
+      "negative_curvature": false,
+      "gradient_fallback": false,
+      "level_shift": 0.27310987337350223
+    }
+  ],
+  "total_hvp_calls": 60,
+  "total_microiterations": 60,
+  "total_line_search_trials": 7,
+  "fallback_count": 0,
+  "negative_curvature_events": 0,
+  "fixed_point_l2": 7.972557288294528e-08,
+  "fixed_point_max": 2.8338692377102848e-08,
+  "stationarity": 2.8366617497775586e-08,
+  "electron_count_error": 1.4210854715202004e-14,
+  "energy": -19.694059708019115,
+  "free_energy": 0.0,
+  "wall_seconds": 2.4573057100642473,
+  "peak_rss_mib": 1757.06640625,
+  "ao_matrix_float64_bytes": 11552,
+  "largest_persistent_orbital_hessian": null,
+  "source_sha": "2167f194b9510e89256e1680b78ddede3fd08b3c",
+  "nrot": 360,
+  "final_orbital_gradient_norm": 2.4729443845675044e-07,
+  "occupation_sector_spectra": [
+    {
+      "occupation": 2.0,
+      "minimum": -0.7006116106419528,
+      "maximum": -0.3386400500640233
+    },
+    {
+      "occupation": 0.0,
+      "minimum": -0.28421328059793083,
+      "maximum": 0.6649377144037716
+    }
+  ],
+  "adjacent_sector_gaps": [
+    0.054426769466092484
+  ],
+  "switch_metrics": [
+    {
+      "fixed_point_l2": 0.003318968505826291,
+      "fixed_point_max": 0.000760596817828918,
+      "stationarity": 0.0003450552511228741
+    }
+  ],
+  "worktree_dirty": true,
+  "tracked_diff_sha256": "26813a66966abf66eb67bb79c7fb119833ae8ff3c86311d30990790cf7c97fbc"
+}
