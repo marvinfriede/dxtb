@@ -411,8 +411,8 @@ def validate_functional_scf_interactions(
     """Reject interaction extensions without a functional-purity contract.
 
     The E4.0 raw map is guaranteed pure for exact migrated built-in
-    interactions. Arbitrary subclasses remain supported by the legacy SCF
-    route and must not be admitted to future functional SCF execution.
+    interactions. Arbitrary subclasses are rejected by functional SCF setup
+    and are not routed to a legacy iterative solver.
     """
     eligible, names = functional_scf_interactions_eligible(interactions)
     if not eligible:

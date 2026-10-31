@@ -35,6 +35,7 @@ API.
 | `22-scf-s5-native-cdiis.md` | Adds internal Fock-space commutator CDIIS with orthogonalized stationarity errors, bounded Pulay history, dtype-aware conditioning safeguards, and standalone characterization |
 | `23-scf-s6-strategy-switching.md` | Adds eager multi-stage strategy control, compact-to-Fock observation conversion, Broyden/Anderson to CDIIS characterization, and fixed-trip inactive-lane sanitation |
 | `24-scf-s7-legacy-xitorch-retirement.md` | Makes functional iterative SCF authoritative, migrates GFN0's retained generalized eigensolve, fixes switched implicit representation ownership, and removes the vendored xitorch and retired SCF engines |
+| `25-scf-s8-fixed-occupation-soscf.md` | Adds eager Fock-space SOSCF for fixed occupations using xTB orbital gradients, matrix-free physical Hessian-vector products, safeguarded inner Newton steps, and density-consistent Fock seeds |
 
 The design review referenced by the plan is not in the repository.
 
