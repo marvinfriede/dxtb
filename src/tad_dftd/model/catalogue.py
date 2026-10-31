@@ -384,6 +384,18 @@ def resolve_charge_model_id(
     return qid
 
 
+_DAMPING_ALIASES: dict[str, str] = {
+    "optpower": "optimizedpower",
+    "opt-power": "optimizedpower",
+    "optimized-power": "optimizedpower",
+    "optimised-power": "optimizedpower",
+    "m-zero": "mzero",
+    "tang_toennies": "screened",
+    "z-damping": "z",
+    "koide-bjm": "koide",
+}
+
+
 def validate_model_damping(
     model: str | DispersionModelId,
     damping: str,
@@ -393,6 +405,7 @@ def validate_model_damping(
     """
     meta = get_model_metadata(model)
     key = damping.lower().strip()
+    key = _DAMPING_ALIASES.get(key, key)
     if key not in meta.allowed_dampings:
         allowed = ", ".join(meta.allowed_dampings)
         raise ValueError(

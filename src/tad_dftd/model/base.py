@@ -32,7 +32,7 @@ from tad_mctc.typing import Tensor
 from ..cutoff import Cutoff
 from ..pairs import Pairs
 
-__all__ = ["DispersionModel", "DispersionProperties"]
+__all__ = ["DispersionModel", "DispersionProperties", "ModelProperties"]
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class DispersionProperties:
         charge-independent models.
     c6 : Tensor
         Pairwise :math:`C_6` dispersion coefficients of shape ``(..., nat, nat)``.
-    c8 : Tensor
+    c8 : Tensor | None
         Pairwise :math:`C_8` dispersion coefficients of shape ``(..., nat, nat)``.
     alphadd : Tensor | None
         Static dipole-dipole polarizabilities :math:`\alpha_{dd}(0)` of shape
@@ -63,10 +63,13 @@ class DispersionProperties:
 
     cn: Tensor
     c6: Tensor
-    c8: Tensor
+    c8: Tensor | None = None
     q: Tensor | None = None
     alphadd: Tensor | None = None
     alphaqq: Tensor | None = None
+
+
+ModelProperties = DispersionProperties
 
 
 class DispersionModel(Node, ABC):

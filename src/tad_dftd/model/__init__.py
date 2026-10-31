@@ -18,12 +18,19 @@
 Dispersion Models
 =================
 
-Model catalogue, weighting kernels, and model implementations for DFT-D1 through
-DFT-D5.
+Model catalogue, weighting kernels, C6 factorization, and model implementations
+for DFT-D1 through DFT-D5.
 """
 from __future__ import annotations
 
-from .base import DispersionModel, DispersionProperties
+from .base import DispersionModel, DispersionProperties, ModelProperties
+from .c6 import (
+    AtomicC6,
+    atomic_c6,
+    atomic_c6_d3s,
+    factored_c6,
+    factored_c6_d3s,
+)
 from .catalogue import (
     CHARGE_MODELS,
     DISPERSION_MODELS,
@@ -36,6 +43,7 @@ from .catalogue import (
     resolve_model_id,
     validate_model_damping,
 )
+from .d3 import D3Model, D3SModel, Environment, default_damping
 from .weights import (
     WeightingFunction,
     gaussian_log_weight,
@@ -46,6 +54,7 @@ from .weights import (
     smooth_weight,
     weight_cn,
     weight_references,
+    weight_references_d3s,
     zeta,
     zeta_tanh,
 )
@@ -54,12 +63,22 @@ __all__ = [
     "CHARGE_MODELS",
     "DISPERSION_MODELS",
     "MODEL_ALLOWED_DAMPINGS",
+    "AtomicC6",
     "ChargeModelId",
+    "D3Model",
+    "D3SModel",
     "DispersionModel",
     "DispersionModelId",
     "DispersionProperties",
+    "Environment",
     "ModelMetadata",
+    "ModelProperties",
     "WeightingFunction",
+    "atomic_c6",
+    "atomic_c6_d3s",
+    "default_damping",
+    "factored_c6",
+    "factored_c6_d3s",
     "gaussian_log_weight",
     "gaussian_weight",
     "get_model_metadata",
@@ -72,6 +91,7 @@ __all__ = [
     "validate_model_damping",
     "weight_cn",
     "weight_references",
+    "weight_references_d3s",
     "zeta",
     "zeta_tanh",
 ]

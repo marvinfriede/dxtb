@@ -29,8 +29,6 @@ from typing import Any, Protocol
 import torch
 from tad_mctc.typing import Tensor
 
-from .. import defaults
-
 __all__ = [
     "WeightingFunction",
     "gaussian_log_weight",
@@ -41,6 +39,7 @@ __all__ = [
     "smooth_weight",
     "weight_cn",
     "weight_references",
+    "weight_references_d3s",
     "zeta",
     "zeta_tanh",
 ]
@@ -80,10 +79,67 @@ def weight_references(
     """
     refcn = reference.cn[numbers]
     mask = refcn >= 0
+    dcn = refcn - cn.unsqueeze(-1)
 
+    if weighting_function is gaussian_weight:
+        factor = kwargs.get("factor", kwargs.get("wf", 4.0))
+        log_w = gaussian_log_weight(dcn, factor=factor)
+    else:
+        log_w = weighting_function(dcn, **kwargs)
+
+    log_weights = torch.where(mask, log_w, -torch.inf)
+
+    has_reference = mask.any(dim=-1, keepdim=True)
+    log_weights = torch.where(has_reference, log_weights, 0.0)
+
+    weights = torch.softmax(log_weights, dim=-1)
+    return torch.where(mask, weights, torch.zeros_like(weights))
+
+
+def weight_references_d3s(
+    numbers: Tensor,
+    cn: Tensor,
+    reference: _HasCN,
+    wfpair: Tensor,
+    elements: Tensor | None = None,
+) -> Tensor:
+    """
+    Normalized partner-element-dependent weights of the reference systems for
+    DFT-D3S, of shape ``(..., nat, nel, nref)``.
+
+    Parameters
+    ----------
+    numbers : Tensor
+        Atomic numbers of shape ``(..., nat)``.
+    cn : Tensor
+        Coordination numbers of shape ``(..., nat)``.
+    reference : _HasCN
+        D3S reference systems (see :meth:`Reference.load_d3s`).
+    wfpair : Tensor
+        Pairwise weighting factor table ``wf(Z_A, Z_B)`` of shape ``(95, 95)``.
+    elements : Tensor | None, optional
+        1D tensor of partner element atomic numbers ``(nel,)``. Defaults to
+        all elements ``0..wfpair.shape[0]-1``.
+
+    Returns
+    -------
+    Tensor
+        Normalized weights of shape ``(..., nat, nel, nref)``.
+    """
+    if elements is None:
+        elements = torch.arange(wfpair.shape[0], device=numbers.device)
+
+    refcn = reference.cn[numbers]  # (..., nat, nref)
+    mask_ref = refcn >= 0  # (..., nat, nref)
+
+    wf = wfpair[numbers.unsqueeze(-1), elements]  # (..., nat, nel)
+    valid_pair = (numbers.unsqueeze(-1) > 0) & (elements > 0) & (wf > 0)
+
+    mask = mask_ref.unsqueeze(-2) & valid_pair.unsqueeze(-1)  # (..., nat, nel, nref)
+    dcn = refcn.unsqueeze(-2) - cn.unsqueeze(-1).unsqueeze(-1)  # (..., nat, 1, nref)
     log_weights = torch.where(
         mask,
-        weighting_function(refcn - cn.unsqueeze(-1), **kwargs),
+        -wf.unsqueeze(-1) * dcn * dcn,
         -torch.inf,
     )
 
@@ -96,7 +152,9 @@ def weight_references(
 
 def gaussian_weight(
     dcn: Tensor,
-    wf: Tensor | float = defaults.D4_WF,
+    factor: Tensor | float = 4.0,
+    *,
+    wf: Tensor | float | None = None,
 ) -> Tensor:
     r"""
     Gaussian reference coordination number weight:
@@ -104,21 +162,9 @@ def gaussian_weight(
     .. math::
 
         w(\Delta \mathrm{CN}) = \exp\!\left(-w_f \, (\Delta \mathrm{CN})^2\right)
-
-    Parameters
-    ----------
-    dcn : Tensor
-        Difference :math:`\mathrm{CN} - \mathrm{CN}_{\mathrm{ref}}`.
-    wf : Tensor | float, optional
-        Gaussian weighting factor :math:`w_f`. Defaults to 6.0
-        (:data:`.defaults.D4_WF`; D3 passes :math:`-k_3 = 4.0`).
-
-    Returns
-    -------
-    Tensor
-        Unnormalized Gaussian weight.
     """
-    return torch.exp(-wf * dcn * dcn)
+    w = factor if wf is None else wf
+    return torch.exp(-w * dcn * dcn)
 
 
 def weight_cn(
