@@ -27,6 +27,7 @@ from dxtb._src.wavefunction import filling
 
 from .data import SCFCharges, SCFInputs, SCFSpectralResult
 from .interactions import interaction_energy_from_charges as _core_interaction
+from .map import density_to_charges_and_core_energy
 from .spectral import (
     aufbau_free_energy_matrix,
     fermi_free_energy_matrix,
@@ -35,6 +36,7 @@ from .spectral import (
 
 __all__ = [
     "electronic_energy_from_spectral",
+    "electronic_energy_from_density",
     "free_energy_from_spectral",
     "interaction_energy_from_charges",
 ]
@@ -53,6 +55,17 @@ def electronic_energy_from_spectral(
     """Return atom-resolved electronic energy excluding entropy."""
     h0_energy = inputs.index.reduce_orbital_to_atom(spectral.orbital_energy)
     return h0_energy + interaction_energy_from_charges(spectral.charges, inputs)
+
+
+def electronic_energy_from_density(
+    density: Tensor, inputs: SCFInputs
+) -> Tensor:
+    """Return xTB electronic energy for an explicit density matrix."""
+    charges, orbital_energy = density_to_charges_and_core_energy(
+        density, inputs
+    )
+    core_energy = inputs.index.reduce_orbital_to_atom(orbital_energy)
+    return core_energy + interaction_energy_from_charges(charges, inputs)
 
 
 def free_energy_from_spectral(
