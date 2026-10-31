@@ -106,7 +106,10 @@ def classify_legacy_system(
     if not eligible:
         return LegacySystemRoute.LEGACY_COMPOSED
 
-    if len(core.classical_terms) != len(system.classicals.components):
+    if (
+        len(core.classical_terms) != len(system.classicals.components)
+        or system._active_exact_core() is None
+    ):
         return LegacySystemRoute.LEGACY_COMPOSED
 
     scf_config = config.scf
@@ -125,8 +128,8 @@ def compose_legacy_systems(
     spins: tuple[Tensor | float | int | None, ...] | None = None,
     *,
     source_ids: tuple[int, ...] | None = None,
-    field: Tensor | None = None,
-    field_grad: Tensor | None = None,
+    field: Tensor | tuple[Tensor | None, ...] | None = None,
+    field_grad: Tensor | tuple[Tensor | None, ...] | None = None,
     legacy_options: LegacySCFOptions | None = None,
 ) -> LegacyCompositionResult:
     """Evaluate retained Systems independently and preserve input order.
@@ -180,18 +183,28 @@ def compose_legacy_systems(
 
     kwargs = None if legacy_options is None else legacy_options.as_kwargs()
     args = () if legacy_options is None else legacy_options.args
+    if isinstance(field, tuple) and len(field) != count:
+        raise ValueError("Systems and per-lane fields must have equal length.")
+    if isinstance(field_grad, tuple) and len(field_grad) != count:
+        raise ValueError(
+            "Systems and per-lane field gradients must have equal length."
+        )
     results_list: list[Result] = []
-    for source_id, system, position, charge, spin, route in zip(
-        source_ids, systems, positions, charges, spins, routes
+    for idx, (source_id, system, position, charge, spin, route) in enumerate(
+        zip(source_ids, systems, positions, charges, spins, routes)
     ):
+        lane_field = field[idx] if isinstance(field, tuple) else field
+        lane_field_grad = (
+            field_grad[idx] if isinstance(field_grad, tuple) else field_grad
+        )
         try:
             result = _singlepoint_impl(
                 system,
                 position,
                 charge,
                 spin,
-                field,
-                field_grad,
+                lane_field,
+                lane_field_grad,
                 fixed_trip=False,
                 force_legacy_scf=(
                     route is LegacySystemRoute.LEGACY_COMPOSED

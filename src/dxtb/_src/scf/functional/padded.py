@@ -877,21 +877,41 @@ def evaluate_padded_systems(
                 "A canonical bucket requires one shared classical D4 EEQ cutoff."
             )
         d4_eeq_cutoff = d4_cutoffs[0]
+    per_lane_field = field is not None and field.ndim == 2
+    per_lane_field_grad = field_grad is not None and field_grad.ndim == 3
+    if per_lane_field and field.shape != (count, 3):
+        raise ValueError(
+            f"Per-lane field must have shape ({count}, 3), got {tuple(field.shape)}."
+        )
+    if per_lane_field_grad and field_grad.shape != (count, 3, 3):
+        raise ValueError(
+            f"Per-lane field_grad must have shape ({count}, 3, 3), got {tuple(field_grad.shape)}."
+        )
     mapped = torch.func.vmap(
-        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
+        lambda core, position, charge, spin, f, fg: evaluate_padded_fixed_trip(
             core,
             position,
             charge,
             spin,
-            field=field,
-            field_grad=field_grad,
+            field=f,
+            field_grad=fg,
             d4_eeq_cutoff=d4_eeq_cutoff,
-        )
+        ),
+        in_dims=(
+            0,
+            0,
+            0,
+            0,
+            0 if per_lane_field else None,
+            0 if per_lane_field_grad else None,
+        ),
     )(
         stacked_core,
         torch.stack(positions),
         torch.stack(charges),
         torch.stack(spins),
+        field,
+        field_grad,
     )
     decoded = tuple(
         decode_padded_result(
