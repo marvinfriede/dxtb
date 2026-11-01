@@ -149,10 +149,18 @@ def resolve_full_scf_route(
     numbers: Tensor | None = None,
     integrals: IntegralMatrices | None = None,
     legacy_engine_overrides: bool = False,
+    allow_implicit: bool = False,
 ) -> FullSCFRoute:
     """Resolve a supported functional route or its explicit batch boundary."""
-    if config._legacy_mode_code != labels.SCF_MODE_FULL:
-        raise ValueError("FULL route resolution requires SCF_MODE_FULL.")
+    supported_modes = (
+        (labels.SCF_MODE_FULL, labels.SCF_MODE_IMPLICIT)
+        if allow_implicit
+        else (labels.SCF_MODE_FULL,)
+    )
+    if config._legacy_mode_code not in supported_modes:
+        raise ValueError(
+            "Functional SCF route resolution requires SCF_MODE_FULL."
+        )
     if not config.requires_iterations:
         raise ValueError("FULL route resolution requires iterative SCF.")
     if config.maxiter < 0:

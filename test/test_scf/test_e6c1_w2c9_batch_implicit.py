@@ -28,6 +28,7 @@ from torch.func import grad, jacfwd, jacrev, jvp, vmap
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.batch_implicit import (
     BatchRootFailureCode,
+    ResponseDiagnosticCollector,
     _classify_fermi_code,
     _resolve_strictness,
     classify_response_failure_status,
@@ -56,6 +57,7 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb.config import Config
+from dxtb.scf import SCFRepresentation, SCFResponseSettings
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -115,6 +117,13 @@ def _build_system(
         int_driver=labels.INTDRIVER_PYTORCH,
         scf_mode=labels.SCF_MODE_FULL,
         scp_mode=scp_mode,
+        response=SCFResponseSettings(
+            representation={
+                labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+                labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+                labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+            }[scp_mode]
+        ),
         mixer=mixer,
         maxiter=maxiter,
         x_atol=x_atol,
@@ -167,6 +176,178 @@ def _h2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.65]], dtype=DTYPE, device=DEVICE
     )
     return numbers, torch.stack((c0, c1), dim=0)
+
+
+@pytest.mark.parametrize(
+    "response_representation",
+    [
+        "default",
+        SCFRepresentation.POTENTIAL,
+        SCFRepresentation.CHARGE,
+        SCFRepresentation.FOCK,
+        None,
+    ],
+)
+def test_cdiis_fock_batch_uses_configured_response_coordinates(
+    response_representation: SCFRepresentation | None | str,
+) -> None:
+    """Batch IFT coordinates and derivatives match serial implicit SCF."""
+    numbers, positions = _h2_conformers()
+    positions = positions.requires_grad_(True)
+    response = (
+        None
+        if response_representation == "default"
+        else SCFResponseSettings(representation=response_representation)
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        convergence="tight",
+        response=response,
+        fermi_etemp=0.0,
+        force_convergence=True,
+    )
+    model = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=config,
+    )
+    system = model.setup(numbers, batch_mode=0)
+
+    prepared = prepare_converged_root_batch(system, positions)
+    expected_response = (
+        SCFRepresentation.POTENTIAL
+        if response_representation == "default"
+        else (
+            SCFRepresentation.FOCK
+            if response_representation is None
+            else response_representation
+        )
+    )
+    assert prepared.primal_representation == labels.SCP_MODE_FOCK
+    assert (
+        prepared.response_representation
+        == {
+            SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
+            SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
+            SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
+        }[expected_response]
+    )
+    assert prepared.all_roots_valid
+
+    batch_result = evaluate_converged_root_batch(prepared)
+    batch_gradient = torch.autograd.grad(
+        batch_result.energy.sum(), positions, retain_graph=True
+    )[0]
+
+    serial_results = [system.singlepoint(position) for position in positions]
+    serial_gradient = torch.autograd.grad(
+        torch.stack([result.energy.sum() for result in serial_results]).sum(),
+        positions,
+    )[0]
+    torch.testing.assert_close(
+        batch_result.energy,
+        torch.stack([result.energy for result in serial_results]),
+        atol=2.0e-9,
+        rtol=2.0e-9,
+    )
+    torch.testing.assert_close(
+        batch_gradient, serial_gradient, atol=2.0e-7, rtol=2.0e-7
+    )
+
+
+def test_batch_response_maxiter_is_shared_by_attachment_and_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured response maxiter controls the mapped IFT and its monitor."""
+    numbers, positions = _h2o_conformers()
+    positions = positions[:1].clone().requires_grad_(True)
+    response = SCFResponseSettings(
+        representation=SCFRepresentation.POTENTIAL,
+        rtol=0.0,
+        atol=0.0,
+        maxiter=1,
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        convergence="tight",
+        response=response,
+        fermi_etemp=0.0,
+        force_convergence=True,
+    )
+    system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
+    ).setup(numbers, batch_mode=0)
+    prepared = prepare_converged_root_batch(system, positions)
+    assert prepared.all_roots_valid
+    diagnostics = ResponseDiagnosticCollector()
+    received_options: list[dict[str, object]] = []
+    solve = ResponseDiagnosticCollector.solve
+
+    def record_options(self, matvec, rhs, *params, **kwargs):
+        received_options.append(dict(kwargs))
+        return solve(self, matvec, rhs, *params, **kwargs)
+
+    monkeypatch.setattr(ResponseDiagnosticCollector, "solve", record_options)
+    result = evaluate_converged_root_batch(
+        prepared, response_diagnostics=diagnostics
+    )
+    gradient = torch.autograd.grad(result.energy.sum(), positions)[0]
+    assert bool(result.converged.all())
+    assert not bool(torch.isfinite(gradient).all())
+    assert diagnostics.iterations is not None
+    assert int(diagnostics.iterations.max().item()) <= 1
+    assert received_options
+    assert received_options[0]["rtol"] == response.rtol
+    assert received_options[0]["atol"] == response.atol
+    assert received_options[0]["maxiter"] == response.maxiter
+
+
+def test_padded_batch_rejects_unsupported_response_conversion() -> None:
+    """Padded cores reject mismatched response coordinates before mapping."""
+    h2_numbers = torch.tensor([1, 1], device=DEVICE)
+    h2_config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        fermi_etemp=0.0,
+    )
+    h2_system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=h2_config,
+    ).setup(h2_numbers, batch_mode=0)
+    h2o_numbers, _ = _h2o_conformers()
+    h2o_config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        fermi_etemp=0.0,
+    )
+    h2o_system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=h2o_config,
+    ).setup(h2o_numbers, batch_mode=0)
+    assert h2_system.exact_core is not None
+    assert h2o_system.exact_core is not None
+    bucket = bucket_canonical_exact_cores(
+        (h2_system.exact_core, h2o_system.exact_core)
+    )
+    padded = pad_canonical_exact_core(h2_system.exact_core, bucket, 0)
+    padded_positions = torch.zeros(
+        (1, padded.core.numbers.shape[0], 3), dtype=DTYPE, device=DEVICE
+    )
+    with pytest.raises(ValueError, match="require response coordinates"):
+        prepare_converged_root_batch(padded, padded_positions)
 
 
 def _no2_conformers() -> tuple[torch.Tensor, torch.Tensor]:

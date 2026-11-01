@@ -23,8 +23,8 @@ detached values and gradients after releasing each chunk's autograd graph.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import warnings
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -254,6 +254,9 @@ def _subset_prepared(
             prepared.parameter_snapshots[i] for i in indices
         ),
         root_snapshots=tuple(prepared.root_snapshots[i] for i in indices),
+        response_root_snapshots=tuple(
+            prepared.response_root_snapshots[i] for i in indices
+        ),
         input_tensor_versions=tuple(
             prepared.input_tensor_versions[i] for i in indices
         ),
@@ -262,17 +265,11 @@ def _subset_prepared(
     )
 
 
-def _input_target(
-    value: Any, seen_leaf_ids: set[int]
-) -> Tensor | None:
+def _input_target(value: Any, seen_leaf_ids: set[int]) -> Tensor | None:
     """Create or reuse a differentiable leaf target for an explicit floating input."""
     if not isinstance(value, torch.Tensor) or not value.is_floating_point():
         return None
-    if (
-        value.is_leaf
-        and value.requires_grad
-        and id(value) not in seen_leaf_ids
-    ):
+    if value.is_leaf and value.requires_grad and id(value) not in seen_leaf_ids:
         seen_leaf_ids.add(id(value))
         return value
     return value.detach().clone().requires_grad_(True)
@@ -352,7 +349,9 @@ def stream_batch_value_and_grad(
     elif tuple(weights.shape) != (batch_size,):
         raise ValueError(f"weights must have shape ({batch_size},).")
     elif weights.is_complex() or weights.dtype == torch.bool:
-        raise ValueError("weights must be a real floating-point or numeric tensor.")
+        raise ValueError(
+            "weights must be a real floating-point or numeric tensor."
+        )
     else:
         weights = weights.to(device=device, dtype=dtype)
     if not bool(torch.isfinite(weights).all()):
@@ -406,10 +405,14 @@ def stream_batch_value_and_grad(
             stop = min(start + chunk_size, batch_size)
             chunk_indices = list(range(start, stop))
             active_indices = [
-                idx for idx in chunk_indices if bool((weights[idx] != 0.0).item())
+                idx
+                for idx in chunk_indices
+                if bool((weights[idx] != 0.0).item())
             ]
             zero_indices = [
-                idx for idx in chunk_indices if not bool((weights[idx] != 0.0).item())
+                idx
+                for idx in chunk_indices
+                if not bool((weights[idx] != 0.0).item())
             ]
 
             if zero_indices:
@@ -577,9 +580,8 @@ def stream_batch_value_and_grad(
                     target = external_targets[index]
                     assert target is not None
                     tail_ndim = tail_dimensions[index]
-                    if (
-                        leaf_grad is not None
-                        and _is_batched_external(target, batch_size, tail_ndim)
+                    if leaf_grad is not None and _is_batched_external(
+                        target, batch_size, tail_ndim
                     ):
                         per_lane_ext_grads.append(leaf_grad.detach()[a_idx])
                     elif inter_grad is not None:
@@ -657,9 +659,7 @@ def stream_batch_value_and_grad(
                             ].root_valid or bool(
                                 diag.confirmed_failure[local_i]
                             ):
-                                lane_model_grad_sentinel[local_i] = float(
-                                    "nan"
-                                )
+                                lane_model_grad_sentinel[local_i] = float("nan")
                                 continue
                             single_pos = (
                                 positions.detach()[lane_idx : lane_idx + 1]
@@ -754,7 +754,10 @@ def stream_batch_value_and_grad(
                                 else:
                                     ext_grad.fill_(float("nan"))
                         for index, connected in enumerate(parameter_connected):
-                            if connected and parameter_gradients[index] is not None:
+                            if (
+                                connected
+                                and parameter_gradients[index] is not None
+                            ):
                                 parameter_gradients[index].fill_(float("nan"))
                         reason = (
                             f"[Lane {lane_idx}] Implicit linear-response solve "
@@ -762,7 +765,9 @@ def stream_batch_value_and_grad(
                         )
                         if effective_strict:
                             raise SCFConvergenceError(reason)
-                        warnings.warn(reason, SCFConvergenceWarning, stacklevel=2)
+                        warnings.warn(
+                            reason, SCFConvergenceWarning, stacklevel=2
+                        )
                         OutputHandler.warn(reason, SCFConvergenceWarning)
                     elif code == int(BatchRootFailureCode.NONFINITE_DERIVATIVE):
                         reason = (
@@ -771,7 +776,9 @@ def stream_batch_value_and_grad(
                         )
                         if effective_strict:
                             raise SCFConvergenceError(reason)
-                        warnings.warn(reason, SCFConvergenceWarning, stacklevel=2)
+                        warnings.warn(
+                            reason, SCFConvergenceWarning, stacklevel=2
+                        )
                         OutputHandler.warn(reason, SCFConvergenceWarning)
 
                 energy_out[a_idx] = lane_energy.detach()
