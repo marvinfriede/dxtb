@@ -348,7 +348,7 @@ class Driver:
 
         if args.dipole is True:
             timer.start("Dipole")
-            mu = calc.dipole_analytical(positions, chrg)
+            mu = calc.dipole(positions, chrg)
             timer.stop("Dipole")
             print("Dipole Moment\n", mu)
 

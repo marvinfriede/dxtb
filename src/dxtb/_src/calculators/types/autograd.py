@@ -29,7 +29,7 @@ import torch
 
 from dxtb import OutputHandler, timer
 from dxtb._src.constants import defaults
-from dxtb._src.typing import Any, Callable, Literal, Tensor
+from dxtb._src.typing import Any, Literal, Tensor
 
 from ..properties.vibration import (
     IRResult,
@@ -66,15 +66,20 @@ class AutogradCalculator(EnergyCalculator):
         "dipole",
         "quadrupole",
         "dipole_deriv",
+        "dipole_derivatives",
         "polarizability",
         "pol_deriv",
+        "polarizability_derivatives",
         "hyperpolarizability",
         #
         "ir",
         "ir_intensity",
+        "ir_intensities",
         "raman",
         "raman_intensity",
+        "raman_intensities",
         "rama_depol",
+        "raman_depol",
     ]
 
     @cdec.requires_positions_grad
@@ -509,8 +514,7 @@ class AutogradCalculator(EnergyCalculator):
 
         where :math:`G` is the electric field gradient of the
         :class:`~dxtb.components.field.ElectricFieldGrad` interaction. The
-        result is packed in the order ``xx, yx, yy, zx, zy, zz``, like
-        :meth:`dxtb.Calculator.quadrupole_analytical`.
+        result is packed in the order ``xx, yx, yy, zx, zy, zz``.
 
         .. note::
 
@@ -582,7 +586,6 @@ class AutogradCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        use_analytical_dipmom: bool = True,
         use_functorch: bool = False,
         field: Tensor | None | object = _UNSET,
         field_grad: Tensor | None | object = _UNSET,
@@ -614,9 +617,6 @@ class AutogradCalculator(EnergyCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        use_analytical_dipmom: bool, optional
-            Whether to use the analytically calculated dipole moment for AD or
-            the automatically differentiated dipole moment.
         use_functorch: bool, optional
             Whether to use functorch or the standard (slower) autograd.
 
@@ -625,7 +625,6 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Cartesian dipole derivative of shape ``(..., 3, nat, 3)``.
         """
-        dip_fcn = self._get_dipole_fcn(use_analytical_dipmom)
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
         )
@@ -636,11 +635,11 @@ class AutogradCalculator(EnergyCalculator):
 
             # d(3) / d(nat, 3) = (3, nat, 3)
             def wrapped(pos: Tensor) -> Tensor:
-                return dip_fcn(
+                return self.dipole(
                     pos,
                     chrg,
                     spin,
-                    use_functorch,
+                    use_functorch=use_functorch,
                     field=field,
                     field_grad=field_grad,
                     **kwargs,
@@ -653,11 +652,11 @@ class AutogradCalculator(EnergyCalculator):
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            mu = dip_fcn(
+            mu = self.dipole(
                 positions,
                 chrg,
                 spin,
-                use_functorch,
+                use_functorch=use_functorch,
                 field=field,
                 field_grad=field_grad,
                 **kwargs,
@@ -684,7 +683,6 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        use_analytical: bool = False,
         derived_quantity: Literal["energy", "dipole"] = "dipole",
         field: Tensor | None | object = _UNSET,
         field_grad: Tensor | None | object = _UNSET,
@@ -717,10 +715,6 @@ class AutogradCalculator(EnergyCalculator):
             Number of unpaired electrons. Defaults to ``None``.
         use_functorch: bool, optional
             Whether to use functorch or the standard (slower) autograd.
-        use_analytical: bool, optional
-            Whether to use the analytically calculated dipole moment for AD or
-            the automatically differentiated dipole moment. Defaults to
-            ``False``.
         derived_quantity: Literal['energy', 'dipole'], optional
             Which derivative to calculate for the polarizability, i.e.,
             derivative of dipole moment or energy w.r.t field.
@@ -742,14 +736,11 @@ class AutogradCalculator(EnergyCalculator):
                 "field tensor needs requires_grad=True for polarizability."
             )
 
-        # FIXME: Not working for Raman
-        dip_fcn = self._get_dipole_fcn(use_analytical)
-
         if use_functorch is False:
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            mu = dip_fcn(
+            mu = self.dipole(
                 positions, chrg, spin, field=field, field_grad=field_grad
             )
             return jac(mu, field)
@@ -760,7 +751,7 @@ class AutogradCalculator(EnergyCalculator):
         if derived_quantity == "dipole":
 
             def wrapped_dipole(f: Tensor) -> Tensor:
-                return dip_fcn(
+                return self.dipole(
                     positions, chrg, spin, field=f, field_grad=field_grad
                 )
 
@@ -847,7 +838,6 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Polarizability derivative shape ``(..., 3, 3, nat, 3)``.
         """
-        use_analytical = kwargs.pop("use_analytical", False)
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
         )
@@ -861,7 +851,6 @@ class AutogradCalculator(EnergyCalculator):
                 chrg,
                 spin,
                 use_functorch=use_functorch,
-                use_analytical=use_analytical,
                 field=field,
                 field_grad=field_grad,
             )
@@ -879,7 +868,6 @@ class AutogradCalculator(EnergyCalculator):
                     chrg,
                     spin,
                     use_functorch=use_functorch,
-                    use_analytical=use_analytical,
                     derived_quantity=derived_quantity,
                     field=field,
                     field_grad=field_grad,
@@ -1141,27 +1129,6 @@ class AutogradCalculator(EnergyCalculator):
 
     ##########################################################################
 
-    def _get_dipole_fcn(self, use_analytical: bool) -> Callable:
-        if use_analytical is False:
-            return self.dipole
-
-        if not hasattr(self, "dipole_analytical"):
-            raise ValueError(
-                "Analytical dipole moment not available. "
-                "Please use a calculator, which subclasses "
-                "the `AnalyticalCalculator`."
-            )
-        if not callable(getattr(self, "dipole_analytical")):
-            raise ValueError(
-                "Calculator an attribute `dipole_analytical` but it "
-                "is not callable. This should not happen and is an "
-                "implementation error."
-            )
-
-        return self.dipole_analytical  # type: ignore
-
-    ##########################################################################
-
     def calculate(
         self,
         properties: list[str],
@@ -1207,8 +1174,27 @@ class AutogradCalculator(EnergyCalculator):
             for name in ("polarizability_derivatives", "pol_deriv"):
                 if name in properties:
                     values[name] = value
-        if "ir" in properties:
-            values["ir"] = self.ir(positions, chrg, spin, **kwargs)
-        if "raman" in properties:
-            values["raman"] = self.raman(positions, chrg, spin, **kwargs)
+        if {"ir", "ir_intensities", "ir_intensity"} & set(properties):
+            ir_result = self.ir(positions, chrg, spin, **kwargs)
+            if "ir" in properties:
+                values["ir"] = ir_result
+            for name in ("ir_intensities", "ir_intensity"):
+                if name in properties:
+                    values[name] = ir_result.ints
+        if {
+            "raman",
+            "raman_intensities",
+            "raman_intensity",
+            "raman_depol",
+            "rama_depol",
+        } & set(properties):
+            raman_result = self.raman(positions, chrg, spin, **kwargs)
+            if "raman" in properties:
+                values["raman"] = raman_result
+            for name in ("raman_intensities", "raman_intensity"):
+                if name in properties:
+                    values[name] = raman_result.ints
+            for name in ("raman_depol", "rama_depol"):
+                if name in properties:
+                    values[name] = raman_result.depol
         return values

@@ -203,34 +203,14 @@ class NumericalCalculator(EnergyCalculator):
 
         field, field_grad = self._resolve_fields(field, field_grad)
 
-        # potentially use analytical forces if available
-        if hasattr(self, "forces_analytical") and callable(
-            getattr(self, "forces_analytical")
-        ):
-
-            def _gradfcn(pos: Tensor) -> Tensor:
-                with torch.enable_grad():
-                    pos.requires_grad_(True)
-                    result = -self.forces_analytical(
-                        pos,
-                        chrg,
-                        spin,
-                        field=field,
-                        field_grad=field_grad,
-                    )  # type: ignore
-                    pos.detach_()
-                return result.detach()
-
-        else:
-
-            def _gradfcn(pos: Tensor) -> Tensor:
-                return -self.forces_numerical(
-                    pos,
-                    chrg,
-                    spin,
-                    field=field,
-                    field_grad=field_grad,
-                )
+        def _gradfcn(pos: Tensor) -> Tensor:
+            return -self.forces_numerical(
+                pos,
+                chrg,
+                spin,
+                field=field,
+                field_grad=field_grad,
+            )
 
         # (..., nat, 3, nat, 3)
         deriv = torch.zeros(
@@ -505,9 +485,6 @@ class NumericalCalculator(EnergyCalculator):
             \mu' = \dfrac{\partial \mu}{\partial R}
                  = \dfrac{\partial^2 E}{\partial F \partial R}
 
-        Here, the analytical dipole moment is used for the numerical
-        differentiation (if it is available in the calculator).
-
         Parameters
         ----------
         positions : Tensor
@@ -527,12 +504,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        if hasattr(self, "dipole_analytical") and callable(
-            getattr(self, "dipole_analytical")
-        ):
-            _dipfcn = self.dipole_analytical  # type: ignore
-        else:
-            _dipfcn = self.dipole_numerical
+        _dipfcn = self.dipole_numerical
 
         field, field_grad = self._resolve_response_fields(
             kwargs.pop("field", _UNSET),
@@ -595,8 +567,6 @@ class NumericalCalculator(EnergyCalculator):
 
             \alpha = \dfrac{\partial \mu}{\partial F} = \dfrac{\partial^2 E}{\partial^2 F}
 
-        Here, the analytical dipole moment is used for the numerical derivative.
-
         Parameters
         ----------
         positions : Tensor
@@ -616,12 +586,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        if hasattr(self, "dipole_analytical") and callable(
-            getattr(self, "dipole_analytical")
-        ):
-            _dipfcn = self.dipole_analytical  # type: ignore
-        else:
-            _dipfcn = self.dipole_numerical
+        _dipfcn = self.dipole_numerical
 
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
