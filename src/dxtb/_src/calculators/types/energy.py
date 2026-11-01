@@ -28,23 +28,13 @@ from tad_mctc.convert import any_to_tensor
 from tad_mctc.io.checks import content_checks, shape_checks
 
 from dxtb import OutputHandler, labels
-from dxtb._src import scf
 from dxtb._src.calculators.singlepoint import (
     _call_tensor,
-    _normalize_scf_output,
     _singlepoint_eager,
 )
-from dxtb._src.components.interactions.field.efield import (
-    LABEL_EFIELD,
-    ElectricField,
-)
-from dxtb._src.components.interactions.field.efieldgrad import (
-    LABEL_EFIELD_GRAD,
-    ElectricFieldGrad,
-)
-from dxtb._src.components.interactions.list import InteractionList
+from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
+from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 from dxtb._src.constants import defaults
-from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
 
@@ -129,18 +119,20 @@ class EnergyCalculator(BaseCalculator):
 
         OutputHandler.write_stdout("Singlepoint ", v=3)
 
-        is_batched = self.numbers.ndim == 2
+        if self.numbers.ndim > 1:
+            from dxtb._src.calculators.packed_result import (
+                evaluate_calculator_packed_singlepoint,
+            )
 
-        if is_batched:
-            if isinstance(chrg, (float, int)):
-                if chrg != defaults.CHRG:
-                    raise ValueError(
-                        "Cannot set charge for batched calculations with a "
-                        "single float or integer. Please provide a 1D tensor "
-                        "of charges."
-                    )
-
-                chrg = torch.tensor([chrg, chrg], **self.dd)
+            return evaluate_calculator_packed_singlepoint(
+                self,
+                positions,
+                chrg=chrg,
+                spin=spin,
+                field=field,
+                field_grad=field_grad,
+                **kwargs,
+            )
 
         _chrg: Tensor = torch.atleast_1d(any_to_tensor(chrg, **self.dd))
         if spin is not None:
@@ -166,208 +158,9 @@ class EnergyCalculator(BaseCalculator):
                 f"{labels.INTLEVEL_QUADRUPOLE}."
             )
 
-        # Attempt reshaping to proper batch shape: (n,) -> (n, 1)
-        if is_batched is True:
-            if _chrg.ndim == 1 and _chrg.numel() != 1:
-                _chrg = _chrg.view(-1, 1)
-            if _spin is not None and _spin.ndim == 1 and _spin.numel() != 1:
-                _spin = _spin.view(-1, 1)
-
-        if not is_batched:
-            return self._singlepoint_system(
-                positions, _chrg, _spin, field, field_grad, kwargs
-            )
-
-        classical: dict[str, Tensor] = {}
-        total_energy = torch.zeros(positions.shape[:-1], **self.dd)
-
-        ###########################
-        # CLASSICAL CONTRIBUTIONS #
-        ###########################
-
-        if len(self.classicals.components) > 0:
-            OutputHandler.write_stdout_nf(" - Classicals        ... ", v=3)
-            timer.start("Classicals")
-
-            ccaches = self.system.classical_cache
-            classical = self.classicals.get_energy(
-                positions, ccaches, charge=_chrg
-            )
-            total_energy = total_energy + torch.stack(
-                list(classical.values())
-            ).sum(0)
-
-            timer.stop("Classicals")
-            OutputHandler.write_stdout("done", v=3)
-
-        if {"all", "scf"} & set(self.opts.exclude):
-            result = Result.snapshot(
-                energy=total_energy,
-                scf=torch.zeros_like(total_energy),
-                classical=tuple(classical.items()),
-                fenergy=torch.zeros_like(total_energy),
-                iterations=torch.zeros(
-                    (), dtype=torch.int64, device=self.device
-                ),
-            )
-            self._ncalcs += 1
-            return result
-
-        #############
-        # INTEGRALS #
-        #############
-
-        timer.start("Integrals")
-        OutputHandler.write_stdout_nf(" - Integral matrices ... ", v=3)
-        if self.system.h0_setup is None:
-            raise NotImplementedError("Core Hamiltonian setup is missing.")
-        if self.opts.ints.level < labels.INTLEVEL_HCORE:
-            raise NotImplementedError(
-                "Core Hamiltonian missing. Skipping the Core Hamiltonian in "
-                "the SCF is currently not supported. Please increase the "
-                "integral level to at least '2'. Currently, the level is set "
-                f"to '{self.opts.ints.level}'."
-            )
-
-        # Batched Calculator calls remain on legacy mutable integral builders
-        # until E6 introduces stacked-System evaluation.
-        overlap_matrix = self.integrals.build_overlap(positions)
-        dipole_matrix = None
-        quadrupole_matrix = None
-        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-            dipole_matrix = self.integrals.build_dipole(positions)
-        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            quadrupole_matrix = self.integrals.build_quadrupole(positions)
-            if self.integrals.dipole is not None:
-                dipole_matrix = self.integrals.dipole.matrix
-        hcore_matrix = self.integrals.build_hcore(
-            positions,
-            with_overlap=True,
-            charge=_chrg,
+        return self._singlepoint_system(
+            positions, _chrg, _spin, field, field_grad, kwargs
         )
-        if self.integrals.hcore is None:
-            raise RuntimeError("Legacy H0 adapter is not initialized.")
-        refocc = self.integrals.hcore.refocc
-        intmats = IntegralMatrices(
-            hcore=hcore_matrix,
-            overlap=overlap_matrix,
-            dipole=dipole_matrix,
-            quadrupole=quadrupole_matrix,
-        ).to(self.device)
-        timer.stop("Integrals")
-        OutputHandler.write_stdout("done", v=3)
-
-        for key, matrix, integral in (
-            ("write_overlap", intmats.overlap, self.integrals.overlap),
-            ("write_dipole", intmats.dipole, self.integrals.dipole),
-            ("write_quadrupole", intmats.quadrupole, self.integrals.quadrupole),
-            ("write_hcore", intmats.hcore, self.integrals.hcore),
-        ):
-            path = kwargs.get(key, False)
-            if path is False or matrix is None:
-                continue
-            if path is None or path is True:
-                if integral is None:
-                    raise RuntimeError(
-                        f"No legacy label is available for {key}."
-                    )
-                path = integral.label.casefold() + ".pt"
-            torch.save(matrix, path)
-
-        ###################################
-        # SELF-CONSISTENT FIELD PROCEDURE #
-        ###################################
-
-        old_cuda_sync = timer.cuda_sync
-        timer.cuda_sync = kwargs.get(
-            "cuda_sync_in_scf", False if self.device.type == "cpu" else True
-        )
-        timer.start("SCF", "Self-Consistent Field")
-
-        # get caches of all interactions
-        timer.start("Interaction Cache", parent_uid="SCF")
-        OutputHandler.write_stdout_nf(" - Interaction Cache ... ", v=3)
-        call_interactions = self._call_interactions(field, field_grad)
-        icaches = call_interactions.get_cache(
-            numbers=self.numbers, positions=positions, ihelp=self.ihelp
-        )
-        timer.stop("Interaction Cache")
-        OutputHandler.write_stdout("done", v=3)
-
-        # Electronic solve
-        if self.opts.scf.requires_iterations:
-            OutputHandler.write_stdout("\nStarting SCF Iterations...", v=3)
-        else:
-            OutputHandler.write_stdout(
-                "\nStarting non-self-consistent electronic solve...", v=3
-            )
-
-        scf_results = scf.solve(
-            self.numbers,
-            positions,
-            _chrg,
-            _spin,
-            call_interactions,
-            icaches,
-            self.ihelp,
-            self.opts.scf,
-            intmats,
-            refocc,
-        )
-        scf_output = _normalize_scf_output(scf_results, positions)
-
-        timer.stop("SCF")
-        timer.cuda_sync = old_cuda_sync
-        if self.opts.scf.requires_iterations:
-            OutputHandler.write_stdout(
-                f"SCF finished in {scf_output.iterations} iterations.", v=3
-            )
-        else:
-            OutputHandler.write_stdout(
-                "Non-self-consistent electronic solve finished.", v=3
-            )
-
-        scf_energy = scf_output.energy + scf_output.fenergy
-        result = Result.snapshot(
-            energy=total_energy + scf_energy,
-            scf=scf_output.energy,
-            classical=tuple(classical.items()),
-            fenergy=scf_output.fenergy,
-            charges=scf_output.charges,
-            density=scf_output.density,
-            coefficients=scf_output.coefficients,
-            emo=scf_output.emo,
-            occupation=scf_output.occupation,
-            potential=scf_output.potential,
-            hamiltonian=scf_output.hamiltonian,
-            overlap=intmats.overlap,
-            hcore=intmats.hcore,
-            dipole_integrals=intmats.dipole,
-            quadrupole_integrals=intmats.quadrupole,
-            overlap_norm=(
-                None
-                if self.integrals.overlap is None
-                else self.integrals.overlap.norm
-            ),
-            iterations=scf_output.iterations,
-            converged=scf_output.converged,
-            residual=scf_output.residual,
-        )
-
-        if self.ihelp.batch_mode == 0:
-            OutputHandler.write_stdout(
-                "SCF Energy  : %.14f Hartree.",
-                scf_output.energy.sum(-1),
-                v=2,
-            )
-            OutputHandler.write_stdout(
-                "Total Energy: %.14f Hartree.",
-                result.energy.sum(-1),
-                v=1,
-            )
-
-        self._ncalcs += 1
-        return result
 
     def _singlepoint_system(
         self,
@@ -379,6 +172,7 @@ class EnergyCalculator(BaseCalculator):
         kwargs: dict[str, Any],
     ) -> Result:
         """Adapt a pure System result to legacy Calculator state and options."""
+        self._ensure_system_current()
         old_cuda_sync = timer.cuda_sync
         timer.cuda_sync = kwargs.get(
             "cuda_sync_in_scf", False if self.device.type == "cpu" else True
@@ -506,29 +300,6 @@ class EnergyCalculator(BaseCalculator):
                 "custom response implementation."
             )
         return resolved_field, resolved_grad
-
-    def _call_interactions(
-        self, field: Tensor | None, field_grad: Tensor | None
-    ) -> InteractionList:
-        """Create a call-local interaction list for legacy batch SCF."""
-        components = list(self.interactions.components)
-        if field is not None:
-            if any(x.label == LABEL_EFIELD for x in components):
-                raise ValueError(
-                    f"Explicit field= conflicts with a custom '{LABEL_EFIELD}' "
-                    "label interaction."
-                )
-            components.append(ElectricField(field))
-        if field_grad is not None:
-            if any(x.label == LABEL_EFIELD_GRAD for x in components):
-                raise ValueError(
-                    "Explicit field_grad= conflicts with a custom "
-                    f"'{LABEL_EFIELD_GRAD}' label interaction."
-                )
-            components.append(ElectricFieldGrad(field_grad))
-        return InteractionList(
-            *components, device=self.device, dtype=self.dtype
-        )
 
     def bond_orders(
         self,

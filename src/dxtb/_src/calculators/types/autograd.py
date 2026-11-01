@@ -131,12 +131,6 @@ class AutogradCalculator(EnergyCalculator):
         -------
         Tensor
             Atomic forces of shape ``(..., nat, 3)``.
-
-        Warning
-        -------
-        For batched input, the ``"autograd"`` and ``"backward"`` modes raise
-        an error (non-scalar energy). Differentiate ``energy.sum()`` instead.
-        See :ref:`help_known_issues`.
         """
         OutputHandler.write_stdout("\nForces", v=5)
         OutputHandler.write_stdout("------\n", v=5)
@@ -153,14 +147,16 @@ class AutogradCalculator(EnergyCalculator):
             e = self.energy(positions, chrg, spin, **kwargs)
 
             timer.start("Forces")
-            (deriv,) = torch.autograd.grad(e, positions, **kw)
+            (deriv,) = torch.autograd.grad(
+                e, positions, grad_outputs=torch.ones_like(e), **kw
+            )
             timer.stop("Forces")
 
         elif grad_mode == "backward":
             e = self.energy(positions, chrg, spin, **kwargs)
 
             timer.start("Forces")
-            e.backward(**kw)
+            e.sum().backward(**kw)
             timer.stop("Forces")
 
             assert positions.grad is not None
@@ -1055,7 +1051,10 @@ class AutogradCalculator(EnergyCalculator):
         # run vibrational analysis first
         vib_res = self.vibration(positions, chrg, spin, **kwargs)
 
-        if self.ihelp.batch_mode != 0 or self.system._active_exact_core() is None:
+        if (
+            self.ihelp.batch_mode == 0
+            and self.system._active_exact_core() is None
+        ):
             self.classicals.reset_all()
             self.interactions.reset_all()
             self.integrals.reset_all()
@@ -1111,7 +1110,10 @@ class AutogradCalculator(EnergyCalculator):
             positions, chrg, spin, use_functorch=use_functorch, **kwargs
         )
 
-        if self.ihelp.batch_mode != 0 or self.system._active_exact_core() is None:
+        if (
+            self.ihelp.batch_mode == 0
+            and self.system._active_exact_core() is None
+        ):
             self.classicals.reset_all()
             self.interactions.reset_all()
             self.integrals.reset_all()

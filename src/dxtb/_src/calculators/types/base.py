@@ -35,7 +35,7 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 from dxtb import IndexHelper, OutputHandler
 from dxtb import integrals as ints
 from dxtb import labels
-from dxtb._src.calculators.model import Model
+from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.properties.vibration import (
     IRResult,
     RamanResult,
@@ -115,6 +115,83 @@ def reject_removed_cache_options(opts: dict[str, Any]) -> None:
             "Calculator result caching has been removed; retain the returned "
             "Result instead. Unsupported cache option: " + ", ".join(removed)
         )
+
+
+def _param_state_signature(
+    par: ParamModule,
+) -> tuple[tuple[int, int, int, bool, torch.dtype, torch.device], ...]:
+    """Capture a lightweight state signature of all parameter and buffer leaves."""
+    return tuple(
+        (
+            id(t),
+            int(t.data_ptr()),
+            int(t._version),
+            bool(t.requires_grad),
+            t.dtype,
+            t.device,
+        )
+        for t in (*par.parameters(), *par.buffers())
+    )
+
+
+def _convert_system_dtype(
+    system: System,
+    dtype: torch.dtype,
+    *,
+    classicals: ClassicalList | None = None,
+    interactions: InteractionList | None = None,
+) -> System:
+    """Convert functional System setup snapshots to ``dtype`` per ``Calculator.type``."""
+    integral_setup = (
+        None
+        if system.integral_setup is None
+        else system.integral_setup.to(dtype=dtype)
+    )
+    h0_setup = (
+        None
+        if system.h0_setup is None
+        else system.h0_setup.to(dtype=dtype)
+    )
+    exact_core = system.exact_core
+    if exact_core is not None:
+        exact_core = exact_core.to(dtype=dtype)
+        backend_setup = (
+            integral_setup.pytorch
+            if integral_setup is not None and integral_setup.pytorch is not None
+            else (
+                integral_setup.libcint
+                if integral_setup is not None
+                else None
+            )
+        )
+        core_integral = None
+        if integral_setup is not None:
+            from dxtb._src.calculators.model import IntegralBackendNode
+
+            core_integral = IntegralBackendNode(
+                driver_type=integral_setup.driver_type,
+                intlevel=integral_setup.intlevel,
+                logical_device=system.numbers.device,
+                backend=backend_setup,
+            )
+        exact_core = exact_core.replace(
+            effective_dtype=dtype,
+            integral=core_integral,
+            h0_setup=(
+                h0_setup if isinstance(h0_setup, H0SetupNode) else None
+            ),
+        )
+    return replace(
+        system,
+        classicals=system.classicals if classicals is None else classicals,
+        interactions=(
+            system.interactions if interactions is None else interactions
+        ),
+        integral_setup=integral_setup,
+        h0_setup=h0_setup,
+        dd={**system.dd, "dtype": dtype},
+        exact_core=exact_core,
+    )
 
 
 class BaseCalculator(GetPropertiesMixin, TensorLike):
@@ -355,8 +432,81 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.interactions = self.system.interactions
         self.integrals = self._create_legacy_integral_adapter()
 
+        self._model_param_sig = _param_state_signature(self.model.par)
+        self._system_graph_consumed = False
+        self._param_hook_handles: list[Any] = []
+        self._lane_systems_cache: tuple[Any, tuple[System, ...]] | None = None
+        self._register_param_backward_hooks()
+
         self._ncalcs = 0
         timer.stop("Calculator")
+
+    def _clear_param_backward_hooks(self) -> None:
+        """Remove any active parameter backward hooks."""
+        for handle in self._param_hook_handles:
+            handle.remove()
+        self._param_hook_handles.clear()
+
+    def _register_param_backward_hooks(self) -> None:
+        """Track when a backward pass consumes the setup autograd graph."""
+        self._clear_param_backward_hooks()
+
+        def _on_param_backward(_grad: Tensor) -> None:
+            self._system_graph_consumed = True
+            self._lane_systems_cache = None
+            self._clear_param_backward_hooks()
+
+        for p in self.model.par.parameters():
+            if p.requires_grad:
+                self._param_hook_handles.append(
+                    p.register_hook(_on_param_backward)
+                )
+
+    def _ensure_system_current(self) -> None:
+        """Refresh setup-derived System state when Model parameters change or their graph was consumed."""
+        current_sig = _param_state_signature(self.model.par)
+        if (
+            current_sig == self._model_param_sig
+            and not self._system_graph_consumed
+        ):
+            return
+
+        self._lane_systems_cache = None
+        setup_model = (
+            self.model
+            if self.opts == self.model.config and not self.model.auto_int_level
+            else Model(
+                par=self.model.par,
+                config=self.opts,
+                classical=self.model.classical,
+                interaction=self.model.interaction,
+                auto_int_level=False,
+            )
+        )
+        setup_dd = (
+            self.model.par.dd
+            if self.dtype != self.model.par.dtype
+            else self.dd
+        )
+        new_sys = setup_model.setup(
+            self.numbers,
+            batch_mode=self.ihelp.batch_mode,
+            dd=setup_dd,
+        )
+        if self.dtype != self.model.par.dtype:
+            new_sys = _convert_system_dtype(
+                new_sys,
+                self.dtype,
+                classicals=new_sys.classicals.type(self.dtype),
+                interactions=new_sys.interactions.type(self.dtype),
+            )
+        self.system = new_sys
+        self.ihelp = self.system.ihelp
+        self.classicals = self.system.classicals
+        self.interactions = self.system.interactions
+        self._model_param_sig = current_sig
+        self._system_graph_consumed = False
+        self._register_param_backward_hooks()
 
     def _create_legacy_integral_adapter(self) -> Integrals:
         """Create Calculator-local mutable integral compatibility objects."""
@@ -414,6 +564,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals.reset_all()
         self.interactions.reset_all()
         self.integrals.reset_all()
+        self._lane_systems_cache = None
 
     @abstractmethod
     def calculate(
@@ -587,60 +738,18 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
         self.integrals = self.integrals.type(dtype)
+        self._lane_systems_cache = None
 
         # Keep the system consistent with the converted components where
         # supported. Legacy System classical and ES2/ES3 setup objects are
         # not converted; evaluating those legacy snapshots after `type` is a
         # known issue (see known_issues.rst). The separate exact core below is
         # converted because it owns functional setup snapshots.
-        integral_setup = (
-            None
-            if self.system.integral_setup is None
-            else self.system.integral_setup.to(dtype=dtype)
-        )
-        h0_setup = (
-            None
-            if self.system.h0_setup is None
-            else self.system.h0_setup.to(dtype=dtype)
-        )
-        exact_core = self.system.exact_core
-        if exact_core is not None:
-            exact_core = exact_core.to(dtype=dtype)
-            backend_setup = (
-                integral_setup.pytorch
-                if integral_setup is not None
-                and integral_setup.pytorch is not None
-                else (
-                    integral_setup.libcint
-                    if integral_setup is not None
-                    else None
-                )
-            )
-            core_integral = None
-            if integral_setup is not None:
-                from dxtb._src.calculators.model import IntegralBackendNode
-
-                core_integral = IntegralBackendNode(
-                    driver_type=integral_setup.driver_type,
-                    intlevel=integral_setup.intlevel,
-                    logical_device=self.system.numbers.device,
-                    backend=backend_setup,
-                )
-            exact_core = exact_core.replace(
-                effective_dtype=dtype,
-                integral=core_integral,
-                h0_setup=(
-                    h0_setup if isinstance(h0_setup, H0SetupNode) else None
-                ),
-            )
-        self.system = replace(
+        self.system = _convert_system_dtype(
             self.system,
+            dtype,
             classicals=self.classicals,
             interactions=self.interactions,
-            integral_setup=integral_setup,
-            h0_setup=h0_setup,
-            dd={**self.system.dd, "dtype": dtype},
-            exact_core=exact_core,
         )
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)

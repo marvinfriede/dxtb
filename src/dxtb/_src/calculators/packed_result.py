@@ -44,7 +44,10 @@ from dxtb._src.calculators.legacy_composition import (
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import _call_tensor
-from dxtb._src.calculators.types.base import reject_removed_store_kwargs
+from dxtb._src.calculators.types.base import (
+    _convert_system_dtype,
+    reject_removed_store_kwargs,
+)
 from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 from dxtb._src.constants import defaults
@@ -680,7 +683,7 @@ def _normalize_packed_charges(
     """Normalize batched or per-lane charges under functional or legacy rules."""
     count = len(lane_positions)
     if isinstance(chrg, (int, float)) and not isinstance(chrg, bool):
-        if legacy_compat and count > 1 and float(chrg) != float(defaults.CHRG):
+        if legacy_compat and float(chrg) != float(defaults.CHRG):
             raise ValueError(
                 "Cannot set charge for batched calculations with a single "
                 "float or integer. Please provide a 1D tensor of charges."
@@ -1327,6 +1330,107 @@ def evaluate_packed_systems(
     return packed_result
 
 
+def _sync_lane_system_labels(
+    lane_sys: System,
+    source_classicals: Sequence[Any],
+    source_interactions: Sequence[Any],
+    caller_owned_ids: set[int],
+) -> System:
+    """Restore source classical/interaction labels on a lane System without mutating caller components."""
+    classical_changed = False
+    interaction_changed = False
+    if len(lane_sys.classicals.components) == len(source_classicals):
+        new_classicals = list(lane_sys.classicals.components)
+        for idx, (lane_comp, orig_comp) in enumerate(
+            zip(new_classicals, source_classicals)
+        ):
+            if lane_comp.label != orig_comp.label:
+                old_label = lane_comp.label
+                if id(lane_comp) in caller_owned_ids:
+                    lane_comp = copy.copy(lane_comp)
+                    new_classicals[idx] = lane_comp
+                lane_comp.label = orig_comp.label
+                if old_label in lane_sys._classical_extension_cache:
+                    lane_sys._classical_extension_cache[orig_comp.label] = (
+                        lane_sys._classical_extension_cache.pop(old_label)
+                    )
+                classical_changed = True
+        if classical_changed:
+            lane_sys.classicals.components = new_classicals
+
+    if len(lane_sys.interactions.components) == len(source_interactions):
+        new_interactions = list(lane_sys.interactions.components)
+        for idx, (lane_inter, orig_inter) in enumerate(
+            zip(new_interactions, source_interactions)
+        ):
+            if lane_inter.label != orig_inter.label:
+                if id(lane_inter) in caller_owned_ids:
+                    lane_inter = copy.copy(lane_inter)
+                    new_interactions[idx] = lane_inter
+                lane_inter.label = orig_inter.label
+                interaction_changed = True
+        if interaction_changed:
+            lane_sys.interactions.components = new_interactions
+
+    if not (classical_changed or interaction_changed):
+        return lane_sys
+
+    exact_core = lane_sys.exact_core
+    if exact_core is not None:
+        new_c_terms = tuple(
+            replace(
+                term,
+                label=lane_sys.classicals.components[term.position].label,
+            )
+            for term in exact_core.classical_terms
+        )
+        new_i_terms = tuple(
+            replace(
+                term,
+                label=lane_sys.interactions.components[term.position].label,
+            )
+            for term in exact_core.interaction_terms
+        )
+        exact_core = exact_core.replace(
+            classical_terms=new_c_terms,
+            interaction_terms=new_i_terms,
+        )
+
+    compat = lane_sys._exact_compatibility
+    if compat is not None:
+        new_c_refs = tuple(
+            replace(
+                ref,
+                component_identity=id(
+                    lane_sys.classicals.components[ref.position]
+                ),
+                label=lane_sys.classicals.components[ref.position].label,
+            )
+            for ref in compat.classical_setups
+        )
+        new_i_refs = tuple(
+            replace(
+                ref,
+                component_identity=id(
+                    lane_sys.interactions.components[ref.position]
+                ),
+                label=lane_sys.interactions.components[ref.position].label,
+            )
+            for ref in compat.interaction_setups
+        )
+        compat = replace(
+            compat,
+            classical_setups=new_c_refs,
+            interaction_setups=new_i_refs,
+        )
+
+    return replace(
+        lane_sys,
+        exact_core=exact_core,
+        _exact_compatibility=compat,
+    )
+
+
 def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     """Construct deduplicated per-lane single-System instances from a Calculator.
 
@@ -1335,6 +1439,8 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     a single ``Model.setup(..., batch_mode=0)`` call and share the resulting
     immutable ``System`` value.
     """
+    if hasattr(calc, "_ensure_system_current"):
+        calc._ensure_system_current()
     if calc.numbers.ndim == 1:
         return (calc.system,)
 
@@ -1342,6 +1448,39 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     source_classicals = tuple(calc.classicals.components)
     source_interactions = tuple(calc.interactions.components)
     model_classicals = tuple(calc.model.classical)
+    model_interactions = tuple(calc.model.interaction)
+    caller_owned_ids = {
+        *(id(c) for c in model_classicals),
+        *(id(c) for c in model_interactions),
+        *(id(c) for c in source_classicals),
+        *(id(c) for c in source_interactions),
+    }
+
+    comp_nums_sig = tuple(
+        (id(c), int(c.numbers.data_ptr()), int(c.numbers._version))
+        for c in model_classicals
+        if getattr(c, "numbers", None) is not None
+        and isinstance(c.numbers, Tensor)
+    )
+    calc_cache_key = (
+        getattr(calc, "_model_param_sig", None),
+        calc.dtype,
+        calc.device,
+        int(calc.numbers.data_ptr()),
+        int(calc.numbers._version),
+        calc.opts,
+        tuple((id(c), c.label) for c in source_classicals),
+        tuple((id(c), c.label) for c in source_interactions),
+        comp_nums_sig,
+    )
+    cached_entry = getattr(calc, "_lane_systems_cache", None)
+    if cached_entry is not None:
+        cached_key, cached_systems = cached_entry
+        if cached_key == calc_cache_key and all(
+            sys._active_exact_core() is not None for sys in cached_systems
+        ):
+            return cached_systems
+
     has_2d_classical_nums = any(
         getattr(c, "numbers", None) is not None
         and isinstance(c.numbers, Tensor)
@@ -1367,8 +1506,11 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         dedup_key = (
             tuple(int(x) for x in row_nums.tolist()),
             comp_nums_key,
-            tuple(current_labels),
-            tuple(c.label for c in source_interactions),
+            calc.opts,
+            calc.dtype,
+            calc.device,
+            tuple((id(c), c.label) for c in source_classicals),
+            tuple((id(c), c.label) for c in source_interactions),
         )
         lane_sys = cache.get(dedup_key)
         if lane_sys is None:
@@ -1403,24 +1545,32 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     auto_int_level=False,
                 )
             )
-            lane_sys = lane_model.setup(row_nums, batch_mode=0, dd=calc.dd)
-            if len(lane_sys.classicals.components) == len(source_classicals):
-                for lane_comp, orig_comp in zip(
-                    lane_sys.classicals.components, source_classicals
-                ):
-                    if lane_comp.label != orig_comp.label:
-                        lane_comp.label = orig_comp.label
-            if len(lane_sys.interactions.components) == len(
-                source_interactions
-            ):
-                for lane_inter, orig_inter in zip(
-                    lane_sys.interactions.components, source_interactions
-                ):
-                    if lane_inter.label != orig_inter.label:
-                        lane_inter.label = orig_inter.label
+            setup_dd = (
+                calc.model.par.dd
+                if calc.dtype != calc.model.par.dtype
+                else calc.dd
+            )
+            lane_sys = lane_model.setup(row_nums, batch_mode=0, dd=setup_dd)
+            lane_sys = _sync_lane_system_labels(
+                lane_sys,
+                source_classicals,
+                source_interactions,
+                caller_owned_ids,
+            )
+            if calc.dtype != calc.model.par.dtype:
+                lane_sys = _convert_system_dtype(
+                    lane_sys,
+                    calc.dtype,
+                    classicals=lane_sys.classicals.type(calc.dtype),
+                    interactions=lane_sys.interactions.type(calc.dtype),
+                )
             cache[dedup_key] = lane_sys
         lane_systems.append(lane_sys)
-    return tuple(lane_systems)
+
+    result_tuple = tuple(lane_systems)
+    if hasattr(calc, "_lane_systems_cache"):
+        calc._lane_systems_cache = (calc_cache_key, result_tuple)
+    return result_tuple
 
 
 def evaluate_calculator_packed_singlepoint(
@@ -1486,4 +1636,5 @@ def evaluate_calculator_packed_singlepoint(
         atom_masks=atom_masks,
         **kwargs,
     )
+    calc._ncalcs += 1
     return result
