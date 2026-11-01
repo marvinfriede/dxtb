@@ -14,6 +14,7 @@ Matches ``dftd/src/dftd/model/d4/reference/{orig,srev}.f90`` and
 from __future__ import annotations
 
 import contextlib
+import math
 from importlib.resources import as_file, files
 
 import torch
@@ -147,10 +148,10 @@ def _compute_d4_aiw_and_c6(
         torch.zeros_like(raw_aiw),
     )
 
-    cp_weights = _DEFAULT_INTEGRATOR_64.cp_weights.to(
+    weights = _DEFAULT_INTEGRATOR_64.weights.to(
         device=device, dtype=dtype
     )
-    c6 = torch.einsum("w,irw,jsw->ijrs", cp_weights, aiw, aiw)
+    c6 = (3.0 / math.pi) * torch.einsum("w,irw,jsw->ijrs", weights, aiw, aiw)
 
     return refn, ngw, refcovcn, ref_q, aiw, c6
 

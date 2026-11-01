@@ -144,5 +144,5 @@ class TrapezoidIntegrator:
         """
         Compute Casimir-Polder :math:`C_6 = \\frac{3}{\\pi} \\int_0^\\infty \\alpha_i(i\\omega)\\alpha_j(i\\omega)\\,d\\omega`.
         """
-        w = self.cp_weights.to(device=alpha_i.device, dtype=alpha_i.dtype)
-        return torch.sum(alpha_i * alpha_j * w, dim=-1)
+        w = self.weights.to(device=alpha_i.device, dtype=alpha_i.dtype)
+        return (3.0 / math.pi) * torch.sum(alpha_i * alpha_j * w, dim=-1)
