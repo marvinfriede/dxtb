@@ -18,7 +18,7 @@ API.
 | `E1.3-L2-official-d3.md` | Official tad-dftd3 0.7.0 integration, local mctc compatibility and s9 derivative acceptance |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
 | `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
-| `08-scf-redesign-overview.md` | Architectural roadmap for the SCF solver/convergence redesign, including Broyden retention, DIIS/SOSCF strategies, convergence certification, and xitorch retirement |
+| `08-scf-redesign-overview.md` | Completed S0–S13 SCF architecture and final design invariants; implementation history is in the linked package records |
 | `09-scf-s0-audit.md` | S0 baseline classification, functional/legacy architecture inventory, and the synchronization gate before S1 |
 | `10-scf-s0.1-matrix-fermi-hardening.md` | S0.1 adaptive matrix-Fermi scaling for large spectra, transform checks, and updated S1 gate |
 | `11-scf-s0.1b-reconciliation.md` | Records published-kernel reconciliation, finite scaling envelope, bad-lane isolation, public failure behavior, transform checks, and performance cost |
@@ -41,6 +41,10 @@ API.
 | `28-scf-s11-differentiation-hardening.md` | Decouples certified-root response coordinates from primal strategy history and validates first-, second-, and third-order implicit response |
 | `29-scf-s12-transform-performance-hardening.md` | Records fixed-trip and vmap support boundaries, state isolation, compilation characterization, and performance evidence |
 | `30-scf-s13-defaults-api-closure.md` | Freezes the benchmark-backed default candidate, public strategy/differentiation vocabulary, convergence profiles, and remaining support boundaries |
+
+The SCF redesign is complete through S13. The final integrated gate and public
+API closure are recorded in `30-scf-s13-defaults-api-closure.md`; later
+enhancements listed there are outside this redesign.
 
 The design review referenced by the plan is not in the repository.
 

@@ -2,10 +2,11 @@
 
 ## Decision status
 
-This document records the final S13 policy. The current synchronized candidate is
-`619c63f88195565bbb7a80700abab8f46a0a7747`; remote publication and the
-post-publication verification remain the release gate before marking the full
-redesign complete.
+This document records the final S13 policy. The integrated candidate
+`619c63f88195565bbb7a80700abab8f46a0a7747` passed the final functional
+SCF/calculator selection with 668 tests. The S13 closure that marks the whole
+redesign complete is documentation-only and reruns that exact selection on its
+own final published SHA.
 
 The final-head one-thread benchmark matrix in
 `benchmarks/results/scf-s13/defaults-py314-torch2141.json` contains 45
@@ -29,6 +30,20 @@ explicit rejection of unsupported packed GFN2 coordinate choices.
 This matrix supports Anderson/Potential as the default on the tested set. It
 does not establish universal superiority. Broyden remains a supported native
 method, and CDIIS remains the explicit Fock-space choice.
+
+The final integrated regression command was:
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+python -m pytest -q -n logical --dist worksteal \
+  test/test_scf/test_functional_*.py \
+  test/test_calculator/test_e6a0_system_vmap.py --tb=short
+```
+
+On the synchronized candidate it collected and passed 668 tests. The S13
+closure commit changes only roadmap documentation; the exact command is
+rerun after that commit and its result is recorded in the coordination
+handoff.
 
 ## Public configuration
 

@@ -1479,3 +1479,36 @@ These external implementations are references for numerical strategy and
 failure modes, not specifications for dxtb. The dxtb implementation must be
 derived from the GFN-xTB energy/free-energy and the functional physical core.
 
+---
+
+## 19. Final implementation status — S0–S13 complete
+
+The SCF redesign is complete through S13. The final implementation and
+benchmark-backed public decisions are recorded in
+[`30-scf-s13-defaults-api-closure.md`](30-scf-s13-defaults-api-closure.md).
+This section supersedes the open-ended decisions above where S13 has now
+selected a policy; the earlier sections remain as design history.
+
+The final architecture is:
+
+```text
+physical SCFProblem
+    -> explicit strategy and method stages
+    -> shared S2 physical certification
+    -> certified physical root
+    -> unrolled or implicit differentiation
+    -> physical Result
+```
+
+The default is Anderson in Potential representation, with unrolled
+differentiation and the standard convergence profile. Potential is the
+canonical implicit response representation. Broyden remains a supported
+native method, CDIIS remains Fock-only, and SOSCF remains an opt-in,
+fixed-occupation, eager-only second-order method. Active Fermi smearing uses
+the supported first-order methods; occupations are never silently frozen.
+
+S13 does not claim support for automatic `torch.compile`, SOSCF `vmap`, or
+dynamic multistage `vmap`. Those are documented boundaries for future work,
+not unfinished S13 requirements. Future thermal second-order research and
+public mixed-System routing remain outside the completed redesign.
+

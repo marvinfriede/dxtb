@@ -3992,3 +3992,19 @@ remain binding design constraints. The package records above describe their
 own validation points and do not replace the current status and next action
 at the start of this section.
 
+### SCF redesign closure — S13 complete
+
+The SCF redesign is complete through S13 on the integrated branch. The final
+public strategy API, benchmark-selected Anderson/Potential default,
+unrolled/implicit differentiation policy, Potential response default,
+convergence profiles, method restrictions, and support boundaries are recorded
+in [`30-scf-s13-defaults-api-closure.md`](30-scf-s13-defaults-api-closure.md).
+The post-synchronization functional SCF/calculator gate passed 668 tests; the
+current-head 45-case decision matrix certified all cases for Anderson,
+Broyden, and CDIIS. Detailed commands, provenance, and distribution metrics
+are in the S13 record.
+
+S0–S13 completion does not include future thermal second-order theory,
+optimized `torch.compile`, dynamic multistage `vmap`, or public mixed-System
+routing. These remain separate future work and do not block the SCF redesign.
+
