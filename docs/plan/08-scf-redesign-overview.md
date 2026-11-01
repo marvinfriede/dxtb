@@ -1483,8 +1483,9 @@ derived from the GFN-xTB energy/free-energy and the functional physical core.
 
 ## 19. Final implementation status — S0–S13 complete
 
-The SCF redesign is complete through S13. The final implementation and
-benchmark-backed public decisions are recorded in
+S0–S12 are complete, the S13 numerical/default decisions are accepted, and
+S13.1 closes the public-boundary consistency gate. The final implementation
+and benchmark-backed public decisions are recorded in
 [`30-scf-s13-defaults-api-closure.md`](30-scf-s13-defaults-api-closure.md).
 This section supersedes the open-ended decisions above where S13 has now
 selected a policy; the earlier sections remain as design history.

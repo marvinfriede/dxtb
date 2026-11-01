@@ -3992,11 +3992,11 @@ remain binding design constraints. The package records above describe their
 own validation points and do not replace the current status and next action
 at the start of this section.
 
-### SCF redesign closure — S13 complete
+### SCF redesign closure — S0–S13 complete
 
-The SCF redesign is complete through S13 on the integrated branch. The final
-public strategy API, benchmark-selected Anderson/Potential default,
-unrolled/implicit differentiation policy, Potential response default,
+The S13 numerical/default policy and S13.1 public-boundary consistency gate
+are accepted. The public strategy API, benchmark-selected Anderson/Potential
+default, unrolled/implicit differentiation policy, Potential response default,
 convergence profiles, method restrictions, and support boundaries are recorded
 in [`30-scf-s13-defaults-api-closure.md`](30-scf-s13-defaults-api-closure.md).
 The post-synchronization functional SCF/calculator gate passed 668 tests; the
