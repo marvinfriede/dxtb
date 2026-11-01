@@ -31,7 +31,7 @@ from dxtb._src.components.interactions import (
     Potential,
 )
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Tensor
+from dxtb._src.typing import Any, Tensor
 from dxtb.config import ConfigSCF
 
 from .pure.conversions import density_to_charges, hamiltonian_to_density
@@ -67,6 +67,8 @@ def solve_nonselfconsistent(
     integrals: IntegralMatrices,
     n0: Tensor,
     occupation: Tensor,
+    *args: Any,
+    **kwargs: Any,
 ) -> SCFResult:
     """
     Solve a non-self-consistent electronic problem with exactly one eigensolve.
@@ -75,6 +77,11 @@ def solve_nonselfconsistent(
     to density-dependent interactions. Applying one arbitrary interaction pass
     would not be a well-defined physical model, so such components are rejected.
     """
+    if args or kwargs:
+        raise NotImplementedError(
+            "Legacy SCF engine positional/keyword overrides are no longer "
+            "supported by functional SCF."
+        )
     if len(interactions.components) > 0:
         interaction_labels = ", ".join(
             interaction.label for interaction in interactions.components
@@ -85,8 +92,8 @@ def solve_nonselfconsistent(
         )
 
     data = _Data(
-        occupation=occupation,
-        n0=n0,
+        occupation,
+        n0,
         numbers=numbers,
         ihelp=ihelp,
         cache=cache,

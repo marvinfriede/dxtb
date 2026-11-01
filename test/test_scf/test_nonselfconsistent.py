@@ -162,7 +162,7 @@ def test_complete_result_and_reference_energy(name: str) -> None:
 
 def test_exactly_one_diagonalization_and_no_initial_guess() -> None:
     """Dispatch directly to one diagonalization without an SCF guess."""
-    config = ConfigSCF(
+    config = ConfigSCF.create(
         method=labels.GFN0_XTB,
         maxiter=999,
         mixer=labels.MIXER_BROYDEN,
@@ -194,7 +194,7 @@ def test_mixer_and_maxiter_are_inert(maxiter: int, mixer: int) -> None:
     _, reference = run_problem("H2O")
     _, result = run_problem(
         "H2O",
-        config=ConfigSCF(
+        config=ConfigSCF.create(
             method=labels.GFN0_XTB,
             maxiter=maxiter,
             mixer=mixer,
@@ -326,3 +326,59 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
     potential = result["potential"].mono
     assert potential is not None
     assert torch.count_nonzero(potential).item() == 0
+
+
+def test_gfn0_low_level_engine_overrides_are_retired() -> None:
+    """Verify GFN0 rejects retired low-level positional and keyword overrides."""
+    from dxtb._src.scf.nonselfconsistent import solve_nonselfconsistent
+
+    _, numbers, positions, ihelp, hcore, integrals = build_problem("H2")
+    interactions = InteractionList()
+    cache = interactions.get_cache(numbers, positions, ihelp)
+    config = ConfigSCF(method=labels.GFN0_XTB)
+    charge = torch.tensor(0.0, dtype=torch.float64)
+
+    for kwargs in (
+        {"unexpected_option": 1},
+        {"eigen_options": {"method": "exacteig"}},
+        {"eigen_options": None},
+    ):
+        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+            solve(
+                numbers,
+                positions,
+                charge,
+                None,
+                interactions,
+                cache,
+                ihelp,
+                config,
+                integrals,
+                hcore.refocc,
+                **kwargs,
+            )
+        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+            solve_nonselfconsistent(
+                numbers,
+                interactions,
+                cache,
+                ihelp,
+                config,
+                integrals,
+                hcore.refocc,
+                hcore.refocc,
+                **kwargs,
+            )
+
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        solve_nonselfconsistent(
+            numbers,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            hcore.refocc,
+            hcore.refocc,
+            "extra_positional",
+        )

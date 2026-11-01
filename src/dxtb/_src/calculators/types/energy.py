@@ -221,6 +221,13 @@ class EnergyCalculator(BaseCalculator):
         OutputHandler.write_stdout_nf(" - Integral matrices ... ", v=3)
         if self.system.h0_setup is None:
             raise NotImplementedError("Core Hamiltonian setup is missing.")
+        if self.opts.ints.level < labels.INTLEVEL_HCORE:
+            raise NotImplementedError(
+                "Core Hamiltonian missing. Skipping the Core Hamiltonian in "
+                "the SCF is currently not supported. Please increase the "
+                "integral level to at least '2'. Currently, the level is set "
+                f"to '{self.opts.ints.level}'."
+            )
 
         # Batched Calculator calls remain on legacy mutable integral builders
         # until E6 introduces stacked-System evaluation.

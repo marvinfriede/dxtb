@@ -34,21 +34,22 @@ This engineering record documents the closure hardening of the functional `Model
   - Preserves the exact ordered sequence of `(label, occ)` slots across all lanes, pads each slot to `(B, max_atoms)`, and preserves independent autograd graphs for every occurrence.
 - **`Result.cenergies` (`src/dxtb/_src/calculators/result.py:397-413`)**:
   - Explicitly documented as a legacy compatibility dictionary view (`dict(self.classical)`) that retains the last occurrence when duplicate labels are present, while `Result.classical` is the authoritative ordered tuple representation.
-- **`Result.get_energies()` (`src/dxtb/_src/calculators/result.py:527-579`)**:
-  - Computes `ctotal = sum(value.sum().item() for _, value in self.classical)` directly over `self.classical` so duplicate labels are never dropped from total classical energy reporting, and disambiguates repeated labels in `"Classical"["sub"]` as `f"{name} ({occ})"`.
+- **`Result.get_energies()` (`src/dxtb/_src/calculators/result.py:240-272`)**:
+  - Computes `ctotal = sum(value.sum().item() for _, value in self.classical)` directly over `self.classical` so duplicate labels are never dropped from total classical energy reporting, and disambiguates repeated or colliding pre-suffixed labels in `"Classical"["sub"]` (`while f"{name} ({suffix})" in classical: suffix += 1`) so display keys never overwrite one another.
 
 ---
 
 ## 3. Packed Input & Option Compatibility Matrix (`Section 3`)
 
-Implemented in `src/dxtb/_src/calculators/packed_result.py` and `src/dxtb/_src/scf/functional/padded.py`:
+Implemented in `src/dxtb/_src/calculators/packed_result.py` and `src/dxtb/_src/scf/functional/padded.py` (with final public vs low-level option separation documented in [`functional-route-final-acceptance.md`](functional-route-final-acceptance.md)):
 
 | Input / Option Category | `legacy_compat=False` (Functional Packed API) | `legacy_compat=True` (`Calculator` Compatibility Mode) | `strict_e6bcompat=True` Override |
 | :--- | :--- | :--- | :--- |
-| **Unknown public `**kwargs`** | Raises `TypeError` by default; ignored only if `ignore_unknown_kwargs=True`. | Raises `TypeError` by default; ignored only if `ignore_unknown_kwargs=True`. | Always raises `TypeError` (ignores `ignore_unknown_kwargs`). |
+| **Recognized public `**kwargs` (`write_overlap`, `write_dipole`, `write_quadrupole`, `write_hcore`, `cuda_sync_in_scf`)** | Executed (`torch.save` for `write_*`; `timer.cuda_sync` scoped in `try`/`finally` for `cuda_sync_in_scf`). | Executed (`torch.save` for `write_*`; `timer.cuda_sync` scoped in `try`/`finally` for `cuda_sync_in_scf`). | Executed. |
+| **Unknown public `**kwargs`** | **Always raises `TypeError`** (regardless of `ignore_unknown_kwargs`). | Raises `TypeError` by default; ignored only if `ignore_unknown_kwargs=True and not strict_e6bcompat`. | Always raises `TypeError` (ignores `ignore_unknown_kwargs`). |
 | **Removed `store_*` kwargs** | Always raises `TypeError`. | Always raises `TypeError`. | Always raises `TypeError`. |
-| **Valid `legacy_options.kwargs` (`fwd_options`, `bck_options`, `eigen_options`) & `legacy_options.args`** | Routes lane to `LEGACY_COMPOSED` and forwards options to `scf.solve_legacy`. | Routes lane to `LEGACY_COMPOSED` and forwards options to `scf.solve_legacy`. | Same. |
-| **Unknown `legacy_options.kwargs`** | Raises `TypeError` by default; filtered out only if `ignore_unknown_kwargs=True`. | Raises `TypeError` by default; filtered out only if `ignore_unknown_kwargs=True`. | Always raises `TypeError`. |
+| **Valid `legacy_options.kwargs` (`fwd_options`, `bck_options`, `eigen_options`) & `legacy_options.args`** | Routes lane to `LEGACY_COMPOSED` (`SEPARATE_ROUTE` for `GFN0`) and forwards options unchanged to `scf.solve_legacy`. | Routes lane to `LEGACY_COMPOSED` (`SEPARATE_ROUTE` for `GFN0`) and forwards options unchanged to `scf.solve_legacy`. | Same. |
+| **Unknown `legacy_options.kwargs` & extra `legacy_options.args`** | **Never filtered by `ignore_unknown_kwargs`**; forwarded to `_Data.__init__`, which raises `TypeError`. | **Never filtered by `ignore_unknown_kwargs`**; forwarded to `_Data.__init__`, which raises `TypeError`. | Always raises `TypeError`. |
 | **GFN2 with non-Fock `scp_mode` (`CHARGE` / `POTENTIAL`)** | Emits `UserWarning` and normalizes `scp_mode` to `SCP_MODE_FOCK` (unless `system.config.strict=True` / `system.config.scf.strict=True`, which raises `NotImplementedError`). | Emits `UserWarning` and normalizes `scp_mode` to `SCP_MODE_FOCK` (unless `system.config.strict=True` / `system.config.scf.strict=True`, which raises `NotImplementedError`). | Raises `NotImplementedError`. |
 | **Charge (`chrg`) — `int` / `float` / 0D `Tensor`** | Broadcasts any scalar charge across all $B$ lanes. | Accepts default `0` for `count > 1`; raises `ValueError` for non-default scalar `int`/`float` or any 0D `Tensor` when `count > 1`. | Same as selected `legacy_compat`. |
 | **Charge (`chrg`) — 1D `(B,)`, 2D `(B, 1)`, or `Sequence` of length `B`** | Accepted; preserves per-lane autograd and validates dtype/device. | Accepted; preserves per-lane autograd and validates dtype/device. | Same. |
@@ -96,8 +97,9 @@ All 20 `Result` dataclass fields plus the derived `Result.multipoles` property a
 1. **Contract A — Finite-Trajectory Differentiation (`maxiter=3`)**:
    - Tests `test_b8a_first_and_second_order_functional_properties` and `test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces` (including vibrational/IR parity and finite-temperature free-energy stationarity).
    - Verifies that differentiating the fixed-trip $K$-step trajectory via `torch.func` matches central finite differences of the same $K$-step trajectory and `Calculator` unrolled autograd across GFN1 and GFN2.
-2. **Contract B — Converged Physical Property Acceptance (`maxiter=10..15`, `x_atol=1e-12`, residual $< 10^{-12}$)**:
-   - Tests `test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives` and `test_contract_b_equilibrium_vibrations_ir_raman_and_third_order` across GFN1 ($\text{H}_2$, $\text{H}_2\text{O}$) and GFN2 ($\text{H}_2$, $\text{H}_2\text{O}$).
+2. **Contract B — Converged Physical Property Acceptance (`maxiter=10..15`, `x_atol=1e-12`, residual $< 10^{-12}`) and Fixed-Point Response Convergence (`maxiter=30` vs `40` vs `SCF_MODE_IMPLICIT`)**:
+   - Tests `test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives`, `test_contract_b_equilibrium_vibrations_ir_raman_and_third_order`, and `test_section5_primal_vs_derivative_fixed_point_convergence` across GFN1 ($\text{H}_2$, $\text{H}_2\text{O}$) and GFN2 ($\text{H}_2$, $\text{H}_2\text{O}$).
+   - Explicitly separates (i) primal SCF root convergence (`res.converged == True`, `res.residual.abs().max() < 1e-12`), (ii) convergence of finite-trip unrolled derivatives (`maxiter=30` vs `maxiter=40`) toward the physical fixed-point response (`SCF_MODE_IMPLICIT`), and (iii) internal AD consistency (`jacfwd(grad)` vs `jacrev(grad)` and central finite differences of the same $K$-step function). See [`functional-route-final-acceptance.md`](functional-route-final-acceptance.md) Section 5.
    - Verifies:
      - Tight SCF convergence (`res.converged == True`, `res.residual.abs().max() < 1e-12`).
      - Agreement against converged `Calculator` properties and central finite differences across `energy`, `forces`, `hessian`, `dipole`, `quadrupole`, `polarizability`, `dipole_deriv`, `pol_deriv`, `hyperpolarizability`, `third_order_directional`, `vibration`, `ir`, and `raman`.

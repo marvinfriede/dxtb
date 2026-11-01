@@ -78,17 +78,25 @@ def classify_legacy_system(
         return LegacySystemRoute.REJECTED
 
     config = system.config
-    if config.scf.requires_iterations is False or {"all", "scf"} & set(
-        config.exclude
-    ):
+    if {"all", "scf"} & set(config.exclude):
+        if legacy_options is not None and (
+            legacy_options.args or legacy_options.kwargs
+        ):
+            raise NotImplementedError(
+                "Legacy SCF engine positional/keyword overrides are no longer "
+                "supported by functional SCF."
+            )
         return LegacySystemRoute.SEPARATE_ROUTE
 
     core = system.exact_core
-    if core is None:
-        return LegacySystemRoute.REJECTED
+    if (
+        core is None
+        or core.integral is None
+        or system.h0_setup is None
+        or config.ints.level < labels.INTLEVEL_HCORE
+    ):
+        return LegacySystemRoute.LEGACY_COMPOSED
 
-    if core.integral is None:
-        return LegacySystemRoute.REJECTED
     if legacy_options is not None and (
         legacy_options.args or legacy_options.kwargs
     ):
@@ -96,6 +104,9 @@ def classify_legacy_system(
             "Legacy SCF engine positional/keyword overrides are no longer "
             "supported by functional SCF."
         )
+
+    if config.scf.requires_iterations is False:
+        return LegacySystemRoute.SEPARATE_ROUTE
 
     eligible, _ = functional_scf_interactions_eligible(system.interactions)
     if not eligible:
@@ -107,13 +118,6 @@ def classify_legacy_system(
             f"Functional SCF does not support interaction extension(s): {names}."
         )
 
-    if (
-        len(core.classical_terms) != len(system.classicals.components)
-        or system._active_exact_core() is None
-        or config.scf.differentiation.value == "implicit"
-    ):
-        return LegacySystemRoute.LEGACY_COMPOSED
-
     scf_config = config.scf
     if scf_config.fermi.etemp < 0.0:
         raise ValueError("Electronic Temperature must be non-negative.")
@@ -121,6 +125,41 @@ def classify_legacy_system(
         raise ValueError("Fermi maxiter must be non-negative.")
     if scf_config.maxiter < 0:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
+
+    if any(
+        type(stage.method).__name__ == "SOSCFMethod"
+        for stage in scf_config.strategy.stages
+    ):
+        kt = float(scf_config.fermi.etemp) * 3.166811563e-6
+        if kt >= 3.0e-7:
+            raise ValueError(
+                "SOSCF cannot be used with active Fermi smearing. Use "
+                "Anderson, Broyden, or CDIIS, or disable smearing explicitly."
+            )
+
+    eager_only = len(scf_config.strategy.stages) != 1 or any(
+        not getattr(stage.method, "supports_fixed_trip", True)
+        for stage in scf_config.strategy.stages
+    )
+    if scf_config.differentiation.value == "unrolled" and eager_only:
+        raise ValueError(
+            "This SCF strategy requires eager/implicit execution; "
+            "unrolled fixed-trip execution does not support its "
+            "dynamic or eager-only method stages."
+        )
+
+    if core.integral.driver_type == labels.INTDRIVER_LIBCINT:
+        return LegacySystemRoute.LEGACY_COMPOSED
+    if core.integral.driver_type != labels.INTDRIVER_PYTORCH:
+        return LegacySystemRoute.REJECTED
+
+    if (
+        len(core.classical_terms) != len(system.classicals.components)
+        or system._active_exact_core() is None
+        or scf_config.differentiation.value == "implicit"
+        or eager_only
+    ):
+        return LegacySystemRoute.LEGACY_COMPOSED
 
     return LegacySystemRoute.MAPPED
 

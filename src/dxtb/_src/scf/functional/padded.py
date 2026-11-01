@@ -674,6 +674,14 @@ def evaluate_padded_fixed_trip(
         )
     if core.config.scf.maxiter < 0:
         raise ValueError("Padded fixed-trip evaluation requires maxiter >= 0.")
+    strategy = core.config.scf.strategy
+    if len(strategy.stages) != 1 or not getattr(
+        strategy.stages[0].method, "supports_fixed_trip", True
+    ):
+        raise ValueError(
+            "Padded fixed-trip evaluation requires a single-stage "
+            "fixed-trip SCF strategy."
+        )
     for name, value, shape in (
         ("field", field, (3,)),
         ("field_grad", field_grad, (3, 3)),

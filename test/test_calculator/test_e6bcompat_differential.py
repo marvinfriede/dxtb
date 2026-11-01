@@ -501,9 +501,12 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
 )
 def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     representation: scf.SCFRepresentation,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unsupported packed GFN2 coordinates fail before mapping, without fallback."""
+    """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
+    from dxtb._src.calculators.legacy_composition import (
+        LegacySystemRoute,
+        classify_legacy_system,
+    )
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     strategy = scf.SCFStrategy(
@@ -516,24 +519,62 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     )
     config = Config.create(
         method=labels.GFN2_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
         strategy=strategy,
-        maxiter=2,
+        maxiter=12,
+        fermi_etemp=0.0,
     )
-    system = Model(
-        par=ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE),
-        config=config,
+    param = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+    model = Model(par=param, config=config, auto_int_level=False)
+    sys_h2 = model.setup(torch.tensor([1, 1], dtype=torch.int64))
+    sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    assert classify_legacy_system(sys_h2) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys_h2o) is LegacySystemRoute.MAPPED
+    assert sys_h2.config.scf.strategy.stages[0].representation is representation
+
+    pos_h2 = _geometry((1, 1), 0)
+    pos_h2o = _geometry((8, 1, 1), 0)
+    OutputHandler.clear_warnings()
+    packed = evaluate_packed_systems(
+        (sys_h2, sys_h2o),
+        (pos_h2, pos_h2o),
+        legacy_compat=False,
+    )
+    assert not any(
+        "Fock" in msg or "fock" in msg for msg, _ in OutputHandler.warnings
+    )
+    ref_h2 = sys_h2.singlepoint(pos_h2)
+    ref_h2o = sys_h2o.singlepoint(pos_h2o)
+    torch.testing.assert_close(
+        packed.energy[0, :2], ref_h2.energy, atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        packed.energy[1, :3], ref_h2o.energy, atol=1e-12, rtol=1e-12
+    )
+
+    # Legacy public Calculator(batch_mode=2) still uses BaseTSCF, which rejects non-Fock GFN2 without substitution.
+    numbers = torch.tensor([[1, 1], [1, 1]], dtype=torch.int64)
+    positions = torch.stack((pos_h2, _geometry((1, 1), 1)))
+    calculator = Calculator(
+        numbers,
+        param,
+        opts={
+            "method": labels.GFN2_XTB,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+            "strategy": strategy,
+            "maxiter": 2,
+            "verbosity": 0,
+        },
+        batch_mode=2,
+        dtype=DTYPE,
         auto_int_level=False,
-    ).setup(torch.tensor([1, 1], dtype=torch.int64))
-
-    def fail_if_mapped(*args, **kwargs):
-        raise AssertionError("unsupported strategy reached the packed map")
-
-    monkeypatch.setattr(
-        "dxtb._src.calculators.packed_result.evaluate_padded_systems",
-        fail_if_mapped,
     )
+    OutputHandler.clear_warnings()
     with pytest.raises(NotImplementedError, match="explicit Fock"):
-        evaluate_packed_systems((system,), (_geometry((1, 1), 0),))
+        calculator.singlepoint(positions)
+    assert not OutputHandler.warnings
 
 
 def test_public_packed_gfn2_fock_route_has_no_nonfock_warning() -> None:
@@ -812,32 +853,34 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
             packed.energy[idx, :nat], ref.energy, atol=1.0e-10, rtol=1.0e-10
         )
 
-    # E6bcompat strict vs warned GFN2 non-Fock and unknown kwargs
-    cfg_gfn2_charge = Config.create(
+    # Default S13 GFN2 strategy (Anderson/Potential) executes on MAPPED without Fock substitution
+    cfg_gfn2_default = Config.create(
         method=labels.GFN2_XTB,
         **(_SETTINGS | {"strategy": "anderson"}),
     )
-    sys_gfn2_charge = Model(
-        par=param_gfn2, config=cfg_gfn2_charge, auto_int_level=False
+    sys_gfn2_default = Model(
+        par=param_gfn2, config=cfg_gfn2_default, auto_int_level=False
     ).setup(torch.tensor([1, 1], dtype=torch.int64))
-
-    with pytest.raises(NotImplementedError, match="explicit Fock"):
-        evaluate_packed_systems(
-            (sys_gfn2_charge,),
-            (_geometry((1, 1), 0),),
-            strict_e6bcompat=True,
-        )
-
+    assert (
+        sys_gfn2_default.config.scf.strategy.stages[0].representation
+        is scf.SCFRepresentation.POTENTIAL
+    )
+    assert classify_legacy_system(sys_gfn2_default) is LegacySystemRoute.MAPPED
     OutputHandler.clear_warnings()
-    with pytest.raises(NotImplementedError, match="explicit Fock"):
-        evaluate_packed_systems(
-            (sys_gfn2_charge,),
-            (_geometry((1, 1), 0),),
-            strict_e6bcompat=False,
-        )
+    packed_gfn2_def = evaluate_packed_systems(
+        (sys_gfn2_default,),
+        (_geometry((1, 1), 0),),
+        strict_e6bcompat=True,
+    )
     assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        packed_gfn2_def.energy[0],
+        sys_gfn2_default.singlepoint(_geometry((1, 1), 0)).energy,
+        atol=1e-12,
+        rtol=1e-12,
+    )
 
-    with pytest.raises(TypeError, match="unexpected keyword arguments"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         evaluate_packed_systems(
             (sys0,),
             (_geometry((1, 1), 0),),
@@ -1083,12 +1126,12 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
     pos_h2 = _geometry((1, 1), 0)
     pos_h3p = _geometry((1, 1, 1), 0)
 
-    # 1. Unknown kwargs rejected by default (both public and legacy_options)
+    # 1. Unknown public kwargs rejected by default; legacy_options rejected with NotImplementedError
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         evaluate_packed_systems(
             (sys_h2,), (pos_h2,), unknown_public_option=True
         )
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         evaluate_packed_systems(
             (sys_h2,),
             (pos_h2,),
@@ -1103,16 +1146,26 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             ignore_unknown_kwargs=True,
             store_overlap=True,
         )
-    # Legacy engine options are retired, including otherwise valid low-level keys.
-    with pytest.raises(NotImplementedError, match="engine positional/keyword"):
+    # Legacy engine options are retired, even when ignore_unknown_kwargs=True
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         evaluate_packed_systems(
             (sys_h2,),
             (pos_h2,),
             legacy_options=LegacySCFOptions(
                 kwargs={"fwd_options": {"damp": 0.25}, "ignored_extra": 123}
             ),
+            legacy_compat=True,
             ignore_unknown_kwargs=True,
         )
+    # Explicit legacy_compat + ignore_unknown_kwargs ignores unknown PUBLIC kwargs
+    res_ignored = evaluate_packed_systems(
+        (sys_h2,),
+        (pos_h2,),
+        legacy_compat=True,
+        ignore_unknown_kwargs=True,
+        ignored_public_extra=123,
+    )
+    assert res_ignored.energy.shape == (1, 2)
 
     # 2. Charge rules in legacy_compat=True vs legacy_compat=False
     with pytest.raises(ValueError, match="single float or integer"):
@@ -1441,3 +1494,639 @@ def test_complete_packed_result_adapter_all_fields_and_model_param_gradients() -
             if idx >= 7 and float(pg.abs().max()) > 0.0:
                 non_zero_param_grads += 1
     assert non_zero_param_grads > 0
+
+
+def test_option_ownership_and_side_effects_contract(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify public write_*/cuda_sync_in_scf execution vs low-level SCF options."""
+    from dxtb._src.calculators import packed_result as pr_mod
+    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
+    from dxtb._src.calculators.packed_result import (
+        evaluate_calculator_packed_singlepoint,
+        evaluate_packed_systems,
+    )
+    from dxtb._src.timing import timer
+
+    compositions = ((1, 1), (8, 1, 1))
+    source_positions = tuple(_geometry(nums, 0) for nums in compositions)
+    public_numbers, public_positions = _pad_public_inputs(
+        compositions, source_positions
+    )
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    opts = dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0)
+    calc = Calculator(public_numbers, param_gfn1, opts=opts, dtype=DTYPE)
+
+    # 1. Explicit paths for write_overlap, write_dipole, write_quadrupole, write_hcore
+    explicit_paths = {
+        "write_overlap": tmp_path / "ovlp_cand.pt",
+        "write_dipole": tmp_path / "dip_cand.pt",
+        "write_quadrupole": tmp_path / "quad_cand.pt",
+        "write_hcore": tmp_path / "hcore_cand.pt",
+    }
+    res_cand = evaluate_calculator_packed_singlepoint(
+        calc,
+        public_positions,
+        **explicit_paths,
+    )
+    for key, attr in (
+        ("write_overlap", "overlap"),
+        ("write_dipole", "dipole_integrals"),
+        ("write_quadrupole", "quadrupole_integrals"),
+        ("write_hcore", "hcore"),
+    ):
+        saved = torch.load(explicit_paths[key], weights_only=True)
+        expected = getattr(res_cand, attr)
+        assert expected is not None
+        torch.testing.assert_close(saved, expected, atol=0.0, rtol=0.0)
+
+    # 2. Default filenames (write_*=True) match Calculator.singlepoint
+    dir_legacy = tmp_path / "legacy_default"
+    dir_cand = tmp_path / "cand_default"
+    dir_legacy.mkdir()
+    dir_cand.mkdir()
+
+    monkeypatch.chdir(dir_legacy)
+    res_leg = calc.singlepoint(
+        public_positions,
+        write_overlap=True,
+        write_dipole=True,
+        write_quadrupole=True,
+        write_hcore=True,
+    )
+    monkeypatch.chdir(dir_cand)
+    res_cand_def = evaluate_calculator_packed_singlepoint(
+        calc,
+        public_positions,
+        write_overlap=True,
+        write_dipole=True,
+        write_quadrupole=True,
+        write_hcore=True,
+    )
+    for fname in (
+        "overlappytorch.pt",
+        "dipolepytorch.pt",
+        "quadrupolepytorch.pt",
+        "gfn1hamiltonian.pt",
+    ):
+        assert (dir_legacy / fname).exists()
+        assert (dir_cand / fname).exists()
+        t_leg = torch.load(dir_legacy / fname, weights_only=True)
+        t_cand = torch.load(dir_cand / fname, weights_only=True)
+        torch.testing.assert_close(t_cand, t_leg, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        res_cand_def.energy, res_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 3. cuda_sync_in_scf sets timer.cuda_sync during SCF and restores it in finally
+    observed_sync: list[bool] = []
+    orig_eval_padded = pr_mod.evaluate_padded_systems
+
+    def spy_eval_padded(*args, **kwargs):
+        observed_sync.append(bool(timer.cuda_sync))
+        return orig_eval_padded(*args, **kwargs)
+
+    monkeypatch.setattr(pr_mod, "evaluate_padded_systems", spy_eval_padded)
+    old_sync = timer.cuda_sync
+    timer.cuda_sync = False
+    try:
+        evaluate_calculator_packed_singlepoint(
+            calc, public_positions, cuda_sync_in_scf=True
+        )
+        assert observed_sync == [True]
+        assert timer.cuda_sync is False
+    finally:
+        timer.cuda_sync = old_sync
+
+    # 4. Option separation: unknown public kwargs vs low-level legacy_options
+    lane_systems = pr_mod.build_calculator_lane_systems(calc)
+    # Functional API (legacy_compat=False) always rejects unknown public kwargs
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        evaluate_packed_systems(
+            lane_systems,
+            source_positions,
+            legacy_compat=False,
+            ignore_unknown_kwargs=True,
+            unknown_public_kw=1,
+        )
+    # Low-level legacy_options are never filtered by ignore_unknown_kwargs=True and raise NotImplementedError
+    for bad_key in ("unexpected_option", "solver_options", "custom_bad_scf_kw"):
+        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+            evaluate_packed_systems(
+                lane_systems,
+                source_positions,
+                legacy_options=LegacySCFOptions(kwargs={bad_key: 1}),
+                legacy_compat=True,
+                ignore_unknown_kwargs=True,
+            )
+    # Low-level positional args also fail with NotImplementedError
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            lane_systems,
+            source_positions,
+            legacy_options=LegacySCFOptions(args=("extra_positional",)),
+            legacy_compat=True,
+            ignore_unknown_kwargs=True,
+        )
+
+
+def test_classical_display_key_collision_resolution() -> None:
+    """Result.get_energies() never collides on pre-suffixed classical labels."""
+    from dxtb._src.calculators.result import Result
+
+    e1 = torch.tensor([0.1, 0.2], dtype=DTYPE)
+    e2 = torch.tensor([0.3, 0.4], dtype=DTYPE)
+    e3 = torch.tensor([0.5, 0.6], dtype=DTYPE)
+    e4 = torch.tensor([0.7, 0.8], dtype=DTYPE)
+    classical_entries = (
+        ("Custom", e1),
+        ("Custom", e2),
+        ("Custom (1)", e3),
+        ("Custom (2)", e4),
+    )
+    total = e1 + e2 + e3 + e4
+    res = Result.snapshot(
+        energy=total,
+        scf=torch.zeros_like(total),
+        classical=classical_entries,
+        fenergy=torch.zeros_like(total),
+        iterations=torch.tensor(0, dtype=torch.int64),
+    )
+    energies = res.get_energies()
+    sub = energies["Classical"]["sub"]
+    assert isinstance(sub, dict)
+    assert len(sub) == 4
+    assert list(sub.keys()) == [
+        "Custom (1)",
+        "Custom (2)",
+        "Custom (1) (1)",
+        "Custom (2) (1)",
+    ]
+    assert [v["value"] for v in sub.values()] == pytest.approx(
+        [0.3, 0.7, 1.1, 1.5], abs=1e-15
+    )
+    assert sum(v["value"] for v in sub.values()) == pytest.approx(
+        energies["Classical"]["value"], abs=1e-15
+    )
+    assert res.classical == classical_entries
+
+    # Reverse order: singleton "Custom (1)" precedes duplicate "Custom"
+    classical_rev = (
+        ("Custom (1)", e3),
+        ("Custom", e1),
+        ("Custom", e2),
+    )
+    res_rev = Result.snapshot(
+        energy=e1 + e2 + e3,
+        scf=torch.zeros_like(e1),
+        classical=classical_rev,
+        fenergy=torch.zeros_like(e1),
+        iterations=torch.tensor(0, dtype=torch.int64),
+    )
+    sub_rev = res_rev.get_energies()["Classical"]["sub"]
+    assert len(sub_rev) == 3
+    assert list(sub_rev.keys()) == [
+        "Custom (1)",
+        "Custom (2)",
+        "Custom (3)",
+    ]
+    assert [v["value"] for v in sub_rev.values()] == pytest.approx(
+        [1.1, 0.3, 0.7], abs=1e-15
+    )
+    assert sum(v["value"] for v in sub_rev.values()) == pytest.approx(
+        res_rev.get_energies()["Classical"]["value"], abs=1e-15
+    )
+
+
+def test_production_routing_differential_gate_matrix() -> None:
+    """Differential gate between Calculator.singlepoint and candidate packed route."""
+    from dxtb._src.calculators.model import Model
+    from dxtb._src.calculators.packed_result import (
+        build_calculator_lane_systems,
+        evaluate_calculator_packed_singlepoint,
+        evaluate_packed_systems,
+    )
+    from dxtb._src.components.classicals.dispersion import new_dispersion
+    from dxtb._src.components.interactions.field.efield import (
+        LABEL_EFIELD,
+        ElectricField,
+    )
+    from dxtb._src.typing.exceptions import (
+        SCFConvergenceError,
+        SCFConvergenceWarning,
+    )
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+
+    # 1. Mode 2 conformer setup deduplication: Model.setup called once for B conformers
+    conformer_nums = torch.tensor([[8, 1, 1], [8, 1, 1], [8, 1, 1]], dtype=torch.int64)
+    conformer_pos = torch.stack(
+        [
+            _geometry((8, 1, 1), 0),
+            _geometry((8, 1, 1), 0) + 0.02,
+            _geometry((8, 1, 1), 0) - 0.01,
+        ],
+        dim=0,
+    )
+    calc_m2 = Calculator(
+        conformer_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, batch_mode=2, verbosity=0),
+        dtype=DTYPE,
+    )
+    lane_sys_m2 = build_calculator_lane_systems(calc_m2)
+    assert len(lane_sys_m2) == 3
+    assert lane_sys_m2[0] is lane_sys_m2[1]
+    assert lane_sys_m2[1] is lane_sys_m2[2]
+    m2_chrg = torch.zeros(3, dtype=DTYPE)
+    res_m2_leg = calc_m2.singlepoint(conformer_pos, chrg=m2_chrg)
+    res_m2_cand = evaluate_calculator_packed_singlepoint(
+        calc_m2, conformer_pos, chrg=m2_chrg
+    )
+    res_m2_cand_default_chrg = evaluate_calculator_packed_singlepoint(
+        calc_m2, conformer_pos
+    )
+    torch.testing.assert_close(
+        res_m2_cand.energy, res_m2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        res_m2_cand_default_chrg.energy, res_m2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 2. Trailing all-zero columns and non-contiguous interior zero padding in Mode 1
+    nums_2d, pos_2d = _pad_public_inputs(
+        ((8, 1, 1), (1, 1)), (_geometry((8, 1, 1), 0), _geometry((1, 1), 0))
+    )
+    calc_ref2 = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_ref2_leg = calc_ref2.singlepoint(pos_2d)
+
+    trailing_nums = torch.tensor([[8, 1, 1, 0], [1, 1, 0, 0]], dtype=torch.int64)
+    trailing_pos = torch.zeros((2, 4, 3), dtype=DTYPE)
+    trailing_pos[0, :3] = _geometry((8, 1, 1), 0)
+    trailing_pos[1, :2] = _geometry((1, 1), 0)
+    calc_tr = Calculator(
+        trailing_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_tr_cand = evaluate_calculator_packed_singlepoint(calc_tr, trailing_pos)
+    assert res_tr_cand.energy.shape == (2, 4)
+    torch.testing.assert_close(
+        res_tr_cand.energy[:, :3], res_ref2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+    assert float(res_tr_cand.energy[0, 3].abs().item()) == 0.0
+    assert float(res_tr_cand.energy[1, 2:].abs().max().item()) == 0.0
+
+    noncontig_nums = torch.tensor([[8, 1, 1, 0], [1, 0, 1, 0]], dtype=torch.int64)
+    noncontig_pos = torch.zeros((2, 4, 3), dtype=DTYPE)
+    noncontig_pos[0, :3] = _geometry((8, 1, 1), 0)
+    noncontig_pos[1, 0] = _geometry((1, 1), 0)[0]
+    noncontig_pos[1, 2] = _geometry((1, 1), 0)[1]
+    calc_nc = Calculator(
+        noncontig_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_nc_cand = evaluate_calculator_packed_singlepoint(calc_nc, noncontig_pos)
+    assert res_nc_cand.energy.shape == (2, 4)
+    torch.testing.assert_close(
+        res_nc_cand.energy[0, :3], res_ref2_leg.energy[0, :3], atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        res_nc_cand.energy[1, [0, 2]], res_ref2_leg.energy[1, :2], atol=1e-9, rtol=1e-9
+    )
+    assert float(res_nc_cand.energy[1, 1].abs().item()) == 0.0
+    assert float(res_nc_cand.energy[1, 3].abs().item()) == 0.0
+
+    # 3. Multiple explicit DispersionD3 instances on batched Calculator (2D numbers)
+    nums_2d, pos_2d = _pad_public_inputs(
+        ((1, 1), (8, 1, 1)), (_geometry((1, 1), 0), _geometry((8, 1, 1), 0))
+    )
+    d3_a = new_dispersion(nums_2d, param_gfn1, device=DEVICE, dtype=DTYPE)
+    d3_b = new_dispersion(nums_2d, param_gfn1, device=DEVICE, dtype=DTYPE)
+    assert d3_a is not None and d3_b is not None
+    d3_a.label = "D3:first"
+    d3_b.label = "D3:second"
+    d3_b.param["s6"] = torch.tensor(0.5, dtype=DTYPE)
+    calc_multi_d3 = Calculator(
+        nums_2d,
+        param_gfn1,
+        classical=[d3_a, d3_b],
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            exclude=["disp"],
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    res_d3_leg = calc_multi_d3.singlepoint(pos_2d)
+    res_d3_cand = evaluate_calculator_packed_singlepoint(calc_multi_d3, pos_2d)
+    assert tuple(k for k, _ in res_d3_cand.classical) == tuple(
+        k for k, _ in res_d3_leg.classical
+    )
+    torch.testing.assert_close(
+        res_d3_cand.energy, res_d3_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 4. Integral level < INTLEVEL_HCORE and missing h0_setup raise NotImplementedError
+    for bad_level, match_str in (
+        (labels.INTLEVEL_NONE, "Core Hamiltonian setup is missing"),
+        (labels.INTLEVEL_OVERLAP, "Core Hamiltonian missing"),
+    ):
+        calc_bad_lvl = Calculator(
+            nums_2d,
+            param_gfn1,
+            opts=dict(
+                _SETTINGS,
+                method=labels.GFN1_XTB,
+                int_level=bad_level,
+                verbosity=0,
+            ),
+            auto_int_level=False,
+            dtype=DTYPE,
+        )
+        with pytest.raises(NotImplementedError, match=match_str):
+            calc_bad_lvl.singlepoint(pos_2d)
+        with pytest.raises(NotImplementedError, match=match_str):
+            evaluate_calculator_packed_singlepoint(calc_bad_lvl, pos_2d)
+
+    # 5. Constructor ElectricField default on Calculator vs call-time override
+    ef_default = torch.tensor([0.002, -0.001, 0.001], dtype=DTYPE)
+    calc_ef = Calculator(
+        nums_2d,
+        param_gfn1,
+        interaction=[ElectricField(field=ef_default)],
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            convergence="tight",
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    res_ef_leg = calc_ef.singlepoint(pos_2d)
+    res_ef_cand = evaluate_calculator_packed_singlepoint(calc_ef, pos_2d)
+    torch.testing.assert_close(
+        res_ef_cand.energy, res_ef_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 6. Outer maxiter=0, SCFConvergenceWarning (force_convergence=False), and SCFConvergenceError
+    calc_iter0 = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, maxiter=0, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_i0_leg = calc_iter0.singlepoint(pos_2d)
+    res_i0_cand = evaluate_calculator_packed_singlepoint(calc_iter0, pos_2d)
+    assert int(res_i0_cand.iterations.item()) == int(res_i0_leg.iterations.item()) == 1
+    torch.testing.assert_close(
+        res_i0_cand.energy, res_i0_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    calc_warn = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            maxiter=1,
+            x_atol=1e-14,
+            x_atol_max=1e-14,
+            force_convergence=False,
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    OutputHandler.clear_warnings()
+    res_w_leg = calc_warn.singlepoint(pos_2d)
+    assert any(
+        issubclass(cat, SCFConvergenceWarning)
+        for _, cat in OutputHandler.warnings
+    )
+    OutputHandler.clear_warnings()
+    res_w_cand = evaluate_calculator_packed_singlepoint(calc_warn, pos_2d)
+    assert any(
+        issubclass(cat, SCFConvergenceWarning)
+        for _, cat in OutputHandler.warnings
+    )
+    torch.testing.assert_close(
+        res_w_cand.energy, res_w_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    calc_err = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            maxiter=1,
+            x_atol=1e-14,
+            x_atol_max=1e-14,
+            force_convergence=True,
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    with pytest.raises(SCFConvergenceError):
+        calc_err.singlepoint(pos_2d)
+    with pytest.raises(SCFConvergenceError) as exc_info:
+        evaluate_calculator_packed_singlepoint(calc_err, pos_2d)
+    # Lane 0 (H2) is already at its symmetric physical fixed point after 1 step;
+    # lane 1 (H2O) fails S2 certification at maxiter=1 and reports source_id=1.
+    assert getattr(exc_info.value, "source_id", None) == 1
+
+    # 7. GFN2 default S13 strategy (Anderson/Potential) and Charge/Fock representations
+    calc_gfn2_default = Calculator(
+        nums_2d,
+        param_gfn2,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN2_XTB,
+            strategy="anderson",
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    with pytest.raises(NotImplementedError, match="explicit Fock"):
+        calc_gfn2_default.singlepoint(pos_2d)
+    OutputHandler.clear_warnings()
+    res_g2_cand = evaluate_calculator_packed_singlepoint(
+        calc_gfn2_default, pos_2d
+    )
+    assert not OutputHandler.warnings
+    lane_sys_g2 = build_calculator_lane_systems(calc_gfn2_default)
+    ref_g2_0 = lane_sys_g2[0].singlepoint(_geometry((1, 1), 0))
+    ref_g2_1 = lane_sys_g2[1].singlepoint(_geometry((8, 1, 1), 0))
+    torch.testing.assert_close(
+        res_g2_cand.energy[0, :2], ref_g2_0.energy, atol=1e-11, rtol=1e-11
+    )
+    torch.testing.assert_close(
+        res_g2_cand.energy[1, :3], ref_g2_1.energy, atol=1e-11, rtol=1e-11
+    )
+
+
+def test_failure_precedence_six_stages() -> None:
+    """Verify the 6-stage failure precedence order when multiple errors coexist."""
+    from tad_mctc.exceptions import DtypeError
+
+    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.typing.exceptions import SCFConvergenceError
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    pos_h2 = _geometry((1, 1), 0)
+
+    # Construct a System with int_level=INTLEVEL_OVERLAP (Stage 4 error) and
+    # maxiter=1, force_convergence=True (Stage 6 error)
+    cfg_stage4 = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "int_level": labels.INTLEVEL_OVERLAP,
+                "maxiter": 1,
+                "x_atol": 1e-14,
+                "x_atol_max": 1e-14,
+                "force_convergence": True,
+            }
+        ),
+    )
+    sys_stage4 = Model(
+        par=param_gfn1, config=cfg_stage4, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+
+    bad_pos_dtype = pos_h2.to(torch.float32)
+    valid_field = torch.tensor([0.01, 0.0, 0.0], dtype=DTYPE)
+    bad_legacy_opts = LegacySCFOptions(kwargs={"unknown_scf_kw": 1})
+
+    # Stage 1 beats Stages 2, 3, 4, 5, 6: removed store_* -> TypeError
+    with pytest.raises(TypeError, match="store_"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (bad_pos_dtype,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+            store_overlap=True,
+        )
+
+    # Stage 2 beats Stages 3, 4, 5, 6: wrong position dtype -> DtypeError
+    with pytest.raises(DtypeError, match="Dtype mismatch"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (bad_pos_dtype,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 3 beats Stages 4, 5, 6: field with int_level < INTLEVEL_DIPOLE -> RuntimeError
+    with pytest.raises(RuntimeError, match="dipole integrals"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (pos_h2,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 4 beats Stages 5, 6: int_level < INTLEVEL_HCORE -> NotImplementedError
+    with pytest.raises(NotImplementedError, match="Core Hamiltonian missing"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (pos_h2,),
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Now upgrade int_level to INTLEVEL_HCORE so Stage 4 passes:
+    cfg_stage56 = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "int_level": labels.INTLEVEL_HCORE,
+                "maxiter": 1,
+                "x_atol": 1e-14,
+                "x_atol_max": 1e-14,
+                "force_convergence": True,
+            }
+        ),
+    )
+    sys_stage56 = Model(
+        par=param_gfn1, config=cfg_stage56, auto_int_level=False
+    ).setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    pos_h2o = _geometry((8, 1, 1), 0)
+
+    # Stage 5 beats Stage 6: retired low-level SCF kwarg -> NotImplementedError
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            (sys_stage56,),
+            (pos_h2o,),
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 6 fires when Stages 1-5 are valid: SCFConvergenceError
+    with pytest.raises(SCFConvergenceError):
+        evaluate_packed_systems(
+            (sys_stage56,),
+            (pos_h2o,),
+            legacy_compat=True,
+        )
+
+
+def test_e6bcompat_final_routing_manifest() -> None:
+    """Validate machine-readable E6bcompat routing manifest completeness."""
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest_path = repo_root / "docs" / "plan" / "E6bcompat-final-routing-manifest.json"
+    assert manifest_path.exists()
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert data["default_calculator_routing_changed"] is False
+    rows = data["rows"]
+    assert len(rows) == 32
+    expected_ids = [f"E6B-{i:02d}" for i in range(1, 33)]
+    assert [r["id"] for r in rows] == expected_ids
+    valid_categories = {
+        "1. Preserved public contract",
+        "2. S13-supported functional replacement",
+        "3. Explicitly retained compatibility adapter",
+        "4. Intentionally retired S13 behavior",
+        "5. Not yet supported by mixed-System functional routing",
+    }
+    for row in rows:
+        assert row["decision"] in ("REPLACE", "RETAIN", "RETIRE")
+        assert row["s13_category"] in valid_categories
+        assert row["authority"]
+        assert row["verdict"] == "PASS"
+        assert row["policy_case"]
+        assert row["old_route"]
+        assert row["candidate_route"]
+        assert row["numeric_outcome"]
+        assert row["warning_error_outcome"]
+        assert len(row["test_nodes"]) >= 1
+        for node in row["test_nodes"]:
+            parts = node.split("::")
+            file_part = parts[0]
+            file_path = repo_root / file_part
+            assert file_path.exists(), f"Missing test file {file_part}"
+            if len(parts) > 1:
+                fn_name = parts[1].split("[")[0]
+                text = file_path.read_text(encoding="utf-8")
+                assert f"def {fn_name}" in text, (
+                    f"Missing test function {fn_name} in {file_part}"
+                )

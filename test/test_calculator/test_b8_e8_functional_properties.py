@@ -579,3 +579,106 @@ def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
     assert (ir_h2o.ints > 0.0).all()
     assert (raman_h2o.ints > 0.0).all()
     assert (raman_h2o.depol >= 0.0).all()
+
+
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+def test_section5_primal_vs_derivative_fixed_point_convergence(
+    method: object,
+) -> None:
+    """Distinguish primal root convergence, fixed-point derivative convergence, and AD consistency."""
+    is_gfn2 = method is GFN2_XTB
+    numbers = torch.tensor([8, 1, 1], dtype=torch.int64)
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 1.43, 1.10], [0.0, -1.43, 1.10]], **_DD
+    )
+    direction = torch.tensor(
+        [[0.0, 0.0, 1.0], [0.0, 0.5, -0.5], [0.0, -0.5, -0.5]], **_DD
+    )
+    direction = direction / torch.linalg.vector_norm(direction)
+
+    def _make_system(
+        maxiter: int,
+        scf_mode: int = labels.SCF_MODE_FULL,
+        x_atol: float = 1.0e-12,
+    ):
+        opts = {
+            "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+            "scf_mode": scf_mode,
+            "scp_mode": (
+                labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
+            ),
+            "mixer": labels.MIXER_ANDERSON,
+            "maxiter": maxiter,
+            "x_atol": x_atol,
+            "x_atol_max": x_atol,
+        }
+        par = ParamModule(method, **_DD)
+        return Model(par=par, config=Config.create(**opts)).setup(numbers)
+
+    # 1. Just-converged primal root (maxiter=12 for GFN1, 15 for GFN2 at x_atol=1e-12)
+    # vs tighter fixed-point trajectories (maxiter=14/16 and 16/18 at x_atol=1e-14)
+    k_just = 15 if is_gfn2 else 12
+    k_deep = 17 if is_gfn2 else 14
+    k_ref = 19 if is_gfn2 else 16
+    sys_just = _make_system(k_just, x_atol=1.0e-12)
+    sys_deep = _make_system(k_deep, x_atol=1.0e-14)
+    sys_ref = _make_system(k_ref, x_atol=1.0e-14)
+
+    res_just = sys_just.singlepoint(pos)
+    res_deep = sys_deep.singlepoint(pos)
+    assert res_just.converged is not None and bool(res_just.converged)
+    assert (
+        res_just.residual is not None
+        and float(res_just.residual.abs().max()) < 1.0e-12
+    )
+    # Primal energies already agree to machine precision at k_just
+    torch.testing.assert_close(
+        res_just.energy, res_deep.energy, atol=1.0e-13, rtol=1.0e-13
+    )
+
+    # 2. Derivative convergence toward the physical fixed-point response (k_deep vs k_ref)
+    f_deep = sys_deep.forces(pos)
+    f_ref = sys_ref.forces(pos)
+    h_deep = sys_deep.hessian(pos, matrix=True)
+    h_ref = sys_ref.hessian(pos, matrix=True)
+
+    torch.testing.assert_close(f_deep, f_ref, atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(h_deep, h_ref, atol=1.0e-9, rtol=1.0e-9)
+
+    # 3rd-order directional derivative fixed-point convergence on converged H2 (k=12 vs 14)
+    nums_h2 = torch.tensor([1, 1], dtype=torch.int64)
+    pos_h2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.44]], **_DD)
+    dir_h2 = torch.tensor([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], **_DD)
+    dir_h2 = dir_h2 / torch.linalg.vector_norm(dir_h2)
+    par_h2 = ParamModule(method, **_DD)
+    base_h2_opts = {
+        "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE,
+        "mixer": labels.MIXER_ANDERSON,
+        "x_atol": 1.0e-14,
+        "x_atol_max": 1.0e-14,
+    }
+    sys_h2_12 = Model(
+        par=par_h2, config=Config.create(**(base_h2_opts | {"maxiter": 12}))
+    ).setup(nums_h2)
+    sys_h2_14 = Model(
+        par=par_h2, config=Config.create(**(base_h2_opts | {"maxiter": 14}))
+    ).setup(nums_h2)
+    t_deep = sys_h2_12.third_order_directional(pos_h2, dir_h2)
+    t_ref = sys_h2_14.third_order_directional(pos_h2, dir_h2)
+    torch.testing.assert_close(t_deep, t_ref, atol=1.0e-8, rtol=1.0e-8)
+
+    # Compare against implicit differentiation at the converged root (1st derivative)
+    sys_imp = _make_system(
+        40, scf_mode=labels.SCF_MODE_IMPLICIT, x_atol=1.0e-14
+    )
+    pos_imp = pos.clone().requires_grad_(True)
+    e_imp = sys_imp.singlepoint(pos_imp).energy.sum()
+    (g_imp,) = torch.autograd.grad(e_imp, pos_imp)
+    torch.testing.assert_close(-g_imp, f_ref, atol=1.0e-9, rtol=1.0e-9)
+
