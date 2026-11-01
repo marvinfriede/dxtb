@@ -144,15 +144,15 @@
   "peak_rss_mb": 680.2
  },
  "dispersion_d3.positions:forward": {
-  "status": "error",
+  "status": "pass",
   "seconds": 0.4833997890000319,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "message": "",
   "peak_rss_mb": 704.7
  },
  "dispersion_d3.positions:jvp": {
-  "status": "error",
+  "status": "pass",
   "seconds": 0.4415580749991932,
-  "message": "NotImplementedError: You must implement the jvp function for custom autograd.Function to use it with forward mode AD. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "message": "",
   "peak_rss_mb": 700.3
  },
  "dispersion_d3.positions:order1": {
@@ -174,9 +174,9 @@
   "peak_rss_mb": 687.7
  },
  "dispersion_d3.positions:vmap": {
-  "status": "error",
+  "status": "pass",
   "seconds": 0.1320708069997636,
-  "message": "ValueError: Batch size mismatch: expected 2, got 3 in `numbers`. The first dimension should be the batch dimension. [dxtb/_src/components/classicals/dispersion/d3.py:199]",
+  "message": "",
   "peak_rss_mb": 684.7
  },
  "dispersion_d4.positions:forward": {
