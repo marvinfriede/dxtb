@@ -1457,29 +1457,29 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     }
 
     comp_nums_sig = tuple(
-        (id(c), int(c.numbers.data_ptr()), int(c.numbers._version))
+        (id(c), id(c.numbers), int(c.numbers._version))
         for c in model_classicals
         if getattr(c, "numbers", None) is not None
         and isinstance(c.numbers, Tensor)
     )
-    calc_cache_key = (
+    lane_setup_sig = (
         getattr(calc, "_model_param_sig", None),
         calc.dtype,
         calc.device,
-        int(calc.numbers.data_ptr()),
+        id(calc.numbers),
         int(calc.numbers._version),
         calc.opts,
         tuple((id(c), c.label) for c in source_classicals),
         tuple((id(c), c.label) for c in source_interactions),
         comp_nums_sig,
     )
-    cached_entry = getattr(calc, "_lane_systems_cache", None)
-    if cached_entry is not None:
-        cached_key, cached_systems = cached_entry
-        if cached_key == calc_cache_key and all(
-            sys._active_exact_core() is not None for sys in cached_systems
+    memo_entry = getattr(calc, "_lane_systems_memo", None)
+    if memo_entry is not None:
+        prev_sig, memo_systems = memo_entry
+        if prev_sig == lane_setup_sig and all(
+            sys._active_exact_core() is not None for sys in memo_systems
         ):
-            return cached_systems
+            return memo_systems
 
     has_2d_classical_nums = any(
         getattr(c, "numbers", None) is not None
@@ -1490,7 +1490,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
 
-    cache: dict[tuple[object, ...], System] = {}
+    lane_memo: dict[tuple[object, ...], System] = {}
     lane_systems: list[System] = []
     for idx in range(batch_size):
         row_raw = calc.numbers[idx]
@@ -1512,7 +1512,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
             tuple((id(c), c.label) for c in source_classicals),
             tuple((id(c), c.label) for c in source_interactions),
         )
-        lane_sys = cache.get(dedup_key)
+        lane_sys = lane_memo.get(dedup_key)
         if lane_sys is None:
             lane_classical_list = []
             for c_idx, comp in enumerate(model_classicals):
@@ -1564,12 +1564,12 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     classicals=lane_sys.classicals.type(calc.dtype),
                     interactions=lane_sys.interactions.type(calc.dtype),
                 )
-            cache[dedup_key] = lane_sys
+            lane_memo[dedup_key] = lane_sys
         lane_systems.append(lane_sys)
 
     result_tuple = tuple(lane_systems)
-    if hasattr(calc, "_lane_systems_cache"):
-        calc._lane_systems_cache = (calc_cache_key, result_tuple)
+    if hasattr(calc, "_lane_systems_memo"):
+        calc._lane_systems_memo = (lane_setup_sig, result_tuple)
     return result_tuple
 
 
@@ -1586,11 +1586,11 @@ def evaluate_calculator_packed_singlepoint(
     legacy_options: LegacySCFOptions | None = None,
     **kwargs: Any,
 ) -> Result:
-    """Evaluate a batched Calculator through candidate E6broute packed routing.
+    """Evaluate a batched Calculator through packed functional System routing.
 
-    This internal differential harness executes the exact validation and
-    evaluation contract that a future ``Calculator.singlepoint`` batch cutover
-    would use, without altering default public ``Calculator`` dispatch.
+    Executes the validation, lane-System construction, canonical bucketed
+    evaluation, and packed Result reassembly contract for batched
+    ``Calculator.singlepoint`` calls.
     """
     reject_removed_store_kwargs(kwargs)
     resolve_kwargs: dict[str, Any] = {}

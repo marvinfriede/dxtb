@@ -47,7 +47,6 @@ opts = {
 }
 
 DIAG = [0, 2, 5]  # xx, yy, zz of (xx, yx, yy, zx, zy, zz)
-OFFDIAG = [1, 3, 4]  # yx, zx, zy
 
 sample_list = ["H2O", "SiH4", "MB16_43_01"]
 
@@ -61,20 +60,6 @@ def _calc(
         numbers, GFN2_XTB, interaction=[efg], opts=opts, **kwargs, **dd
     )
     return calc, field_grad
-
-
-def _point_moment(calc: Calculator, positions: Tensor) -> Tensor:
-    """Cartesian second moment ``Q_ij`` of the point charges and dipoles."""
-    res = calc.singlepoint(positions)
-    qat = calc.ihelp.reduce_orbital_to_atom(res.charges.mono)
-    mu = res.charges.dipole
-    assert mu is not None
-
-    return (
-        torch.einsum("...a,...ai,...aj->...ij", qat, positions, positions)
-        + torch.einsum("...ai,...aj->...ij", positions, mu)
-        + torch.einsum("...ai,...aj->...ij", mu, positions)
-    ).detach()
 
 
 @pytest.mark.parametrize("name", sample_list[:2])

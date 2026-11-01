@@ -154,7 +154,7 @@ class Driver:
         io.OutputHandler.write(config.info(), v=5)
         io.OutputHandler.write_stdout("", v=5)
 
-        # The analytical IR, Raman and dipole calculations use the
+        # The IR, Raman and dipole calculations use the
         # transform-compatible single-stage Anderson strategy.
         scf = config.scf
         if args.ir is True or args.raman is True or args.dipole is True:

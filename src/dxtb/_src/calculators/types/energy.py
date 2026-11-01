@@ -184,8 +184,8 @@ class EnergyCalculator(BaseCalculator):
         finally:
             timer.cuda_sync = old_cuda_sync
 
-        # Legacy wrappers remain for analytical gradient operations and
-        # write_* filenames. Per-call matrices stay on the returned Result.
+        # Legacy integral wrappers remain for write_* default filenames.
+        # Per-call matrices stay on the returned Result.
         for key, matrix, integral in (
             ("write_overlap", result.overlap, self.integrals.overlap),
             ("write_dipole", result.dipole_integrals, self.integrals.dipole),

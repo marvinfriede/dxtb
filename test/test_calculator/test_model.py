@@ -826,4 +826,3 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
     assert lanes_cached_3[0] is not lanes_cached_2[0]
     (gb_2,) = torch.autograd.grad(eb2, gam_param)
     torch.testing.assert_close(gb_1, gb_2)
-

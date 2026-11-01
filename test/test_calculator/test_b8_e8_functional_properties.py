@@ -791,5 +791,3 @@ def test_batched_calculator_autograd_properties_after_cutover(
     torch.testing.assert_close(
         pol_batch[1], sys_b.polarizability(pos_b), atol=1e-9, rtol=1e-9
     )
-
-

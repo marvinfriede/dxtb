@@ -36,7 +36,13 @@ OPTS = {"verbosity": 0, "scf_mode": "full", "x_atol": 1e-11}
 
 
 def _calc(numbers, dd: DD, **opts):
-    return dxtb.calculators.GFN2Calculator(numbers, opts={**OPTS, **opts}, **dd)
+    field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
+    return dxtb.calculators.GFN2Calculator(
+        numbers,
+        interaction=dxtb.components.field.new_efield_grad(field_grad, **dd),
+        opts={**OPTS, **opts},
+        **dd,
+    )
 
 
 def test_quadrupole_shape_traceless_and_alias() -> None:
@@ -47,7 +53,7 @@ def test_quadrupole_shape_traceless_and_alias() -> None:
     calc = _calc(numbers, dd)
     quad = calc.get_quadrupole(positions)
     assert quad.shape == (6,)
-    assert abs(float(quad[0] + quad[2] + quad[5])) < 1e-10
+    assert abs(float(quad.detach()[0] + quad.detach()[2] + quad.detach()[5])) < 1e-10
     assert torch.equal(calc.get_quadrupole_moment(positions), quad)
 
 
@@ -86,7 +92,8 @@ def test_quadrupole_requires_quadrupole_integral() -> None:
     dd: DD = {"dtype": torch.double, "device": DEVICE}
     numbers = samples["H2O"]["numbers"].to(DEVICE)
     positions = samples["H2O"]["positions"].to(**dd)
+    field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
 
     calc = dxtb.calculators.GFN1Calculator(numbers, opts={"verbosity": 0}, **dd)
     with pytest.raises(RuntimeError, match="quadrupole integral"):
-        calc.get_quadrupole(positions)
+        calc.get_quadrupole(positions, field_grad=field_grad)

@@ -119,12 +119,11 @@ def reject_removed_cache_options(opts: dict[str, Any]) -> None:
 
 def _param_state_signature(
     par: ParamModule,
-) -> tuple[tuple[int, int, int, bool, torch.dtype, torch.device], ...]:
+) -> tuple[tuple[int, int, bool, torch.dtype, torch.device], ...]:
     """Capture a lightweight state signature of all parameter and buffer leaves."""
     return tuple(
         (
             id(t),
-            int(t.data_ptr()),
             int(t._version),
             bool(t.requires_grad),
             t.dtype,
@@ -435,7 +434,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self._model_param_sig = _param_state_signature(self.model.par)
         self._system_graph_consumed = False
         self._param_hook_handles: list[Any] = []
-        self._lane_systems_cache: tuple[Any, tuple[System, ...]] | None = None
+        self._lane_systems_memo: tuple[Any, tuple[System, ...]] | None = None
         self._register_param_backward_hooks()
 
         self._ncalcs = 0
@@ -453,7 +452,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         def _on_param_backward(_grad: Tensor) -> None:
             self._system_graph_consumed = True
-            self._lane_systems_cache = None
+            self._lane_systems_memo = None
             self._clear_param_backward_hooks()
 
         for p in self.model.par.parameters():
@@ -471,7 +470,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         ):
             return
 
-        self._lane_systems_cache = None
+        self._lane_systems_memo = None
         setup_model = (
             self.model
             if self.opts == self.model.config and not self.model.auto_int_level
@@ -564,7 +563,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals.reset_all()
         self.interactions.reset_all()
         self.integrals.reset_all()
-        self._lane_systems_cache = None
+        self._lane_systems_memo = None
 
     @abstractmethod
     def calculate(
@@ -738,7 +737,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
         self.integrals = self.integrals.type(dtype)
-        self._lane_systems_cache = None
+        self._lane_systems_memo = None
 
         # Keep the system consistent with the converted components where
         # supported. Legacy System classical and ES2/ES3 setup objects are
