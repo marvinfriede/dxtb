@@ -762,3 +762,41 @@ def test_dispersion_from_c6_helpers() -> None:
         dftd3(mol, dict(param, damping="fermi"))
     with pytest.raises(Exception):
         dftd3s(mol, dict(param, damping="z"))
+
+
+def test_d3_reference_full_float64_precision_and_fortran_h2o_gfn1() -> None:
+    """
+    Verify that Reference() preserves full float64 precision (even when the
+    default PyTorch dtype is float32) and reproduces the authoritative Fortran
+    dftd (d2740777049b2a77fd5acc86c4e1abe75d5374ee) GFN1-xTB D3(BJ) energy on
+    H2O to machine precision, without the +3.473445326935415e-12 Eh legacy
+    float32 reference-table truncation artifact (H3.1).
+    """
+    ref_default = Reference()
+    ref_f64 = Reference.load(dtype=torch.float64)
+    assert ref_default.cn.dtype == torch.float64
+    assert ref_default.c6.dtype == torch.float64
+    torch.testing.assert_close(ref_default.cn, ref_f64.cn, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(ref_default.c6, ref_f64.c6, rtol=0.0, atol=0.0)
+
+    # Non-representable float64 entries in O (Z=8) and H (Z=1) differ from float32
+    assert float((ref_f64.cn[8] - ref_f64.cn[8].to(torch.float32).to(torch.float64)).abs().max()) > 1e-8
+    assert float((ref_f64.c6[8, 8] - ref_f64.c6[8, 8].to(torch.float32).to(torch.float64)).abs().max()) > 1e-7
+
+    # H2O sample from test/test_scf/samples.py with GFN1-xTB D3(BJ) parameters
+    numbers = torch.tensor([8, 1, 1], dtype=torch.long)
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, -0.74288549752983],
+            [-1.43472674945442, 0.0, 0.37144274876492],
+            [1.43472674945442, 0.0, 0.37144274876492],
+        ],
+        dtype=torch.float64,
+    )
+    h2o = Structure(numbers=numbers, positions=positions)
+    gfn1_param = {"s6": 1.0, "s8": 2.4, "a1": 0.63, "a2": 5.0, "s9": 0.0}
+    dxtb_cutoff = Cutoff(cn=25.0, disp2=50.0, disp3=50.0)
+
+    e_f64 = dftd3(h2o, gfn1_param, cutoff=dxtb_cutoff).sum()
+    e_fort = torch.tensor(-0.00013758459371839634, dtype=torch.float64)
+    torch.testing.assert_close(e_f64, e_fort, rtol=0.0, atol=1e-16)

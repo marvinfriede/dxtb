@@ -345,7 +345,7 @@ class DispersionD3(Dispersion):
         """
         ref = kwargs.pop(
             "ref",
-            d3.reference.Reference(),
+            d3.reference.Reference.load(**self.dd),
         ).to(**self.dd)
 
         rcov = kwargs.pop(

@@ -123,12 +123,14 @@ The T0.8 GPU baseline remains deferred until explicitly requested.
 Use only:
 
 ```text
-/tmp1/friede/dxtb-agentic/envs/py3.10-torch2.6.0
+/tmp1/friede/dxtb-agentic/envs/py3.10-torch2.7.0
 /tmp1/friede/dxtb-agentic/envs/py3.11-torch2.8.0
 /tmp1/friede/dxtb-agentic/envs/py3.12-torch2.11.0
 /tmp1/friede/dxtb-agentic/envs/py3.12-torch2.13.0
 /tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1
 ```
+
+(`/tmp1/friede/dxtb-agentic/envs/py3.10-torch2.6.0` is a retired pre-U1–U4 environment with `torch 2.6.0+cpu`, `tad-mctc 0.9.1`, and `tad-multicharge 0.7.0`; `setup.cfg` requires `torch>=2.7.0,<3`, `tad-mctc==0.11.3`, and `tad-multicharge==0.8.0`.)
 
 Never use the user's interactive Python, Conda, or shell environment.
 

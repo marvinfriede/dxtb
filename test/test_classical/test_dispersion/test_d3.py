@@ -322,3 +322,32 @@ def test_grad_param() -> None:
     from torch.autograd.gradcheck import gradcheck
 
     assert gradcheck(func, param)
+
+
+def test_d3_h2o_gfn1_float64_reference_parity() -> None:
+    """
+    Verify that DispersionD3 in float64 constructs full-precision float64
+    reference tables and matches the Fortran dftd H2O GFN1-xTB D3(BJ) energy
+    (-0.00013758459371839634 Eh) to machine precision (H3.1).
+    """
+    dd: DD = {"dtype": torch.double, "device": DEVICE}
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, -0.74288549752983],
+            [-1.43472674945442, 0.0, 0.37144274876492],
+            [1.43472674945442, 0.0, 0.37144274876492],
+        ],
+        **dd,
+    )
+    disp = new_dispersion(numbers, GFN1_XTB, **dd)
+    assert isinstance(disp, DispersionD3)
+    cache = disp.get_cache(numbers)
+    core = core_dispersion_d3_setup(cache, numbers, disp.numbers, disp.param)
+
+    e_cache = disp.get_energy(positions, cache).sum()
+    e_core = dispersion_d3_energy(core, positions).sum()
+    e_fortran = torch.tensor(-0.00013758459371839634, **dd)
+
+    torch.testing.assert_close(e_cache, e_fortran, rtol=0.0, atol=1e-15)
+    torch.testing.assert_close(e_core, e_fortran, rtol=0.0, atol=1e-15)

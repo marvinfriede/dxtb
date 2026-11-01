@@ -30,13 +30,19 @@ from dxtb._src.scf.functional import solver as functional_solver
 from ..utils import get_param_module
 from .samples import samples
 
+# Total energies include the constant classical GFN1-xTB D3(BJ) dispersion
+# energy (-0.00013758459371839634 Eh on samples["H2O"], verified against
+# Fortran dftd d2740777049b2a77fd5acc86c4e1abe75d5374ee). Legacy tad-dftd3
+# initialized Reference() in torch.float32 before casting to torch.float64,
+# introducing a +3.473445326935415e-12 Eh truncation artifact (-5.7674748965126055,
+# -5.768234535786348, -5.768064929714654, -5.768491792471992, -5.768438426259488).
 _CASES = [
     pytest.param(
         0,
         True,
         1,
         0,
-        -5.7674748965126055,
+        -5.767474896516079,
         [
             0.2855700080025312,
             -0.6666666666666667,
@@ -54,7 +60,7 @@ _CASES = [
         False,
         1,
         0,
-        -5.7674748965126055,
+        -5.767474896516079,
         [
             0.2855700080025312,
             -0.6666666666666667,
@@ -72,7 +78,7 @@ _CASES = [
         True,
         2,
         2,
-        -5.768234535786348,
+        -5.768234535789823,
         [
             0.2939889013410317,
             -0.6666666666666681,
@@ -90,7 +96,7 @@ _CASES = [
         False,
         2,
         1,
-        -5.768064929714654,
+        -5.768064929718129,
         [
             0.3198050957629175,
             -0.6666666666666663,
@@ -108,7 +114,7 @@ _CASES = [
         True,
         3,
         3,
-        -5.768491792471992,
+        -5.768491792475467,
         [
             0.2989105466303572,
             -0.6666666666666672,
@@ -126,7 +132,7 @@ _CASES = [
         False,
         3,
         2,
-        -5.768438426259488,
+        -5.76843842626296,
         [
             0.3137716574472518,
             -0.6666666666666672,

@@ -87,6 +87,7 @@ from .disp import (
     dispersion2,
     dispersion3,
     get_properties,
+    validate_numbers,
 )
 from .model.d4 import (
     d4sc_atom_energy,
@@ -165,4 +166,5 @@ __all__ = [
     "threebody",
     "twobody",
     "typing",
+    "validate_numbers",
 ]

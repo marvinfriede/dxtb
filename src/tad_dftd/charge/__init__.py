@@ -23,6 +23,7 @@ import torch
 from tad_mctc.tools import is_compiling
 from tad_mctc.typing import Tensor
 
+from ..data.table import guard_numbers
 from .eeq import EEQModel, get_eeq_charges
 
 __all__ = [
@@ -85,15 +86,13 @@ def get_charges(
     if qkey != "eeq":
         raise ValueError(f"Unknown charge model '{qmod}'.")
 
-    if not is_compiling():
-        raw = numbers
-        while torch._C._functorch.is_functorch_wrapped_tensor(raw):
-            raw = torch._C._functorch.get_unwrapped(raw)
-        if bool((raw < 0).any()) or bool((raw > MAX_ELEM_EEQ).any()):
-            raise ValueError(
-                f"Structure contains unsupported element for '{qkey}' charge model "
-                f"(valid range: 1..{MAX_ELEM_EEQ})."
-            )
+    invalid = (numbers < 0) | (numbers > MAX_ELEM_EEQ)
+    numbers = guard_numbers(
+        numbers,
+        invalid,
+        f"Structure contains unsupported element for '{qkey}' charge model "
+        f"(valid range: 1..{MAX_ELEM_EEQ}).",
+    )
 
     return get_eeq_charges(
         numbers=numbers,

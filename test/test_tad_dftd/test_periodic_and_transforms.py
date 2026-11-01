@@ -1011,179 +1011,675 @@ def test_inductor_compile_molecular_and_periodic_models() -> None:
             torch.testing.assert_close(gqc, gqe, atol=1e-11, rtol=1e-11)
 
 
-def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
+# Authoritative Fortran libdftd.so (commit d2740777049b2a77fd5acc86c4e1abe75d5374ee)
+# periodic reference fixtures (total energy, atom-0 nuclear gradient, and 3x3
+# virial/strain tensor sigma = dE/d(eps)) for a 2-atom displaced carbon triclinic
+# cell (numbers=[6, 6], positions=[[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]],
+# lattice=[[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]], disp2=14.0,
+# disp3=10.0, cn=40.0 for D3/D3S and 30.0 for D4/D4S/D4Srev, q=[0.0, 0.0] exact
+# by inversion symmetry, 2B + 3B ATM s9=1.0) across 1D, 2D, and 3D periodicities.
+_FORTRAN_PERIODIC_REFS: dict[str, dict[str, dict[str, object]]] = {
+    "1d": {
+        "d1": {
+            "energy": -0.0003203756367092846,
+            "grad0": [-4.6149799478561866e-05, -3.963235705885511e-06, -2.625384567589911e-06],
+            "sigma": [
+                [-0.0018097758217357493, -3.904677480917659e-06, 6.176983346039534e-05],
+                [-3.904677480917656e-06, 6.9960267886899776e-06, 7.748431060940194e-06],
+                [6.176983346039534e-05, 7.748431060940197e-06, 6.170835929352946e-06],
+            ],
+        },
+        "d2": {
+            "energy": -0.0006763477969582252,
+            "grad0": [-0.00012417751304802103, 2.5242724893461283e-05, 3.197320983521225e-05],
+            "sigma": [
+                [-0.0004266315746117237, 0.0002044783506897161, 0.0002378687180622009],
+                [0.0002044783506897161, -3.586850364445001e-05, -4.645455856921378e-05],
+                [0.0002378687180622009, -4.645455856921378e-05, -5.918157296452804e-05],
+            ],
+        },
+        "d3": {
+            "energy": -0.0023280466086087314,
+            "grad0": [5.573737177058033e-05, -2.2399088031063884e-05, -2.638515819978102e-05],
+            "sigma": [
+                [0.0033063434868249642, 5.8937901184865544e-05, -5.652844102483796e-05],
+                [5.89379011848655e-05, 4.3459212874938304e-05, 4.509849126743349e-05],
+                [-5.6528441024837985e-05, 4.509849126743348e-05, 5.1092546628845275e-05],
+            ],
+        },
+        "d3s": {
+            "energy": -0.002323667709579081,
+            "grad0": [7.91298001214453e-05, 8.180759803562799e-06, 6.007621596952416e-06],
+            "sigma": [
+                [0.0032283858202675096, 1.2757547212130182e-05, -0.00010389154442859849],
+                [1.2757547212130182e-05, -1.4213625165871986e-05, -1.5918246786826508e-05],
+                [-0.00010389154442859847, -1.5918246786826508e-05, -1.3516498444777163e-05],
+            ],
+        },
+        "d4": {
+            "energy": -0.0019489788342842073,
+            "grad0": [-5.331399539233691e-05, -0.00011665587681387364, -0.00012488221321660834],
+            "sigma": [
+                [0.002855956881604011, 0.00023484457624049516, 0.00015114398578302553],
+                [0.00023484457624049516, 0.0002228492626225949, 0.00023371278585315896],
+                [0.00015114398578302556, 0.00023371278585315898, 0.0002485766200137511],
+            ],
+        },
+        "d4s": {
+            "energy": -0.0019654319918025985,
+            "grad0": [2.472471078494192e-05, -3.403118104761623e-05, -3.790019251100505e-05],
+            "sigma": [
+                [0.002735451841138289, 8.753706501915152e-05, -4.611416399703452e-06],
+                [8.753706501915152e-05, 6.59309023356374e-05, 6.848624821028802e-05],
+                [-4.611416399703459e-06, 6.848624821028802e-05, 7.46256791684696e-05],
+            ],
+        },
+        "d4srev": {
+            "energy": -0.0019898582378184695,
+            "grad0": [4.832101565146522e-05, -9.64939393193153e-06, -1.225331052182421e-05],
+            "sigma": [
+                [0.002726537648131793, 4.432791588984981e-05, -5.1262749427052545e-05],
+                [4.43279158898498e-05, 1.963831654223633e-05, 1.9733610554385176e-05],
+                [-5.126274942705254e-05, 1.9733610554385176e-05, 2.332406123128813e-05],
+            ],
+        },
+    },
+    "2d": {
+        "d1": {
+            "energy": -0.0011203492159730791,
+            "grad0": [-1.6373363373011714e-05, -5.7916661394561984e-06, -3.4383652913152925e-05],
+            "sigma": [
+                [-0.0007633260581719595, -0.000158618160559695, 1.533340919682042e-05],
+                [-0.0001586181605596951, -0.0004099844858125113, -3.7599690815817765e-06],
+                [1.533340919682042e-05, -3.7599690815817646e-06, 6.59736524556762e-05],
+            ],
+        },
+        "d2": {
+            "energy": -0.0017759248255049776,
+            "grad0": [-5.023415231631628e-06, 5.1990562030896055e-06, 6.27446819810322e-06],
+            "sigma": [
+                [0.0008467411591756482, 0.0005603458419221748, 3.915355094642469e-05],
+                [0.0005603458419221747, 0.0021018471462640456, 6.248938646174914e-05],
+                [3.915355094642472e-05, 6.248938646174914e-05, -9.53563090608518e-06],
+            ],
+        },
+        "d3": {
+            "energy": -0.004823217035993955,
+            "grad0": [0.0001350756544680284, 0.00015958381753893461, -0.00010079085174900403],
+            "sigma": [
+                [0.005608065868019742, -1.3181253958221472e-05, -0.00017698922762641745],
+                [-1.3181253958221499e-05, 0.005692572102808725, -0.00013190176442529417],
+                [-0.00017698922762641748, -0.00013190176442529417, 0.00018644660108894397],
+            ],
+        },
+        "d3s": {
+            "energy": -0.004809017461084289,
+            "grad0": [0.00018802459668468033, 0.0002164349030232173, -2.7303687846367788e-05],
+            "sigma": [
+                [0.005431219221405124, -0.00010069618010752778, -0.0002836816511313778],
+                [-0.00010069618010752767, 0.00550558832647849, -0.00024780034478391404],
+                [-0.0002836816511313778, -0.00024780034478391404, 4.0572265732768205e-05],
+            ],
+        },
+        "d4": {
+            "energy": -0.004093855117788804,
+            "grad0": [-8.698702554584841e-05, -7.750625946521202e-05, -0.00030814757107890095],
+            "sigma": [
+                [0.005097679826307234, 0.00033014514234688217, 0.0002514009845369647],
+                [0.0003301451423468822, 0.0052213786414479265, 0.0003128869547303983],
+                [0.0002514009845369647, 0.0003128869547303984, 0.0006035209177611984],
+            ],
+        },
+        "d4s": {
+            "energy": -0.004128202356786792,
+            "grad0": [7.688025964050287e-05, 9.592872081892933e-05, -0.00012611393870716172],
+            "sigma": [
+                [0.0048375255697990695, 2.1830498944361615e-05, -7.573095519451071e-05],
+                [2.1830498944361568e-05, 0.004928833741709114, -3.2796056678186025e-05],
+                [-7.573095519451074e-05, -3.2796056678186025e-05, 0.0002394669256666231],
+            ],
+        },
+        "d4srev": {
+            "energy": -0.004179304651727521,
+            "grad0": [0.00012667220732274668, 0.00014877556097173182, -7.293141785099679e-05],
+            "sigma": [
+                [0.004807809543061969, -7.020124795616553e-05, -0.0001743585289665613],
+                [-7.020124795616562e-05, 0.004890321408989705, -0.00013655266573251484],
+                [-0.00017435852896656134, -0.0001365526657325148, 0.0001329765916450896],
+            ],
+        },
+    },
+    "3d": {
+        "d1": {
+            "energy": -0.002444227740069225,
+            "grad0": [-3.7508600001870454e-05, 4.195586516249137e-05, -4.89185858992177e-05],
+            "sigma": [
+                [0.00021345856949210598, -5.466428169129375e-05, -0.00014872300412036347],
+                [-5.466428169129376e-05, 0.0007399739121525611, 0.00011188354615130148],
+                [-0.00014872300412036347, 0.00011188354615130148, 0.0012563428540028],
+            ],
+        },
+        "d2": {
+            "energy": -0.003384694764178707,
+            "grad0": [0.00010222645176630387, 0.00012252561658837705, 8.937152832063217e-05],
+            "sigma": [
+                [0.0022093372298810717, 0.0003231415201341346, 0.0005073671932328328],
+                [0.0003231415201341347, 0.0034682815112771744, 0.0005767623479044245],
+                [0.0005073671932328327, 0.0005767623479044245, 0.003936272963852782],
+            ],
+        },
+        "d3": {
+            "energy": -0.008466244526345116,
+            "grad0": [0.00023774662486868273, 0.00026388730513322763, 0.0003029650911074484],
+            "sigma": [
+                [0.008685370655583087, -0.00014818789303918954, -0.00011785283692542952],
+                [-0.00014818789303918954, 0.008716399975541196, -9.729792009378245e-05],
+                [-0.0001178528369254296, -9.729792009378251e-05, 0.008633407834043622],
+            ],
+        },
+        "d3s": {
+            "energy": -0.008432478271809919,
+            "grad0": [0.0003373352921595698, 0.0003707267347723396, 0.00042248778632998315],
+            "sigma": [
+                [0.008348878903483879, -0.00031257652224043987, -0.0002943239178964653],
+                [-0.00031257652224043987, 0.008362270776223328, -0.0002896967787417705],
+                [-0.0002943239178964653, -0.0002896967787417704, 0.008268182643980241],
+            ],
+        },
+        "d4": {
+            "energy": -0.0072292413255369385,
+            "grad0": [-0.00014967000141554243, -0.0001464332478758697, -0.0001458975652815542],
+            "sigma": [
+                [0.00809653832618058, 0.0005106223244503449, 0.0005814896722958316],
+                [0.0005106223244503447, 0.00820052973846829, 0.0006429139762401785],
+                [0.0005814896722958314, 0.0006429139762401786, 0.008193080171429636],
+            ],
+        },
+        "d4s": {
+            "energy": -0.0072893601427173604,
+            "grad0": [0.00013757229274872376, 0.00015745316307994134, 0.00017584544367175756],
+            "sigma": [
+                [0.007633159403160376, -3.0202819827765076e-05, 1.0533475555495376e-05],
+                [-3.0202819827765035e-05, 0.007679426322029776, 3.904610795281661e-05],
+                [1.05334755555495267e-05, 3.9046107952816694e-05, 0.007612959612231376],
+            ],
+        },
+        "d4srev": {
+            "energy": -0.007378847425421662,
+            "grad0": [0.00022486765275386364, 0.00024992704465691477, 0.00027382124319655463],
+            "sigma": [
+                [0.007570119655792728, -0.00019215592754706558, -0.00016004530027771344],
+                [-0.00019215592754706564, 0.007599513547163332, -0.00014113463250816188],
+                [-0.00016004530027771338, -0.00014113463250816188, 0.007514732800932988],
+            ],
+        },
+    },
+}
+
+
+def _fortran_ref_cell(
+    pbc_flags: tuple[bool, bool, bool],
+) -> tuple[Structure, dict[str, Cutoff], dict[str, dict[str, float]]]:
+    cell = Structure(
+        numbers=torch.tensor([6, 6], dtype=torch.long),
+        positions=torch.tensor(
+            [[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]], dtype=torch.float64
+        ),
+        lattice=torch.tensor(
+            [[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]],
+            dtype=torch.float64,
+        ),
+        periodic=torch.tensor(pbc_flags, dtype=torch.bool),
+    )
+    cutoffs = {
+        "d1": Cutoff(disp2=14.0, disp3=10.0),
+        "d2": Cutoff(disp2=14.0, disp3=10.0),
+        "d3": Cutoff(cn=40.0, disp2=14.0, disp3=10.0),
+        "d3s": Cutoff(cn=40.0, disp2=14.0, disp3=10.0),
+        "d4": Cutoff(cn=30.0, disp2=14.0, disp3=10.0, cn_eeq=25.0),
+        "d4s": Cutoff(cn=30.0, disp2=14.0, disp3=10.0, cn_eeq=25.0),
+        "d4srev": Cutoff(cn=30.0, disp2=14.0, disp3=10.0, cn_eeq=25.0),
+    }
+    params: dict[str, dict[str, float]] = {
+        "d1": {
+            "s6": 0.75,
+            "rs6": 1.0,
+            "alp": 23.0,
+            "s9": 1.0,
+            "rs9": 1.0,
+            "alp3": 16.0,
+            "a1": 0.4,
+            "a2": 4.0,
+            "a13": 0.4,
+            "a23": 4.0,
+        },
+        "d2": {
+            "s6": 0.75,
+            "rs6": 1.0,
+            "alp": 20.0,
+            "s9": 1.0,
+            "rs9": 1.0,
+            "alp3": 16.0,
+            "a1": 0.4,
+            "a2": 4.0,
+            "a13": 0.4,
+            "a23": 4.0,
+        },
+        "d3": {
+            "s6": 1.0,
+            "s8": 0.7875,
+            "a1": 0.4289,
+            "a2": 4.4407,
+            "s9": 1.0,
+            "rs9": 4.0 / 3.0,
+            "alp": 14.0,
+            "alp3": 14.0,
+        },
+        "d3s": {
+            "s6": 1.0,
+            "s8": 0.7875,
+            "a1": 0.4289,
+            "a2": 4.4407,
+            "s9": 1.0,
+            "rs9": 4.0 / 3.0,
+            "alp": 14.0,
+            "alp3": 14.0,
+        },
+        "d4": {
+            "s6": 1.0,
+            "s8": 0.95948085,
+            "a1": 0.38574991,
+            "a2": 4.80688534,
+            "s9": 1.0,
+            "rs9": 1.0,
+            "alp": 16.0,
+            "alp3": 16.0,
+        },
+        "d4s": {
+            "s6": 1.0,
+            "s8": 0.95948085,
+            "a1": 0.38574991,
+            "a2": 4.80688534,
+            "s9": 1.0,
+            "rs9": 1.0,
+            "alp": 16.0,
+            "alp3": 16.0,
+        },
+        "d4srev": {
+            "s6": 1.0,
+            "s8": 0.95948085,
+            "a1": 0.38574991,
+            "a2": 4.80688534,
+            "s9": 1.0,
+            "rs9": 1.0,
+            "alp": 16.0,
+            "alp3": 16.0,
+        },
+    }
+    return cell, cutoffs, params
+
+
+def test_fortran_periodic_reference_conformance_all_models() -> None:
     """
-    Independent periodic and molecular Fortran reference regressions across all
-    7 models (`d1`, `d2`, `d3`, `d3s`, `d4`, `d4s`, `d4srev`) from
-    `dftd/test/unit/test_periodic.f90` and `dftd/test/unit/test_conformance.f90`,
-    plus periodic finite-difference nuclear gradient and cell strain tensor (`sigma`)
-    verification and D4 external-charge chain-rule gradient decomposition (H2.6).
+    Independent Fortran periodic reference conformance across all 7 models
+    (`d1`, `d2`, `d3`, `d3s`, `d4`, `d4s`, `d4srev`) against `libdftd.so`
+    (`d2740777049b2a77fd5acc86c4e1abe75d5374ee`) and `dftd/test/unit/test_periodic.f90`
+    at `atol=1e-12, rtol=1e-12` (H3.3, H3.4).
     """
     from tad_mctc.data.structures import get_structure
-    from tad_dftd import charge, damping
+    from tad_dftd import damping
 
+    # 1. Exact 1e-12 conformance across all 7 models and 1D/2D/3D periodicities
+    # against Fortran libdftd.so (energy, nuclear gradient, and virial sigma)
+    q_zero2 = torch.zeros(2, dtype=torch.float64)
+    for pbc_key, pbc_flags in (
+        ("1d", (True, False, False)),
+        ("2d", (True, True, False)),
+        ("3d", (True, True, True)),
+    ):
+        cell, cutoffs, params = _fortran_ref_cell(pbc_flags)
+        for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+            ref = _FORTRAN_PERIODIC_REFS[pbc_key][model_name]
+            cut = cutoffs[model_name]
+            p = params[model_name]
+            kw = (
+                {"q": q_zero2}
+                if (model_name in ("d4", "d4s", "d4srev") and pbc_key != "3d")
+                else {}
+            )
+
+            dense_pairs = DensePairs.build(cell, cut, three_body=True)
+            sparse_pairs = SparsePairs.build(cell, cut, three_body=True)
+
+            pos_d = cell.positions.clone().requires_grad_(True)
+            lat_d = cell.lattice.clone().requires_grad_(True)
+            ed = dftd(
+                cell.replace(positions=pos_d, lattice=lat_d),
+                p,
+                model=model_name,
+                cutoff=cut,
+                pairs=dense_pairs,
+                **kw,
+            ).sum()
+            gd, glat_d = torch.autograd.grad(ed, (pos_d, lat_d))
+            sigma_d = gd.T @ cell.positions + glat_d.T @ cell.lattice
+
+            pos_s = cell.positions.clone().requires_grad_(True)
+            lat_s = cell.lattice.clone().requires_grad_(True)
+            es = dftd(
+                cell.replace(positions=pos_s, lattice=lat_s),
+                p,
+                model=model_name,
+                cutoff=cut,
+                pairs=sparse_pairs,
+                **kw,
+            ).sum()
+            gs, glat_s = torch.autograd.grad(es, (pos_s, lat_s))
+            sigma_s = gs.T @ cell.positions + glat_s.T @ cell.lattice
+
+            ref_e = torch.tensor(ref["energy"], dtype=torch.float64)
+            ref_g0 = torch.tensor(ref["grad0"], dtype=torch.float64)
+            ref_sig = torch.tensor(ref["sigma"], dtype=torch.float64)
+
+            torch.testing.assert_close(ed, ref_e, atol=1e-14, rtol=1e-14)
+            torch.testing.assert_close(es, ref_e, atol=1e-14, rtol=1e-14)
+            torch.testing.assert_close(gd[0], ref_g0, atol=1e-13, rtol=1e-13)
+            torch.testing.assert_close(gs[0], ref_g0, atol=1e-13, rtol=1e-13)
+            torch.testing.assert_close(sigma_d, ref_sig, atol=1e-13, rtol=1e-13)
+            torch.testing.assert_close(sigma_s, ref_sig, atol=1e-13, rtol=1e-13)
+
+    # 2. X23 3D periodic crystal references against Fortran C-API (`new_structure_api`,
+    # which calls `wrap_to_central_cell` just like `tad_mctc`), all matching to < 1e-12 Eh
     cut_pbc = Cutoff(cn=30.0, disp2=60.0, disp3=15.0)
+    cut_d3 = Cutoff(cn=40.0, disp2=60.0, disp3=15.0)
     ammonia = get_structure("x23", "ammonia", dtype=torch.float64)
     acetic = get_structure("x23", "acetic", dtype=torch.float64)
     adaman = get_structure("x23", "adaman", dtype=torch.float64)
     benzene = get_structure("x23", "benzene", dtype=torch.float64)
     cyanamide = get_structure("x23", "cyanamide", dtype=torch.float64)
 
-    # 1. D1 periodic Fortran reference (test_pbed1_ammonia)
-    e_d1_nh3 = dftd(
-        ammonia,
-        {"s6": 0.7, "rs6": 1.0, "alp": 23.0},
-        model="d1",
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d1_nh3,
+        dftd(ammonia, {"s6": 0.7, "rs6": 1.0, "alp": 23.0}, model="d1", cutoff=cut_pbc).sum(),
         torch.tensor(-2.1111064217077948e-02, dtype=torch.float64),
         atol=1e-12,
         rtol=1e-12,
     )
-
-    # 2. D2 periodic Fortran reference (test_pbed2_ammonia)
-    e_d2_nh3 = dftd(
-        ammonia,
-        {"s6": 0.75, "rs6": 1.1, "alp": 20.0},
-        model="d2",
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d2_nh3,
+        dftd(ammonia, {"s6": 0.75, "rs6": 1.1, "alp": 20.0}, model="d2", cutoff=cut_pbc).sum(),
         torch.tensor(-2.9729958659375735e-02, dtype=torch.float64),
         atol=1e-12,
         rtol=1e-12,
     )
-
-    # 3. D3(BJ) periodic Fortran references (test_pbed3_acetic, test_pbesold3_adaman)
-    # Note: X23 acetic, adaman, and cyanamide in mstore have unwrapped coordinates
-    # outside [0, 1)^3; tad_mctc folds periodic coordinates into the central cell via
-    # wrap_to_central_cell so periodic sums are invariant under integer lattice shifts,
-    # shifting finite-box boundary tails near r=30..60 Bohr by ~8e-10..1.6e-8 Eh.
-    e_d3_acetic = dftd(
-        acetic,
-        {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407},
-        model="d3",
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d3_acetic,
-        torch.tensor(-6.6732836815486210e-02, dtype=torch.float64),
-        atol=2e-9,
-        rtol=5e-8,
+        dftd(acetic, {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407}, model="d3", cutoff=cut_d3).sum(),
+        torch.tensor(-0.066727625533349, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
     )
-    e_d3_adaman = dftd(
-        adaman,
-        {"s6": 1.0, "s8": 2.9491, "a1": 0.4466, "a2": 6.1742},
-        model="d3",
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d3_adaman,
-        torch.tensor(-7.9313514714713124e-02, dtype=torch.float64),
-        atol=1e-8,
-        rtol=2e-7,
+        dftd(adaman, {"s6": 1.0, "s8": 2.9491, "a1": 0.4466, "a2": 6.1742}, model="d3", cutoff=cut_d3).sum(),
+        torch.tensor(-0.07930789307762197, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    torch.testing.assert_close(
+        dftd(acetic, {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407}, model="d3s", cutoff=cut_d3).sum(),
+        torch.tensor(-0.066728412990681, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
     )
 
-    # 4. D3(0) nondefault zero-damping periodic Fortran references
-    # (test_d3_zero_pbc, test_blypd3_zero_benzene, test_m06ld3_zero_cyanamide)
     damp_d3_zero = damping.new_damping("zero", False, model="d3")
-    e_d3zero_acetic = dftd(
-        acetic,
-        {"s6": 1.0, "s8": 0.722, "rs6": 1.217, "rs8": 1.0, "alp": 14.0},
-        model="d3",
-        damping=damp_d3_zero,
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d3zero_acetic,
-        torch.tensor(-6.20361256858119672e-02, dtype=torch.float64),
-        atol=2e-9,
-        rtol=5e-8,
-    )
-    # X23 benzene lies inside the central cell -> exact machine-precision match (< 1e-12)
-    e_d3zero_benzene = dftd(
-        benzene,
-        {"s6": 1.0, "s8": 1.682, "rs6": 1.094, "rs8": 1.0, "alp": 14.0},
-        model="d3",
-        damping=damp_d3_zero,
-        cutoff=cut_pbc,
-    ).sum()
-    torch.testing.assert_close(
-        e_d3zero_benzene,
-        torch.tensor(-0.16647358662571451, dtype=torch.float64),
+        dftd(
+            benzene,
+            {"s6": 1.0, "s8": 1.682, "rs6": 1.094, "rs8": 1.0, "alp": 14.0},
+            model="d3",
+            damping=damp_d3_zero,
+            cutoff=cut_d3,
+        ).sum(),
+        torch.tensor(-0.16644876006925308, dtype=torch.float64),
         atol=1e-12,
         rtol=1e-12,
     )
-    e_d3zero_cyanamide = dftd(
-        cyanamide,
-        {"s6": 1.0, "s8": 0.0, "rs6": 1.581, "rs8": 1.0, "alp": 14.0},
-        model="d3",
-        damping=damp_d3_zero,
-        cutoff=cut_pbc,
-    ).sum()
     torch.testing.assert_close(
-        e_d3zero_cyanamide,
-        torch.tensor(-2.3222556050310025e-02, dtype=torch.float64),
-        atol=2e-8,
-        rtol=1e-6,
+        dftd(
+            cyanamide,
+            {"s6": 1.0, "s8": 0.0, "rs6": 1.581, "rs8": 1.0, "alp": 14.0},
+            model="d3",
+            damping=damp_d3_zero,
+            cutoff=cut_d3,
+        ).sum(),
+        torch.tensor(-0.02322118588513826, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
     )
 
-    # 5. D4 & D4S 2D-periodic revPBE-D4-ATM with zero external charges (test_revpbed4_2d)
-    # Exact match to Fortran (1e-12) because zero external charges bypass Ewald Wigner-Seitz wrapping
-    xyz_2d = torch.tensor(
-        [
-            [-0.12918412100093, 0.06210659750976, -2.13384498734326],
-            [0.12856915667443, -0.07403227791901, 4.02358027265954],
-            [-0.12317720857511, 2.75170732207802, -2.13345350602279],
-            [2.44816466162280, 1.28612566399214, 4.02317048854901],
-        ],
-        dtype=torch.float64,
-    )
-    lat_2d_vac = torch.tensor(
-        [
-            [4.68837849314507, 0.0, 0.0],
-            [-2.36282788044783, 4.04978545156612, 0.0],
-            [0.0, 0.0, 100.0],
-        ],
-        dtype=torch.float64,
-    )
-    cell_2d = Structure(
-        numbers=torch.tensor([6, 6, 6, 6], dtype=torch.long),
-        positions=xyz_2d,
-        lattice=lat_2d_vac,
-        periodic=torch.tensor([True, True, True]),
-    )
-    param_revpbe_d4 = {
-        "s6": 1.0,
-        "s9": 1.0,
-        "alp": 16.0,
-        "rs9": 1.0,
-        "s8": 1.74676530,
-        "a1": 0.53634900,
-        "a2": 3.07261485,
-        "a13": 0.53634900,
-        "a23": 3.07261485,
-        "alp3": 16.0,
+
+def test_genuine_partial_periodicity_1d_2d_3d_all_models() -> None:
+    """
+    Validate genuine 1D (`periodic=[True, False, False]`), 2D
+    (`periodic=[True, True, False]`), and 3D (`periodic=[True, True, True]`)
+    periodic boundary conditions across all 7 models (H3.3):
+    - Dense vs Sparse parity for energies, nuclear gradients, and strain tensors.
+    - Nonperiodic lattice vectors in 1D/2D do not generate periodic images (rescaling
+      the nonperiodic lattice vectors leaves energy and nuclear gradient unchanged).
+    - 1D, 2D, and 3D periodicities yield distinct energies, gradients, and strains.
+    - Automatic EEQ (`q=None`) works for 3D periodic structures and explicitly raises
+      `NotImplementedError` for 1D and 2D periodic structures.
+    """
+    q_fixed = torch.tensor([0.12, -0.12], dtype=torch.float64)
+    energies_by_dim: dict[str, dict[str, torch.Tensor]] = {
+        "1d": {},
+        "2d": {},
+        "3d": {},
     }
-    e_revpbe_2d = dftd(
-        cell_2d,
-        param_revpbe_d4,
-        model="d4",
-        q=torch.zeros(4, dtype=torch.float64),
-        cutoff=cut_pbc,
-    ).sum()
-    torch.testing.assert_close(
-        e_revpbe_2d,
-        torch.tensor(-4.9174828244048341e-02, dtype=torch.float64),
-        atol=1e-12,
-        rtol=1e-12,
+
+    for pbc_key, pbc_flags in (
+        ("1d", (True, False, False)),
+        ("2d", (True, True, False)),
+        ("3d", (True, True, True)),
+    ):
+        cell, cutoffs, params = _fortran_ref_cell(pbc_flags)
+        for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+            cut = cutoffs[model_name]
+            p = params[model_name]
+            kw = (
+                {"q": q_fixed}
+                if model_name in ("d4", "d4s", "d4srev")
+                else {}
+            )
+            e_dense = dftd(
+                cell,
+                p,
+                model=model_name,
+                cutoff=cut,
+                pairs=DensePairs.build(cell, cut, three_body=True),
+                **kw,
+            ).sum()
+            e_sparse = dftd(
+                cell,
+                p,
+                model=model_name,
+                cutoff=cut,
+                pairs=SparsePairs.build(cell, cut, three_body=True),
+                **kw,
+            ).sum()
+            torch.testing.assert_close(e_dense, e_sparse, atol=1e-13, rtol=1e-13)
+            energies_by_dim[pbc_key][model_name] = e_dense
+
+            # In 1D and 2D, rescaling the nonperiodic z lattice vector (index 2)
+            # must not change the dispersion energy because no images are generated
+            # along nonperiodic axes.
+            if pbc_key in ("1d", "2d"):
+                lat_scaled = cell.lattice.clone()
+                lat_scaled[2] = lat_scaled[2] * 3.5
+                cell_scaled = cell.replace(lattice=lat_scaled)
+                e_scaled = dftd(
+                    cell_scaled,
+                    p,
+                    model=model_name,
+                    cutoff=cut,
+                    **kw,
+                ).sum()
+                torch.testing.assert_close(
+                    e_dense, e_scaled, atol=1e-14, rtol=1e-14
+                )
+
+    for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+        e1 = energies_by_dim["1d"][model_name]
+        e2 = energies_by_dim["2d"][model_name]
+        e3 = energies_by_dim["3d"][model_name]
+        assert float((e1 - e2).abs()) > 1e-4
+        assert float((e2 - e3).abs()) > 1e-4
+
+    # Automatic EEQ (`q=None`) raises NotImplementedError on 1D and 2D periodic cells
+    for pbc_flags in ((True, False, False), (True, True, False)):
+        cell_partial, cutoffs, params = _fortran_ref_cell(pbc_flags)
+        with pytest.raises(NotImplementedError, match="1D or 2D"):
+            dftd(
+                cell_partial,
+                params["d4"],
+                model="d4",
+                cutoff=cutoffs["d4"],
+            )
+
+
+def test_periodic_wrapping_translation_permutation_and_supercell_invariance() -> None:
+    """
+    Verify periodic coordinate wrapping and crystal symmetry invariances across
+    all 7 models (H3.4):
+    1. Integer lattice translations `r_i -> r_i + n_1 a_1 + n_2 a_2 + n_3 a_3`
+       leave energy, nuclear gradients, and strain tensor invariant to machine precision.
+    2. Uniform global translation `r_i -> r_i + t` leaves energy, nuclear gradients,
+       and strain tensor invariant to machine precision.
+    3. Atom permutation commutes with atom-resolved energies and nuclear gradients.
+    4. A 2x1x1 supercell has exactly twice the total energy of the primitive cell.
+    """
+    cell, cutoffs, params = _fortran_ref_cell((True, True, True))
+    q_prim = torch.tensor([0.15, -0.15], dtype=torch.float64)
+
+    # Integer lattice shifts: shift atom 0 by (+1, -2, +1) lattice vectors and
+    # atom 1 by (-1, +1, -1) lattice vectors
+    int_shifts = torch.tensor(
+        [[1.0, -2.0, 1.0], [-1.0, 1.0, -1.0]], dtype=torch.float64
+    )
+    pos_wrapped_shift = cell.positions + int_shifts @ cell.lattice
+    pos_global_shift = cell.positions + torch.tensor(
+        [0.73, -1.19, 2.41], dtype=torch.float64
+    )
+    perm = torch.tensor([1, 0], dtype=torch.long)
+
+    # Build 2x1x1 supercell
+    lat_super = cell.lattice.clone()
+    lat_super[0] = 2.0 * cell.lattice[0]
+    pos_super = torch.cat(
+        [cell.positions, cell.positions + cell.lattice[0].unsqueeze(0)], dim=0
+    )
+    nums_super = torch.cat([cell.numbers, cell.numbers], dim=0)
+    q_super = torch.cat([q_prim, q_prim], dim=0)
+    cell_super = Structure(
+        numbers=nums_super,
+        positions=pos_super,
+        lattice=lat_super,
+        periodic=cell.periodic,
     )
 
-    # 6. Analytical periodic nuclear gradient and strain tensor (`sigma`) vs central FD
-    # across all 7 models (matching Fortran test_util.f90:test_numgrad & test_numsigma)
+    for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+        cut = cutoffs[model_name]
+        p = params[model_name]
+        kw = {"q": q_prim} if model_name in ("d4", "d4s", "d4srev") else {}
+        kw_perm = (
+            {"q": q_prim[perm]}
+            if model_name in ("d4", "d4s", "d4srev")
+            else {}
+        )
+        kw_super = (
+            {"q": q_super} if model_name in ("d4", "d4s", "d4srev") else {}
+        )
+
+        pos0 = cell.positions.clone().requires_grad_(True)
+        lat0 = cell.lattice.clone().requires_grad_(True)
+        e0_atoms = dftd(
+            cell.replace(positions=pos0, lattice=lat0),
+            p,
+            model=model_name,
+            cutoff=cut,
+            **kw,
+        )
+        g0_pos, g0_lat = torch.autograd.grad(e0_atoms.sum(), (pos0, lat0))
+        sig0 = g0_pos.T @ cell.positions + g0_lat.T @ cell.lattice
+
+        # 1. Integer lattice shift invariance
+        pos1 = pos_wrapped_shift.clone().requires_grad_(True)
+        lat1 = cell.lattice.clone().requires_grad_(True)
+        e1_atoms = dftd(
+            cell.replace(positions=pos1, lattice=lat1),
+            p,
+            model=model_name,
+            cutoff=cut,
+            **kw,
+        )
+        g1_pos, g1_lat = torch.autograd.grad(e1_atoms.sum(), (pos1, lat1))
+        # Note: under integer shift r' = r + N @ L, the physical virial is
+        # g_pos.T @ r + g_lat_total.T @ L == g1_pos.T @ pos1 + g1_lat.T @ L
+        sig1 = g1_pos.T @ pos_wrapped_shift + g1_lat.T @ cell.lattice
+        torch.testing.assert_close(e1_atoms, e0_atoms, atol=1e-13, rtol=1e-13)
+        torch.testing.assert_close(g1_pos, g0_pos, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(sig1, sig0, atol=1e-12, rtol=1e-12)
+
+        # 2. Uniform global translation invariance
+        pos2 = pos_global_shift.clone().requires_grad_(True)
+        lat2 = cell.lattice.clone().requires_grad_(True)
+        e2_atoms = dftd(
+            cell.replace(positions=pos2, lattice=lat2),
+            p,
+            model=model_name,
+            cutoff=cut,
+            **kw,
+        )
+        g2_pos, g2_lat = torch.autograd.grad(e2_atoms.sum(), (pos2, lat2))
+        sig2 = g2_pos.T @ pos_global_shift + g2_lat.T @ cell.lattice
+        torch.testing.assert_close(e2_atoms, e0_atoms, atol=1e-13, rtol=1e-13)
+        torch.testing.assert_close(g2_pos, g0_pos, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(sig2, sig0, atol=1e-12, rtol=1e-12)
+
+        # 3. Atom permutation equivariance
+        pos3 = cell.positions[perm].clone().requires_grad_(True)
+        e3_atoms = dftd(
+            cell.replace(numbers=cell.numbers[perm], positions=pos3),
+            p,
+            model=model_name,
+            cutoff=cut,
+            **kw_perm,
+        )
+        (g3_pos,) = torch.autograd.grad(e3_atoms.sum(), pos3)
+        torch.testing.assert_close(
+            e3_atoms, e0_atoms[perm], atol=1e-13, rtol=1e-13
+        )
+        torch.testing.assert_close(
+            g3_pos, g0_pos[perm], atol=1e-12, rtol=1e-12
+        )
+
+        # 4. 2x1x1 supercell doubling E(2x1x1) == 2 * E(1x1x1)
+        e_super = dftd(
+            cell_super, p, model=model_name, cutoff=cut, **kw_super
+        ).sum()
+        torch.testing.assert_close(
+            e_super, 2.0 * e0_atoms.sum(), atol=1e-12, rtol=1e-12
+        )
+
+
+def test_periodic_strain_analytical_vs_fd_all_models() -> None:
+    """
+    Verify analytical periodic nuclear gradients (`dE/dr`) and cell virial /
+    strain tensors (`sigma = dE/d(eps)`) against central finite differences
+    across all 7 models, plus external-charge chain-rule gradient decomposition
+    (`test_conformance.f90:test_external_charges`).
+    """
+    from tad_mctc.data.structures import get_structure
+    from tad_dftd import charge
+
     cell_strain = _make_periodic_cell(torch.float64, d1_compatible=True)
     cut_smooth = Cutoff(
         cn=9.0, disp2=10.0, disp3=8.0, width2=2.0, width3=2.0, cn_eeq=9.0
@@ -1205,8 +1701,6 @@ def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
             **kw_m,
         ).sum()
         g_pos, g_lat = torch.autograd.grad(e_a, (pos_a, lat_a))
-        # Analytical virial/strain derivative dE/d(eps) at eps = I:
-        # pos(eps) = pos @ eps.T, lat(eps) = lat @ eps.T => sigma = g_pos.T @ pos + g_lat.T @ lat
         sigma_analytic = (
             g_pos.T @ cell_strain.positions + g_lat.T @ cell_strain.lattice
         )
@@ -1245,7 +1739,7 @@ def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
             sigma_analytic, sigma_fd, atol=1e-7, rtol=1e-6
         )
 
-    # 7. Fortran test_conformance.f90:test_external_charges chain-rule decomposition
+    # Fortran test_conformance.f90:test_external_charges chain-rule decomposition
     mol_mb01 = get_structure("mb16_43", "01", dtype=torch.float64)
     p_d4_conf = _model_param("d4", torch.float64)
     cut_conf = Cutoff(cn=20.0, disp2=40.0, disp3=15.0)
@@ -1273,7 +1767,6 @@ def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
     ).sum()
     g_ext_pos, dedq = torch.autograd.grad(e_ext, (pos_ext, q_ext_leaf))
 
-    # Indirect charge-response force g_q = sum_j (dq_j / dr) * (dE / dq_j)
     pos_q = mol_mb01.positions.clone().requires_grad_(True)
     q_of_r = charge.get_charges_eeq(mol_mb01.numbers, pos_q)
     (g_q,) = torch.autograd.grad((q_of_r * dedq.detach()).sum(), pos_q)
@@ -1282,5 +1775,6 @@ def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
     torch.testing.assert_close(
         g_auto, g_ext_pos + g_q, atol=1e-11, rtol=1e-11
     )
+
 
 

@@ -1126,3 +1126,59 @@ def test_d4_autograd_and_transforms(model_name: str) -> None:
         model=model_name,
     ).sum(dim=-1)
     assert torch.allclose(vmap_e, direct_e, rtol=1e-12, atol=1e-12)
+
+
+def test_h3_7_d4_casimir_polder_fortran_energy_and_gradient() -> None:
+    """
+    Verify H3.7 D4, D4S, and D4Srev Casimir-Polder `3/pi` integration factor
+    conformance against authoritative Fortran `libdftd.so` (`d2740777049b2a77fd5acc86c4e1abe75d5374ee`)
+    on MB16-43 01 (with nonzero 3-body ATM contribution), checking both total
+    energies and nuclear gradients.
+    """
+    mol = get_structure("mb16_43", "01", dtype=torch.float64)
+    param = _conformance_param(torch.float64)
+    cutoff = Cutoff(cn=30.0, disp2=60.0, disp3=40.0, cn_eeq=25.0)
+    param_2b = {
+        k: v
+        for k, v in param.items()
+        if k not in ("s9", "rs9", "a13", "a23", "alp3")
+    }
+
+    # Authoritative Fortran libdftd.so energies and atom-0 nuclear gradients on MB16-43 01
+    fortran_refs = {
+        "d4": (
+            -0.018528083872689883,
+            [-9.766610308825017e-05, 0.0002568554089959182, -0.00016317631527395417],
+        ),
+        "d4s": (
+            -0.019813838966238666,
+            [0.0025187166314867425, -0.003103659556981383, 0.00044009140825191127],
+        ),
+        "d4srev": (
+            -0.019073487468982180,
+            [0.0003341654596794053, -0.0004049476974231436, 0.00018994991956220597],
+        ),
+    }
+
+    for model_name, (ref_e, ref_g0) in fortran_refs.items():
+        pos = mol.positions.clone().requires_grad_(True)
+        e_tot = dftd(
+            mol.replace(positions=pos), param, model=model_name, cutoff=cutoff
+        ).sum()
+        (g_pos,) = torch.autograd.grad(e_tot, pos)
+        e_2b = dftd(mol, param_2b, model=model_name, cutoff=cutoff).sum()
+        e_atm = e_tot.detach() - e_2b
+
+        assert float(e_atm.abs()) > 4e-5
+        torch.testing.assert_close(
+            e_tot,
+            torch.tensor(ref_e, dtype=torch.float64),
+            rtol=1e-14,
+            atol=1e-15,
+        )
+        torch.testing.assert_close(
+            g_pos[0],
+            torch.tensor(ref_g0, dtype=torch.float64),
+            rtol=1e-13,
+            atol=1e-14,
+        )

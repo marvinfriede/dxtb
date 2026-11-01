@@ -44,6 +44,7 @@ from ..damping import (
     as_damping_param,
 )
 from ..data.d2 import D2_C6, D2_RADII_PAIRWISE
+from ..data.table import guard_numbers
 from ..pairs import DensePairs, Pairs, TermPairs
 from .base import DispersionModel, DispersionProperties
 from .c6 import AtomicC6
@@ -70,29 +71,17 @@ def _default_d2_cutoff() -> Cutoff:
     )
 
 
-def _unwrap_functorch(x: Tensor) -> Tensor:
-    while torch._C._functorch.is_functorch_wrapped_tensor(x):
-        x = torch._C._functorch.get_unwrapped(x)
-    return x
-
-
-def _validate_d2_numbers(numbers: Tensor, c6_table: Tensor) -> None:
-    if torch.compiler.is_compiling():
-        return
-    raw_num = _unwrap_functorch(numbers)
-    raw_c6 = _unwrap_functorch(c6_table)
-    max_z = min(defaults.MAX_ELEM_D2, int(raw_c6.shape[0]) - 1)
-    if bool((raw_num < 0).any()) or bool((raw_num > max_z).any()):
-        raise ValueError(
-            "Structure contains unsupported element for D2 dispersion model "
-            f"(only H-Rn, Z <= {defaults.MAX_ELEM_D2}, are supported)."
-        )
-    invalid = (raw_num > 0) & (raw_c6[raw_num] <= 0.0)
-    if bool(invalid.any()):
-        raise ValueError(
-            "Structure contains unsupported element for D2 dispersion model "
-            f"(only H-Rn, Z <= {defaults.MAX_ELEM_D2}, are supported)."
-        )
+def _validate_d2_numbers(numbers: Tensor, c6_table: Tensor) -> Tensor:
+    max_z = min(defaults.MAX_ELEM_D2, int(c6_table.shape[0]) - 1)
+    oob = (numbers < 0) | (numbers > max_z)
+    safe_num = torch.where(oob, torch.zeros_like(numbers), numbers)
+    invalid = oob | ((safe_num > 0) & (c6_table[safe_num] <= 0.0))
+    return guard_numbers(
+        numbers,
+        invalid,
+        "Structure contains unsupported element for D2 dispersion model "
+        f"(only H-Rn, Z <= {defaults.MAX_ELEM_D2}, are supported).",
+    )
 
 
 class D2Model(DispersionModel):
@@ -152,11 +141,12 @@ class D2Model(DispersionModel):
     ) -> Environment:
         """Return a zero coordination-number environment (D2 is environment-independent)."""
         _ = pairs
-        _validate_d2_numbers(
+        numbers = _validate_d2_numbers(
             structure.numbers, self._c6_table(structure.positions)
         )
         return Environment(
-            cn=torch.zeros_like(structure.positions[..., 0]),
+            cn=torch.zeros_like(structure.positions[..., 0])
+            + (numbers[..., :1] * 0).to(structure.positions.dtype),
             q=None,
         )
 
@@ -178,9 +168,9 @@ class D2Model(DispersionModel):
         the geometric mean :math:`\\sqrt{C_6^A C_6^B}`.
         """
         _ = environment
-        numbers, positions = structure.numbers, structure.positions
+        positions = structure.positions
         c6_tab = self._c6_table(positions)
-        _validate_d2_numbers(numbers, c6_tab)
+        numbers = _validate_d2_numbers(structure.numbers, c6_tab)
 
         ci = c6_tab[numbers]
         ci_i = ci.unsqueeze(-1)
@@ -283,6 +273,11 @@ class D2Model(DispersionModel):
         else:
             validate_model_damping("d2", damping.two)
 
+        structure = structure.replace(
+            numbers=_validate_d2_numbers(
+                structure.numbers, self._c6_table(structure.positions)
+            )
+        )
         if pairs is None:
             pairs = DensePairs.build(
                 structure,

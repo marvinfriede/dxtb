@@ -23,6 +23,7 @@ element parameters ``rcov_table``, ``rvdw_table`` and ``r4r2_table`` are given a
 """
 from __future__ import annotations
 
+import torch
 from tad_mctc.data import radii, resolve_table
 from tad_mctc.typing import TableFunction, Tensor
 
@@ -32,7 +33,45 @@ from .r4r2 import R4R2
 from .radii import VDW_PAIRWISE_119
 from .zeff import ZEFF
 
-__all__ = ["TABLES", "element_table"]
+__all__ = ["TABLES", "element_table", "guard_numbers"]
+
+
+def _unwrap_functorch(x: Tensor) -> Tensor:
+    while torch._C._functorch.is_functorch_wrapped_tensor(x):
+        x = torch._C._functorch.get_unwrapped(x)
+    return x
+
+
+def guard_numbers(
+    numbers: Tensor,
+    invalid: Tensor,
+    message: str,
+    *,
+    format_bad: bool = False,
+) -> Tensor:
+    """
+    Validate atomic numbers eagerly (`ValueError`) and, when tracing under
+    `torch.compile`, guard `numbers` with a graph-connected out-of-bounds
+    table lookup so that invalid atomic numbers (including negative values and
+    unsupported gap elements) deterministically fail at runtime instead of
+    silently producing meaningless energies.
+    """
+    if torch.compiler.is_compiling():
+        sentinel = torch.full_like(numbers, 1000)
+        guard = torch.zeros(1, device=numbers.device, dtype=numbers.dtype)
+        return (
+            torch.where(invalid, sentinel, numbers)
+            + guard[invalid.to(torch.long)]
+        )
+
+    raw_num = _unwrap_functorch(numbers)
+    raw_inv = _unwrap_functorch(invalid)
+    if bool(raw_inv.any()):
+        if format_bad:
+            bad = int(raw_num[raw_inv][0].item())
+            raise ValueError(message.format(bad=bad))
+        raise ValueError(message)
+    return numbers
 
 
 TABLES: dict[str, tuple[TableFunction, tuple[int, ...]]] = {

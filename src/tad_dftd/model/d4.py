@@ -41,7 +41,7 @@ from ..damping import (
 )
 from ..data import GAM, TANH_PARAMS, ZEFF
 from ..data.r4r2 import R4R2
-from ..data.table import element_table
+from ..data.table import element_table, guard_numbers
 from ..data.wfpair import WFPAIR_D4S
 from ..pairvalues import pair_radii
 from ..pairs import DensePairs, Pairs, SparsePairs, TermPairs
@@ -79,49 +79,39 @@ def _default_d4_cutoff() -> Cutoff:
     return Cutoff.from_model("d4")
 
 
-def _unwrap_functorch(x: Tensor) -> Tensor:
-    while torch._C._functorch.is_functorch_wrapped_tensor(x):
-        x = torch._C._functorch.get_unwrapped(x)
-    return x
-
-
-def _validate_d4_numbers(numbers: Tensor) -> None:
+def _validate_d4_numbers(numbers: Tensor) -> Tensor:
     """
     Validate that atomic numbers are within the supported D4 range
     (``Z == 0`` for padding, ``1 <= Z <= 103``, or ``112 <= Z <= 118``).
     """
-    if is_compiling():
-        return
-    raw = _unwrap_functorch(numbers)
     invalid = (
-        (raw < 0)
-        | ((raw > 103) & (raw < 112))
-        | (raw > defaults.MAX_ELEM_D4)
+        (numbers < 0)
+        | ((numbers > 103) & (numbers < 112))
+        | (numbers > defaults.MAX_ELEM_D4)
     )
-    if bool(invalid.any()):
-        bad = int(raw[invalid][0].item())
-        raise ValueError(
-            f"Unsupported atomic number {bad} for D4 dispersion model "
-            "(supported: Z in 1..103 and 112..118)."
-        )
+    return guard_numbers(
+        numbers,
+        invalid,
+        "Unsupported atomic number {bad} for D4 dispersion model "
+        "(supported: Z in 1..103 and 112..118).",
+        format_bad=True,
+    )
 
 
-def _validate_d4srev_numbers(numbers: Tensor) -> None:
+def _validate_d4srev_numbers(numbers: Tensor) -> Tensor:
     """
     Validate that atomic numbers are within the supported D4Srev range
     (``Z == 0`` for padding, ``1 <= Z <= 103``; ``dftd/data/tanh.f90`` defines
     tanh charge-scaling parameters only up to ``Z = 103``).
     """
-    if is_compiling():
-        return
-    raw = _unwrap_functorch(numbers)
-    invalid = (raw < 0) | (raw > defaults.MAX_ELEM_D4SREV)
-    if bool(invalid.any()):
-        bad = int(raw[invalid][0].item())
-        raise ValueError(
-            f"Unsupported atomic number {bad} for D4Srev dispersion model "
-            f"(supported: Z in 1..{defaults.MAX_ELEM_D4SREV})."
-        )
+    invalid = (numbers < 0) | (numbers > defaults.MAX_ELEM_D4SREV)
+    return guard_numbers(
+        numbers,
+        invalid,
+        f"Unsupported atomic number {{bad}} for D4Srev dispersion model "
+        f"(supported: Z in 1..{defaults.MAX_ELEM_D4SREV}).",
+        format_bad=True,
+    )
 
 
 class D4Model(DispersionModel):
@@ -196,7 +186,9 @@ class D4Model(DispersionModel):
         damping: Damping | None = None,
         pairs: Pairs | None = None,
     ) -> Tensor:
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         param, damping, pairs = self._prepare(structure, param, damping, pairs)
 
         env = self.environment(structure, pairs.cn, q=q)
@@ -230,7 +222,9 @@ class D4Model(DispersionModel):
         cn: Tensor | None = None,
     ) -> Environment:
         """Compute the D4 coordination number and atomic partial charges."""
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         if cn is None:
             cn_model = ncoord.cn_d4.replace(
                 count=self.counting_function,
@@ -291,7 +285,9 @@ class D4Model(DispersionModel):
         with_dgwdq: bool = False,
     ) -> Tensor | tuple[Tensor, Tensor]:
         """Normalized charge-scaled reference weights of shape ``(..., nat, 7)``."""
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         q = (
             environment.q
             if environment.q is not None
@@ -333,7 +329,9 @@ class D4Model(DispersionModel):
         weights_or_env: Tensor | Environment,
     ) -> AtomicC6:
         """Factored atomic C6 coefficients from reference `weights` or `environment`."""
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         w = (
             self.weights(structure, weights_or_env)
             if isinstance(weights_or_env, Environment)
@@ -372,7 +370,9 @@ class D4Model(DispersionModel):
         Compute dense pairwise :math:`C_6` coefficients ``(..., nat, nat)`` and
         optional partial-charge derivatives ``dc6dq[..., i, j] = d(C6_ij)/d(q_i)``.
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         ref = self._reference(structure)
         if not with_dc6dq:
             w = self.weights(structure, environment)
@@ -398,7 +398,9 @@ class D4Model(DispersionModel):
         Compute static dipole-dipole (`alphadd`) and quadrupole-quadrupole
         (`alphaqq`) atomic polarizabilities.
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         if weights is None:
             if environment is None:
                 environment = self.environment(structure)
@@ -426,7 +428,9 @@ class D4Model(DispersionModel):
         Compute D4 model properties (`cn`, `q`, dense `c6`, dense `c8`,
         `alphadd`, and `alphaqq`).
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         cn_pairs: PeriodicShifts | NeighborList | None = None
         if cn is None:
             if isinstance(pairs, DensePairs):
@@ -569,7 +573,9 @@ class D4SModel(DispersionModel):
         damping: Damping | None = None,
         pairs: Pairs | None = None,
     ) -> Tensor:
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         param, damping, pairs = self._prepare(structure, param, damping, pairs)
 
         env = self.environment(structure, pairs.cn, q=q)
@@ -642,7 +648,9 @@ class D4SModel(DispersionModel):
         Partner-element-dependent charge-scaled reference weights of shape
         ``(..., nat, nel, 7)``.
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         q = (
             environment.q
             if environment.q is not None
@@ -686,7 +694,9 @@ class D4SModel(DispersionModel):
         environment_or_weights: Environment | Tensor,
     ) -> AtomicC6:
         """Factored atomic C6 coefficients for D4S."""
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         ref = self._reference(structure)
         wfpair = self._wfpair(structure)
         if isinstance(environment_or_weights, Environment):
@@ -746,7 +756,9 @@ class D4SModel(DispersionModel):
         Compute dense pairwise :math:`C_6` coefficients ``(..., nat, nat)`` and
         optional partial-charge derivatives ``dc6dq[..., i, j] = d(C6_ij)/d(q_i)``.
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         if not with_dc6dq:
             return self.coefficients(structure, environment).dense()
         gw, dgwdq = self.weights(structure, environment, with_dgwdq=True)
@@ -769,7 +781,9 @@ class D4SModel(DispersionModel):
         (`alphaqq`) atomic polarizabilities using diagonal element-pair
         weights ``wf = wfpair[Z_i, Z_i]`` (``dftd/model/d4/smooth.f90``).
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         if environment is None:
             environment = self.environment(structure)
         q = (
@@ -814,7 +828,9 @@ class D4SModel(DispersionModel):
         Compute D4S model properties (`cn`, `q`, dense `c6`, dense `c8`,
         `alphadd`, and `alphaqq`).
         """
-        _validate_d4_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4_numbers(structure.numbers)
+        )
         cn_pairs: PeriodicShifts | NeighborList | None = None
         if cn is None:
             if isinstance(pairs, DensePairs):
@@ -968,7 +984,9 @@ class D4SrevModel(DispersionModel):
         damping: Damping | None = None,
         pairs: Pairs | None = None,
     ) -> Tensor:
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         param, damping, pairs = self._prepare(structure, param, damping, pairs)
 
         env = self.environment(structure, pairs.cn, q=q)
@@ -998,7 +1016,9 @@ class D4SrevModel(DispersionModel):
         cn: Tensor | None = None,
     ) -> Environment:
         """Compute the D4Srev coordination number and atomic partial charges."""
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         if cn is None:
             cn_model = ncoord.cn_d4srev.replace(
                 count=self.counting_function,
@@ -1062,7 +1082,9 @@ class D4SrevModel(DispersionModel):
         Partner-element-dependent charge-scaled reference weights of shape
         ``(..., nat, nel, 7)`` for D4Srev.
         """
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         q = (
             environment.q
             if environment.q is not None
@@ -1099,7 +1121,9 @@ class D4SrevModel(DispersionModel):
         environment_or_weights: Environment | Tensor,
     ) -> AtomicC6:
         """Factored atomic C6 coefficients for D4Srev."""
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         ref = self._reference(structure)
         wfpair = self._wfpair(structure)
         if isinstance(environment_or_weights, Environment):
@@ -1156,7 +1180,9 @@ class D4SrevModel(DispersionModel):
         Compute dense pairwise :math:`C_6` coefficients ``(..., nat, nat)`` and
         optional partial-charge derivatives ``dc6dq[..., i, j] = d(C6_ij)/d(q_i)``.
         """
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         if not with_dc6dq:
             return self.coefficients(structure, environment).dense()
         gw, dgwdq = self.weights(structure, environment, with_dgwdq=True)
@@ -1178,7 +1204,9 @@ class D4SrevModel(DispersionModel):
         Compute static dipole-dipole (`alphadd`) and quadrupole-quadrupole
         (`alphaqq`) atomic polarizabilities for D4Srev.
         """
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         if environment is None:
             environment = self.environment(structure)
         q = (
@@ -1220,7 +1248,9 @@ class D4SrevModel(DispersionModel):
         Compute D4Srev model properties (`cn`, `q`, dense `c6`, dense `c8`,
         `alphadd`, and `alphaqq`).
         """
-        _validate_d4srev_numbers(structure.numbers)
+        structure = structure.replace(
+            numbers=_validate_d4srev_numbers(structure.numbers)
+        )
         cn_pairs: PeriodicShifts | NeighborList | None = None
         if cn is None:
             if isinstance(pairs, DensePairs):
@@ -1341,7 +1371,7 @@ def d4sc_dispersion_matrix(
     Evaluate the self-consistent D4 pairwise reference dispersion matrix
     ``dispmat`` of shape ``(..., nat, nat, nref, nref)``.
     """
-    _validate_d4_numbers(numbers)
+    numbers = _validate_d4_numbers(numbers)
     if isinstance(param, DampingParam):
         dparam = param.replace(
             s6=defaults.D4_S6 if param.s6 is None else param.s6,

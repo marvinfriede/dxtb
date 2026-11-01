@@ -44,8 +44,8 @@ from .model.catalogue import (
     get_model_metadata,
     resolve_model_id,
 )
-from .model.d1 import D1Model, _default_d1_cutoff
-from .model.d2 import D2Model, _default_d2_cutoff
+from .model.d1 import D1Model, _default_d1_cutoff, _validate_d1_numbers
+from .model.d2 import D2Model, _default_d2_cutoff, _validate_d2_numbers
 from .model.d3 import (
     D3Model,
     D3SModel,
@@ -53,9 +53,18 @@ from .model.d3 import (
     _eval_dispersion2,
     _eval_dispersion3,
     _matrix,
+    _validate_d3_numbers,
+    _validate_d3s_numbers,
     default_damping,
 )
-from .model.d4 import D4Model, D4SModel, D4SrevModel, _default_d4_cutoff
+from .model.d4 import (
+    D4Model,
+    D4SModel,
+    D4SrevModel,
+    _default_d4_cutoff,
+    _validate_d4_numbers,
+    _validate_d4srev_numbers,
+)
 from .model.weights import WeightingFunction, gaussian_log_weight
 from .pairs import DensePairs, Pairs, TermPairs
 from .reference.d3 import Reference
@@ -84,6 +93,7 @@ __all__ = [
     "dispersion2",
     "dispersion3",
     "get_properties",
+    "validate_numbers",
 ]
 
 Param: TypeAlias = DampingParam | Mapping[str, Any]
@@ -794,4 +804,50 @@ def dispersion3(
         cutoff=cut,
         max_triples=max_triples,
         checkpoint=checkpoint,
+    )
+
+
+def validate_numbers(
+    numbers: Tensor,
+    model: str | int | DispersionModelId = "d3",
+    *,
+    q: Tensor | None = None,
+    qmodel: str = "eeq",
+) -> Tensor:
+    """
+    Validate atomic numbers for `model` at the structure boundary (`ValueError`
+    in eager mode, graph-connected out-of-bounds guard under `torch.compile`).
+    """
+    import torch
+
+    from .charge import MAX_ELEM_EEQ
+    from .data.d1 import D1_C6
+    from .data.d2 import D2_C6
+    from .data.table import guard_numbers
+
+    model_id = resolve_model_id(model)
+    like = torch.zeros(1, device=numbers.device, dtype=torch.float64)
+    if model_id == DispersionModelId.D1:
+        return _validate_d1_numbers(numbers, D1_C6(device=like.device, dtype=like.dtype))
+    if model_id == DispersionModelId.D2:
+        return _validate_d2_numbers(numbers, D2_C6(device=like.device, dtype=like.dtype))
+    if model_id == DispersionModelId.D3:
+        return _validate_d3_numbers(numbers)
+    if model_id == DispersionModelId.D3S:
+        return _validate_d3s_numbers(numbers)
+    if model_id in (DispersionModelId.D4, DispersionModelId.D4S):
+        numbers = _validate_d4_numbers(numbers)
+        if q is None and qmodel.lower().strip() in ("eeq", "eeq2019"):
+            invalid = (numbers < 0) | (numbers > MAX_ELEM_EEQ)
+            numbers = guard_numbers(
+                numbers,
+                invalid,
+                f"Structure contains unsupported element for 'eeq' charge model "
+                f"(valid range: 1..{MAX_ELEM_EEQ}).",
+            )
+        return numbers
+    if model_id == DispersionModelId.D4SREV:
+        return _validate_d4srev_numbers(numbers)
+    raise NotImplementedError(
+        f"Dispersion model '{model}' is not supported by validate_numbers()."
     )

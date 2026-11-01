@@ -246,3 +246,147 @@ def test_element_ranges_padding_and_transform_validation_all_models() -> None:
                 q=q_zero,
             )
 
+
+@pytest.mark.parametrize("backend", ["eager", "aot_eager", "inductor"])
+def test_compiled_unsupported_elements_all_models_and_backends(
+    backend: str,
+) -> None:
+    """
+    Verify H3.6 compiled unsupported-element behavior across `eager`,
+    `aot_eager`, and `inductor` (`fullgraph=True`):
+    1. Valid atomic numbers succeed under `torch.compile`.
+    2. Invalid atomic numbers (negative Z, Z above model max, unsupported gap
+       elements Z=2..5 in D1 and Z=104..111 in D4/D4S, mixed valid/invalid
+       batches, padded systems, and repeated calls with different `numbers`)
+       never silently produce finite energies and deterministically raise an
+       exception (`IndexError` or `RuntimeError`).
+    3. Public `validate_numbers` raises `ValueError` at the structure boundary.
+    """
+    from tad_dftd import dftd, validate_numbers
+    from tad_mctc import Structure
+
+    pos2 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 3.2]], dtype=torch.float64
+    )
+    p_fermi = {"s6": 1.0, "rs6": 1.0, "alp": 20.0}
+    p_bj = {"s6": 1.0, "s8": 0.8, "a1": 0.4, "a2": 4.5, "s9": 1.0}
+    q2 = torch.zeros(2, dtype=torch.float64)
+
+    def run_d1(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        return dftd(Structure(numbers=nums, positions=pos), p_fermi, model="d1").sum()
+
+    def run_d2(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        return dftd(Structure(numbers=nums, positions=pos), p_fermi, model="d2").sum()
+
+    def run_d3(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        return dftd(Structure(numbers=nums, positions=pos), p_bj, model="d3").sum()
+
+    def run_d3s(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        return dftd(Structure(numbers=nums, positions=pos), p_bj, model="d3s").sum()
+
+    def run_d4_ext(
+        nums: torch.Tensor, pos: torch.Tensor, q_in: torch.Tensor
+    ) -> torch.Tensor:
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_bj, model="d4", q=q_in
+        ).sum()
+
+    def run_d4_eeq(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_bj, model="d4"
+        ).sum()
+
+    def run_d4srev(
+        nums: torch.Tensor, pos: torch.Tensor, q_in: torch.Tensor
+    ) -> torch.Tensor:
+        return dftd(
+            Structure(numbers=nums, positions=pos),
+            p_bj,
+            model="d4srev",
+            q=q_in,
+        ).sum()
+
+    c_d1 = torch.compile(run_d1, backend=backend, fullgraph=True)
+    c_d2 = torch.compile(run_d2, backend=backend, fullgraph=True)
+    c_d3 = torch.compile(run_d3, backend=backend, fullgraph=True)
+    c_d3s = torch.compile(run_d3s, backend=backend, fullgraph=True)
+    c_d4_ext = torch.compile(run_d4_ext, backend=backend, fullgraph=True)
+    c_d4_eeq = torch.compile(run_d4_eeq, backend=backend, fullgraph=True)
+    c_d4srev = torch.compile(run_d4srev, backend=backend, fullgraph=True)
+
+    # First call with valid elements succeeds and matches eager
+    valid_hc = torch.tensor([1, 6], dtype=torch.long)
+    assert torch.isfinite(c_d1(valid_hc, pos2))
+    assert torch.isfinite(c_d2(valid_hc, pos2))
+    assert torch.isfinite(c_d3(valid_hc, pos2))
+    assert torch.isfinite(c_d3s(valid_hc, pos2))
+    assert torch.isfinite(c_d4_ext(valid_hc, pos2, q2))
+    assert torch.isfinite(c_d4_eeq(valid_hc, pos2))
+    assert torch.isfinite(c_d4srev(valid_hc, pos2, q2))
+    # Superheavy Z=118 succeeds in compiled D4 with external charges
+    assert torch.isfinite(
+        c_d4_ext(torch.tensor([1, 118], dtype=torch.long), pos2, q2)
+    )
+
+    # Repeated calls with invalid elements must raise and never return finite energies
+    for bad_d1 in ([-1, 6], [2, 6], [5, 6], [1, 11], [0, -2]):
+        t_bad = torch.tensor(bad_d1, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d1")
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d1(t_bad, pos2).item()
+
+    for bad_d2 in ([-1, 6], [1, 87], [0, 100]):
+        t_bad = torch.tensor(bad_d2, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d2")
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d2(t_bad, pos2).item()
+
+    for bad_d3 in ([-1, 6], [1, 104], [0, 118]):
+        t_bad = torch.tensor(bad_d3, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d3")
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d3(t_bad, pos2).item()
+
+    for bad_d3s in ([-1, 6], [1, 95], [0, 103]):
+        t_bad = torch.tensor(bad_d3s, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d3s")
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d3s(t_bad, pos2).item()
+
+    # D4 with external charges rejects negative Z, gap Z=104..111, and Z > 118
+    for bad_d4_ext in ([-1, 6], [1, 104], [1, 111], [1, 119], [0, 105]):
+        t_bad = torch.tensor(bad_d4_ext, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d4", q=q2)
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d4_ext(t_bad, pos2, q2).item()
+
+    # D4 with auto-EEQ also rejects Z=112..118 because EEQ supports Z <= 103
+    for bad_d4_eeq in ([-1, 6], [1, 104], [1, 112], [1, 118]):
+        t_bad = torch.tensor(bad_d4_eeq, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d4")
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d4_eeq(t_bad, pos2).item()
+
+    # D4Srev rejects negative Z and Z >= 104 even with external charges
+    for bad_srev in ([-1, 6], [1, 104], [1, 118]):
+        t_bad = torch.tensor(bad_srev, dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(t_bad, model="d4srev", q=q2)
+        with pytest.raises((IndexError, RuntimeError)):
+            _ = c_d4srev(t_bad, pos2, q2).item()
+
+    # Mixed valid/invalid batch with padding
+    batch_pos = torch.stack([pos2, pos2], dim=0)
+    batch_valid = torch.tensor([[1, 6], [8, 0]], dtype=torch.long)
+    batch_mixed_bad = torch.tensor([[1, 6], [105, 0]], dtype=torch.long)
+    assert torch.isfinite(c_d3(batch_valid, batch_pos))
+    with pytest.raises((IndexError, RuntimeError)):
+        _ = c_d3(batch_mixed_bad, batch_pos).item()
+
+
