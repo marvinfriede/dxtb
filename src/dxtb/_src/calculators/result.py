@@ -216,7 +216,13 @@ class Result:
 
     @property
     def cenergies(self) -> dict[str, Tensor]:
-        """Materialize the immutable classical-energy pairs as a new dict."""
+        """Materialize the immutable classical-energy pairs as a new dict.
+
+        ``Result.classical`` is the authoritative ordered tuple representation
+        and preserves duplicate labels (for example, multiple identity-keyed
+        classical setups). As a dictionary view, ``cenergies`` retains the last
+        occurrence when a label is repeated.
+        """
         return dict(self.classical)
 
     @property
@@ -234,10 +240,17 @@ class Result:
     def get_energies(self) -> dict[str, dict[str, object]]:
         """Return energy contributions formatted for user-facing output."""
         key = "value"
-        classical = {
-            name: {key: value.sum().item()} for name, value in self.classical
-        }
-        ctotal = sum(value[key] for value in classical.values())
+        totals: dict[str, int] = {}
+        for name, _ in self.classical:
+            totals[name] = totals.get(name, 0) + 1
+        counts: dict[str, int] = {}
+        classical: dict[str, dict[str, float]] = {}
+        for name, value in self.classical:
+            occ = counts.get(name, 0) + 1
+            counts[name] = occ
+            display_name = name if totals[name] == 1 else f"{name} ({occ})"
+            classical[display_name] = {key: value.sum().item()}
+        ctotal = sum(value.sum().item() for _, value in self.classical)
         scf_energy = 0.0 if self.scf is None else self.scf.sum().item()
         free_energy = 0.0 if self.fenergy is None else self.fenergy.sum().item()
         return {

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -39,9 +40,13 @@ from dxtb._src.calculators.legacy_composition import (
 )
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
+from dxtb._src.calculators.singlepoint import _call_tensor
 from dxtb._src.constants import defaults
 from dxtb._src.scf.functional.eager import _raise_failure_code
-from dxtb._src.scf.functional.padded import evaluate_padded_systems
+from dxtb._src.scf.functional.padded import (
+    evaluate_padded_systems,
+    validate_padded_charge_spin,
+)
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import (
@@ -53,6 +58,24 @@ __all__ = [
     "evaluate_packed_systems",
     "pack_system_results",
 ]
+
+_KNOWN_PUBLIC_SINGLEPOINT_KWARGS = frozenset(
+    {
+        "write_overlap",
+        "write_dipole",
+        "write_quadrupole",
+        "write_hcore",
+        "cuda_sync_in_scf",
+    }
+)
+
+_KNOWN_LEGACY_SCF_DATA_KWARGS = frozenset(
+    {
+        "fwd_options",
+        "bck_options",
+        "eigen_options",
+    }
+)
 
 
 def _pad_last_dim(tensors: Sequence[Tensor], target_len: int) -> Tensor:
@@ -119,6 +142,40 @@ def _pad_matrix_2d(
     return torch.stack(padded, dim=0)
 
 
+def _orbital_extent(r: Result) -> int:
+    """Infer atomic-orbital extent from any present orbital-indexed field."""
+    for mat in (
+        r.overlap,
+        r.hcore,
+        r.density,
+        r.hamiltonian,
+        r.dipole_integrals,
+        r.quadrupole_integrals,
+    ):
+        if mat is not None:
+            return int(mat.shape[-1])
+    if r.coefficients is not None:
+        return int(r.coefficients.shape[-2])
+    if r.charges is not None:
+        return int(r.charges.mono.shape[-1])
+    if r.potential is not None and r.potential.mono is not None:
+        return int(r.potential.mono.shape[-1])
+    if r.overlap_norm is not None:
+        return int(r.overlap_norm.shape[-1])
+    return 0
+
+
+def _mo_extent(r: Result, default_norb: int) -> int:
+    """Infer molecular-orbital extent from present MO-indexed fields."""
+    if r.emo is not None:
+        return int(r.emo.shape[-1])
+    if r.occupation is not None:
+        return int(r.occupation.shape[-1])
+    if r.coefficients is not None:
+        return int(r.coefficients.shape[-1])
+    return default_norb
+
+
 def pack_system_results(
     results: Sequence[Result],
     *,
@@ -148,22 +205,8 @@ def pack_system_results(
 
     ref = results[0].energy
     max_atoms = max(int(r.energy.shape[-1]) for r in results)
-    max_orbitals = max(
-        (
-            int(r.overlap.shape[-1])
-            if r.overlap is not None
-            else (
-                int(r.charges.mono.shape[-1])
-                if r.charges is not None
-                else (int(r.hcore.shape[-1]) if r.hcore is not None else 0)
-            )
-        )
-        for r in results
-    )
-    max_mos = max(
-        int(r.emo.shape[-1]) if r.emo is not None else max_orbitals
-        for r in results
-    )
+    max_orbitals = max(_orbital_extent(r) for r in results)
+    max_mos = max(_mo_extent(r, max_orbitals) for r in results)
 
     energy = _pad_last_dim([r.energy for r in results], max_atoms)
     scf = (
@@ -193,25 +236,32 @@ def pack_system_results(
         )
     )
 
-    # Classical contributions in deterministic first-seen order
-    classical_labels: list[str] = []
+    # Classical contributions in deterministic first-seen occurrence order
+    classical_slots: list[tuple[str, int]] = []
+    classical_maps: list[dict[tuple[str, int], Tensor]] = []
     for r in results:
-        for label, _ in r.classical:
-            if label not in classical_labels:
-                classical_labels.append(label)
-    classical_maps = [dict(r.classical) for r in results]
+        counts: dict[str, int] = {}
+        rmap: dict[tuple[str, int], Tensor] = {}
+        for label, val in r.classical:
+            occ = counts.get(label, 0)
+            counts[label] = occ + 1
+            slot = (label, occ)
+            rmap[slot] = val
+            if slot not in classical_slots:
+                classical_slots.append(slot)
+        classical_maps.append(rmap)
     classical = tuple(
         (
             label,
             _pad_last_dim(
                 [
-                    cmap.get(label, ref.new_zeros((max_atoms,)))
-                    for cmap in classical_maps
+                    rmap.get((label, occ), ref.new_zeros((max_atoms,)))
+                    for rmap in classical_maps
                 ],
                 max_atoms,
             ),
         )
-        for label in classical_labels
+        for label, occ in classical_slots
     )
 
     # Charges
@@ -371,38 +421,100 @@ def pack_system_results(
         status = None
     else:
         iterations = lane_iters
-        converged = (
-            torch.stack([r.converged.reshape(()) for r in results], dim=0)
-            if all(r.converged is not None for r in results)
-            else None
+        can_fill_non_scf = all(
+            r.converged is not None or r.scf is None or r.density is None
+            for r in results
         )
-        residual = (
-            torch.stack([r.residual for r in results], dim=0)
-            if all(r.residual is not None for r in results)
-            else None
+        if any(r.converged is not None for r in results) and can_fill_non_scf:
+            converged = torch.stack(
+                [
+                    (
+                        r.converged.reshape(())
+                        if r.converged is not None
+                        else torch.tensor(
+                            True, device=ref.device, dtype=torch.bool
+                        )
+                    )
+                    for r in results
+                ],
+                dim=0,
+            )
+        else:
+            converged = None
+
+        can_fill_residual = all(
+            r.residual is not None or r.scf is None or r.density is None
+            for r in results
         )
-        status = (
-            SCFStatus(
+        if any(r.residual is not None for r in results) and can_fill_residual:
+            sample_res = next(
+                r.residual for r in results if r.residual is not None
+            )
+            if all(
+                r.residual is None or r.residual.numel() == 1 for r in results
+            ):
+                residual = torch.stack(
+                    [
+                        (
+                            r.residual.reshape(sample_res.shape)
+                            if r.residual is not None
+                            else sample_res.new_zeros(sample_res.shape)
+                        )
+                        for r in results
+                    ],
+                    dim=0,
+                )
+            else:
+                max_res_len = max(
+                    1 if r.residual is None else int(r.residual.shape[-1])
+                    for r in results
+                )
+                residual = _pad_last_dim(
+                    [
+                        (
+                            r.residual.reshape(-1)
+                            if r.residual is not None
+                            else sample_res.new_zeros((max_res_len,))
+                        )
+                        for r in results
+                    ],
+                    max_res_len,
+                )
+        else:
+            residual = None
+
+        can_fill_status = all(
+            r.status is not None or r.scf is None or r.density is None
+            for r in results
+        )
+        if any(r.status is not None for r in results) and can_fill_status:
+            zero_code = torch.tensor(0, device=ref.device, dtype=torch.int64)
+            status = SCFStatus(
                 trajectory_failure=torch.stack(
                     [
-                        r.status.trajectory_failure.reshape(())
+                        (
+                            r.status.trajectory_failure.reshape(())
+                            if r.status is not None
+                            else zero_code
+                        )
                         for r in results
-                        if r.status is not None
                     ],
                     dim=0,
                 ),
                 final_failure=torch.stack(
                     [
-                        r.status.final_failure.reshape(())
+                        (
+                            r.status.final_failure.reshape(())
+                            if r.status is not None
+                            else zero_code
+                        )
                         for r in results
-                        if r.status is not None
                     ],
                     dim=0,
                 ),
             )
-            if all(r.status is not None for r in results)
-            else None
-        )
+        else:
+            status = None
 
     return Result(
         energy=energy,
@@ -428,38 +540,204 @@ def pack_system_results(
     )
 
 
-def _normalize_scalar_lane_input(
-    value: Tensor | float | int | None,
-    index: int,
+def _scalar_to_0d_tensor(
+    value: Tensor | float | int,
     *,
-    default: float,
+    name: str,
     device: torch.device,
     dtype: torch.dtype,
 ) -> Tensor:
-    """Normalize one lane's scalar charge or spin input to a 0D Tensor."""
-    if value is None:
-        return torch.tensor(default, device=device, dtype=dtype)
-    if isinstance(value, (int, float)):
+    """Convert a scalar int/float or 0D/1-element Tensor to a 0D Tensor."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return torch.tensor(float(value), device=device, dtype=dtype)
     if isinstance(value, Tensor):
         if value.ndim == 0:
             return value.to(device=device, dtype=dtype)
         if value.ndim == 1 and value.numel() == 1:
             return value.reshape(()).to(device=device, dtype=dtype)
-        if value.ndim >= 1 and value.shape[0] > index:
-            selected = value[index]
-            if selected.numel() == 1:
-                return selected.reshape(()).to(device=device, dtype=dtype)
         raise ValueError(
-            f"Lane {index} scalar input has invalid shape {tuple(value.shape)}."
+            f"{name} element must be scalar, got shape {tuple(value.shape)}."
         )
-    raise TypeError(f"Unsupported scalar input type {type(value)}.")
+    raise TypeError(f"Unsupported {name} input type {type(value)}.")
+
+
+def _normalize_packed_charges(
+    chrg: Tensor | float | int | Sequence[Tensor | float | int],
+    lane_positions: Sequence[Tensor],
+    *,
+    legacy_compat: bool,
+) -> list[Tensor]:
+    """Normalize batched or per-lane charges under functional or legacy rules."""
+    count = len(lane_positions)
+    if isinstance(chrg, (int, float)) and not isinstance(chrg, bool):
+        if legacy_compat and count > 1 and float(chrg) != float(defaults.CHRG):
+            raise ValueError(
+                "Cannot set charge for batched calculations with a single "
+                "float or integer. Please provide a 1D tensor of charges."
+            )
+        return [
+            torch.tensor(float(chrg), device=pos.device, dtype=pos.dtype)
+            for pos in lane_positions
+        ]
+    if isinstance(chrg, Tensor):
+        if chrg.ndim == 0:
+            if legacy_compat and count > 1:
+                raise ValueError(
+                    "Cannot set charge for batched calculations with a 0D "
+                    "scalar tensor. Please provide a 1D tensor of charges."
+                )
+            return [
+                chrg.to(device=pos.device, dtype=pos.dtype)
+                for pos in lane_positions
+            ]
+        if chrg.ndim == 1:
+            if chrg.numel() == count:
+                return [
+                    chrg[idx].reshape(()).to(device=pos.device, dtype=pos.dtype)
+                    for idx, pos in enumerate(lane_positions)
+                ]
+            if chrg.numel() == 1 and not legacy_compat:
+                return [
+                    chrg.reshape(()).to(device=pos.device, dtype=pos.dtype)
+                    for pos in lane_positions
+                ]
+            raise ValueError(
+                f"Batched charges tensor must have length {count}, got shape "
+                f"{tuple(chrg.shape)}."
+            )
+        if chrg.ndim == 2 and chrg.shape == (count, 1):
+            return [
+                chrg[idx, 0].reshape(()).to(device=pos.device, dtype=pos.dtype)
+                for idx, pos in enumerate(lane_positions)
+            ]
+        raise ValueError(
+            f"Batched charges tensor has invalid shape {tuple(chrg.shape)} "
+            f"for {count} Systems."
+        )
+    if isinstance(chrg, Sequence):
+        if len(chrg) != count:
+            raise ValueError(
+                f"Charges sequence length {len(chrg)} does not match "
+                f"{count} Systems."
+            )
+        return [
+            _scalar_to_0d_tensor(
+                item, name=f"charge[{idx}]", device=pos.device, dtype=pos.dtype
+            )
+            for idx, (item, pos) in enumerate(zip(chrg, lane_positions))
+        ]
+    raise TypeError(f"Unsupported charge input type {type(chrg)}.")
+
+
+def _normalize_packed_spins(
+    spin: Tensor | float | int | None | Sequence[Tensor | float | int | None],
+    lane_positions: Sequence[Tensor],
+) -> list[Tensor | None]:
+    """Normalize batched or per-lane spin inputs while preserving None."""
+    count = len(lane_positions)
+    if spin is None:
+        return [None for _ in lane_positions]
+    if isinstance(spin, (int, float)) and not isinstance(spin, bool):
+        return [
+            torch.tensor(float(spin), device=pos.device, dtype=pos.dtype)
+            for pos in lane_positions
+        ]
+    if isinstance(spin, Tensor):
+        if spin.ndim == 0:
+            return [
+                spin.to(device=pos.device, dtype=pos.dtype)
+                for pos in lane_positions
+            ]
+        if spin.ndim == 1:
+            if spin.numel() == count:
+                return [
+                    spin[idx].reshape(()).to(device=pos.device, dtype=pos.dtype)
+                    for idx, pos in enumerate(lane_positions)
+                ]
+            if spin.numel() == 1:
+                return [
+                    spin.reshape(()).to(device=pos.device, dtype=pos.dtype)
+                    for pos in lane_positions
+                ]
+            raise ValueError(
+                f"Batched spin tensor must have length {count} or 1, got "
+                f"shape {tuple(spin.shape)}."
+            )
+        if spin.ndim == 2 and spin.shape in ((count, 1), (1, 1)):
+            return [
+                (spin[idx, 0] if spin.shape[0] == count else spin[0, 0])
+                .reshape(())
+                .to(device=pos.device, dtype=pos.dtype)
+                for idx, pos in enumerate(lane_positions)
+            ]
+        raise ValueError(
+            f"Batched spin tensor has invalid shape {tuple(spin.shape)} "
+            f"for {count} Systems."
+        )
+    if isinstance(spin, Sequence):
+        if len(spin) != count:
+            raise ValueError(
+                f"Spin sequence length {len(spin)} does not match "
+                f"{count} Systems."
+            )
+        result: list[Tensor | None] = []
+        for idx, (item, pos) in enumerate(zip(spin, lane_positions)):
+            if item is None:
+                result.append(None)
+            else:
+                result.append(
+                    _scalar_to_0d_tensor(
+                        item,
+                        name=f"spin[{idx}]",
+                        device=pos.device,
+                        dtype=pos.dtype,
+                    )
+                )
+        return result
+    raise TypeError(f"Unsupported spin input type {type(spin)}.")
+
+
+def _normalize_packed_fields(
+    name: str,
+    value: Tensor | Sequence[Tensor | None] | None,
+    lane_positions: Sequence[Tensor],
+    expected_shape: tuple[int, ...],
+    *,
+    legacy_compat: bool,
+) -> list[Tensor | None]:
+    """Normalize shared or per-lane perturbation tensors."""
+    count = len(lane_positions)
+    if value is None:
+        return [None for _ in lane_positions]
+    if isinstance(value, Tensor):
+        if value.shape == expected_shape:
+            return [
+                _call_tensor(name, value, pos, expected_shape)
+                for pos in lane_positions
+            ]
+        if not legacy_compat and value.shape == (count, *expected_shape):
+            return [
+                _call_tensor(name, value[idx], pos, expected_shape)
+                for idx, pos in enumerate(lane_positions)
+            ]
+        raise ValueError(
+            f"{name} must have shape {expected_shape}, got {tuple(value.shape)}."
+        )
+    if not legacy_compat and isinstance(value, Sequence):
+        if len(value) != count:
+            raise ValueError(
+                f"{name} sequence length {len(value)} does not match "
+                f"{count} Systems."
+            )
+        return [
+            _call_tensor(name, item, pos, expected_shape)
+            for item, pos in zip(value, lane_positions)
+        ]
+    raise TypeError(f"Unsupported {name} input type {type(value)}.")
 
 
 def _normalize_system_for_e6bcompat(
     system: System,
-    *,
-    strict_e6bcompat: bool,
 ) -> System:
     """Reject strategies unsupported by the retained packed GFN2 route."""
     if (
@@ -526,12 +804,14 @@ def evaluate_packed_systems(
     spin: (
         Tensor | float | int | None | Sequence[Tensor | float | int | None]
     ) = defaults.SPIN,
-    field: Tensor | None = None,
-    field_grad: Tensor | None = None,
+    field: Tensor | Sequence[Tensor | None] | None = None,
+    field_grad: Tensor | Sequence[Tensor | None] | None = None,
     *,
     legacy_options: LegacySCFOptions | None = None,
     legacy_compat: bool = False,
     strict_e6bcompat: bool = False,
+    ignore_unknown_kwargs: bool = False,
+    **kwargs: Any,
 ) -> Result:
     """Evaluate a sequence of Systems and return a single packed Result.
 
@@ -552,16 +832,53 @@ def evaluate_packed_systems(
             "evaluate_packed_systems requires at least one System."
         )
 
+    removed_store = sorted(k for k in kwargs if k.startswith("store_"))
+    if removed_store:
+        raise TypeError(
+            f"Removed store_* keyword arguments are not supported: {removed_store}"
+        )
+    unknown_public = sorted(set(kwargs) - _KNOWN_PUBLIC_SINGLEPOINT_KWARGS)
+    if unknown_public and (strict_e6bcompat or not ignore_unknown_kwargs):
+        raise TypeError(
+            f"evaluate_packed_systems() got unexpected keyword arguments "
+            f"{unknown_public}: unexpected keyword argument {unknown_public[0]!r}"
+        )
+
+    effective_legacy_options = legacy_options
     if legacy_options is not None and legacy_options.kwargs:
-        if strict_e6bcompat:
-            unknown = sorted(legacy_options.kwargs.keys())
+        removed_legacy_store = sorted(
+            k for k in legacy_options.kwargs if k.startswith("store_")
+        )
+        if removed_legacy_store:
             raise TypeError(
-                f"singlepoint() got unexpected keyword arguments: {unknown}"
+                "Removed store_* keyword arguments are not supported: "
+                f"{removed_legacy_store}"
+            )
+        unknown_legacy = sorted(
+            set(legacy_options.kwargs) - _KNOWN_LEGACY_SCF_DATA_KWARGS
+        )
+        if unknown_legacy:
+            if strict_e6bcompat or not ignore_unknown_kwargs:
+                raise TypeError(
+                    f"evaluate_packed_systems() got unexpected keyword arguments "
+                    f"{unknown_legacy}: unexpected keyword argument {unknown_legacy[0]!r}"
+                )
+            filtered_kwargs = {
+                k: v
+                for k, v in legacy_options.kwargs.items()
+                if k in _KNOWN_LEGACY_SCF_DATA_KWARGS
+            }
+            effective_legacy_options = (
+                LegacySCFOptions(
+                    args=legacy_options.args,
+                    kwargs=filtered_kwargs or None,
+                )
+                if (legacy_options.args or filtered_kwargs)
+                else None
             )
 
     normalized_systems = [
-        _normalize_system_for_e6bcompat(sys, strict_e6bcompat=strict_e6bcompat)
-        for sys in systems
+        _normalize_system_for_e6bcompat(sys) for sys in systems
     ]
 
     # Normalize per-lane positions
@@ -583,35 +900,27 @@ def evaluate_packed_systems(
             raise ValueError("Systems and positions must have equal length.")
         lane_positions = list(positions)
 
-    lane_charges: list[Tensor] = []
-    lane_spins: list[Tensor | None] = []
-    for idx, (sys, pos) in enumerate(zip(normalized_systems, lane_positions)):
-        c_raw = chrg[idx] if isinstance(chrg, (tuple, list)) else chrg
-        s_raw = spin[idx] if isinstance(spin, (tuple, list)) else spin
-        lane_charges.append(
-            _normalize_scalar_lane_input(
-                c_raw,
-                idx,
-                default=float(defaults.CHRG),
-                device=pos.device,
-                dtype=pos.dtype,
-            )
-        )
-        if s_raw is None:
-            lane_spins.append(None)
-        else:
-            lane_spins.append(
-                _normalize_scalar_lane_input(
-                    s_raw,
-                    idx,
-                    default=0.0,
-                    device=pos.device,
-                    dtype=pos.dtype,
-                )
-            )
+    lane_charges = _normalize_packed_charges(
+        chrg, lane_positions, legacy_compat=legacy_compat
+    )
+    lane_spins = _normalize_packed_spins(spin, lane_positions)
+    lane_fields = _normalize_packed_fields(
+        "field",
+        field,
+        lane_positions,
+        (3,),
+        legacy_compat=legacy_compat,
+    )
+    lane_field_grads = _normalize_packed_fields(
+        "field_grad",
+        field_grad,
+        lane_positions,
+        (3, 3),
+        legacy_compat=legacy_compat,
+    )
 
     routes = [
-        classify_legacy_system(sys, legacy_options=legacy_options)
+        classify_legacy_system(sys, legacy_options=effective_legacy_options)
         for sys in normalized_systems
     ]
     rejected = [
@@ -642,7 +951,12 @@ def evaluate_packed_systems(
                 for descriptor in core.classical_terms
                 if descriptor.kind == "d4"
             )
-            group_key = (_base_signature(core), d4_cutoffs)
+            group_key = (
+                _base_signature(core),
+                d4_cutoffs,
+                lane_fields[source_id] is not None,
+                lane_field_grads[source_id] is not None,
+            )
             groups.setdefault(group_key, []).append(source_id)
 
         for group_source_ids in groups.values():
@@ -668,10 +982,10 @@ def evaluate_packed_systems(
             padded_spin_list: list[Tensor] = []
             for p_core, sid in zip(padded_cores, group_source_ids):
                 s_opt = lane_spins[sid]
+                nab = validate_padded_charge_spin(
+                    p_core, lane_charges[sid], s_opt
+                )
                 if s_opt is None:
-                    nab = validate_padded_charge_spin(
-                        p_core, lane_charges[sid], None
-                    )
                     padded_spin_list.append(
                         (nab[0] - nab[1])
                         .reshape(())
@@ -683,19 +997,55 @@ def evaluate_packed_systems(
                 else:
                     padded_spin_list.append(s_opt)
             padded_spin = tuple(padded_spin_list)
+
+            first_field = lane_fields[group_source_ids[0]]
+            if first_field is None:
+                bucket_field = None
+            elif all(
+                lane_fields[sid] is first_field for sid in group_source_ids
+            ):
+                bucket_field = first_field
+            else:
+                bucket_field = torch.stack(
+                    [
+                        lane_fields[sid]
+                        for sid in group_source_ids
+                        if lane_fields[sid] is not None
+                    ],
+                    dim=0,
+                )
+
+            first_fg = lane_field_grads[group_source_ids[0]]
+            if first_fg is None:
+                bucket_field_grad = None
+            elif all(
+                lane_field_grads[sid] is first_fg for sid in group_source_ids
+            ):
+                bucket_field_grad = first_fg
+            else:
+                bucket_field_grad = torch.stack(
+                    [
+                        lane_field_grads[sid]
+                        for sid in group_source_ids
+                        if lane_field_grads[sid] is not None
+                    ],
+                    dim=0,
+                )
+
             _, decoded = evaluate_padded_systems(
                 padded_cores,
                 bucket,
                 padded_pos,
                 padded_chrg,
                 padded_spin,
-                field=field,
-                field_grad=field_grad,
+                field=bucket_field,
+                field_grad=bucket_field_grad,
             )
             for source_id, result in zip(group_source_ids, decoded):
-                _enforce_decoded_eager_policy(
-                    result, normalized_systems[source_id], source_id
-                )
+                if legacy_compat:
+                    _enforce_decoded_eager_policy(
+                        result, normalized_systems[source_id], source_id
+                    )
                 ordered_results[source_id] = result
 
     # 2. Evaluate LEGACY_COMPOSED and SEPARATE_ROUTE lanes via compose_legacy_systems
@@ -712,9 +1062,9 @@ def evaluate_packed_systems(
             tuple(lane_charges[idx] for idx in retained_indices),
             tuple(lane_spins[idx] for idx in retained_indices),
             source_ids=tuple(retained_indices),
-            field=field,
-            field_grad=field_grad,
-            legacy_options=legacy_options,
+            field=tuple(lane_fields[idx] for idx in retained_indices),
+            field_grad=tuple(lane_field_grads[idx] for idx in retained_indices),
+            legacy_options=effective_legacy_options,
         )
         for source_id, result in zip(composed.source_ids, composed.results):
             ordered_results[source_id] = result

@@ -16,9 +16,56 @@
 # limitations under the License.
 """Pure functional 1st, 2nd, and 3rd order property evaluators (B8a/B8b/E8).
 
-All functions in this module operate on immutable :class:`~dxtb._src.calculators.model.System`
-and :class:`~dxtb._src.calculators.model.Model` values via :mod:`torch.func`
+All functions in this module operate on immutable
+:class:`~dxtb._src.calculators.model.System` and
+:class:`~dxtb._src.calculators.model.Model` values via :mod:`torch.func`
 transforms without mutating or resetting component caches.
+
+Conventions and Units
+---------------------
+All evaluators use atomic units (Hartree ``Eh``, Bohr ``a0``, elementary charge
+``e``) and match the sign and packing conventions of
+:class:`~dxtb._src.calculators.types.autograd.AutogradCalculator`:
+
+- ``system_energy``: Scalar total energy :math:`E` in :math:`\\text{E}_\\text{h}`
+  (includes the Mermin electronic free-energy term :math:`F_\\text{el} = -T S_\\text{el}`
+  by default when ``include_free_energy=True``).
+- ``system_forces``: Nuclear forces :math:`F = -\\partial E / \\partial R` in
+  :math:`\\text{E}_\\text{h}/\\text{a}_0`, shape ``(nat, 3)``.
+- ``system_hessian``: Nuclear Hessian :math:`H = \\partial^2 E / \\partial R^2`
+  in :math:`\\text{E}_\\text{h}/\\text{a}_0^2`, shape ``(nat, 3, nat, 3)`` or
+  ``(3*nat, 3*nat)`` when ``matrix=True``.
+- ``system_dipole``: Electric dipole moment :math:`\\mu = -\\partial E / \\partial F`
+  in :math:`\\text{e}\\cdot\\text{a}_0`, shape ``(3,)``.
+- ``system_quadrupole``: Traceless electric quadrupole moment
+  :math:`\\Theta_{ij} = -3\\,\\partial E / \\partial G_{ij}` in
+  :math:`\\text{e}\\cdot\\text{a}_0^2`, packed in lower-triangular order
+  ``(xx, yx, yy, zx, zy, zz)`` of shape ``(6,)``.
+- ``system_polarizability``: Static dipole polarizability
+  :math:`\\alpha = \\partial \\mu / \\partial F = -\\partial^2 E / \\partial F^2`
+  in :math:`\\text{a}_0^3`, shape ``(3, 3)``.
+- ``system_dipole_deriv``: Cartesian dipole derivative
+  :math:`\\mu' = \\partial \\mu / \\partial R = -\\partial^2 E / (\\partial F \\partial R)`
+  in :math:`\\text{e}`, shape ``(3, nat, 3)``.
+- ``system_pol_deriv``: Cartesian polarizability derivative
+  :math:`\\chi = \\partial \\alpha / \\partial R = -\\partial^3 E / (\\partial F^2 \\partial R)`
+  in :math:`\\text{a}_0^2`, shape ``(3, 3, nat, 3)``.
+- ``system_hyperpolarizability``: Static first hyperpolarizability
+  :math:`\\beta = \\partial \\alpha / \\partial F = -\\partial^3 E / \\partial F^3`
+  in :math:`\\text{a}_0^5 / \\text{e}`, shape ``(3, 3, 3)``.
+- ``system_third_order_directional``: Third directional nuclear energy
+  derivative :math:`D^3 E(R)[v_1, v_2, v_3]`, scalar ``()``.
+- ``system_parameter_force_jacobian``: Mixed parameter-force Jacobian
+  :math:`\\partial F(R, \\theta) / \\partial \\theta = -\\partial^2 E(R, \\theta) / (\\partial R \\partial \\theta)`.
+- ``system_bond_orders``: Wiberg bond order matrix (unitless), shape ``(nat, nat)``.
+- ``system_vibration``, ``system_ir``, ``system_raman``: Eager spectroscopic
+  analyzers returning :class:`VibResult`, :class:`IRResult` (``ints`` convertible
+  to ``km/mol``), and :class:`RamanResult` (``ints`` convertible to ``A^4/amu``).
+  Physical normal-mode interpretation requires a stationary (equilibrium)
+  geometry where :math:`\\partial E / \\partial R = 0`; because :func:`vib_analysis`
+  uses data-dependent linearity detection, rank thresholding, QR projection, and
+  eigendecomposition, these three spectroscopic wrappers are eager single-System
+  post-processors over the transform-compatible derivative tensors.
 """
 
 from __future__ import annotations

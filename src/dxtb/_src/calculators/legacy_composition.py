@@ -43,6 +43,7 @@ class LegacySystemRoute(Enum):
     """Static execution ownership for one independently prepared System."""
 
     MAPPED = auto()
+    LEGACY_COMPOSED = auto()
     SEPARATE_ROUTE = auto()
     REJECTED = auto()
 
@@ -106,15 +107,12 @@ def classify_legacy_system(
             f"Functional SCF does not support interaction extension(s): {names}."
         )
 
-    if len(core.classical_terms) != len(system.classicals.components):
-        names = ", ".join(
-            type(component).__name__
-            for component in system.classicals.components
-        )
-        raise NotImplementedError(
-            "Functional SCF does not support custom classical extension(s): "
-            f"{names}."
-        )
+    if (
+        len(core.classical_terms) != len(system.classicals.components)
+        or system._active_exact_core() is None
+        or config.scf.differentiation.value == "implicit"
+    ):
+        return LegacySystemRoute.LEGACY_COMPOSED
 
     scf_config = config.scf
     if scf_config.fermi.etemp < 0.0:
@@ -134,8 +132,8 @@ def compose_legacy_systems(
     spins: tuple[Tensor | float | int | None, ...] | None = None,
     *,
     source_ids: tuple[int, ...] | None = None,
-    field: Tensor | None = None,
-    field_grad: Tensor | None = None,
+    field: Tensor | tuple[Tensor | None, ...] | None = None,
+    field_grad: Tensor | tuple[Tensor | None, ...] | None = None,
     legacy_options: LegacySCFOptions | None = None,
 ) -> LegacyCompositionResult:
     """Evaluate Systems independently and preserve input order."""
@@ -172,18 +170,39 @@ def compose_legacy_systems(
         raise ValueError(
             f"Systems {rejected} are not supported by retained composition."
         )
+    mapped = [
+        source_ids[i]
+        for i, route in enumerate(routes)
+        if route is LegacySystemRoute.MAPPED
+    ]
+    if mapped:
+        raise ValueError(
+            "Mapped-eligible Systems must use the private mapped evaluator; "
+            f"legacy composition was not selected for source IDs {mapped}."
+        )
+
+    if isinstance(field, tuple) and len(field) != count:
+        raise ValueError("Systems and per-lane fields must have equal length.")
+    if isinstance(field_grad, tuple) and len(field_grad) != count:
+        raise ValueError(
+            "Systems and per-lane field gradients must have equal length."
+        )
     results_list: list[Result] = []
-    for source_id, system, position, charge, spin, route in zip(
-        source_ids, systems, positions, charges, spins, routes
+    for idx, (source_id, system, position, charge, spin, route) in enumerate(
+        zip(source_ids, systems, positions, charges, spins, routes)
     ):
+        lane_field = field[idx] if isinstance(field, tuple) else field
+        lane_field_grad = (
+            field_grad[idx] if isinstance(field_grad, tuple) else field_grad
+        )
         try:
             result = _singlepoint_impl(
                 system,
                 position,
                 charge,
                 spin,
-                field,
-                field_grad,
+                lane_field,
+                lane_field_grad,
                 fixed_trip=False,
                 refresh_extension_caches=True,
             )
