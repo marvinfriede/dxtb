@@ -28,9 +28,14 @@ from typing import Any
 
 import torch
 from tad_dftd import defaults as d4_defaults
+from tad_dftd.model.d4 import (
+    d4sc_atom_energy,
+    d4sc_atom_potential,
+    d4sc_dispersion_matrix,
+)
+from tad_dftd.ncoord import coordination_number
 from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
-from tad_mctc.math import einsum
 from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import (
     DD,
@@ -43,7 +48,7 @@ from tad_mctc.typing import (
 
 from dxtb import IndexHelper
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
-from dxtb._src.ncoord import coordination_number, erf_count
+from dxtb._src.ncoord import erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Slicers
 from dxtb._src.utils.tensors import normalize_device
@@ -425,20 +430,15 @@ def build_d4sc_data(
         cutoff=setup.cn_cutoff,
         pair_weight=setup.pair_weight,
     )
-    edisp = d4.dispersion.dispersion2(
+    model = _build_d4sc_model(setup)
+    dispmat = d4sc_dispersion_matrix(
         numbers,
         positions,
         setup.as_param(),
-        torch.ones(
-            (*numbers.shape, numbers.shape[-1]),
-            device=positions.device,
-            dtype=positions.dtype,
-        ),
         setup.r4r2,
-        as_matrix=True,
+        model.rc6,
+        cutoff=d4_defaults.D4_DISP2_CUTOFF,
     )
-    model = _build_d4sc_model(setup)
-    dispmat = edisp.unsqueeze(-1).unsqueeze(-1) * model.rc6
     return DispersionD4SCCache(cn, dispmat, model)
 
 
@@ -683,11 +683,7 @@ class DispersionD4SC(Interaction):
         # `numbers` in model are updated in cache (for culling)
         weights = cache.model.weight_references(cache.cn, qat)
 
-        return 0.5 * einsum(
-            "...ijab,...ia,...jb->...j",
-            *(cache.dispmat, weights, weights),
-            optimize=[(0, 1), (0, 1)],
-        )
+        return d4sc_atom_energy(cache.dispmat, weights)
 
     @override
     def get_monopole_atom_potential(
@@ -717,9 +713,7 @@ class DispersionD4SC(Interaction):
             cache.cn, qat, with_dgwdq=True
         )
 
-        return einsum(
-            "...ijab,...jb,...ia->...i", cache.dispmat, weights, dgwdq
-        )
+        return d4sc_atom_potential(cache.dispmat, weights, dgwdq)
 
 
 def new_d4sc(

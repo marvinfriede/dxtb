@@ -120,27 +120,28 @@ def pair_radii(
     rdamp_table: Tensor | TableFunction | None = None,
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
+    rdamp: Tensor | None = None,
 ) -> PairRadii:
     """
     The radii of all pairs of atoms of `structure`, ``(..., nat, nat)``.
 
-    Optional pre-gathered per-pair `rvdw` (shape ``(..., nat, nat)``) and
-    per-atom `r4r2` (shape ``(..., nat)``) may be supplied directly to avoid
-    re-indexing element tables when setup data has already been gathered.
+    Optional pre-gathered per-pair `rvdw` / `rdamp` (shape ``(..., nat, nat)``)
+    and per-atom `r4r2` (shape ``(..., nat)``) may be supplied directly to
+    avoid re-indexing element tables when setup data has already been gathered.
     """
     numbers, positions = structure.numbers, structure.positions
-    rdamp = (
+    rdamp_tbl = (
         element_table(rdamp_table, "rdamp_table", positions)
         if rdamp_table is not None
         else None
     )
-    if rvdw is None and r4r2 is None:
+    if rvdw is None and r4r2 is None and rdamp is None:
         return pair_radii_of(
             numbers.unsqueeze(-1),
             numbers.unsqueeze(-2),
             element_table(rvdw_table, "rvdw_table", positions),
             element_table(r4r2_table, "r4r2_table", positions),
-            rdamp=rdamp,
+            rdamp=rdamp_tbl,
         )
 
     z_i = numbers.unsqueeze(-1)
@@ -151,31 +152,26 @@ def pair_radii(
             r4r2.to(device=positions.device, dtype=positions.dtype)
         )
         qq = 3 * r4r2_atom.unsqueeze(-1) * r4r2_atom.unsqueeze(-2)
-    elif r4r2_table is not None or rvdw is None:
+    else:
         r4r2_tbl = element_table(r4r2_table, "r4r2_table", positions)
         qq = 3 * nonzero(r4r2_tbl[z_i]) * nonzero(r4r2_tbl[z_j])
-    else:
-        qq = None
 
     if rvdw is not None:
         rvdw_val = nonzero(
             rvdw.to(device=positions.device, dtype=positions.dtype)
         )
-    elif rvdw_table is not None or qq is None:
+    else:
         rvdw_tbl = element_table(rvdw_table, "rvdw_table", positions)
         rvdw_val = nonzero(rvdw_tbl[z_i, z_j])
+
+    if rdamp is not None:
+        rdamp_val = nonzero(
+            rdamp.to(device=positions.device, dtype=positions.dtype)
+        )
+    elif rdamp_tbl is not None:
+        rdamp_val = nonzero(rdamp_tbl[z_i, z_j])
     else:
-        rvdw_val = None
-
-    if qq is None:
-        assert rvdw_val is not None
-        qq = rvdw_val * rvdw_val
-
-    rdamp_val = (
-        torch.sqrt(qq) if rdamp is None else nonzero(rdamp[z_i, z_j])
-    )
-    if rvdw_val is None:
-        rvdw_val = rdamp_val
+        rdamp_val = torch.sqrt(qq)
 
     return PairRadii(
         qq=qq,

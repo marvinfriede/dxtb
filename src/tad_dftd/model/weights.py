@@ -178,9 +178,14 @@ def _d4_cngw(
     ngw: Tensor,
     refcn: Tensor,
     valid_ref: Tensor,
-) -> Tensor:
+    *,
+    dcn: Tensor | None = None,
+    with_dgwdcn: bool = False,
+    orig_dtype: torch.dtype | None = None,
+) -> Tensor | tuple[Tensor, Tensor]:
     """
-    Evaluate normalized multi-Gaussian CN weights ``gwk`` for D4, D4S, and D4Srev.
+    Evaluate normalized multi-Gaussian CN weights ``gwk`` (and optional
+    derivative ``dgwk/d(cn)``) for D4, D4S, and D4Srev.
 
     Parameters
     ----------
@@ -194,8 +199,14 @@ def _d4_cngw(
         Reference coordination numbers of shape ``(..., nref)``.
     valid_ref : Tensor
         Boolean mask of valid references of shape ``(..., nref)``.
+    dcn : Tensor | None, optional
+        Signed CN difference ``cn - refcn`` (required when ``with_dgwdcn=True``).
+    with_dgwdcn : bool, optional
+        Whether to also return ``dgwk/d(cn)``.
+    orig_dtype : torch.dtype | None, optional
+        Output floating-point dtype. Defaults to ``cn_diff2.dtype``.
     """
-    orig_dtype = cn_diff2.dtype
+    out_dtype = cn_diff2.dtype if orig_dtype is None else orig_dtype
     cn_diff2_64 = cn_diff2.to(torch.float64)
     refcn_64 = refcn.to(torch.float64)
     igw = torch.arange(1, 7, device=cn_diff2.device, dtype=torch.float64)
@@ -207,11 +218,12 @@ def _d4_cngw(
         else float(wf)
     )
     exponent = -wf_t * cn_diff2_64.unsqueeze(-1) * igw
-    expw = torch.where(
+    expw_igw = torch.where(
         igw_mask,
         torch.exp(exponent),
         torch.zeros_like(exponent),
-    ).sum(dim=-1)
+    )
+    expw = expw_igw.sum(dim=-1)
 
     norm = expw.sum(dim=-1, keepdim=True)
     eps_norm = math.sqrt(torch.finfo(torch.float64).tiny)
@@ -229,8 +241,30 @@ def _d4_cngw(
     )
 
     safe_norm = torch.where(norm_ok, norm, torch.ones_like(norm))
-    gwk = torch.where(norm_ok, expw / safe_norm, fallback).to(orig_dtype)
-    return torch.where(valid_ref, gwk, torch.zeros_like(gwk))
+    gwk_64 = torch.where(norm_ok, expw / safe_norm, fallback)
+    gwk = torch.where(
+        valid_ref,
+        gwk_64.to(out_dtype),
+        torch.zeros(cn_diff2.shape, device=cn_diff2.device, dtype=out_dtype),
+    )
+    if not with_dgwdcn:
+        return gwk
+
+    assert dcn is not None
+    dcn_64 = dcn.to(torch.float64)
+    dexpw = (-2.0 * wf_t * dcn_64.unsqueeze(-1) * igw * expw_igw).sum(dim=-1)
+    dnorm = dexpw.sum(dim=-1, keepdim=True)
+    dgwk_64 = torch.where(
+        norm_ok,
+        (dexpw - (expw / safe_norm) * dnorm) / safe_norm,
+        torch.zeros_like(dexpw),
+    )
+    dgwk = torch.where(
+        valid_ref & torch.isfinite(dgwk_64),
+        dgwk_64.to(out_dtype),
+        torch.zeros_like(gwk),
+    )
+    return gwk, dgwk
 
 
 def _d4_charge_scale(
@@ -308,6 +342,7 @@ def weight_references_d4(
     gam_table: Tensor | None = None,
     tanh_table: Tensor | None = None,
     with_dgwdq: Literal[False] = False,
+    with_dgwdcn: Literal[False] = False,
 ) -> Tensor: ...
 
 
@@ -326,7 +361,46 @@ def weight_references_d4(
     gam_table: Tensor | None = None,
     tanh_table: Tensor | None = None,
     with_dgwdq: Literal[True],
+    with_dgwdcn: Literal[False] = False,
 ) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def weight_references_d4(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    *,
+    wf: Tensor | float = defaults.D4_WF,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[False] = False,
+    with_dgwdcn: Literal[True],
+) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def weight_references_d4(
+    numbers: Tensor,
+    cn: Tensor,
+    q: Tensor,
+    reference: _HasD4Ref,
+    *,
+    wf: Tensor | float = defaults.D4_WF,
+    ga: Tensor | float = defaults.D4_GA,
+    gc: Tensor | float = defaults.D4_GC,
+    is_srev: bool = False,
+    zeff_table: Tensor | None = None,
+    gam_table: Tensor | None = None,
+    tanh_table: Tensor | None = None,
+    with_dgwdq: Literal[True],
+    with_dgwdcn: Literal[True],
+) -> tuple[Tensor, Tensor, Tensor]: ...
 
 
 def weight_references_d4(
@@ -343,11 +417,12 @@ def weight_references_d4(
     gam_table: Tensor | None = None,
     tanh_table: Tensor | None = None,
     with_dgwdq: bool = False,
-) -> Tensor | tuple[Tensor, Tensor]:
+    with_dgwdcn: bool = False,
+) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     """
-    Reference weights ``gw`` of shape ``(..., nat, 7)`` (and optional charge
-    derivative ``dgwdq``) for DFT-D4 (or diagonal polarizability weights for
-    DFT-D4S / DFT-D4Srev).
+    Reference weights ``gw`` of shape ``(..., nat, 7)`` (and optional
+    derivatives ``dgwdcn`` and/or ``dgwdq``) for DFT-D4 (or diagonal
+    polarizability weights for DFT-D4S / DFT-D4Srev).
     """
     refn = reference.refn[numbers]  # (..., nat)
     ngw = reference.ngw[numbers]  # (..., nat, 7)
@@ -356,9 +431,26 @@ def weight_references_d4(
     ir_idx = torch.arange(refcn.shape[-1], device=numbers.device)
     valid_ref = (numbers.unsqueeze(-1) > 0) & (ir_idx < refn.unsqueeze(-1))
 
-    cn_diff2 = (cn.unsqueeze(-1) - refcn) ** 2
+    dcn = cn.to(torch.float64).unsqueeze(-1) - refcn.to(torch.float64)
+    cn_diff2 = dcn * dcn
     wf_arg = wf.unsqueeze(-1) if isinstance(wf, Tensor) and wf.ndim == cn.ndim else wf
-    gwk = _d4_cngw(cn_diff2, wf_arg, ngw, refcn, valid_ref)
+
+    if with_dgwdcn:
+        gwk, dgwk = _d4_cngw(
+            cn_diff2,
+            wf_arg,
+            ngw,
+            refcn,
+            valid_ref,
+            dcn=dcn,
+            with_dgwdcn=True,
+            orig_dtype=cn.dtype,
+        )
+    else:
+        gwk = _d4_cngw(
+            cn_diff2, wf_arg, ngw, refcn, valid_ref, orig_dtype=cn.dtype
+        )
+        dgwk = None
 
     if with_dgwdq:
         z, dz = _d4_charge_scale(
@@ -374,6 +466,8 @@ def weight_references_d4(
             tanh_table=tanh_table,
             with_dgwdq=True,
         )
+        if dgwk is not None:
+            return gwk * z, dgwk * z, gwk * dz
         return gwk * z, gwk * dz
 
     z = _d4_charge_scale(
@@ -389,6 +483,8 @@ def weight_references_d4(
         tanh_table=tanh_table,
         with_dgwdq=False,
     )
+    if dgwk is not None:
+        return gwk * z, dgwk * z
     return gwk * z
 
 

@@ -29,6 +29,7 @@ from .c6 import (
     atomic_c6,
     atomic_c6_d3s,
     atomic_c6_d4s,
+    contract_rc6,
     factored_c6,
     factored_c6_d3s,
     factored_c6_d4s,
@@ -48,7 +49,14 @@ from .catalogue import (
 from .d1 import D1Model
 from .d2 import D2Model
 from .d3 import D3Model, D3SModel, Environment, default_damping
-from .d4 import D4Model, D4SModel, D4SrevModel
+from .d4 import (
+    D4Model,
+    D4SModel,
+    D4SrevModel,
+    d4sc_atom_energy,
+    d4sc_atom_potential,
+    d4sc_dispersion_matrix,
+)
 from .weights import (
     WeightingFunction,
     dzeta,
@@ -91,6 +99,10 @@ __all__ = [
     "atomic_c6",
     "atomic_c6_d3s",
     "atomic_c6_d4s",
+    "contract_rc6",
+    "d4sc_atom_energy",
+    "d4sc_atom_potential",
+    "d4sc_dispersion_matrix",
     "default_damping",
     "dzeta",
     "dzeta_tanh",

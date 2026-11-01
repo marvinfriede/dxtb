@@ -77,7 +77,7 @@ def atm_term(
     rvdw: tuple[Tensor, Tensor, Tensor],
     damping: ThreeBodyDamping,
     param: DampingParam,
-    cutoff: float,
+    cutoff: float | Tensor,
     width: float,
     valid: Tensor | None = None,
 ) -> Tensor:
@@ -89,6 +89,9 @@ def atm_term(
     has a side beyond `cutoff`.
     """
     cutoff2 = cutoff * cutoff
+    if isinstance(cutoff2, Tensor) and cutoff2.ndim > 0:
+        while cutoff2.ndim < r2ij.ndim:
+            cutoff2 = cutoff2.unsqueeze(-1)
     mask = (r2ij <= cutoff2) & (r2ik <= cutoff2) & (r2jk <= cutoff2)
     if valid is not None:
         mask = mask & valid
@@ -131,10 +134,11 @@ def dispersion_atm(
     rdamp_table: Tensor | TableFunction | None = None,
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
+    rdamp: Tensor | None = None,
     c9: Tensor | None = None,
     adiw: Tensor | None = None,
     gl_weights: Tensor | None = None,
-    cutoff: float = defaults.D3_DISP3_CUTOFF,
+    cutoff: float | Tensor = defaults.D3_DISP3_CUTOFF,
     width: float = defaults.D3_DISP3_WIDTH,
 ) -> Tensor:
     """
@@ -157,6 +161,7 @@ def dispersion_atm(
         rdamp_table=rdamp_table,
         rvdw=rvdw,
         r4r2=r4r2,
+        rdamp=rdamp,
     )
 
     mask_pairs = real_pairs(numbers, mask_diagonal=True)

@@ -31,7 +31,7 @@ from tad_mctc.data import radii
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import coordination_number, exp_count
+from dxtb._src.ncoord import exp_count
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import ClassicalCache, ComponentCache
@@ -290,7 +290,7 @@ def dispersion_d3_energy(
         cn=setup.reference_cn,
         c6=setup.reference_c6,
     )
-    cn = coordination_number(
+    cn = d3.ncoord.coordination_number(
         numbers,
         positions,
         counting_function=setup.counting_function,
@@ -309,6 +309,10 @@ def dispersion_d3_energy(
         setup.rvdw,
         setup.r4r2,
         setup.damping_function,
+        cutoff=d3.Cutoff(
+            disp2=_DXTB_D3_DISPERSION_CUTOFF,
+            disp3=_DXTB_D3_DISPERSION_CUTOFF,
+        ),
     )
 
 
@@ -403,7 +407,7 @@ class DispersionD3(Dispersion):
                 f"Cache in {self.label} is not of type 'DispersionD3Cache'."
             )
 
-        cn = coordination_number(
+        cn = d3.ncoord.coordination_number(
             self.numbers,
             positions,
             counting_function=cache.counting_function,
@@ -425,4 +429,8 @@ class DispersionD3(Dispersion):
             cache.rvdw,
             cache.r4r2,
             cache.damping_function,
+            cutoff=d3.Cutoff(
+                disp2=_DXTB_D3_DISPERSION_CUTOFF,
+                disp3=_DXTB_D3_DISPERSION_CUTOFF,
+            ),
         )

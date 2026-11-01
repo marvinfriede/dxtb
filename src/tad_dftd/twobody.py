@@ -85,7 +85,7 @@ def _dispersion2_dense(
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
     c8: Tensor | None = None,
-    cutoff: float,
+    cutoff: float | Tensor,
     width: float,
     as_matrix: bool = False,
 ) -> Tensor:
@@ -132,12 +132,13 @@ def _dispersion2_dense(
     if shifts is not None:
         kernel = kernel.sum(dim=-1)
 
-    pair_energy = -0.5 * c6 * kernel
-    return pair_energy if as_matrix else torch.sum(pair_energy, dim=-1)
+    if as_matrix:
+        return -c6 * kernel
+    return -0.5 * torch.sum(c6 * kernel, dim=-1)
 
 
 def _molecular_distances(
-    numbers: Tensor, positions: Tensor, cutoff: float
+    numbers: Tensor, positions: Tensor, cutoff: float | Tensor
 ) -> tuple[Tensor, Tensor]:
     """
     Distances between all atoms of a molecule, ``(..., nat, nat)``, and
@@ -152,7 +153,11 @@ def _molecular_distances(
         torch.tensor(1.0, **dd),
     )
 
-    keep = mask * (distances <= cutoff)
+    cut = cutoff
+    if isinstance(cut, Tensor) and cut.ndim > 0:
+        while cut.ndim < distances.ndim:
+            cut = cut.unsqueeze(-1)
+    keep = mask * (distances <= cut)
     return distances, keep
 
 

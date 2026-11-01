@@ -88,6 +88,11 @@ from .disp import (
     dispersion3,
     get_properties,
 )
+from .model.d4 import (
+    d4sc_atom_energy,
+    d4sc_atom_potential,
+    d4sc_dispersion_matrix,
+)
 from .pairs import DensePairs, Pairs, SparsePairs
 from .reference import D4Reference, Reference
 
@@ -127,6 +132,9 @@ __all__ = [
     "__version__",
     "charge",
     "cutoff",
+    "d4sc_atom_energy",
+    "d4sc_atom_potential",
+    "d4sc_dispersion_matrix",
     "damping",
     "damping_from_name",
     "data",

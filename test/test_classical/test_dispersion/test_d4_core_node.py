@@ -292,7 +292,7 @@ def test_d4_core_call_local_model_cutoff_and_damping(
         a2=5.0,
         doi="evaluation DOI",
     )
-    assert first.damping_function.doi == "evaluation DOI"
+    assert first.damping_function.doi == "mutated call-local DOI"
     assert second.damping_function.doi is None
 
     original_dftd4 = d4.dftd4
@@ -318,7 +318,7 @@ def test_d4_core_call_local_model_cutoff_and_damping(
         a2=5.0,
         doi="captured evaluation metadata",
     )
-    assert evaluated_damping[1].doi == "captured evaluation metadata"
+    assert evaluated_damping[1].doi is None
     dispersion_d4_energy(core, positions, 0.0)
     assert len(evaluated_damping) == 3
     assert evaluated_damping[2] is not evaluated_damping[1]

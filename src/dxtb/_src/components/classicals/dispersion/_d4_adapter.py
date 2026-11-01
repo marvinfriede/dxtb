@@ -32,11 +32,24 @@ from types import SimpleNamespace
 from typing import Any, Literal, TypedDict, overload
 
 import torch
+import tad_dftd as _tad_dftd
 from tad_dftd import data, defaults
-from tad_dftd.reference.d4 import _D4_RAW, _DEFAULT_INTEGRATOR_64
-from tad_mctc import storch
+from tad_dftd.damping import (
+    CallableTwoBodyDamping,
+    DampingParam,
+    RationalTwoBody,
+    ThreeBodyDamping,
+    TripleData,
+    ZeroThreeBodyD4,
+    rational_damping,
+    zero_damping,
+)
+from tad_dftd.model.c6 import contract_rc6
+from tad_dftd.model.weights import weight_references_d4
+from tad_dftd.reference.d4 import D4Reference, load_d4
+from tad_dftd.threebody import dispersion_atm
+from tad_mctc import Structure, storch
 from tad_mctc.autograd import is_functorch_tensor
-from tad_mctc.batch import real_pairs, real_triples
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import VDW_PAIRWISE
 from tad_mctc.math import einsum
@@ -85,15 +98,6 @@ __all__ = [
 _MISSING = object()
 
 
-def _is_exceptional(val: Tensor, dtype: torch.dtype) -> Tensor:
-    """Detect non-finite or overflow values for safe fallback."""
-    return (
-        torch.isnan(val)
-        | torch.isinf(val)
-        | (torch.abs(val) > torch.finfo(dtype).max)
-    )
-
-
 class Cutoff(TensorLike):
     """Collection of real-space cutoffs for D4 in dxtb."""
 
@@ -125,6 +129,9 @@ class Damping(ABC):
 
     radius_type: Literal["r4r2", "rvdw"]
     doi: str | None = None
+
+    def __init__(self, doi: str | None = None) -> None:
+        self.doi = doi
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -189,7 +196,7 @@ class Damping(ABC):
         bet: Tensor | float | int | None = None,
         doi: str | None = None,
     ) -> Tensor:
-        self.doi = doi
+        del doi
 
         if order == 6 and (s6 is None and rs6 is None):
             return torch.zeros_like(distances)
@@ -275,11 +282,10 @@ class RationalDamping(Damping):
         only_damping: bool = False,
     ) -> Tensor:
         assert a1 is not None and a2 is not None
-        radius = a1 * torch.sqrt(radii) + a2
+        t_n = rational_damping(order, distances, radii, a1=a1, a2=a2)
         if only_damping:
-            r_order = distances.pow(order)
-            return r_order / (r_order + radius.pow(order))
-        return 1.0 / (distances.pow(order) + radius.pow(order))
+            return distances.pow(order) * t_n
+        return t_n
 
 
 class ZeroDamping(Damping):
@@ -314,24 +320,50 @@ class ZeroDamping(Damping):
         assert alp is not None
         if order == 6:
             assert rs6 is not None
-            alp_n = alp
             rs = rs6
+            alp_arg = alp
         elif order == 8:
             assert rs8 is not None
-            alp_n = alp + 2.0
             rs = rs8
+            alp_arg = alp
         elif order == 9:
             assert rs9 is not None
-            alp_n = alp
             rs = rs9
+            alp_arg = alp - 3.0
         else:
             raise ValueError(f"Unsupported order {order} for ZeroDamping.")
 
-        t_n = rs * storch.safe_divide(distances, radii)
-        f_n = 1.0 / (1.0 + 6.0 * t_n**alp_n)
+        f_n = zero_damping(
+            order,
+            radii,
+            distances,
+            rsn=rs,
+            alp=alp_arg,
+        )
         if only_damping is True:
             return f_n
         return storch.safe_divide(f_n, distances**order)
+
+
+class _CallableThreeBodyD4(ThreeBodyDamping):
+    """Wrap a custom ``Damping`` instance into ``tad_dftd``'s ``ThreeBodyDamping``."""
+
+    defaults = (("s9", defaults.D4_S9), ("alp", defaults.D4_ALP))
+    label = "Custom D4 three-body damping"
+
+    def __init__(self, fn: Damping) -> None:
+        self._fn = fn
+
+    def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
+        r0 = triples.rdampij * triples.rdampik * triples.rdampjk
+        fdamp = self._fn(
+            r0,
+            triples.r,
+            order=9,
+            alp=self.value(param, "alp") / 3.0,
+            only_damping=True,
+        )
+        return self.value(param, "s9") * fdamp
 
 
 class _BaseD4Model(TensorLike):
@@ -371,6 +403,17 @@ class D4Model(_BaseD4Model):
 
     def _get_wf(self) -> Tensor:
         return torch.tensor(defaults.D4_WF, **self.dd)
+
+    def _reference(self) -> D4Reference:
+        if self.ref_charges not in ("eeq", "gfn2"):
+            raise ValueError(f"Unknown reference charges: {self.ref_charges}")
+        return load_d4(
+            qmod=self.ref_charges,
+            ga=self.ga,
+            gc=self.gc,
+            device=self.device,
+            dtype=self.dtype,
+        )
 
     @overload
     def weight_references(
@@ -425,100 +468,21 @@ class D4Model(_BaseD4Model):
         if q is None:
             q = torch.zeros(self.numbers.shape, **self.dd)
 
-        if self.ref_charges == "eeq":
-            refq_tab = _D4_RAW["clsq"]
-        elif self.ref_charges == "gfn2":
-            refq_tab = _D4_RAW["refq"]
-        else:
-            raise ValueError(f"Unknown reference charges: {self.ref_charges}")
-
-        refq = refq_tab.to(**self.dd)[self.numbers]
-        zero = torch.tensor(0.0, **self.dd)
-        zero_double = torch.tensor(0.0, device=self.device, dtype=torch.double)
-
-        refc = _D4_RAW["ngw"].to(self.device)[self.numbers]
-        mask = refc > 0
-
-        refcn = _D4_RAW["refcovcn"].to(device=self.device, dtype=torch.double)[
-            self.numbers
-        ]
-        dcn = cn.unsqueeze(-1).type(torch.double) - refcn
-        tmp = torch.exp(-dcn * dcn)
-
-        def refc_pow(n: int) -> Tensor:
-            return sum(
-                (torch.pow(tmp, i * self.wf) for i in range(1, n + 1)),
-                torch.tensor(0.0, device=tmp.device, dtype=tmp.dtype),
-            )
-
-        refc_pow_1 = torch.where(refc == 1, refc_pow(1), tmp)
-        refc_pow_final = torch.where(refc == 3, refc_pow(3), refc_pow_1)
-        expw = torch.where(mask, refc_pow_final, zero_double)
-
-        norm = torch.where(
-            mask,
-            torch.sum(expw, dim=-1, keepdim=True),
-            torch.tensor(1e-300, device=self.device, dtype=torch.double),
+        return weight_references_d4(  # type: ignore[call-overload,no-any-return]
+            self.numbers,
+            cn,
+            q,
+            self._reference(),
+            wf=self.wf,
+            ga=self.ga,
+            gc=self.gc,
+            is_srev=False,
+            with_dgwdq=with_dgwdq,
+            with_dgwdcn=with_dgwdcn,
         )
-        gw_temp = (expw / norm).type(self.dtype)
-        maxcn = torch.max(refcn, dim=-1, keepdim=True)[0]
-
-        gw = torch.where(
-            _is_exceptional(gw_temp, self.dtype),
-            torch.where(refcn == maxcn, torch.tensor(1.0, **self.dd), zero),
-            gw_temp,
-        )
-
-        zeff = data.ZEFF(device=self.device, dtype=self.dtype)[
-            self.numbers
-        ].unsqueeze(-1)
-        gam = data.GAM(**self.dd)[self.numbers].unsqueeze(-1) * self.gc
-        q_exp = q.unsqueeze(-1)
-
-        zeta_val = torch.where(
-            mask, self._zeta(gam, refq + zeff, q_exp + zeff), zero
-        )
-
-        if with_dgwdq is False and with_dgwdcn is False:
-            return zeta_val * gw
-
-        outputs = [zeta_val * gw]
-
-        if with_dgwdcn is True:
-
-            def _dpow(n: int) -> Tensor:
-                return sum(
-                    (
-                        2 * i * self.wf * dcn * torch.pow(tmp, i * self.wf)
-                        for i in range(1, n + 1)
-                    ),
-                    zero_double,
-                )
-
-            wf_1 = torch.where(refc == 1, _dpow(1), zero_double)
-            wf_3 = torch.where(refc == 3, _dpow(3), zero_double)
-            dexpw = wf_1 + wf_3
-            dnorm = torch.sum(dexpw, dim=-1, keepdim=True)
-            _dgw = (dexpw - expw * dnorm / norm) / norm
-            dgw = torch.where(
-                _is_exceptional(_dgw, self.dtype), zero, _dgw.type(self.dtype)
-            )
-            outputs.append(zeta_val * dgw)
-
-        if with_dgwdq is True:
-            dzeta_val = torch.where(
-                mask, self._dzeta(gam, refq + zeff, q_exp + zeff), zero
-            )
-            outputs.append(dzeta_val * gw)
-
-        return tuple(outputs)  # type: ignore[return-value]
 
     def get_atomic_c6(self, gw: Tensor) -> Tensor:
-        return einsum(
-            "...ijab,...ia,...jb->...ij",
-            *(self.rc6, gw, gw),
-            optimize=[(0, 1), (0, 1)],
-        )
+        return contract_rc6(self.rc6, gw)
 
     def get_weighted_pols(self, gw: Tensor) -> Tensor:
         a = self._get_alpha()
@@ -527,66 +491,13 @@ class D4Model(_BaseD4Model):
     def get_polarizabilities(self, weights: Tensor) -> Tensor:
         return einsum("...nr,...nr->...n", weights, self._get_alpha()[..., 0])
 
-    def _zeta(self, gam: Tensor, qref: Tensor, qmod: Tensor) -> Tensor:
-        eps = torch.tensor(torch.finfo(self.dtype).eps, **self.dd)
-        ga = torch.tensor(self.ga, **self.dd)
-        scale = torch.exp(gam * (1.0 - qref / (qmod - eps)))
-        return torch.where(
-            qmod > 0.0,
-            torch.exp(ga * (1.0 - scale)),
-            torch.exp(ga),
-        )
-
-    def _dzeta(self, gam: Tensor, qref: Tensor, qmod: Tensor) -> Tensor:
-        eps = torch.tensor(torch.finfo(self.dtype).eps, **self.dd)
-        ga = torch.tensor(self.ga, **self.dd)
-        scale = torch.exp(gam * (1.0 - qref / (qmod - eps)))
-        zeta_val = torch.exp(ga * (1.0 - scale))
-        return torch.where(
-            qmod > 0.0,
-            -ga * gam * scale * zeta_val * storch.safe_divide(qref, qmod**2),
-            torch.tensor(0.0, **self.dd),
-        )
-
     def _get_alpha(self) -> Tensor:
-        zero = torch.tensor(0.0, **self.dd)
-        refsys = _D4_RAW["refsys"].to(self.device)[self.numbers]
-        refascale = _D4_RAW["ascale"].to(**self.dd)[self.numbers]
-        refalpha = _D4_RAW["alphaiw"].to(**self.dd)[self.numbers]
-        refscount = _D4_RAW["hcount"].to(**self.dd)[self.numbers]
-        secscale = _D4_RAW["sscale"].to(**self.dd)
-        secalpha = _D4_RAW["secaiw"].to(**self.dd)
-
-        if self.ref_charges == "eeq":
-            refsq = _D4_RAW["clsh"].to(**self.dd)[self.numbers]
-        elif self.ref_charges == "gfn2":
-            refsq = _D4_RAW["refh"].to(**self.dd)[self.numbers]
-        else:
-            raise ValueError(f"Unknown reference charges: {self.ref_charges}")
-
-        mask = refsys > 0
-        zeff = data.ZEFF(device=self.device, dtype=self.dtype)[refsys]
-        gam = data.GAM(**self.dd)[refsys] * self.gc
-
-        zeta_val = torch.where(
-            mask,
-            self._zeta(gam, zeff, refsq + zeff),
-            zero,
-        )
-
-        aiw = (
-            secscale[refsys].unsqueeze(-1)
-            * secalpha[refsys]
-            * zeta_val.unsqueeze(-1)
-        )
-        h = refalpha - refscount.unsqueeze(-1) * aiw
-        alpha = refascale.unsqueeze(-1) * h
-        return torch.where(alpha > 0.0, alpha, zero)
+        return self._reference().aiw[self.numbers]
 
     def _get_refc6(self) -> Tensor:
-        alpha = self._get_alpha()
-        cp_weights = _DEFAULT_INTEGRATOR_64.cp_weights.to(**self.dd)
-        return einsum("w,...irw,...jsw->...ijrs", cp_weights, alpha, alpha)
+        return self._reference().c6[
+            self.numbers.unsqueeze(-1), self.numbers.unsqueeze(-2)
+        ]
 
     def __str__(self) -> str:  # pragma: no cover
         return (
@@ -615,67 +526,45 @@ def dispersion2(
     as_matrix: bool = False,
 ) -> Tensor:
     """Calculate two-body D4 dispersion energy between pairs of atoms."""
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    zero = torch.tensor(0.0, **dd)
-
-    if cutoff is None:
-        cutoff = torch.tensor(defaults.D4_DISP2_CUTOFF, **dd)
-
-    mask = real_pairs(numbers, mask_diagonal=True)
-    distances = torch.where(
-        mask,
-        storch.cdist(positions, positions, p=2),
-        torch.tensor(torch.finfo(positions.dtype).eps, **dd),
-    )
-
-    qq = 3.0 * r4r2.unsqueeze(-1) * r4r2.unsqueeze(-2)
-    c8 = c6 * qq
-
     if damping_function.radius_type == "rvdw":
         if rvdw is None:
             raise ValueError("`rvdw` must be provided for `rvdw` radius type.")
-        radii = rvdw
-    elif damping_function.radius_type == "r4r2":
-        radii = qq
-    else:
+    elif damping_function.radius_type != "r4r2":
         raise ValueError(f"Unknown radius type: {damping_function.radius_type}")
 
-    active = mask * (distances <= cutoff)
-    t6 = torch.where(
-        active,
-        damping_function(distances, radii, 6, **param),
-        zero,
+    cut: Tensor | float = (
+        defaults.D4_DISP2_CUTOFF if cutoff is None else cutoff
     )
-    t8 = torch.where(
-        active,
-        damping_function(distances, radii, 8, **param),
-        zero,
+    s6_val = (
+        0.0
+        if ("s6" in param and param["s6"] is None)
+        else param.get("s6", defaults.D4_S6)
     )
-
-    if as_matrix is True:
-        e6 = c6 * t6
-        e8 = c8 * t8
+    s8_val = (
+        0.0
+        if ("s8" not in param or param["s8"] is None)
+        else param["s8"]
+    )
+    param_2b = {**param, "s6": s6_val, "s8": s8_val}
+    if type(damping_function) is RationalDamping:
+        damp_2b = RationalTwoBody()
     else:
-        e6 = torch.sum(c6 * t6, dim=-1)
-        e8 = torch.sum(c8 * t8, dim=-1)
-
-    s6 = param.get("s6", torch.tensor(defaults.D4_S6, **dd))
-    s8 = param.get("s8", torch.tensor(defaults.D4_S8, **dd))
-    edisp = s6 * e6 + s8 * e8
-
-    if "s10" in param:
-        c10 = c6 * torch.pow(qq, 2) * 49.0 / 40.0
-        t10 = torch.where(
-            active,
-            damping_function(distances, radii, 10, **param),
-            zero,
+        damp_2b = CallableTwoBodyDamping(
+            damping_function,
+            param,
+            radius_type=damping_function.radius_type,
         )
-        e10 = c10 * t10 if as_matrix is True else torch.sum(c10 * t10, dim=-1)
-        edisp = edisp + param["s10"] * e10
-
-    if as_matrix is True:
-        return -edisp
-    return -0.5 * edisp
+    return _tad_dftd.disp.dispersion2(
+        numbers,
+        positions,
+        param_2b,
+        c6,
+        r4r2=r4r2,
+        rvdw=rvdw,
+        damping=damp_2b,
+        cutoff=cut,
+        as_matrix=as_matrix,
+    )
 
 
 def get_atm_dispersion(
@@ -692,66 +581,32 @@ def get_atm_dispersion(
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
     s9_t = any_to_tensor(s9, **dd)
     alp_t = any_to_tensor(alp, **dd)
-
-    cutoff2 = cutoff * cutoff
-    mask_pairs = real_pairs(numbers, mask_diagonal=True)
-    mask_triples = real_triples(numbers, mask_diagonal=True, mask_self=True)
-
-    eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)
-    zero = torch.tensor(0.0, **dd)
-    one = torch.tensor(1.0, **dd)
-
-    r0ij = radii.unsqueeze(-1)
-    r0ik = radii.unsqueeze(-2)
-    r0jk = radii.unsqueeze(-3)
-    r0 = r0ij * r0ik * r0jk
-
-    distances = torch.pow(
-        torch.where(
-            mask_pairs,
-            storch.cdist(positions, positions, p=2),
-            eps,
-        ),
-        2.0,
+    c6_dummy = torch.zeros(
+        (*numbers.shape, numbers.shape[-1]),
+        device=positions.device,
+        dtype=positions.dtype,
     )
-
-    r2ij = distances.unsqueeze(-1)
-    r2ik = distances.unsqueeze(-2)
-    r2jk = distances.unsqueeze(-3)
-    r2 = r2ij * r2ik * r2jk
-    r1 = torch.sqrt(r2)
-    r3 = torch.where(mask_triples, r1 * r2, eps)
-    r5 = torch.where(mask_triples, r2 * r3, eps)
-
-    fdamp = torch.where(
-        mask_triples,
-        damping_function(
-            r0,
-            torch.where(mask_triples, r1, one),
-            order=9,
-            alp=alp_t / 3.0,
-            only_damping=True,
-        ),
-        zero,
+    dparam = DampingParam(
+        s9=s9_t,
+        alp=alp_t,
+        a1=1.0,
+        a2=0.0,
+        rs9=1.0,
     )
-
-    s = torch.where(
-        mask_triples,
-        (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) * (-r2ij + r2jk + r2ik),
-        zero,
+    three_damp: ThreeBodyDamping = (
+        ZeroThreeBodyD4()
+        if type(damping_function) is ZeroDamping
+        else _CallableThreeBodyD4(damping_function)
     )
-
-    ang = torch.where(
-        mask_triples
-        * (r2ij <= cutoff2)
-        * (r2ik <= cutoff2)
-        * (r2jk <= cutoff2),
-        0.375 * s / r5 + 1.0 / r3,
-        zero,
+    return dispersion_atm(
+        Structure(numbers=numbers, positions=positions),
+        c6_dummy,
+        dparam,
+        damping=three_damp,
+        rdamp=radii,
+        c9=c9,
+        cutoff=cutoff,
     )
-
-    energy = ang * fdamp * s9_t * c9
-    return torch.sum(energy, dim=(-2, -1)) / 6.0
 
 
 def dftd4(
@@ -850,26 +705,21 @@ def dftd4(
     if use_atm:
         weights_3b = model_inst.weight_references(cn, None)
         c6_3b = model_inst.get_atomic_c6(weights_3b)
-        c9 = storch.safe_sqrt(
-            torch.abs(
-                c6_3b.unsqueeze(-1) * c6_3b.unsqueeze(-2) * c6_3b.unsqueeze(-3)
-            )
-        )
-        a1 = param.get("a1", torch.tensor(defaults.A1, **dd))
-        a2 = param.get("a2", torch.tensor(defaults.A2, **dd))
-        radii_3b = (
-            a1 * storch.safe_sqrt(3.0 * r4r2.unsqueeze(-1) * r4r2.unsqueeze(-2)) + a2
-        )
-        alp = param.get("alp", torch.tensor(defaults.D4_ALP, **dd))
-        energy = energy + get_atm_dispersion(
+        param_3b = {
+            "a1": param.get("a1", torch.tensor(defaults.A1, **dd)),
+            "a2": param.get("a2", torch.tensor(defaults.A2, **dd)),
+            "s9": s9,
+            "alp": param.get("alp", torch.tensor(defaults.D4_ALP, **dd)),
+        }
+        energy = energy + _tad_dftd.disp.dispersion3(
             numbers,
             positions,
-            c9,
-            radii_3b,
+            param_3b,
+            c6_3b,
+            rvdw=rvdw,
+            r4r2=r4r2,
             cutoff=cutoff.disp3,
-            damping_function=ZeroDamping(),
-            s9=s9,
-            alp=alp,
+            damping=ZeroThreeBodyD4(),
         )
 
     return energy

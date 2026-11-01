@@ -58,9 +58,6 @@ class RationalTwoBody(TwoBodyDamping):
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = (
         ("s6", defaults.S6),
-        ("s8", defaults.S8),
-        ("a1", defaults.A1),
-        ("a2", defaults.A2),
     )
     label: ClassVar[str] = "Rational damping"
 
@@ -68,9 +65,16 @@ class RationalTwoBody(TwoBodyDamping):
         r0 = scaled_radius(self, param, pairs.rdamp, qq=pairs.qq)
         r6, r8 = pow6_pow8(pairs.distances)
         r0_6, r0_8 = pow6_pow8(r0)
-        return self.value(param, "s6") / (r6 + r0_6) + self.value(
+        res = self.value(param, "s6") / (r6 + r0_6) + self.value(
             param, "s8"
         ) * pairs.qq / (r8 + r0_8)
+        if param.s10 is not None:
+            r2 = pairs.distances * pairs.distances
+            r0_2 = r0 * r0
+            res = res + param.s10 * (49.0 / 40.0) * (pairs.qq * pairs.qq) / (
+                r8 * r2 + r0_8 * r0_2
+            )
+        return res
 
 
 class CallableTwoBodyDamping(TwoBodyDamping):
@@ -89,20 +93,40 @@ class CallableTwoBodyDamping(TwoBodyDamping):
 
     def __init__(
         self,
-        fn: Callable[[int, Tensor, Tensor, Any], Tensor],
+        fn: Callable[..., Tensor],
         raw_param: Mapping[str, Any] | None = None,
+        *,
+        radius_type: str | None = None,
     ) -> None:
         self.fn = fn
         self.raw_param = raw_param
+        self.radius_type = (
+            radius_type
+            if radius_type is not None
+            else getattr(fn, "radius_type", "r4r2")
+        )
+
+    def _eval_order(
+        self, order: int, distances: Tensor, radii: Tensor, p: Any
+    ) -> Tensor:
+        if hasattr(self.fn, "radius_type"):
+            kw = p if isinstance(p, Mapping) else p.to_dict()
+            return self.fn(distances, radii, order, **kw)
+        return self.fn(order, distances, radii, p)
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         p = self.raw_param if self.raw_param is not None else param
-        t6 = self.fn(6, pairs.distances, pairs.qq, p)
-        t8 = self.fn(8, pairs.distances, pairs.qq, p)
-        return (
+        radii = pairs.rvdw if self.radius_type == "rvdw" else pairs.qq
+        t6 = self._eval_order(6, pairs.distances, radii, p)
+        t8 = self._eval_order(8, pairs.distances, radii, p)
+        res = (
             self.value(param, "s6") * t6
             + self.value(param, "s8") * pairs.qq * t8
         )
+        if param.s10 is not None:
+            t10 = self._eval_order(10, pairs.distances, radii, p)
+            res = res + param.s10 * (49.0 / 40.0) * (pairs.qq * pairs.qq) * t10
+        return res
 
 
 class RationalThreeBody(ThreeBodyDamping):

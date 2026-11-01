@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import torch
 from tad_mctc.autograd import is_functorch_tensor, is_vmapped
+from tad_mctc.math import einsum
 from tad_mctc.tools import is_compiling
 from tad_mctc.tree import Node, child
 from tad_mctc.typing import Tensor
@@ -40,10 +41,27 @@ __all__ = [
     "atomic_c6",
     "atomic_c6_d3s",
     "atomic_c6_d4s",
+    "contract_rc6",
     "factored_c6",
     "factored_c6_d3s",
     "factored_c6_d4s",
 ]
+
+
+def contract_rc6(
+    rc6: Tensor, gw_i: Tensor, gw_j: Tensor | None = None
+) -> Tensor:
+    """
+    Contract a pre-expanded pairwise reference C6 tensor ``(..., nat, nat, nref, nref)``
+    with reference weights ``gw_i`` and ``gw_j`` (defaults to ``gw_i``).
+    """
+    if gw_j is None:
+        gw_j = gw_i
+    return einsum(
+        "...ijab,...ia,...jb->...ij",
+        *(rc6, gw_i, gw_j),
+        optimize=[(0, 1), (0, 1)],
+    )
 
 
 class AtomicC6(Node):

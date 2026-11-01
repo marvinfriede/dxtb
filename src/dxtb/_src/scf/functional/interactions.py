@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import torch
+from tad_dftd.model.d4 import d4sc_atom_energy, d4sc_atom_potential
 from tad_mctc.math import einsum
 
 from dxtb._src.components.interactions import (
@@ -221,8 +222,7 @@ def _potential_parts(
         weights, derivative = model.weight_references(
             entry.tensor("cn"), atom_charges, with_dgwdq=True
         )
-        atom = einsum(
-            "...ijab,...jb,...ia->...i",
+        atom = d4sc_atom_potential(
             entry.tensor("dispmat"),
             weights,
             derivative,
@@ -316,12 +316,9 @@ def _entry_energy(
         weights = _build_d4sc_model(setup).weight_references(
             entry.tensor("cn"), atom_charges
         )
-        result = result + 0.5 * einsum(
-            "...ijab,...ia,...jb->...j",
+        result = result + d4sc_atom_energy(
             entry.tensor("dispmat"),
             weights,
-            weights,
-            optimize=[(0, 1), (0, 1)],
         )
     elif entry.kind == "generalized_born":
         potential = einsum(

@@ -167,3 +167,113 @@ def test_grad_param() -> None:
     from torch.autograd.gradcheck import gradcheck
 
     assert gradcheck(func, param)
+
+
+def test_three_way_d4_parity_values_and_gradients() -> None:
+    """dxtb DispersionD4, _d4_adapter.dftd4, and native tad_dftd.dftd4 agree to roundoff."""
+    import tad_dftd
+    from tad_mctc import Structure
+
+    dd: DD = {"dtype": torch.double, "device": DEVICE}
+    sample = samples["C4H5NCS"]
+    numbers = sample["numbers"].to(DEVICE)
+    positions = sample["positions"].to(**dd)
+
+    pos_dxtb = positions.clone().requires_grad_(True)
+    chrg_dxtb = torch.tensor(0.2, **dd, requires_grad=True)
+    p_dxtb = {
+        "s6": torch.tensor(1.0, **dd, requires_grad=True),
+        "s8": torch.tensor(0.78981345, **dd, requires_grad=True),
+        "a1": torch.tensor(0.49484001, **dd, requires_grad=True),
+        "a2": torch.tensor(5.73083694, **dd, requires_grad=True),
+        "s9": torch.tensor(1.0, **dd, requires_grad=True),
+        "s10": torch.tensor(0.25, **dd, requires_grad=True),
+        "alp": torch.tensor(16.0, **dd, requires_grad=True),
+    }
+    disp = DispersionD4(numbers, p_dxtb, charge=chrg_dxtb, **dd)
+    cache = disp.get_cache(numbers)
+    e_dxtb = disp.get_energy(pos_dxtb, cache, charge=chrg_dxtb)
+
+    pos_native = positions.clone().requires_grad_(True)
+    chrg_native = torch.tensor(0.2, **dd, requires_grad=True)
+    p_native = {k: v.detach().clone().requires_grad_(True) for k, v in p_dxtb.items()}
+    mol = Structure(numbers=numbers, positions=pos_native, charge=chrg_native)
+    e_native = tad_dftd.dftd4(mol, p_native)
+
+    torch.testing.assert_close(e_dxtb, e_native, atol=1e-13, rtol=1e-13)
+    # Also compare against the independent reference stored in samples.py (for standard GFN2 D4 params)
+    gfn2_param = {
+        "s6": torch.tensor(1.0, **dd),
+        "s8": torch.tensor(par.dispersion.d4.s8, **dd),
+        "a1": torch.tensor(par.dispersion.d4.a1, **dd),
+        "a2": torch.tensor(par.dispersion.d4.a2, **dd),
+        "s9": torch.tensor(par.dispersion.d4.s9, **dd),
+        "alp": torch.tensor(par.dispersion.d4.alp, **dd),
+    }
+    q_eeq = get_eeq_guess(numbers, positions, torch.tensor(0.0, **dd))
+    e_gfn2_native = tad_dftd.dftd4(
+        Structure(numbers=numbers, positions=positions),
+        gfn2_param,
+        q=q_eeq,
+        qmodel="gfn2",
+    )
+    disp_gfn2 = DispersionD4(
+        numbers, gfn2_param, charge=torch.tensor(0.0, **dd), ref_charges="gfn2", **dd
+    )
+    e_gfn2_dxtb = disp_gfn2.get_energy(positions, disp_gfn2.get_cache(numbers))
+    torch.testing.assert_close(e_gfn2_dxtb, e_gfn2_native, atol=1e-13, rtol=1e-13)
+
+    grads_dxtb = torch.autograd.grad(
+        e_dxtb.sum(),
+        (pos_dxtb, chrg_dxtb, *p_dxtb.values()),
+    )
+    grads_native = torch.autograd.grad(
+        e_native.sum(),
+        (pos_native, chrg_native, *p_native.values()),
+    )
+    for g_d, g_n in zip(grads_dxtb, grads_native):
+        torch.testing.assert_close(g_d, g_n, atol=1e-12, rtol=1e-12)
+
+
+def test_d4_trainable_zero_s9_and_weight_derivatives() -> None:
+    """Trainable zero s9 retains ATM gradient and weight_references analytical derivatives match autograd."""
+    import tad_dftd
+    from tad_mctc import Structure
+
+    dd: DD = {"dtype": torch.double, "device": DEVICE}
+    sample = samples["C4H5NCS"]
+    numbers = sample["numbers"].to(DEVICE)
+    positions = sample["positions"].to(**dd)
+
+    s9_zero = torch.tensor(0.0, **dd, requires_grad=True)
+    param_zero = {
+        "s6": torch.tensor(1.0, **dd),
+        "s8": torch.tensor(0.8, **dd),
+        "a1": torch.tensor(0.45, **dd),
+        "a2": torch.tensor(4.5, **dd),
+        "s9": s9_zero,
+    }
+    disp = DispersionD4(numbers, param_zero, charge=torch.tensor(0.0, **dd), **dd)
+    e_zero = disp.get_energy(positions, disp.get_cache(numbers)).sum()
+    (grad_s9_dxtb,) = torch.autograd.grad(e_zero, s9_zero)
+
+    s9_zero_nat = torch.tensor(0.0, **dd, requires_grad=True)
+    e_zero_nat = tad_dftd.dftd4(
+        Structure(numbers=numbers, positions=positions),
+        {**param_zero, "s9": s9_zero_nat},
+    ).sum()
+    (grad_s9_nat,) = torch.autograd.grad(e_zero_nat, s9_zero_nat)
+    assert torch.count_nonzero(grad_s9_dxtb) > 0
+    torch.testing.assert_close(grad_s9_dxtb, grad_s9_nat, atol=1e-13, rtol=1e-13)
+
+    # Check analytical dgwdcn and dgwdq against autograd
+    model = d4.model.D4Model(numbers, **dd)
+    cn = torch.linspace(0.5, 3.5, numbers.numel(), **dd, requires_grad=True)
+    q = torch.linspace(-0.3, 0.3, numbers.numel(), **dd, requires_grad=True)
+    gw, dgwdcn, dgwdq = model.weight_references(
+        cn, q, with_dgwdcn=True, with_dgwdq=True
+    )
+    v = torch.randn_like(gw)
+    grad_cn, grad_q = torch.autograd.grad((gw * v).sum(), (cn, q))
+    torch.testing.assert_close((dgwdcn * v).sum(dim=-1), grad_cn, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close((dgwdq * v).sum(dim=-1), grad_q, atol=1e-12, rtol=1e-12)

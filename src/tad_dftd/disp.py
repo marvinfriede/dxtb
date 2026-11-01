@@ -523,6 +523,35 @@ def get_properties(
     )
 
 
+def _legacy_damping_param(
+    raw_param: Param,
+    *,
+    allow_unknown: bool = False,
+) -> DampingParam:
+    """
+    Convert a legacy parameter mapping or :class:`DampingParam` to a
+    :class:`DampingParam`, filling default ``s6``, ``s8``, ``a1``, and ``a2``
+    values when omitted so sparse legacy dicts remain supported.
+    """
+    if isinstance(raw_param, DampingParam):
+        return raw_param.replace(
+            s6=defaults.S6 if raw_param.s6 is None else raw_param.s6,
+            s8=defaults.S8 if raw_param.s8 is None else raw_param.s8,
+            a1=defaults.A1 if raw_param.a1 is None else raw_param.a1,
+            a2=defaults.A2 if raw_param.a2 is None else raw_param.a2,
+        )
+    merged: dict[str, Any] = {
+        "s6": defaults.S6,
+        "s8": defaults.S8,
+        "a1": defaults.A1,
+        "a2": defaults.A2,
+        **raw_param,
+    }
+    if allow_unknown:
+        return DampingParam.from_dict(merged)
+    return as_damping_param(merged)
+
+
 def dispersion(
     structure: Structure | Tensor,
     param: Param | Tensor,
@@ -570,13 +599,16 @@ def dispersion(
             if cutoff is None
             else cutoff
         )
-        if (
+        custom_fn = (
             damping is None
             and damping_function is not None
             and damping_function is not rational_damping
-        ):
-            dparam_tmp = as_damping_param(raw_param)
-            def_damp = default_damping(dparam_tmp)
+        )
+        dparam_legacy = _legacy_damping_param(
+            raw_param, allow_unknown=custom_fn
+        )
+        if custom_fn:
+            def_damp = default_damping(dparam_legacy)
             two = (
                 damping_function
                 if isinstance(damping_function, TwoBodyDamping)
@@ -586,6 +618,7 @@ def dispersion(
                 )
             )
             damping = Damping(two=two, three=def_damp.three)
+        raw_param = dparam_legacy
 
     d3 = D3Model(
         rvdw_table=rvdw_table,
@@ -649,6 +682,7 @@ def dispersion2(
     rvdw: Tensor | None = None,
     cutoff: Cutoff | Tensor | float | None = None,
     checkpoint: bool = False,
+    as_matrix: bool = False,
 ) -> Tensor:
     """
     Two-body dispersion energy from given C6 coefficients.
@@ -659,21 +693,8 @@ def dispersion2(
         c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
         r4r2_val = r4r2
         cut_arg = cutoff
-        cut = (
-            Cutoff()
-            if cut_arg is None
-            else (
-                cut_arg
-                if isinstance(cut_arg, Cutoff)
-                else Cutoff(
-                    disp2=float(
-                        cut_arg.item()
-                        if isinstance(cut_arg, Tensor)
-                        else cut_arg
-                    )
-                )
-            )
-        )
+        cut: Cutoff | Tensor | float = Cutoff() if cut_arg is None else cut_arg
+        dparam = as_damping_param(raw_param)
     else:
         assert isinstance(param, Tensor)
         assert r4r2_or_c6 is not None
@@ -685,18 +706,14 @@ def dispersion2(
         cut = (
             Cutoff(disp2=defaults.D3_DISP_CUTOFF)
             if cut_arg is None
-            else (
-                cut_arg
-                if isinstance(cut_arg, Cutoff)
-                else Cutoff(
-                    disp2=float(
-                        cut_arg.item()
-                        if isinstance(cut_arg, Tensor)
-                        else cut_arg
-                    )
-                )
-            )
+            else cut_arg
         )
+        custom_fn = (
+            damping is None
+            and damping_function is not None
+            and damping_function is not rational_damping
+        )
+        dparam = _legacy_damping_param(raw_param, allow_unknown=custom_fn)
         if damping is None:
             if damping_function is None or damping_function is rational_damping:
                 damping = RationalTwoBody()
@@ -708,7 +725,6 @@ def dispersion2(
                     raw_param if isinstance(raw_param, Mapping) else None,
                 )
 
-    dparam = as_damping_param(raw_param)
     if damping is None:
         damping = default_damping(dparam).two
 
@@ -725,6 +741,7 @@ def dispersion2(
         r4r2=r4r2_val,
         cutoff=cut,
         checkpoint=checkpoint,
+        as_matrix=as_matrix,
     )
 
 
@@ -755,21 +772,8 @@ def dispersion3(
         c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
         rvdw_val = rvdw
         cut_arg = cutoff
-        cut = (
-            Cutoff()
-            if cut_arg is None
-            else (
-                cut_arg
-                if isinstance(cut_arg, Cutoff)
-                else Cutoff(
-                    disp3=float(
-                        cut_arg.item()
-                        if isinstance(cut_arg, Tensor)
-                        else cut_arg
-                    )
-                )
-            )
-        )
+        cut: Cutoff | Tensor | float = Cutoff() if cut_arg is None else cut_arg
+        dparam = as_damping_param(raw_param)
     else:
         assert isinstance(param, Tensor)
         assert rvdw_or_c6 is not None
@@ -781,20 +785,10 @@ def dispersion3(
         cut = (
             Cutoff(disp3=defaults.D3_DISP_CUTOFF)
             if cut_arg is None
-            else (
-                cut_arg
-                if isinstance(cut_arg, Cutoff)
-                else Cutoff(
-                    disp3=float(
-                        cut_arg.item()
-                        if isinstance(cut_arg, Tensor)
-                        else cut_arg
-                    )
-                )
-            )
+            else cut_arg
         )
+        dparam = _legacy_damping_param(raw_param)
 
-    dparam = as_damping_param(raw_param)
     return _eval_dispersion3(
         mol,
         dparam,

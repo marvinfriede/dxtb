@@ -136,9 +136,17 @@ def _eval_dispersion2(
     rdamp_table: Tensor | TableFunction | None = None,
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
-    cutoff: Cutoff = Cutoff(),
+    cutoff: Cutoff | Tensor | float = Cutoff(),
     checkpoint: bool = False,
+    as_matrix: bool = False,
 ) -> Tensor:
+    if isinstance(cutoff, Cutoff):
+        cut: float | Tensor = cutoff.disp2
+        width = cutoff.width2
+    else:
+        cut = cutoff
+        width = 0.0
+
     if isinstance(pairs, NeighborList):
         return dispersion2_sparse(
             structure,
@@ -149,8 +157,8 @@ def _eval_dispersion2(
             rvdw_table=rvdw_table,
             r4r2_table=r4r2_table,
             rdamp_table=rdamp_table,
-            cutoff=cutoff.disp2,
-            width=cutoff.width2,
+            cutoff=float(cut),
+            width=width,
             checkpoint=checkpoint,
         )
 
@@ -165,8 +173,9 @@ def _eval_dispersion2(
         rdamp_table=rdamp_table,
         rvdw=rvdw,
         r4r2=r4r2,
-        cutoff=cutoff.disp2,
-        width=cutoff.width2,
+        cutoff=cut,
+        width=width,
+        as_matrix=as_matrix,
     )
 
 
@@ -182,13 +191,18 @@ def _eval_dispersion3(
     rdamp_table: Tensor | TableFunction | None = None,
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
-    cutoff: Cutoff = Cutoff(),
+    cutoff: Cutoff | Tensor | float = Cutoff(),
     max_triples: int = 2_000_000,
     checkpoint: bool = False,
 ) -> Tensor:
     from tad_mctc.neighbor.triples import TripleList
 
-    cut, width = cutoff.disp3, cutoff.width3
+    if isinstance(cutoff, Cutoff):
+        cut: float | Tensor = cutoff.disp3
+        width = cutoff.width3
+    else:
+        cut = cutoff
+        width = 0.0
     if isinstance(pairs, (NeighborList, TripleList)):
         return dispersion_atm_sparse(
             structure,
@@ -199,7 +213,7 @@ def _eval_dispersion3(
             rvdw_table=rvdw_table,
             r4r2_table=r4r2_table,
             rdamp_table=rdamp_table,
-            cutoff=cut,
+            cutoff=float(cut),
             width=width,
             max_triples=max_triples,
             checkpoint=checkpoint,
@@ -215,7 +229,7 @@ def _eval_dispersion3(
             rvdw_table=rvdw_table,
             r4r2_table=r4r2_table,
             rdamp_table=rdamp_table,
-            cutoff=cut,
+            cutoff=float(cut),
             width=width,
             max_triples=max_triples,
             checkpoint=checkpoint,

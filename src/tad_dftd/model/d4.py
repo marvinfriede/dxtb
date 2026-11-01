@@ -31,6 +31,7 @@ import torch
 from tad_mctc import Structure
 from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.data import resolve_table
+from tad_mctc.math import einsum
 from tad_mctc.neighbor.images import PeriodicShifts
 from tad_mctc.neighbor.list import NeighborList
 from tad_mctc.tools import is_compiling
@@ -40,7 +41,13 @@ from tad_mctc.typing import CountingFunction, TableFunction, Tensor
 from .. import defaults, ncoord
 from ..charge import get_charges
 from ..cutoff import Cutoff
-from ..damping import Damping, DampingParam, ThreeBodyDamping, TwoBodyDamping
+from ..damping import (
+    Damping,
+    DampingParam,
+    RationalTwoBody,
+    ThreeBodyDamping,
+    TwoBodyDamping,
+)
 from ..data import GAM, TANH_PARAMS, ZEFF
 from ..data.r4r2 import R4R2
 from ..data.table import element_table
@@ -68,6 +75,9 @@ __all__ = [
     "D4Model",
     "D4SModel",
     "D4SrevModel",
+    "d4sc_atom_energy",
+    "d4sc_atom_potential",
+    "d4sc_dispersion_matrix",
 ]
 
 Param: TypeAlias = DampingParam | Mapping[str, Any]
@@ -1315,3 +1325,89 @@ class D4SrevModel(DispersionModel):
             pairs,
             model_id=DispersionModelId.D4SREV,
         )
+
+
+def d4sc_dispersion_matrix(
+    numbers: Tensor,
+    positions: Tensor,
+    param: Param,
+    r4r2: Tensor,
+    rc6: Tensor,
+    *,
+    cutoff: Cutoff | Tensor | float = defaults.D4_DISP2_CUTOFF,
+    damping: TwoBodyDamping | None = None,
+    rvdw: Tensor | None = None,
+) -> Tensor:
+    """
+    Evaluate the self-consistent D4 pairwise reference dispersion matrix
+    ``dispmat`` of shape ``(..., nat, nat, nref, nref)``.
+    """
+    if isinstance(param, DampingParam):
+        dparam = param.replace(
+            s6=defaults.D4_S6 if param.s6 is None else param.s6,
+            s8=0.0 if param.s8 is None else param.s8,
+            a1=defaults.A1 if param.a1 is None else param.a1,
+            a2=defaults.A2 if param.a2 is None else param.a2,
+        )
+    else:
+        s6_val = (
+            0.0
+            if ("s6" in param and param["s6"] is None)
+            else param.get("s6", defaults.D4_S6)
+        )
+        s8_val = (
+            0.0
+            if ("s8" not in param or param["s8"] is None)
+            else param["s8"]
+        )
+        dparam = DampingParam.from_dict(
+            {
+                "a1": defaults.A1,
+                "a2": defaults.A2,
+                **param,
+                "s6": s6_val,
+                "s8": s8_val,
+            }
+        )
+    damp = RationalTwoBody() if damping is None else damping
+    unit_c6 = torch.ones(
+        (*numbers.shape, numbers.shape[-1]),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    edisp = _eval_dispersion2(
+        Structure(numbers=numbers, positions=positions),
+        dparam,
+        unit_c6,
+        None,
+        damp,
+        rvdw=rvdw,
+        r4r2=r4r2,
+        cutoff=cutoff,
+        as_matrix=True,
+    )
+    return edisp.unsqueeze(-1).unsqueeze(-1) * rc6
+
+
+def d4sc_atom_energy(dispmat: Tensor, weights: Tensor) -> Tensor:
+    """
+    Contract a D4SC dispersion matrix ``(..., nat, nat, nref, nref)`` with
+    charge-dependent reference weights ``(..., nat, nref)`` into atom-resolved
+    dispersion energies ``(..., nat)``.
+    """
+    return 0.5 * einsum(
+        "...ijab,...ia,...jb->...j",
+        *(dispmat, weights, weights),
+        optimize=[(0, 1), (0, 1)],
+    )
+
+
+def d4sc_atom_potential(
+    dispmat: Tensor, weights: Tensor, dgwdq: Tensor
+) -> Tensor:
+    """
+    Contract a D4SC dispersion matrix ``(..., nat, nat, nref, nref)`` with
+    reference weights ``weights`` and their charge derivatives ``dgwdq`` into
+    the atomwise monopole potential ``dE_disp / dq_i`` of shape ``(..., nat)``.
+    """
+    return einsum("...ijab,...jb,...ia->...i", dispmat, weights, dgwdq)
