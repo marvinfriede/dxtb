@@ -47,7 +47,7 @@ from dxtb._src.scf.functional.cdiis import CDIISMethod, CDIISMethodSettings
 from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.problem import SCFRepresentation
 from dxtb._src.scf.functional.response import SCFResponseSettings
-from dxtb._src.scf.functional.soscf import SOSCFMethod, SOSCFMethodSettings
+from dxtb._src.scf.functional.soscf import SOSCFMethod
 from dxtb._src.scf.functional.strategy import (
     SCFStage,
     SCFStrategy,
@@ -70,7 +70,6 @@ __all__ = [
     "SCFStrategy",
     "SCFSwitchPolicy",
     "SOSCFMethod",
-    "SOSCFMethodSettings",
     "strategy_preset",
 ]
 
@@ -92,7 +91,7 @@ def strategy_preset(name: str) -> SCFStrategy:
     )
     broyden = BroydenMethod(BroydenMethodSettings(max_rank=8))
     cdiis = CDIISMethod(CDIISMethodSettings(max_history=8))
-    soscf = SOSCFMethod(SOSCFMethodSettings())
+    soscf = SOSCFMethod()
     potential = SCFRepresentation.POTENTIAL
     fock = SCFRepresentation.FOCK
 

@@ -51,7 +51,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class SCFResponseSettings:
-    """Internal IFT coordinates and matrix-free linear-solve controls."""
+    """Response coordinates and matrix-free linear-solve controls."""
 
     representation: SCFRepresentation | None = None
     rtol: float = 1.0e-10

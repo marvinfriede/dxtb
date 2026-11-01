@@ -18,10 +18,12 @@
 
 from __future__ import annotations
 
+from test.test_baseline.molecules import SYSTEMS
+
 import pytest
 import torch
 
-from dxtb import GFN1_XTB, ParamModule, labels, scf
+from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels, scf
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config, ConfigSCF
 
@@ -55,6 +57,16 @@ def test_named_presets_have_stable_method_and_representation() -> None:
         assert isinstance(stage.method, method_type)
         assert stage.representation is representation
         assert name in str(config.info()).casefold()
+
+
+def test_soscf_internal_safety_settings_are_not_public() -> None:
+    """SOSCF exposes its validated method, not epsilon-scale guard knobs."""
+    assert "SOSCFMethod" in scf.__all__
+    assert "SOSCFMethodSettings" not in scf.__all__
+    assert isinstance(
+        scf.strategy_preset("cdiis-soscf").stages[-1].method,
+        scf.SOSCFMethod,
+    )
 
 
 def test_dynamic_and_soscf_presets_require_implicit_eager_policy() -> None:
@@ -177,6 +189,28 @@ def test_default_float32_h2o_root_and_gradient_are_finite() -> None:
     )
     system = Model(
         par=ParamModule(GFN1_XTB, dtype=torch.float32), config=config
+    ).setup(numbers)
+    result = system.singlepoint(positions)
+    gradient = torch.autograd.grad(result.energy.sum(), positions)[0]
+    assert bool(result.converged)
+    assert torch.isfinite(result.energy).all()
+    assert torch.isfinite(gradient).all()
+
+
+def test_default_gfn2_h2o_root_and_gradient_are_finite() -> None:
+    """The no-option GFN2 public route uses the same strategy contract."""
+    source = SYSTEMS["H2O"]
+    numbers = source.numbers.detach().cpu()
+    positions = (
+        source.positions.detach().cpu().to(torch.float64).requires_grad_()
+    )
+    config = Config.create(
+        method="GFN2-xTB",
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_DIPOLE,
+    )
+    system = Model(
+        par=ParamModule(GFN2_XTB, dtype=positions.dtype), config=config
     ).setup(numbers)
     result = system.singlepoint(positions)
     gradient = torch.autograd.grad(result.energy.sum(), positions)[0]
