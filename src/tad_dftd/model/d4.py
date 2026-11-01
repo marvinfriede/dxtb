@@ -1,19 +1,10 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 """
 DFT-D4, DFT-D4S, and DFT-D4Srev Dispersion Models
 =================================================
@@ -140,8 +131,8 @@ class D4Model(DispersionModel):
         Gaussian reference coordination number weighting factor :math:`w_f`.
         Defaults to ``6.0``.
     qmodel : str, optional
-        Reference charge model (``"eeq"``, ``"eeqbc"``, ``"gfn2"``, or
-        ``"gxtb"``). Defaults to ``"eeq"``.
+        Reference charge model (``"eeq"``, ``"eeq2019"``, or ``"gfn2"``).
+        Defaults to ``"eeq"``.
     rcov_table : Tensor | TableFunction | None, optional
         Covalent radii per element, of shape ``(119,)``.
     en_table : Tensor | TableFunction | None, optional
@@ -1352,13 +1343,25 @@ def d4sc_dispersion_matrix(
     else:
         s6_val = (
             0.0
-            if ("s6" in param and param["s6"] is None)
-            else param.get("s6", defaults.D4_S6)
+            if (
+                "s6" in param
+                and param["s6"] is None
+                and param.get("rs6") is None
+            )
+            else (
+                defaults.D4_S6
+                if param.get("s6") is None
+                else param["s6"]
+            )
         )
         s8_val = (
             0.0
-            if ("s8" not in param or param["s8"] is None)
-            else param["s8"]
+            if (param.get("s8") is None and param.get("rs8") is None)
+            else (
+                defaults.D4_S8
+                if param.get("s8") is None
+                else param["s8"]
+            )
         )
         dparam = DampingParam.from_dict(
             {

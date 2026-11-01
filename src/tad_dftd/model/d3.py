@@ -1,19 +1,10 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 """
 DFT-D3 and DFT-D3S Dispersion Models
 ====================================
@@ -29,7 +20,7 @@ from typing import Any, NamedTuple, TypeAlias
 
 import torch
 from tad_mctc import Structure
-from tad_mctc.autograd import is_functorch_tensor
+from tad_mctc.autograd import is_functorch_tensor, is_vmapped
 from tad_mctc.data import resolve_table
 from tad_mctc.neighbor.images import PeriodicShifts
 from tad_mctc.neighbor.list import NeighborList
@@ -439,7 +430,15 @@ class D3Model(DispersionModel):
         three_body = damping.three is not None
 
         if pairs is None:
-            if structure.lattice is None:
+            if (
+                structure.lattice is None
+                or is_vmapped(structure.positions)
+                or is_vmapped(structure.numbers)
+                or (
+                    structure.lattice is not None
+                    and is_vmapped(structure.lattice)
+                )
+            ):
                 pairs = DensePairs()
             else:
                 pairs = SparsePairs.build(

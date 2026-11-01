@@ -192,11 +192,12 @@ class Damping(ABC):
         s9: Tensor | float | int | None = defaults.D4_S9,
         rs9: Tensor | float | int | None = defaults.D4_RS9,
         s10: Tensor | float | int | None = None,
+        rs10: Tensor | float | int | None = None,
         alp: Tensor | float | int | None = defaults.D4_ALP,
         bet: Tensor | float | int | None = None,
         doi: str | None = None,
     ) -> Tensor:
-        del doi
+        del doi, rs10
 
         if order == 6 and (s6 is None and rs6 is None):
             return torch.zeros_like(distances)
@@ -537,27 +538,47 @@ def dispersion2(
     )
     s6_val = (
         0.0
-        if ("s6" in param and param["s6"] is None)
-        else param.get("s6", defaults.D4_S6)
+        if (
+            "s6" in param
+            and param["s6"] is None
+            and param.get("rs6") is None
+        )
+        else (
+            defaults.D4_S6
+            if param.get("s6") is None
+            else param["s6"]
+        )
     )
     s8_val = (
         0.0
-        if ("s8" not in param or param["s8"] is None)
-        else param["s8"]
+        if (param.get("s8") is None and param.get("rs8") is None)
+        else (
+            defaults.D4_S8
+            if param.get("s8") is None
+            else param["s8"]
+        )
     )
     param_2b = {**param, "s6": s6_val, "s8": s8_val}
     if type(damping_function) is RationalDamping:
         damp_2b = RationalTwoBody()
+        param_arg: DampingParam | dict[str, Any] = DampingParam.from_dict(
+            {
+                "a1": defaults.A1,
+                "a2": defaults.A2,
+                **param_2b,
+            }
+        )
     else:
         damp_2b = CallableTwoBodyDamping(
             damping_function,
             param,
             radius_type=damping_function.radius_type,
         )
+        param_arg = param_2b
     return _tad_dftd.disp.dispersion2(
         numbers,
         positions,
-        param_2b,
+        param_arg,
         c6,
         r4r2=r4r2,
         rvdw=rvdw,

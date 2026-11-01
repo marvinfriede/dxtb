@@ -1,19 +1,10 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 """
 Pairs
 =====
@@ -33,6 +24,7 @@ from tad_mctc.io.structure import Structure
 from tad_mctc.neighbor.images import PeriodicShifts, build_periodic_shifts
 from tad_mctc.neighbor.list import NeighborList, StageHook, build_neighborlists
 from tad_mctc.neighbor.triples import TripleList
+from tad_mctc.tools import is_compiling
 from tad_mctc.tree import Node, child
 from tad_mctc.typing import Tensor
 
@@ -57,6 +49,26 @@ def _no_stage(label: str) -> contextlib.AbstractContextManager[object]:
     """The default stage hook: runs each step of a build as it is."""
     del label
     return contextlib.nullcontext()
+
+
+def _unwrap_primal_tensor(x: Tensor) -> Tensor:
+    """Unwrap functorch layers (vmap, jacrev, jacfwd) to build static shift tables."""
+    if is_compiling():
+        return x.detach()
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    current = x
+    while True:
+        if ft.is_functorch_wrapped_tensor(current):
+            current = ft.get_unwrapped(current)
+            continue
+        with torch._C._DisableFuncTorch():  # pyright: ignore[reportAttributeAccessIssue]
+            if not (current.is_floating_point() or current.is_complex()):
+                return current.detach()
+            dual = torch.autograd.forward_ad.unpack_dual(current)
+            if dual.tangent is not None:
+                current = dual.primal
+                continue
+            return current.detach()
 
 
 class DensePairs(Node):
@@ -109,14 +121,15 @@ class DensePairs(Node):
             return self
 
         assert structure.periodic is not None
+        lat_raw = _unwrap_primal_tensor(structure.lattice)
+        per_raw = _unwrap_primal_tensor(structure.periodic)
 
         def shifts(term: str, reach: float) -> PeriodicShifts:
-            assert structure.lattice is not None
-            assert structure.periodic is not None
             with stage(f"periodic shifts ({term})"):
-                return build_periodic_shifts(
-                    structure.lattice, structure.periodic, reach
-                )
+                if is_compiling():
+                    return build_periodic_shifts(lat_raw, per_raw, reach)
+                with torch._C._DisableFuncTorch():  # pyright: ignore[reportAttributeAccessIssue]
+                    return build_periodic_shifts(lat_raw, per_raw, reach)
 
         missing: dict[str, PeriodicShifts] = {}
         if self.cn is None:

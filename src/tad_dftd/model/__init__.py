@@ -19,7 +19,7 @@ Dispersion Models
 =================
 
 Model catalogue, weighting kernels, C6 factorization, and model implementations
-for DFT-D1 through DFT-D5.
+for DFT-D1 through DFT-D4Srev.
 """
 from __future__ import annotations
 

@@ -1,25 +1,16 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 """
 Reference Weighting and Charge Scaling Functions
 ================================================
 
 Differentiable weighting and interpolation kernels shared across D3, D3S, D4,
-D4S, D4Srev, and D5 dispersion models, following ``dftd/model/utils.f90`` and
+D4S, and D4Srev dispersion models, following ``dftd/model/utils.f90`` and
 ``dftd/model/d4/{orig,smooth,srev}.f90``.
 """
 from __future__ import annotations

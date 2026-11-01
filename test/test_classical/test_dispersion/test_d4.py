@@ -277,3 +277,55 @@ def test_d4_trainable_zero_s9_and_weight_derivatives() -> None:
     grad_cn, grad_q = torch.autograd.grad((gw * v).sum(), (cn, q))
     torch.testing.assert_close((dgwdcn * v).sum(dim=-1), grad_cn, atol=1e-12, rtol=1e-12)
     torch.testing.assert_close((dgwdq * v).sum(dim=-1), grad_q, atol=1e-12, rtol=1e-12)
+
+
+def test_d4_adapter_edge_cases_rs10_doi_and_zero_damping() -> None:
+    """Verify rs10/doi parameter handling and ZeroDamping with rs8 or zero radii."""
+    dd: DD = {"dtype": torch.double, "device": DEVICE}
+    sample = samples["LiH"]
+    numbers = sample["numbers"].to(DEVICE)
+    positions = sample["positions"].to(**dd)
+    r4r2 = d4.data.R4R2(**dd)[numbers]
+    c6 = torch.ones((numbers.shape[-1], numbers.shape[-1]), **dd)
+    rvdw = torch.ones_like(c6) * 2.5
+
+    # 1. dispersion2 with rs10 and doi in param does not raise TypeError
+    e_rs10 = d4.dispersion2(
+        numbers,
+        positions,
+        {"a1": 0.4, "a2": 4.5, "s6": 1.0, "s8": 0.5, "s10": 0.2, "rs10": 1.0, "doi": "10.1063/1.5090222"},  # type: ignore[typeddict-unknown-key]
+        c6,
+        r4r2,
+    )
+    assert torch.isfinite(e_rs10).all()
+
+    # 2. ZeroDamping with rs8 provided and s8 omitted includes order-8 contribution
+    zd = d4.ZeroDamping()
+    e_zd_rs8 = d4.dispersion2(
+        numbers,
+        positions,
+        {"rs6": 1.0, "rs8": 1.2, "alp": 14.0},
+        c6,
+        r4r2,
+        damping_function=zd,
+        rvdw=rvdw,
+    )
+    e_zd_no_rs8 = d4.dispersion2(
+        numbers,
+        positions,
+        {"rs6": 1.0, "alp": 14.0},
+        c6,
+        r4r2,
+        damping_function=zd,
+        rvdw=rvdw,
+    )
+    assert not torch.allclose(e_zd_rs8, e_zd_no_rs8)
+
+    # 3. Direct call to ZeroDamping with zero entries in radii is finite
+    dist = torch.tensor([[0.0, 2.5], [2.5, 0.0]], **dd, requires_grad=True)
+    rad_zero = torch.tensor([[0.0, 2.0], [2.0, 0.0]], **dd)
+    out = zd(dist, rad_zero, 6, rs6=1.0)
+    assert torch.isfinite(out).all()
+    (g_dist,) = torch.autograd.grad(out.sum(), dist)
+    assert torch.isfinite(g_dist).all()
+

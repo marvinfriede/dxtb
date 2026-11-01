@@ -1,19 +1,10 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 r"""
 Three-body (Axilrod-Teller-Muto) term
 =====================================
@@ -29,7 +20,7 @@ triples:
 
 Supports both geometric-mean :math:`C_9 = \sqrt{|C_{6,ij} C_{6,ik} C_{6,jk}|}`
 (used by D3, D3S, D4, D4S, D4Srev) and Casimir-Polder quadrature of dynamic
-polarizabilities :math:`\alpha_{dd}(i\omega)` (used by D5).
+polarizabilities :math:`\alpha_{dd}(i\omega)`.
 """
 from __future__ import annotations
 
@@ -38,6 +29,7 @@ from typing import Any
 
 import torch
 from tad_mctc import storch
+from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.batch import real_pairs, real_triples
 from tad_mctc.io.structure import Structure
 from tad_mctc.ncoord.common import _periodic_images
@@ -45,6 +37,7 @@ from tad_mctc.neighbor import gather_index
 from tad_mctc.neighbor.images import PeriodicShifts
 from tad_mctc.neighbor.list import NeighborList
 from tad_mctc.neighbor.triples import TripleList
+from tad_mctc.tools import is_compiling
 from tad_mctc.typing import DD, TableFunction, Tensor
 from torch.utils.checkpoint import checkpoint as _torch_checkpoint
 
@@ -249,13 +242,17 @@ def dispersion_atm_periodic(
     n_system = folded.shape[0]
     translations = images.translations.reshape(-1, n_shift, 3)
     translations = translations.expand(n_system, n_shift, 3)
-    valid = images.valid.reshape(n_system, nat, nat, n_shift)
+    valid = images.valid.reshape(-1, nat, nat, n_shift)
     valid = valid.expand(n_system, nat, nat, n_shift)
 
-    c6_systems = c6.reshape(n_system, nat, nat)
-    radii_systems = radii.map(lambda r: r.reshape(n_system, nat, nat))
+    c6_systems = c6.reshape(-1, nat, nat).expand(n_system, nat, nat)
+    radii_systems = radii.map(
+        lambda r: r.reshape(-1, nat, nat).expand(n_system, nat, nat)
+    )
     adiw_systems = (
-        adiw.reshape(n_system, nat, -1)
+        adiw.reshape(-1, nat, adiw.shape[-1]).expand(
+            n_system, nat, adiw.shape[-1]
+        )
         if adiw is not None
         else None
     )
@@ -263,6 +260,22 @@ def dispersion_atm_periodic(
     cutoff2 = cutoff * cutoff
     eps = torch.finfo(positions.dtype).eps
     zero = torch.zeros((), device=positions.device, dtype=positions.dtype)
+
+    use_static_legs = (
+        is_compiling()
+        or is_functorch_tensor(positions)
+        or is_functorch_tensor(lattice)
+        or is_functorch_tensor(c6)
+        or torch._C._functorch.get_interpreter_stack() is not None
+    )
+    static_atoms = (
+        torch.arange(nat, device=positions.device)
+        .unsqueeze(1)
+        .expand(nat, n_shift)
+        .reshape(-1)
+        if use_static_legs
+        else None
+    )
 
     energies = []
     for system in range(n_system):
@@ -277,22 +290,34 @@ def dispersion_atm_periodic(
                 + translations[system].unsqueeze(0)
             )
             r2 = vectors.pow(2).sum(-1)
+            keep = valid[system, i] & (r2 <= cutoff2) & (r2 >= eps)
 
-            with torch.no_grad():
-                keep = valid[system, i] & (r2 <= cutoff2) & (r2 >= eps)
-                atoms, shift_idx = torch.nonzero(keep, as_tuple=True)
+            if use_static_legs:
+                assert static_atoms is not None
+                atoms = static_atoms
+                legs = vectors.reshape(-1, 3)
+                c6_i = c6_sys[i].unsqueeze(1).expand(nat, n_shift).reshape(-1)
+                radii_i = radii_sys.map(
+                    lambda r: r[i].unsqueeze(1).expand(nat, n_shift).reshape(-1)
+                )
+                keep_legs: Tensor | None = keep.reshape(-1)
+            else:
+                with torch.no_grad():
+                    atoms, shift_idx = torch.nonzero(keep, as_tuple=True)
 
-            legs = vectors.reshape(-1, 3).index_select(
-                0, atoms * n_shift + shift_idx
-            )
-            c6_i = c6_sys[i].index_select(0, atoms)
-            radii_i = radii_sys.map(lambda r: r[i].index_select(0, atoms))
+                legs = vectors.reshape(-1, 3).index_select(
+                    0, atoms * n_shift + shift_idx
+                )
+                c6_i = c6_sys[i].index_select(0, atoms)
+                radii_i = radii_sys.map(lambda r: r[i].index_select(0, atoms))
+                keep_legs = None
 
             n_leg = atoms.shape[0]
             energy = zero
             block = max(1, max_triples // max(n_leg, 1))
             for start in range(0, max(n_leg, 1), block):
                 rows = slice(start, start + block)
+                keep_rows = keep_legs[rows] if keep_legs is not None else None
                 args = (
                     legs[rows],
                     legs,
@@ -311,6 +336,8 @@ def dispersion_atm_periodic(
                     i,
                     adiw_sys,
                     gl_weights,
+                    keep_rows,
+                    keep_legs,
                 )
                 if checkpoint:
                     energy = energy + _torch_checkpoint(
@@ -321,7 +348,9 @@ def dispersion_atm_periodic(
 
             energies.append(energy)
 
-    return torch.stack(energies).reshape(numbers.shape)
+    return torch.stack(energies).reshape(
+        torch.broadcast_shapes(numbers.shape, positions.shape[:-1])
+    )
 
 
 def _periodic_block_energy(
@@ -342,6 +371,8 @@ def _periodic_block_energy(
     atom_i: int = 0,
     adiw_sys: Tensor | None = None,
     gl_weights: Tensor | None = None,
+    keep_a: Tensor | None = None,
+    keep_b: Tensor | None = None,
 ) -> Tensor:
     """
     Sum of the ATM energy of the triples of one atom ``i`` of the cell with
@@ -376,6 +407,10 @@ def _periodic_block_energy(
         )
 
     eps = torch.finfo(vec_a.dtype).eps
+    valid_jk = r2jk >= eps
+    if keep_a is not None and keep_b is not None:
+        valid_jk = valid_jk & keep_a.unsqueeze(1) & keep_b.unsqueeze(0)
+
     term = atm_term(
         r2ij,
         r2ik,
@@ -386,7 +421,7 @@ def _periodic_block_energy(
         param,
         cutoff,
         width,
-        r2jk >= eps,
+        valid_jk,
     )
 
     return torch.sum(term * c9) / 6.0
@@ -435,9 +470,7 @@ def dispersion_atm_sparse(
         flat_adiw = adiw.reshape(total_atoms, -1)
 
     total = triples.idx_i.shape[0]
-    size = max(max_triples, 1)
-    if torch.compiler.is_compiling():
-        size = max(total, 1)
+    size = max(1, min(max_triples, max(total, 1)))
 
     energy = flat_positions.new_zeros(total_atoms)
     for start in range(0, max(total, 1), size):

@@ -2,7 +2,9 @@
 
 ## Overview
 
-`tad_dftd` is a unified, differentiable PyTorch dispersion correction library implementing the Grimme-lab DFT-D family of dispersion models (`D1`, `D2`, `D3`, `D3S`, `D4`, `D4S`, `D4Srev`, `D5`) and associated charge models (`EEQ`, `EEQBC`), damping functions, Casimir-Polder integrators, and periodic/sparse neighbor-list evaluations.
+`tad_dftd` is a unified, differentiable PyTorch dispersion correction library implementing the Grimme-lab DFT-D family of dispersion models (`D1`, `D2`, `D3`, `D3S`, `D4`, `D4S`, `D4Srev`), the classical `EEQ` (`eeq2019`) charge model, damping functions, Casimir-Polder integrators, and periodic/sparse neighbor-list evaluations.
+
+> **Scope Note (`D5` and `EEQBC`)**: Both the `D5` dispersion model (`model="d5"`) and the `EEQBC` charge model (`qmodel="eeqbc"` / `"eeqbc2025"`) are intentionally excluded from this release because their upstream reference models are not yet finalized. Requesting `model="d5"` or `qmodel="eeqbc"` / `"eeqbc2025"` raises `NotImplementedError`.
 
 Currently developed as an independent top-level Python package (`src/tad_dftd/`) inside `marvinfriede/dxtb` for subsequent standalone extraction to `tad-dftd`.
 
@@ -14,7 +16,7 @@ Currently developed as an independent top-level Python package (`src/tad_dftd/`)
    - Commit SHA: `d2740777049b2a77fd5acc86c4e1abe75d5374ee`
    - License: `LGPL-3.0-or-later` (see `COPYING` and `COPYING.LESSER` in this directory)
    - Subprojects referenced:
-     - `multicharge` (`subprojects/multicharge`): `LGPL-3.0-or-later` (for `eeqbc2025` model equations and parameters in `src/multicharge/model/eeqbc.f90`, `src/multicharge/param.f90`, and `src/multicharge/param/eeqbc2025.f90`)
+     - `multicharge` (`subprojects/multicharge`): `LGPL-3.0-or-later`
      - `mctc-lib` (`subprojects/mctc-lib`): `Apache-2.0`
 
 2. **Existing PyTorch Dispersion Libraries**
@@ -32,23 +34,27 @@ Currently developed as an independent top-level Python package (`src/tad_dftd/`)
      - Version: `0.8.0` (`https://github.com/tad-mctc/tad-multicharge`)
      - License: `Apache-2.0`
 
-## File-by-File Provenance Mapping
+## File-by-File Provenance and License Classification
 
-| `tad_dftd` Module / Asset | Upstream Source(s) | Upstream License | Notes |
+| `tad_dftd` Module / Asset | Upstream Source(s) | Effective License | Notes |
 |---|---|---|---|
-| `tad_dftd/cutoff.py`, `tad_dftd/pairs.py` | `tad-dftd3/src/tad_dftd3/{cutoff,pairs}.py`, `dftd/src/dftd/cutoff.f90` | `Apache-2.0` / `LGPL-3.0-or-later` | Real-space cutoffs, quintic smooth switch, `DensePairs`, `SparsePairs` |
-| `tad_dftd/data/*` | `dftd/src/dftd/data/{d1,d2,en,hardness,r4r2,tanh,zeff}.f90`, `dftd/src/dftd/data/wfpair/{d3s,d4s}.f90` | `LGPL-3.0-or-later` / `Apache-2.0` | Atomic and pairwise element constants ($Z=1..118$) |
-| `tad_dftd/integrator/*` | `dftd/src/dftd/integrator/{gauss_legendre,trapezoid}.f90` | `LGPL-3.0-or-later` | 10-point Gauss-Legendre and 23-point composite trapezoid Casimir-Polder integrators |
-| `tad_dftd/damping/*` | `tad-dftd3/src/tad_dftd3/damping/*.py`, `dftd/src/dftd/damping/*.f90` | `Apache-2.0` / `LGPL-3.0-or-later` | Unified 2B (`rational`, `screened`, `zero`, `mzero`, `optpower`/`optimizedpower`, `cso`, `koide`, `fermi`, `z`) and 3B (`zero_avg`/`zero_d3`/`zero_d4`, `zero`/`zero_product`, `rational`, `screened`, `koide`) dampings and damping radii |
-| `tad_dftd/ncoord/*` | `tad-mctc/src/tad_mctc/ncoord/*`, `dftd/src/dftd/model/*` | `Apache-2.0` / `LGPL-3.0-or-later` | Coordination number configurations for D3, D4, D4Srev, D5, and EEQBC |
-| `tad_dftd/charge/*` | `tad-multicharge`, `dftd/subprojects/multicharge/src/multicharge/{param.f90,model/eeqbc.f90,param/eeqbc2025.f90}` | `Apache-2.0` / `LGPL-3.0-or-later` | Differentiable `EEQ` (`eeq2019`) and `EEQBC` (`eeqbc2025`) charge solvers (0D and 3D periodic) |
-| `tad_dftd/reference/*` | `dftd/src/dftd/model/{d1,d2,d3,d4,d5}/reference/*`, `tad-dftd3`, `tad-dftd4` | `LGPL-3.0-or-later` / `Apache-2.0` | Packaged reference tables for D1, D2, D3, D3S, D4, D4S, D4Srev, and D5 generated via `tools/generate_tad_dftd_data.py` |
-| `tad_dftd/model/*` | `dftd/src/dftd/model/{catalogue,type,fixed,utils}.f90`, `dftd/src/dftd/model/{d1,d2,d3,d4,d5}/*`, `tad-dftd3`, `tad-dftd4` | `LGPL-3.0-or-later` / `Apache-2.0` | PyTorch dispersion models (`D1Model`, `D2Model`, `D3Model`, `D3SModel`, `D4Model`, `D4SModel`, `D4SrevModel`, `D5Model`) |
-| `tad_dftd/param/*` | `dftd/src/dftd/param/{d1,d2,d3,d4,d5}.f90`, `dftd/assets/parameters.toml` | `LGPL-3.0-or-later` | Functional damping parameter lookup tables |
-| `tad_dftd/{disp,twobody,threebody,pairvalues}.py` | `tad-dftd3/src/tad_dftd3/{disp,twobody,threebody,pairvalues}.py`, `dftd/src/dftd/disp.f90` | `Apache-2.0` / `LGPL-3.0-or-later` | High-level and term-level evaluation entrypoints |
+| `tad_dftd/cutoff.py`, `tad_dftd/pairs.py` | `tad-dftd3/src/tad_dftd3/{cutoff,pairs}.py`, `dftd/src/dftd/cutoff.f90` | `Apache-2.0 AND LGPL-3.0-or-later` | Real-space cutoffs, quintic smooth switch, `DensePairs`, `SparsePairs` |
+| `tad_dftd/data/{en,hardness,r4r2,radii,zeff,table}.py` | `tad-dftd3`, `tad-dftd4`, `dftd/src/dftd/data/{en,hardness,r4r2,zeff}.f90` | `Apache-2.0` | Atomic and pairwise element constants ($Z=1..118$) |
+| `tad_dftd/data/{d1,d2,tanh,wfpair}.py` | `dftd/src/dftd/data/{d1,d2,tanh}.f90`, `dftd/src/dftd/data/wfpair/{d3s,d4s}.f90` | `LGPL-3.0-or-later` | Direct translations of `grimme-lab/dftd` element/pair data tables |
+| `tad_dftd/integrator/{gauss_legendre,trapezoid}.py` | `dftd/src/dftd/integrator/{gauss_legendre,trapezoid}.f90`, `tad-dftd4` | `LGPL-3.0-or-later` | 10-point Gauss-Legendre and 23-point composite trapezoid Casimir-Polder integrators |
+| `tad_dftd/damping/{base,param,rational,zero,atm}.py` | `tad-dftd3/src/tad_dftd3/damping/*.py`, `tad-dftd4` | `Apache-2.0` | Core damping base classes, `DampingParam`, rational (BJ) and zero dampings |
+| `tad_dftd/damping/{screened,mzero,optimizedpower,cso,koide,fermi,z,select}.py` | `dftd/src/dftd/damping/*.f90` | `LGPL-3.0-or-later` | Direct translations of `grimme-lab/dftd` 2B/3B damping families and damping radii |
+| `tad_dftd/ncoord/__init__.py` | `tad-mctc/src/tad_mctc/ncoord/*`, `dftd/src/dftd/model/*` | `Apache-2.0 AND LGPL-3.0-or-later` | Coordination number configurations for D3 (`cn_d3`), D4 (`cn_d4`), and D4Srev (`cn_d4srev`) |
+| `tad_dftd/charge/{__init__,eeq}.py` | `tad-multicharge`, `tad-dftd4` | `Apache-2.0` | Classical `EEQ` (`eeq2019`) charge model wrapper and charge model dispatch (`eeqbc` raises `NotImplementedError`) |
+| `tad_dftd/reference/{d3,d4}.py`, `tad_dftd/reference/*.pt` | `dftd/src/dftd/model/{d3,d4}/reference/*`, `tad-dftd3`, `tad-dftd4` | `Apache-2.0 AND LGPL-3.0-or-later` | Packaged reference tables for D3 (`d3-c6.pt`), D3S (`d3s-legacy-c6.pt`), D4/D4S (`d4-ref.pt`), and D4Srev (`d4srev-ref.pt`) generated via `tools/generate_tad_dftd_data.py` |
+| `tad_dftd/model/{catalogue,d1,d2}.py` | `dftd/src/dftd/model/{catalogue.f90,d1/orig.f90,d2/orig.f90}` | `LGPL-3.0-or-later` | Model catalogue registry and `D1Model` / `D2Model` implementations |
+| `tad_dftd/model/{base,c6,weights,d3,d4}.py` | `tad-dftd3`, `tad-dftd4`, `dftd/src/dftd/model/{d3,d4}/*` | `Apache-2.0 AND LGPL-3.0-or-later` | PyTorch dispersion models (`D3Model`, `D3SModel`, `D4Model`, `D4SModel`, `D4SrevModel`) and `D4SC` matrix/energy/potential kernels |
+| `tad_dftd/param/functional.py`, `tad_dftd/param/*.toml` | `tad-dftd3` / `s-dftd3` (`d3_parameters.toml`), `dftd/src/dftd/param/{d1,d2,d3,d4}.f90`, `dftd/assets/parameters.toml` | `Apache-2.0 AND LGPL-3.0-or-later` | Functional damping parameter lookup tables (`aliases.toml`, `d3_parameters.toml`, `d4_parameters.toml`) |
+| `tad_dftd/{disp,twobody,threebody,pairvalues}.py` | `tad-dftd3/src/tad_dftd3/{disp,twobody,threebody,pairvalues}.py`, `dftd/src/dftd/disp.f90` | `Apache-2.0 AND LGPL-3.0-or-later` | High-level and term-level evaluation entrypoints |
 
-## Licensing Notes
+## Licensing Policy
 
-- Original PyTorch implementations derived from `tad-dftd3`, `tad-dftd4`, and `tad-mctc` are licensed under `Apache-2.0` (`LICENSE`).
-- Numerical reference tables, parameter tables, and algorithms ported from `grimme-lab/dftd` and `grimme-lab/multicharge` are subject to `LGPL-3.0-or-later` (`COPYING.LESSER` and `COPYING`).
-- Distributing `tad_dftd` as a separate package inside `src/tad_dftd/` preserves `dxtb`'s root `Apache-2.0` license while keeping `tad_dftd`'s licensing and attribution self-contained for standalone extraction.
+- Code derived purely from `tad-dftd3`, `tad-dftd4`, `tad-mctc`, and `tad-multicharge` is licensed under `Apache-2.0` (`LICENSE`).
+- Numerical reference tables (`reference/*.pt`), functional parameter tables (`param/*.toml`), and algorithms/modules translated directly from `grimme-lab/dftd` are subject to `LGPL-3.0-or-later` (`COPYING.LESSER` and `COPYING`).
+- Consequently, the combined `tad_dftd` package distribution carries the composite license expression `Apache-2.0 AND LGPL-3.0-or-later` (and under LGPLv3 terms, the combined work may be redistributed under `LGPL-3.0-or-later` while preserving `Apache-2.0` notices on the `tad-*`-derived portions).
+- Distributing `tad_dftd` as a separate top-level package inside `src/tad_dftd/` keeps `tad_dftd`'s licensing and attribution self-contained for standalone extraction.

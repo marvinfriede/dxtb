@@ -1,19 +1,10 @@
 # This file is part of tad-dftd.
 #
-# SPDX-Identifier: Apache-2.0
+# SPDX-Identifier: Apache-2.0 AND LGPL-3.0-or-later
 # Copyright (C) 2024 Grimme Group
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Derived from tad-dftd3 / tad-dftd4 (Apache-2.0) and grimme-lab/dftd
+# (LGPL-3.0-or-later). See PROVENANCE.md, LICENSE, COPYING, and COPYING.LESSER.
 """
 Reference systems for DFT-D4, DFT-D4S, and DFT-D4Srev.
 
@@ -22,9 +13,11 @@ Matches ``dftd/src/dftd/model/d4/reference/{orig,srev}.f90`` and
 """
 from __future__ import annotations
 
+import contextlib
 from importlib.resources import as_file, files
 
 import torch
+from tad_mctc.tools import is_compiling
 from tad_mctc.tree import Node, child
 from tad_mctc.typing import Self, Tensor, get_default_device, get_default_dtype
 
@@ -228,18 +221,37 @@ class D4Reference(Node):
         if is_default_scalars:
             cache_key = (qkey, False)
             if cache_key not in _D4_CACHE:
-                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                    _D4_RAW,
-                    qkey,
-                    defaults.D4_GA,
-                    defaults.D4_GC,
-                    is_srev=False,
-                    device=torch.device("cpu"),
-                    dtype=torch.float64,
-                )
-                _D4_CACHE[cache_key] = D4Reference(
-                    refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
-                )
+                if is_compiling():
+                    refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
+                        _D4_RAW,
+                        qkey,
+                        defaults.D4_GA,
+                        defaults.D4_GC,
+                        is_srev=False,
+                        device=dev,
+                        dtype=torch.float64,
+                    )
+                    return cls(
+                        refn=refn,
+                        ngw=ngw,
+                        cn=cn.to(dtype=dt),
+                        q=q.to(dtype=dt),
+                        aiw=aiw.to(dtype=dt),
+                        c6=c6.to(dtype=dt),
+                    )
+                with torch._C._DisableFuncTorch(), torch.no_grad():  # pyright: ignore[reportAttributeAccessIssue]
+                    refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
+                        _D4_RAW,
+                        qkey,
+                        defaults.D4_GA,
+                        defaults.D4_GC,
+                        is_srev=False,
+                        device=torch.device("cpu"),
+                        dtype=torch.float64,
+                    )
+                    _D4_CACHE[cache_key] = D4Reference(
+                        refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
+                    )
             cached = _D4_CACHE[cache_key]
             return cls(
                 refn=cached.refn.to(device=dev),
@@ -286,18 +298,37 @@ class D4Reference(Node):
 
         cache_key = (qkey, True)
         if cache_key not in _D4_CACHE:
-            refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                _D4SREV_RAW,
-                qkey,
-                0.0,
-                0.0,
-                is_srev=True,
-                device=torch.device("cpu"),
-                dtype=torch.float64,
-            )
-            _D4_CACHE[cache_key] = D4Reference(
-                refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
-            )
+            if is_compiling():
+                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
+                    _D4SREV_RAW,
+                    qkey,
+                    0.0,
+                    0.0,
+                    is_srev=True,
+                    device=dev,
+                    dtype=torch.float64,
+                )
+                return cls(
+                    refn=refn,
+                    ngw=ngw,
+                    cn=cn.to(dtype=dt),
+                    q=q.to(dtype=dt),
+                    aiw=aiw.to(dtype=dt),
+                    c6=c6.to(dtype=dt),
+                )
+            with torch._C._DisableFuncTorch(), torch.no_grad():  # pyright: ignore[reportAttributeAccessIssue]
+                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
+                    _D4SREV_RAW,
+                    qkey,
+                    0.0,
+                    0.0,
+                    is_srev=True,
+                    device=torch.device("cpu"),
+                    dtype=torch.float64,
+                )
+                _D4_CACHE[cache_key] = D4Reference(
+                    refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
+                )
         cached = _D4_CACHE[cache_key]
         return cls(
             refn=cached.refn.to(device=dev),

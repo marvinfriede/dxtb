@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 import torch
+from tad_mctc import storch
 from tad_mctc.typing import Tensor
 
 from .. import defaults
@@ -212,4 +213,4 @@ def zero_damping(
     :class:`ZeroTwoBody`.
     """
     alpn = alp + order - 6
-    return 1.0 / (1.0 + 6.0 * (rsn * r0 / distances) ** alpn)
+    return 1.0 / (1.0 + 6.0 * (rsn * storch.safe_divide(r0, distances)) ** alpn)

@@ -6,7 +6,7 @@
 
 1. **Package source tree**:
    - Move `src/tad_dftd/` -> `src/tad_dftd/` in the new `tad-dftd` repository.
-   - Includes packaged binary reference tables (`src/tad_dftd/reference/*.pt`), functional parameter table (`src/tad_dftd/param/parameters.toml`), `py.typed`, `PROVENANCE.md`, and `THIRD_PARTY_LICENSES.md`.
+   - Includes packaged binary atomic/reference tables (`src/tad_dftd/data/*.pt`, `src/tad_dftd/reference/*.pt`), functional parameter tables (`src/tad_dftd/param/*.toml`), `py.typed`, `LICENSE`, `COPYING`, `COPYING.LESSER`, and `PROVENANCE.md`.
 
 2. **Test suite**:
    - Move `test/test_tad_dftd/` -> `test/` in the new `tad-dftd` repository.
@@ -24,7 +24,7 @@ In the new `tad-dftd` repository, configure `setup.cfg` / `pyproject.toml` with:
 name = tad-dftd
 version = attr: tad_dftd.__version__.__version__
 description = Unified Differentiable DFT-D Dispersion Corrections in PyTorch
-license = Apache-2.0
+license = Apache-2.0 AND LGPL-3.0-or-later
 
 [options]
 packages = find:
@@ -44,8 +44,11 @@ where = src
 [options.package_data]
 tad_dftd =
     py.typed
+    LICENSE
+    COPYING
+    COPYING.LESSER
     PROVENANCE.md
-    THIRD_PARTY_LICENSES.md
+    data/*.pt
     param/*.toml
     reference/*.pt
 ```
