@@ -33,7 +33,7 @@
       "stationarity": 2.0872103510534582e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.014194585150107741,
+      "wall_seconds": 0.014217874966561794,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -54,7 +54,7 @@
       "stationarity": 5.614835854051183e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.013871881878003478,
+      "wall_seconds": 0.013822149019688368,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -75,7 +75,7 @@
       "stationarity": 1.4345509505443856e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.01962490100413561,
+      "wall_seconds": 0.019642451079562306,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -96,7 +96,7 @@
       "stationarity": 1.480189261675009e-07,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.055842522997409105,
+      "wall_seconds": 0.05617743404582143,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -117,7 +117,7 @@
       "stationarity": 1.166515712332418e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.09186939708888531,
+      "wall_seconds": 0.09266449511051178,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -138,7 +138,7 @@
       "stationarity": 3.1025945025112186e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.08538471790961921,
+      "wall_seconds": 0.08522021886892617,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -159,7 +159,7 @@
       "stationarity": 3.999211456204215e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.07514857104979455,
+      "wall_seconds": 0.07537936791777611,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -180,7 +180,7 @@
       "stationarity": 8.770362425942241e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.1293497879523784,
+      "wall_seconds": 0.1302037280984223,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -201,7 +201,7 @@
       "stationarity": 7.931908770985209e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.1479332980234176,
+      "wall_seconds": 0.1506736020091921,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -222,7 +222,7 @@
       "stationarity": 1.078805890540908e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.09661037591286004,
+      "wall_seconds": 0.09672516607679427,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -243,7 +243,7 @@
       "stationarity": 1.9956938599754827e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.15239835483953357,
+      "wall_seconds": 0.1488392490427941,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -264,7 +264,7 @@
       "stationarity": 1.734163324380074e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.18955888506025076,
+      "wall_seconds": 0.18236756208352745,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -285,7 +285,7 @@
       "stationarity": 9.596910318124413e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.0786252690013498,
+      "wall_seconds": 0.07461019698530436,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -306,7 +306,7 @@
       "stationarity": 8.031005789401607e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.13810321618802845,
+      "wall_seconds": 0.138224087189883,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -327,7 +327,7 @@
       "stationarity": 1.2328657429917586e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.14869743795134127,
+      "wall_seconds": 0.14858393906615674,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -348,7 +348,7 @@
       "stationarity": 1.667200513758695e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.0751984128728509,
+      "wall_seconds": 0.07461972697637975,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -369,7 +369,7 @@
       "stationarity": 9.188014734405605e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.11258991109207273,
+      "wall_seconds": 0.11267174105159938,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -390,7 +390,7 @@
       "stationarity": 5.959777671717946e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.13993353000842035,
+      "wall_seconds": 0.13713818392716348,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -411,7 +411,7 @@
       "stationarity": 2.14531832516785e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.19011668814346194,
+      "wall_seconds": 0.19045957387425005,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -432,7 +432,7 @@
       "stationarity": 4.193301757635432e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.19906653300859034,
+      "wall_seconds": 0.20188899897038937,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -453,7 +453,7 @@
       "stationarity": 1.385794033366787e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.25952005898579955,
+      "wall_seconds": 0.26499281800352037,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -474,7 +474,7 @@
       "stationarity": 2.1721063704513325e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.012736287200823426,
+      "wall_seconds": 0.012650753138586879,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -495,7 +495,7 @@
       "stationarity": 2.147508263396805e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.013487506890669465,
+      "wall_seconds": 0.01334280101582408,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -516,7 +516,7 @@
       "stationarity": 3.6572760090191297e-16,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.019359690137207508,
+      "wall_seconds": 0.01923800492659211,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -537,7 +537,7 @@
       "stationarity": 1.9360227444634116e-07,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.05620273691602051,
+      "wall_seconds": 0.05603278800845146,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -558,7 +558,7 @@
       "stationarity": 1.214348365564702e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.09496447909623384,
+      "wall_seconds": 0.09419792494736612,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -579,7 +579,7 @@
       "stationarity": 2.8668626841217506e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.08499809307977557,
+      "wall_seconds": 0.08640473708510399,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -600,7 +600,7 @@
       "stationarity": 2.8260559022922927e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.0781451400835067,
+      "wall_seconds": 0.07634003483690321,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -621,7 +621,7 @@
       "stationarity": 1.0841905590858294e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.12217303202487528,
+      "wall_seconds": 0.12423843098804355,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -642,7 +642,7 @@
       "stationarity": 6.413790484106522e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.1500007410068065,
+      "wall_seconds": 0.15502886404283345,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -663,7 +663,7 @@
       "stationarity": 3.999211456013034e-06,
       "temperature_kelvin": 300.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.615876882802695,
+      "wall_seconds": 0.614646403118968,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -684,7 +684,7 @@
       "stationarity": 8.770362425044483e-06,
       "temperature_kelvin": 300.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 1.00436822604388,
+      "wall_seconds": 1.0126934628933668,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -705,7 +705,7 @@
       "stationarity": 7.931908770695009e-06,
       "temperature_kelvin": 300.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.8997190508525819,
+      "wall_seconds": 0.9047429689671844,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -726,7 +726,7 @@
       "stationarity": 1.1077302459141021e-05,
       "temperature_kelvin": 2000.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.7700181279797107,
+      "wall_seconds": 0.7738638350274414,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -747,7 +747,7 @@
       "stationarity": 1.985777948695245e-05,
       "temperature_kelvin": 2000.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 1.1238066598307341,
+      "wall_seconds": 1.1127615920268,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -768,7 +768,7 @@
       "stationarity": 1.735492464603482e-05,
       "temperature_kelvin": 2000.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 1.0972135120537132,
+      "wall_seconds": 1.0998336379416287,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -789,7 +789,7 @@
       "stationarity": 2.3766928217511846e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.10239627584815025,
+      "wall_seconds": 0.10107092000544071,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -810,7 +810,7 @@
       "stationarity": 2.132319088083749e-12,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.364166934043169,
+      "wall_seconds": 0.3611555721145123,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -831,7 +831,7 @@
       "stationarity": 1.0425619253376964e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.20536806294694543,
+      "wall_seconds": 0.20658253482542932,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -852,7 +852,7 @@
       "stationarity": 1.4821886231358724e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.10513147385790944,
+      "wall_seconds": 0.10714465100318193,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -873,7 +873,7 @@
       "stationarity": 3.0469764523823404e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.3932860540226102,
+      "wall_seconds": 0.3907974511384964,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -894,7 +894,7 @@
       "stationarity": 1.4718414273320925e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN2_XTB",
-      "wall_seconds": 0.20473596779629588,
+      "wall_seconds": 0.19997887313365936,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -915,7 +915,7 @@
       "stationarity": 3.6675487652062273e-06,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.062324451049789786,
+      "wall_seconds": 0.06252430682070553,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -936,7 +936,7 @@
       "stationarity": 2.2114244418956665e-13,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.28084624907933176,
+      "wall_seconds": 0.28083451790735126,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     },
@@ -957,12 +957,12 @@
       "stationarity": 1.3142565088296984e-05,
       "temperature_kelvin": 0.0,
       "tight_binding_method": "GFN1_XTB",
-      "wall_seconds": 0.15065236599184573,
+      "wall_seconds": 0.1493447890970856,
       "x_atol": 0.0001,
       "x_atol_max": 1e-05
     }
   ],
-  "source_sha": "bd64767766fb2d3c2cb981888a6deaa44fefd081",
+  "source_sha": "5b622a58c394839a2284f18fea34804805995615",
   "torch": "2.14.1+cpu",
   "worktree_dirty": false
 }
