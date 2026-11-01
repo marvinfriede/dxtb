@@ -109,13 +109,13 @@ def test_b8a_first_and_second_order_functional_properties(
     )
     torch.testing.assert_close(
         system.polarizability(pos),
-        calc.polarizability(pos_req, use_analytical=False, field=field0),
+        calc.polarizability(pos_req, field=field0),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
     torch.testing.assert_close(
         system.dipole_deriv(pos),
-        calc.dipole_deriv(pos_req, use_analytical_dipmom=False, field=field0),
+        calc.dipole_deriv(pos_req, field=field0),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
@@ -127,7 +127,7 @@ def test_b8a_first_and_second_order_functional_properties(
         vib_sys.freqs, vib_calc.freqs, atol=1.0e-8, rtol=1.0e-8
     )
     ir_sys = system.ir(pos)
-    ir_calc = calc.ir(pos_req, use_analytical_dipmom=False, field=field0)
+    ir_calc = calc.ir(pos_req, field=field0)
     torch.testing.assert_close(
         ir_sys.freqs, ir_calc.freqs, atol=1.0e-8, rtol=1.0e-8
     )
@@ -359,13 +359,13 @@ def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
     )
     torch.testing.assert_close(
         alpha_sys,
-        calc.polarizability(pos_req, use_analytical=False, field=field0),
+        calc.polarizability(pos_req, field=field0),
         atol=1e-8,
         rtol=1e-8,
     )
     torch.testing.assert_close(
         dmu_dr_sys,
-        calc.dipole_deriv(pos_req, use_analytical_dipmom=False, field=field0),
+        calc.dipole_deriv(pos_req, field=field0),
         atol=1e-8,
         rtol=1e-8,
     )
@@ -563,7 +563,7 @@ def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
     raman_h2o = sys_h2o.raman(pos_h2o)
     pos_h2o_req = pos_h2o.clone().requires_grad_(True)
     ir_h2o_calc = calc_h2o.ir(
-        pos_h2o_req, use_analytical_dipmom=False, field=field0
+        pos_h2o_req, field=field0
     )
     torch.testing.assert_close(
         ir_h2o.ints, ir_h2o_calc.ints, atol=1e-6, rtol=1e-6
@@ -681,4 +681,115 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
     e_imp = sys_imp.singlepoint(pos_imp).energy.sum()
     (g_imp,) = torch.autograd.grad(e_imp, pos_imp)
     torch.testing.assert_close(-g_imp, f_ref, atol=1.0e-9, rtol=1.0e-9)
+
+
+@pytest.mark.parametrize("batch_mode", [1, 2])
+def test_batched_calculator_autograd_properties_after_cutover(
+    batch_mode: int,
+) -> None:
+    """Batched Calculator forces, dipole, quadrupole, and polarizability match single-system references."""
+    if batch_mode == 1:
+        nums_a = torch.tensor([8, 1, 1], dtype=torch.int64)
+        nums_b = torch.tensor([1, 1], dtype=torch.int64)
+        pos_a = torch.tensor(
+            [
+                [0.0, 0.0, 0.22],
+                [0.0, 1.43, -0.88],
+                [0.0, -1.43, -0.88],
+            ],
+            **_DD,
+        )
+        pos_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.44]], **_DD)
+        batch_nums = torch.tensor([[8, 1, 1], [1, 1, 0]], dtype=torch.int64)
+        batch_pos = torch.zeros((2, 3, 3), **_DD)
+        batch_pos[0] = pos_a
+        batch_pos[1, :2] = pos_b
+    else:
+        nums_a = torch.tensor([8, 1, 1], dtype=torch.int64)
+        nums_b = torch.tensor([8, 1, 1], dtype=torch.int64)
+        pos_a = torch.tensor(
+            [
+                [0.0, 0.0, 0.22],
+                [0.0, 1.43, -0.88],
+                [0.0, -1.43, -0.88],
+            ],
+            **_DD,
+        )
+        pos_b = pos_a * 1.03
+        batch_nums = torch.stack([nums_a, nums_b], dim=0)
+        batch_pos = torch.stack([pos_a, pos_b], dim=0)
+
+    par = ParamModule(GFN1_XTB, **_DD)
+    opts = {
+        "method": labels.GFN1_XTB,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": labels.SCF_MODE_FULL,
+        "scp_mode": labels.SCP_MODE_CHARGE,
+        "mixer": labels.MIXER_LINEAR,
+        "maxiter": 3,
+        "x_atol": 0.0,
+        "x_atol_max": 0.0,
+    }
+    model = Model(par=par, config=Config.create(**opts))
+    sys_a = model.setup(nums_a)
+    sys_b = model.setup(nums_b)
+
+    from dxtb.components.field import new_efield, new_efield_grad
+
+    ef0 = torch.zeros(3, **_DD, requires_grad=True)
+    fg0 = torch.zeros((3, 3), **_DD, requires_grad=True)
+    calc_batch = Calculator(
+        batch_nums,
+        par,
+        interaction=[new_efield(ef0), new_efield_grad(fg0)],
+        opts=dict(opts, batch_mode=batch_mode, verbosity=0),
+        **_DD,
+    )
+
+    f_batch = calc_batch.forces(
+        batch_pos.clone().requires_grad_(True),
+        field=ef0.detach(),
+        field_grad=fg0.detach(),
+    )
+    torch.testing.assert_close(
+        f_batch[0], sys_a.forces(pos_a), atol=1e-10, rtol=1e-10
+    )
+    torch.testing.assert_close(
+        f_batch[1, : nums_b.numel()],
+        sys_b.forces(pos_b),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+
+    dip_batch = calc_batch.dipole(
+        batch_pos, field=ef0, field_grad=fg0.detach()
+    )
+    torch.testing.assert_close(
+        dip_batch[0], sys_a.dipole(pos_a), atol=1e-10, rtol=1e-10
+    )
+    torch.testing.assert_close(
+        dip_batch[1], sys_b.dipole(pos_b), atol=1e-10, rtol=1e-10
+    )
+
+    quad_batch = calc_batch.quadrupole(
+        batch_pos, field=ef0.detach(), field_grad=fg0
+    )
+    torch.testing.assert_close(
+        quad_batch[0], sys_a.quadrupole(pos_a), atol=1e-10, rtol=1e-10
+    )
+    torch.testing.assert_close(
+        quad_batch[1], sys_b.quadrupole(pos_b), atol=1e-10, rtol=1e-10
+    )
+
+    pol_batch = calc_batch.polarizability(
+        batch_pos, field=ef0, field_grad=fg0.detach()
+    )
+    torch.testing.assert_close(
+        pol_batch[0], sys_a.polarizability(pos_a), atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        pol_batch[1], sys_b.polarizability(pos_b), atol=1e-9, rtol=1e-9
+    )
+
 

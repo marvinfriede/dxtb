@@ -13,7 +13,7 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
-from dxtb._src.components.interactions import new_efield
+from dxtb._src.components.interactions import new_efield, new_efield_grad
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
@@ -596,18 +596,24 @@ def test_fresh_system_rebuild_preserves_basis_parameter_gradients(
     ],
 )
 @pytest.mark.parametrize("property_name", ["forces", "dipole", "quadrupole"])
-def test_analytical_properties_after_pure_singlepoint(
+def test_autograd_properties_after_pure_singlepoint(
     driver: int, property_name: str
 ) -> None:
-    """Analytical compatibility APIs remain usable after pure evaluation."""
-    if property_name == "forces" and driver == labels.INTDRIVER_PYTORCH:
-        pytest.skip(
-            "PyTorch overlap has no analytical gradient; use its autograd path"
-        )
+    """Autograd Calculator properties remain usable after pure evaluation."""
     positions = samples["H2"]["positions"].to(dtype=torch.float64)
     interactions = None
     if property_name == "dipole":
-        interactions = [new_efield(torch.zeros(3, dtype=positions.dtype))]
+        interactions = [
+            new_efield(
+                torch.zeros(3, dtype=positions.dtype, requires_grad=True)
+            )
+        ]
+    elif property_name == "quadrupole":
+        interactions = [
+            new_efield_grad(
+                torch.zeros((3, 3), dtype=positions.dtype, requires_grad=True)
+            )
+        ]
     calc = Calculator(
         samples["H2"]["numbers"],
         GFN1_XTB if property_name == "forces" else GFN2_XTB,
@@ -621,11 +627,11 @@ def test_analytical_properties_after_pure_singlepoint(
     )
 
     if property_name == "forces":
-        value = calc.forces_analytical(positions.clone().requires_grad_())
+        value = calc.forces(positions.clone().requires_grad_())
     elif property_name == "dipole":
-        value = calc.dipole_analytical(positions)
+        value = calc.dipole(positions)
     else:
-        value = calc.quadrupole_analytical(positions)
+        value = calc.quadrupole(positions)
     assert torch.isfinite(value).all()
 
 

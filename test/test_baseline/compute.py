@@ -28,10 +28,9 @@ autograd of the energy through the unrolled SCF (``scf_mode="full"``):
 - forces: first derivative of the energy (positions);
 - Hessian: derivative of the forces (``derived_quantity="forces"``);
 - dipole: first derivative of the energy (electric field);
-- polarizability: derivative of the dipole (``use_analytical=False``);
+- polarizability: derivative of the dipole;
 - hyperpolarizability: derivative of the polarizability;
-- dipole derivative: positions derivative of the dipole
-  (``use_analytical_dipmom=False``);
+- dipole derivative: positions derivative of the dipole;
 - polarizability derivative: positions derivative of the polarizability.
 """
 
@@ -189,7 +188,7 @@ def _polarizability(
 ) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver, field=_field())
     pos = system.positions.clone()
-    alpha = calc.polarizability(pos, *_args(system), use_analytical=False)
+    alpha = calc.polarizability(pos, *_args(system))
     return {"polarizability": alpha}
 
 
@@ -198,7 +197,7 @@ def _dipole_deriv(
 ) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver, field=_field())
     pos = system.positions.clone().requires_grad_(True)
-    dmu = calc.dipole_deriv(pos, *_args(system), use_analytical_dipmom=False)
+    dmu = calc.dipole_deriv(pos, *_args(system))
     return {"dipole_deriv": dmu}
 
 

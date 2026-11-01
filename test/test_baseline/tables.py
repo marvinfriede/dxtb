@@ -59,7 +59,7 @@ def matrix_tables() -> str:
             continue
         by[(c.quantity, c.path, c.input)].append((c, res))
 
-    paths = ("analytical", "autograd", "functorch", "forward", "numerical")
+    paths = ("autograd", "functorch", "forward", "numerical")
     lines = []
     for inp in mx.INPUTS:
         lines += [

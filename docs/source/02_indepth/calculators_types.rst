@@ -8,7 +8,6 @@ Types of Calculators
 
    Basic Energy Calculator <../_autosummary/dxtb.calculators.EnergyCalculator>
    Autograd Calculator <../_autosummary/dxtb.calculators.AutogradCalculator>
-   Analytical Calculator <../_autosummary/dxtb.calculators.AnalyticalCalculator>
    Numerical Calculator <../_autosummary/dxtb.calculators.NumericalCalculator>
    GFN0 Calculator <../_autosummary/dxtb.calculators.GFN0Calculator>
    GFN1 Calculator <../_autosummary/dxtb.calculators.GFN1Calculator>

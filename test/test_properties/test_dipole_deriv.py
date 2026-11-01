@@ -109,12 +109,11 @@ def execute(
 
     field_vector.requires_grad_(True)
 
-    # manual jacobian with analytical dipole derivative
+    # manual jacobian with AD dipole moment
     dipder1 = tensor_to_numpy(
         calc.dipole_deriv(
             positions.detach().clone().requires_grad_(True),
             charge,
-            use_analytical=True,
             use_functorch=False,
         )
     )
@@ -123,48 +122,16 @@ def execute(
     # applying AD twice requires detaching
     calc.reset()
 
-    # manual jacobian with AD dipole moment
+    # jacrev of AD dipole moment
     dipder2 = tensor_to_numpy(
         calc.dipole_deriv(
             positions.detach().clone().requires_grad_(True),
             charge,
-            use_analytical=False,
-            use_functorch=False,
+            use_functorch=True,
         )
     )
     assert pytest.approx(num.cpu(), abs=atol, rel=rtol) == dipder2
-
-    # applying AD twice requires detaching
-    calc.reset()
-
-    # jacrev of analytical dipole moment
-    dipder3 = tensor_to_numpy(
-        calc.dipole_deriv(
-            positions.detach().clone().requires_grad_(True),
-            charge,
-            use_analytical=True,
-            use_functorch=True,
-        )
-    )
-    assert pytest.approx(num.cpu(), abs=atol, rel=rtol) == dipder3
-
-    # applying AD twice requires detaching
-    calc.reset()
-
-    # jacrev of AD dipole moment
-    dipder4 = tensor_to_numpy(
-        calc.dipole_deriv(
-            positions.detach().clone().requires_grad_(True),
-            charge,
-            use_analytical=False,
-            use_functorch=True,
-        )
-    )
-    assert pytest.approx(num.cpu(), abs=atol, rel=rtol) == dipder4
-
     assert pytest.approx(dipder1, abs=atol) == dipder2
-    assert pytest.approx(dipder1, abs=atol) == dipder3
-    assert pytest.approx(dipder1, abs=atol) == dipder4
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")

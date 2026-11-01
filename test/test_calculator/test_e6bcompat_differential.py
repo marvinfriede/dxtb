@@ -553,7 +553,7 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
         packed.energy[1, :3], ref_h2o.energy, atol=1e-12, rtol=1e-12
     )
 
-    # Legacy public Calculator(batch_mode=2) still uses BaseTSCF, which rejects non-Fock GFN2 without substitution.
+    # Public Calculator(batch_mode=2) now routes through the packed functional route and supports non-Fock GFN2 without substitution.
     numbers = torch.tensor([[1, 1], [1, 1]], dtype=torch.int64)
     positions = torch.stack((pos_h2, _geometry((1, 1), 1)))
     calculator = Calculator(
@@ -564,7 +564,8 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
             "int_driver": labels.INTDRIVER_PYTORCH,
             "int_level": labels.INTLEVEL_QUADRUPOLE,
             "strategy": strategy,
-            "maxiter": 2,
+            "maxiter": 12,
+            "fermi_etemp": 0.0,
             "verbosity": 0,
         },
         batch_mode=2,
@@ -572,9 +573,11 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
         auto_int_level=False,
     )
     OutputHandler.clear_warnings()
-    with pytest.raises(NotImplementedError, match="explicit Fock"):
-        calculator.singlepoint(positions)
+    res_calc = calculator.singlepoint(positions)
     assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        res_calc.energy[0], ref_h2.energy, atol=1e-12, rtol=1e-12
+    )
 
 
 def test_public_packed_gfn2_fock_route_has_no_nonfock_warning() -> None:
@@ -1958,13 +1961,17 @@ def test_production_routing_differential_gate_matrix() -> None:
         ),
         dtype=DTYPE,
     )
-    with pytest.raises(NotImplementedError, match="explicit Fock"):
-        calc_gfn2_default.singlepoint(pos_2d)
+    OutputHandler.clear_warnings()
+    res_g2_leg = calc_gfn2_default.singlepoint(pos_2d)
+    assert not OutputHandler.warnings
     OutputHandler.clear_warnings()
     res_g2_cand = evaluate_calculator_packed_singlepoint(
         calc_gfn2_default, pos_2d
     )
     assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        res_g2_leg.energy, res_g2_cand.energy, atol=1e-12, rtol=1e-12
+    )
     lane_sys_g2 = build_calculator_lane_systems(calc_gfn2_default)
     ref_g2_0 = lane_sys_g2[0].singlepoint(_geometry((1, 1), 0))
     ref_g2_1 = lane_sys_g2[1].singlepoint(_geometry((8, 1, 1), 0))

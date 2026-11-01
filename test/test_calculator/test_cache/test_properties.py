@@ -24,7 +24,7 @@ import torch
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.calculators.result import ChargeResult, PotentialResult
 from dxtb._src.typing import Tensor
-from dxtb.calculators import AnalyticalCalculator
+from dxtb.calculators import AutogradCalculator
 
 from ...conftest import DEVICE
 
@@ -128,7 +128,7 @@ def test_calculate_returns_mixed_energy_and_force_values() -> None:
     """Mixed energy and property requests return explicit local values."""
     numbers, positions = _system()
     positions.requires_grad_(True)
-    calc = AnalyticalCalculator(
+    calc = AutogradCalculator(
         numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
     )
     before = calc._ncalcs
@@ -270,12 +270,12 @@ def test_legacy_batch_modes_recompute_without_result_cache(
     )
 
 
-def test_analytical_forces_use_local_result_data() -> None:
-    """Analytical forces work without result cache transport."""
+def test_autograd_forces_use_local_result_data() -> None:
+    """Autograd forces work without result cache transport."""
     numbers, positions = _system()
     positions.requires_grad_(True)
-    calc = AnalyticalCalculator(
+    calc = AutogradCalculator(
         numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
     )
-    forces = calc.forces_analytical(positions)
+    forces = calc.forces(positions)
     assert torch.isfinite(forces).all()

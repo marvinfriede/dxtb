@@ -123,7 +123,7 @@ def analytical(
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
-    result = -calc.forces_analytical(positions, charge)
+    result = -calc.forces(positions, charge)
     gradient = result.detach()
 
     ref = load_from_npz(ref_grad, name, dtype)
