@@ -86,7 +86,9 @@ owns its method and representation. There is no top-level representation
 setting in the final strategy model. Temporary `mixer`, `scp_mode`, and
 `scf_mode` parser arguments are converted immediately and are not stored on
 `ConfigSCF`; deprecated Anderson damping parser arguments are converted into
-`AndersonMethodSettings`. Ambiguous conflicts are rejected. `f_atol` is
+`AndersonMethodSettings`. An old argument may translate into the new value
+when that new authority is omitted; supplying both corresponding old and new
+arguments is rejected, even when their values agree. `f_atol` is
 retired because physical fixed-point and stationarity certification own SCF
 convergence.
 

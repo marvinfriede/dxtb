@@ -121,7 +121,7 @@ class Config:
         # SCF
         maxiter: int = defaults.MAXITER,
         strategy: str | object | None = None,
-        differentiation: str = "unrolled",
+        differentiation: str | None = None,
         convergence: str = "standard",
         response: object | None = None,
         # Transitional input adapters are parsed into the strategy and

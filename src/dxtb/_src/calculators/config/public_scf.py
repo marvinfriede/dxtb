@@ -185,7 +185,7 @@ class ConfigSCF:
         guess: str | int = defaults.GUESS,
         maxiter: int = defaults.MAXITER,
         strategy: str | Any | None = None,
-        differentiation: str | SCFDifferentiation = "unrolled",
+        differentiation: str | SCFDifferentiation | None = None,
         convergence: str | SCFConvergenceProfile = "standard",
         response: Any = None,
         mix_guess: bool = defaults.MIX_GUESS,
@@ -220,6 +220,22 @@ class ConfigSCF:
         explicit_strategy = strategy is not None
         if strategy is not None and mixer is not None:
             raise ValueError("Choose strategy or mixer construction, not both.")
+        if strategy is not None and scp_mode is not None:
+            raise ValueError("Choose strategy or legacy scp_mode, not both.")
+        legacy_anderson_options = any(
+            value is not None
+            for value in (
+                damp_init,
+                damp_soft_start,
+                damp_generations,
+                damp_diagonal_offset,
+            )
+        )
+        if explicit_strategy and legacy_anderson_options:
+            raise ValueError(
+                "Legacy Anderson options cannot be combined with strategy; "
+                "configure AndersonMethodSettings on an SCFStage instead."
+            )
         if strategy is None:
             method_name = "anderson"
             if mixer is not None:
@@ -254,13 +270,10 @@ class ConfigSCF:
                 labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
             }[code]
             configured = strategy_value.stages[0].representation
-            if (
-                explicit_strategy
-                and configured is not None
-                and configured is not representation
-            ):
+            if explicit_strategy and configured is not None:
                 raise ValueError(
-                    "scp_mode conflicts with the representation on the SCFStage."
+                    "Choose strategy-stage representation or legacy scp_mode, "
+                    "not both."
                 )
             strategy_value = SCFStrategy(
                 (
@@ -313,6 +326,10 @@ class ConfigSCF:
                 )
                 strategy_value = SCFStrategy((replace(stage, method=updated),))
 
+        if scf_mode is not None and differentiation is not None:
+            raise ValueError(
+                "Choose differentiation or legacy scf_mode, not both."
+            )
         if scf_mode is not None:
             mode_code = _label(
                 scf_mode,
@@ -330,6 +347,8 @@ class ConfigSCF:
                 if mode_code == labels.SCF_MODE_IMPLICIT
                 else "unrolled"
             )
+        if differentiation is None:
+            differentiation = "unrolled"
 
         try:
             differentiation_value = SCFDifferentiation(differentiation)
