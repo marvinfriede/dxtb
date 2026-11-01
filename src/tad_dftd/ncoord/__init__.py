@@ -19,7 +19,7 @@ Coordination Numbers
 ====================
 
 Coordination number counting functions and models for D3, D3S, D4, D4S, D4Srev,
-D5, and EEQ/EEQBC charge models, built on :mod:`tad_mctc.ncoord`.
+and EEQ charge models, built on :mod:`tad_mctc.ncoord`.
 """
 from __future__ import annotations
 
@@ -47,11 +47,8 @@ __all__ = [
     "cn_d3",
     "cn_d4",
     "cn_d4srev",
-    "cn_d5",
     "cn_eeq",
     "cn_eeq_en",
-    "cn_eeqbc",
-    "cn_eeqbc_en",
     "cn_gfn2",
     "cut_coordination_number",
     "d4_en_weight",
@@ -61,32 +58,9 @@ __all__ = [
     "gfn2_count",
 ]
 
-#: Coordination number for EEQBC2025 (erf counting, kcn=1.80, norm_exp=1.0, cutoff=25.0)
-cn_eeqbc = CNModel(
-    count=partial(erf_count, kcn=1.80, norm_exp=1.0),
-    cutoff=25.0,
-    rcov=data.EEQBC_COV_RADII,
-)
-
-#: Electronegativity-weighted coordination number (qloc) for EEQBC2025
-cn_eeqbc_en = CNModel(
-    count=partial(erf_count, kcn=1.80, norm_exp=1.0),
-    cutoff=25.0,
-    rcov=data.EEQBC_COV_RADII,
-    en=data.EEQBC_EN,
-    pair_weight=en_difference,
-)
-
 #: Coordination number for DFT-D4Srev (erf counting without EN weight, cutoff 30.0 Bohr)
 cn_d4srev = CNModel(
     count=partial(erf_count, kcn=7.5),
     cutoff=defaults.D4_CN_CUTOFF,
-    rcov=data.COV_D3,
-)
-
-#: Coordination number for DFT-D5 (exponential counting, cutoff 30.0 Bohr)
-cn_d5 = CNModel(
-    count=partial(exp_count, kcn=16.0),
-    cutoff=defaults.D5_CN_CUTOFF,
     rcov=data.COV_D3,
 )

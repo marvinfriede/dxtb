@@ -36,13 +36,20 @@ from tad_dftd.model.catalogue import (
 
 
 def test_model_catalogue_and_damping_validation() -> None:
-    """Verify all 8 dispersion models and their valid damping combinations."""
-    expected_models = {"d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev", "d5"}
+    """Verify all 7 supported dispersion models and their valid damping combinations."""
+    expected_models = {"d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"}
     assert set(DISPERSION_MODELS.keys()) == expected_models
 
     assert resolve_model_id("dft-d3") == DispersionModelId.D3
     assert resolve_model_id("D4Srev") == DispersionModelId.D4SREV
-    assert resolve_charge_model_id("eeqbc", model="d4srev") == ChargeModelId.EEQBC
+
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        resolve_charge_model_id("eeqbc", model="d4srev")
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        resolve_charge_model_id("eeqbc2025", model="d4")
+
+    with pytest.raises(NotImplementedError, match="not yet implemented"):
+        resolve_model_id("d5")
 
     with pytest.raises(ValueError, match="Unknown dispersion model"):
         resolve_model_id("d6")
@@ -69,11 +76,9 @@ def test_model_catalogue_and_damping_validation() -> None:
     with pytest.raises(ValueError, match="not supported"):
         validate_model_damping("d4", "cso")
 
-    # D5 allows screened, rational, zero, koide
-    validate_model_damping("d5", "screened")
-    validate_model_damping("d5", "bj")
-    with pytest.raises(ValueError, match="not supported"):
-        validate_model_damping("d5", "cso")
+    # D5 raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="not yet implemented"):
+        validate_model_damping("d5", "screened")
 
     meta_d4srev = get_model_metadata("d4srev")
     assert meta_d4srev.charge_dep_2b is True

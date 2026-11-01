@@ -46,10 +46,8 @@ def test_cutoff_validation_and_from_model() -> None:
     assert c_d4.disp2 == defaults.D4_DISP2_CUTOFF
     assert c_d4.disp3 == defaults.D4_DISP3_CUTOFF
 
-    c_d5 = Cutoff.from_model("d5")
-    assert c_d5.cn == defaults.D5_CN_CUTOFF
-    assert c_d5.disp2 == defaults.D5_DISP2_CUTOFF
-    assert c_d5.disp3 == defaults.D5_DISP3_CUTOFF
+    with pytest.raises(NotImplementedError, match="not yet implemented"):
+        Cutoff.from_model("d5")
 
     with pytest.raises(TypeError, match="must be a plain number"):
         Cutoff(cn=torch.tensor(40.0))  # type: ignore[arg-type]

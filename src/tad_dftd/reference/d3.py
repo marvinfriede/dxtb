@@ -23,7 +23,7 @@ to compute atomic C6 dispersion coefficients.
 """
 from __future__ import annotations
 
-import os.path as op
+from importlib.resources import as_file, files
 
 import torch
 from tad_mctc.data import resolve_table
@@ -198,18 +198,16 @@ def _load_cn_d3s(
     return cn
 
 
-# Loaded once at import: `torch.load` cannot be traced by `torch.compile`.
-_C6: Tensor = torch.load(
-    op.join(op.dirname(__file__), "d3-c6.pt"),
-    map_location="cpu",
-    weights_only=True,
-)
+def _load_pkg_tensor(filename: str) -> Tensor:
+    res = files(__package__).joinpath(filename)
+    with as_file(res) as path:
+        return torch.load(path, map_location="cpu", weights_only=True)
 
-_LEGACY_C6_D3S: Tensor = torch.load(
-    op.join(op.dirname(__file__), "d3s-legacy-c6.pt"),
-    map_location="cpu",
-    weights_only=True,
-)
+
+# Loaded once at import: `torch.load` cannot be traced by `torch.compile`.
+_C6: Tensor = _load_pkg_tensor("d3-c6.pt")
+
+_LEGACY_C6_D3S: Tensor = _load_pkg_tensor("d3s-legacy-c6.pt")
 
 
 def _build_c6_d3s() -> Tensor:

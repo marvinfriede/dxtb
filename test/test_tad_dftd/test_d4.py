@@ -260,41 +260,19 @@ def test_c6_d4s_mb01() -> None:
     assert torch.allclose(c6, c6.T, rtol=1e-14, atol=1e-14)
 
 
-def test_c6_d4_eeqbc_mb02() -> None:
+def test_c6_d4_eeqbc_rejected() -> None:
     """
-    Reference C6 matrix for MB16-43 02 with D4 + EEQBC (with_cn=False, with_q=True)
-    from ``dftd/test/unit/test_model.f90:test_c6_d4_eeqbc_mb02``.
+    Requesting qmodel='eeqbc' or 'eeqbc2025' raises NotImplementedError.
     """
     mol = get_structure("mb16_43", "02", dtype=torch.float64)
-    cn = torch.zeros(mol.numbers.shape, dtype=torch.float64)
-    q = charge.get_charges_eeqbc(mol.numbers, mol.positions)
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        charge.get_charges(mol.numbers, mol.positions, qmod="eeqbc")
 
     d4 = D4Model(qmodel="eeqbc")
-    gw = d4.weights(mol, Environment(cn=cn, q=q))
-    c6 = d4.coefficients(mol, gw).dense()
-
-    ref_row0 = torch.tensor(
-        [
-            8.3927698731514e00,
-            3.5694618468534e01,
-            2.9939267651186e01,
-            1.4756740088150e01,
-            6.3400848091147e01,
-            4.0968861748150e00,
-            7.7602731112588e00,
-            8.0399475458183e00,
-            4.9479521337131e01,
-            4.1163947967514e00,
-            2.9811861798045e01,
-            6.3182463323600e01,
-            1.0790044024388e01,
-            7.6731828442285e00,
-            8.3342633309769e00,
-            3.6347058629589e01,
-        ],
-        dtype=torch.float64,
-    )
-    assert torch.allclose(c6[0], ref_row0, rtol=1e-11, atol=1e-11)
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        d4.environment(mol)
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        d4.weights(mol, Environment(cn=torch.zeros(mol.numbers.shape), q=torch.zeros(mol.numbers.shape)))
 
 
 def test_c6_d4_mb03() -> None:
@@ -574,9 +552,10 @@ def test_charge_model_aliases() -> None:
     e_eeq2019 = dftd4(mol, param, qmodel="eeq2019")
     assert torch.allclose(e_eeq, e_eeq2019, rtol=1e-14, atol=1e-14)
 
-    e_eeqbc = dftd4(mol, param, qmodel="eeqbc")
-    e_eeqbc2025 = dftd4(mol, param, qmodel="eeqbc2025")
-    assert torch.allclose(e_eeqbc, e_eeqbc2025, rtol=1e-14, atol=1e-14)
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        dftd4(mol, param, qmodel="eeqbc")
+    with pytest.raises(NotImplementedError, match="not supported in this release"):
+        dftd4(mol, param, qmodel="eeqbc2025")
 
 
 # ===========================================================================
@@ -596,24 +575,10 @@ def test_charge_model_aliases() -> None:
         ),
         (
             "01",
-            "d4",
-            "eeqbc",
-            {"s6": 1.0, "alp": 16.0, "s8": 0.95948085, "a1": 0.38574991, "a2": 4.80688534},
-            -1.8738354839506779e-02,
-        ),
-        (
-            "01",
             "d4s",
             "eeq",
             {"s6": 1.0, "alp": 16.0, "s8": 0.95948085, "a1": 0.38574991, "a2": 4.80688534},
             -1.9870451633183694e-02,
-        ),
-        (
-            "01",
-            "d4s",
-            "eeqbc",
-            {"s6": 1.0, "alp": 16.0, "s8": 0.95948085, "a1": 0.38574991, "a2": 4.80688534},
-            -1.9901335934314583e-02,
         ),
         (
             "02",

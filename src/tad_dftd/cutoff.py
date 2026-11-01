@@ -116,11 +116,11 @@ class Cutoff:
             def_disp3 = defaults.D4_DISP3_CUTOFF
             def_cn = defaults.D4_CN_CUTOFF
             def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF
-        elif m == "d5":
-            def_disp2 = defaults.D5_DISP2_CUTOFF
-            def_disp3 = defaults.D5_DISP3_CUTOFF
-            def_cn = defaults.D5_CN_CUTOFF
-            def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF
+        elif m in ("d5", "dft-d5", "dftd5"):
+            raise NotImplementedError(
+                "Dispersion model 'D5' is not yet implemented because the "
+                "upstream reference is not finalized."
+            )
         else:
             raise ValueError(f"Unknown dispersion model '{model}'.")
 

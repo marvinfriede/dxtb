@@ -24,7 +24,7 @@ Grimme-lab ``dftd/param/functionals.f90``.
 """
 from __future__ import annotations
 
-import os.path as op
+from importlib.resources import as_file, files
 from typing import Any
 
 import torch
@@ -94,30 +94,30 @@ _D4_EXTRA_PARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 
+def _load_pkg_toml(filename: str) -> dict[str, Any]:
+    res = files(__package__).joinpath(filename)
+    with as_file(res) as path, open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
 def _load_d3_parameters() -> dict[str, Any]:
     global _d3_parameters
     if _d3_parameters is None:
-        path = op.join(op.dirname(__file__), "d3_parameters.toml")
-        with open(path, "rb") as fh:
-            _d3_parameters = tomllib.load(fh)
+        _d3_parameters = _load_pkg_toml("d3_parameters.toml")
     return _d3_parameters
 
 
 def _load_d4_parameters() -> dict[str, Any]:
     global _d4_parameters
     if _d4_parameters is None:
-        path = op.join(op.dirname(__file__), "d4_parameters.toml")
-        with open(path, "rb") as fh:
-            _d4_parameters = tomllib.load(fh)
+        _d4_parameters = _load_pkg_toml("d4_parameters.toml")
     return _d4_parameters
 
 
 def _load_aliases() -> dict[str, str]:
     global _aliases
     if _aliases is None:
-        path = op.join(op.dirname(__file__), "aliases.toml")
-        with open(path, "rb") as fh:
-            _aliases = dict(tomllib.load(fh)["alias"])
+        _aliases = dict(_load_pkg_toml("aliases.toml")["alias"])
     assert _aliases is not None
     return _aliases
 

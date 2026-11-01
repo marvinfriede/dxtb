@@ -191,8 +191,6 @@ def _parse_d4_inc(inc_text: str, *, include_gxtb: bool) -> dict[str, torch.Tenso
         "hcount",
         "clsq",
         "clsh",
-        "eeqbcq",
-        "eeqbch",
         "refq",
         "refh",
     ]

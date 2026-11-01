@@ -213,7 +213,6 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
-            ChargeModelId.EEQBC,
         ),
     ),
     "d4s": ModelMetadata(
@@ -245,7 +244,6 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
-            ChargeModelId.EEQBC,
         ),
     ),
     "d4srev": ModelMetadata(
@@ -277,32 +275,8 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
-            ChargeModelId.EEQBC,
             ChargeModelId.GXTB,
         ),
-    ),
-    "d5": ModelMetadata(
-        model_id=DispersionModelId.D5,
-        name="d5",
-        label="D5",
-        max_elem=defaults.MAX_ELEM_D5,
-        charge_dep_2b=True,
-        charge_dep_3b=True,
-        has_polarizabilities=True,
-        default_qmodel=ChargeModelId.EEQBC,
-        default_damping_2b="screened",
-        default_damping_3b="screened",
-        default_cutoff=Cutoff.from_model("d5"),
-        allowed_dampings=(
-            "screened",
-            "tang-toennies",
-            "tt",
-            "rational",
-            "bj",
-            "zero",
-            "koide",
-        ),
-        allowed_qmodels=(ChargeModelId.EEQBC,),
     ),
 }
 
@@ -310,8 +284,6 @@ CHARGE_MODELS: dict[str, ChargeModelId] = {
     "eeq": ChargeModelId.EEQ,
     "eeq2019": ChargeModelId.EEQ,
     "gfn2": ChargeModelId.GFN2,
-    "eeqbc": ChargeModelId.EEQBC,
-    "eeqbc2025": ChargeModelId.EEQBC,
     "gxtb": ChargeModelId.GXTB,
 }
 
@@ -323,12 +295,22 @@ MODEL_ALLOWED_DAMPINGS: dict[str, tuple[str, ...]] = {
 def resolve_model_id(model: str | DispersionModelId) -> DispersionModelId:
     """Resolve a model name or enum to a :class:`DispersionModelId`."""
     if isinstance(model, DispersionModelId):
+        if model == DispersionModelId.D5:
+            raise NotImplementedError(
+                "Dispersion model 'D5' is not yet implemented because the "
+                "upstream reference is not finalized."
+            )
         return model
     key = model.lower().strip()
     if key.startswith("dft-"):
         key = key[4:]
     elif key.startswith("dft"):
         key = key[3:]
+    if key == "d5":
+        raise NotImplementedError(
+            "Dispersion model 'D5' is not yet implemented because the "
+            "upstream reference is not finalized."
+        )
     meta = DISPERSION_MODELS.get(key)
     if meta is None:
         known = ", ".join(sorted(DISPERSION_MODELS))
@@ -361,9 +343,19 @@ def resolve_charge_model_id(
         return meta.default_qmodel
 
     if isinstance(qmodel, ChargeModelId):
+        if qmodel == ChargeModelId.EEQBC:
+            raise NotImplementedError(
+                "Charge model 'eeqbc' is not supported in this release "
+                "because the upstream model is not finalized."
+            )
         qid = qmodel
     else:
         key = qmodel.lower().strip()
+        if key in ("eeqbc", "eeqbc2025"):
+            raise NotImplementedError(
+                f"Charge model '{qmodel}' is not supported in this release "
+                "because the upstream model is not finalized."
+            )
         if key not in CHARGE_MODELS:
             known = ", ".join(sorted(CHARGE_MODELS))
             raise ValueError(

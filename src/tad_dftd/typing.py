@@ -68,7 +68,7 @@ __all__ = [
     "runtime_checkable",
 ]
 
-ModelName = Literal["d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev", "d5"]
+ModelName = Literal["d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"]
 
 WeightingFunction = Callable[[Tensor, Tensor], Tensor]
 

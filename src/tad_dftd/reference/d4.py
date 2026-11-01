@@ -22,7 +22,7 @@ Matches ``dftd/src/dftd/model/d4/reference/{orig,srev}.f90`` and
 """
 from __future__ import annotations
 
-from pathlib import Path
+from importlib.resources import as_file, files
 
 import torch
 from tad_mctc.tree import Node, child
@@ -43,16 +43,15 @@ __all__ = [
     "load_d4srev",
 ]
 
-_D4_RAW: dict[str, Tensor] = torch.load(
-    Path(__file__).resolve().parent / "d4-ref.pt",
-    map_location="cpu",
-    weights_only=True,
-)
-_D4SREV_RAW: dict[str, Tensor] = torch.load(
-    Path(__file__).resolve().parent / "d4srev-ref.pt",
-    map_location="cpu",
-    weights_only=True,
-)
+
+def _load_pkg_dict(filename: str) -> dict[str, Tensor]:
+    res = files(__package__).joinpath(filename)
+    with as_file(res) as path:
+        return torch.load(path, map_location="cpu", weights_only=True)
+
+
+_D4_RAW: dict[str, Tensor] = _load_pkg_dict("d4-ref.pt")
+_D4SREV_RAW: dict[str, Tensor] = _load_pkg_dict("d4srev-ref.pt")
 
 _DEFAULT_INTEGRATOR_64 = TrapezoidIntegrator(
     device=torch.device("cpu"), dtype=torch.float64
@@ -63,8 +62,11 @@ def _normalize_qmod(qmod: str) -> str:
     qkey = qmod.lower().strip()
     if qkey == "eeq2019":
         return "eeq"
-    if qkey == "eeqbc2025":
-        return "eeqbc"
+    if qkey in ("eeqbc", "eeqbc2025"):
+        raise NotImplementedError(
+            f"Charge model '{qmod}' is not supported in this release "
+            "because the upstream model is not finalized."
+        )
     return qkey
 
 
@@ -85,7 +87,6 @@ def _compute_d4_aiw_and_c6(
     if is_srev:
         q_map = {
             "eeq": ("clsq", "clsh"),
-            "eeqbc": ("eeqbcq", "eeqbch"),
             "gfn2": ("refq", "refh"),
             "gxtb": ("gxtbq", "gxtbh"),
         }
@@ -98,7 +99,6 @@ def _compute_d4_aiw_and_c6(
             raise ValueError("g-xTB charges are not supported for D4")
         q_map = {
             "eeq": ("clsq", "clsh"),
-            "eeqbc": ("eeqbcq", "eeqbch"),
             "gfn2": ("refq", "refh"),
         }
         if qkey not in q_map:

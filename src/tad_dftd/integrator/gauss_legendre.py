@@ -24,8 +24,6 @@ import math
 import torch
 from tad_mctc.typing import Self, Tensor, get_default_dtype
 
-from .. import defaults
-
 __all__ = [
     "GAUSS_LEGENDRE_NODES_10",
     "GAUSS_LEGENDRE_WEIGHTS_10",
@@ -212,17 +210,6 @@ class GaussLegendreIntegrator:
     def type(self, dtype: torch.dtype) -> Self:
         """Return a copy converted to ``dtype``."""
         return self.to(dtype=dtype)
-
-    @classmethod
-    def for_d5(
-        cls,
-        ngrid: int = 10,
-        scale: float | Tensor = defaults.D5_OMEGA0,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> Self:
-        """Create the default 10-point Gauss-Legendre integrator for DFT-D5."""
-        return cls(ngrid=ngrid, scale=scale, device=device, dtype=dtype)
 
     @property
     def ngrid(self) -> int:

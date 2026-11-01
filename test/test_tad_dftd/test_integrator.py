@@ -79,7 +79,7 @@ def test_gauss_legendre_1d_and_casimir_polder() -> None:
     # alpha_i(iw) = a_i / (1 + (w / w_i)^2)
     # Exact: (3/pi) \int_0^\infty alpha_i(iw) alpha_j(iw) dw
     #      = (3/2) * a_i * a_j * (w_i * w_j) / (w_i + w_j)
-    integ = GaussLegendreIntegrator.for_d5(dtype=torch.float64)
+    integ = GaussLegendreIntegrator(ngrid=10, scale=0.151295, dtype=torch.float64)
     w = integ.freq  # (10,)
     a_i, w_i = 4.5, 0.6
     a_j, w_j = 3.2, 0.8

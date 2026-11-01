@@ -70,22 +70,6 @@ __all__ = [
     "D4_S9",
     "D4_S10",
     "D4_WF",
-    "D5_ALP",
-    "D5_CN_CUTOFF",
-    "D5_DISP2_CUTOFF",
-    "D5_DISP3_CUTOFF",
-    "D5_GA",
-    "D5_GC",
-    "D5_OMEGA0",
-    "D5_QA",
-    "D5_QC",
-    "D5_RS6",
-    "D5_RS8",
-    "D5_RS9",
-    "D5_S6",
-    "D5_S8",
-    "D5_S9",
-    "D5_S10",
     "DISP2_CUTOFF_WIDTH",
     "DISP3_CUTOFF_WIDTH",
     "MAX_ELEM",
@@ -94,7 +78,6 @@ __all__ = [
     "MAX_ELEM_D2",
     "MAX_ELEM_D3",
     "MAX_ELEM_D4",
-    "MAX_ELEM_D5",
     "RATIONAL_A1",
     "RATIONAL_A2",
     "RS6",
@@ -113,7 +96,6 @@ MAX_ELEM_D1 = 10
 MAX_ELEM_D2 = 86
 MAX_ELEM_D3 = 103
 MAX_ELEM_D4 = 118
-MAX_ELEM_D5 = 86
 
 # Cutoffs in Bohr (matching Grimme-lab dftd cutoff.f90)
 D1_DISP2_CUTOFF = 90.0
@@ -133,10 +115,6 @@ D4_DISP3_CUTOFF = 40.0
 D4_CN_CUTOFF = 30.0
 D4_CN_EEQ_CUTOFF = 25.0
 D4_CN_EEQ_LMAX = 8.0
-
-D5_DISP2_CUTOFF = 60.0
-D5_DISP3_CUTOFF = 40.0
-D5_CN_CUTOFF = 30.0
 
 # D1 & D2 model defaults
 D1_RS6 = 1.0
@@ -177,22 +155,6 @@ D4_RS6 = 1.0
 D4_RS8 = 1.0
 D4_RS9 = 1.0
 D4_ALP = 16.0
-
-# D5 model defaults (dftd/model/d5.f90)
-D5_GA = 3.0
-D5_GC = 2.0
-D5_QA = 2.5
-D5_QC = 2.0
-D5_OMEGA0 = 0.151295
-
-D5_S6 = 1.0
-D5_S8 = 1.0
-D5_S9 = 1.0
-D5_S10 = 0.0
-D5_RS6 = 1.0
-D5_RS8 = 1.0
-D5_RS9 = 4.0 / 3.0
-D5_ALP = 16.0
 
 # CSO damping defaults
 CSO_A2 = 2.5

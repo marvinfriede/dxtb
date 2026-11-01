@@ -106,8 +106,8 @@ def damping_from_name(
     three_body : bool | str, optional
         The three-body damping: one of the names of
         :data:`THREE_BODY_DAMPINGS`, ``True`` for the default ATM damping of
-        `model` (``"zero_d3"`` for D3/D3S, ``"zero_d4"`` for D4/D4S/D4Srev,
-        ``"koide"`` for D5) or ``False`` for none. Defaults to ``True``.
+        `model` (``"zero_d3"`` for D3/D3S, ``"zero_d4"`` for D4/D4S/D4Srev)
+        or ``False`` for none. Defaults to ``True``.
     model : str, optional
         Model name used when ``three_body is True``. Defaults to ``"d3"``.
 
@@ -122,8 +122,11 @@ def damping_from_name(
         m = model.lower().strip()
         if m in ("d1", "d2", "d4", "d4s", "d4srev"):
             three_body = "zero_d4"
-        elif m == "d5":
-            three_body = "koide"
+        elif m in ("d5", "dft-d5", "dftd5"):
+            raise NotImplementedError(
+                "Dispersion model 'D5' is not yet implemented because the "
+                "upstream reference is not finalized."
+            )
         else:
             three_body = "zero_d3"
 

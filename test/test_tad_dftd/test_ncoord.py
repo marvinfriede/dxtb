@@ -32,9 +32,7 @@ from tad_dftd import ncoord
         ncoord.cn_d3,
         ncoord.cn_d4,
         ncoord.cn_d4srev,
-        ncoord.cn_d5,
         ncoord.cn_eeq,
-        ncoord.cn_eeqbc,
     ],
 )
 def test_coordination_numbers_and_autograd(fn) -> None:
