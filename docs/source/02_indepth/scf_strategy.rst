@@ -43,6 +43,38 @@ The following examples select supported policies explicitly:
        fermi_etemp=2000.0,
    )
 
+A custom staged strategy can select each method's representation and switch
+criterion directly:
+
+.. code-block:: python
+
+   from dxtb import scf
+   from dxtb.config import Config
+
+   robust = scf.SCFStrategy(
+       (
+           scf.SCFStage(
+               scf.BroydenMethod(
+                   scf.BroydenMethodSettings(max_rank=8)
+               ),
+               representation=scf.SCFRepresentation.POTENTIAL,
+               switch_policy=scf.SCFSwitchPolicy(fixed_point_l2=1.0e-2),
+           ),
+           scf.SCFStage(
+               scf.CDIISMethod(scf.CDIISMethodSettings(max_history=8)),
+               representation=scf.SCFRepresentation.FOCK,
+           ),
+       )
+   )
+   staged = Config.create(strategy=robust, differentiation="implicit")
+
+The command line accepts the same named policy:
+
+.. code-block:: console
+
+   dxtb input.xyz --scf-strategy anderson --scf-differentiation unrolled \
+       --scf-convergence standard
+
 Active Fermi smearing supports Linear, Anderson, Broyden, and CDIIS. SOSCF
 and every SOSCF-containing strategy reject active smearing. Thermal
 occupations are never frozen to enable orbital SOSCF.
@@ -72,3 +104,26 @@ The older ``mixer`` and global ``scp_mode`` vocabulary is replaced by a
 strategy whose individual stages own their method and representation.
 ``f_atol`` is retired; SCF convergence uses physical fixed-point and
 stationarity checks.
+
+The configuration migration is:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Previous option
+     - Current option
+   * - ``mixer="simple"``
+     - ``strategy="linear"``
+   * - ``mixer="anderson"`` or ``mixer="broyden"``
+     - ``strategy="anderson"`` or ``strategy="broyden"``
+   * - ``scp_mode=...``
+     - Select a named preset or set ``SCFStage.representation``
+   * - ``scf_mode="FULL"`` / ``"IMPLICIT"``
+     - ``differentiation="unrolled"`` / ``"implicit"``
+   * - ``f_atol`` or ``strict``
+     - Use an explicit convergence profile; neither option controls SCF now
+
+Parser-edge compatibility accepts a limited set of the old names and converts
+them immediately to the strategy API. The functional configuration stores no
+``mixer`` or global representation field. Experimental single-shot SCF and
+legacy SCF engine overrides are rejected.

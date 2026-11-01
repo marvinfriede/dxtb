@@ -2,22 +2,29 @@
 
 ## Decision status
 
-This document records the final S13 policy. The final local candidate is
-`5b622a58c394839a2284f18fea34804805995615`; remote publication and the
+This document records the final S13 policy. The current synchronized candidate is
+`619c63f88195565bbb7a80700abab8f46a0a7747`; remote publication and the
 post-publication verification remain the release gate before marking the full
 redesign complete.
 
 The final-head one-thread benchmark matrix in
 `benchmarks/results/scf-s13/defaults-py314-torch2141.json` contains 45
 method/case runs from source SHA
-`5b622a58c394839a2284f18fea34804805995615` with a clean worktree: 15 GFN1/GFN2,
+`619c63f88195565bbb7a80700abab8f46a0a7747` with a clean worktree: 15 GFN1/GFN2,
 charge, temperature, and poor-start cases, each run with Anderson, Broyden,
 and CDIIS. All three methods certified all 15 cases with the public 100-map
 budget. Anderson/Potential used a median of 9 maps and nearest-rank p90 of 12,
-compared with Broyden/Potential at 15/43 and CDIIS/Fock at 13/17. Median and
-nearest-rank p90 wall times were 0.075/0.615 s for Anderson, 0.138/1.013 s for
-Broyden, and 0.151/0.905 s for CDIIS. The benchmark records runtime, dtype,
+compared with Broyden/Potential at 15/42 and CDIIS/Fock at 13/17. Median and
+nearest-rank p90 wall times were 0.075/0.184 s for Anderson, 0.141/0.393 s for
+Broyden, and 0.151/0.258 s for CDIIS. The benchmark records runtime, dtype,
 thread count, tolerances, certification, physical maps, memory, and raw rows.
+
+This candidate synchronizes the S13 branch with general-refactor SHA
+`b9b311a234868a1d339795eb0846fb117a5ce1f0`. The synchronization is a merge;
+all accepted SCF commits are unchanged in the first-parent history, and
+`git range-diff` reports the six S13 commits as identical. The integrated
+E6b differential file passed 18 tests, including per-lane field handling and
+explicit rejection of unsupported packed GFN2 coordinate choices.
 
 This matrix supports Anderson/Potential as the default on the tested set. It
 does not establish universal superiority. Broyden remains a supported native
