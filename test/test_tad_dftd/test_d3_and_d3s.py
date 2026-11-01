@@ -477,8 +477,8 @@ def test_unsupported_elements() -> None:
     )
     param = {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407}
 
-    # D3 supports up to Z=103; Z=105 raises IndexError
-    with pytest.raises(IndexError):
+    # D3 supports up to Z=103; Z=105 raises ValueError
+    with pytest.raises(ValueError, match="Unsupported atomic number"):
         dftd3(
             Structure(
                 numbers=torch.tensor([1, 105]), positions=positions
@@ -486,8 +486,8 @@ def test_unsupported_elements() -> None:
             param,
         )
 
-    # D3S supports up to Z=94 (Pu); Z=95 (Am) raises IndexError
-    with pytest.raises(IndexError):
+    # D3S supports up to Z=94 (Pu); Z=95 (Am) raises ValueError
+    with pytest.raises(ValueError, match="Unsupported atomic number"):
         dftd3s(
             Structure(
                 numbers=torch.tensor([1, 95]), positions=positions

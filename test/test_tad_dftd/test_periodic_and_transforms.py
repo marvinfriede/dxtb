@@ -669,3 +669,618 @@ def test_periodic_atm_2d_tile_shape_and_memory_bound(
     assert torch.isfinite(g_pos_empty).all() and torch.all(g_pos_empty == 0.0)
     assert torch.isfinite(g_lat_empty).all() and torch.all(g_lat_empty == 0.0)
 
+
+def test_inductor_compile_molecular_and_periodic_models() -> None:
+    """
+    Validate default CPU Inductor backend (`torch.compile(..., backend="inductor", fullgraph=True)`)
+    beyond `aot_eager` (H2.4) for:
+    - Molecular D3 (2B + 3B ATM, differentiable damping parameter `a1`)
+    - Molecular D4 (automatic EEQ and external charges, 2B + 3B ATM, differentiable `a1`)
+    - Periodic dense D3 with ATM
+    - Periodic sparse D3 with ATM
+    - Periodic D4 with external charges (dense and sparse)
+    Verifies energy, first derivatives, selected second derivatives, and repeated calls
+    with changed coordinates and changed damping parameters.
+    """
+    torch._dynamo.reset()
+
+    # 1. Molecular D3 and Molecular D4 (small nontrivial 3-atom H2O)
+    mol_nums = torch.tensor([8, 1, 1], dtype=torch.long)
+    mol_pos0 = torch.tensor(
+        [
+            [0.00, 0.00, 0.22],
+            [0.00, 1.43, -0.88],
+            [0.00, -1.43, -0.88],
+        ],
+        dtype=torch.float64,
+    )
+    mol_pos1 = mol_pos0 + torch.tensor(
+        [[0.04, -0.02, 0.01], [-0.03, 0.05, -0.02], [0.01, -0.04, 0.03]],
+        dtype=torch.float64,
+    )
+    mol_q0 = torch.tensor([-0.56, 0.28, 0.28], dtype=torch.float64)
+
+    def mol_d3_fn(pos: torch.Tensor, a1_val: torch.Tensor) -> torch.Tensor:
+        st = Structure(numbers=mol_nums, positions=pos)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.7875, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.4407, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+        }
+        return dftd3(st, p).sum()
+
+    def mol_d4_ext_fn(
+        pos: torch.Tensor, a1_val: torch.Tensor, q_in: torch.Tensor
+    ) -> torch.Tensor:
+        st = Structure(numbers=mol_nums, positions=pos)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.95948085, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.80688534, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+            "rs9": torch.tensor(1.0, dtype=torch.float64),
+            "alp": torch.tensor(16.0, dtype=torch.float64),
+            "a13": a1_val,
+            "a23": torch.tensor(4.80688534, dtype=torch.float64),
+            "alp3": torch.tensor(16.0, dtype=torch.float64),
+        }
+        return dftd(st, p, model="d4", q=q_in).sum()
+
+    def mol_d4_eeq_fn(pos: torch.Tensor, a1_val: torch.Tensor) -> torch.Tensor:
+        st = Structure(numbers=mol_nums, positions=pos)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.95948085, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.80688534, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+        }
+        return dftd(st, p, model="d4", qmodel="eeq").sum()
+
+    comp_mol_d3 = torch.compile(mol_d3_fn, backend="inductor", fullgraph=True)
+    comp_mol_d4_ext = torch.compile(
+        mol_d4_ext_fn, backend="inductor", fullgraph=True
+    )
+    comp_mol_d4_eeq = torch.compile(
+        mol_d4_eeq_fn, backend="inductor", fullgraph=True
+    )
+
+    hess_mol_d3_fn = torch.func.jacfwd(
+        torch.func.jacrev(mol_d3_fn, argnums=0), argnums=1
+    )
+    comp_hess_mol_d3 = torch.compile(
+        hess_mol_d3_fn, backend="inductor", fullgraph=True
+    )
+
+    for idx, (pos_in, a1_in) in enumerate(
+        (
+            (mol_pos0, 0.4289),
+            (mol_pos1, 0.4289),
+            (mol_pos1, 0.4650),
+        )
+    ):
+        # Molecular D3: energy, 1st derivative, 2nd mixed derivative (d^2E / dpos da1)
+        p_e = pos_in.clone().requires_grad_(True)
+        a_e = torch.tensor(a1_in, dtype=torch.float64, requires_grad=True)
+        e_eager = mol_d3_fn(p_e, a_e)
+        g_pos_e, g_a1_e = torch.autograd.grad(e_eager, (p_e, a_e))
+
+        p_c = pos_in.clone().requires_grad_(True)
+        a_c = torch.tensor(a1_in, dtype=torch.float64, requires_grad=True)
+        e_comp = comp_mol_d3(p_c, a_c)
+        g_pos_c, g_a1_c = torch.autograd.grad(e_comp, (p_c, a_c))
+
+        torch.testing.assert_close(e_comp, e_eager, atol=1e-13, rtol=1e-13)
+        torch.testing.assert_close(g_pos_c, g_pos_e, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(g_a1_c, g_a1_e, atol=1e-12, rtol=1e-12)
+        if idx in (0, 2):
+            h_mixed_e = hess_mol_d3_fn(pos_in, a_e.detach())
+            h_mixed_c = comp_hess_mol_d3(pos_in, a_c.detach())
+            torch.testing.assert_close(
+                h_mixed_c, h_mixed_e, atol=1e-11, rtol=1e-11
+            )
+
+        # Molecular D4 with external charges + auto EEQ
+        p_d4_e = pos_in.clone().requires_grad_(True)
+        a_d4_e = torch.tensor(a1_in, dtype=torch.float64, requires_grad=True)
+        q_d4_e = mol_q0.clone().requires_grad_(True)
+        e_d4_eager = mol_d4_ext_fn(p_d4_e, a_d4_e, q_d4_e)
+        gp_e, ga_e, gq_e = torch.autograd.grad(
+            e_d4_eager, (p_d4_e, a_d4_e, q_d4_e)
+        )
+
+        p_d4_c = pos_in.clone().requires_grad_(True)
+        a_d4_c = torch.tensor(a1_in, dtype=torch.float64, requires_grad=True)
+        q_d4_c = mol_q0.clone().requires_grad_(True)
+        e_d4_comp = comp_mol_d4_ext(p_d4_c, a_d4_c, q_d4_c)
+        gp_c, ga_c, gq_c = torch.autograd.grad(
+            e_d4_comp, (p_d4_c, a_d4_c, q_d4_c)
+        )
+
+        torch.testing.assert_close(
+            e_d4_comp, e_d4_eager, atol=1e-13, rtol=1e-13
+        )
+        torch.testing.assert_close(gp_c, gp_e, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(ga_c, ga_e, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(gq_c, gq_e, atol=1e-12, rtol=1e-12)
+
+        # Also check Molecular D4 with automatic EEQ under Inductor
+        if idx in (0, 2):
+            p_eeq_e = pos_in.clone().requires_grad_(True)
+            a_eeq_e = torch.tensor(
+                a1_in, dtype=torch.float64, requires_grad=True
+            )
+            e_eeq_eager = mol_d4_eeq_fn(p_eeq_e, a_eeq_e)
+            gp_eeq_e, ga_eeq_e = torch.autograd.grad(
+                e_eeq_eager, (p_eeq_e, a_eeq_e)
+            )
+
+            p_eeq_c = pos_in.clone().requires_grad_(True)
+            a_eeq_c = torch.tensor(
+                a1_in, dtype=torch.float64, requires_grad=True
+            )
+            e_eeq_comp = comp_mol_d4_eeq(p_eeq_c, a_eeq_c)
+            gp_eeq_c, ga_eeq_c = torch.autograd.grad(
+                e_eeq_comp, (p_eeq_c, a_eeq_c)
+            )
+            torch.testing.assert_close(
+                e_eeq_comp, e_eeq_eager, atol=1e-13, rtol=1e-13
+            )
+            torch.testing.assert_close(
+                gp_eeq_c, gp_eeq_e, atol=1e-11, rtol=1e-11
+            )
+            torch.testing.assert_close(
+                ga_eeq_c, ga_eeq_e, atol=1e-11, rtol=1e-11
+            )
+
+    # 2. Periodic dense D3+ATM, periodic sparse D3+ATM, and periodic D4+external charges
+    # Use a compact 2-atom periodic cell so C++ Inductor codegen finishes quickly
+    cell = Structure(
+        numbers=torch.tensor([14, 1], dtype=torch.long),
+        positions=torch.tensor(
+            [[0.15, 0.25, 0.35], [2.10, 1.85, 1.65]], dtype=torch.float64
+        ),
+        lattice=torch.tensor(
+            [[6.2, 0.2, 0.0], [0.1, 6.4, 0.1], [0.0, 0.1, 6.6]],
+            dtype=torch.float64,
+        ),
+        periodic=torch.tensor([True, True, True]),
+    )
+    cutoff = Cutoff(cn=7.5, disp2=8.5, disp3=6.8, cn_eeq=7.5)
+    dense_d3 = DensePairs.build(cell, cutoff, three_body=True)
+    sparse_d3 = SparsePairs.build(cell, cutoff, three_body=True)
+    dense_d4 = DensePairs.build(
+        cell, cutoff, three_body=True, with_cn_eeq=True
+    )
+    sparse_d4 = SparsePairs.build(
+        cell, cutoff, three_body=True, with_cn_eeq=True
+    )
+    q_pbc0 = torch.tensor([0.25, -0.25], dtype=torch.float64)
+
+    def pbc_d3_dense_fn(
+        pos: torch.Tensor, lat: torch.Tensor, a1_val: torch.Tensor
+    ) -> torch.Tensor:
+        st = cell.replace(positions=pos, lattice=lat)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.7875, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.4407, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+        }
+        return dftd3(
+            st, p, cutoff=cutoff, pairs=dense_d3, max_triples=200_000
+        ).sum()
+
+    def pbc_d3_sparse_fn(
+        pos: torch.Tensor, lat: torch.Tensor, a1_val: torch.Tensor
+    ) -> torch.Tensor:
+        st = cell.replace(positions=pos, lattice=lat)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.7875, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.4407, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+        }
+        return dftd3(
+            st, p, cutoff=cutoff, pairs=sparse_d3, max_triples=200_000
+        ).sum()
+
+    def pbc_d4_dense_fn(
+        pos: torch.Tensor,
+        lat: torch.Tensor,
+        a1_val: torch.Tensor,
+        q_in: torch.Tensor,
+    ) -> torch.Tensor:
+        st = cell.replace(positions=pos, lattice=lat)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.95948085, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.80688534, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+            "rs9": torch.tensor(1.0, dtype=torch.float64),
+            "alp": torch.tensor(16.0, dtype=torch.float64),
+            "a13": a1_val,
+            "a23": torch.tensor(4.80688534, dtype=torch.float64),
+            "alp3": torch.tensor(16.0, dtype=torch.float64),
+        }
+        return dftd(
+            st,
+            p,
+            model="d4",
+            q=q_in,
+            cutoff=cutoff,
+            pairs=dense_d4,
+            max_triples=200_000,
+        ).sum()
+
+    def pbc_d4_sparse_fn(
+        pos: torch.Tensor,
+        lat: torch.Tensor,
+        a1_val: torch.Tensor,
+        q_in: torch.Tensor,
+    ) -> torch.Tensor:
+        st = cell.replace(positions=pos, lattice=lat)
+        p = {
+            "s6": torch.tensor(1.0, dtype=torch.float64),
+            "s8": torch.tensor(0.95948085, dtype=torch.float64),
+            "a1": a1_val,
+            "a2": torch.tensor(4.80688534, dtype=torch.float64),
+            "s9": torch.tensor(1.0, dtype=torch.float64),
+            "rs9": torch.tensor(1.0, dtype=torch.float64),
+            "alp": torch.tensor(16.0, dtype=torch.float64),
+            "a13": a1_val,
+            "a23": torch.tensor(4.80688534, dtype=torch.float64),
+            "alp3": torch.tensor(16.0, dtype=torch.float64),
+        }
+        return dftd(
+            st,
+            p,
+            model="d4",
+            q=q_in,
+            cutoff=cutoff,
+            pairs=sparse_d4,
+            max_triples=200_000,
+        ).sum()
+
+    comp_pbc_d3_dense = torch.compile(
+        pbc_d3_dense_fn, backend="inductor", fullgraph=True
+    )
+    comp_pbc_d3_sparse = torch.compile(
+        pbc_d3_sparse_fn, backend="inductor", fullgraph=True
+    )
+    comp_pbc_d4_dense = torch.compile(
+        pbc_d4_dense_fn, backend="inductor", fullgraph=True
+    )
+    comp_pbc_d4_sparse = torch.compile(
+        pbc_d4_sparse_fn, backend="inductor", fullgraph=True
+    )
+
+    for shift_pos, a1_val in ((0.0, 0.4289), (0.015, 0.4450)):
+        pos_cur = cell.positions + shift_pos
+        lat_cur = cell.lattice
+
+        for eager_fn, comp_fn in (
+            (pbc_d3_dense_fn, comp_pbc_d3_dense),
+            (pbc_d3_sparse_fn, comp_pbc_d3_sparse),
+        ):
+            pe = pos_cur.clone().requires_grad_(True)
+            le = lat_cur.clone().requires_grad_(True)
+            ae = torch.tensor(a1_val, dtype=torch.float64, requires_grad=True)
+            ee = eager_fn(pe, le, ae)
+            gpe, gle, gae = torch.autograd.grad(ee, (pe, le, ae))
+
+            pc = pos_cur.clone().requires_grad_(True)
+            lc = lat_cur.clone().requires_grad_(True)
+            ac = torch.tensor(a1_val, dtype=torch.float64, requires_grad=True)
+            ec = comp_fn(pc, lc, ac)
+            gpc, glc, gac = torch.autograd.grad(ec, (pc, lc, ac))
+
+            torch.testing.assert_close(ec, ee, atol=1e-12, rtol=1e-12)
+            torch.testing.assert_close(gpc, gpe, atol=1e-11, rtol=1e-11)
+            torch.testing.assert_close(glc, gle, atol=1e-11, rtol=1e-11)
+            torch.testing.assert_close(gac, gae, atol=1e-11, rtol=1e-11)
+
+        for eager_fn4, comp_fn4 in (
+            (pbc_d4_dense_fn, comp_pbc_d4_dense),
+            (pbc_d4_sparse_fn, comp_pbc_d4_sparse),
+        ):
+            pe = pos_cur.clone().requires_grad_(True)
+            le = lat_cur.clone().requires_grad_(True)
+            ae = torch.tensor(a1_val, dtype=torch.float64, requires_grad=True)
+            qe = q_pbc0.clone().requires_grad_(True)
+            ee = eager_fn4(pe, le, ae, qe)
+            gpe, gle, gae, gqe = torch.autograd.grad(ee, (pe, le, ae, qe))
+
+            pc = pos_cur.clone().requires_grad_(True)
+            lc = lat_cur.clone().requires_grad_(True)
+            ac = torch.tensor(a1_val, dtype=torch.float64, requires_grad=True)
+            qc = q_pbc0.clone().requires_grad_(True)
+            ec = comp_fn4(pc, lc, ac, qc)
+            gpc, glc, gac, gqc = torch.autograd.grad(ec, (pc, lc, ac, qc))
+
+            torch.testing.assert_close(ec, ee, atol=1e-12, rtol=1e-12)
+            torch.testing.assert_close(gpc, gpe, atol=1e-11, rtol=1e-11)
+            torch.testing.assert_close(glc, gle, atol=1e-11, rtol=1e-11)
+            torch.testing.assert_close(gac, gae, atol=1e-11, rtol=1e-11)
+            torch.testing.assert_close(gqc, gqe, atol=1e-11, rtol=1e-11)
+
+
+def test_fortran_periodic_reference_energies_and_strain_all_models() -> None:
+    """
+    Independent periodic and molecular Fortran reference regressions across all
+    7 models (`d1`, `d2`, `d3`, `d3s`, `d4`, `d4s`, `d4srev`) from
+    `dftd/test/unit/test_periodic.f90` and `dftd/test/unit/test_conformance.f90`,
+    plus periodic finite-difference nuclear gradient and cell strain tensor (`sigma`)
+    verification and D4 external-charge chain-rule gradient decomposition (H2.6).
+    """
+    from tad_mctc.data.structures import get_structure
+    from tad_dftd import charge, damping
+
+    cut_pbc = Cutoff(cn=30.0, disp2=60.0, disp3=15.0)
+    ammonia = get_structure("x23", "ammonia", dtype=torch.float64)
+    acetic = get_structure("x23", "acetic", dtype=torch.float64)
+    adaman = get_structure("x23", "adaman", dtype=torch.float64)
+    benzene = get_structure("x23", "benzene", dtype=torch.float64)
+    cyanamide = get_structure("x23", "cyanamide", dtype=torch.float64)
+
+    # 1. D1 periodic Fortran reference (test_pbed1_ammonia)
+    e_d1_nh3 = dftd(
+        ammonia,
+        {"s6": 0.7, "rs6": 1.0, "alp": 23.0},
+        model="d1",
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d1_nh3,
+        torch.tensor(-2.1111064217077948e-02, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+    # 2. D2 periodic Fortran reference (test_pbed2_ammonia)
+    e_d2_nh3 = dftd(
+        ammonia,
+        {"s6": 0.75, "rs6": 1.1, "alp": 20.0},
+        model="d2",
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d2_nh3,
+        torch.tensor(-2.9729958659375735e-02, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+    # 3. D3(BJ) periodic Fortran references (test_pbed3_acetic, test_pbesold3_adaman)
+    # Note: X23 acetic, adaman, and cyanamide in mstore have unwrapped coordinates
+    # outside [0, 1)^3; tad_mctc folds periodic coordinates into the central cell via
+    # wrap_to_central_cell so periodic sums are invariant under integer lattice shifts,
+    # shifting finite-box boundary tails near r=30..60 Bohr by ~8e-10..1.6e-8 Eh.
+    e_d3_acetic = dftd(
+        acetic,
+        {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407},
+        model="d3",
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d3_acetic,
+        torch.tensor(-6.6732836815486210e-02, dtype=torch.float64),
+        atol=2e-9,
+        rtol=5e-8,
+    )
+    e_d3_adaman = dftd(
+        adaman,
+        {"s6": 1.0, "s8": 2.9491, "a1": 0.4466, "a2": 6.1742},
+        model="d3",
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d3_adaman,
+        torch.tensor(-7.9313514714713124e-02, dtype=torch.float64),
+        atol=1e-8,
+        rtol=2e-7,
+    )
+
+    # 4. D3(0) nondefault zero-damping periodic Fortran references
+    # (test_d3_zero_pbc, test_blypd3_zero_benzene, test_m06ld3_zero_cyanamide)
+    damp_d3_zero = damping.new_damping("zero", False, model="d3")
+    e_d3zero_acetic = dftd(
+        acetic,
+        {"s6": 1.0, "s8": 0.722, "rs6": 1.217, "rs8": 1.0, "alp": 14.0},
+        model="d3",
+        damping=damp_d3_zero,
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d3zero_acetic,
+        torch.tensor(-6.20361256858119672e-02, dtype=torch.float64),
+        atol=2e-9,
+        rtol=5e-8,
+    )
+    # X23 benzene lies inside the central cell -> exact machine-precision match (< 1e-12)
+    e_d3zero_benzene = dftd(
+        benzene,
+        {"s6": 1.0, "s8": 1.682, "rs6": 1.094, "rs8": 1.0, "alp": 14.0},
+        model="d3",
+        damping=damp_d3_zero,
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d3zero_benzene,
+        torch.tensor(-0.16647358662571451, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    e_d3zero_cyanamide = dftd(
+        cyanamide,
+        {"s6": 1.0, "s8": 0.0, "rs6": 1.581, "rs8": 1.0, "alp": 14.0},
+        model="d3",
+        damping=damp_d3_zero,
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_d3zero_cyanamide,
+        torch.tensor(-2.3222556050310025e-02, dtype=torch.float64),
+        atol=2e-8,
+        rtol=1e-6,
+    )
+
+    # 5. D4 & D4S 2D-periodic revPBE-D4-ATM with zero external charges (test_revpbed4_2d)
+    # Exact match to Fortran (1e-12) because zero external charges bypass Ewald Wigner-Seitz wrapping
+    xyz_2d = torch.tensor(
+        [
+            [-0.12918412100093, 0.06210659750976, -2.13384498734326],
+            [0.12856915667443, -0.07403227791901, 4.02358027265954],
+            [-0.12317720857511, 2.75170732207802, -2.13345350602279],
+            [2.44816466162280, 1.28612566399214, 4.02317048854901],
+        ],
+        dtype=torch.float64,
+    )
+    lat_2d_vac = torch.tensor(
+        [
+            [4.68837849314507, 0.0, 0.0],
+            [-2.36282788044783, 4.04978545156612, 0.0],
+            [0.0, 0.0, 100.0],
+        ],
+        dtype=torch.float64,
+    )
+    cell_2d = Structure(
+        numbers=torch.tensor([6, 6, 6, 6], dtype=torch.long),
+        positions=xyz_2d,
+        lattice=lat_2d_vac,
+        periodic=torch.tensor([True, True, True]),
+    )
+    param_revpbe_d4 = {
+        "s6": 1.0,
+        "s9": 1.0,
+        "alp": 16.0,
+        "rs9": 1.0,
+        "s8": 1.74676530,
+        "a1": 0.53634900,
+        "a2": 3.07261485,
+        "a13": 0.53634900,
+        "a23": 3.07261485,
+        "alp3": 16.0,
+    }
+    e_revpbe_2d = dftd(
+        cell_2d,
+        param_revpbe_d4,
+        model="d4",
+        q=torch.zeros(4, dtype=torch.float64),
+        cutoff=cut_pbc,
+    ).sum()
+    torch.testing.assert_close(
+        e_revpbe_2d,
+        torch.tensor(-4.9174828244048341e-02, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+    # 6. Analytical periodic nuclear gradient and strain tensor (`sigma`) vs central FD
+    # across all 7 models (matching Fortran test_util.f90:test_numgrad & test_numsigma)
+    cell_strain = _make_periodic_cell(torch.float64, d1_compatible=True)
+    cut_smooth = Cutoff(
+        cn=9.0, disp2=10.0, disp3=8.0, width2=2.0, width3=2.0, cn_eeq=9.0
+    )
+    q_fixed = torch.tensor([0.20, -0.25, 0.15, -0.10], dtype=torch.float64)
+    step = 1e-6
+
+    for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+        p_m = _model_param(model_name, torch.float64)
+        kw_m = {"q": q_fixed} if model_name in ("d4", "d4s", "d4srev") else {}
+
+        pos_a = cell_strain.positions.clone().requires_grad_(True)
+        lat_a = cell_strain.lattice.clone().requires_grad_(True)
+        e_a = dftd(
+            cell_strain.replace(positions=pos_a, lattice=lat_a),
+            p_m,
+            model=model_name,
+            cutoff=cut_smooth,
+            **kw_m,
+        ).sum()
+        g_pos, g_lat = torch.autograd.grad(e_a, (pos_a, lat_a))
+        # Analytical virial/strain derivative dE/d(eps) at eps = I:
+        # pos(eps) = pos @ eps.T, lat(eps) = lat @ eps.T => sigma = g_pos.T @ pos + g_lat.T @ lat
+        sigma_analytic = (
+            g_pos.T @ cell_strain.positions + g_lat.T @ cell_strain.lattice
+        )
+
+        sigma_fd = torch.zeros((3, 3), dtype=torch.float64)
+        eye3 = torch.eye(3, dtype=torch.float64)
+        for i in range(3):
+            for j in range(3):
+                eps_p = eye3.clone()
+                eps_p[i, j] += step
+                eps_m = eye3.clone()
+                eps_m[i, j] -= step
+                ep = dftd(
+                    cell_strain.replace(
+                        positions=cell_strain.positions @ eps_p.T,
+                        lattice=cell_strain.lattice @ eps_p.T,
+                    ),
+                    p_m,
+                    model=model_name,
+                    cutoff=cut_smooth,
+                    **kw_m,
+                ).sum()
+                em = dftd(
+                    cell_strain.replace(
+                        positions=cell_strain.positions @ eps_m.T,
+                        lattice=cell_strain.lattice @ eps_m.T,
+                    ),
+                    p_m,
+                    model=model_name,
+                    cutoff=cut_smooth,
+                    **kw_m,
+                ).sum()
+                sigma_fd[i, j] = 0.5 * (ep - em) / step
+
+        torch.testing.assert_close(
+            sigma_analytic, sigma_fd, atol=1e-7, rtol=1e-6
+        )
+
+    # 7. Fortran test_conformance.f90:test_external_charges chain-rule decomposition
+    mol_mb01 = get_structure("mb16_43", "01", dtype=torch.float64)
+    p_d4_conf = _model_param("d4", torch.float64)
+    cut_conf = Cutoff(cn=20.0, disp2=40.0, disp3=15.0)
+
+    pos_eeq = mol_mb01.positions.clone().requires_grad_(True)
+    e_auto = dftd(
+        mol_mb01.replace(positions=pos_eeq),
+        p_d4_conf,
+        model="d4",
+        cutoff=cut_conf,
+    ).sum()
+    (g_auto,) = torch.autograd.grad(e_auto, pos_eeq)
+
+    q_eeq_det = charge.get_charges_eeq(
+        mol_mb01.numbers, mol_mb01.positions
+    ).detach()
+    pos_ext = mol_mb01.positions.clone().requires_grad_(True)
+    q_ext_leaf = q_eeq_det.clone().requires_grad_(True)
+    e_ext = dftd(
+        mol_mb01.replace(positions=pos_ext),
+        p_d4_conf,
+        model="d4",
+        q=q_ext_leaf,
+        cutoff=cut_conf,
+    ).sum()
+    g_ext_pos, dedq = torch.autograd.grad(e_ext, (pos_ext, q_ext_leaf))
+
+    # Indirect charge-response force g_q = sum_j (dq_j / dr) * (dE / dq_j)
+    pos_q = mol_mb01.positions.clone().requires_grad_(True)
+    q_of_r = charge.get_charges_eeq(mol_mb01.numbers, pos_q)
+    (g_q,) = torch.autograd.grad((q_of_r * dedq.detach()).sum(), pos_q)
+
+    torch.testing.assert_close(e_auto, e_ext, atol=1e-13, rtol=1e-13)
+    torch.testing.assert_close(
+        g_auto, g_ext_pos + g_q, atol=1e-11, rtol=1e-11
+    )
+
+
