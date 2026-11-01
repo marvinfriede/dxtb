@@ -16,12 +16,13 @@ fixed-trip differentiation.
        convergence="higher_order",
    )
 
-Named strategies include ``linear``, ``anderson``, ``broyden``, ``cdiis``,
-``broyden-cdiis``, and ``cdiis-soscf``. Broyden is a native limited-memory
-method available in charge, potential, and Fock coordinates. CDIIS is a
-Fock-space method. SOSCF is a real orbital second-order method, but it is
-restricted to zero-temperature fixed occupations and eager primal execution.
-It is intended as an explicit near-root stage, not a general startup method.
+Named strategies are ``linear``, ``anderson``, ``broyden``, ``cdiis``,
+``broyden-cdiis``, ``anderson-cdiis``, ``cdiis-soscf``, and
+``broyden-cdiis-soscf``. Broyden is a native limited-memory method available
+in charge, potential, and Fock coordinates. CDIIS is a Fock-space method.
+SOSCF is a real orbital second-order method, but it is restricted to
+zero-temperature fixed occupations and eager primal execution. It is intended
+as an explicit near-root stage, not a general startup method.
 
 The following examples select supported policies explicitly:
 
