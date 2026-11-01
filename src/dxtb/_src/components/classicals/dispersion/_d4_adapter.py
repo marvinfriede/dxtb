@@ -45,6 +45,7 @@ from tad_dftd.damping import (
     zero_damping,
 )
 from tad_dftd.model.c6 import contract_rc6
+from tad_dftd.model.d4 import _validate_d4_numbers
 from tad_dftd.model.weights import weight_references_d4
 from tad_dftd.reference.d4 import D4Reference, load_d4
 from tad_dftd.threebody import dispersion_atm
@@ -395,6 +396,7 @@ class D4Model(_BaseD4Model):
         dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__(device, dtype)
+        _validate_d4_numbers(numbers)
         self.numbers = numbers
         self.ga = ga
         self.gc = gc

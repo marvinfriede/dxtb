@@ -7,11 +7,11 @@
 - **Recorded base commit SHA**: `abdb4562a0607475e775072277b63f82501363a0`
 - **Isolated worktree & branch**: `/tmp1/friede/dxtb-agentic/worktrees/unified-tad-dftd` on `feature/unified-tad-dftd`
 - **Authoritative Fortran reference (`grimme-lab/dftd`)**: `/tmp1/friede/work/dftd-grimme-lab/dftd` at commit SHA `d2740777049b2a77fd5acc86c4e1abe75d5374ee` (branch `split-c-api-tests`)
-- **Modified PyTorch `tad-dftd3` reference**: `/tmp1/friede/dxtb-agentic/tad-dftd3` at commit SHA `954c0f285e25939b7003e62fdcdc47a2a4be971b` (branch `neighborlist`)
+- **Modified PyTorch `tad-dftd3` reference**: `/tmp1/friede/dxtb-agentic/tad-dftd3` at commit SHA `954c0f2237c348063e0b8190cb2cb108a49cc3d9` (branch `neighborlist`)
 
 ## 2. Package Architecture (`src/tad_dftd/`)
 
-`tad_dftd` is an independent top-level Python package inside `src/tad_dftd/` that depends only on `torch`, `tad-mctc`, `tad-multicharge`, `tomli` (on Python < 3.11), and standard library modules. It never imports `dxtb`, `tad_dftd3`, or `tad_dftd4`.
+`tad_dftd` is an independent top-level Python package inside `src/tad_dftd/` that depends only on `torch` (`>=2.7.0,<3`), `tad-mctc` (`>=0.11.3`), `tad-multicharge` (`>=0.8.0`), `tomli` (on Python < 3.11), and standard library modules. It never imports `dxtb`, `tad_dftd3`, or `tad_dftd4`.
 
 ```text
 src/tad_dftd/
@@ -93,18 +93,34 @@ src/tad_dftd/
     └── d4_parameters.toml
 ```
 
-## 3. Model Catalogue & Element Coverage
+## 3. Model Catalogue & Element Coverage (`H2.2`)
 
-| Model Key (`DispersionModelId`) | Implemented Status | Supported Atomic Numbers ($Z$) | Default CN & Cutoff (Bohr) | Charge Dependency (`qmodel`) | Default 2B / 3B Damping & Radii |Default 2B / 3B Cutoff (Bohr) |
-|---|---|---|---|---|---|---|
-| `d1` (`10`) | Implemented (`D1Model`) | $Z \in \{1, 6, 7, 8, 9, 10\}$ (H, C–Ne; $Z=0$ padding) | None (fixed $C_6$) | None | 2B: `fermi` (`d1` radii); 3B: `zero_avg` (`r4r2` radii, expert option) | `disp2 = 36.8`, `disp3 = 40.0` |
-| `d2` (`20`) | Implemented (`D2Model`) | $1 \le Z \le 86$ (H–Rn; $Z=0$ padding) | None (fixed $C_6$) | None | 2B: `fermi` (`d2` radii); 3B: `zero_avg` (`r4r2` radii, expert option) | `disp2 = 94.5`, `disp3 = 40.0` |
-| `d3` (`30`) | Implemented (`D3Model`) | $1 \le Z \le 103$ (H–Lr; $Z=0$ padding) | `cn_d3` (`exp_count`, `kcn=16.0`, `cn = 40.0`) | None | 2B: `rational` (`r4r2`), `zero`, `mzero`, `optpower`, `cso`, `z`; 3B: `zero_d3` (`vdw` radii) | `disp2 = 94.86832980505137` ($\sqrt{9000}$), `disp3 = 40.0` |
-| `d3s` (`31`) | Implemented (`D3SModel`) | $1 \le Z \le 94$ (H–Pu; $Z=0$ padding; raises `IndexError` for $Z \ge 95$) | `cn_d3` (`exp_count`, `kcn=16.0`, `cn = 40.0`) | None | Same as `d3` (`rational` / `zero` / `mzero` / `optpower`; 3B `zero_d3`) with pairwise $w_f(A,B)$ | `disp2 = 94.86832980505137`, `disp3 = 40.0` |
-| `d4` (`40`) | Implemented (`D4Model`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (H–Lr, Cn–Og; $Z=0$ padding; note: internal `eeq` supports $1 \le Z \le 103$, while $112 \le Z \le 118$ requires external `q`) | `cn_d4` (EN-weighted `erf_count`, `kcn=7.5`, `cn = 30.0`, `cn_eeq = 25.0`) | `eeq` (`eeq2019`, default) or external `q` (`gfn2`, `gxtb`); `eeqbc` / `eeqbc2025` raises `NotImplementedError` | 2B: `rational` (`r4r2`), `zero`, `mzero`, `optpower`; 3B: `zero_d4` (`r4r2` radii, evaluated at $q = 0$) | `disp2 = 60.0`, `disp3 = 40.0` |
-| `d4s` (`41`) | Implemented (`D4SModel`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (same as `d4`) | `cn_d4` (`cn = 30.0`, `cn_eeq = 25.0`) | Same as `d4` (`eeq`, external `q`; `eeqbc` raises `NotImplementedError`) | Same as `d4`, with pairwise CN Gaussian widths $w_f(A,B)$ instead of $1/\text{ngw}$ | `disp2 = 60.0`, `disp3 = 40.0` |
-| `d4srev` (`42`) | Implemented (`D4SrevModel`) | $1 \le Z \le 103$ (H–Lr; $Z=0$ padding; `tanh.f90` defines charge-scaling parameters up to $Z = 103$) | `cn_d4srev` (unweighted `erf_count`, `kcn=7.5`, `cn = 30.0`, `cn_eeq = 25.0`) | `eeq` (`eeq2019`, default) or external `q` (`gfn2`, `gxtb`); `eeqbc` raises `NotImplementedError` | 2B: `rational`, `screened`, `zero`, `mzero`, `optpower`, `koide`; 3B: `zero_d4`, `zero_product`, `rational`, `screened`, `koide` (evaluated at $q = 0$) | `disp2 = 60.0`, `disp3 = 40.0` |
-| `d5` (`50`) | **Excluded / Not Implemented** | Raises `NotImplementedError` | Raises `NotImplementedError` | Raises `NotImplementedError` | Intentionally excluded because upstream `D5` and `EEQBC` are not finalized in `dftd` | Raises `NotImplementedError` |
+### 3.1 Model Overview
+
+| Model Key (`DispersionModelId`) | Implemented Status | Default CN & Cutoff (Bohr) | Charge Dependency (`qmodel`) | Default 2B / 3B Damping & Radii | Default 2B / 3B Cutoff (Bohr) |
+|---|---|---|---|---|---|
+| `d1` (`10`) | Implemented (`D1Model`) | None (fixed $C_6$) | None | 2B: `fermi` (`d1` radii); 3B: `zero_d4` (`r4r2` radii, expert option) | `disp2 = 90.0`, `disp3 = 40.0` |
+| `d2` (`20`) | Implemented (`D2Model`) | None (fixed $C_6$) | None | 2B: `fermi` (`d2` radii); 3B: `zero_d4` (`r4r2` radii, expert option) | `disp2 = 90.0`, `disp3 = 40.0` |
+| `d3` (`30`) | Implemented (`D3Model`) | `cn_d3` (`exp_count`, `kcn=16.0`, `cn = 40.0`) | None | 2B: `rational` (`r4r2`), `zero`, `mzero`, `optpower`, `cso`, `screened`, `koide`, `z`; 3B: `zero_d3` (`vdw` radii) | `disp2 = 60.0`, `disp3 = 40.0` |
+| `d3s` (`31`) | Implemented (`D3SModel`) | `cn_d3` (`exp_count`, `kcn=16.0`, `cn = 40.0`) | None | Same as `d3` (excluding `z`) with pairwise CN Gaussian width $w_f(A,B)$ | `disp2 = 60.0`, `disp3 = 40.0` |
+| `d4` (`40`) | Implemented (`D4Model`) | `cn_d4` (EN-weighted `erf_count`, `kcn=7.5`, `cn = 30.0`, `cn_eeq = 25.0`) | `eeq` (`eeq2019`, default) or external `q` (`gfn2`); `eeqbc` / `eeqbc2025` raises `NotImplementedError` | 2B: `rational` (`r4r2`), `screened`, `zero`, `mzero`, `optpower`, `koide`; 3B: `zero_d4` (`r4r2` radii, evaluated at $q = 0$) | `disp2 = 60.0`, `disp3 = 40.0` |
+| `d4s` (`41`) | Implemented (`D4SModel`) | `cn_d4` (`cn = 30.0`, `cn_eeq = 25.0`) | Same as `d4` (`eeq`, external `q`; `eeqbc` raises `NotImplementedError`) | Same as `d4`, with pairwise CN Gaussian widths $w_f(A,B)$ instead of $1/\text{ngw}$ | `disp2 = 60.0`, `disp3 = 40.0` |
+| `d4srev` (`42`) | Implemented (`D4SrevModel`) | `cn_d4srev` (unweighted `erf_count`, `kcn=7.5`, `cn = 30.0`, `cn_eeq = 25.0`) | `eeq` (`eeq2019`, default) or external `q` (`gfn2`, `gxtb`); `eeqbc` raises `NotImplementedError` | 2B: `rational`, `screened`, `zero`, `mzero`, `optpower`, `koide`; 3B: `zero_d4`, `zero_product`, `rational`, `screened`, `koide` (evaluated at $q = 0$) | `disp2 = 60.0`, `disp3 = 40.0` |
+| `d5` (`50`) | **Excluded / Not Implemented** | Raises `NotImplementedError` | Raises `NotImplementedError` | Intentionally excluded because upstream `D5` and `EEQBC` are not finalized in `dftd` | Raises `NotImplementedError` |
+
+### 3.2 Detailed Element Coverage by Table and Charge Mode
+
+All models accept `Z == 0` as a padding/dummy atom (zero energy and zero nuclear force) and raise `ValueError` for negative atomic numbers ($Z < 0$) or unsupported positive atomic numbers in eager and `torch.func` (`vmap`, `jacrev`, `jacfwd`, `grad`) execution.
+
+| Model | (1) Reference Table Elements | (2) Damping / Atomic Parameter Elements | (3) CN Parameter Elements | (4) Charge-Model Parameter Elements (`eeq`) | (5) Supported with External Charges (`q`) | (6) Supported with Auto EEQ Charges (`q=None`) | (7) Numerically Validated Elements |
+|---|---|---|---|---|---|---|---|
+| `D1Model` (`d1`) | $Z \in \{1, 6, 7, 8, 9, 10\}$ (`D1_C6`; $Z \in \{2..5\}$ and $Z > 10$ are zero/unsupported) | $Z \in \{1, 6, 7, 8, 9, 10\}$ (`D1_RADII`, `D1_RADII_PAIRWISE`) | N/A (CN not used) | N/A (charges not used) | $Z \in \{1, 6, 7, 8, 9, 10\}$ ($q$ ignored) | $Z \in \{1, 6, 7, 8, 9, 10\}$ (no EEQ used) | $Z \in \{1, 6, 7, 8, 9, 10\}$ (e.g. dimers, MB16-43 subset, boundary $Z=1, 6, 10$, rejection of $Z \in \{2..5, 11\}$) |
+| `D2Model` (`d2`) | $1 \le Z \le 86$ (`D2_C6`, H–Rn) | $1 \le Z \le 86$ (`D2_RADII`, `D2_RADII_PAIRWISE`) | N/A (CN not used) | N/A (charges not used) | $1 \le Z \le 86$ ($q$ ignored) | $1 \le Z \le 86$ (no EEQ used) | $1 \le Z \le 86$ (H–Rn, including main-group, transition-metal, lanthanide, and boundary $Z=86$ Rn; rejection of $Z=87$) |
+| `D3Model` (`d3`) | $1 \le Z \le 103$ (`d3-c6.pt` shape `(104, 104, 7, 7)`, `_load_cn` shape `(104, 7)`, H–Lr) | $1 \le Z \le 103$ (`VDW_PAIRWISE` `(104, 104)`, `R4R2` `(119,)`) | $1 \le Z \le 118$ (`COV_D3` `(119,)`) | N/A (charges not used) | $1 \le Z \le 103$ | $1 \le Z \le 103$ (no EEQ used) | $1 \le Z \le 103$ (MB16-43, heavy actinides up to $Z=103$ Lr, periodic cells; rejection of $Z \ge 104$) |
+| `D3SModel` (`d3s`) | $1 \le Z \le 94$ (`_C6_D3S` and `_load_cn_d3s` with legacy Fr–Pu references, H–Pu) | $1 \le Z \le 94$ (`WFPAIR_D3S` shape `(95, 95)`, `VDW_PAIRWISE`, `R4R2`) | $1 \le Z \le 118$ (`COV_D3` `(119,)`) | N/A (charges not used) | $1 \le Z \le 94$ | $1 \le Z \le 94$ (no EEQ used) | $1 \le Z \le 94$ (MB16-43, actinides up to $Z=94$ Pu, periodic cells; rejection of $Z \ge 95$) |
+| `D4Model` (`d4`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (`d4-ref.pt` for `eeq` and `gfn2`; gap at $104 \le Z \le 111$ where `refn == 0`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (`R4R2`, `VDW_PAIRWISE_119`, `ZEFF`, `GAM` of shape `(119,)` / `(119, 119)`) | $1 \le Z \le 118$ (`COV_D3`, `PAULING_EN` `(119,)`) | $1 \le Z \le 103$ (`tad_multicharge` EEQ2019, `MAX_ELEM_EEQ = 103`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (rejects $104 \le Z \le 111$ and $Z > 118$) | $1 \le Z \le 103$ ($112 \le Z \le 118$ raises `ValueError` in `get_charges` because EEQ2019 is parameterized up to $Z=103$) | $1 \le Z \le 103$ (with auto EEQ and external `q`) and $112 \le Z \le 118$ (Cn–Og with external `q`); rejection of $104 \le Z \le 111$ and auto-EEQ on $112 \le Z \le 118$ |
+| `D4SModel` (`d4s`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (`d4-ref.pt`; gap at $104 \le Z \le 111$) | $1 \le Z \le 103$ and $112 \le Z \le 118$ (`WFPAIR_D4S` `(119, 119)`, `R4R2`, `VDW_PAIRWISE_119`, `ZEFF`, `GAM`) | $1 \le Z \le 118$ (`COV_D3`, `PAULING_EN`) | $1 \le Z \le 103$ (`MAX_ELEM_EEQ = 103`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ | $1 \le Z \le 103$ | $1 \le Z \le 103$ (auto EEQ & external `q`) and $112 \le Z \le 118$ (external `q`); rejection of $104 \le Z \le 111$ |
+| `D4SrevModel` (`d4srev`) | $1 \le Z \le 103$ and $112 \le Z \le 118$ in `d4srev-ref.pt`, restricted to $1 \le Z \le 103$ by `TANH_PARAMS` | $1 \le Z \le 103$ (`TANH_PARAMS` from `dftd/data/tanh.f90` is non-zero only for $1 \le Z \le 103$; `WFPAIR_D4S`, `R4R2`) | $1 \le Z \le 118$ (`COV_D3`) | $1 \le Z \le 103$ (`MAX_ELEM_EEQ = 103`) | $1 \le Z \le 103$ (rejects $Z \ge 104$) | $1 \le Z \le 103$ (rejects $Z \ge 104$) | $1 \le Z \le 103$ (MB16-43, actinides up to $Z=103$ Lr, periodic cells; rejection of $Z \ge 104$) |
 
 ## 4. Fortran-to-PyTorch Module & Algorithm Mapping
 
@@ -121,9 +137,30 @@ src/tad_dftd/
 | `dftd_model_d4_{orig,smooth,srev}` (`model/d4/*.f90`) | `tad_dftd.model.d4` | `cn_d4` (EN-weighted `erf_count`, `kcn=7.5`) for D4/D4S and unweighted `erf_count` (`kcn=7.5`) for D4Srev; $\zeta$ charge scaling for D4/D4S and $\zeta_{\tanh}$ for D4Srev; multi-Gaussian CN sum over `igw = 1..ngw(iref, Z)` (divided by `ngw` in D4, pairwise $w_f(A,B)$ in D4S/D4Srev); 23-point Casimir-Polder integration; charge-independent 3B ATM ($q=0$); supports `eeq`, `gfn2`, and `gxtb` (D4Srev) reference charges, plus `d4sc_dispersion_matrix`, `d4sc_atom_energy`, and `d4sc_atom_potential` for self-consistent `D4SC`. |
 | `dftd_disp` (`disp.f90`) | `tad_dftd.disp` | Unified `dftd` and model-specific entrypoints (`dftd1`, `dftd2`, `dftd3`, `dftd3s`, `dftd4`, `dftd4s`, `dftd4srev`), property evaluation (`get_properties`), and C6-supplied `dispersion`, `dispersion2`, `dispersion3`. |
 
-## 5. `dxtb` Integration Layer
+## 5. `dxtb` Integration Layer & D4 / D4SC Compatibility Boundary (`H2.5`)
 
 - **D3 (`src/dxtb/_src/components/classicals/dispersion/d3.py`)**: Consolidated onto `tad_dftd` kernels (`tad_dftd.model.weight_references`, `tad_dftd.model.atomic_c6`, `tad_dftd.disp.dispersion2`, `tad_dftd.threebody.dispersion_atm`, `tad_dftd.damping.rational_damping`, `tad_dftd.ncoord.coordination_number`) while preserving `dxtb`'s historical default cutoffs (`cn = 25.0`, `disp = 50.0` Bohr) and `DispersionD3CoreSetup` contracts.
-- **D4 (`src/dxtb/_src/components/classicals/dispersion/_d4_adapter.py`)**: Thin compatibility adapter translating `dxtb`'s `D4Model`, `Cutoff`, and pure `Damping` objects onto `tad_dftd` (`tad_dftd.reference.d4.load_d4`, `tad_dftd.model.weights.weight_references_d4`, `tad_dftd.model.c6.contract_rc6`, `tad_dftd.disp.dispersion2`, `tad_dftd.disp.dispersion3`, `tad_dftd.threebody.dispersion_atm`).
-- **D4SC (`src/dxtb/_src/components/interactions/dispersion/d4sc.py` and `src/dxtb/_src/scf/functional/interactions.py`)**: Consolidated onto `tad_dftd.model.d4.d4sc_dispersion_matrix`, `tad_dftd.model.d4.d4sc_atom_energy`, and `tad_dftd.model.d4.d4sc_atom_potential`.
+- **Classical D4 (`src/dxtb/_src/components/classicals/dispersion/d4.py` and `_d4_adapter.py`)**:
+  - **System-owned canonical Node path (`DispersionD4CoreSetup`)**: Requires exact `DispersionD4`, built-in `d4.model.D4Model`, built-in `d4.damping.RationalDamping`, and `erf_count`. Passing custom `D4Model` subclasses or non-`RationalDamping` strategies to `core_dispersion_d4_setup` raises `TypeError`.
+  - **Legacy direct setup path (`DispersionD4Setup` / `DispersionD4.get_cache`)**: Supports custom `D4Model` subclasses (`get_atomic_c6`, `weight_references`), custom `Damping` subclasses (`ZeroDamping`, custom `RationalDamping` subclasses) for two-body `dispersion2` and `get_atm_dispersion`, explicit static `q` overrides, trainable `s9 = 0.0` (which preserves a non-zero $\partial E / \partial s_9$ gradient equal to the unscaled ATM energy), and optional `s10` / `rs10` parameters.
+- **Self-Consistent D4SC (`src/dxtb/_src/components/interactions/dispersion/d4sc.py` and `src/dxtb/_src/scf/functional/interactions.py`)**:
+  - Consolidated onto `tad_dftd.model.d4.d4sc_dispersion_matrix`, `tad_dftd.model.d4.d4sc_atom_energy`, and `tad_dftd.model.d4.d4sc_atom_potential`.
+  - **Custom `D4Model` subclasses**: Supported on both `D4SCSetup` and `D4SCCoreSetup` (and in both functional and legacy SCF routes) as long as the subclass accepts standard `D4Model` constructor arguments (`numbers, ga=..., gc=..., wf=..., ref_charges=..., rc6=..., device=..., dtype=...`) and stores only tensors and immutable scalar/container state in attributes or `__slots__`.
+  - **Damping boundary**: Self-consistent D4SC in GFN2-xTB is defined exclusively for two-body Becke-Johnson (`RationalDamping`) damping (with `s6`, `s8`, `a1`, `a2`, and optional `s10`; `s9` is evaluated by the companion classical ATM component and does not enter `d4sc_dispersion_matrix`). Passing a non-`RationalDamping` instance to `setup_d4sc` (or `DispersionD4SC.get_cache` / `Model.setup`) explicitly raises `TypeError`; custom damping in D4SC is only supported via a `DispersionD4SC` subclass overriding `get_cache`.
 - **Legacy Shims Removed**: `src/dxtb/_src/mctc_shim.py` and the `tad-dftd3` / `tad-dftd4` packaging dependencies in `setup.cfg` have been completely removed.
+
+## 6. Execution Modes, `torch.compile`, and Environment Policy (`H2.1`, `H2.3`, `H2.4`)
+
+- **Dense Periodic ATM 2D Tiling (`H2.1`)**: `dispersion_atm_periodic` bounds candidate-leg pairs in both row and column dimensions via `_periodic_tile_shape(n_leg, max_triples)` such that every numerical tile satisfies `tile_rows * tile_cols <= max_triples` (`1 <= tile_rows <= n_leg`, `1 <= tile_cols <= n_leg`), both in eager active-leg mode and in static-leg mode (`torch.func` / `torch.compile`).
+- **`torch.compile` and `torch.func` Support (`H2.4`)**:
+  - `torch.func` transforms (`grad`, `vjp`, `jvp`, `jacrev`, `jacfwd`, `vmap`) are supported across molecular and periodic dense calculations.
+  - `torch.compile` is validated on CPU with both `backend="inductor"` (the default PyTorch Inductor backend, with `fullgraph=True`) and `backend="aot_eager"` across molecular D3, molecular D4, periodic dense D3 with ATM, periodic sparse D3 with ATM, periodic D4 with external charges, and differentiable damping parameters.
+- **Supported Python & PyTorch Environment Matrix (`H2.3`)**:
+  - Following commit `887f09b787c99a44d3d7a9fda683c3796edc8569` ("Update upstream dependency baseline for U1-U4"), `setup.cfg` requires `python_requires = >=3.10, <3.15`, `torch>=2.7.0,<3`, `tad-mctc==0.11.3`, and `tad-multicharge==0.8.0`.
+  - Validated across the five CPU environments with the U1–U4 dependency stack:
+    - `/tmp1/friede/dxtb-agentic/envs/py3.10-torch2.7.0` (`Python 3.10.22`, `torch 2.7.0+cpu`, `tad-mctc 0.11.3`, `tad-multicharge 0.8.0`)
+    - `/tmp1/friede/dxtb-agentic/envs/py3.11-torch2.8.0` (`Python 3.11.15`, `torch 2.8.0+cpu`, `tad-mctc 0.11.3`, `tad-multicharge 0.8.0`)
+    - `/tmp1/friede/dxtb-agentic/envs/py3.12-torch2.11.0` (`Python 3.12.10`, `torch 2.11.0+cpu`, `tad-mctc 0.11.3`, `tad-multicharge 0.8.0`)
+    - `/tmp1/friede/dxtb-agentic/envs/py3.12-torch2.13.0` (`Python 3.12.10`, `torch 2.13.0+cpu`, `tad-mctc 0.11.3`, `tad-multicharge 0.8.0`)
+    - `/tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1` (`Python 3.14.8`, `torch 2.14.1+cpu`, `tad-mctc 0.11.3`, `tad-multicharge 0.8.0`)
+  - Note: `/tmp1/friede/dxtb-agentic/envs/py3.10-torch2.6.0` remains on disk from the pre-U1–U4 baseline (`tad-mctc 0.9.1`, `tad-multicharge 0.7.0`) and lacks `tad_mctc.Structure`, `tad_mctc.neighbor`, and `tad_mctc.pbc`.

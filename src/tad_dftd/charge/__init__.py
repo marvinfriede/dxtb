@@ -19,7 +19,7 @@ Charge model dispatch (`eeq`) for charge-dependent DFT-D models.
 """
 from __future__ import annotations
 
-from tad_mctc.autograd import is_functorch_tensor
+import torch
 from tad_mctc.tools import is_compiling
 from tad_mctc.typing import Tensor
 
@@ -85,8 +85,11 @@ def get_charges(
     if qkey != "eeq":
         raise ValueError(f"Unknown charge model '{qmod}'.")
 
-    if not is_compiling() and not is_functorch_tensor(numbers):
-        if bool((numbers < 0).any()) or bool((numbers > MAX_ELEM_EEQ).any()):
+    if not is_compiling():
+        raw = numbers
+        while torch._C._functorch.is_functorch_wrapped_tensor(raw):
+            raw = torch._C._functorch.get_unwrapped(raw)
+        if bool((raw < 0).any()) or bool((raw > MAX_ELEM_EEQ).any()):
             raise ValueError(
                 f"Structure contains unsupported element for '{qkey}' charge model "
                 f"(valid range: 1..{MAX_ELEM_EEQ})."

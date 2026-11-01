@@ -348,6 +348,12 @@ def _extra_model_state(model: d4.model.D4Model) -> tuple[tuple[str, Any], ...]:
 
 def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
     """Gather D4SC parameter and model tables for one System."""
+    if type(component.damping_function) is not d4.damping.RationalDamping:
+        raise TypeError(
+            "DispersionD4SC setup requires RationalDamping; "
+            "custom damping strategies are only supported via a "
+            "DispersionD4SC subclass overriding get_cache."
+        )
     en = PAULING(device=numbers.device, dtype=component.rcov.dtype)[numbers]
     endiff = torch.abs(en.unsqueeze(-2) - en.unsqueeze(-1))
     pair_weight = d4_defaults.D4_K4 * torch.exp(

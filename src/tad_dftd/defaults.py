@@ -78,7 +78,9 @@ __all__ = [
     "MAX_ELEM_D1",
     "MAX_ELEM_D2",
     "MAX_ELEM_D3",
+    "MAX_ELEM_D3S",
     "MAX_ELEM_D4",
+    "MAX_ELEM_D4SREV",
     "RATIONAL_A1",
     "RATIONAL_A2",
     "RS6",
@@ -96,7 +98,9 @@ MAX_ELEMENT = 104
 MAX_ELEM_D1 = 10
 MAX_ELEM_D2 = 86
 MAX_ELEM_D3 = 103
+MAX_ELEM_D3S = 94
 MAX_ELEM_D4 = 118
+MAX_ELEM_D4SREV = 103
 
 # Cutoffs in Bohr (matching Grimme-lab dftd cutoff.f90)
 D1_DISP2_CUTOFF = 90.0

@@ -27,7 +27,7 @@ from tad_mctc.neighbor.list import NeighborList
 from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import CountingFunction, TableFunction, Tensor
 
-from .. import ncoord
+from .. import defaults, ncoord
 from ..cutoff import Cutoff
 from ..damping import (
     Damping,
@@ -108,6 +108,50 @@ def default_damping(param: DampingParam, *, model: str = "d3") -> Damping:
     m = model.lower().strip()
     def_2b = "fermi" if m in ("d1", "d2") else "rational"
     return damping_from_name(param.damping or def_2b, three_body, model=m)
+
+
+def _unwrap_functorch(x: Tensor) -> Tensor:
+    while torch._C._functorch.is_functorch_wrapped_tensor(x):
+        x = torch._C._functorch.get_unwrapped(x)
+    return x
+
+
+def _validate_d3_numbers(
+    numbers: Tensor, max_elem: int = defaults.MAX_ELEM_D3
+) -> None:
+    """
+    Validate that atomic numbers are within the supported D3 range
+    (``Z == 0`` for padding, ``1 <= Z <= max_elem``, default ``103``).
+    """
+    if torch.compiler.is_compiling():
+        return
+    raw = _unwrap_functorch(numbers)
+    invalid = (raw < 0) | (raw > max_elem)
+    if bool(invalid.any()):
+        bad = int(raw[invalid][0].item())
+        raise ValueError(
+            f"Unsupported atomic number {bad} for D3 dispersion model "
+            f"(supported: Z in 1..{max_elem})."
+        )
+
+
+def _validate_d3s_numbers(
+    numbers: Tensor, max_elem: int = defaults.MAX_ELEM_D3S
+) -> None:
+    """
+    Validate that atomic numbers are within the supported D3S range
+    (``Z == 0`` for padding, ``1 <= Z <= max_elem``, default ``94``).
+    """
+    if torch.compiler.is_compiling():
+        return
+    raw = _unwrap_functorch(numbers)
+    invalid = (raw < 0) | (raw > max_elem)
+    if bool(invalid.any()):
+        bad = int(raw[invalid][0].item())
+        raise ValueError(
+            f"Unsupported atomic number {bad} for D3S dispersion model "
+            f"(supported: Z in 1..{max_elem})."
+        )
 
 
 def _matrix(c6: Tensor | AtomicC6) -> Tensor:
@@ -291,6 +335,10 @@ class D3Model(DispersionModel):
         damping: Damping | None = None,
         pairs: Pairs | None = None,
     ) -> Tensor:
+        _validate_d3_numbers(
+            structure.numbers,
+            max_elem=int(self._reference(structure).cn.shape[-2]) - 1,
+        )
         param, damping, pairs = self._prepare(structure, param, damping, pairs)
 
         env = self.environment(structure, pairs.cn)
@@ -314,6 +362,10 @@ class D3Model(DispersionModel):
         pairs: PeriodicShifts | NeighborList | None = None,
     ) -> Environment:
         """Compute the D3 coordination number of `structure`."""
+        _validate_d3_numbers(
+            structure.numbers,
+            max_elem=int(self._reference(structure).cn.shape[-2]) - 1,
+        )
         cn_model = ncoord.cn_d3.replace(
             count=self.counting_function,
             cutoff=self.cutoff.cn,
@@ -329,18 +381,24 @@ class D3Model(DispersionModel):
 
     def weights(self, structure: Structure, environment: Environment) -> Tensor:
         """Normalized reference weights of shape ``(..., nat, 7)``."""
+        ref = self._reference(structure)
+        _validate_d3_numbers(
+            structure.numbers, max_elem=int(ref.cn.shape[-2]) - 1
+        )
         return weight_references(
             structure.numbers,
             environment.cn,
-            self._reference(structure),
+            ref,
             self.weighting_function,
         )
 
     def coefficients(self, structure: Structure, weights: Tensor) -> AtomicC6:
         """Factored atomic C6 coefficients from reference `weights`."""
-        return factored_c6(
-            structure.numbers, weights, self._reference(structure)
+        ref = self._reference(structure)
+        _validate_d3_numbers(
+            structure.numbers, max_elem=int(ref.cn.shape[-2]) - 1
         )
+        return factored_c6(structure.numbers, weights, ref)
 
     def get_properties(
         self,
@@ -350,6 +408,10 @@ class D3Model(DispersionModel):
         cn: Tensor | None = None,
     ) -> DispersionProperties:
         """Compute D3 model properties (`cn`, dense `c6`, and dense `c8`)."""
+        _validate_d3_numbers(
+            structure.numbers,
+            max_elem=int(self._reference(structure).cn.shape[-2]) - 1,
+        )
         if cn is None:
             if isinstance(pairs, DensePairs):
                 pairs = pairs.fill(structure, self.cutoff, three_body=False)
@@ -516,6 +578,7 @@ class D3SModel(DispersionModel):
         damping: Damping | None = None,
         pairs: Pairs | None = None,
     ) -> Tensor:
+        _validate_d3s_numbers(structure.numbers)
         param, damping, pairs = self._prepare(structure, param, damping, pairs)
 
         env = self.environment(structure, pairs.cn)
@@ -538,6 +601,7 @@ class D3SModel(DispersionModel):
         pairs: PeriodicShifts | NeighborList | None = None,
     ) -> Environment:
         """Compute the D3S coordination number of `structure`."""
+        _validate_d3s_numbers(structure.numbers)
         cn_model = ncoord.cn_d3.replace(
             count=self.counting_function,
             cutoff=self.cutoff.cn,
@@ -561,6 +625,7 @@ class D3SModel(DispersionModel):
         Partner-element-dependent reference weights of shape
         ``(..., nat, nel, 7)``.
         """
+        _validate_d3s_numbers(structure.numbers)
         return weight_references_d3s(
             structure.numbers,
             environment.cn,
@@ -575,6 +640,7 @@ class D3SModel(DispersionModel):
         environment_or_weights: Environment | Tensor,
     ) -> AtomicC6:
         """Factored atomic C6 coefficients for D3S."""
+        _validate_d3s_numbers(structure.numbers)
         ref = self._reference(structure)
         wfpair = self._wfpair(structure)
         if isinstance(environment_or_weights, Environment):
@@ -600,6 +666,7 @@ class D3SModel(DispersionModel):
         cn: Tensor | None = None,
     ) -> DispersionProperties:
         """Compute D3S model properties (`cn`, dense `c6`, and dense `c8`)."""
+        _validate_d3s_numbers(structure.numbers)
         if cn is None:
             if isinstance(pairs, DensePairs):
                 pairs = pairs.fill(structure, self.cutoff, three_body=False)

@@ -79,20 +79,27 @@ def _default_d4_cutoff() -> Cutoff:
     return Cutoff.from_model("d4")
 
 
+def _unwrap_functorch(x: Tensor) -> Tensor:
+    while torch._C._functorch.is_functorch_wrapped_tensor(x):
+        x = torch._C._functorch.get_unwrapped(x)
+    return x
+
+
 def _validate_d4_numbers(numbers: Tensor) -> None:
     """
     Validate that atomic numbers are within the supported D4 range
     (``Z == 0`` for padding, ``1 <= Z <= 103``, or ``112 <= Z <= 118``).
     """
-    if is_compiling() or is_functorch_tensor(numbers):
+    if is_compiling():
         return
+    raw = _unwrap_functorch(numbers)
     invalid = (
-        (numbers < 0)
-        | ((numbers > 103) & (numbers < 112))
-        | (numbers > defaults.MAX_ELEM_D4)
+        (raw < 0)
+        | ((raw > 103) & (raw < 112))
+        | (raw > defaults.MAX_ELEM_D4)
     )
     if bool(invalid.any()):
-        bad = int(numbers[invalid][0].item())
+        bad = int(raw[invalid][0].item())
         raise ValueError(
             f"Unsupported atomic number {bad} for D4 dispersion model "
             "(supported: Z in 1..103 and 112..118)."
@@ -105,14 +112,15 @@ def _validate_d4srev_numbers(numbers: Tensor) -> None:
     (``Z == 0`` for padding, ``1 <= Z <= 103``; ``dftd/data/tanh.f90`` defines
     tanh charge-scaling parameters only up to ``Z = 103``).
     """
-    if is_compiling() or is_functorch_tensor(numbers):
+    if is_compiling():
         return
-    invalid = (numbers < 0) | (numbers > 103)
+    raw = _unwrap_functorch(numbers)
+    invalid = (raw < 0) | (raw > defaults.MAX_ELEM_D4SREV)
     if bool(invalid.any()):
-        bad = int(numbers[invalid][0].item())
+        bad = int(raw[invalid][0].item())
         raise ValueError(
             f"Unsupported atomic number {bad} for D4Srev dispersion model "
-            "(supported: Z in 1..103)."
+            f"(supported: Z in 1..{defaults.MAX_ELEM_D4SREV})."
         )
 
 
@@ -1333,6 +1341,7 @@ def d4sc_dispersion_matrix(
     Evaluate the self-consistent D4 pairwise reference dispersion matrix
     ``dispmat`` of shape ``(..., nat, nat, nref, nref)``.
     """
+    _validate_d4_numbers(numbers)
     if isinstance(param, DampingParam):
         dparam = param.replace(
             s6=defaults.D4_S6 if param.s6 is None else param.s6,

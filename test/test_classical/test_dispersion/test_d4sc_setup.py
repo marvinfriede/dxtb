@@ -753,3 +753,25 @@ def test_sparse_d4_parameters_are_preserved(missing: str) -> None:
     call_data = build_d4sc_data(system.d4sc_setup, positions)
     energy = custom.get_monopole_atom_energy(call_data, charges)
     assert torch.isfinite(energy).all()
+
+
+def test_setup_d4sc_rejects_non_rational_damping() -> None:
+    """Exact D4SC setup rejects non-RationalDamping instead of ignoring it (H2.5)."""
+    numbers, _ = _sample("SiH4")
+    interaction = new_d4sc(numbers, _parameters(), **DD)
+    assert interaction is not None
+
+    class CustomDamping:
+        pass
+
+    interaction.damping_function = CustomDamping()  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="RationalDamping"):
+        setup_d4sc(interaction, numbers)
+    with pytest.raises(TypeError, match="RationalDamping"):
+        Model(
+            par=_parameters(),
+            interaction=(interaction,),
+            config=Config.create(exclude=("d4sc", "es2", "es3", "aes2")),
+            auto_int_level=False,
+        ).setup(numbers)
+
