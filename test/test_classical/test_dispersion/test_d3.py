@@ -28,11 +28,16 @@ import tad_dftd as d3
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data import radii
+from tad_mctc.io.structure import Structure
 
 from dxtb import GFN1_XTB
+from dxtb._src.components.classicals.dispersion import (
+    core_dispersion_d3_setup,
+    dispersion_d3_energy,
+)
 from dxtb._src.components.classicals.dispersion.d3 import (
+    _DXTB_D3_CN_CUTOFF,
     _DXTB_D3_DISPERSION_CUTOFF,
-    _dispersion,
 )
 from dxtb._src.typing import DD, Tensor
 from dxtb.components.dispersion import DispersionD3, new_dispersion
@@ -84,7 +89,7 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         "a2": torch.tensor(5.73083694, **dd),
     }
 
-    energy = _dispersion(
+    energy = d3.disp.dispersion(
         numbers,
         positions,
         param,
@@ -119,6 +124,118 @@ def test_disp_batch(dtype: torch.dtype) -> None:
     assert edisp.dtype == dtype
     assert pytest.approx(edisp.cpu()) == ref.cpu()
     assert pytest.approx(edisp.cpu()) == energy.cpu()
+
+
+def test_three_way_d3_parity_values_and_gradients() -> None:
+    """
+    Three-way comparison required by H1.1:
+    1. dxtb integrated D3 (legacy cache and core setup).
+    2. Native tad_dftd D3 with equivalent physical configuration and cutoffs.
+    3. Independent reference energies and analytical gradients from tblite/s-dftd3.
+    """
+    dtype = torch.float64
+    dd: DD = {"dtype": dtype, "device": DEVICE}
+    sample = samples["PbH4-BiH3"]
+    numbers = sample["numbers"].to(DEVICE)
+    positions = sample["positions"].to(**dd).detach().clone()
+    ref_energy = sample["edisp"].to(**dd)
+    ref_grad = sample["grad"].to(**dd)
+
+    disp = new_dispersion(numbers, GFN1_XTB, **dd)
+    assert isinstance(disp, DispersionD3)
+    cache = disp.get_cache(numbers)
+    assert _DXTB_D3_CN_CUTOFF == 25.0
+    assert _DXTB_D3_DISPERSION_CUTOFF == 50.0
+    assert cache.cutoff.item() == 25.0
+    core = core_dispersion_d3_setup(cache, numbers, disp.numbers, disp.param)
+
+    pos_dxtb = positions.clone().requires_grad_(True)
+    e_dxtb = disp.get_energy(pos_dxtb, cache)
+    g_dxtb = torch.autograd.grad(e_dxtb.sum(), pos_dxtb)[0]
+
+    pos_core = positions.clone().requires_grad_(True)
+    e_core = dispersion_d3_energy(core, pos_core)
+    g_core = torch.autograd.grad(e_core.sum(), pos_core)[0]
+
+    pos_native = positions.clone().requires_grad_(True)
+    mol = Structure(numbers=numbers, positions=pos_native)
+    dxtb_cutoff = d3.Cutoff(
+        cn=_DXTB_D3_CN_CUTOFF,
+        disp2=_DXTB_D3_DISPERSION_CUTOFF,
+        disp3=_DXTB_D3_DISPERSION_CUTOFF,
+    )
+    e_native = d3.dftd3(mol, disp.param, cutoff=dxtb_cutoff)
+    g_native = torch.autograd.grad(e_native.sum(), pos_native)[0]
+
+    # Roundoff-level parity between dxtb integrated D3 and native tad_dftd D3
+    torch.testing.assert_close(e_dxtb, e_native, rtol=1e-14, atol=1e-15)
+    torch.testing.assert_close(e_core, e_native, rtol=1e-14, atol=1e-15)
+    torch.testing.assert_close(g_dxtb, g_native, rtol=1e-13, atol=1e-14)
+    torch.testing.assert_close(g_core, g_native, rtol=1e-13, atol=1e-14)
+
+    # Parity against independent tblite reference gradient for GFN1-xTB
+    torch.testing.assert_close(g_dxtb, ref_grad, rtol=1e-7, atol=1e-10)
+    torch.testing.assert_close(g_native, ref_grad, rtol=1e-7, atol=1e-10)
+
+    # Parity against independent s-dftd3 reference energy (r2SCAN-D3(BJ))
+    r2scan_par = GFN1_XTB.model_copy(deep=True)
+    assert r2scan_par.dispersion is not None and r2scan_par.dispersion.d3 is not None
+    r2scan_par.dispersion.d3.a1 = 0.49484001
+    r2scan_par.dispersion.d3.s8 = 0.78981345
+    r2scan_par.dispersion.d3.a2 = 5.73083694
+    disp_r2scan = new_dispersion(numbers, r2scan_par, **dd)
+    assert isinstance(disp_r2scan, DispersionD3)
+    cache_r2scan = disp_r2scan.get_cache(numbers)
+    core_r2scan = core_dispersion_d3_setup(
+        cache_r2scan, numbers, disp_r2scan.numbers, disp_r2scan.param
+    )
+    e_r2scan_dxtb = disp_r2scan.get_energy(positions, cache_r2scan)
+    e_r2scan_core = dispersion_d3_energy(core_r2scan, positions)
+    e_r2scan_native = d3.dftd3(
+        Structure(numbers=numbers, positions=positions),
+        disp_r2scan.param,
+        cutoff=dxtb_cutoff,
+    )
+    torch.testing.assert_close(
+        e_r2scan_dxtb, e_r2scan_native, rtol=1e-14, atol=1e-15
+    )
+    torch.testing.assert_close(
+        e_r2scan_core, e_r2scan_native, rtol=1e-14, atol=1e-15
+    )
+    torch.testing.assert_close(e_r2scan_dxtb, ref_energy, rtol=1e-7, atol=1e-7)
+    torch.testing.assert_close(
+        e_r2scan_native, ref_energy, rtol=1e-7, atol=1e-7
+    )
+
+    # Three-body ATM parity (nonzero s9 and trainable zero s9)
+    for s9_val in (1.0, 0.0):
+        s9_dxtb = torch.tensor(s9_val, **dd, requires_grad=True)
+        s9_native = torch.tensor(s9_val, **dd, requires_grad=True)
+        param_dxtb = dict(disp.param, s9=s9_dxtb)
+        param_native = dict(disp.param, s9=s9_native)
+
+        comp_atm = DispersionD3(numbers, param_dxtb, **dd)
+        cache_atm = comp_atm.get_cache(numbers)
+        core_atm = core_dispersion_d3_setup(
+            cache_atm, numbers, comp_atm.numbers, comp_atm.param
+        )
+
+        p1 = positions.clone().requires_grad_(True)
+        e1 = dispersion_d3_energy(core_atm, p1)
+        g_p1, g_s1 = torch.autograd.grad(e1.sum(), (p1, s9_dxtb))
+
+        p2 = positions.clone().requires_grad_(True)
+        e2 = d3.dftd3(
+            Structure(numbers=numbers, positions=p2),
+            param_native,
+            cutoff=dxtb_cutoff,
+        )
+        g_p2, g_s2 = torch.autograd.grad(e2.sum(), (p2, s9_native))
+
+        torch.testing.assert_close(e1, e2, rtol=1e-14, atol=1e-15)
+        torch.testing.assert_close(g_p1, g_p2, rtol=1e-13, atol=1e-14)
+        torch.testing.assert_close(g_s1, g_s2, rtol=1e-14, atol=1e-15)
+        assert torch.count_nonzero(g_s1) > 0
 
 
 @pytest.mark.grad

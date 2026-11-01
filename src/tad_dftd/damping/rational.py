@@ -23,7 +23,7 @@ The Becke-Johnson damping for the two-body term and the three-body
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, ClassVar
 
 import torch
@@ -42,7 +42,12 @@ from .base import (
 )
 from .param import DampingParam
 
-__all__ = ["RationalThreeBody", "RationalTwoBody", "rational_damping"]
+__all__ = [
+    "CallableTwoBodyDamping",
+    "RationalThreeBody",
+    "RationalTwoBody",
+    "rational_damping",
+]
 
 
 class RationalTwoBody(TwoBodyDamping):
@@ -51,7 +56,12 @@ class RationalTwoBody(TwoBodyDamping):
     and `a2`; `s6` defaults to 1.0.
     """
 
-    defaults: ClassVar[tuple[tuple[str, float], ...]] = (("s6", defaults.S6),)
+    defaults: ClassVar[tuple[tuple[str, float], ...]] = (
+        ("s6", defaults.S6),
+        ("s8", defaults.S8),
+        ("a1", defaults.A1),
+        ("a2", defaults.A2),
+    )
     label: ClassVar[str] = "Rational damping"
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
@@ -61,6 +71,38 @@ class RationalTwoBody(TwoBodyDamping):
         return self.value(param, "s6") / (r6 + r0_6) + self.value(
             param, "s8"
         ) * pairs.qq / (r8 + r0_8)
+
+
+class CallableTwoBodyDamping(TwoBodyDamping):
+    """
+    Adapter wrapping a legacy ``damping_function(order, r, qq, param)``
+    callable into a :class:`TwoBodyDamping`.
+    """
+
+    defaults: ClassVar[tuple[tuple[str, float], ...]] = (
+        ("s6", defaults.S6),
+        ("s8", defaults.S8),
+        ("a1", defaults.A1),
+        ("a2", defaults.A2),
+    )
+    label: ClassVar[str] = "Custom callable two-body damping"
+
+    def __init__(
+        self,
+        fn: Callable[[int, Tensor, Tensor, Any], Tensor],
+        raw_param: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.fn = fn
+        self.raw_param = raw_param
+
+    def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
+        p = self.raw_param if self.raw_param is not None else param
+        t6 = self.fn(6, pairs.distances, pairs.qq, p)
+        t8 = self.fn(8, pairs.distances, pairs.qq, p)
+        return (
+            self.value(param, "s6") * t6
+            + self.value(param, "s8") * pairs.qq * t8
+        )
 
 
 class RationalThreeBody(ThreeBodyDamping):

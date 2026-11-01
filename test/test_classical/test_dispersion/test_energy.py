@@ -31,7 +31,6 @@ from tad_mctc.data import radii
 
 from dxtb import GFN1_XTB
 from dxtb._src.components.classicals.dispersion import new_dispersion
-from dxtb._src.components.classicals.dispersion.d3 import _dispersion
 from dxtb._src.typing import DD
 
 from ...conftest import DEVICE
@@ -81,7 +80,7 @@ def test_disp_batch(dtype: torch.dtype) -> None:
         "a2": torch.tensor(5.73083694, **dd),
     }
 
-    energy = _dispersion(
+    energy = d3.disp.dispersion(
         numbers, positions, param, c6, rvdw, r4r2, d3.damping.rational_damping
     )
     assert energy.dtype == dtype

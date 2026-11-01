@@ -129,6 +129,8 @@ def dispersion_atm(
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     rdamp_table: Tensor | TableFunction | None = None,
+    rvdw: Tensor | None = None,
+    r4r2: Tensor | None = None,
     c9: Tensor | None = None,
     adiw: Tensor | None = None,
     gl_weights: Tensor | None = None,
@@ -149,7 +151,12 @@ def dispersion_atm(
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
 
     radii = pair_radii(
-        structure, rvdw_table, r4r2_table, rdamp_table=rdamp_table
+        structure,
+        rvdw_table,
+        r4r2_table,
+        rdamp_table=rdamp_table,
+        rvdw=rvdw,
+        r4r2=r4r2,
     )
 
     mask_pairs = real_pairs(numbers, mask_diagonal=True)

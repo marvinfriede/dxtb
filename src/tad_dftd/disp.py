@@ -36,12 +36,15 @@ from tad_mctc.typing import CountingFunction, TableFunction, Tensor
 from . import defaults, ncoord
 from .cutoff import Cutoff
 from .damping import (
+    CallableTwoBodyDamping,
     Damping,
     DampingParam,
+    RationalTwoBody,
     ThreeBodyDamping,
     TwoBodyDamping,
     ZeroThreeBodyD3,
     as_damping_param,
+    rational_damping,
 )
 from .model.base import DispersionProperties
 from .model.c6 import AtomicC6
@@ -521,106 +524,289 @@ def get_properties(
 
 
 def dispersion(
-    structure: Structure,
-    param: Param,
-    c6: Tensor | AtomicC6,
+    structure: Structure | Tensor,
+    param: Param | Tensor,
+    c6: Tensor | AtomicC6 | Param,
+    c6_pos: Tensor | AtomicC6 | None = None,
+    rvdw: Tensor | None = None,
+    r4r2: Tensor | None = None,
+    damping_function: Any = None,
     *,
     damping: Damping | None = None,
     pairs: Pairs | None = None,
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
-    cutoff: Cutoff = Cutoff(),
+    cutoff: Cutoff | None = None,
     max_triples: int = 2_000_000,
     checkpoint: bool = False,
 ) -> Tensor:
     """
     Dispersion energy from given C6 coefficients: the two-body term, and the
     three-body term if `damping` has one.
+
+    Supports both :class:`~tad_mctc.Structure` inputs and legacy
+    ``(numbers, positions, param, c6, rvdw, r4r2, damping_function)`` calls.
     """
+    if isinstance(structure, Structure):
+        mol = structure
+        raw_param: Param = param  # type: ignore[assignment]
+        c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
+        rvdw_val = rvdw
+        r4r2_val = r4r2
+        cut = Cutoff() if cutoff is None else cutoff
+    else:
+        assert isinstance(param, Tensor)
+        assert c6_pos is not None
+        mol = Structure(numbers=structure, positions=param)
+        raw_param = c6  # type: ignore[assignment]
+        c6_val = c6_pos
+        rvdw_val = rvdw
+        r4r2_val = r4r2
+        cut = (
+            Cutoff(
+                disp2=defaults.D3_DISP_CUTOFF,
+                disp3=defaults.D3_DISP_CUTOFF,
+            )
+            if cutoff is None
+            else cutoff
+        )
+        if (
+            damping is None
+            and damping_function is not None
+            and damping_function is not rational_damping
+        ):
+            dparam_tmp = as_damping_param(raw_param)
+            def_damp = default_damping(dparam_tmp)
+            two = (
+                damping_function
+                if isinstance(damping_function, TwoBodyDamping)
+                else CallableTwoBodyDamping(
+                    damping_function,
+                    raw_param if isinstance(raw_param, Mapping) else None,
+                )
+            )
+            damping = Damping(two=two, three=def_damp.three)
+
     d3 = D3Model(
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
-        cutoff=cutoff,
+        cutoff=cut,
         max_triples=max_triples,
         checkpoint=checkpoint,
     )
     if pairs is None:
         pairs = DensePairs()
-    param, damping, pairs = d3._prepare(structure, param, damping, pairs)
+    dparam, damp, prs = d3._prepare(mol, raw_param, damping, pairs)
 
-    if isinstance(pairs, DensePairs):
-        c6 = _matrix(c6)
+    if isinstance(prs, DensePairs):
+        c6_val = _matrix(c6_val)
 
-    energy = d3.dispersion2(structure, param, c6, pairs.disp2, damping.two)
-    if damping.three is not None:
-        energy = energy + d3.dispersion3(
-            structure, param, c6, pairs.disp3, damping.three
+    energy = _eval_dispersion2(
+        mol,
+        dparam,
+        c6_val,
+        prs.disp2,
+        damp.two,
+        rvdw_table=rvdw_table,
+        r4r2_table=r4r2_table,
+        rvdw=rvdw_val,
+        r4r2=r4r2_val,
+        cutoff=cut,
+        checkpoint=checkpoint,
+    )
+    if damp.three is not None:
+        energy = energy + _eval_dispersion3(
+            mol,
+            dparam,
+            c6_val,
+            prs.disp3,
+            damp.three,
+            rvdw_table=rvdw_table,
+            r4r2_table=r4r2_table,
+            rvdw=rvdw_val,
+            r4r2=r4r2_val,
+            cutoff=cut,
+            max_triples=max_triples,
+            checkpoint=checkpoint,
         )
     return energy
 
 
 def dispersion2(
-    structure: Structure,
-    param: Param,
-    c6: Tensor | AtomicC6,
+    structure: Structure | Tensor,
+    param: Param | Tensor,
+    c6: Tensor | AtomicC6 | Param,
+    r4r2_or_c6: Tensor | AtomicC6 | None = None,
+    r4r2: Tensor | None = None,
+    damping_function: Any = None,
+    cutoff_pos: Cutoff | Tensor | float | None = None,
     *,
     pairs: PeriodicShifts | NeighborList | None = None,
     damping: TwoBodyDamping | None = None,
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     rdamp_table: Tensor | TableFunction | None = None,
-    cutoff: Cutoff = Cutoff(),
+    rvdw: Tensor | None = None,
+    cutoff: Cutoff | Tensor | float | None = None,
     checkpoint: bool = False,
 ) -> Tensor:
     """
     Two-body dispersion energy from given C6 coefficients.
     """
-    param = as_damping_param(param)
+    if isinstance(structure, Structure):
+        mol = structure
+        raw_param: Param = param  # type: ignore[assignment]
+        c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
+        r4r2_val = r4r2
+        cut_arg = cutoff
+        cut = (
+            Cutoff()
+            if cut_arg is None
+            else (
+                cut_arg
+                if isinstance(cut_arg, Cutoff)
+                else Cutoff(
+                    disp2=float(
+                        cut_arg.item()
+                        if isinstance(cut_arg, Tensor)
+                        else cut_arg
+                    )
+                )
+            )
+        )
+    else:
+        assert isinstance(param, Tensor)
+        assert r4r2_or_c6 is not None
+        mol = Structure(numbers=structure, positions=param)
+        raw_param = c6  # type: ignore[assignment]
+        c6_val = r4r2_or_c6
+        r4r2_val = r4r2
+        cut_arg = cutoff if cutoff is not None else cutoff_pos
+        cut = (
+            Cutoff(disp2=defaults.D3_DISP_CUTOFF)
+            if cut_arg is None
+            else (
+                cut_arg
+                if isinstance(cut_arg, Cutoff)
+                else Cutoff(
+                    disp2=float(
+                        cut_arg.item()
+                        if isinstance(cut_arg, Tensor)
+                        else cut_arg
+                    )
+                )
+            )
+        )
+        if damping is None:
+            if damping_function is None or damping_function is rational_damping:
+                damping = RationalTwoBody()
+            elif isinstance(damping_function, TwoBodyDamping):
+                damping = damping_function
+            else:
+                damping = CallableTwoBodyDamping(
+                    damping_function,
+                    raw_param if isinstance(raw_param, Mapping) else None,
+                )
+
+    dparam = as_damping_param(raw_param)
     if damping is None:
-        damping = default_damping(param).two
+        damping = default_damping(dparam).two
 
     return _eval_dispersion2(
-        structure,
-        param,
-        c6,
+        mol,
+        dparam,
+        c6_val,
         pairs,
         damping,
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
-        cutoff=cutoff,
+        rvdw=rvdw,
+        r4r2=r4r2_val,
+        cutoff=cut,
         checkpoint=checkpoint,
     )
 
 
 def dispersion3(
-    structure: Structure,
-    param: Param,
-    c6: Tensor | AtomicC6,
+    structure: Structure | Tensor,
+    param: Param | Tensor,
+    c6: Tensor | AtomicC6 | Param,
+    rvdw_or_c6: Tensor | AtomicC6 | None = None,
+    rvdw: Tensor | None = None,
+    cutoff_pos: Cutoff | Tensor | float | None = None,
     *,
     pairs: TermPairs = None,
     damping: ThreeBodyDamping = ZeroThreeBodyD3(),
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     rdamp_table: Tensor | TableFunction | None = None,
-    cutoff: Cutoff = Cutoff(),
+    r4r2: Tensor | None = None,
+    cutoff: Cutoff | Tensor | float | None = None,
     max_triples: int = 2_000_000,
     checkpoint: bool = False,
 ) -> Tensor:
     """
     Three-body (Axilrod-Teller-Muto) dispersion term from given C6 coefficients.
     """
-    param = as_damping_param(param)
+    if isinstance(structure, Structure):
+        mol = structure
+        raw_param: Param = param  # type: ignore[assignment]
+        c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
+        rvdw_val = rvdw
+        cut_arg = cutoff
+        cut = (
+            Cutoff()
+            if cut_arg is None
+            else (
+                cut_arg
+                if isinstance(cut_arg, Cutoff)
+                else Cutoff(
+                    disp3=float(
+                        cut_arg.item()
+                        if isinstance(cut_arg, Tensor)
+                        else cut_arg
+                    )
+                )
+            )
+        )
+    else:
+        assert isinstance(param, Tensor)
+        assert rvdw_or_c6 is not None
+        mol = Structure(numbers=structure, positions=param)
+        raw_param = c6  # type: ignore[assignment]
+        c6_val = rvdw_or_c6
+        rvdw_val = rvdw
+        cut_arg = cutoff if cutoff is not None else cutoff_pos
+        cut = (
+            Cutoff(disp3=defaults.D3_DISP_CUTOFF)
+            if cut_arg is None
+            else (
+                cut_arg
+                if isinstance(cut_arg, Cutoff)
+                else Cutoff(
+                    disp3=float(
+                        cut_arg.item()
+                        if isinstance(cut_arg, Tensor)
+                        else cut_arg
+                    )
+                )
+            )
+        )
+
+    dparam = as_damping_param(raw_param)
     return _eval_dispersion3(
-        structure,
-        param,
-        c6,
+        mol,
+        dparam,
+        c6_val,
         pairs,
         damping,
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
-        cutoff=cutoff,
+        rvdw=rvdw_val,
+        r4r2=r4r2,
+        cutoff=cut,
         max_triples=max_triples,
         checkpoint=checkpoint,
     )

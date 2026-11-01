@@ -38,13 +38,11 @@ __all__ = [
 
 
 def _load_cn(
-    dtype: torch.dtype | None = None, device: torch.device | None = None
+    dtype: torch.dtype = torch.double, device: torch.device | None = None
 ) -> Tensor:
     """
     Load D3 reference coordination numbers of shape ``(104, 7)`` (Z=0..103).
     """
-    if dtype is None:
-        dtype = get_default_dtype()
     if device is None:
         device = get_default_device()
     # fmt: off
@@ -162,7 +160,7 @@ def _load_cn(
 
 
 def _load_cn_d3s(
-    dtype: torch.dtype | None = None, device: torch.device | None = None
+    dtype: torch.dtype = torch.double, device: torch.device | None = None
 ) -> Tensor:
     """
     Load D3S reference coordination numbers of shape ``(104, 7)``.
@@ -171,8 +169,6 @@ def _load_cn_d3s(
     coordination numbers for Fr-Pu (Z=87..94) from
     ``dftd/model/d3/reference/smooth.inc``, and has no references for Z > 94.
     """
-    if dtype is None:
-        dtype = get_default_dtype()
     if device is None:
         device = get_default_device()
     cn = _load_cn(dtype=dtype, device=device)
@@ -226,22 +222,18 @@ _C6_D3S: Tensor = _build_c6_d3s()
 
 
 def _load_c6(
-    dtype: torch.dtype | None = None, device: torch.device | None = None
+    dtype: torch.dtype = torch.double, device: torch.device | None = None
 ) -> Tensor:
     """Get D3 reference C6 coefficients (always a copy)."""
-    if dtype is None:
-        dtype = get_default_dtype()
     if device is None:
         device = get_default_device()
     return _C6.to(device=device, dtype=dtype, copy=True)
 
 
 def _load_c6_d3s(
-    dtype: torch.dtype | None = None, device: torch.device | None = None
+    dtype: torch.dtype = torch.double, device: torch.device | None = None
 ) -> Tensor:
     """Get D3S reference C6 coefficients (always a copy)."""
-    if dtype is None:
-        dtype = get_default_dtype()
     if device is None:
         device = get_default_device()
     return _C6_D3S.to(device=device, dtype=dtype, copy=True)

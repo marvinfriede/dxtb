@@ -29,6 +29,7 @@ from typing import Any, NamedTuple, TypeAlias
 
 import torch
 from tad_mctc import Structure
+from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.data import resolve_table
 from tad_mctc.neighbor.images import PeriodicShifts
 from tad_mctc.neighbor.list import NeighborList
@@ -96,14 +97,23 @@ def default_damping(param: DampingParam, *, model: str = "d3") -> Damping:
     """
     The damping named by ``param.damping`` (rational damping if unset, or Fermi
     damping for D1/D2), with the default three-body damping of `model` if `s9`
-    is set and not the Python number zero.
+    is set and not a non-trainable zero.
 
-    A tensor `s9` always gets the three-body term (even at zero) so that the
-    choice is static under ``torch.compile`` and ``vmap`` and the derivative
-    with respect to `s9` equals the three-body energy.
+    A differentiable, functorch-traced, or compiled tensor `s9` always gets the
+    three-body term (even at zero) so that the choice is static under
+    ``torch.compile`` and ``vmap`` and the derivative with respect to `s9`
+    equals the three-body energy.
     """
     s9 = param.s9
-    three_body = s9 is not None and (isinstance(s9, Tensor) or s9 != 0.0)
+    if isinstance(s9, Tensor):
+        three_body = (
+            s9.requires_grad
+            or is_functorch_tensor(s9)
+            or torch.compiler.is_compiling()
+            or bool(s9 != 0.0)
+        )
+    else:
+        three_body = s9 is not None and s9 != 0.0
     m = model.lower().strip()
     def_2b = "fermi" if m in ("d1", "d2") else "rational"
     return damping_from_name(param.damping or def_2b, three_body, model=m)
@@ -124,6 +134,8 @@ def _eval_dispersion2(
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     rdamp_table: Tensor | TableFunction | None = None,
+    rvdw: Tensor | None = None,
+    r4r2: Tensor | None = None,
     cutoff: Cutoff = Cutoff(),
     checkpoint: bool = False,
 ) -> Tensor:
@@ -151,6 +163,8 @@ def _eval_dispersion2(
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
+        rvdw=rvdw,
+        r4r2=r4r2,
         cutoff=cutoff.disp2,
         width=cutoff.width2,
     )
@@ -166,6 +180,8 @@ def _eval_dispersion3(
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     rdamp_table: Tensor | TableFunction | None = None,
+    rvdw: Tensor | None = None,
+    r4r2: Tensor | None = None,
     cutoff: Cutoff = Cutoff(),
     max_triples: int = 2_000_000,
     checkpoint: bool = False,
@@ -213,6 +229,8 @@ def _eval_dispersion3(
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
+        rvdw=rvdw,
+        r4r2=r4r2,
         cutoff=cut,
         width=width,
     )

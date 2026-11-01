@@ -82,6 +82,8 @@ def _dispersion2_dense(
     rvdw_table: Tensor | TableFunction | None,
     r4r2_table: Tensor | TableFunction | None,
     rdamp_table: Tensor | TableFunction | None = None,
+    rvdw: Tensor | None = None,
+    r4r2: Tensor | None = None,
     c8: Tensor | None = None,
     cutoff: float,
     width: float,
@@ -103,7 +105,12 @@ def _dispersion2_dense(
     numbers, positions = structure.numbers, structure.positions
 
     radii = pair_radii(
-        structure, rvdw_table, r4r2_table, rdamp_table=rdamp_table
+        structure,
+        rvdw_table,
+        r4r2_table,
+        rdamp_table=rdamp_table,
+        rvdw=rvdw,
+        r4r2=r4r2,
     )
     if c8 is not None:
         qq = torch.where(c6 != 0, c8 / nonzero(c6), radii.qq)
