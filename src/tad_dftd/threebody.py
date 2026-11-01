@@ -49,11 +49,41 @@ from .damping.zero import ZeroThreeBodyD3
 from .pairvalues import PairRadii, pair_radii, slot_values
 
 __all__ = [
+    "_periodic_tile_shape",
     "atm_term",
     "dispersion_atm",
     "dispersion_atm_periodic",
     "dispersion_atm_sparse",
 ]
+
+
+def _periodic_tile_shape(n_leg: int, max_triples: int) -> tuple[int, int]:
+    """
+    Bounded 2D tile shape ``(row_block, col_block)`` for ``n_leg`` candidate
+    periodic legs such that ``row_block * col_block <= max_triples``.
+
+    Parameters
+    ----------
+    n_leg : int
+        Number of candidate periodic legs ``(j, shift)`` for one central atom.
+    max_triples : int
+        Maximum number of candidate leg pairs per tile (``>= 1``).
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(row_block, col_block)`` satisfying
+        ``1 <= row_block <= n_leg``, ``1 <= col_block <= n_leg``, and
+        ``row_block * col_block <= max_triples`` when ``n_leg >= 1``, or
+        ``(0, 0)`` when ``n_leg < 1``.
+    """
+    if max_triples < 1:
+        raise ValueError(f"'max_triples' must be >= 1, got {max_triples}.")
+    if n_leg < 1:
+        return 0, 0
+    row_block = min(n_leg, max(1, math.isqrt(max_triples)))
+    col_block = min(n_leg, max(1, max_triples // row_block))
+    return row_block, col_block
 
 
 def _sides(table: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -85,7 +115,15 @@ def atm_term(
     if isinstance(cutoff2, Tensor) and cutoff2.ndim > 0:
         while cutoff2.ndim < r2ij.ndim:
             cutoff2 = cutoff2.unsqueeze(-1)
-    mask = (r2ij <= cutoff2) & (r2ik <= cutoff2) & (r2jk <= cutoff2)
+    eps = torch.finfo(r2ij.dtype).eps
+    mask = (
+        (r2ij <= cutoff2)
+        & (r2ik <= cutoff2)
+        & (r2jk <= cutoff2)
+        & (r2ij >= eps)
+        & (r2ik >= eps)
+        & (r2jk >= eps)
+    )
     if valid is not None:
         mask = mask & valid
 
@@ -220,7 +258,15 @@ def dispersion_atm_periodic(
     Axilrod-Teller-Muto dispersion term of a periodic cell: every atom ``i``
     of the cell with every pair of atoms or images of atoms within `cutoff`
     of it (also images of ``i`` itself).
+
+    Candidate leg pairs ``(j, shift_j) x (k, shift_k)`` around each central
+    atom ``i`` are evaluated in 2D tiles of shape ``(tile_rows, tile_cols)``
+    satisfying ``tile_rows * tile_cols <= max_triples`` so no full
+    ``(n_leg, n_leg)`` intermediate is materialized when ``n_leg**2 > max_triples``.
     """
+    if max_triples < 1:
+        raise ValueError(f"'max_triples' must be >= 1, got {max_triples}.")
+
     numbers, positions = structure.numbers, structure.positions
     lattice, periodic = structure.lattice, structure.periodic
     if lattice is None or periodic is None:
@@ -246,8 +292,11 @@ def dispersion_atm_periodic(
     valid = valid.expand(n_system, nat, nat, n_shift)
 
     c6_systems = c6.reshape(-1, nat, nat).expand(n_system, nat, nat)
-    radii_systems = radii.map(
-        lambda r: r.reshape(-1, nat, nat).expand(n_system, nat, nat)
+    radii_systems = PairRadii(
+        qq=radii.qq.reshape(-1, nat, nat).expand(n_system, nat, nat),
+        rdamp=radii.rdamp.reshape(-1, nat, nat).expand(n_system, nat, nat),
+        rvdw=radii.rvdw.reshape(-1, nat, nat).expand(n_system, nat, nat),
+        znum=radii.znum.reshape(-1, nat, nat).expand(n_system, nat, nat),
     )
     adiw_systems = (
         adiw.reshape(-1, nat, adiw.shape[-1]).expand(
@@ -259,7 +308,6 @@ def dispersion_atm_periodic(
 
     cutoff2 = cutoff * cutoff
     eps = torch.finfo(positions.dtype).eps
-    zero = torch.zeros((), device=positions.device, dtype=positions.dtype)
 
     use_static_legs = (
         is_compiling()
@@ -280,7 +328,12 @@ def dispersion_atm_periodic(
     energies = []
     for system in range(n_system):
         c6_sys = c6_systems[system]
-        radii_sys = radii_systems.map(lambda r: r[system])
+        radii_sys = PairRadii(
+            qq=radii_systems.qq[system],
+            rdamp=radii_systems.rdamp[system],
+            rvdw=radii_systems.rvdw[system],
+            znum=radii_systems.znum[system],
+        )
         adiw_sys = adiw_systems[system] if adiw_systems is not None else None
 
         for i in range(nat):
@@ -297,8 +350,23 @@ def dispersion_atm_periodic(
                 atoms = static_atoms
                 legs = vectors.reshape(-1, 3)
                 c6_i = c6_sys[i].unsqueeze(1).expand(nat, n_shift).reshape(-1)
-                radii_i = radii_sys.map(
-                    lambda r: r[i].unsqueeze(1).expand(nat, n_shift).reshape(-1)
+                radii_i = PairRadii(
+                    qq=radii_sys.qq[i]
+                    .unsqueeze(1)
+                    .expand(nat, n_shift)
+                    .reshape(-1),
+                    rdamp=radii_sys.rdamp[i]
+                    .unsqueeze(1)
+                    .expand(nat, n_shift)
+                    .reshape(-1),
+                    rvdw=radii_sys.rvdw[i]
+                    .unsqueeze(1)
+                    .expand(nat, n_shift)
+                    .reshape(-1),
+                    znum=radii_sys.znum[i]
+                    .unsqueeze(1)
+                    .expand(nat, n_shift)
+                    .reshape(-1),
                 )
                 keep_legs: Tensor | None = keep.reshape(-1)
             else:
@@ -309,42 +377,79 @@ def dispersion_atm_periodic(
                     0, atoms * n_shift + shift_idx
                 )
                 c6_i = c6_sys[i].index_select(0, atoms)
-                radii_i = radii_sys.map(lambda r: r[i].index_select(0, atoms))
+                radii_i = PairRadii(
+                    qq=radii_sys.qq[i].index_select(0, atoms),
+                    rdamp=radii_sys.rdamp[i].index_select(0, atoms),
+                    rvdw=radii_sys.rvdw[i].index_select(0, atoms),
+                    znum=radii_sys.znum[i].index_select(0, atoms),
+                )
                 keep_legs = None
 
             n_leg = atoms.shape[0]
-            energy = zero
-            block = max(1, max_triples // max(n_leg, 1))
-            for start in range(0, max(n_leg, 1), block):
-                rows = slice(start, start + block)
-                keep_rows = keep_legs[rows] if keep_legs is not None else None
-                args = (
-                    legs[rows],
-                    legs,
-                    atoms[rows],
-                    atoms,
-                    c6_i[rows],
-                    c6_i,
-                    radii_i.map(lambda r: r[rows]),
-                    radii_i,
-                    c6_sys,
-                    radii_sys,
-                    damping,
-                    param,
-                    cutoff,
-                    width,
-                    i,
-                    adiw_sys,
-                    gl_weights,
-                    keep_rows,
-                    keep_legs,
+            if n_leg == 0:
+                energy = (
+                    folded[system, i].sum()
+                    + translations[system].sum()
+                    + c6_sys[i].sum()
+                ) * 0.0
+                energies.append(energy)
+                continue
+
+            row_block, col_block = _periodic_tile_shape(n_leg, max_triples)
+            energy = folded.new_zeros(())
+            for row_start in range(0, n_leg, row_block):
+                rows = slice(row_start, min(row_start + row_block, n_leg))
+                legs_a = legs[rows]
+                atoms_a = atoms[rows]
+                c6_a = c6_i[rows]
+                radii_a = PairRadii(
+                    qq=radii_i.qq[rows],
+                    rdamp=radii_i.rdamp[rows],
+                    rvdw=radii_i.rvdw[rows],
+                    znum=radii_i.znum[rows],
                 )
-                if checkpoint:
-                    energy = energy + _torch_checkpoint(
-                        _periodic_block_energy, *args, use_reentrant=False
+                keep_rows = keep_legs[rows] if keep_legs is not None else None
+                for col_start in range(0, n_leg, col_block):
+                    cols = slice(col_start, min(col_start + col_block, n_leg))
+                    legs_b = legs[cols]
+                    atoms_b = atoms[cols]
+                    c6_b = c6_i[cols]
+                    radii_b = PairRadii(
+                        qq=radii_i.qq[cols],
+                        rdamp=radii_i.rdamp[cols],
+                        rvdw=radii_i.rvdw[cols],
+                        znum=radii_i.znum[cols],
                     )
-                else:
-                    energy = energy + _periodic_block_energy(*args)
+                    keep_cols = (
+                        keep_legs[cols] if keep_legs is not None else None
+                    )
+                    args = (
+                        legs_a,
+                        legs_b,
+                        atoms_a,
+                        atoms_b,
+                        c6_a,
+                        c6_b,
+                        radii_a,
+                        radii_b,
+                        c6_sys,
+                        radii_sys,
+                        damping,
+                        param,
+                        cutoff,
+                        width,
+                        i,
+                        adiw_sys,
+                        gl_weights,
+                        keep_rows,
+                        keep_cols,
+                    )
+                    if checkpoint:
+                        energy = energy + _torch_checkpoint(
+                            _periodic_block_energy, *args, use_reentrant=False
+                        )
+                    else:
+                        energy = energy + _periodic_block_energy(*args)
 
             energies.append(energy)
 
@@ -388,10 +493,12 @@ def _periodic_block_energy(
     jk = (atom_a.unsqueeze(1), atom_b.unsqueeze(0))
     c6_jk = c6[jk]
 
-    def sides(
-        of_a: Tensor, of_b: Tensor, table: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        return of_a.unsqueeze(1), of_b.unsqueeze(0), table[jk]
+    eps = torch.finfo(vec_a.dtype).eps
+    valid_jk = (r2ij >= eps) & (r2ik >= eps) & (r2jk >= eps)
+    if keep_a is not None:
+        valid_jk = valid_jk & keep_a.unsqueeze(1)
+    if keep_b is not None:
+        valid_jk = valid_jk & keep_b.unsqueeze(0)
 
     if adiw_sys is not None and gl_weights is not None:
         w = gl_weights.to(device=adiw_sys.device, dtype=adiw_sys.dtype)
@@ -402,21 +509,30 @@ def _periodic_block_energy(
             "w,aw,bw,w->ab", ai, aj, ak, w
         )
     else:
-        c9 = storch.safe_sqrt(
-            torch.abs(c6_a.unsqueeze(1) * c6_b.unsqueeze(0) * c6_jk)
+        c6_prod = torch.where(
+            valid_jk,
+            torch.abs(c6_a.unsqueeze(1) * c6_b.unsqueeze(0) * c6_jk),
+            torch.zeros_like(c6_jk),
         )
+        c9 = storch.safe_sqrt(c6_prod)
 
-    eps = torch.finfo(vec_a.dtype).eps
-    valid_jk = r2jk >= eps
-    if keep_a is not None and keep_b is not None:
-        valid_jk = valid_jk & keep_a.unsqueeze(1) & keep_b.unsqueeze(0)
+    rdamp_sides = (
+        radii_a.rdamp.unsqueeze(1),
+        radii_b.rdamp.unsqueeze(0),
+        radii.rdamp[jk],
+    )
+    rvdw_sides = (
+        radii_a.rvdw.unsqueeze(1),
+        radii_b.rvdw.unsqueeze(0),
+        radii.rvdw[jk],
+    )
 
     term = atm_term(
         r2ij,
         r2ik,
         r2jk,
-        sides(radii_a.rdamp, radii_b.rdamp, radii.rdamp),
-        sides(radii_a.rvdw, radii_b.rvdw, radii.rvdw),
+        rdamp_sides,
+        rvdw_sides,
         damping,
         param,
         cutoff,
