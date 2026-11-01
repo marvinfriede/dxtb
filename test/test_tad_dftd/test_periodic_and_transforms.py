@@ -1011,13 +1011,49 @@ def test_inductor_compile_molecular_and_periodic_models() -> None:
             torch.testing.assert_close(gqc, gqe, atol=1e-11, rtol=1e-11)
 
 
-# Authoritative Fortran libdftd.so (commit d2740777049b2a77fd5acc86c4e1abe75d5374ee)
-# periodic reference fixtures (total energy, atom-0 nuclear gradient, and 3x3
-# virial/strain tensor sigma = dE/d(eps)) for a 2-atom displaced carbon triclinic
-# cell (numbers=[6, 6], positions=[[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]],
-# lattice=[[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]], disp2=14.0,
-# disp3=10.0, cn=40.0 for D3/D3S and 30.0 for D4/D4S/D4Srev, q=[0.0, 0.0] exact
-# by inversion symmetry, 2B + 3B ATM s9=1.0) across 1D, 2D, and 3D periodicities.
+# Authoritative Fortran periodic reference fixtures (H3.3, H3-F.4):
+# - Upstream repository: https://github.com/grimme-lab/dftd
+# - Pinned commit SHA: d2740777049b2a77fd5acc86c4e1abe75d5374ee
+# - Fortran library / C-API: `<dftd_root>/_build/libdftd.so` (`src/dftd/api.f90`:
+#   `dftd_new_error`, `dftd_new_structure`, `dftd_new_model`,
+#   `dftd_set_model_realspace_cutoff`, `dftd_new_damping`,
+#   `dftd_new_empty_param`, `dftd_set_param`, `dftd_get_dispersion`).
+# - Reproducibility & verification recipe:
+#   `PYTHONPATH=src python tools/generate_tad_dftd_data.py --verify-periodic-fixtures`
+# - Units: Atomic units throughout (positions, lattice vectors, and cutoffs in
+#   Bohr; total energy and 3x3 virial/strain tensor sigma in Hartree; nuclear
+#   gradients in Hartree / Bohr).
+# - Output precision: IEEE-754 binary64 (`float64`, 17 decimal digits).
+# - Atomic numbers & geometry (`natoms = 2`):
+#   `numbers = [6, 6]`, `positions = [[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]]` Bohr.
+# - Lattice orientation & periodic flags:
+#   Row-vector 3x3 lattice `L = [[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]]`
+#   Bohr (stored as columns `lattice(:, i) = a_i` in Fortran column-major layout);
+#   periodic flags `1d = [True, False, False]`, `2d = [True, True, False]`,
+#   `3d = [True, True, True]`.
+# - Coordinate-wrapping preprocessing:
+#   `dftd_new_structure` (`new_structure_api`) applies `wrap_to_central_cell`;
+#   because fractional coordinates of both atoms lie in `(0.01, 0.35) subset [0, 1)`,
+#   central-cell wrapping is an identity transformation on these coordinates.
+# - Charge model & external charges:
+#   Total charge `charge = 0.0`, `qmodel = 1` (EEQ, `ga=3.0, gc=2.0, wf=6.0`);
+#   by inversion symmetry between the two identical carbon atoms, partial charges
+#   are identically `q = [0.0, 0.0]` in 1D, 2D, and 3D.
+# - Damping parameters & ATM status (ATM enabled with `s9 = 1.0` for all 7 models):
+#   - `d1`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`),
+#     `s6=0.75, rs6=1.0, alp=23.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`.
+#   - `d2`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`),
+#     `s6=0.75, rs6=1.0, alp=20.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`.
+#   - `d3`, `d3s`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero_avg` 3B (`damping_3b_id=4`),
+#     PBE parameters `s6=1.0, s8=0.7875, a1=0.4289, a2=4.4407, s9=1.0, rs9=4/3, alp=14.0, alp3=14.0, a13=1.0, a23=0.0`.
+#   - `d4`, `d4s`, `d4srev`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero_avg` 3B (`damping_3b_id=4`),
+#     PBE parameters `s6=1.0, s8=0.95948085, a1=0.38574991, a2=4.80688534, s9=1.0, rs9=1.0, alp=16.0, alp3=16.0, a13=0.38574991, a23=4.80688534`.
+# - Cutoffs (`dftd_set_model_realspace_cutoff`, hard cutoffs `width2 = width3 = 0.0` Bohr):
+#   - `d1`, `d2`, `d3`, `d3s`: `disp2 = 14.0, disp3 = 10.0, cn = 40.0` Bohr
+#   - `d4`, `d4s`, `d4srev`: `disp2 = 14.0, disp3 = 10.0, cn = 30.0` Bohr (`cn_eeq = 25.0` Bohr)
+# - Strain tensor definition:
+#   `sigma_{alpha,beta} = dE/d(eps_{alpha,beta})|_{s, eps=0} = sum_i r_{i,alpha} dE/dr_{i,beta} + sum_k L_{k,alpha} dE/dL_{k,beta}`
+#   under `r' = r (I + eps)`, `L' = L (I + eps)` at fixed fractional coordinates `s = r L^{-1}`.
 _FORTRAN_PERIODIC_REFS: dict[str, dict[str, dict[str, object]]] = {
     "1d": {
         "d1": {

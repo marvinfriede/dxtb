@@ -58,3 +58,23 @@ Currently developed as an independent top-level Python package (`src/tad_dftd/`)
 - Numerical reference tables (`reference/*.pt`), functional parameter tables (`param/*.toml`), and algorithms/modules translated directly from `grimme-lab/dftd` are subject to `LGPL-3.0-or-later` (`COPYING.LESSER` and `COPYING`).
 - Consequently, the combined `tad_dftd` package distribution carries the composite license expression `Apache-2.0 AND LGPL-3.0-or-later` (and under LGPLv3 terms, the combined work may be redistributed under `LGPL-3.0-or-later` while preserving `Apache-2.0` notices on the `tad-*`-derived portions).
 - Distributing `tad_dftd` as a separate top-level package inside `src/tad_dftd/` keeps `tad_dftd`'s licensing and attribution self-contained for standalone extraction.
+
+## Periodic Fortran Reference Fixtures (`_FORTRAN_PERIODIC_REFS`, `H3-F.4`)
+
+The 21 periodic reference fixtures in `test/test_tad_dftd/test_periodic_and_transforms.py` (`1d`, `2d`, `3d` × `d1`, `d2`, `d3`, `d3s`, `d4`, `d4s`, `d4srev`) can be regenerated or audited directly against the pinned Fortran shared library (`/tmp1/friede/work/dftd-grimme-lab/dftd/_build/libdftd.so`, commit `d2740777049b2a77fd5acc86c4e1abe75d5374ee`) using:
+
+```bash
+PYTHONPATH=src /tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1/bin/python tools/generate_tad_dftd_data.py --verify-periodic-fixtures
+```
+
+- **Units & Precision**: Atomic units (`Bohr`, `Eh`, `Eh/Bohr`), IEEE-754 `float64` (17 significant decimal digits).
+- **Geometry & Cell**: `natoms = 2`, `numbers = [6, 6]`, `positions = [[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]]` Bohr, row-vector lattice `L = [[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]]` Bohr, `periodic = [True, False, False]` (`1d`), `[True, True, False]` (`2d`), `[True, True, True]` (`3d`).
+- **Coordinate Wrapping**: `dftd_new_structure` (`new_structure_api` in `src/dftd/api.f90`) wraps periodic coordinates into $[0, 1)^3$ via `wrap_to_central_cell`; fractional coordinates already lie in $(0.01, 0.35) \subset [0, 1)$.
+- **Charge Model & Partial Charges**: `charge = 0.0`, `qmodel = 1` (EEQ, `ga=3.0, gc=2.0, wf=6.0`); by cell inversion symmetry between the two identical carbon atoms, $q = [0.0, 0.0]$ identically.
+- **Damping Parameters, ATM, & Cutoffs (`dftd_set_model_realspace_cutoff`, `s9 = 1.0` for all 7 models)**:
+  - `d1`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`), `s6=0.75, rs6=1.0, alp=23.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`, `disp2=14.0, disp3=10.0, cn=40.0` Bohr.
+  - `d2`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`), `s6=0.75, rs6=1.0, alp=20.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`, `disp2=14.0, disp3=10.0, cn=40.0` Bohr.
+  - `d3`, `d3s`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero_avg` 3B (`damping_3b_id=4`), PBE parameters (`s6=1.0, s8=0.7875, a1=0.4289, a2=4.4407, s9=1.0, rs9=4/3, alp=14.0, alp3=14.0, a13=1.0, a23=0.0`), `disp2=14.0, disp3=10.0, cn=40.0` Bohr.
+  - `d4`, `d4s`, `d4srev`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero_avg` 3B (`damping_3b_id=4`), PBE parameters (`s6=1.0, s8=0.95948085, a1=0.38574991, a2=4.80688534, s9=1.0, rs9=1.0, alp=16.0, alp3=16.0, a13=0.38574991, a23=4.80688534`), `disp2=14.0, disp3=10.0, cn=30.0` Bohr (`cn_eeq=25.0` Bohr).
+- **Strain Tensor Definition**: $\sigma_{\alpha\beta} = \left.\partial E / \partial \varepsilon_{\alpha\beta}\right|_{\mathbf{s},\,\varepsilon=0} = \sum_i r_{i\alpha}\partial E/\partial r_{i\beta} + \sum_{k=1}^3 L_{k\alpha}\partial E/\partial L_{k\beta}$.
+

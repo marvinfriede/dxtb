@@ -390,3 +390,112 @@ def test_compiled_unsupported_elements_all_models_and_backends(
         _ = c_d3(batch_mixed_bad, batch_pos).item()
 
 
+def test_integer_model_id_dispatch_and_validation() -> None:
+    """
+    Verify H3-F.1 integer model-ID dispatch (10, 20, 30, 31, 40, 41, 42),
+    agreement with string and enum selections, D5 (50) NotImplementedError,
+    invalid integer ValueError, and explicit boolean rejection across
+    resolve_model_id, get_model_metadata, dftd, get_properties, and
+    validate_numbers.
+    """
+    from tad_dftd import dftd, get_properties, validate_numbers
+    from tad_mctc import Structure
+
+    mol = Structure(
+        numbers=torch.tensor([8, 1, 1], dtype=torch.long),
+        positions=torch.tensor(
+            [[0.0, 0.0, 0.0], [0.0, 1.43, -1.10], [0.0, -1.43, -1.10]],
+            dtype=torch.float64,
+        ),
+    )
+    p_fermi = {"s6": 0.75, "rs6": 1.1, "alp": 20.0, "s9": 1.0}
+    p_bj = {"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407, "s9": 1.0}
+
+    cases = [
+        (10, "d1", DispersionModelId.D1, p_fermi, 11),
+        (20, "d2", DispersionModelId.D2, p_fermi, 87),
+        (30, "d3", DispersionModelId.D3, p_bj, 104),
+        (31, "d3s", DispersionModelId.D3S, p_bj, 95),
+        (40, "d4", DispersionModelId.D4, p_bj, 104),
+        (41, "d4s", DispersionModelId.D4S, p_bj, 104),
+        (42, "d4srev", DispersionModelId.D4SREV, p_bj, 104),
+    ]
+
+    for int_id, str_id, enum_id, params, bad_z in cases:
+        assert int(enum_id) == int_id
+        assert resolve_model_id(int_id) == enum_id
+        assert resolve_model_id(str_id) == enum_id
+        assert resolve_model_id(enum_id) == enum_id
+
+        meta_int = get_model_metadata(int_id)
+        meta_str = get_model_metadata(str_id)
+        meta_enum = get_model_metadata(enum_id)
+        assert meta_int == meta_str == meta_enum
+
+        e_int = dftd(mol, params, model=int_id)
+        e_str = dftd(mol, params, model=str_id)
+        e_enum = dftd(mol, params, model=enum_id)
+        torch.testing.assert_close(e_int, e_str, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(e_int, e_enum, atol=0.0, rtol=0.0)
+
+        props_int = get_properties(mol, model=int_id)
+        props_str = get_properties(mol, model=str_id)
+        props_enum = get_properties(mol, model=enum_id)
+        torch.testing.assert_close(props_int.c6, props_str.c6, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(props_int.c6, props_enum.c6, atol=0.0, rtol=0.0)
+
+        v_int = validate_numbers(mol.numbers, model=int_id)
+        v_str = validate_numbers(mol.numbers, model=str_id)
+        v_enum = validate_numbers(mol.numbers, model=enum_id)
+        assert torch.equal(v_int, v_str)
+        assert torch.equal(v_int, v_enum)
+
+        bad_nums = torch.tensor([bad_z, 1], dtype=torch.long)
+        with pytest.raises(ValueError):
+            validate_numbers(bad_nums, model=int_id)
+
+    # Excluded D5 identifier (50) must continue raising NotImplementedError
+    for d5_id in (50, DispersionModelId.D5, "d5", "dft-d5"):
+        with pytest.raises(NotImplementedError, match="D5"):
+            resolve_model_id(d5_id)
+        with pytest.raises(NotImplementedError, match="D5"):
+            get_model_metadata(d5_id)
+        with pytest.raises(NotImplementedError, match="D5"):
+            dftd(mol, p_bj, model=d5_id)
+        with pytest.raises(NotImplementedError, match="D5"):
+            get_properties(mol, model=d5_id)
+        with pytest.raises(NotImplementedError, match="D5"):
+            validate_numbers(mol.numbers, model=d5_id)
+
+    # Unknown integer IDs raise clear ValueError
+    for invalid_int in (-10, -1, 0, 1, 9, 11, 29, 32, 39, 43, 49, 51, 99):
+        with pytest.raises(ValueError, match="Unknown dispersion model ID"):
+            resolve_model_id(invalid_int)
+        with pytest.raises(ValueError, match="Unknown dispersion model ID"):
+            get_model_metadata(invalid_int)
+        with pytest.raises(ValueError, match="Unknown dispersion model ID"):
+            dftd(mol, p_bj, model=invalid_int)
+        with pytest.raises(ValueError, match="Unknown dispersion model ID"):
+            get_properties(mol, model=invalid_int)
+        with pytest.raises(ValueError, match="Unknown dispersion model ID"):
+            validate_numbers(mol.numbers, model=invalid_int)
+
+    # Booleans are explicitly rejected (both as TypeError and ValueError)
+    for bad_bool in (True, False):
+        with pytest.raises(TypeError, match="Boolean value"):
+            resolve_model_id(bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            resolve_model_id(bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            get_model_metadata(bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            dftd(mol, p_bj, model=bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            get_properties(mol, model=bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            validate_numbers(mol.numbers, model=bad_bool)
+        with pytest.raises(ValueError, match="Boolean value"):
+            resolve_charge_model_id(bad_bool, model=40)
+
+
+

@@ -290,8 +290,18 @@ MODEL_ALLOWED_DAMPINGS: dict[str, tuple[str, ...]] = {
 }
 
 
-def resolve_model_id(model: str | DispersionModelId) -> DispersionModelId:
-    """Resolve a model name or enum to a :class:`DispersionModelId`."""
+class _InvalidModelTypeError(TypeError, ValueError):
+    """Exception raised when a boolean or invalid type is passed as a model ID."""
+
+
+def resolve_model_id(
+    model: str | int | DispersionModelId,
+) -> DispersionModelId:
+    """Resolve a model name, integer ID, or enum to a :class:`DispersionModelId`."""
+    if isinstance(model, bool):
+        raise _InvalidModelTypeError(
+            f"Boolean value '{model}' is not a valid dispersion model identifier."
+        )
     if isinstance(model, DispersionModelId):
         if model == DispersionModelId.D5:
             raise NotImplementedError(
@@ -299,6 +309,29 @@ def resolve_model_id(model: str | DispersionModelId) -> DispersionModelId:
                 "upstream reference is not finalized."
             )
         return model
+    if isinstance(model, int):
+        try:
+            model_id = DispersionModelId(model)
+        except ValueError as exc:
+            valid = ", ".join(
+                f"{m.value} ({m.name})"
+                for m in DispersionModelId
+                if m != DispersionModelId.D5
+            )
+            raise ValueError(
+                f"Unknown dispersion model ID '{model}'; expected one of: {valid}."
+            ) from exc
+        if model_id == DispersionModelId.D5:
+            raise NotImplementedError(
+                "Dispersion model 'D5' is not yet implemented because the "
+                "upstream reference is not finalized."
+            )
+        return model_id
+    if not isinstance(model, str):
+        raise _InvalidModelTypeError(
+            f"Expected str, int, or DispersionModelId for 'model', got "
+            f"'{type(model).__name__}'."
+        )
     key = model.lower().strip()
     if key.startswith("dft-"):
         key = key[4:]
@@ -318,7 +351,7 @@ def resolve_model_id(model: str | DispersionModelId) -> DispersionModelId:
     return meta.model_id
 
 
-def get_model_metadata(model: str | DispersionModelId) -> ModelMetadata:
+def get_model_metadata(model: str | int | DispersionModelId) -> ModelMetadata:
     """Return the :class:`ModelMetadata` for ``model``."""
     model_id = resolve_model_id(model)
     for meta in DISPERSION_MODELS.values():
@@ -328,18 +361,22 @@ def get_model_metadata(model: str | DispersionModelId) -> ModelMetadata:
 
 
 def resolve_charge_model_id(
-    qmodel: str | ChargeModelId | None,
+    qmodel: str | int | ChargeModelId | None,
     *,
-    model: str | DispersionModelId = "d4",
+    model: str | int | DispersionModelId = "d4",
 ) -> ChargeModelId | None:
     """
-    Resolve a charge model name or enum for ``model`` and validate that the
-    dispersion model supports it.
+    Resolve a charge model name, integer ID, or enum for ``model`` and validate
+    that the dispersion model supports it.
     """
     meta = get_model_metadata(model)
     if qmodel is None:
         return meta.default_qmodel
 
+    if isinstance(qmodel, bool):
+        raise _InvalidModelTypeError(
+            f"Boolean value '{qmodel}' is not a valid charge model identifier."
+        )
     if isinstance(qmodel, ChargeModelId):
         if qmodel == ChargeModelId.EEQBC:
             raise NotImplementedError(
@@ -347,6 +384,18 @@ def resolve_charge_model_id(
                 "because the upstream model is not finalized."
             )
         qid = qmodel
+    elif isinstance(qmodel, int):
+        try:
+            qid = ChargeModelId(qmodel)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unknown charge model ID '{qmodel}'."
+            ) from exc
+        if qid == ChargeModelId.EEQBC:
+            raise NotImplementedError(
+                "Charge model 'eeqbc' is not supported in this release "
+                "because the upstream model is not finalized."
+            )
     else:
         key = qmodel.lower().strip()
         if key in ("eeqbc", "eeqbc2025"):
@@ -387,7 +436,7 @@ _DAMPING_ALIASES: dict[str, str] = {
 
 
 def validate_model_damping(
-    model: str | DispersionModelId,
+    model: str | int | DispersionModelId,
     damping: str | object,
 ) -> None:
     """

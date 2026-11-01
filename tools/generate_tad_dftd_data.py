@@ -264,6 +264,261 @@ def generate_d4_references(dftd_root: Path, ref_dir: Path) -> None:
     torch.save(d4srev_data, ref_dir / "d4srev-ref.pt")
 
 
+def compute_fortran_periodic_fixtures(dftd_root: Path) -> dict[str, dict[str, dict[str, object]]]:
+    """
+    Compute the 21 periodic reference fixtures (`1d`, `2d`, `3d` x `d1`, `d2`,
+    `d3`, `d3s`, `d4`, `d4s`, `d4srev`) directly from the authoritative Fortran
+    `libdftd.so` C-API (`d2740777049b2a77fd5acc86c4e1abe75d5374ee`).
+
+    Specification
+    -------------
+    - Repository & Commit: https://github.com/grimme-lab/dftd @ d2740777049b2a77fd5acc86c4e1abe75d5374ee
+    - Shared Library & C-API (`src/dftd/api.f90`): `<dftd_root>/_build/libdftd.so`
+      (`dftd_new_error`, `dftd_new_structure`, `dftd_new_model`,
+      `dftd_set_model_realspace_cutoff`, `dftd_new_damping`,
+      `dftd_new_empty_param`, `dftd_set_param`, `dftd_get_dispersion`)
+    - Units: Atomic units (positions/lattice/cutoffs in Bohr, energy/sigma in Eh,
+      gradient in Eh/Bohr)
+    - Precision: IEEE-754 binary64 (`ctypes.c_double`, 17 decimal digits)
+    - Geometry: `natoms = 2`, `numbers = [6, 6]`,
+      `positions = [[0.15, 0.25, 0.35], [1.95, 2.15, 2.35]]` Bohr
+    - Lattice (row vectors `a_1, a_2, a_3` in Bohr):
+      `[[6.2, 0.3, 0.1], [0.3, 6.4, 0.2], [0.1, 0.2, 6.6]]`
+      (fractional coordinates lie in `(0.01, 0.35) subset [0, 1)`, so
+      `wrap_to_central_cell` in `new_structure_api` is an identity map)
+    - Periodicity flags (`c_bool[3]`):
+      `1d = [True, False, False]`, `2d = [True, True, False]`,
+      `3d = [True, True, True]`
+    - Charges: `charge = 0.0`, `qmodel = 1` (EEQ, `ga=3.0, gc=2.0, wf=6.0`);
+      by inversion symmetry between the two identical carbon atoms,
+      `q = [0.0, 0.0]` identically in 1D, 2D, and 3D
+    - Damping & ATM (ATM enabled with `s9 = 1.0` for all 7 models):
+      - `d1`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`),
+        `s6=0.75, rs6=1.0, alp=23.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`
+      - `d2`: Fermi 2B (`damping_2b_id=8`) + `zero_avg` 3B (`damping_3b_id=4`),
+        `s6=0.75, rs6=1.0, alp=20.0, s9=1.0, rs9=1.0, alp3=16.0, a1=0.4, a2=4.0, a13=0.4, a23=4.0`
+      - `d3`, `d3s`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero` 3B (`damping_3b_id=3`),
+        PBE parameters `s6=1.0, s8=0.7875, a1=0.4289, a2=4.4407, s9=1.0, rs9=4/3, alp=14.0, alp3=14.0`
+      - `d4`, `d4s`, `d4srev`: Rational (BJ) 2B (`damping_2b_id=1`) + `zero_avg` 3B (`damping_3b_id=4`),
+        PBE parameters `s6=1.0, s8=0.95948085, a1=0.38574991, a2=4.80688534, s9=1.0, rs9=1.0, alp=16.0, alp3=16.0`
+    - Cutoffs (`dftd_set_model_realspace_cutoff`, hard cutoffs `width2=width3=0.0`):
+      - `d1`, `d2`, `d3`, `d3s`: `disp2 = 14.0, disp3 = 10.0, cn = 40.0` Bohr
+      - `d4`, `d4s`, `d4srev`: `disp2 = 14.0, disp3 = 10.0, cn = 30.0` Bohr (`cn_eeq = 25.0` Bohr)
+    - Strain tensor definition:
+      `sigma_{alpha,beta} = dE/d(eps_{alpha,beta}) = sum_i r_{i,alpha} dE/dr_{i,beta} + sum_k L_{k,alpha} dE/dL_{k,beta}`
+    """
+    import ctypes
+
+    lib_path = dftd_root / "_build/libdftd.so"
+    if not lib_path.exists():
+        raise FileNotFoundError(f"Fortran shared library not found at {lib_path}")
+    lib = ctypes.CDLL(str(lib_path))
+
+    c_vp = ctypes.c_void_p
+    c_int = ctypes.c_int
+    c_bool = ctypes.c_bool
+    c_dbl = ctypes.c_double
+    c_char_p = ctypes.c_char_p
+    c_int_p = ctypes.POINTER(c_int)
+    c_bool_p = ctypes.POINTER(c_bool)
+    c_dbl_p = ctypes.POINTER(c_dbl)
+
+    lib.dftd_new_error.restype = c_vp
+    lib.dftd_delete_error.argtypes = [ctypes.POINTER(c_vp)]
+    lib.dftd_new_structure.argtypes = [c_vp, c_int, c_int_p, c_dbl_p, c_dbl_p, c_dbl_p, c_bool_p]
+    lib.dftd_new_structure.restype = c_vp
+    lib.dftd_delete_structure.argtypes = [ctypes.POINTER(c_vp)]
+
+    lib.dftd_new_model.argtypes = [c_vp, c_vp, c_char_p]
+    lib.dftd_new_model.restype = c_vp
+    lib.dftd_set_model_realspace_cutoff.argtypes = [c_vp, c_vp, c_dbl, c_dbl, c_dbl]
+    lib.dftd_delete_model.argtypes = [ctypes.POINTER(c_vp)]
+
+    lib.dftd_new_damping.argtypes = [c_vp, c_int, c_int]
+    lib.dftd_new_damping.restype = c_vp
+    lib.dftd_delete_damping.argtypes = [ctypes.POINTER(c_vp)]
+
+    lib.dftd_new_empty_param.argtypes = []
+    lib.dftd_new_empty_param.restype = c_vp
+    lib.dftd_set_param.argtypes = [c_vp, c_vp, c_char_p, c_dbl]
+    lib.dftd_delete_param.argtypes = [ctypes.POINTER(c_vp)]
+
+    lib.dftd_get_dispersion.argtypes = [c_vp, c_vp, c_vp, c_vp, c_vp, c_dbl_p, c_dbl_p, c_dbl_p]
+
+    nums = (c_int * 2)(6, 6)
+    pos = (c_dbl * 6)(0.15, 0.25, 0.35, 1.95, 2.15, 2.35)
+    lat = (c_dbl * 9)(6.2, 0.3, 0.1, 0.3, 6.4, 0.2, 0.1, 0.2, 6.6)
+    chrg = c_dbl(0.0)
+
+    pbc_map = {
+        "1d": (c_bool * 3)(True, False, False),
+        "2d": (c_bool * 3)(True, True, False),
+        "3d": (c_bool * 3)(True, True, True),
+    }
+
+    model_specs: dict[str, tuple[int, int, float, dict[str, float]]] = {
+        "d1": (
+            8,
+            4,
+            40.0,
+            {
+                "s6": 0.75,
+                "rs6": 1.0,
+                "alp": 23.0,
+                "s9": 1.0,
+                "rs9": 1.0,
+                "alp3": 16.0,
+                "a1": 0.4,
+                "a2": 4.0,
+                "a13": 0.4,
+                "a23": 4.0,
+            },
+        ),
+        "d2": (
+            8,
+            4,
+            40.0,
+            {
+                "s6": 0.75,
+                "rs6": 1.0,
+                "alp": 20.0,
+                "s9": 1.0,
+                "rs9": 1.0,
+                "alp3": 16.0,
+                "a1": 0.4,
+                "a2": 4.0,
+                "a13": 0.4,
+                "a23": 4.0,
+            },
+        ),
+        "d3": (
+            1,
+            4,
+            40.0,
+            {
+                "s6": 1.0,
+                "s8": 0.7875,
+                "a1": 0.4289,
+                "a2": 4.4407,
+                "s9": 1.0,
+                "rs9": 4.0 / 3.0,
+                "alp": 14.0,
+                "alp3": 14.0,
+                "a13": 1.0,
+                "a23": 0.0,
+            },
+        ),
+        "d3s": (
+            1,
+            4,
+            40.0,
+            {
+                "s6": 1.0,
+                "s8": 0.7875,
+                "a1": 0.4289,
+                "a2": 4.4407,
+                "s9": 1.0,
+                "rs9": 4.0 / 3.0,
+                "alp": 14.0,
+                "alp3": 14.0,
+                "a13": 1.0,
+                "a23": 0.0,
+            },
+        ),
+        "d4": (
+            1,
+            4,
+            30.0,
+            {
+                "s6": 1.0,
+                "s8": 0.95948085,
+                "a1": 0.38574991,
+                "a2": 4.80688534,
+                "s9": 1.0,
+                "rs9": 1.0,
+                "alp": 16.0,
+                "alp3": 16.0,
+                "a13": 0.38574991,
+                "a23": 4.80688534,
+            },
+        ),
+        "d4s": (
+            1,
+            4,
+            30.0,
+            {
+                "s6": 1.0,
+                "s8": 0.95948085,
+                "a1": 0.38574991,
+                "a2": 4.80688534,
+                "s9": 1.0,
+                "rs9": 1.0,
+                "alp": 16.0,
+                "alp3": 16.0,
+                "a13": 0.38574991,
+                "a23": 4.80688534,
+            },
+        ),
+        "d4srev": (
+            1,
+            4,
+            30.0,
+            {
+                "s6": 1.0,
+                "s8": 0.95948085,
+                "a1": 0.38574991,
+                "a2": 4.80688534,
+                "s9": 1.0,
+                "rs9": 1.0,
+                "alp": 16.0,
+                "alp3": 16.0,
+                "a13": 0.38574991,
+                "a23": 4.80688534,
+            },
+        ),
+    }
+
+    out: dict[str, dict[str, dict[str, object]]] = {}
+    for pbc_key, pbc_arr in pbc_map.items():
+        out[pbc_key] = {}
+        err = c_vp(lib.dftd_new_error())
+        mol = c_vp(
+            lib.dftd_new_structure(
+                err, 2, nums, pos, ctypes.byref(chrg), lat, pbc_arr
+            )
+        )
+        for m, (damp_2b, damp_3b, cn_cut, p_dict) in model_specs.items():
+            mod = c_vp(lib.dftd_new_model(err, mol, m.encode("ascii")))
+            lib.dftd_set_model_realspace_cutoff(err, mod, 14.0, 10.0, cn_cut)
+            damp = c_vp(lib.dftd_new_damping(err, damp_2b, damp_3b))
+            par = c_vp(lib.dftd_new_empty_param())
+            for k, v in p_dict.items():
+                lib.dftd_set_param(err, par, k.encode("ascii"), float(v))
+
+            energy = c_dbl(0.0)
+            grad = (c_dbl * 6)()
+            sigma = (c_dbl * 9)()
+            lib.dftd_get_dispersion(
+                err, mol, mod, damp, par, ctypes.byref(energy), grad, sigma
+            )
+            out[pbc_key][m] = {
+                "energy": float(energy.value),
+                "grad0": [float(grad[0]), float(grad[1]), float(grad[2])],
+                "sigma": [
+                    [float(sigma[0]), float(sigma[1]), float(sigma[2])],
+                    [float(sigma[3]), float(sigma[4]), float(sigma[5])],
+                    [float(sigma[6]), float(sigma[7]), float(sigma[8])],
+                ],
+            }
+            lib.dftd_delete_param(ctypes.byref(par))
+            lib.dftd_delete_damping(ctypes.byref(damp))
+            lib.dftd_delete_model(ctypes.byref(mod))
+        lib.dftd_delete_structure(ctypes.byref(mol))
+        lib.dftd_delete_error(ctypes.byref(err))
+
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -272,7 +527,42 @@ def main() -> None:
         default=DEFAULT_DFTD_ROOT,
         help="Path to the authoritative Fortran dftd checkout.",
     )
+    parser.add_argument(
+        "--verify-periodic-fixtures",
+        action="store_true",
+        help="Verify _FORTRAN_PERIODIC_REFS against Fortran libdftd.so without overwriting assets.",
+    )
     args = parser.parse_args()
+
+    if args.verify_periodic_fixtures:
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from test.test_tad_dftd.test_periodic_and_transforms import (
+            _FORTRAN_PERIODIC_REFS,
+        )
+
+        computed = compute_fortran_periodic_fixtures(args.dftd_root)
+        max_diff = 0.0
+        for pbc_key, models_dict in _FORTRAN_PERIODIC_REFS.items():
+            for m, ref in models_dict.items():
+                got = computed[pbc_key][m]
+                e_diff = abs(float(ref["energy"]) - float(got["energy"]))  # type: ignore[arg-type]
+                g_diff = max(
+                    abs(a - b)
+                    for a, b in zip(ref["grad0"], got["grad0"])  # type: ignore[arg-type]
+                )
+                s_diff = max(
+                    abs(a - b)
+                    for row_r, row_g in zip(ref["sigma"], got["sigma"])  # type: ignore[arg-type]
+                    for a, b in zip(row_r, row_g)
+                )
+                max_diff = max(max_diff, e_diff, g_diff, s_diff)
+        print(
+            f"Verified all 21 _FORTRAN_PERIODIC_REFS fixtures against "
+            f"{args.dftd_root / '_build/libdftd.so'}: max abs diff = {max_diff:.3e}"
+        )
+        return
 
     data_dir = REPO_ROOT / "src/tad_dftd/data"
     data_dir.mkdir(parents=True, exist_ok=True)
