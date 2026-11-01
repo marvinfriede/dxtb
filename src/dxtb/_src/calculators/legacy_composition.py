@@ -85,10 +85,12 @@ def classify_legacy_system(
 
     core = system.exact_core
     if core is None:
-        return LegacySystemRoute.REJECTED
+        return LegacySystemRoute.LEGACY_COMPOSED
 
-    if core.integral is None:
-        return LegacySystemRoute.REJECTED
+    if core.integral is None or system.h0_setup is None:
+        return LegacySystemRoute.LEGACY_COMPOSED
+    if config.ints.level < labels.INTLEVEL_HCORE:
+        return LegacySystemRoute.LEGACY_COMPOSED
     if core.integral.driver_type == labels.INTDRIVER_LIBCINT:
         return LegacySystemRoute.LEGACY_COMPOSED
     if core.integral.driver_type != labels.INTDRIVER_PYTORCH:

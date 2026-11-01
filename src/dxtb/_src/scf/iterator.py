@@ -258,6 +258,7 @@ def _solve_impl(
             integrals,
             n0,
             occupation,
+            *args,
             **kwargs,
         )
 

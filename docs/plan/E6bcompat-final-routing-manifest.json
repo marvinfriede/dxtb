@@ -1,0 +1,506 @@
+{
+  "schema_version": "1.0",
+  "policy_reference": "docs/plan/E6bcompat-policy.md",
+  "acceptance_report": "docs/plan/functional-route-final-acceptance.md",
+  "default_calculator_routing_changed": false,
+  "candidate_harnesses": [
+    "dxtb._src.calculators.packed_result.evaluate_packed_systems",
+    "dxtb._src.calculators.packed_result.evaluate_calculator_packed_singlepoint",
+    "dxtb._src.calculators.packed_result.build_calculator_lane_systems",
+    "dxtb._src.calculators.packed_result.pack_system_results"
+  ],
+  "rows": [
+    {
+      "id": "E6B-01",
+      "policy_case": "GFN1, mode 1, equal-size PyTorch systems",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint -> legacy packed Integrals + SelfConsistentFieldFull",
+      "candidate_route": "MAPPED -> bucket_canonical_exact_cores + evaluate_padded_systems + pack_system_results",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped[h2-h2]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "Per-atom energy, scf, fenergy, classicals, charges, potential, matrices, and forces match serial and legacy within 2e-9",
+      "warning_error_outcome": "None (clean convergence)",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-02",
+      "policy_case": "GFN1, mode 1, different-size padded systems (including non-contiguous and trailing zero padding)",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint -> legacy packed padded-number setup + SelfConsistentFieldFull",
+      "candidate_route": "MAPPED -> canonical bucketing + evaluate_padded_systems + mask-aware pack_system_results",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped[h2-h3plus]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped[h2-water]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped[water-h2]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped[water-ch4]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "Real-atom and real-orbital blocks match serial within 2e-9; padded slots are identically zero; non-contiguous [1,0,1,0] padding preserved",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-03",
+      "policy_case": "GFN1, mode 2, equal-composition conformers",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint(batch_mode=2) -> legacy packed SelfConsistentFieldFull",
+      "candidate_route": "MAPPED -> deduplicated single Model.setup(batch_mode=0) shared across conformers + evaluate_padded_systems",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode2_conformers_match_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "Per-conformer energies, forces, charges, and iterations match serial and legacy within 2e-9; Model.setup runs once per unique composition",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-04",
+      "policy_case": "GFN1, batch_mode=1 and 2 with PyTorch integrals and classical contributions",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint(batch_mode=1|2) -> ClassicalList + Integrals + SelfConsistentFieldFull",
+      "candidate_route": "MAPPED -> pure Repulsion/DispersionD3/Halogen descriptors + pure PyTorch integral kernel + vmap SCF",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode2_conformers_match_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_and_private_position_gradients_match_serial"
+      ],
+      "numeric_outcome": "Classical terms, integrals, SCF energies, and position gradients match serial within 2e-9",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-05",
+      "policy_case": "GFN2, packed batch (Fock mode and non-Fock strict/non-strict SCP policy)",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint -> BaseTSCF (warns and resets scp_mode to 'fock' when non-strict; raises NotImplementedError when strict)",
+      "candidate_route": "MAPPED -> _normalize_system_for_e6bcompat + canonical GFN2 AES2/D4SC/ES2/ES3 vmap SCF",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn2_fock_mode_matches_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_and_private_gfn2_non_fock_policy",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "GFN2 energy, multipole charges (mono/dipole/quadrupole), potential, and gradients match serial within 2e-9",
+      "warning_error_outcome": "Non-strict scp_mode!='fock' emits UserWarning and resets to 'fock'; strict raises NotImplementedError",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-06",
+      "policy_case": "C8b H2/H3 and H2/H2O padded cores",
+      "decision": "RETAIN",
+      "old_route": "Direct PaddedExactSystemCore structural and pure-kernel API",
+      "candidate_route": "Retained as structural building block used internally by evaluate_padded_systems",
+      "test_nodes": [
+        "test/test_calculator/test_c8b3b_canonical_padding.py",
+        "test/test_calculator/test_e6bimpl0_padded_integrals.py",
+        "test/test_calculator/test_e6bimpl2b_gfn2_scf.py"
+      ],
+      "numeric_outcome": "Exact structural and numerical parity with unpadded single-System cores",
+      "warning_error_outcome": "Validation errors on malformed padded cores preserved",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-07",
+      "policy_case": "PyTorch batch integrals (overlap, dipole, quadrupole, hcore)",
+      "decision": "REPLACE",
+      "old_route": "Legacy DriverManagerPyTorch + OverlapPyTorch/DipolePyTorch/QuadrupolePyTorch/GFN*Hamiltonian",
+      "candidate_route": "MAPPED -> evaluate_padded_integrals over PytorchIntegralSetupNode and H0SetupNode",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl0_padded_integrals.py::test_padded_mapped_integrals_match_independent_systems",
+        "test/test_calculator/test_e6bcompat_differential.py::test_complete_packed_result_adapter_all_fields_and_model_param_gradients"
+      ],
+      "numeric_outcome": "Overlap, dipole, quadrupole, hcore, and overlap_norm match serial within 1e-11",
+      "warning_error_outcome": "Missing H0/integral setup or int_level < INTLEVEL_HCORE raises NotImplementedError",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-08",
+      "policy_case": "Standard libcint batch setup and eager evaluation",
+      "decision": "RETAIN",
+      "old_route": "Calculator.singlepoint -> DriverManagerLibcint + legacy packed SCF",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems outer loop over single-System libcint evaluations + pack_system_results",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_libcint_composition_matches_independent_serial_systems",
+        "test/test_calculator/test_e6bcompat_differential.py::test_libcint_public_and_composed_match_serial"
+      ],
+      "numeric_outcome": "Energies, matrices, field responses, position gradients, and parameter gradients match serial libcint within 2e-9",
+      "warning_error_outcome": "Source order and exception source_id preserved",
+      "accepted_limitation": "Outer Python loop over single-System libcint evaluations (no whole-System vmap over C/PySCF libcint)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-09",
+      "policy_case": "Libcint mixed logical/physical device (force_cpu_for_libcint)",
+      "decision": "RETAIN",
+      "old_route": "DriverManagerLibcint force_cpu_for_libcint residency policy",
+      "candidate_route": "LEGACY_COMPOSED -> preserves existing single-System force_cpu_for_libcint residency policy",
+      "test_nodes": [
+        "test/test_integrals/test_driver/test_manager.py",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_libcint_composition_matches_independent_serial_systems"
+      ],
+      "numeric_outcome": "Matches serial CPU libcint evaluation",
+      "warning_error_outcome": "Device mismatch checks preserved",
+      "accepted_limitation": "CUDA hardware not claimed in CPU validation profile",
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-10",
+      "policy_case": "Built-in supported interactions (ES2, ES3, AES2, D4SC, GeneralizedBorn/ALPB)",
+      "decision": "REPLACE",
+      "old_route": "InteractionList.get_cache + SelfConsistentFieldFull",
+      "candidate_route": "MAPPED -> PaddedInteractionEvaluation (ES2, ES3, AES2, D4SC, GeneralizedBornCoreSetup) inside vmap SCF",
+      "test_nodes": [
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn1_mode1_matches_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_public_gfn2_fock_mode_matches_serial_and_private_mapped",
+        "test/test_calculator/test_e6bcompat_differential.py::test_alpb_solvation_packed_matches_serial"
+      ],
+      "numeric_outcome": "Per-family interaction potentials, energies, and gradients match serial within 2e-9",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-11",
+      "policy_case": "Custom Interaction subclass",
+      "decision": "RETAIN",
+      "old_route": "InteractionList + SelfConsistentFieldFull",
+      "candidate_route": "LEGACY_COMPOSED -> classify_legacy_system selects compose_legacy_systems -> scf.solve_legacy",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_custom_interaction_is_retained_and_order_independent",
+        "test/test_calculator/test_e6bcompat_differential.py::test_mixed_mapped_and_legacy_composed_systems_preserve_order"
+      ],
+      "numeric_outcome": "Custom interaction potential, energy, and position gradients match serial exactly",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-12",
+      "policy_case": "Additional custom Classical component and multiple DispersionD3 components",
+      "decision": "RETAIN",
+      "old_route": "ClassicalList.get_cache + ClassicalList.get_energy",
+      "candidate_route": "LEGACY_COMPOSED (custom Classical subclass) or MAPPED (multiple exact DispersionD3 with distinct labels)",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_custom_classical_cache_is_refreshed_per_composition_call",
+        "test/test_calculator/test_e6bcompat_differential.py::test_calculator_packed_duplicate_classical_labels_select_legacy_composition",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "All classical contributions, occurrence ordering, display keys, and position gradients preserved",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-13",
+      "policy_case": "Legacy-cached interaction and classical extensions (cache refresh per call)",
+      "decision": "RETAIN",
+      "old_route": "InteractionList.get_cache / ClassicalList.get_cache",
+      "candidate_route": "LEGACY_COMPOSED -> _singlepoint_impl(refresh_extension_caches=True)",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_custom_classical_cache_is_refreshed_per_composition_call",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_composition_preserves_custom_classical_position_gradient"
+      ],
+      "numeric_outcome": "Extension get_cache called on each evaluation; energies and gradients match serial",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-14",
+      "policy_case": "Low-level unexpected_option in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "scf.iterator.solve -> BaseSCF._Data.__init__ raises TypeError",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems -> scf.solve_legacy -> BaseSCF._Data.__init__ raises TypeError (never filtered)",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_unknown_keywords_reach_legacy_constructor[unexpected_option]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_option_ownership_and_side_effects_contract"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises TypeError('... unexpected keyword argument \\'unexpected_option\\'') even when ignore_unknown_kwargs=True",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-15",
+      "policy_case": "Low-level solver_options in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "scf.iterator.solve -> BaseSCF._Data.__init__ raises TypeError",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems -> scf.solve_legacy -> BaseSCF._Data.__init__ raises TypeError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_unknown_keywords_reach_legacy_constructor[solver_options]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_option_ownership_and_side_effects_contract"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises TypeError('... unexpected keyword argument \\'solver_options\\'')",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-16",
+      "policy_case": "Other unknown low-level keyword in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "scf.iterator.solve -> BaseSCF._Data.__init__ raises TypeError",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems -> scf.solve_legacy -> BaseSCF._Data.__init__ raises TypeError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_unknown_keywords_reach_legacy_constructor[arbitrary_unknown_scf_option]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_option_ownership_and_side_effects_contract"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises TypeError at _Data.__init__",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-17",
+      "policy_case": "Low-level positional engine extra in LegacySCFOptions.args",
+      "decision": "RETAIN",
+      "old_route": "scf.iterator.solve -> BaseSCF.__init__ -> BaseSCF._Data.__init__ raises TypeError",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems -> scf.solve_legacy -> BaseSCF._Data.__init__ raises TypeError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_positional_extra_reaches_legacy_constructor",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_engine_positional_extras_are_not_filtered",
+        "test/test_calculator/test_e6bcompat_differential.py::test_option_ownership_and_side_effects_contract"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises TypeError('... got multiple values for argument \\'numbers\\'')",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-18",
+      "policy_case": "Low-level fwd_options in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "BaseSCF.__init__ consumes and merges fwd_options",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems forwards fwd_options unchanged to BaseSCF.__init__",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_named_option_dicts_reach_legacy_constructor[fwd_options]",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_composition_preserves_option_values_and_constructor_merge"
+      ],
+      "numeric_outcome": "Merged into engine.fwd_options and used by legacy forward mixer",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-19",
+      "policy_case": "Low-level bck_options in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "BaseSCF.__init__ consumes and merges bck_options over {'posdef': True}",
+      "candidate_route": "LEGACY_COMPOSED -> compose_legacy_systems forwards bck_options unchanged to BaseSCF.__init__",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_named_option_dicts_reach_legacy_constructor[bck_options]",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_composition_preserves_option_values_and_constructor_merge"
+      ],
+      "numeric_outcome": "Merged into engine.bck_options; FULL forward loop does not read bck_options",
+      "warning_error_outcome": "None",
+      "accepted_limitation": "bck_options is stored on BaseSCF for implicit backward; FULL forward loop does not read it",
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-20",
+      "policy_case": "Low-level eigen_options in LegacySCFOptions.kwargs",
+      "decision": "RETAIN",
+      "old_route": "BaseSCF.__init__ / solve_nonselfconsistent consumes and merges eigen_options",
+      "candidate_route": "LEGACY_COMPOSED / SEPARATE_ROUTE -> compose_legacy_systems forwards eigen_options unchanged",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_named_option_dicts_reach_legacy_constructor[eigen_options]",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_composition_preserves_option_values_and_constructor_merge"
+      ],
+      "numeric_outcome": "Merged into engine.eigen_options and data.eigen_options",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-21",
+      "policy_case": "Malformed named option dictionary (fwd_options=None, bck_options=None, eigen_options=None)",
+      "decision": "RETAIN",
+      "old_route": "BaseSCF.__init__ dictionary unpack raises TypeError",
+      "candidate_route": "LEGACY_COMPOSED -> BaseSCF.__init__ raises TypeError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_low_level_malformed_named_option_dict_raises_type_error",
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_composition_preserves_malformed_option_errors"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises TypeError('... argument after ** must be a mapping, not NoneType')",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-22",
+      "policy_case": "Negative electronic temperature (fermi_etemp < 0)",
+      "decision": "RETAIN",
+      "old_route": "E4.5b routes FULL to legacy SelfConsistentFieldFull",
+      "candidate_route": "LEGACY_COMPOSED -> classify_legacy_system selects compose_legacy_systems -> scf.solve_legacy",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_owned_fermi_edges_select_legacy_route[negative-temperature]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_negative_fermi_and_outer_maxiter_routing_parity"
+      ],
+      "numeric_outcome": "Matches legacy Fermi behavior and result",
+      "warning_error_outcome": "Preserves legacy Fermi warning/error behavior",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-23",
+      "policy_case": "Negative Fermi maxiter (fermi_maxiter < 0)",
+      "decision": "RETAIN",
+      "old_route": "E4.5b routes FULL to legacy SelfConsistentFieldFull",
+      "candidate_route": "LEGACY_COMPOSED -> classify_legacy_system selects compose_legacy_systems -> scf.solve_legacy",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_legacy_owned_fermi_edges_select_legacy_route[negative-fermi-maxiter]",
+        "test/test_calculator/test_e6bcompat_differential.py::test_negative_fermi_and_outer_maxiter_routing_parity"
+      ],
+      "numeric_outcome": "Matches legacy Fermi behavior and result",
+      "warning_error_outcome": "Preserves legacy Fermi warning/error behavior",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-24",
+      "policy_case": "Negative outer SCF maxiter (maxiter < 0), otherwise eligible single FULL",
+      "decision": "RETAIN",
+      "old_route": "Functional route rejects maxiter < 0 with ValueError",
+      "candidate_route": "classify_legacy_system raises ValueError('The functional SCF solver requires maxiter >= 0.')",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_negative_outer_maxiter_keeps_functional_error_policy",
+        "test/test_calculator/test_e6bcompat_differential.py::test_negative_fermi_and_outer_maxiter_routing_parity"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises ValueError('The functional SCF solver requires maxiter >= 0.')",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-25",
+      "policy_case": "Negative outer maxiter on legacy-owned FULL (custom extension / negative etemp / negative fermi_maxiter)",
+      "decision": "RETAIN",
+      "old_route": "Routes to legacy SelfConsistentFieldFull before functional maxiter check",
+      "candidate_route": "LEGACY_COMPOSED -> classify_legacy_system returns LEGACY_COMPOSED before functional maxiter check",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_negative_outer_maxiter_on_legacy_owned_routes",
+        "test/test_calculator/test_e6bcompat_differential.py::test_negative_fermi_and_outer_maxiter_routing_parity"
+      ],
+      "numeric_outcome": "Matches legacy loop result/error",
+      "warning_error_outcome": "Preserves legacy loop error/warning",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-26",
+      "policy_case": "Missing hcore / overlap or int_level < INTLEVEL_HCORE",
+      "decision": "RETAIN",
+      "old_route": "Singlepoint raises NotImplementedError; direct SCF _Data raises ValueError",
+      "candidate_route": "LEGACY_COMPOSED -> _singlepoint_impl raises NotImplementedError; direct scf.solve raises ValueError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_direct_scf_missing_matrices_raise_value_error",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix",
+        "test/test_calculator/test_e6bcompat_differential.py::test_failure_precedence_six_stages"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Raises NotImplementedError at singlepoint boundary and ValueError at direct SCF _Data boundary",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-27",
+      "policy_case": "Malformed integral shapes / nonfinite matrices at direct SCF boundary",
+      "decision": "RETAIN",
+      "old_route": "IntegralMatrices raises ValueError; wrong AO shape raises RuntimeError; nonfinite hcore raises _LinAlgError",
+      "candidate_route": "Direct scf.solve boundary unchanged; evaluate_padded_integrals validates shapes/dtypes",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_direct_scf_malformed_integral_shapes_and_nonfinite_matrices",
+        "test/test_calculator/test_e6bimpl0_padded_integrals.py::test_padded_integral_validation_errors"
+      ],
+      "numeric_outcome": "N/A (error path)",
+      "warning_error_outcome": "Preserves ValueError, RuntimeError, and torch._C._LinAlgError",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-28",
+      "policy_case": "Shared charge/spin scalar and per-System charge/spin tensors",
+      "decision": "REPLACE",
+      "old_route": "Calculator.singlepoint rejects nonzero scalar charge in batch; reshapes (B,) to (B,1)",
+      "candidate_route": "_normalize_packed_charges and _normalize_packed_spins enforce legacy_compat vs functional broadcast rules and DeviceError/DtypeError",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_public_packed_charge_shape_contract",
+        "test/test_calculator/test_e6bcompat_differential.py::test_packed_options_charge_spin_and_fermi_contracts"
+      ],
+      "numeric_outcome": "Per-lane charges, spins, alpha/beta occupations, and energies match serial within 2e-9",
+      "warning_error_outcome": "Nonzero scalar or 0D tensor charge in legacy_compat=True raises ValueError; TOO_MANY_ELECTRONS raises ValueError in legacy_compat=True and populates SCFStatus in legacy_compat=False",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-29",
+      "policy_case": "Electric field and field gradient (shared (3,)/(3,3) in legacy_compat; per-lane supported in functional mode)",
+      "decision": "REPLACE",
+      "old_route": "Calculator._call_tensor + call-local ElectricField / ElectricFieldGrad interactions",
+      "candidate_route": "_normalize_packed_fields + Stage 3 integral-level & label-conflict checks + vmap/composed field evaluation",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_public_packed_field_is_shared_not_per_system",
+        "test/test_calculator/test_e6bcompat_differential.py::test_shared_and_per_lane_field_and_field_grad_parity",
+        "test/test_calculator/test_e6bcompat_differential.py::test_production_routing_differential_gate_matrix"
+      ],
+      "numeric_outcome": "Energies, dipoles, and field/position gradients match serial within 2e-9",
+      "warning_error_outcome": "Raises RuntimeError if int_level < INTLEVEL_DIPOLE/QUADRUPOLE; raises ValueError on LABEL_EFIELD/LABEL_EFIELD_GRAD conflict or wrong shape",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-30",
+      "policy_case": "SCF excluded / classical-only (exclude='scf' or 'all')",
+      "decision": "RETAIN",
+      "old_route": "Calculator.singlepoint early return after ClassicalList.get_energy",
+      "candidate_route": "SEPARATE_ROUTE -> classify_legacy_system selects compose_legacy_systems -> _singlepoint_impl early return + pack_system_results",
+      "test_nodes": [
+        "test/test_calculator/test_e6bimpl3_legacy_composition.py::test_classical_only_calculation_retains_separate_route",
+        "test/test_calculator/test_e6bcompat_differential.py::test_classical_only_and_non_scf_gfn0_packed_parity"
+      ],
+      "numeric_outcome": "Classical energies match serial exactly; scf and fenergy are zero tensors; electronic fields are None",
+      "warning_error_outcome": "None",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-31",
+      "policy_case": "Non-self-consistent method (GFN0-xTB, requires_iterations=False)",
+      "decision": "RETAIN",
+      "old_route": "scf.iterator.solve -> solve_nonselfconsistent",
+      "candidate_route": "SEPARATE_ROUTE -> classify_legacy_system selects compose_legacy_systems -> solve_nonselfconsistent + pack_system_results",
+      "test_nodes": [
+        "test/test_scf/test_nonselfconsistent.py::test_heterogeneous_batch_matches_separate_solves",
+        "test/test_calculator/test_e6bcompat_differential.py::test_classical_only_and_non_scf_gfn0_packed_parity"
+      ],
+      "numeric_outcome": "Single-diagonalization energies, charges, density, and iterations=0 match serial and packed GFN0",
+      "warning_error_outcome": "Charge-dependent interactions raise ValueError; unknown low-level kwargs raise TypeError at _Data.__init__",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    },
+    {
+      "id": "E6B-32",
+      "policy_case": "Public Calculator singlepoint options (write_overlap, write_dipole, write_quadrupole, write_hcore, cuda_sync_in_scf, store_* rejection, unknown public kwargs)",
+      "decision": "REPLACE",
+      "old_route": "EnergyCalculator.singlepoint handles write_* and cuda_sync_in_scf; ignores unknown kwargs; rejects store_*",
+      "candidate_route": "evaluate_packed_systems executes _write_packed_integrals and timer.cuda_sync; rejects store_*; rejects unknown public kwargs unless legacy_compat=True and ignore_unknown_kwargs=True and not strict_e6bcompat",
+      "test_nodes": [
+        "test/test_scf/test_e6bcompat_policy.py::test_public_packed_calculator_does_not_forward_engine_options",
+        "test/test_calculator/test_e6bcompat_differential.py::test_option_ownership_and_side_effects_contract",
+        "test/test_calculator/test_e6bcompat_differential.py::test_failure_precedence_six_stages"
+      ],
+      "numeric_outcome": "Saved .pt integral files match Result matrices and legacy Calculator output",
+      "warning_error_outcome": "store_* raises TypeError; unknown public kwargs raise TypeError in functional/strict mode",
+      "accepted_limitation": null,
+      "verdict": "PASS"
+    }
+  ]
+}

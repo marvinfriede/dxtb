@@ -67,6 +67,7 @@ def solve_nonselfconsistent(
     integrals: IntegralMatrices,
     n0: Tensor,
     occupation: Tensor,
+    *args: Any,
     **kwargs: Any,
 ) -> SCFResult:
     """
@@ -85,18 +86,21 @@ def solve_nonselfconsistent(
             f"Interaction components (received: {interaction_labels})."
         )
 
+    eigen_options = kwargs.pop("eigen_options", {})
     data = _Data(
-        occupation=occupation,
-        n0=n0,
+        occupation,
+        n0,
+        *args,
         numbers=numbers,
         ihelp=ihelp,
         cache=cache,
         integrals=integrals,
+        **kwargs,
     )
 
     data.eigen_options = {
         "method": "exacteig",
-        **kwargs.pop("eigen_options", {}),
+        **eigen_options,
     }
 
     # H0 is the full Hamiltonian for the non-self-consistent method.

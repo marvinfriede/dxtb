@@ -248,7 +248,13 @@ class Result:
         for name, value in self.classical:
             occ = counts.get(name, 0) + 1
             counts[name] = occ
-            display_name = name if totals[name] == 1 else f"{name} ({occ})"
+            if totals[name] == 1 and name not in classical:
+                display_name = name
+            else:
+                suffix = occ
+                while f"{name} ({suffix})" in classical:
+                    suffix += 1
+                display_name = f"{name} ({suffix})"
             classical[display_name] = {key: value.sum().item()}
         ctotal = sum(value.sum().item() for _, value in self.classical)
         scf_energy = 0.0 if self.scf is None else self.scf.sum().item()
