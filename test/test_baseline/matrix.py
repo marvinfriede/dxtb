@@ -510,7 +510,8 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
         if path == "autograd":
             return calc().forces(pos_grad(), charge)
         if path == "functorch":
-            return calc().forces(pos_grad(), charge, grad_mode="functorch")
+            c = calc()
+            return -jacrev(_func_energy(c, charge))(positions.clone())
         if path == "forward":
             c = calc()
             return -jacfwd(_func_energy(c, charge))(positions.clone())

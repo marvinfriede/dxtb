@@ -729,7 +729,7 @@ def test_constructor_field_defaults_reject_custom_label_conflicts() -> None:
 
 
 def test_custom_same_label_field_remains_an_energy_force_extension() -> None:
-    """Custom field terms still evaluate as ordinary legacy interactions."""
+    """Custom field terms remain in system.interactions and hit the extension boundary."""
 
     class FieldExtension(ElectricField):
         def __init__(self, field: torch.Tensor) -> None:
@@ -746,18 +746,18 @@ def test_custom_same_label_field_remains_an_energy_force_extension() -> None:
     )
     calc = _calc(numbers, interaction=extension)
 
-    energy = calc.energy(positions, chrg=1)
-    assert torch.isfinite(energy).all()
     assert any(x is extension for x in calc.system.interactions.components)
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        calc.energy(positions, chrg=1)
 
     positions_grad = positions.clone().requires_grad_(True)
-    autograd_forces = calc.forces(positions_grad, chrg=1, grad_mode="autograd")
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        calc.forces(positions_grad, chrg=1)
     cache = extension.get_cache(numbers=numbers, positions=positions)
     atomic_charges = torch.tensor([1.0, 0.0, 0.0], dtype=torch.double)
     field_gradient = extension.get_atom_gradient(
         atomic_charges, positions, cache
     )
-    assert torch.isfinite(autograd_forces).all()
     torch.testing.assert_close(
         field_gradient,
         -atomic_charges[:, None] * extension.field,

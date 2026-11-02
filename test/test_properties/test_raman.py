@@ -47,6 +47,7 @@ opts = {
     "scf_mode": "full",
     "verbosity": 0,
     "x_atol": 1e-10,
+    "fermi_diff_order": 0,
 }
 
 

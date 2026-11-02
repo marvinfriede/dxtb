@@ -156,16 +156,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
 def _forces(system: System, method: str, driver: str) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver)
     pos = system.positions.clone().requires_grad_(True)
-    if not system.batched:
-        return {"forces": calc.forces(pos, *_args(system))}
-
-    # `Calculator.forces` differentiates the per-system energies with
-    # `torch.autograd.grad`, which needs a scalar and raises for batches
-    # (baseline finding). The systems are independent, so the gradient of
-    # the summed energy gives the forces of every entry.
-    energy = calc.energy(pos, *_args(system))
-    (grad,) = torch.autograd.grad(energy.sum(), pos)
-    return {"forces": -grad}
+    return {"forces": calc.forces(pos, *_args(system))}
 
 
 def _field() -> Tensor:

@@ -793,9 +793,11 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
 
     from dxtb._src.scf.functional import eager
 
+    from dxtb.config import ConfigSCF
+
     system = _model().setup(torch.tensor([1, 1]))
-    scf = replace(
-        system.config.scf,
+    scf = ConfigSCF.create(
+        method=system.config.scf.method,
         scf_mode=labels.SCF_MODE_IMPLICIT,
         mixer=labels.MIXER_LINEAR,
         maxiter=100,
@@ -903,7 +905,7 @@ def test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding() -> None:
     """The captured reduction maps do not replace padding-aware mask setup."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from tad_mctc import storch
+    from dxtb._src.scf.functional.data import _symmetric_inverse_sqrt
 
     case = _prepare_case(GFN1_XTB, sample_name="SiH4")
     expected_mask = case.system.ihelp.spread_shell_to_orbital(
@@ -914,9 +916,7 @@ def test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding() -> None:
     conditioned_overlap = case.integrals.overlap + torch.diag_embed(
         padding_diagonal
     )
-    expected_inverse = storch.inv_cholesky_factor(
-        conditioned_overlap, is_posdef=True
-    )
+    expected_inverse = _symmetric_inverse_sqrt(conditioned_overlap)
     torch.testing.assert_close(case.inputs.inverse_cholesky, expected_inverse)
 
 

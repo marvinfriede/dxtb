@@ -270,8 +270,10 @@ def test_full_and_implicit_coherence_checks_do_not_construct_descriptors(
     full_result = system.singlepoint(positions)
     assert full_result.energy is not None
 
-    scf = replace(
-        system.config.scf,
+    from dxtb._src.calculators.config.scf import ConfigSCF
+
+    scf = ConfigSCF.create(
+        method=system.config.scf.method,
         scf_mode=labels.SCF_MODE_IMPLICIT,
         mixer=labels.MIXER_LINEAR,
         maxiter=100,

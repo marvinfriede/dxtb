@@ -751,7 +751,7 @@ def test_calculator_holds_the_system() -> None:
 
 
 def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_batch() -> None:
-    """Calculator refreshes System and lane setups on parameter backward or mutation."""
+    """Calculator prepares call-local setups so parameter backward and mutations work repeatedly."""
     from dxtb._src.calculators.packed_result import build_calculator_lane_systems
 
     numbers_1d = torch.tensor([8, 1, 1], device=DEVICE)
@@ -775,7 +775,7 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
     assert calc_1d._ncalcs == 1
     assert calc_1d.system is sys_initial
 
-    # Repeated parameter backward passes succeed by refreshing the setup graph
+    # Repeated parameter backward passes succeed via call-local setup preparation
     e1 = calc_1d.energy(pos_1d)
     assert calc_1d._ncalcs == 2
     (g_param_1,) = torch.autograd.grad(e1, gam_param)
@@ -783,17 +783,17 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
 
     e2 = calc_1d.energy(pos_1d)
     assert calc_1d._ncalcs == 3
-    assert calc_1d.system is not sys_initial
+    assert calc_1d.system is sys_initial
     (g_param_2,) = torch.autograd.grad(e2, gam_param)
     torch.testing.assert_close(g_param_1, g_param_2)
 
-    # In-place parameter mutation refreshes System setup and changes energy
+    # In-place parameter mutation takes effect immediately on next evaluation
     with torch.no_grad():
         gam_param.add_(0.05)
     e3 = calc_1d.energy(pos_1d)
     assert not torch.isclose(e2, e3)
 
-    # Batched Calculator (mode 1 padded and mode 2 conformer): _ncalcs, caching, and parameter gradients
+    # Batched Calculator (mode 1 padded and mode 2 conformer): _ncalcs, call-local deduplication, and parameter gradients
     numbers_2d = torch.tensor([[8, 1, 1], [1, 1, 0]], device=DEVICE)
     pos_2d = torch.tensor(
         [
@@ -808,21 +808,23 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
     assert calc_2d._ncalcs == 0
     res_b1 = calc_2d.singlepoint(pos_2d.detach())
     assert calc_2d._ncalcs == 1
-    lanes_cached_1 = build_calculator_lane_systems(calc_2d)
     res_b2 = calc_2d.singlepoint(pos_2d.detach())
     assert calc_2d._ncalcs == 2
-    lanes_cached_2 = build_calculator_lane_systems(calc_2d)
-    assert lanes_cached_1[0] is lanes_cached_2[0]
-    assert lanes_cached_1[1] is lanes_cached_2[1]
     torch.testing.assert_close(res_b1.energy, res_b2.energy)
 
-    # Parameter backward pass on batched Calculator refreshes cached lane Systems on next call
+    # Conformer batch deduplicates identical lane compositions within a single call
+    numbers_conf = torch.tensor([[8, 1, 1], [8, 1, 1]], device=DEVICE)
+    calc_conf = Calculator(
+        numbers_conf, par, opts={"verbosity": 0, "batch_mode": 2}, **DD
+    )
+    conf_lanes = build_calculator_lane_systems(calc_conf)
+    assert conf_lanes[0] is conf_lanes[1]
+
+    # Repeated parameter backward passes on batched Calculator succeed cleanly
     eb1 = calc_2d.energy(pos_2d).sum()
     (gb_1,) = torch.autograd.grad(eb1, gam_param)
     assert torch.isfinite(gb_1).all() and gb_1.abs().item() > 0.0
 
     eb2 = calc_2d.energy(pos_2d).sum()
-    lanes_cached_3 = build_calculator_lane_systems(calc_2d)
-    assert lanes_cached_3[0] is not lanes_cached_2[0]
     (gb_2,) = torch.autograd.grad(eb2, gam_param)
     torch.testing.assert_close(gb_1, gb_2)

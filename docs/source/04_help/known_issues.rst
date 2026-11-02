@@ -105,61 +105,30 @@ Running the test suite with several ``pytest-xdist`` workers is also much
 slower if each worker uses several threads; set ``OMP_NUM_THREADS=1``.
 
 
-Repeated derivatives on the same tensor raise an error
-------------------------------------------------------
-
-Calling ``calc.get_forces(positions)`` twice with the same ``positions``
-tensor raises ``RuntimeError: Trying to backward through the graph a second
-time``, because the second call reuses cached intermediate results whose
-graph the first call has freed.
-
-**Workaround:** create a new calculator, call ``calc.reset()`` (but see
-below), or pass a fresh tensor (``positions.detach().clone()``).
-
-
-``Calculator.forces`` fails for batched input
----------------------------------------------
-
-For a batch of systems, ``calc.forces(positions)`` (default
-``grad_mode="autograd"`` and ``"backward"``) raises ``RuntimeError: grad can
-be implicitly created only for scalar outputs``.
-
-**Workaround:** differentiate the sum of the energies, which gives the forces
-of every system because the systems are independent:
-
-.. code-block:: python
-
-    energy = calc.energy(positions)
-    (grad,) = torch.autograd.grad(energy.sum(), positions)
-    forces = -grad
-
-
 ``reset()`` cuts gradients to user-supplied tensors
 ---------------------------------------------------
 
 ``calc.reset()``, ``reset_all()`` and the ``reset_*`` methods of the
-interaction and classical lists replace the tensors of the components with
-detached copies. Gradients with respect to a tensor the user passed in, e.g.,
-``requires_grad=True`` component parameters, are then ``None``. Electric
-fields are per-evaluation inputs and are not component state; their graph is
-preserved across ``Calculator.reset()``. Setup-derived parameters are not reset;
-change them by constructing a new Model/System or Calculator.
+interaction and classical lists replace the tensors of custom components with
+detached copies. Gradients with respect to a tensor the user passed into a
+custom component, e.g., ``requires_grad=True`` component parameters, are then
+``None``. Electric fields are per-evaluation inputs and are not component
+state; their graph is preserved across ``Calculator.reset()``. ``Model.par``
+parameters are re-evaluated on each call and remain differentiable across
+``Calculator.reset()``.
 
-**Workaround:** for unmigrated component parameters, pass a fresh component or
+**Workaround:** for custom component parameters, pass a fresh component or
 rebuild the Calculator after reset if gradients to the original leaves matter.
 
 
 ``Calculator.to(device)`` does not move all state
 -------------------------------------------------
 
-``Calculator.to`` (and ``.type``) convert the components, but not every
-internal object (e.g., the :class:`~dxtb.IndexHelper` stays on the original
-device). The immutable ES2/ES3 setup values gathered by ``Model.setup`` also
-remain on their original dtype/device. Legacy constructor-field defaults are
-also retained at their original dtype/device because they are compatibility
-call inputs rather than interaction components. Evaluating after
-``Calculator.type`` is unsupported; construct a new Calculator with the
-requested dtype instead.
+``Calculator.to`` converts the components, but not every internal object
+(e.g., the :class:`~dxtb.IndexHelper` stays on the original device). Legacy
+constructor-field defaults are also retained at their original device because
+they are compatibility call inputs rather than interaction components.
+(Changing floating-point precision via ``Calculator.type(dtype)`` is supported.)
 
 **Workaround:** create the calculator on the target device
 (``Calculator(..., device=device)``).
