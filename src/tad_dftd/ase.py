@@ -87,11 +87,13 @@ try:
     from ase.calculators.mixing import (  # type: ignore[import-untyped]
         SumCalculator,
     )
-    from ase.units import Bohr  # type: ignore[import-untyped]
+    from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
         "The 'tad_dftd.ase' submodule requires ASE to be installed."
     ) from exc
+
+from tad_mctc import Structure
 
 from .cutoff import Cutoff
 from .damping import (
@@ -102,6 +104,7 @@ from .damping import (
     TwoBodyDamping,
     damping_from_name,
 )
+from .disp import dftd
 from .model.catalogue import (
     ChargeModelId,
     DispersionModelId,
@@ -682,6 +685,159 @@ def _resolve_charge_options(
     return resolved_charge, resolved_key
 
 
+def _resolve_total_charge(
+    atoms: Atoms,
+    cfg: _ResolvedConfig,
+) -> torch.Tensor:
+    """
+    Resolve the total system charge used by automatic EEQ evaluation.
+    """
+    if cfg.charge is not None:
+        total_q = float(cfg.charge)
+    else:
+        init_q = np.asarray(atoms.get_initial_charges(), dtype=np.float64)
+        if not np.all(np.isfinite(init_q)):
+            raise ValueError(
+                "ASE 'initial_charges' array contains non-finite values."
+            )
+        total_q = float(init_q.sum()) if init_q.size > 0 else 0.0
+
+    return torch.tensor(total_q, dtype=cfg.dtype, device=cfg.device)
+
+
+def _build_structure(
+    atoms: Atoms,
+    cfg: _ResolvedConfig,
+    *,
+    need_forces: bool = False,
+) -> tuple[Structure, torch.Tensor]:
+    """
+    Convert an ASE :class:`~ase.atoms.Atoms` object into a fresh
+    :class:`~tad_mctc.Structure` in atomic units (Bohr) without mutating ``atoms``.
+    """
+    raw_numbers = np.asarray(atoms.get_atomic_numbers(), dtype=np.int64)
+    if raw_numbers.ndim != 1 or raw_numbers.size == 0:
+        raise ValueError("ASE Atoms object must contain at least one atom.")
+
+    if np.any(raw_numbers <= 0) or np.any(raw_numbers > cfg.meta.max_elem):
+        bad_mask = (raw_numbers <= 0) | (raw_numbers > cfg.meta.max_elem)
+        bad = int(raw_numbers[bad_mask][0])
+        raise ValueError(
+            f"Unsupported atomic number Z={bad} for {cfg.meta.label} "
+            f"(supported range: 1..{cfg.meta.max_elem})."
+        )
+
+    numbers = torch.as_tensor(raw_numbers, dtype=torch.long, device=cfg.device)
+
+    raw_positions = np.asarray(atoms.get_positions(), dtype=np.float64)
+    if raw_positions.shape != (raw_numbers.size, 3):
+        raise ValueError(
+            f"Expected positions of shape ({raw_numbers.size}, 3), got {raw_positions.shape}."
+        )
+    if not np.all(np.isfinite(raw_positions)):
+        raise ValueError("Atomic positions contain non-finite values.")
+
+    positions_bohr = (
+        torch.as_tensor(raw_positions, dtype=cfg.dtype, device=cfg.device)
+        / Bohr
+    )
+    if need_forces:
+        positions_bohr = positions_bohr.detach().requires_grad_(True)
+
+    pbc_flags = np.asarray(atoms.get_pbc(), dtype=bool)
+    if pbc_flags.shape != (3,):
+        raise ValueError(
+            f"Expected 3 periodic boundary flags, got shape {pbc_flags.shape}."
+        )
+
+    has_any_pbc = bool(pbc_flags.any())
+    if has_any_pbc:
+        raw_cell = np.asarray(atoms.get_cell().array, dtype=np.float64)
+        if raw_cell.shape != (3, 3) or not np.all(np.isfinite(raw_cell)):
+            raise ValueError("Periodic cell vectors must be a finite (3, 3) array.")
+        lattice: torch.Tensor | None = (
+            torch.as_tensor(raw_cell, dtype=cfg.dtype, device=cfg.device)
+            / Bohr
+        )
+        periodic: torch.Tensor | None = torch.as_tensor(
+            pbc_flags, dtype=torch.bool, device=cfg.device
+        )
+    else:
+        lattice = None
+        periodic = None
+
+    total_charge = _resolve_total_charge(atoms, cfg)
+    structure = Structure(
+        numbers=numbers,
+        positions=positions_bohr,
+        charge=total_charge,
+        lattice=lattice,
+        periodic=periodic,
+    )
+    return structure, positions_bohr
+
+
+def _calculate_energy_and_derivatives(
+    atoms: Atoms,
+    cfg: _ResolvedConfig,
+    properties: set[str],
+) -> dict[str, Any]:
+    """
+    Evaluate dispersion energies and requested nuclear forces in atomic units
+    and convert outputs to ASE units (eV and eV/Angstrom).
+    """
+    need_forces = "forces" in properties
+
+    with torch.inference_mode(False), torch.set_grad_enabled(need_forces):
+        structure, positions_bohr = _build_structure(
+            atoms,
+            cfg,
+            need_forces=need_forces,
+        )
+
+        extra_kwargs: dict[str, Any] = {}
+        if cfg.qmodel is not None:
+            extra_kwargs["qmodel"] = cfg.qmodel
+
+        atom_energies = dftd(
+            structure,
+            cfg.param,
+            model=cfg.model_id,
+            damping=cfg.damping,
+            cutoff=cfg.cutoff,
+            **extra_kwargs,
+        )
+        total_energy_eh = atom_energies.sum()
+
+        grad_pos: torch.Tensor | None = None
+        if need_forces:
+            grad_pos = torch.autograd.grad(
+                total_energy_eh,
+                positions_bohr,
+                retain_graph=False,
+                create_graph=False,
+            )[0]
+
+    energy_ev = float(total_energy_eh.detach().cpu().item()) * Hartree
+    energies_ev = (
+        atom_energies.detach().cpu().numpy().astype(np.float64) * Hartree
+    )
+
+    results: dict[str, Any] = {
+        "energy": energy_ev,
+        "free_energy": energy_ev,
+        "energies": energies_ev,
+    }
+
+    if grad_pos is not None:
+        forces_ev_ang = (-grad_pos.detach().cpu().numpy().astype(np.float64)) * (
+            Hartree / Bohr
+        )
+        results["forces"] = forces_ev_ang
+
+    return results
+
+
 class DFTD(Calculator):
     """
     ASE calculator for Grimme-lab DFT-D dispersion corrections backed by
@@ -905,6 +1061,41 @@ class DFTD(Calculator):
     def reset(self) -> None:
         """Clear all cached calculation results."""
         super().reset()
+
+    def calculate(
+        self,
+        atoms: Atoms | None = None,
+        properties: list[str] | tuple[str, ...] | None = None,
+        system_changes: list[str] | tuple[str, ...] = all_changes,
+    ) -> None:
+        """
+        Evaluate the requested ASE properties for ``atoms`` and store them in
+        ``self.results``.
+        """
+        if properties is None:
+            requested_props = list(self.implemented_properties)
+        else:
+            requested_props = list(properties)
+
+        super().calculate(
+            atoms=atoms,
+            properties=requested_props,
+            system_changes=list(system_changes),
+        )
+
+        if self.atoms is None:
+            raise _ConfigurationError(
+                "No ASE Atoms object is associated with the calculator."
+            )
+
+        if self._resolved_config is None:
+            self._resolved_config = self._resolve_current_config()
+
+        self.results = _calculate_energy_and_derivatives(
+            self.atoms,
+            self._resolved_config,
+            set(requested_props),
+        )
 
 
 class DFTD4(DFTD):

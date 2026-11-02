@@ -14,17 +14,24 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pytest
 import torch
 
 ase = pytest.importorskip("ase")
+from ase.atoms import Atoms  # type: ignore[import-untyped]
+from ase.build import molecule  # type: ignore[import-untyped]
 from ase.calculators.calculator import (  # type: ignore[import-untyped]
     Calculator,
     InputError,
 )
-from ase.units import Bohr  # type: ignore[import-untyped]
+from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
 
+from tad_mctc import Structure
+
+from tad_dftd import dftd, param
 from tad_dftd.ase import DFTD, DFTD3, DFTD4
 from tad_dftd.damping import (
     FermiTwoBody,
@@ -34,6 +41,7 @@ from tad_dftd.damping import (
     ZeroThreeBodyD3,
     ZeroThreeBodyD4,
     ZeroTwoBody,
+    damping_from_name,
 )
 from tad_dftd.model.catalogue import DispersionModelId
 
@@ -311,3 +319,404 @@ else:
         check=False,
     )
     assert proc.returncode == 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
+
+@pytest.mark.parametrize(
+    ("model", "method", "tweaks"),
+    [
+        ("d1", "BLYP", None),
+        ("d2", "PBE", None),
+        ("d3", "PBE", None),
+        ("d3s", "BLYP", None),
+        ("d4", "PBE", None),
+        ("d4s", "PBE", None),
+        (
+            "d4srev",
+            None,
+            {"s6": 1.0, "s8": 0.9589, "a1": 0.3857, "a2": 4.8069, "s9": 1.0},
+        ),
+    ],
+)
+def test_all_seven_models_energy_and_forces_evaluation(
+    model: str,
+    method: str | None,
+    tweaks: dict[str, float] | None,
+) -> None:
+    """Verify energy, per-atom energies, and forces for all 7 supported dispersion models."""
+    atoms = molecule("H2O")
+    orig_pos = atoms.get_positions().copy()
+
+    atoms.calc = DFTD(method=method, model=model, params_tweaks=tweaks)
+    energy = atoms.get_potential_energy()
+    energies = atoms.get_potential_energies()
+    forces = atoms.get_forces()
+
+    assert isinstance(energy, float)
+    assert energy < 0.0
+    assert isinstance(energies, np.ndarray)
+    assert energies.shape == (3,)
+    assert pytest.approx(float(energies.sum()), rel=1e-14, abs=1e-14) == energy
+    assert pytest.approx(atoms.calc.results["free_energy"], rel=1e-14, abs=1e-14) == energy
+
+    assert isinstance(forces, np.ndarray)
+    assert forces.shape == (3, 3)
+    assert np.all(np.isfinite(forces))
+    # Net translational force on an isolated molecule must vanish
+    assert np.max(np.abs(forces.sum(axis=0))) < 1e-12
+    # Input Atoms positions must not be mutated
+    np.testing.assert_allclose(atoms.get_positions(), orig_pos, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("model", "method", "tweaks", "invalid_z"),
+    [
+        ("d1", "BLYP", None, 11),
+        ("d2", "PBE", None, 87),
+        ("d3", "PBE", None, 104),
+        ("d3s", "BLYP", None, 95),
+        ("d4", "PBE", None, 119),
+    ],
+)
+def test_element_range_validation(
+    model: str,
+    method: str | None,
+    tweaks: dict[str, float] | None,
+    invalid_z: int,
+) -> None:
+    """Verify element-range limits are enforced via the catalogue without duplication."""
+    atoms = Atoms(
+        numbers=[1, invalid_z],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
+    )
+    atoms.calc = DFTD(method=method, model=model, params_tweaks=tweaks)
+    with pytest.raises(ValueError, match="Unsupported|unsupported"):
+        atoms.get_potential_energy()
+
+    # Dummy Z=0 atom must also be rejected
+    atoms_zero = Atoms(
+        numbers=[0, 1],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+    )
+    atoms_zero.calc = DFTD(method="PBE", model="d4")
+    with pytest.raises(ValueError, match="Unsupported atomic number"):
+        atoms_zero.get_potential_energy()
+
+
+@pytest.mark.parametrize(
+    ("model", "method", "damping_hint", "tweaks"),
+    [
+        ("d1", "BLYP", None, None),
+        ("d2", "PBE", None, None),
+        ("d3", "PBE", None, None),
+        ("d3", "PBE", {"2b": "zero", "3b": "none"}, None),
+        ("d3", "PBE", {"2b": "rational", "3b": "zero-avg"}, None),
+        ("d3s", "BLYP", None, None),
+        ("d4", "PBE", None, None),
+        ("d4", "PBE", {"3b": "none"}, None),
+        ("d4s", "PBE", None, None),
+        (
+            "d4srev",
+            None,
+            None,
+            {"s6": 1.0, "s8": 0.9589, "a1": 0.3857, "a2": 4.8069, "s9": 1.0},
+        ),
+    ],
+)
+def test_direct_numerical_parity_with_native_dftd(
+    model: str,
+    method: str | None,
+    damping_hint: dict[str, str] | None,
+    tweaks: dict[str, float] | None,
+) -> None:
+    """Verify exact numerical parity between tad_dftd.ase.DFTD and native tad_dftd.dftd()."""
+    atoms = molecule("CH3CH2OH")
+    calc = DFTD(
+        method=method,
+        model=model,
+        damping_hint=damping_hint,
+        params_tweaks=tweaks,
+    )
+    atoms.calc = calc
+    e_ase = atoms.get_potential_energy()
+    es_ase = atoms.get_potential_energies()
+    f_ase = atoms.get_forces()
+
+    cfg = calc._resolved_config
+    assert cfg is not None
+    pos_bohr = (
+        torch.tensor(atoms.get_positions(), dtype=torch.float64) / Bohr
+    ).requires_grad_(True)
+    numbers = torch.tensor(atoms.get_atomic_numbers(), dtype=torch.long)
+    structure = Structure(
+        numbers=numbers,
+        positions=pos_bohr,
+        charge=torch.tensor(0.0, dtype=torch.float64),
+    )
+    extra_kwargs: dict[str, Any] = {}
+    if cfg.qmodel is not None:
+        extra_kwargs["qmodel"] = cfg.qmodel
+    es_native = dftd(
+        structure,
+        cfg.param,
+        model=cfg.model_id,
+        damping=cfg.damping,
+        cutoff=cfg.cutoff,
+        **extra_kwargs,
+    )
+    e_native = es_native.sum()
+    grad_native = torch.autograd.grad(e_native, pos_bohr)[0]
+    f_native = (-grad_native.detach().numpy()) * (Hartree / Bohr)
+
+    assert pytest.approx(float(e_native.item()) * Hartree, rel=1e-14, abs=1e-14) == e_ase
+    np.testing.assert_allclose(
+        es_ase, es_native.detach().numpy() * Hartree, rtol=1e-14, atol=1e-14
+    )
+    np.testing.assert_allclose(f_ase, f_native, rtol=1e-13, atol=1e-13)
+
+
+def test_fortran_dftd_ase_reference_parity() -> None:
+    """Verify against independent Fortran grimme-lab/dftd python/dftd/test_ase.py reference values."""
+    # 1. SCAN-D4 on methylenecyclopropane (energy + forces)
+    atoms1 = molecule("methylenecyclopropane")
+    atoms1.calc = DFTD4(method="SCAN")
+    ref_forces1 = np.array(
+        [
+            [-7.90552684e-21, -1.15811595e-19, -2.80061133e-05],
+            [+4.61502216e-20, +4.26735028e-04, +4.94269127e-04],
+            [+2.28682834e-19, -4.26735028e-04, +4.94269127e-04],
+            [+1.39725405e-20, -9.71924142e-20, -7.95205193e-04],
+            [-1.08042249e-04, -8.23929519e-05, +2.31098749e-05],
+            [+1.08042249e-04, -8.23929519e-05, +2.31098749e-05],
+            [+1.08042249e-04, +8.23929519e-05, +2.31098749e-05],
+            [-1.08042249e-04, +8.23929519e-05, +2.31098749e-05],
+            [+1.07391220e-20, -4.98420762e-05, -1.28883224e-04],
+            [+5.97028977e-21, +4.98420762e-05, -1.28883224e-04],
+        ]
+    )
+    assert pytest.approx(-0.021665446836610567, abs=1e-9) == atoms1.get_potential_energy()
+    np.testing.assert_allclose(atoms1.get_forces(), ref_forces1, atol=1e-6)
+
+    # 2. PBE-D4S on bicyclobutane (energy + forces)
+    atoms2 = molecule("bicyclobutane")
+    atoms2.calc = DFTD(method="PBE", model="d4s")
+    ref_forces2 = np.array(
+        [
+            [-1.05900228e-18, -1.47186433e-03, -2.08505399e-03],
+            [-8.94454333e-19, 1.47186433e-03, -2.08505399e-03],
+            [-2.48990627e-03, -1.06729670e-18, 2.15375860e-03],
+            [2.48990627e-03, -1.91047493e-19, 2.15375860e-03],
+            [-4.33024525e-22, -2.06112648e-03, -6.95481292e-05],
+            [2.47579260e-21, -2.26182709e-03, -5.56758674e-04],
+            [3.90654502e-20, 2.06112648e-03, -6.95481292e-05],
+            [4.57489295e-20, 2.26182709e-03, -5.56758674e-04],
+            [-1.57814347e-03, 6.44754156e-19, 5.57602199e-04],
+            [1.57814347e-03, 5.62735538e-19, 5.57602199e-04],
+        ]
+    )
+    assert pytest.approx(-0.16377494406788423, abs=1e-12) == atoms2.get_potential_energy()
+    np.testing.assert_allclose(atoms2.get_forces(), ref_forces2, atol=1e-6)
+
+    # 3. BLYP-D3S on OH2LiNi
+    bohr_codata2018 = 0.529177210903
+    atoms3 = Atoms(
+        "OH2LiNi",
+        positions=bohr_codata2018
+        * np.array(
+            [
+                [+0.00000000000000, +0.00000000000000, -0.73578586109551],
+                [+1.44183152868459, +0.00000000000000, +0.36789293054775],
+                [-1.44183152868459, +0.00000000000000, +0.36789293054775],
+                [+0.00000000000000, +0.00000000000000, +3.90000000000000],
+                [+0.00000000000000, +5.00000000000000, +0.00000000000000],
+            ]
+        ),
+    )
+    atoms3.calc = DFTD(method="BLYP", model="d3s")
+    assert pytest.approx(-1.0101127823439129e-02 * Hartree, abs=1e-9) == atoms3.get_potential_energy()
+    np.testing.assert_allclose(np.sum(atoms3.get_forces(), axis=0), np.zeros(3), atol=1e-12)
+
+    # 4. PBE-D4 without ATM (3b="none") on bicyclobutane
+    atoms4 = molecule("bicyclobutane")
+    atoms4.calc = DFTD(method="PBE", model="d4", damping_hint={"3b": "none"})
+    assert pytest.approx(-0.15427642282371362, abs=1e-12) == atoms4.get_potential_energy()
+
+    # 5. TPSS-D4 on C2H6CHOH (energy + forces)
+    atoms5 = molecule("C2H6CHOH")
+    atoms5.calc = DFTD4(method="tpss")
+    ref_forces5 = np.array(
+        [
+            [-8.27697238e-04, -1.74116189e-02, +9.50315402e-05],
+            [-3.00615825e-04, +3.51410800e-04, -3.12339518e-03],
+            [-9.55691674e-04, -4.05325537e-03, +7.33934018e-05],
+            [+2.70525425e-04, -1.91784287e-03, -6.13796425e-04],
+            [+1.56444473e-02, +5.71643192e-03, +6.29706049e-04],
+            [-1.43399413e-02, +7.36397630e-03, +7.87584027e-04],
+            [+4.41551907e-03, +4.04705396e-04, +1.42098826e-03],
+            [-4.17670039e-03, +1.57923335e-03, +1.60488604e-03],
+            [+4.66065256e-03, +7.97764912e-05, -3.60249901e-05],
+            [-4.95386767e-03, +1.38115911e-03, -1.63079386e-05],
+            [+5.36717422e-03, +2.78165913e-03, -4.68647341e-04],
+            [-4.80380448e-03, +3.72436466e-03, -3.53417437e-04],
+        ]
+    )
+    assert pytest.approx(-0.24206732765720423, abs=1e-8) == atoms5.get_potential_energy()
+    np.testing.assert_allclose(atoms5.get_forces(), ref_forces5, atol=1e-6)
+
+    # 6. PBE-D4 on H2O
+    atoms6 = molecule("H2O")
+    atoms6.calc = DFTD4(method="pbe")
+    assert pytest.approx(-0.005358475432239303, abs=1e-10) == atoms6.get_potential_energy()
+
+    # 7. PBE-D3(BJ) on MB16-43-01 (from Fortran test_ase_dftd3_bj)
+    atoms7 = Atoms(
+        numbers=[11, 1, 8, 1, 9, 1, 1, 8, 7, 1, 1, 17, 5, 5, 7, 13],
+        positions=(
+            np.array(
+                [
+                    [-1.85528263484662, +3.58670515364616, -2.41763729306344],
+                    [+4.40178023537845, +0.02338844412653, -4.95457749372945],
+                    [-2.98706033463438, +4.76252065456814, +1.27043301573532],
+                    [+0.79980886075526, +1.41103455609189, -5.04655321620119],
+                    [-4.20647469409936, +1.84275767548460, +4.55038084858449],
+                    [-3.54356121843970, -3.18835665176557, +1.46240021785588],
+                    [+2.70032160109941, +1.06818452504054, -1.73234650374438],
+                    [+3.73114088824361, -2.07001543363453, +2.23160937604731],
+                    [-1.75306819230397, +0.35951417150421, +1.05323406177129],
+                    [+5.41755788583825, -1.57881830078929, +1.75394002750038],
+                    [-2.23462868255966, -2.13856505054269, +4.10922285746451],
+                    [+1.01565866207568, -3.21952154552768, -3.36050963020778],
+                    [+2.42119255723593, +0.26626435093114, -3.91862474360560],
+                    [-3.02526098819107, +2.53667889095925, +2.31664984740423],
+                    [-2.00438948664892, -2.29235136977220, +2.19782807357059],
+                    [+1.12226554109716, -1.36942007032045, +0.48455055461782],
+                ]
+            )
+            * Bohr
+        ),
+    )
+    atoms7.calc = DFTD3(method="PBE")
+    assert pytest.approx(-1.7882220155186028e-02 * Hartree, abs=1e-9) == atoms7.get_potential_energy()
+
+    # 8. RPBE-D3(0) on MB16-43-09 (from Fortran test_ase_dftd3_zero)
+    atoms8 = Atoms(
+        numbers=[1, 1, 1, 1, 3, 1, 6, 5, 1, 1, 14, 1, 17, 9, 1, 5],
+        positions=(
+            np.array(
+                [
+                    [+3.97360649552839, +1.71723751297383, -0.51862929250676],
+                    [+0.16903666216522, +1.73154352333176, -0.40099024352959],
+                    [-3.94463844105182, -1.24346369608005, +0.09565841726334],
+                    [+2.21647168119803, +4.10625979391554, +2.61391340002321],
+                    [-0.04488993380842, -2.16288302687041, +4.48488595610432],
+                    [+3.52287141817194, -0.90500888687059, -5.00916337263077],
+                    [+1.95336082370762, -0.83849036872324, -3.65515970516029],
+                    [+2.05706981818495, +1.70095588601056, -2.06303335904159],
+                    [-6.40097100472159, -1.71072935987273, +3.14621771036234],
+                    [+2.04751538182937, -2.55691868000982, -2.49926722310562],
+                    [+2.03251078714394, +1.35094356516468, +2.02150308748654],
+                    [+0.20477572129201, -0.93291693232462, -4.76431390827476],
+                    [-2.67673272939098, +1.40764602033672, +4.10347165469140],
+                    [-2.75901984658887, -3.73954809548334, +3.19373273207227],
+                    [+1.96938102642596, +3.74070925169244, -3.03185101883736],
+                    [-4.32034786008576, -1.66533650719069, +2.28302516508337],
+                ]
+            )
+            * Bohr
+        ),
+    )
+    atoms8.calc = DFTD3(method="RPBE", damping_hint={"2b": "zero", "3b": "none"})
+    assert pytest.approx(-2.0178760785797962e-02 * Hartree, abs=1e-9) == atoms8.get_potential_energy()
+
+
+@pytest.mark.parametrize(
+    ("model", "method", "damping_hint"),
+    [
+        ("d3", "PBE", {"2b": "rational", "3b": "none"}),
+        ("d3", "PBE", {"2b": "rational", "3b": "zero-avg"}),
+        ("d3", "PBE", {"2b": "zero", "3b": "none"}),
+        ("d3", "PBE", {"2b": "mzero", "3b": "none"}),
+        ("d3", "PBE", {"2b": "optimizedpower", "3b": "none"}),
+        ("d4", "PBE", {"2b": "rational", "3b": "zero-avg"}),
+        ("d4", "PBE", {"2b": "rational", "3b": "none"}),
+    ],
+)
+def test_molecular_forces_central_finite_differences(
+    model: str,
+    method: str,
+    damping_hint: dict[str, str],
+) -> None:
+    """Compare analytical autograd forces against central finite differences of ASE energy."""
+    atoms = molecule("H2O")
+    # Perturb slightly to break exact symmetry so all force components are non-trivial
+    pos0 = atoms.get_positions().copy()
+    pos0[0] += np.array([0.02, -0.01, 0.03])
+    pos0[1] += np.array([-0.01, 0.03, -0.02])
+    atoms.set_positions(pos0)
+
+    atoms.calc = DFTD(
+        method=method,
+        model=model,
+        damping_hint=damping_hint,
+        dtype=torch.float64,
+    )
+    f_analytic = atoms.get_forces().copy()
+
+    eps = 1.0e-6
+    f_num = np.zeros_like(f_analytic)
+    for idx in range(len(atoms)):
+        for alpha in range(3):
+            pos_plus = pos0.copy()
+            pos_plus[idx, alpha] += eps
+            atoms.set_positions(pos_plus)
+            e_plus = atoms.get_potential_energy()
+
+            pos_minus = pos0.copy()
+            pos_minus[idx, alpha] -= eps
+            atoms.set_positions(pos_minus)
+            e_minus = atoms.get_potential_energy()
+
+            f_num[idx, alpha] = -(e_plus - e_minus) / (2.0 * eps)
+
+    np.testing.assert_allclose(f_analytic, f_num, rtol=1e-7, atol=1e-8)
+
+
+def test_dtype_and_gradient_contexts() -> None:
+    """Verify float64/float32 execution and safe force evaluation under no_grad and inference_mode."""
+    default_dtype_before = torch.get_default_dtype()
+
+    atoms64 = molecule("H2O")
+    atoms64.calc = DFTD(method="PBE", model="d4", dtype=torch.float64)
+    e64 = atoms64.get_potential_energy()
+    f64 = atoms64.get_forces()
+
+    atoms32 = molecule("H2O")
+    atoms32.calc = DFTD(method="PBE", model="d4", dtype=torch.float32)
+    e32 = atoms32.get_potential_energy()
+    f32 = atoms32.get_forces()
+
+    assert pytest.approx(e64, rel=1e-5, abs=1e-5) == e32
+    np.testing.assert_allclose(f32, f64, rtol=1e-4, atol=1e-5)
+    assert torch.get_default_dtype() == default_dtype_before
+
+    # Test under torch.no_grad()
+    with torch.no_grad():
+        assert not torch.is_grad_enabled()
+        atoms_ng = molecule("H2O")
+        atoms_ng.calc = DFTD(method="PBE", model="d4")
+        e_ng = atoms_ng.get_potential_energy()
+        f_ng = atoms_ng.get_forces()
+        assert not torch.is_grad_enabled()
+    assert pytest.approx(e64, rel=1e-14, abs=1e-14) == e_ng
+    np.testing.assert_allclose(f_ng, f64, rtol=1e-13, atol=1e-13)
+
+    # Test under torch.inference_mode()
+    with torch.inference_mode():
+        assert torch.is_inference_mode_enabled()
+        atoms_im = molecule("H2O")
+        atoms_im.calc = DFTD(method="PBE", model="d4")
+        e_im = atoms_im.get_potential_energy()
+        f_im = atoms_im.get_forces()
+        assert torch.is_inference_mode_enabled()
+    assert pytest.approx(e64, rel=1e-14, abs=1e-14) == e_im
+    np.testing.assert_allclose(f_im, f64, rtol=1e-13, atol=1e-13)
+
