@@ -120,7 +120,7 @@ class CanonicalCoreBucket:
 def _tensor_ints(value: Tensor) -> tuple[int, ...]:
     if value.ndim != 1:
         raise ValueError("Expected a one-dimensional structural tensor.")
-    return tuple(int(item) for item in value.tolist())
+    return tuple(int(item.item()) for item in value)
 
 
 def _source_layout(core: ExactSystemCore) -> _SourceLayout:
@@ -1170,7 +1170,7 @@ def _remap_family_setup(
                 for target_shell in mapping.shells
             )
             actual_source_map = tuple(
-                int(value) for value in setup.shells_to_atom.tolist()
+                int(value.item()) for value in setup.shells_to_atom
             )
             if actual_source_map != expected_source_map:
                 raise ValueError(

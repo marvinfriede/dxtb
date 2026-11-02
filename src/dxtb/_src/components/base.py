@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import torch
 
-from dxtb._src.typing import Any, Tensor, TensorLike
+from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.misc import get_all_slots
 from dxtb._src.utils.tensors import GradKey, grad_key_matches
 
@@ -274,6 +274,16 @@ class Component(TensorLike):
     def cache_disable(self) -> None:
         """Disable the cache."""
         self._cache_enabled = False
+
+    @override
+    def type(self, dtype: torch.dtype) -> Self:
+        new = super().type(dtype)
+        new.label = getattr(self, "label", self.__class__.__name__)
+        new._cache = None
+        new._cachevars = None
+        new._cachegrad = None
+        new._cache_enabled = getattr(self, "_cache_enabled", True)
+        return new
 
     ############################################################################
 

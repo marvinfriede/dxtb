@@ -26,6 +26,8 @@ the :attr:`implemented_properties` attribute.
 
 from __future__ import annotations
 
+import contextlib
+import copy
 from abc import abstractmethod
 from dataclasses import replace
 
@@ -98,7 +100,12 @@ _REMOVED_CACHE_OPTIONS = {
 
 
 def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
-    """Reject the removed Calculator result-retention arguments."""
+    """Reject removed Calculator result-retention and grad_mode arguments."""
+    if "grad_mode" in kwargs:
+        raise TypeError(
+            "Unsupported keyword argument 'grad_mode': public force "
+            "differentiation mode selection has been removed."
+        )
     removed = sorted(_REMOVED_STORE_OPTIONS.intersection(kwargs))
     if removed:
         raise TypeError(
@@ -117,20 +124,22 @@ def reject_removed_cache_options(opts: dict[str, Any]) -> None:
         )
 
 
-def _param_state_signature(
-    par: ParamModule,
-) -> tuple[tuple[int, int, bool, torch.dtype, torch.device], ...]:
-    """Capture a lightweight state signature of all parameter and buffer leaves."""
-    return tuple(
-        (
-            id(t),
-            int(t._version),
-            bool(t.requires_grad),
-            t.dtype,
-            t.device,
-        )
-        for t in (*par.parameters(), *par.buffers())
-    )
+def _sanitize_inference_param_module(par: ParamModule) -> None:
+    """Replace any inference-mode parameter or buffer tensors on ``par`` with normal clones."""
+    if not any(
+        t.is_inference() for t in (*par.parameters(), *par.buffers())
+    ):
+        return
+    with torch.inference_mode(False):
+        for mod in par.modules():
+            for name, p in list(mod._parameters.items()):
+                if p is not None and p.is_inference():
+                    mod._parameters[name] = torch.nn.Parameter(
+                        p.clone(), requires_grad=p.requires_grad
+                    )
+            for name, b in list(mod._buffers.items()):
+                if b is not None and b.is_inference():
+                    mod._buffers[name] = b.clone()
 
 
 def _convert_system_dtype(
@@ -190,6 +199,189 @@ def _convert_system_dtype(
         h0_setup=h0_setup,
         dd={**system.dd, "dtype": dtype},
         exact_core=exact_core,
+    )
+
+
+def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
+    """Convert a call-local evaluation System and its exact core setups to ``dtype``."""
+    integral_setup = (
+        None
+        if system.integral_setup is None
+        else system.integral_setup.to(dtype=dtype)
+    )
+    h0_setup = (
+        None
+        if system.h0_setup is None
+        else system.h0_setup.to(dtype=dtype)
+    )
+    exact_core = system.exact_core
+    if exact_core is None:
+        return _convert_system_dtype(
+            system,
+            dtype,
+            classicals=system.classicals.type(dtype),
+            interactions=system.interactions.type(dtype),
+        )
+
+    exact_core = exact_core.to(dtype=dtype)
+    backend_setup = (
+        integral_setup.pytorch
+        if integral_setup is not None and integral_setup.pytorch is not None
+        else (
+            integral_setup.libcint
+            if integral_setup is not None
+            else None
+        )
+    )
+    core_integral = None
+    if integral_setup is not None:
+        from dxtb._src.calculators.model import IntegralBackendNode
+
+        core_integral = IntegralBackendNode(
+            driver_type=integral_setup.driver_type,
+            intlevel=integral_setup.intlevel,
+            logical_device=system.numbers.device,
+            backend=backend_setup,
+        )
+    exact_core = exact_core.replace(
+        effective_dtype=dtype,
+        integral=core_integral,
+        h0_setup=(h0_setup if isinstance(h0_setup, H0SetupNode) else None),
+    )
+
+    c_setup_by_pos = {
+        term.position: term.setup for term in exact_core.classical_terms
+    }
+    i_setup_by_pos = {
+        term.position: term.setup for term in exact_core.interaction_terms
+    }
+
+    repulsion_setup = system.repulsion_setup
+    srb_setup = system.srb_setup
+    d4_setup = system.d4_setup
+    ies_setup = system.ies_setup
+    halogen_setup = system.halogen_setup
+    new_d3_setups: list[tuple[Any, Any]] = []
+    for pos, comp in enumerate(system.classicals.components):
+        conv_setup = c_setup_by_pos.get(pos)
+        if conv_setup is None:
+            continue
+        if comp is system.repulsion_classical:
+            repulsion_setup = conv_setup
+        elif comp is system.srb_classical:
+            srb_setup = conv_setup
+        elif comp is system.d4_classical:
+            d4_setup = conv_setup
+        elif comp is system.ies_classical:
+            ies_setup = conv_setup
+        elif comp is system.halogen_classical:
+            halogen_setup = conv_setup
+        else:
+            for owner, _ in system.d3_setups:
+                if owner is comp:
+                    new_d3_setups.append((owner, conv_setup))
+                    break
+
+    es2_setup = system.es2_setup
+    es3_setup = system.es3_setup
+    aes2_setup = system.aes2_setup
+    d4sc_setup = system.d4sc_setup
+    generalized_born_setup = system.generalized_born_setup
+    for pos, inter in enumerate(system.interactions.components):
+        conv_setup = i_setup_by_pos.get(pos)
+        if conv_setup is None:
+            continue
+        if inter is system.es2_interaction:
+            es2_setup = conv_setup
+        elif inter is system.es3_interaction:
+            es3_setup = conv_setup
+        elif inter is system.aes2_interaction:
+            aes2_setup = conv_setup
+        elif inter is system.d4sc_interaction:
+            d4sc_setup = conv_setup
+        elif inter is system.generalized_born_interaction:
+            generalized_born_setup = conv_setup
+
+    compat = system._exact_compatibility
+    if compat is not None:
+        compat = replace(
+            compat,
+            classical_setups=tuple(
+                replace(ref, setup=c_setup_by_pos.get(ref.position, ref.setup))
+                for ref in compat.classical_setups
+            ),
+            interaction_setups=tuple(
+                replace(ref, setup=i_setup_by_pos.get(ref.position, ref.setup))
+                for ref in compat.interaction_setups
+            ),
+        )
+
+    from dxtb._src.calculators.packed_result import (
+        _BUILTIN_CLASSICAL_TYPES,
+        _BUILTIN_INTERACTION_TYPES,
+    )
+
+    new_classicals = system.classicals
+    if any(
+        type(c) not in _BUILTIN_CLASSICAL_TYPES
+        for c in system.classicals.components
+    ):
+        new_classicals = copy.copy(system.classicals)
+        new_classicals.components = [
+            c if type(c) in _BUILTIN_CLASSICAL_TYPES else c.type(dtype)
+            for c in system.classicals.components
+        ]
+        new_classicals.override_dtype(dtype)
+
+    new_interactions = system.interactions
+    if any(
+        type(i) not in _BUILTIN_INTERACTION_TYPES
+        for i in system.interactions.components
+    ):
+        new_interactions = copy.copy(system.interactions)
+        new_interactions.components = [
+            i if type(i) in _BUILTIN_INTERACTION_TYPES else i.type(dtype)
+            for i in system.interactions.components
+        ]
+        new_interactions.override_dtype(dtype)
+
+    ext_cache = system._classical_extension_cache
+    if ext_cache:
+        from dxtb._src.components.classicals.list import ClassicalListCache
+
+        new_ext_cache = ClassicalListCache()
+        for k, v in ext_cache.items():
+            if isinstance(v, Tensor):
+                new_ext_cache[k] = v.to(dtype=dtype)
+            elif isinstance(v, TensorLike):
+                new_ext_cache[k] = v.type(dtype)
+            else:
+                new_ext_cache[k] = v
+        ext_cache = new_ext_cache
+
+    return replace(
+        system,
+        classicals=new_classicals,
+        interactions=new_interactions,
+        integral_setup=integral_setup,
+        h0_setup=h0_setup,
+        repulsion_setup=repulsion_setup,
+        srb_setup=srb_setup,
+        d4_setup=d4_setup,
+        ies_setup=ies_setup,
+        halogen_setup=halogen_setup,
+        d3_setups=(
+            tuple(new_d3_setups) if new_d3_setups else system.d3_setups
+        ),
+        es2_setup=es2_setup,
+        es3_setup=es3_setup,
+        aes2_setup=aes2_setup,
+        d4sc_setup=d4sc_setup,
+        generalized_born_setup=generalized_born_setup,
+        dd={**system.dd, "dtype": dtype},
+        exact_core=exact_core,
+        _exact_compatibility=compat,
+        _classical_extension_cache=ext_cache,
     )
 
 
@@ -308,204 +500,223 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"indexing: '{', '.join([str(x) for x in allowed_dtypes])}', "
                 f"but is '{numbers.dtype}'"
             )
-        self.numbers = numbers
-
-        # "cpu" or "cuda" would not compare equal to `tensor.device`
-        super().__init__(normalize_device(device), dtype)
-        dd = {"device": self.device, "dtype": self.dtype}
-
-        # Internally, we will always use the differentiable parameter model.
-        if not isinstance(par, ParamModule):
-            par = ParamModule(par, **self.dd)
-
-        # If method not explicitly set in options, we try to get it from the
-        # parametrization.
-        if isinstance(opts, dict) and "method" not in opts:
-            if par.meta is not None:
-                if par.meta.name is not None:
-                    opts["method"] = par.meta.name.casefold()
-
-        # setup calculator options
-        if isinstance(opts, dict):
-            reject_removed_cache_options(opts)
-            opts = Config.create(**opts)
-        self.opts = opts
-
-        # Everything that depends on the atomic numbers only is set up by
-        # the model; the calculator keeps the parts as attributes (B5 removes
-        # the calculator state).
-        if classical is None:
-            classical = ()
-        elif isinstance(classical, Classical):
-            classical = (classical,)
-        elif isinstance(classical, (list, tuple)):
-            classical = tuple(classical)
-        else:
-            raise TypeError(
-                "Expected 'classical' to be 'None' or of type 'Classical', "
-                "'list[Classical]', or 'tuple[Classical]', but got "
-                f"'{type(classical).__name__}'."
-            )
-
-        if interaction is None:
-            interaction = ()
-        elif isinstance(interaction, Interaction):
-            interaction = (interaction,)
-        elif isinstance(interaction, (list, tuple)):
-            interaction = tuple(interaction)
-        else:
-            raise TypeError(
-                "Expected 'interaction' to be 'None' or of type 'Interaction', "
-                "'list[Interaction]', or 'tuple[Interaction]', but got "
-                f"'{type(interaction).__name__}'."
-            )
-
-        # Constructor field interactions remain a Calculator-only adapter.
-        # Keep their tensor references intact so user autograd graphs survive.
-        field_terms = [x for x in interaction if type(x) is ElectricField]
-        field_grad_terms = [
-            x for x in interaction if type(x) is ElectricFieldGrad
-        ]
-        if len(field_terms) > 1:
-            raise ValueError("Only one exact ElectricField default is allowed.")
-        if len(field_grad_terms) > 1:
-            raise ValueError(
-                "Only one exact ElectricFieldGrad default is allowed."
-            )
-        self._field_default = field_terms[0].field if field_terms else None
-        self._field_grad_default = (
-            field_grad_terms[0].field_grad if field_grad_terms else None
+        init_ctx = (
+            torch.inference_mode(False)
+            if torch.is_inference_mode_enabled()
+            else contextlib.nullcontext()
         )
-        interaction = tuple(
-            x
-            for x in interaction
-            if type(x) not in (ElectricField, ElectricFieldGrad)
-        )
+        with init_ctx:
+            if numbers.is_inference():
+                numbers = numbers.clone()
+            self.numbers = numbers
 
-        if self._field_default is not None and any(
-            x.label == LABEL_EFIELD for x in interaction
-        ):
-            raise ValueError(
-                "An exact Calculator field default and a custom interaction "
-                f"labelled '{LABEL_EFIELD}' cannot both represent the same "
-                "perturbation. Choose one."
+            # "cpu" or "cuda" would not compare equal to `tensor.device`
+            super().__init__(normalize_device(device), dtype)
+            dd = {"device": self.device, "dtype": self.dtype}
+
+            # Internally, we will always use the differentiable parameter model.
+            if not isinstance(par, ParamModule):
+                par = ParamModule(par, **self.dd)
+            else:
+                _sanitize_inference_param_module(par)
+
+            # If method not explicitly set in options, we try to get it from the
+            # parametrization.
+            if isinstance(opts, dict) and "method" not in opts:
+                if par.meta is not None:
+                    if par.meta.name is not None:
+                        opts["method"] = par.meta.name.casefold()
+
+            # setup calculator options
+            if isinstance(opts, dict):
+                reject_removed_cache_options(opts)
+                opts = Config.create(**opts)
+            self.opts = opts
+
+            # Everything that depends on the atomic numbers only is set up by
+            # the model; the calculator keeps the parts as attributes (B5 removes
+            # the calculator state).
+            if classical is None:
+                classical = ()
+            elif isinstance(classical, Classical):
+                classical = (classical,)
+            elif isinstance(classical, (list, tuple)):
+                classical = tuple(classical)
+            else:
+                raise TypeError(
+                    "Expected 'classical' to be 'None' or of type 'Classical', "
+                    "'list[Classical]', or 'tuple[Classical]', but got "
+                    f"'{type(classical).__name__}'."
+                )
+
+            if interaction is None:
+                interaction = ()
+            elif isinstance(interaction, Interaction):
+                interaction = (interaction,)
+            elif isinstance(interaction, (list, tuple)):
+                interaction = tuple(interaction)
+            else:
+                raise TypeError(
+                    "Expected 'interaction' to be 'None' or of type 'Interaction', "
+                    "'list[Interaction]', or 'tuple[Interaction]', but got "
+                    f"'{type(interaction).__name__}'."
+                )
+
+            # Constructor field interactions remain a Calculator-only adapter.
+            # Keep their tensor references intact so user autograd graphs survive.
+            field_terms = [x for x in interaction if type(x) is ElectricField]
+            field_grad_terms = [
+                x for x in interaction if type(x) is ElectricFieldGrad
+            ]
+            if len(field_terms) > 1:
+                raise ValueError(
+                    "Only one exact ElectricField default is allowed."
+                )
+            if len(field_grad_terms) > 1:
+                raise ValueError(
+                    "Only one exact ElectricFieldGrad default is allowed."
+                )
+            self._field_default = field_terms[0].field if field_terms else None
+            if (
+                self._field_default is not None
+                and self._field_default.is_inference()
+            ):
+                self._field_default = self._field_default.clone()
+            self._field_grad_default = (
+                field_grad_terms[0].field_grad if field_grad_terms else None
             )
-        if self._field_grad_default is not None and any(
-            x.label == LABEL_EFIELD_GRAD for x in interaction
-        ):
-            raise ValueError(
-                "An exact Calculator field-gradient default and a custom "
-                f"interaction labelled '{LABEL_EFIELD_GRAD}' cannot both "
-                "represent the same perturbation. Choose one."
+            if (
+                self._field_grad_default is not None
+                and self._field_grad_default.is_inference()
+            ):
+                self._field_grad_default = self._field_grad_default.clone()
+            interaction = tuple(
+                x
+                for x in interaction
+                if type(x) not in (ElectricField, ElectricFieldGrad)
             )
 
-        if self._field_default is not None:
-            self.opts = replace(
-                self.opts,
-                ints=replace(
-                    self.opts.ints,
-                    level=max(self.opts.ints.level, labels.INTLEVEL_DIPOLE),
-                ),
+            if self._field_default is not None and any(
+                x.label == LABEL_EFIELD for x in interaction
+            ):
+                raise ValueError(
+                    "An exact Calculator field default and a custom interaction "
+                    f"labelled '{LABEL_EFIELD}' cannot both represent the same "
+                    "perturbation. Choose one."
+                )
+            if self._field_grad_default is not None and any(
+                x.label == LABEL_EFIELD_GRAD for x in interaction
+            ):
+                raise ValueError(
+                    "An exact Calculator field-gradient default and a custom "
+                    f"interaction labelled '{LABEL_EFIELD_GRAD}' cannot both "
+                    "represent the same perturbation. Choose one."
+                )
+
+            if self._field_default is not None:
+                self.opts = replace(
+                    self.opts,
+                    ints=replace(
+                        self.opts.ints,
+                        level=max(self.opts.ints.level, labels.INTLEVEL_DIPOLE),
+                    ),
+                )
+            if self._field_grad_default is not None:
+                self.opts = replace(
+                    self.opts,
+                    ints=replace(
+                        self.opts.ints,
+                        level=max(
+                            self.opts.ints.level, labels.INTLEVEL_QUADRUPOLE
+                        ),
+                    ),
+                )
+
+            self.model = Model(
+                par=par,
+                config=self.opts,
+                classical=classical,
+                interaction=interaction,
+                auto_int_level=kwargs.pop("auto_int_level", True),
             )
-        if self._field_grad_default is not None:
-            self.opts = replace(
-                self.opts,
-                ints=replace(
-                    self.opts.ints,
-                    level=max(self.opts.ints.level, labels.INTLEVEL_QUADRUPOLE),
-                ),
-            )
+            self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
 
-        self.model = Model(
-            par=par,
-            config=self.opts,
-            classical=classical,
-            interaction=interaction,
-            auto_int_level=kwargs.pop("auto_int_level", True),
-        )
-        self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
-
-        self.opts = self.system.config
-        self.ihelp = self.system.ihelp
-        self.classicals = self.system.classicals
-        self.interactions = self.system.interactions
-        self.integrals = self._create_legacy_integral_adapter()
-
-        self._model_param_sig = _param_state_signature(self.model.par)
-        self._system_graph_consumed = False
-        self._param_hook_handles: list[Any] = []
-        self._lane_systems_memo: tuple[Any, tuple[System, ...]] | None = None
-        self._register_param_backward_hooks()
+            self.opts = self.system.config
+            self.ihelp = self.system.ihelp
+            self.classicals = self.system.classicals
+            self.interactions = self.system.interactions
+            self._integrals: Integrals | None = None
 
         self._ncalcs = 0
         timer.stop("Calculator")
 
-    def _clear_param_backward_hooks(self) -> None:
-        """Remove any active parameter backward hooks."""
-        for handle in self._param_hook_handles:
-            handle.remove()
-        self._param_hook_handles.clear()
+    @property
+    def integrals(self) -> Integrals:
+        """Lazily construct Calculator-local mutable integral compatibility objects."""
+        if self._integrals is None:
+            self._integrals = self._create_legacy_integral_adapter()
+        return self._integrals
 
-    def _register_param_backward_hooks(self) -> None:
-        """Track when a backward pass consumes the setup autograd graph."""
-        self._clear_param_backward_hooks()
+    @integrals.setter
+    def integrals(self, value: Integrals | None) -> None:
+        self._integrals = value
 
-        def _on_param_backward(_grad: Tensor) -> None:
-            self._system_graph_consumed = True
-            self._lane_systems_memo = None
-            self._clear_param_backward_hooks()
+    def _prepare_eval_system(self) -> System:
+        """Build a call-local System setup for 1D single-System evaluation."""
+        from dxtb._src.calculators.packed_result import (
+            _BUILTIN_CLASSICAL_TYPES,
+            _BUILTIN_INTERACTION_TYPES,
+            _sync_lane_system_labels,
+        )
 
-        for p in self.model.par.parameters():
-            if p.requires_grad:
-                self._param_hook_handles.append(
-                    p.register_hook(_on_param_backward)
-                )
+        _sanitize_inference_param_module(self.model.par)
+        source_classicals = tuple(self.classicals.components)
+        source_interactions = tuple(self.interactions.components)
+        current_labels = [c.label for c in source_classicals]
+        has_label_collision = len(set(current_labels)) < len(current_labels)
 
-    def _ensure_system_current(self) -> None:
-        """Refresh setup-derived System state when Model parameters change or their graph was consumed."""
-        current_sig = _param_state_signature(self.model.par)
-        if (
-            current_sig == self._model_param_sig
-            and not self._system_graph_consumed
-        ):
-            return
+        eval_classicals = []
+        for idx, comp in enumerate(self.model.classical):
+            if type(comp) in _BUILTIN_CLASSICAL_TYPES or has_label_collision:
+                c_copy = copy.copy(comp)
+                if has_label_collision:
+                    c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
+                eval_classicals.append(c_copy)
+            else:
+                eval_classicals.append(comp)
 
-        self._lane_systems_memo = None
-        setup_model = (
-            self.model
-            if self.opts == self.model.config and not self.model.auto_int_level
-            else Model(
-                par=self.model.par,
-                config=self.opts,
-                classical=self.model.classical,
-                interaction=self.model.interaction,
-                auto_int_level=False,
-            )
+        eval_interactions = [
+            copy.copy(inter)
+            if type(inter) in _BUILTIN_INTERACTION_TYPES
+            else inter
+            for inter in self.model.interaction
+        ]
+        setup_model = Model(
+            par=self.model.par,
+            config=self.opts,
+            classical=tuple(eval_classicals),
+            interaction=tuple(eval_interactions),
+            auto_int_level=False,
         )
         setup_dd = (
             self.model.par.dd
             if self.dtype != self.model.par.dtype
             else self.dd
         )
-        new_sys = setup_model.setup(
+        eval_sys = setup_model.setup(
             self.numbers,
             batch_mode=self.ihelp.batch_mode,
             dd=setup_dd,
         )
+        eval_sys = _sync_lane_system_labels(
+            eval_sys,
+            source_classicals,
+            source_interactions,
+            set(),
+        )
         if self.dtype != self.model.par.dtype:
-            new_sys = _convert_system_dtype(
-                new_sys,
-                self.dtype,
-                classicals=new_sys.classicals.type(self.dtype),
-                interactions=new_sys.interactions.type(self.dtype),
-            )
-        self.system = new_sys
-        self.ihelp = self.system.ihelp
-        self.classicals = self.system.classicals
-        self.interactions = self.system.interactions
-        self._model_param_sig = current_sig
-        self._system_graph_consumed = False
-        self._register_param_backward_hooks()
+            eval_sys = _convert_eval_system_dtype(eval_sys, self.dtype)
+        return eval_sys
 
     def _create_legacy_integral_adapter(self) -> Integrals:
         """Create Calculator-local mutable integral compatibility objects."""
@@ -562,8 +773,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         """
         self.classicals.reset_all()
         self.interactions.reset_all()
-        self.integrals.reset_all()
-        self._lane_systems_memo = None
+        if self._integrals is not None:
+            self._integrals.reset_all()
 
     @abstractmethod
     def calculate(
@@ -736,8 +947,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
-        self.integrals = self.integrals.type(dtype)
-        self._lane_systems_memo = None
+        if self._integrals is not None:
+            self._integrals = self._integrals.type(dtype)
 
         # Keep the system consistent with the converted components where
         # supported. Legacy System classical and ES2/ES3 setup objects are
@@ -765,7 +976,17 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         num_calculations = self._ncalcs
         num_classicals = len(self.classicals)
         num_interactions = len(self.interactions)
-        num_integrals = len(self.integrals)
+        if self._integrals is not None:
+            int_labels = self._integrals.labels
+        else:
+            int_labels = []
+            if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
+                int_labels.extend(["hcore", "overlap"])
+            if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
+                int_labels.append("dipole")
+            if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
+                int_labels.append("quadrupole")
+        num_integrals = len(int_labels)
 
         return (
             f"{self.__class__.__name__}(\n"
@@ -775,7 +996,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             f"  Calculations Performed: {num_calculations}\n"
             f"  Classical Contributions: {num_classicals} {self.classicals.labels}\n"
             f"  Interactions: {num_interactions} {self.interactions.labels}\n"
-            f"  Integrals: {num_integrals} {self.integrals.labels}\n"
+            f"  Integrals: {num_integrals} {int_labels}\n"
             f")"
         )
 

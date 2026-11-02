@@ -187,7 +187,14 @@ class Halogen(Classical):
     bond_strength: Tensor
     cutoff: Tensor
 
-    __slots__ = ["damp", "rscale", "bond_strength", "cutoff"]
+    __slots__ = [
+        "halogens",
+        "bases",
+        "damp",
+        "rscale",
+        "bond_strength",
+        "cutoff",
+    ]
 
     def __init__(
         self,
