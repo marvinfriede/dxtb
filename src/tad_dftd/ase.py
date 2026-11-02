@@ -87,6 +87,9 @@ try:
     from ase.calculators.mixing import (  # type: ignore[import-untyped]
         SumCalculator,
     )
+    from ase.stress import (  # type: ignore[import-untyped]
+        full_3x3_to_voigt_6_stress,
+    )
     from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
@@ -705,12 +708,63 @@ def _resolve_total_charge(
     return torch.tensor(total_q, dtype=cfg.dtype, device=cfg.device)
 
 
+def _resolve_external_charges(
+    atoms: Atoms,
+    cfg: _ResolvedConfig,
+    num_atoms: int,
+) -> torch.Tensor | None:
+    """
+    Validate and extract externally supplied atomic partial charges from
+    ``atoms.arrays[cfg.charges_key]``.
+    """
+    if cfg.charges_key is None:
+        return None
+
+    if cfg.charges_key not in atoms.arrays:
+        raise ValueError(
+            f"External atomic partial charges key '{cfg.charges_key}' was not "
+            "found in 'atoms.arrays'."
+        )
+
+    raw_arr = np.asarray(atoms.arrays[cfg.charges_key])
+    if (
+        raw_arr.dtype.kind in ("b", "c", "O", "S", "U", "V")
+        or not np.issubdtype(raw_arr.dtype, np.number)
+    ):
+        raise ValueError(
+            f"External atomic partial charges '{cfg.charges_key}' must have a "
+            f"real numeric dtype, got '{raw_arr.dtype}'."
+        )
+
+    if raw_arr.ndim != 1 or raw_arr.shape != (num_atoms,):
+        raise ValueError(
+            f"External atomic partial charges '{cfg.charges_key}' must have "
+            f"1D shape ({num_atoms},), got {raw_arr.shape}."
+        )
+
+    q_np = raw_arr.astype(np.float64, copy=False)
+    if not np.all(np.isfinite(q_np)):
+        raise ValueError(
+            f"External atomic partial charges '{cfg.charges_key}' contain "
+            "non-finite values."
+        )
+
+    return torch.as_tensor(q_np, dtype=cfg.dtype, device=cfg.device)
+
+
 def _build_structure(
     atoms: Atoms,
     cfg: _ResolvedConfig,
     *,
     need_forces: bool = False,
-) -> tuple[Structure, torch.Tensor]:
+    need_stress: bool = False,
+) -> tuple[
+    Structure,
+    torch.Tensor,
+    torch.Tensor | None,
+    float | None,
+    torch.Tensor | None,
+]:
     """
     Convert an ASE :class:`~ase.atoms.Atoms` object into a fresh
     :class:`~tad_mctc.Structure` in atomic units (Bohr) without mutating ``atoms``.
@@ -751,30 +805,76 @@ def _build_structure(
         )
 
     has_any_pbc = bool(pbc_flags.any())
+    is_3d_pbc = bool(pbc_flags.all())
+
+    if need_stress and not cfg.compute_stress:
+        raise _StressNotDefinedError(
+            "Stress calculation is disabled because 'compute_stress=False'."
+        )
+
+    if need_stress and not is_3d_pbc:
+        raise _StressNotDefinedError(
+            "Stress is only defined for 3D periodic structures with "
+            f"pbc=[True, True, True] (got pbc={pbc_flags.tolist()})."
+        )
+
+    strain: torch.Tensor | None = None
+    volume_ang3: float | None = None
+
     if has_any_pbc:
         raw_cell = np.asarray(atoms.get_cell().array, dtype=np.float64)
         if raw_cell.shape != (3, 3) or not np.all(np.isfinite(raw_cell)):
-            raise ValueError("Periodic cell vectors must be a finite (3, 3) array.")
-        lattice: torch.Tensor | None = (
+            raise ValueError(
+                "Periodic cell vectors must be a finite (3, 3) array."
+            )
+        det_cell = float(np.linalg.det(raw_cell))
+        if is_3d_pbc and abs(det_cell) <= 1.0e-12:
+            if need_stress:
+                raise _StressNotDefinedError(
+                    "Stress is not defined for a degenerate 3D periodic cell "
+                    "with zero volume."
+                )
+            raise ValueError(
+                "3D periodic cell vectors are singular (cell volume is zero)."
+            )
+
+        lattice_bohr = (
             torch.as_tensor(raw_cell, dtype=cfg.dtype, device=cfg.device)
             / Bohr
         )
         periodic: torch.Tensor | None = torch.as_tensor(
             pbc_flags, dtype=torch.bool, device=cfg.device
         )
+
+        if need_stress:
+            volume_ang3 = abs(det_cell)
+            strain = torch.zeros(
+                (3, 3), dtype=cfg.dtype, device=cfg.device, requires_grad=True
+            )
+            scale = torch.eye(
+                3, dtype=cfg.dtype, device=cfg.device
+            ) + strain.transpose(0, 1)
+            positions_eval = positions_bohr @ scale
+            lattice: torch.Tensor | None = lattice_bohr @ scale
+        else:
+            positions_eval = positions_bohr
+            lattice = lattice_bohr
     else:
+        positions_eval = positions_bohr
         lattice = None
         periodic = None
 
     total_charge = _resolve_total_charge(atoms, cfg)
+    q_external = _resolve_external_charges(atoms, cfg, int(raw_numbers.size))
+
     structure = Structure(
         numbers=numbers,
-        positions=positions_bohr,
+        positions=positions_eval,
         charge=total_charge,
         lattice=lattice,
         periodic=periodic,
     )
-    return structure, positions_bohr
+    return structure, positions_bohr, strain, volume_ang3, q_external
 
 
 def _calculate_energy_and_derivatives(
@@ -783,21 +883,28 @@ def _calculate_energy_and_derivatives(
     properties: set[str],
 ) -> dict[str, Any]:
     """
-    Evaluate dispersion energies and requested nuclear forces in atomic units
-    and convert outputs to ASE units (eV and eV/Angstrom).
+    Evaluate dispersion energies, nuclear forces, and periodic stress in atomic
+    units and convert outputs to ASE units (eV, eV/Angstrom, and eV/Angstrom^3).
     """
     need_forces = "forces" in properties
+    need_stress = "stress" in properties
+    need_grad = need_forces or need_stress
 
-    with torch.inference_mode(False), torch.set_grad_enabled(need_forces):
-        structure, positions_bohr = _build_structure(
-            atoms,
-            cfg,
-            need_forces=need_forces,
+    with torch.inference_mode(False), torch.set_grad_enabled(need_grad):
+        structure, positions_bohr, strain, volume_ang3, q_external = (
+            _build_structure(
+                atoms,
+                cfg,
+                need_forces=need_forces,
+                need_stress=need_stress,
+            )
         )
 
         extra_kwargs: dict[str, Any] = {}
         if cfg.qmodel is not None:
             extra_kwargs["qmodel"] = cfg.qmodel
+        if q_external is not None:
+            extra_kwargs["q"] = q_external
 
         atom_energies = dftd(
             structure,
@@ -810,10 +917,28 @@ def _calculate_energy_and_derivatives(
         total_energy_eh = atom_energies.sum()
 
         grad_pos: torch.Tensor | None = None
-        if need_forces:
+        virial_eh: torch.Tensor | None = None
+
+        if need_forces and need_stress:
+            assert strain is not None
+            grad_pos, virial_eh = torch.autograd.grad(
+                total_energy_eh,
+                (positions_bohr, strain),
+                retain_graph=False,
+                create_graph=False,
+            )
+        elif need_forces:
             grad_pos = torch.autograd.grad(
                 total_energy_eh,
                 positions_bohr,
+                retain_graph=False,
+                create_graph=False,
+            )[0]
+        elif need_stress:
+            assert strain is not None
+            virial_eh = torch.autograd.grad(
+                total_energy_eh,
+                strain,
                 retain_graph=False,
                 create_graph=False,
             )[0]
@@ -834,6 +959,16 @@ def _calculate_energy_and_derivatives(
             Hartree / Bohr
         )
         results["forces"] = forces_ev_ang
+
+    if virial_eh is not None:
+        assert volume_ang3 is not None and volume_ang3 > 0.0
+        stress_3x3_ev_ang3 = (
+            virial_eh.detach().cpu().numpy().astype(np.float64)
+            * (Hartree / volume_ang3)
+        )
+        results["stress"] = np.asarray(
+            full_3x3_to_voigt_6_stress(stress_3x3_ev_ang3), dtype=np.float64
+        )
 
     return results
 
@@ -1073,7 +1208,16 @@ class DFTD(Calculator):
         ``self.results``.
         """
         if properties is None:
-            requested_props = list(self.implemented_properties)
+            target_atoms = atoms if atoms is not None else self.atoms
+            if (
+                target_atoms is not None
+                and bool(np.asarray(target_atoms.get_pbc(), dtype=bool).all())
+            ):
+                requested_props = list(self.implemented_properties)
+            else:
+                requested_props = [
+                    p for p in self.implemented_properties if p != "stress"
+                ]
         else:
             requested_props = list(properties)
 

@@ -26,10 +26,15 @@ from ase.build import molecule  # type: ignore[import-untyped]
 from ase.calculators.calculator import (  # type: ignore[import-untyped]
     Calculator,
     InputError,
+    PropertyNotImplementedError,
+)
+from ase.stress import (  # type: ignore[import-untyped]
+    full_3x3_to_voigt_6_stress,
 )
 from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
 
 from tad_mctc import Structure
+from tad_mctc.data.structures import get_structure
 
 from tad_dftd import dftd, param
 from tad_dftd.ase import DFTD, DFTD3, DFTD4
@@ -719,4 +724,439 @@ def test_dtype_and_gradient_contexts() -> None:
         assert torch.is_inference_mode_enabled()
     assert pytest.approx(e64, rel=1e-14, abs=1e-14) == e_im
     np.testing.assert_allclose(f_im, f64, rtol=1e-13, atol=1e-13)
+
+
+def test_periodic_fortran_reference_parity_all_models() -> None:
+    """Verify 1D/2D/3D periodic energies, forces, and 3D Voigt stress against Fortran libdftd.so references."""
+    from .test_periodic_and_transforms import (
+        _FORTRAN_PERIODIC_REFS,
+        _fortran_ref_cell,
+    )
+
+    q_zero2 = np.zeros(2, dtype=np.float64)
+    for pbc_key, pbc_flags in (
+        ("1d", (True, False, False)),
+        ("2d", (True, True, False)),
+        ("3d", (True, True, True)),
+    ):
+        cell, cutoffs, params = _fortran_ref_cell(pbc_flags)
+        assert cell.lattice is not None
+        pos_ang = cell.positions.numpy() * Bohr
+        lat_ang = cell.lattice.numpy() * Bohr
+        nums = cell.numbers.numpy()
+        vol_ang3 = abs(float(np.linalg.det(lat_ang)))
+
+        for model_name in ("d1", "d2", "d3", "d3s", "d4", "d4s", "d4srev"):
+            ref = _FORTRAN_PERIODIC_REFS[pbc_key][model_name]
+            cut = cutoffs[model_name]
+            p = params[model_name]
+
+            atoms = Atoms(
+                numbers=nums,
+                positions=pos_ang,
+                cell=lat_ang,
+                pbc=pbc_flags,
+            )
+            charges_key: str | None = None
+            if model_name in ("d4", "d4s", "d4srev") and pbc_key != "3d":
+                atoms.set_array("q_ext", q_zero2.copy())
+                charges_key = "q_ext"
+
+            cut_ang = {
+                "disp2": float(cut.disp2) * Bohr,
+                "disp3": float(cut.disp3) * Bohr,
+                "cn": float(cut.cn) * Bohr,
+                "cn_eeq": float(cut.cn_eeq) * Bohr,
+            }
+            atoms.calc = DFTD(
+                model=model_name,
+                params_tweaks=p,
+                realspace_cutoff=cut_ang,
+                charges_key=charges_key,
+            )
+
+            e_ase = atoms.get_potential_energy()
+            f_ase = atoms.get_forces()
+
+            ref_e_ev = float(np.asarray(ref["energy"])) * Hartree
+            ref_f0_ev_ang = -np.asarray(ref["grad0"], dtype=np.float64) * (
+                Hartree / Bohr
+            )
+            assert pytest.approx(ref_e_ev, rel=1e-12, abs=1e-12) == e_ase
+            np.testing.assert_allclose(
+                f_ase[0], ref_f0_ev_ang, rtol=1e-11, atol=1e-11
+            )
+
+            if pbc_key == "3d":
+                s_ase = atoms.get_stress()
+                ref_sigma_3x3 = np.asarray(ref["sigma"], dtype=np.float64) * (
+                    Hartree / vol_ang3
+                )
+                ref_voigt = np.asarray(
+                    full_3x3_to_voigt_6_stress(ref_sigma_3x3), dtype=np.float64
+                )
+                assert s_ase.shape == (6,)
+                np.testing.assert_allclose(
+                    s_ase, ref_voigt, rtol=1e-11, atol=1e-11
+                )
+
+    # Also verify X23 3D molecular crystal references via ASE calculator
+    cut_x23_d12 = {"cn": 30.0 * Bohr, "disp2": 60.0 * Bohr, "disp3": 15.0 * Bohr}
+    cut_x23_d3 = {"cn": 40.0 * Bohr, "disp2": 60.0 * Bohr, "disp3": 15.0 * Bohr}
+
+    for dataset_name, model_name, method_name, hint, cut_dict, ref_eh in [
+        ("ammonia", "d1", "PBE", None, cut_x23_d12, -2.1111064217077948e-02),
+        ("ammonia", "d2", "PBE", None, cut_x23_d12, -2.9729958659375735e-02),
+        ("acetic", "d3", "PBE", None, cut_x23_d3, -0.066727625533349),
+        ("acetic", "d3s", "PBE", None, cut_x23_d3, -0.066728412990681),
+        (
+            "benzene",
+            "d3",
+            "BLYP",
+            {"2b": "zero", "3b": "none"},
+            cut_x23_d3,
+            -0.16644876006925308,
+        ),
+    ]:
+        s_x23 = get_structure("x23", dataset_name, dtype=torch.float64)
+        assert s_x23.lattice is not None
+        atoms_x23 = Atoms(
+            numbers=s_x23.numbers.numpy(),
+            positions=s_x23.positions.numpy() * Bohr,
+            cell=s_x23.lattice.numpy() * Bohr,
+            pbc=[True, True, True],
+        )
+        atoms_x23.calc = DFTD(
+            method=method_name,
+            model=model_name,
+            damping_hint=hint,
+            realspace_cutoff=cut_dict,
+        )
+        assert (
+            pytest.approx(ref_eh * Hartree, rel=1e-11, abs=1e-11)
+            == atoms_x23.get_potential_energy()
+        )
+
+
+@pytest.mark.parametrize("model_name", ["d3", "d4"])
+def test_periodic_stress_central_finite_differences_and_virial_identity(
+    model_name: str,
+) -> None:
+    """Compare analytical ASE 3D periodic Voigt stress against central finite differences under homogeneous strain."""
+    numbers = [14, 8, 6, 1]
+    positions_ang = (
+        np.array(
+            [
+                [0.10, 0.20, 0.30],
+                [2.40, 2.10, 1.90],
+                [1.30, 3.60, 0.80],
+                [3.70, 1.20, 3.80],
+            ],
+            dtype=np.float64,
+        )
+        * Bohr
+    )
+    cell_ang = (
+        np.array(
+            [
+                [7.5, 0.2, 0.0],
+                [0.1, 7.8, 0.1],
+                [0.0, 0.1, 8.0],
+            ],
+            dtype=np.float64,
+        )
+        * Bohr
+    )
+    cut_ang = {
+        "cn": 9.0 * Bohr,
+        "disp2": 10.0 * Bohr,
+        "disp3": 8.0 * Bohr,
+        "width2": 2.0 * Bohr,
+        "width3": 2.0 * Bohr,
+        "cn_eeq": 9.0 * Bohr,
+    }
+    q_fixed = np.array([0.20, -0.25, 0.15, -0.10], dtype=np.float64)
+
+    atoms = Atoms(
+        numbers=numbers,
+        positions=positions_ang.copy(),
+        cell=cell_ang.copy(),
+        pbc=[True, True, True],
+    )
+    charges_key: str | None = None
+    if model_name == "d4":
+        atoms.set_array("q_ext", q_fixed.copy())
+        charges_key = "q_ext"
+
+    calc = DFTD(
+        method="PBE",
+        model=model_name,
+        damping_hint={"2b": "rational", "3b": "zero-avg"},
+        realspace_cutoff=cut_ang,
+        charges_key=charges_key,
+    )
+    atoms.calc = calc
+    stress_voigt = atoms.get_stress().copy()
+    forces_ase = atoms.get_forces().copy()
+    assert stress_voigt.shape == (6,)
+
+    # Verify agreement with (dE/dr)^T r + (dE/dL)^T L from native tad_dftd
+    cfg = calc._resolved_config
+    assert cfg is not None
+    pos_t = (
+        torch.tensor(positions_ang, dtype=torch.float64) / Bohr
+    ).requires_grad_(True)
+    lat_t = (
+        torch.tensor(cell_ang, dtype=torch.float64) / Bohr
+    ).requires_grad_(True)
+    s_native = Structure(
+        numbers=torch.tensor(numbers, dtype=torch.long),
+        positions=pos_t,
+        lattice=lat_t,
+        periodic=torch.tensor([True, True, True]),
+    )
+    extra_kw: dict[str, Any] = {}
+    if model_name == "d4":
+        extra_kw["q"] = torch.tensor(q_fixed, dtype=torch.float64)
+    e_nat = dftd(
+        s_native,
+        cfg.param,
+        model=cfg.model_id,
+        damping=cfg.damping,
+        cutoff=cfg.cutoff,
+        **extra_kw,
+    ).sum()
+    g_pos, g_lat = torch.autograd.grad(e_nat, (pos_t, lat_t))
+    virial_ident = (g_pos.T @ pos_t.detach() + g_lat.T @ lat_t.detach()).numpy()
+    vol_ang3 = abs(float(np.linalg.det(cell_ang)))
+    voigt_ident = np.asarray(
+        full_3x3_to_voigt_6_stress(virial_ident * (Hartree / vol_ang3)),
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(stress_voigt, voigt_ident, rtol=1e-13, atol=1e-13)
+    np.testing.assert_allclose(
+        forces_ase, -g_pos.detach().numpy() * (Hartree / Bohr), rtol=1e-13, atol=1e-13
+    )
+
+    # Central finite differences over all 3x3 strain components (diagonal and off-diagonal)
+    eps = 1.0e-6
+    stress_3x3_fd = np.zeros((3, 3), dtype=np.float64)
+    eye3 = np.eye(3, dtype=np.float64)
+    for alpha in range(3):
+        for beta in range(3):
+            scale_p = eye3.copy()
+            scale_p[alpha, beta] += eps
+            atoms.set_positions(positions_ang @ scale_p.T)
+            atoms.set_cell(cell_ang @ scale_p.T, scale_atoms=False)
+            e_p = atoms.get_potential_energy()
+
+            scale_m = eye3.copy()
+            scale_m[alpha, beta] -= eps
+            atoms.set_positions(positions_ang @ scale_m.T)
+            atoms.set_cell(cell_ang @ scale_m.T, scale_atoms=False)
+            e_m = atoms.get_potential_energy()
+
+            stress_3x3_fd[alpha, beta] = (e_p - e_m) / (2.0 * eps * vol_ang3)
+
+    stress_voigt_fd = np.asarray(
+        full_3x3_to_voigt_6_stress(stress_3x3_fd), dtype=np.float64
+    )
+    # Check Voigt ordering explicitly: xx, yy, zz, yz, xz, xy
+    assert pytest.approx(stress_3x3_fd[0, 0], rel=1e-14) == stress_voigt_fd[0]
+    assert pytest.approx(stress_3x3_fd[1, 1], rel=1e-14) == stress_voigt_fd[1]
+    assert pytest.approx(stress_3x3_fd[2, 2], rel=1e-14) == stress_voigt_fd[2]
+    assert pytest.approx(0.5 * (stress_3x3_fd[1, 2] + stress_3x3_fd[2, 1]), rel=1e-14) == stress_voigt_fd[3]
+    assert pytest.approx(0.5 * (stress_3x3_fd[0, 2] + stress_3x3_fd[2, 0]), rel=1e-14) == stress_voigt_fd[4]
+    assert pytest.approx(0.5 * (stress_3x3_fd[0, 1] + stress_3x3_fd[1, 0]), rel=1e-14) == stress_voigt_fd[5]
+
+    np.testing.assert_allclose(stress_voigt, stress_voigt_fd, rtol=1e-6, atol=1e-8)
+
+
+def test_stress_restrictions_and_errors() -> None:
+    """Verify stress raises a clear error for 0D, 1D, 2D, degenerate 3D cells, and compute_stress=False."""
+    # 0D molecular system
+    mol = molecule("H2O")
+    mol.calc = DFTD(method="PBE", model="d4")
+    assert mol.get_potential_energy() < 0.0
+    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+        mol.get_stress()
+
+    # 1D periodic system
+    chain = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [1.2, 0.0, 0.0]],
+        cell=[3.5, 10.0, 10.0],
+        pbc=[True, False, False],
+    )
+    chain.calc = DFTD(method="PBE", model="d3")
+    assert chain.get_potential_energy() < 0.0
+    assert chain.get_forces().shape == (2, 3)
+    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+        chain.get_stress()
+
+    # 2D periodic slab
+    slab = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [1.2, 1.2, 0.0]],
+        cell=[3.5, 3.5, 10.0],
+        pbc=[True, True, False],
+    )
+    slab.calc = DFTD(method="PBE", model="d3")
+    assert slab.get_potential_energy() < 0.0
+    assert slab.get_forces().shape == (2, 3)
+    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+        slab.get_stress()
+
+    # Degenerate 3D periodic cell (zero volume)
+    degen = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [1.2, 0.0, 0.0]],
+        cell=[[3.5, 0.0, 0.0], [3.5, 0.0, 0.0], [0.0, 0.0, 3.5]],
+        pbc=[True, True, True],
+    )
+    degen.calc = DFTD(method="PBE", model="d3")
+    with pytest.raises((PropertyNotImplementedError, ValueError), match="degenerate|zero volume"):
+        degen.get_stress()
+
+    # 3D periodic cell with compute_stress=False
+    cryst = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [1.2, 1.2, 1.2]],
+        cell=[3.5, 3.5, 3.5],
+        pbc=[True, True, True],
+    )
+    cryst.calc = DFTD(method="PBE", model="d3", compute_stress=False)
+    assert "stress" not in cryst.calc.implemented_properties
+    with pytest.raises(PropertyNotImplementedError):
+        cryst.get_stress()
+
+
+def test_charge_workflows_and_validation() -> None:
+    """Verify automatic EEQ total charge, external charges_key, invalid arrays, and 1D/2D EEQ restrictions."""
+    # 1. Molecular automatic EEQ: neutral vs nonzero charge vs initial_charges
+    atoms_neutral = molecule("H2O")
+    atoms_neutral.calc = DFTD(method="PBE", model="d4")
+    e_neutral = atoms_neutral.get_potential_energy()
+
+    atoms_cation = molecule("H2O")
+    atoms_cation.calc = DFTD(method="PBE", model="d4", charge=1.0)
+    e_cation = atoms_cation.get_potential_energy()
+    assert abs(e_cation - e_neutral) > 1e-4
+
+    # Initial charges sum to +1.0 when charge=None
+    atoms_initq = molecule("H2O")
+    atoms_initq.set_initial_charges([0.4, 0.3, 0.3])
+    atoms_initq.calc = DFTD(method="PBE", model="d4")
+    assert pytest.approx(e_cation, rel=1e-14, abs=1e-14) == atoms_initq.get_potential_energy()
+
+    # Explicit charge=0.0 overrides nonzero initial_charges
+    atoms_override = molecule("H2O")
+    atoms_override.set_initial_charges([0.4, 0.3, 0.3])
+    atoms_override.calc = DFTD(method="PBE", model="d4", charge=0.0)
+    assert pytest.approx(e_neutral, rel=1e-14, abs=1e-14) == atoms_override.get_potential_energy()
+
+    # 2. 3D periodic automatic EEQ
+    cryst = Atoms(
+        numbers=[14, 6],
+        positions=[[0.0, 0.0, 0.0], [1.9, 1.9, 1.9]],
+        cell=[[4.0, 0.1, 0.0], [0.1, 4.1, 0.0], [0.0, 0.1, 4.2]],
+        pbc=[True, True, True],
+    )
+    cryst.calc = DFTD(
+        method="PBE",
+        model="d4",
+        realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+    )
+    assert cryst.get_potential_energy() < 0.0
+    assert cryst.get_forces().shape == (2, 3)
+    assert cryst.get_stress().shape == (6,)
+
+    # 3. External partial charges via charges_key on 0D, 1D, 2D, and 3D
+    q_custom = np.array([-0.55, 0.30, 0.25], dtype=np.float64)
+    atoms_ext = molecule("H2O")
+    atoms_ext.set_array("dftd_partial_charges", q_custom)
+    atoms_ext.calc = DFTD(
+        method="PBE",
+        model="d4",
+        charges_key="dftd_partial_charges",
+    )
+    e_ext = atoms_ext.get_potential_energy()
+    f_ext = atoms_ext.get_forces()
+
+    # Compare directly against native tad_dftd.dftd(..., q=q_custom)
+    cfg = atoms_ext.calc._resolved_config
+    assert cfg is not None
+    pos_t = (
+        torch.tensor(atoms_ext.get_positions(), dtype=torch.float64) / Bohr
+    ).requires_grad_(True)
+    s_ext = Structure(
+        numbers=torch.tensor(atoms_ext.get_atomic_numbers(), dtype=torch.long),
+        positions=pos_t,
+        charge=torch.tensor(0.0, dtype=torch.float64),
+    )
+    e_nat_ext = dftd(
+        s_ext,
+        cfg.param,
+        model="d4",
+        damping=cfg.damping,
+        cutoff=cfg.cutoff,
+        q=torch.tensor(q_custom, dtype=torch.float64),
+    ).sum()
+    g_nat_ext = torch.autograd.grad(e_nat_ext, pos_t)[0]
+    assert pytest.approx(float(e_nat_ext.item()) * Hartree, rel=1e-14, abs=1e-14) == e_ext
+    np.testing.assert_allclose(
+        f_ext, -g_nat_ext.detach().numpy() * (Hartree / Bohr), rtol=1e-13, atol=1e-13
+    )
+
+    # 4. Automatic 1D and 2D periodic EEQ is rejected, while external charges_key works
+    for pbc_partial in ([True, False, False], [True, True, False]):
+        partial_atoms = Atoms(
+            numbers=[14, 6],
+            positions=[[0.0, 0.0, 0.0], [1.9, 1.9, 0.5]],
+            cell=[4.5, 4.5, 10.0],
+            pbc=pbc_partial,
+        )
+        partial_atoms.calc = DFTD(
+            method="PBE",
+            model="d4",
+            realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+        )
+        with pytest.raises((NotImplementedError, ValueError), match="1D|2D|3D"):
+            partial_atoms.get_potential_energy()
+
+        # Supplying external charges makes 1D/2D D4 work
+        partial_atoms.set_array("q_ext", np.array([0.15, -0.15], dtype=np.float64))
+        partial_atoms.calc = DFTD(
+            method="PBE",
+            model="d4",
+            charges_key="q_ext",
+            realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+        )
+        assert partial_atoms.get_potential_energy() < 0.0
+        assert partial_atoms.get_forces().shape == (2, 3)
+
+    # 5. Invalid external charge arrays raise clear ValueErrors
+    atoms_missing = molecule("H2O")
+    atoms_missing.calc = DFTD(method="PBE", model="d4", charges_key="missing_q")
+    with pytest.raises(ValueError, match="not found in 'atoms.arrays'"):
+        atoms_missing.get_potential_energy()
+
+    atoms_badshape = molecule("H2O")
+    atoms_badshape.set_array("bad_q", np.zeros((3, 2), dtype=np.float64))
+    atoms_badshape.calc = DFTD(method="PBE", model="d4", charges_key="bad_q")
+    with pytest.raises(ValueError, match="1D shape"):
+        atoms_badshape.get_potential_energy()
+
+    atoms_baddtype = molecule("H2O")
+    atoms_baddtype.set_array("bool_q", np.array([True, False, True]))
+    atoms_baddtype.calc = DFTD(method="PBE", model="d4", charges_key="bool_q")
+    with pytest.raises(ValueError, match="real numeric dtype"):
+        atoms_baddtype.get_potential_energy()
+
+    atoms_nan = molecule("H2O")
+    atoms_nan.set_array("nan_q", np.array([0.0, np.nan, 0.0], dtype=np.float64))
+    atoms_nan.calc = DFTD(method="PBE", model="d4", charges_key="nan_q")
+    with pytest.raises(ValueError, match="non-finite"):
+        atoms_nan.get_potential_energy()
+
 
