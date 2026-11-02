@@ -1055,6 +1055,8 @@ class DFTD(Calculator):
     ) -> None:
         """Initialize the DFTD ASE calculator."""
         self._resolved_config: _ResolvedConfig | None = None
+        self._last_external_charges: np.ndarray[Any, np.dtype[np.float64]] | None = None
+        self.results: dict[str, Any] = {}
         self.implemented_properties = list(type(self).implemented_properties)
 
         init_kwargs: dict[str, Any] = dict(kwargs)
@@ -1194,8 +1196,60 @@ class DFTD(Calculator):
         return changed_parameters
 
     def reset(self) -> None:
-        """Clear all cached calculation results."""
+        """Clear all cached calculation results and external charge state."""
         super().reset()
+        self._last_external_charges = None
+
+    def check_state(self, atoms: Atoms, tol: float = 1e-15) -> list[str]:
+        """
+        Check for any system changes since the last calculation, including
+        changes to ``atoms.arrays[charges_key]`` when external charges are enabled.
+        """
+        changes = list(super().check_state(atoms, tol=tol))
+        cfg = self._resolved_config
+        charges_key = (
+            cfg.charges_key
+            if cfg is not None
+            else self.parameters.get("charges_key")
+        )
+        if (
+            isinstance(charges_key, str)
+            and charges_key.strip()
+            and self.atoms is not None
+        ):
+            key = charges_key.strip()
+            change_tag = f"arrays:{key}"
+            if change_tag not in changes:
+                has_in_self = key in self.atoms.arrays
+                has_in_atoms = key in atoms.arrays
+                if has_in_self != has_in_atoms:
+                    changes.append(change_tag)
+                elif has_in_atoms:
+                    curr = np.asarray(atoms.arrays[key])
+                    ref = (
+                        self._last_external_charges
+                        if self._last_external_charges is not None
+                        else np.asarray(self.atoms.arrays[key])
+                    )
+                    if (
+                        curr.shape != ref.shape
+                        or curr.dtype.kind in ("b", "c", "O", "S", "U", "V")
+                        or not np.issubdtype(curr.dtype, np.number)
+                    ):
+                        changes.append(change_tag)
+                    else:
+                        curr_f64 = curr.astype(np.float64, copy=False)
+                        ref_f64 = ref.astype(np.float64, copy=False)
+                        if not (
+                            np.all(np.isfinite(curr_f64))
+                            and np.all(np.isfinite(ref_f64))
+                            and np.allclose(
+                                curr_f64, ref_f64, rtol=0.0, atol=tol
+                            )
+                        ):
+                            changes.append(change_tag)
+
+        return changes
 
     def calculate(
         self,
@@ -1221,6 +1275,7 @@ class DFTD(Calculator):
         else:
             requested_props = list(properties)
 
+        had_cached_results = bool(self.results) and not system_changes
         super().calculate(
             atoms=atoms,
             properties=requested_props,
@@ -1235,11 +1290,29 @@ class DFTD(Calculator):
         if self._resolved_config is None:
             self._resolved_config = self._resolve_current_config()
 
-        self.results = _calculate_energy_and_derivatives(
-            self.atoms,
-            self._resolved_config,
-            set(requested_props),
-        )
+        try:
+            new_results = _calculate_energy_and_derivatives(
+                self.atoms,
+                self._resolved_config,
+                set(requested_props),
+            )
+        except Exception:
+            if not had_cached_results:
+                self.reset()
+            raise
+
+        if had_cached_results:
+            self.results.update(new_results)
+        else:
+            self.results = new_results
+
+        key = self._resolved_config.charges_key
+        if key is not None and key in self.atoms.arrays:
+            self._last_external_charges = np.asarray(
+                self.atoms.arrays[key], dtype=np.float64
+            ).copy()
+        else:
+            self._last_external_charges = None
 
 
 class DFTD4(DFTD):

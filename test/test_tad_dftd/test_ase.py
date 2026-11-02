@@ -1160,3 +1160,254 @@ def test_charge_workflows_and_validation() -> None:
         atoms_nan.get_potential_energy()
 
 
+def test_ase_lifecycle_parameter_set_and_defensive_copies() -> None:
+    """Verify parameter updates via .set() and defensive copying of mutable mappings."""
+    atoms = molecule("H2O")
+    tweaks = {"s6": 1.0, "s8": 0.9, "a1": 0.4, "a2": 4.5, "s9": 1.0}
+    hint = {"2b": "rational", "3b": "zero_d4"}
+    cut = {"disp2": 30.0, "disp3": 20.0, "cn": 16.0, "cn_eeq": 20.0}
+
+    calc = DFTD(
+        model="d4",
+        params_tweaks=tweaks,
+        damping_hint=hint,
+        realspace_cutoff=cut,
+    )
+    atoms.calc = calc
+    e0 = atoms.get_potential_energy()
+
+    # Mutating the caller's dicts after construction must NOT affect internal state
+    tweaks["s8"] = 99.0
+    hint["3b"] = "none"
+    cut["disp2"] = 1.0
+    assert calc.parameters["params_tweaks"]["s8"] == pytest.approx(0.9)
+    assert calc.parameters["damping_hint"]["3b"] == "zero_d4"
+    assert calc.parameters["realspace_cutoff"]["disp2"] == pytest.approx(30.0)
+    assert atoms.get_potential_energy() == pytest.approx(e0, rel=1e-15, abs=1e-15)
+
+    # Updating method and model via .set() clears results and recomputes
+    calc.set(method="PBE", model="d3", params_tweaks=None, damping_hint=None)
+    assert calc.results == {}
+    e_d3_pbe = atoms.get_potential_energy()
+    assert e_d3_pbe != pytest.approx(e0, rel=1e-4)
+
+    # Updating method changes energy
+    calc.set(method="B3LYP")
+    assert calc.results == {}
+    e_d3_b3lyp = atoms.get_potential_energy()
+    assert e_d3_b3lyp != pytest.approx(e_d3_pbe, rel=1e-4)
+
+    # Updating damping_hint to zero damping changes energy
+    calc.set(method="PBE", damping_hint={"2b": "zero"})
+    assert calc.results == {}
+    e_d3_zero = atoms.get_potential_energy()
+    assert e_d3_zero != pytest.approx(e_d3_pbe, rel=1e-4)
+
+    # Updating params_tweaks changes energy
+    calc.set(damping_hint={"2b": "rational"}, params_tweaks={"s8": 2.5})
+    assert calc.results == {}
+    e_d3_tweaked = atoms.get_potential_energy()
+    assert e_d3_tweaked != pytest.approx(e_d3_pbe, rel=1e-4)
+
+    # Updating realspace_cutoff changes energy when cutoff is shorter than bond distance
+    calc.set(params_tweaks=None, realspace_cutoff={"disp2": 0.5})
+    assert calc.results == {}
+    assert atoms.get_potential_energy() == pytest.approx(0.0, abs=1e-12)
+
+    # Updating model to d4 and changing charge, charges_key, dtype, compute_stress
+    calc.set(
+        model="d4",
+        method="PBE",
+        realspace_cutoff=None,
+        charge=0.0,
+    )
+    e_d4_q0 = atoms.get_potential_energy()
+    calc.set(charge=1.0)
+    assert calc.results == {}
+    e_d4_q1 = atoms.get_potential_energy()
+    assert e_d4_q1 != pytest.approx(e_d4_q0, rel=1e-4)
+
+    atoms.set_array("ext_q", np.array([-0.5, 0.25, 0.25], dtype=np.float64))
+    calc.set(charge=None, charges_key="ext_q")
+    assert calc.results == {}
+    e_d4_ext = atoms.get_potential_energy()
+    assert e_d4_ext != pytest.approx(e_d4_q0, rel=1e-4)
+
+    calc.set(dtype=torch.float32)
+    assert calc.results == {}
+    e_d4_f32 = atoms.get_potential_energy()
+    assert e_d4_f32 == pytest.approx(e_d4_ext, rel=1e-5, abs=1e-5)
+
+    calc.set(dtype=torch.float64, compute_stress=False)
+    assert "stress" not in calc.implemented_properties
+    calc.set(compute_stress=True)
+    assert "stress" in calc.implemented_properties
+
+
+def test_ase_lifecycle_geometry_and_charge_array_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify cache invalidation on geometry changes, initial_charges changes, and
+    both set_array() and in-place mutation of atoms.arrays[charges_key].
+    """
+    import tad_dftd.ase as ase_mod
+
+    call_count = 0
+    orig_calc_fn = ase_mod._calculate_energy_and_derivatives
+
+    def counting_calc(
+        atoms: Atoms, cfg: Any, properties: set[str]
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return orig_calc_fn(atoms, cfg, properties)
+
+    monkeypatch.setattr(
+        ase_mod, "_calculate_energy_and_derivatives", counting_calc
+    )
+
+    atoms = Atoms(
+        numbers=[8, 1, 1],
+        positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]],
+        cell=[6.0, 6.0, 6.0],
+        pbc=[True, True, True],
+    )
+    atoms.set_array("q_custom", np.array([-0.8, 0.4, 0.4], dtype=np.float64))
+    calc = DFTD(
+        method="PBE",
+        model="d4",
+        charges_key="q_custom",
+        realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+    )
+    atoms.calc = calc
+
+    # 1. First get_potential_energy() evaluates energy
+    e1 = atoms.get_potential_energy()
+    assert call_count == 1
+    assert "energy" in calc.results
+    assert "forces" not in calc.results
+    assert "stress" not in calc.results
+
+    # 2. Repeated get_potential_energy() hits ASE cache without re-evaluating
+    e1_cached = atoms.get_potential_energy()
+    assert call_count == 1
+    assert e1_cached == e1
+
+    # 3. Calling get_forces() after get_potential_energy() computes forces and preserves energy
+    f1 = atoms.get_forces()
+    assert call_count == 2
+    assert f1.shape == (3, 3)
+    assert "energy" in calc.results and "forces" in calc.results
+    assert atoms.get_forces() is not f1  # ASE returns a copy
+    assert call_count == 2
+
+    # 4. Calling get_stress() after get_forces() computes stress and preserves both energy and forces
+    s1 = atoms.get_stress()
+    assert call_count == 3
+    assert s1.shape == (6,)
+    assert "energy" in calc.results
+    assert "forces" in calc.results
+    assert "stress" in calc.results
+    _ = atoms.get_potential_energy()
+    _ = atoms.get_forces()
+    _ = atoms.get_stress()
+    assert call_count == 3
+
+    # 5. Replacing atoms.arrays[charges_key] via set_array invalidates cache
+    atoms.set_array("q_custom", np.array([0.2, -0.1, -0.1], dtype=np.float64))
+    assert "arrays:q_custom" in calc.check_state(atoms)
+    e2 = atoms.get_potential_energy()
+    assert call_count == 4
+    assert e2 != pytest.approx(e1, rel=1e-4)
+
+    # 6. In-place mutation of atoms.arrays[charges_key][i] also invalidates cache!
+    atoms.arrays["q_custom"][0] = -0.9
+    atoms.arrays["q_custom"][1] = 0.45
+    atoms.arrays["q_custom"][2] = 0.45
+    assert "arrays:q_custom" in calc.check_state(atoms)
+    e3 = atoms.get_potential_energy()
+    assert call_count == 5
+    assert e3 != pytest.approx(e2, rel=1e-4)
+
+    # 7. Standard ASE geometry changes: positions, cell, numbers, pbc, initial_charges
+    atoms.positions[1, 0] += 0.08
+    e4 = atoms.get_potential_energy()
+    assert call_count == 6
+    assert e4 != pytest.approx(e3, rel=1e-4)
+
+    atoms.set_cell([6.3, 6.3, 6.3], scale_atoms=True)
+    e5 = atoms.get_potential_energy()
+    assert call_count == 7
+    assert e5 != pytest.approx(e4, rel=1e-4)
+
+    atoms.numbers[0] = 16  # O -> S
+    e6 = atoms.get_potential_energy()
+    assert call_count == 8
+    assert e6 != pytest.approx(e5, rel=1e-4)
+
+    atoms.set_pbc([False, False, False])
+    e7 = atoms.get_potential_energy()
+    assert call_count == 9
+    assert e7 != pytest.approx(e6, rel=1e-4)
+
+    # Switch to automatic EEQ (charges_key=None) and verify initial_charges invalidation
+    calc.set(charges_key=None)
+    e8 = atoms.get_potential_energy()
+    assert call_count == 10
+    atoms.set_initial_charges([1.0, 0.0, 0.0])
+    e9 = atoms.get_potential_energy()
+    assert call_count == 11
+    assert e9 != pytest.approx(e8, rel=1e-4)
+
+
+def test_ase_lifecycle_isolation_copy_and_repeated_updates() -> None:
+    """
+    Verify two calculator instances do not share mutable state, Atoms.copy()
+    independence, and 30 successive geometry updates without leaked tensors.
+    """
+    atoms1 = molecule("H2O")
+    atoms2 = molecule("CH4")
+
+    calc1 = DFTD(method="PBE", model="d4")
+    calc2 = DFTD(method="B3LYP", model="d3")
+    atoms1.calc = calc1
+    atoms2.calc = calc2
+
+    e1 = atoms1.get_potential_energy()
+    e2 = atoms2.get_potential_energy()
+    calc2.set(compute_stress=False)
+    assert "stress" in calc1.implemented_properties
+    assert "stress" not in calc2.implemented_properties
+    assert calc1.parameters["method"] == "PBE"
+    assert calc2.parameters["method"] == "B3LYP"
+    assert atoms1.get_potential_energy() == pytest.approx(e1, rel=1e-15, abs=1e-15)
+    assert atoms2.get_potential_energy() == pytest.approx(e2, rel=1e-15, abs=1e-15)
+
+    # Atoms.copy() creates an independent Atoms object with calc=None
+    atoms1_copy = atoms1.copy()
+    assert atoms1_copy.calc is None
+    atoms1_copy.positions[0, 0] += 0.5
+    assert atoms1.get_potential_energy() == pytest.approx(e1, rel=1e-15, abs=1e-15)
+
+    # 30 successive geometry updates do not retain tensors or autograd graphs
+    traj_atoms = molecule("H2O")
+    traj_calc = DFTD(method="PBE", model="d4")
+    traj_atoms.calc = traj_calc
+
+    energies: list[float] = []
+    for step in range(30):
+        traj_atoms.positions[1, 0] += 0.005
+        e_step = traj_atoms.get_potential_energy()
+        f_step = traj_atoms.get_forces()
+        energies.append(e_step)
+        assert isinstance(e_step, float)
+        assert isinstance(f_step, np.ndarray)
+        for val in traj_calc.results.values():
+            assert not isinstance(val, torch.Tensor)
+            assert not hasattr(val, "grad_fn")
+
+    assert len(set(round(val, 10) for val in energies)) == 30
+
+
+
