@@ -36,19 +36,23 @@ from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
 from tad_mctc import Structure
 from tad_mctc.data.structures import get_structure
 
-from tad_dftd import dftd, param
+from tad_dftd import Cutoff, Damping, DampingParam, dftd, param
 from tad_dftd.ase import DFTD, DFTD3, DFTD4
 from tad_dftd.damping import (
     FermiTwoBody,
     ModifiedZeroTwoBody,
     OptimizedPowerTwoBody,
     RationalTwoBody,
+    ThreeBodyDamping,
+    TwoBodyDamping,
     ZeroThreeBodyD3,
     ZeroThreeBodyD4,
     ZeroTwoBody,
     damping_from_name,
 )
 from tad_dftd.model.catalogue import DispersionModelId
+
+from .test_ase_isolation import run_ase_isolation_check
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
@@ -183,27 +187,105 @@ def test_all_seven_supported_models_configuration(
 
 
 def test_damping_aliases_and_cutoff_conversion() -> None:
-    """Verify damping name aliases and Angstrom-to-Bohr cutoff conversion."""
-    calc_mzero = DFTD(
-        method="PBE",
-        model="d3",
-        damping_hint={"2b": "mzero", "3b": "none"},
+    """Verify damping name aliases across validation, parameter lookup, and dispatch, plus cutoff conversion."""
+    atoms = molecule("H2O")
+
+    # Rational / BJ / BJM aliases on D3
+    for alias in ("rational", "bj"):
+        calc = DFTD(
+            method="PBE", model="d3", damping_hint={"2b": alias, "3b": "none"}
+        )
+        assert calc._resolved_config is not None
+        assert isinstance(calc._resolved_config.damping.two, RationalTwoBody)
+
+    # BJM variant lookup on D3 (e.g., B3LYP has distinct bj vs bjm parameters)
+    calc_bj = DFTD(
+        method="B3LYP", model="d3", damping_hint={"2b": "bj", "3b": "none"}
     )
-    assert calc_mzero._resolved_config is not None
-    assert isinstance(
-        calc_mzero._resolved_config.damping.two, ModifiedZeroTwoBody
+    calc_bjm = DFTD(
+        method="B3LYP", model="d3", damping_hint={"2b": "bjm", "3b": "none"}
+    )
+    assert (
+        calc_bj._resolved_config is not None
+        and calc_bjm._resolved_config is not None
+    )
+    assert isinstance(calc_bjm._resolved_config.damping.two, RationalTwoBody)
+    assert float(calc_bj._resolved_config.param.s8) != pytest.approx(  # type: ignore[arg-type]
+        float(calc_bjm._resolved_config.param.s8)  # type: ignore[arg-type]
     )
 
-    calc_op = DFTD(
-        method="PBE",
-        model="d3",
-        damping_hint={"2b": "optimizedpower", "3b": "none"},
-    )
-    assert calc_op._resolved_config is not None
-    assert isinstance(
-        calc_op._resolved_config.damping.two, OptimizedPowerTwoBody
-    )
+    # Zero / CHG aliases on D3
+    e_zero_ref: float | None = None
+    for alias in ("zero", "chg"):
+        calc_z = DFTD(
+            method="PBE", model="d3", damping_hint={"2b": alias, "3b": "none"}
+        )
+        assert calc_z._resolved_config is not None
+        assert isinstance(calc_z._resolved_config.damping.two, ZeroTwoBody)
+        atoms.calc = calc_z
+        e_val = atoms.get_potential_energy()
+        if e_zero_ref is None:
+            e_zero_ref = e_val
+        else:
+            assert pytest.approx(e_zero_ref, rel=1e-14, abs=1e-14) == e_val
 
+    # Modified zero aliases on D3
+    e_mzero_ref: float | None = None
+    for alias in ("mzero", "zerom", "m-zero"):
+        calc_mz = DFTD(
+            method="PBE", model="d3", damping_hint={"2b": alias, "3b": "none"}
+        )
+        assert calc_mz._resolved_config is not None
+        assert isinstance(
+            calc_mz._resolved_config.damping.two, ModifiedZeroTwoBody
+        )
+        atoms.calc = calc_mz
+        e_val = atoms.get_potential_energy()
+        if e_mzero_ref is None:
+            e_mzero_ref = e_val
+        else:
+            assert pytest.approx(e_mzero_ref, rel=1e-14, abs=1e-14) == e_val
+
+    # Optimized power aliases on D3
+    e_op_ref: float | None = None
+    for alias in (
+        "optimizedpower",
+        "op",
+        "optpower",
+        "opt-power",
+        "optimized-power",
+        "optimised-power",
+    ):
+        calc_op = DFTD(
+            method="PBE", model="d3", damping_hint={"2b": alias, "3b": "none"}
+        )
+        assert calc_op._resolved_config is not None
+        assert isinstance(
+            calc_op._resolved_config.damping.two, OptimizedPowerTwoBody
+        )
+        atoms.calc = calc_op
+        e_val = atoms.get_potential_energy()
+        if e_op_ref is None:
+            e_op_ref = e_val
+        else:
+            assert pytest.approx(e_op_ref, rel=1e-14, abs=1e-14) == e_val
+
+    # Fermi aliases on D1 and D2
+    for model_name, method_name, alias in (
+        ("d1", "BLYP", "fermi"),
+        ("d1", "BLYP", "d1"),
+        ("d2", "PBE", "fermi"),
+        ("d2", "PBE", "d2"),
+    ):
+        calc_f = DFTD(
+            method=method_name,
+            model=model_name,
+            damping_hint={"2b": alias},
+        )
+        assert calc_f._resolved_config is not None
+        assert isinstance(calc_f._resolved_config.damping.two, FermiTwoBody)
+
+    # Cutoff conversion from Angstrom to Bohr, and pass-through of native Cutoff object
     calc_cut = DFTD(
         method="PBE",
         model="d4",
@@ -219,6 +301,200 @@ def test_damping_aliases_and_cutoff_conversion() -> None:
     assert pytest.approx(float(cutoff.disp3)) == 15.0 / Bohr
     assert pytest.approx(float(cutoff.cn)) == 10.0 / Bohr
     assert pytest.approx(float(cutoff.cn_eeq)) == 12.0 / Bohr
+
+    native_cut = Cutoff(disp2=45.0, disp3=22.0, cn=18.0, cn_eeq=20.0)
+    calc_native_cut = DFTD(
+        method="PBE",
+        model="d4",
+        realspace_cutoff=native_cut,
+    )
+    assert calc_native_cut._resolved_config is not None
+    assert (
+        pytest.approx(float(calc_native_cut._resolved_config.cutoff.disp2))
+        == 45.0
+    )
+
+
+def test_damping_object_dispatch_and_parameter_resolution() -> None:
+    """
+    Verify A1-F.1: explicit TwoBodyDamping, ThreeBodyDamping, and Damping objects
+    in damping_hint are preserved by reference and resolve matching parameters.
+    """
+    atoms = molecule("H2O")
+    pos_bohr = (
+        torch.tensor(atoms.get_positions(), dtype=torch.float64) / Bohr
+    ).requires_grad_(True)
+    numbers = torch.tensor(atoms.get_atomic_numbers(), dtype=torch.long)
+
+    def assert_native_parity(calc: DFTD) -> None:
+        atoms.calc = calc
+        e_ase = atoms.get_potential_energy()
+        f_ase = atoms.get_forces()
+
+        cfg = calc._resolved_config
+        assert cfg is not None
+        pos_grad = pos_bohr.detach().clone().requires_grad_(True)
+        struct = Structure(
+            numbers=numbers,
+            positions=pos_grad,
+            charge=torch.tensor(0.0, dtype=torch.float64),
+        )
+        extra_kw: dict[str, Any] = {}
+        if cfg.qmodel is not None:
+            extra_kw["qmodel"] = cfg.qmodel
+        e_nat = dftd(
+            struct,
+            cfg.param,
+            model=cfg.model_id,
+            damping=cfg.damping,
+            cutoff=cfg.cutoff,
+            **extra_kw,
+        ).sum()
+        g_nat = torch.autograd.grad(e_nat, pos_grad)[0]
+        f_nat = (-g_nat.detach().numpy()) * (Hartree / Bohr)
+        assert (
+            pytest.approx(float(e_nat.item()) * Hartree, rel=1e-14, abs=1e-14)
+            == e_ase
+        )
+        np.testing.assert_allclose(f_ase, f_nat, rtol=1e-13, atol=1e-13)
+
+    # 1. Explicit TwoBodyDamping instances in damping_hint={"2b": ...}
+    d2_cases: list[tuple[str, str, TwoBodyDamping, type[TwoBodyDamping]]] = [
+        ("d3", "PBE", RationalTwoBody(), RationalTwoBody),
+        ("d3", "PBE", ZeroTwoBody(), ZeroTwoBody),
+        ("d3", "PBE", ModifiedZeroTwoBody(), ModifiedZeroTwoBody),
+        ("d3", "PBE", OptimizedPowerTwoBody(), OptimizedPowerTwoBody),
+        ("d2", "PBE", FermiTwoBody(), FermiTwoBody),
+        ("d1", "BLYP", FermiTwoBody(), FermiTwoBody),
+        ("d4", "PBE", RationalTwoBody(), RationalTwoBody),
+    ]
+    for model_name, method_name, two_inst, expected_cls in d2_cases:
+        calc = DFTD(
+            method=method_name,
+            model=model_name,
+            damping_hint={"2b": two_inst},
+        )
+        cfg = calc._resolved_config
+        assert cfg is not None
+        assert isinstance(cfg.damping.two, expected_cls)
+        assert cfg.damping.two is two_inst
+        assert_native_parity(calc)
+
+        # Also compare against string-named equivalent to ensure identical parameter lookup
+        d2_str = (
+            "fermi"
+            if expected_cls is FermiTwoBody
+            else (
+                "zero"
+                if expected_cls is ZeroTwoBody
+                else (
+                    "mzero"
+                    if expected_cls is ModifiedZeroTwoBody
+                    else (
+                        "optimizedpower"
+                        if expected_cls is OptimizedPowerTwoBody
+                        else "rational"
+                    )
+                )
+            )
+        )
+        calc_str = DFTD(
+            method=method_name,
+            model=model_name,
+            damping_hint={"2b": d2_str},
+        )
+        atoms.calc = calc_str
+        e_str = atoms.get_potential_energy()
+        atoms.calc = calc
+        assert (
+            pytest.approx(e_str, rel=1e-14, abs=1e-14)
+            == atoms.get_potential_energy()
+        )
+
+    # 2. Explicit ThreeBodyDamping instances in damping_hint={"3b": ...}
+    three_d3_inst = ZeroThreeBodyD3()
+    calc_3b_d3 = DFTD(
+        method="PBE",
+        model="d3",
+        damping_hint={"3b": three_d3_inst},
+    )
+    assert calc_3b_d3._resolved_config is not None
+    assert calc_3b_d3._resolved_config.damping.three is three_d3_inst
+    assert_native_parity(calc_3b_d3)
+
+    three_d4_inst = ZeroThreeBodyD4()
+    calc_3b_d4 = DFTD(
+        method="PBE",
+        model="d4",
+        damping_hint={"3b": three_d4_inst},
+    )
+    assert calc_3b_d4._resolved_config is not None
+    assert calc_3b_d4._resolved_config.damping.three is three_d4_inst
+    assert_native_parity(calc_3b_d4)
+
+    # 3. Full Damping(two=..., three=...) container instances in damping_hint=...
+    damping_container_cases: list[tuple[str, str, Damping]] = [
+        ("d3", "PBE", Damping(two=RationalTwoBody(), three=ZeroThreeBodyD3())),
+        ("d3", "PBE", Damping(two=ZeroTwoBody(), three=None)),
+        ("d3", "PBE", Damping(two=ZeroTwoBody(), three=ZeroThreeBodyD3())),
+        ("d4", "PBE", Damping(two=RationalTwoBody(), three=ZeroThreeBodyD4())),
+        ("d4", "PBE", Damping(two=RationalTwoBody(), three=None)),
+    ]
+    for model_name, method_name, damp_obj in damping_container_cases:
+        calc_d = DFTD(
+            method=method_name,
+            model=model_name,
+            damping_hint=damp_obj,
+        )
+        cfg = calc_d._resolved_config
+        assert cfg is not None
+        assert cfg.damping is damp_obj
+        assert cfg.damping.two is damp_obj.two
+        assert cfg.damping.three is damp_obj.three
+        assert_native_parity(calc_d)
+
+    # 4. Stateful subclass of built-in TwoBodyDamping preserves instance state and resolves family params
+    class _ScaledRationalTwoBody(RationalTwoBody):
+        def __init__(self, scale: float) -> None:
+            self.scale = scale
+
+        def __call__(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+            return self.scale * super().__call__(*args, **kwargs)
+
+    scaled_inst = _ScaledRationalTwoBody(scale=0.35)
+    calc_scaled = DFTD(
+        method="PBE",
+        model="d3",
+        damping_hint={"2b": scaled_inst, "3b": "none"},
+    )
+    assert calc_scaled._resolved_config is not None
+    assert calc_scaled._resolved_config.damping.two is scaled_inst
+    assert_native_parity(calc_scaled)
+
+    # 5. Direct custom subclass of TwoBodyDamping (not subclassing a catalogue class):
+    #    - With method="PBE": raises a clear error because no functional lookup table exists
+    #    - With method=None and explicit params_tweaks: preserved by reference and evaluated
+    class _DirectCustomTwoBody(TwoBodyDamping):
+        def __init__(self, factor: float) -> None:
+            self.factor = factor
+
+        def __call__(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+            return self.factor * RationalTwoBody()(*args, **kwargs)
+
+    direct_inst = _DirectCustomTwoBody(factor=0.6)
+    with pytest.raises(
+        (InputError, ValueError), match="Custom damping class|method=None"
+    ):
+        DFTD(method="PBE", model="d3", damping_hint={"2b": direct_inst})
+
+    calc_direct = DFTD(
+        model="d3",
+        damping_hint={"2b": direct_inst},
+        params_tweaks={"s6": 1.0, "s8": 0.7875, "a1": 0.4289, "a2": 4.4407},
+    )
+    assert calc_direct._resolved_config is not None
+    assert calc_direct._resolved_config.damping.two is direct_inst
+    assert_native_parity(calc_direct)
 
 
 def test_configuration_validation_errors() -> None:
@@ -329,50 +605,8 @@ def test_configuration_validation_errors() -> None:
 
 
 def test_optional_ase_dependency_isolation() -> None:
-    """Verify tad_dftd imports and runs without ASE, while tad_dftd.ase raises a clear ModuleNotFoundError."""
-    code = """
-import sys
-import torch
-import tad_dftd
-from tad_dftd import dftd
-
-# Ensure 'ase' was not imported eagerly and is blocked
-assert "ase" not in sys.modules
-assert "tad_dftd.ase" not in sys.modules
-
-# Run a native tad_dftd calculation without ASE present
-from tad_mctc import Structure
-s = Structure(
-    numbers=torch.tensor([8, 1, 1]),
-    positions=torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]], dtype=torch.float64),
-)
-e = dftd(s, tad_dftd.param.get_params("PBE", model="d4"), model="d4")
-assert e.shape == (3,)
-
-# Now verify importing tad_dftd.ase raises a clear ModuleNotFoundError
-try:
-    import tad_dftd.ase
-except ModuleNotFoundError as exc:
-    assert "requires ASE" in str(exc)
-else:
-    raise AssertionError("Expected ModuleNotFoundError when importing tad_dftd.ase without ASE")
-"""
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    env["PYTHONPATH"] = str(SRC_DIR)
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            f"import sys; sys.path = [p for p in sys.path if 'ase' not in p.lower()]; sys.path.insert(0, {str(SRC_DIR)!r}); {code}",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (
-        proc.returncode == 0
-    ), f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    """Verify tad_dftd imports and runs without ASE using a deterministic import blocker."""
+    run_ase_isolation_check()
 
 
 @pytest.mark.parametrize(
@@ -1664,3 +1898,367 @@ def test_ase_cuda_device_parity() -> None:
     np.testing.assert_allclose(
         atoms_cuda.get_stress(), atoms_cpu.get_stress(), rtol=1e-11, atol=1e-11
     )
+
+
+def test_transactional_set_and_init_rollback() -> None:
+    """
+    Verify A1-F.2: failed DFTD.set() and DFTD.__init__() calls are transactional
+    and never leave calculator parameters, resolved config, results, or atoms.calc
+    in a partially mutated or inconsistent state.
+    """
+    # 1. Failed constructor with atoms=... must not leave atoms.calc attached
+    atoms_init = molecule("H2O")
+    assert atoms_init.calc is None
+    with pytest.raises((InputError, ValueError)):
+        DFTD(atoms=atoms_init, method="nonexistent-functional", model="d4")
+    assert atoms_init.calc is None
+
+    # 2. Attached calculator: verify failed set() calls preserve all state
+    atoms = molecule("H2O")
+    calc = DFTD(method="PBE", model="d4")
+    atoms.calc = calc
+    old_energy = atoms.get_potential_energy()
+    old_forces = atoms.get_forces().copy()
+    old_params = dict(calc.parameters)
+    old_config = calc._resolved_config
+    old_impl_props = list(calc.implemented_properties)
+
+    invalid_updates: list[
+        tuple[
+            dict[str, Any],
+            type[BaseException] | tuple[type[BaseException], ...],
+        ]
+    ] = [
+        ({"method": "nonexistent-functional"}, (InputError, ValueError)),
+        ({"realspace_cutoff": {"disp2": -1.0}}, (InputError, ValueError)),
+        (
+            {"model": "d3", "charges_key": "external_q"},
+            (InputError, ValueError),
+        ),
+        ({"dtype": torch.int64}, (InputError, ValueError)),
+        ({"device": "opencl:0"}, (InputError, ValueError)),
+        ({"model": "d5"}, NotImplementedError),
+        ({"qmodel": "eeqbc"}, NotImplementedError),
+        ({"unexpected_kwarg": 123}, (InputError, TypeError, ValueError)),
+        (
+            {"compute_stress": False, "method": "nonexistent-functional"},
+            (InputError, ValueError),
+        ),
+    ]
+
+    for bad_kwargs, expected_exc in invalid_updates:
+        with pytest.raises(expected_exc):
+            calc.set(**bad_kwargs)
+
+        assert calc.parameters == old_params
+        assert calc._resolved_config is old_config
+        assert calc.implemented_properties == old_impl_props
+        assert "energy" in calc.results
+        assert "forces" in calc.results
+        assert atoms.get_potential_energy() == pytest.approx(
+            old_energy, rel=1e-15, abs=1e-15
+        )
+        np.testing.assert_allclose(
+            atoms.get_forces(), old_forces, rtol=0.0, atol=0.0
+        )
+
+    # 3. Subsequent valid set() succeeds and updates results cleanly
+    calc.set(method="B3LYP")
+    assert calc.parameters["method"] == "B3LYP"
+    assert calc.results == {}
+    new_energy = atoms.get_potential_energy()
+    assert new_energy != pytest.approx(old_energy, rel=1e-4)
+
+    # 4. Standalone calculator (not attached to Atoms)
+    standalone = DFTD(method="PBE", model="d3")
+    standalone_params = dict(standalone.parameters)
+    standalone_config = standalone._resolved_config
+    with pytest.raises((InputError, ValueError)):
+        standalone.set(method="invalid-method", damping_hint={"2b": "zero"})
+    assert standalone.parameters == standalone_params
+    assert standalone._resolved_config is standalone_config
+
+
+def test_failure_path_cache_consistency_scenarios(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify A1-F.3: cache consistency across Scenarios A, B, C, D, and E.
+    """
+    # Scenario A — Valid energy, then invalid stress on a 0D molecular system
+    atoms_a = molecule("H2O")
+    calc_a = DFTD(method="PBE", model="d4")
+    atoms_a.calc = calc_a
+    e0 = atoms_a.get_potential_energy()
+    assert "energy" in calc_a.results
+    with pytest.raises(
+        (PropertyNotImplementedError, ValueError), match="3D periodic"
+    ):
+        atoms_a.get_stress()
+    assert "stress" not in calc_a.results
+    assert atoms_a.get_potential_energy() == pytest.approx(
+        e0, rel=1e-15, abs=1e-15
+    )
+    f0 = atoms_a.get_forces()
+    assert f0.shape == (3, 3)
+    assert "stress" not in calc_a.results
+
+    # Scenario B — Valid energy with external charges, then invalid external charge array
+    atoms_b = molecule("H2O")
+    q_valid = np.array([-0.8, 0.4, 0.4], dtype=np.float64)
+    atoms_b.set_array("q", q_valid.copy())
+    calc_b = DFTD(method="PBE", model="d4", charges_key="q")
+    atoms_b.calc = calc_b
+    e_valid = atoms_b.get_potential_energy()
+    assert "energy" in calc_b.results
+
+    # Replace with NaN charge array -> must raise ValueError and clear stale results
+    atoms_b.set_array("q", np.array([0.0, np.nan, 0.0], dtype=np.float64))
+    with pytest.raises(ValueError, match="non-finite"):
+        atoms_b.get_potential_energy()
+    assert calc_b.results == {}
+
+    # Replace with wrong-shape charge array -> must raise ValueError and keep results empty
+    atoms_b.arrays["q"] = np.zeros((3, 2), dtype=np.float64)
+    with pytest.raises(ValueError, match="1D shape"):
+        atoms_b.get_potential_energy()
+    assert calc_b.results == {}
+
+    # Restore valid charge array -> calculation succeeds and matches original energy
+    atoms_b.arrays["q"] = q_valid.copy()
+    assert atoms_b.get_potential_energy() == pytest.approx(
+        e_valid, rel=1e-15, abs=1e-15
+    )
+
+    # Scenario C — Missing charge array followed by recovery
+    atoms_c = molecule("H2O")
+    calc_c = DFTD(method="PBE", model="d4", charges_key="missing")
+    atoms_c.calc = calc_c
+    with pytest.raises(ValueError, match="not found in 'atoms.arrays'"):
+        atoms_c.get_potential_energy()
+    assert calc_c.results == {}
+
+    atoms_c.set_array("missing", q_valid.copy())
+    assert atoms_c.get_potential_energy() == pytest.approx(
+        e_valid, rel=1e-15, abs=1e-15
+    )
+
+    # Scenario D — Failed configuration update after valid calculation
+    atoms_d = molecule("H2O")
+    calc_d = DFTD(method="PBE", model="d4")
+    atoms_d.calc = calc_d
+    e_d = atoms_d.get_potential_energy()
+    with pytest.raises((InputError, ValueError)):
+        calc_d.set(method="invalid")
+    assert atoms_d.get_potential_energy() == pytest.approx(
+        e_d, rel=1e-15, abs=1e-15
+    )
+
+    # Scenario E — Incremental property requests on a 3D periodic cell
+    import tad_dftd.ase as ase_mod
+
+    eval_calls = 0
+    orig_fn = ase_mod._calculate_energy_and_derivatives
+
+    def spy_eval(
+        atoms_arg: Atoms, cfg_arg: Any, props_arg: set[str]
+    ) -> dict[str, Any]:
+        nonlocal eval_calls
+        eval_calls += 1
+        return orig_fn(atoms_arg, cfg_arg, props_arg)
+
+    monkeypatch.setattr(ase_mod, "_calculate_energy_and_derivatives", spy_eval)
+
+    atoms_e = Atoms(
+        numbers=[14, 6],
+        positions=[[0.0, 0.0, 0.0], [1.9, 1.9, 1.9]],
+        cell=[4.5, 4.5, 4.5],
+        pbc=[True, True, True],
+    )
+    calc_e = DFTD(
+        method="PBE",
+        model="d4",
+        realspace_cutoff={
+            "disp2": 10.0,
+            "disp3": 8.0,
+            "cn": 8.0,
+            "cn_eeq": 8.0,
+        },
+    )
+    atoms_e.calc = calc_e
+
+    e_step1 = atoms_e.get_potential_energy()
+    assert eval_calls == 1
+    assert set(calc_e.results) == {"energy", "energies", "free_energy"}
+
+    f_step2 = atoms_e.get_forces()
+    assert eval_calls == 2
+    assert set(calc_e.results) == {
+        "energy",
+        "energies",
+        "free_energy",
+        "forces",
+    }
+
+    s_step3 = atoms_e.get_stress()
+    assert eval_calls == 3
+    assert set(calc_e.results) == {
+        "energy",
+        "energies",
+        "free_energy",
+        "forces",
+        "stress",
+    }
+
+    # Cached hits when geometry is unchanged
+    assert atoms_e.get_potential_energy() == pytest.approx(
+        e_step1, rel=1e-15, abs=1e-15
+    )
+    np.testing.assert_allclose(
+        atoms_e.get_forces(), f_step2, rtol=0.0, atol=0.0
+    )
+    np.testing.assert_allclose(
+        atoms_e.get_stress(), s_step3, rtol=0.0, atol=0.0
+    )
+    assert eval_calls == 3
+
+    # Full invalidation when cell or positions change
+    atoms_e.set_cell([4.6, 4.6, 4.6], scale_atoms=True)
+    e_new = atoms_e.get_potential_energy()
+    assert eval_calls == 4
+    assert e_new != pytest.approx(e_step1, rel=1e-4)
+    assert "forces" not in calc_e.results
+    assert "stress" not in calc_e.results
+
+
+def test_ase_integer_model_id_dispatch_and_validation() -> None:
+    """
+    Verify A1-F.5: integer model IDs (10, 20, 30, 31, 40, 41, 42) work through
+    DFTD, 50 raises NotImplementedError, and invalid integer/boolean IDs fail.
+    """
+    atoms = molecule("H2O")
+    tweaks_d4srev = {
+        "s6": 1.0,
+        "s8": 0.9589,
+        "a1": 0.3857,
+        "a2": 4.8069,
+        "s9": 1.0,
+    }
+    cases: list[tuple[int, str, str | None, dict[str, float] | None]] = [
+        (10, "d1", "BLYP", None),
+        (20, "d2", "PBE", None),
+        (30, "d3", "PBE", None),
+        (31, "d3s", "BLYP", None),
+        (40, "d4", "PBE", None),
+        (41, "d4s", "PBE", None),
+        (42, "d4srev", None, tweaks_d4srev),
+    ]
+    for int_id, str_name, method_name, tweaks in cases:
+        atoms_int = atoms.copy()
+        atoms_str = atoms.copy()
+        atoms_int.calc = DFTD(
+            method=method_name, model=int_id, params_tweaks=tweaks
+        )
+        atoms_str.calc = DFTD(
+            method=method_name, model=str_name, params_tweaks=tweaks
+        )
+        assert atoms_int.get_potential_energy() == pytest.approx(
+            atoms_str.get_potential_energy(), rel=1e-15, abs=1e-15
+        )
+        np.testing.assert_allclose(
+            atoms_int.get_forces(), atoms_str.get_forces(), rtol=0.0, atol=0.0
+        )
+
+    # Excluded D5 (50) raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="not yet implemented"):
+        DFTD(method="PBE", model=50)
+
+    # Invalid integer IDs (1..7, 0, -1, 99) raise ValueError
+    for bad_int in (1, 2, 3, 4, 5, 6, 7, 0, -1, 99):
+        with pytest.raises(ValueError, match="Unknown dispersion model"):
+            DFTD(method="PBE", model=bad_int)
+
+    # Booleans must be rejected even though bool subclasses int
+    for bad_bool in (True, False):
+        with pytest.raises(
+            TypeError, match="Boolean value|Invalid dispersion model type"
+        ):
+            DFTD(method="PBE", model=bad_bool)
+
+
+def test_no_silent_configuration_substitutions_audit() -> None:
+    """
+    Verify A1-F.6: zero-valued parameter tweaks are never treated as falsy/missing,
+    and invalid method/qmodel/cutoff/parameter values fail loudly.
+    """
+    atoms = molecule("bicyclobutane")
+
+    # 1. s9=0.0 explicitly disables 3B and differs from full 2B+3B D4 evaluation
+    calc_s9_zero = DFTD(
+        method="PBE",
+        model="d4",
+        params_tweaks={"s9": 0.0},
+    )
+    assert calc_s9_zero._resolved_config is not None
+    assert calc_s9_zero._resolved_config.damping.three is None
+    assert float(calc_s9_zero._resolved_config.param.s9) == 0.0  # type: ignore[arg-type]
+    atoms.calc = calc_s9_zero
+    e_s9_zero = atoms.get_potential_energy()
+
+    calc_full = DFTD(method="PBE", model="d4")
+    atoms.calc = calc_full
+    e_full = atoms.get_potential_energy()
+    assert abs(e_s9_zero - e_full) > 1e-5
+
+    # 2. s6=0.0, s8=0.0, s9=0.0 yields identically zero dispersion energy and forces
+    calc_all_zero = DFTD(
+        method="PBE",
+        model="d4",
+        params_tweaks={"s6": 0.0, "s8": 0.0, "s9": 0.0},
+    )
+    atoms.calc = calc_all_zero
+    assert atoms.get_potential_energy() == pytest.approx(0.0, abs=1e-15)
+    np.testing.assert_allclose(
+        atoms.get_forces(), np.zeros((len(atoms), 3)), atol=1e-15
+    )
+
+    # 3. qmodel="gfn2" or "gxtb" without external charges_key must raise an error, not silently run EEQ
+    for ext_qmodel in ("gfn2", 2):
+        with pytest.raises((InputError, ValueError), match="charges_key"):
+            DFTD(method="PBE", model="d4", qmodel=ext_qmodel)
+
+    for ext_qmodel in ("gxtb", 4):
+        with pytest.raises((InputError, ValueError), match="charges_key"):
+            DFTD(
+                model="d4srev",
+                params_tweaks={
+                    "s6": 1.0,
+                    "s8": 0.9,
+                    "a1": 0.4,
+                    "a2": 4.5,
+                    "s9": 1.0,
+                },
+                qmodel=ext_qmodel,
+            )
+
+    # Integer ID 3 is EEQBC -> raises NotImplementedError
+    with pytest.raises(
+        NotImplementedError, match="not supported in this release"
+    ):
+        DFTD(method="PBE", model="d4", qmodel=3)
+
+    # 4. Empty or whitespace-only method must raise an error
+    for empty_method in ("", "   "):
+        with pytest.raises((InputError, ValueError), match="non-empty"):
+            DFTD(method=empty_method, model="d4")
+
+    # 5. None values inside params_tweaks or realspace_cutoff must raise an error
+    with pytest.raises(
+        (InputError, TypeError, ValueError), match="real number|numeric"
+    ):
+        DFTD(method="PBE", model="d4", params_tweaks={"s8": None})
+
+    with pytest.raises(
+        (InputError, TypeError, ValueError), match="real number|numeric"
+    ):
+        DFTD(method="PBE", model="d4", realspace_cutoff={"disp2": None})

@@ -18,6 +18,21 @@ pip install "dxtb[ase]"
 | `DFTD4` | `"d4"` | Convenience subclass defaulting to DFT-D4 (rational Becke-Johnson 2B + ATM 3B damping when `method` is given) |
 | `DFTD3` | `"d3"` | Convenience subclass defaulting to DFT-D3 (rational Becke-Johnson 2B damping without ATM 3B unless requested) |
 
+### Supported Model Identifiers (`model`)
+
+Both canonical string names and Fortran `dftd` integer model IDs (`DispersionModelId`) are accepted:
+
+| Model | String Name | Integer ID (`DispersionModelId`) | Status |
+| :--- | :--- | :--- | :--- |
+| DFT-D1 | `"d1"` | `10` | Supported |
+| DFT-D2 | `"d2"` | `20` | Supported |
+| DFT-D3 | `"d3"` | `30` | Supported |
+| DFT-D3S | `"d3s"` | `31` | Supported |
+| DFT-D4 | `"d4"` | `40` | Supported |
+| DFT-D4S | `"d4s"` | `41` | Supported |
+| DFT-D4Srev | `"d4srev"` | `42` | Supported (`params_tweaks` required) |
+| DFT-D5 | `"d5"` | `50` | Excluded (`NotImplementedError`) |
+
 ---
 
 ## Usage Examples
@@ -51,20 +66,27 @@ forces = atoms.get_forces()
 
 ### 3. D3 with Explicit Damping
 
-Use `damping_hint` with keys `"2b"` and/or `"3b"` to select non-default damping functions or to enable/disable the three-body Axilrod-Teller-Muto (ATM) term:
+Use `damping_hint` with keys `"2b"` and/or `"3b"` (or pass a `tad_dftd.Damping` container directly) to select non-default damping functions or to enable/disable the three-body Axilrod-Teller-Muto (ATM) term. Both string names/aliases and `TwoBodyDamping` / `ThreeBodyDamping` / `Damping` instances are supported:
 
 ```python
 from ase.build import molecule
+from tad_dftd import Damping
 from tad_dftd.ase import DFTD3
+from tad_dftd.damping import RationalTwoBody, ZeroThreeBodyD3, ZeroTwoBody
 
 atoms = molecule("H2O")
 
-# D3(0) zero damping:
+# D3(0) zero damping (by name or damping object):
 atoms.calc = DFTD3(method="PBE", damping_hint={"2b": "zero"})
+# Or equivalently:
+# atoms.calc = DFTD3(method="PBE", damping_hint={"2b": ZeroTwoBody()})
 e_d3_zero = atoms.get_potential_energy()
 
 # D3(BJ)-ATM (enabling three-body dispersion on D3):
-atoms.calc = DFTD3(method="PBE", damping_hint={"2b": "rational", "3b": "zero_d3"})
+atoms.calc = DFTD3(
+    method="PBE",
+    damping_hint=Damping(two=RationalTwoBody(), three=ZeroThreeBodyD3()),
+)
 e_d3_atm = atoms.get_potential_energy()
 ```
 
