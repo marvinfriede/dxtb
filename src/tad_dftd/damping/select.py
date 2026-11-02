@@ -19,6 +19,7 @@ Selecting a damping by name
 The name of a damping variant, as in the data base of functionals, and the
 two-body and three-body damping classes it stands for.
 """
+
 from __future__ import annotations
 
 from .base import Damping, ThreeBodyDamping, TwoBodyDamping
@@ -42,6 +43,7 @@ __all__ = [
     "TWO_BODY_DAMPINGS",
     "damping_from_name",
     "get_damping_id",
+    "identify_damping",
     "new_damping",
 ]
 
@@ -71,10 +73,20 @@ THREE_BODY_DAMPINGS: tuple[tuple[str, type[ThreeBodyDamping]], ...] = (
 _TWO_BODY_ALIASES: dict[str, str] = {
     "bj": "rational",
     "bjm": "rational",
+    "chg": "zero",
+    "d1": "fermi",
+    "d2": "fermi",
     "zerom": "mzero",
+    "m-zero": "mzero",
     "op": "optimizedpower",
     "optimisedpower": "optimizedpower",
     "optpower": "optimizedpower",
+    "opt-power": "optimizedpower",
+    "optimized-power": "optimizedpower",
+    "optimised-power": "optimizedpower",
+    "tang_toennies": "screened",
+    "z-damping": "z",
+    "koide-bjm": "koide",
 }
 
 _THREE_BODY_ALIASES: dict[str, str] = {
@@ -114,7 +126,8 @@ def damping_from_name(
     ValueError
         If a name is unknown.
     """
-    norm_2b = _TWO_BODY_ALIASES.get(name.lower().strip(), name)
+    clean_2b = name.lower().strip()
+    norm_2b = _TWO_BODY_ALIASES.get(clean_2b, clean_2b)
 
     if three_body is True:
         m = model.lower().strip()
@@ -130,9 +143,8 @@ def damping_from_name(
 
     three = None
     if three_body is not False and three_body is not None:
-        norm_3b = _THREE_BODY_ALIASES.get(
-            three_body.lower().strip(), three_body
-        )
+        clean_3b = three_body.lower().strip()
+        norm_3b = _THREE_BODY_ALIASES.get(clean_3b, clean_3b)
         three = _lookup(THREE_BODY_DAMPINGS, norm_3b, "three-body damping")()
 
     return Damping(_lookup(TWO_BODY_DAMPINGS, norm_2b, "damping")(), three)
@@ -151,14 +163,34 @@ def new_damping(
 
 def get_damping_id(name: str, *, three_body: bool = False) -> str:
     """Return the canonical damping name."""
+    clean = name.lower().strip()
     norm = (
-        _THREE_BODY_ALIASES.get(name.lower().strip(), name)
+        _THREE_BODY_ALIASES.get(clean, clean)
         if three_body
-        else _TWO_BODY_ALIASES.get(name.lower().strip(), name)
+        else _TWO_BODY_ALIASES.get(clean, clean)
     )
     table = THREE_BODY_DAMPINGS if three_body else TWO_BODY_DAMPINGS
     _lookup(table, norm, "three-body damping" if three_body else "damping")
     return norm
+
+
+def identify_damping(
+    damping: TwoBodyDamping | ThreeBodyDamping,
+) -> str | None:
+    """
+    Return the canonical catalogue name for a :class:`TwoBodyDamping` or
+    :class:`ThreeBodyDamping` instance, or ``None`` for a custom subclass not
+    inheriting from a built-in catalogue damping class.
+    """
+    if isinstance(damping, ThreeBodyDamping):
+        for name_3b, cls_3b in THREE_BODY_DAMPINGS:
+            if isinstance(damping, cls_3b):
+                return name_3b
+        return None
+    for name_2b, cls_2b in TWO_BODY_DAMPINGS:
+        if isinstance(damping, cls_2b):
+            return name_2b
+    return None
 
 
 def _lookup(table: tuple[tuple[str, type], ...], name: str, what: str) -> type:

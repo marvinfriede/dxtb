@@ -20,6 +20,7 @@ Look up damping parameters by density functional name for D1, D2, D3/D3S, and
 D4/D4S dispersion models, resolving functional aliases from ``s-dftd3`` and
 Grimme-lab ``dftd/param/functionals.f90``.
 """
+
 from __future__ import annotations
 
 from importlib.resources import as_file, files
@@ -70,24 +71,74 @@ _D2_PARAMETERS: dict[str, dict[str, Any]] = {
 # Additional D4 parameters from dftd/param/d4.f90 not in assets/parameters.toml
 _D4_EXTRA_PARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     "dftb_3ob": {
-        "bj-eeq-two": {"s6": 1.0, "s8": 0.4727337, "a1": 0.5467502, "a2": 4.4955068},
-        "bj-eeq-atm": {"s6": 1.0, "s8": 0.6635015, "a1": 0.5523240, "a2": 4.3537076},
+        "bj-eeq-two": {
+            "s6": 1.0,
+            "s8": 0.4727337,
+            "a1": 0.5467502,
+            "a2": 4.4955068,
+        },
+        "bj-eeq-atm": {
+            "s6": 1.0,
+            "s8": 0.6635015,
+            "a1": 0.5523240,
+            "a2": 4.3537076,
+        },
     },
     "dftb_matsci": {
-        "bj-eeq-two": {"s6": 1.0, "s8": 2.7711819, "a1": 0.4681712, "a2": 5.2918629},
-        "bj-eeq-atm": {"s6": 1.0, "s8": 3.3157614, "a1": 0.4826330, "a2": 5.3811976},
+        "bj-eeq-two": {
+            "s6": 1.0,
+            "s8": 2.7711819,
+            "a1": 0.4681712,
+            "a2": 5.2918629,
+        },
+        "bj-eeq-atm": {
+            "s6": 1.0,
+            "s8": 3.3157614,
+            "a1": 0.4826330,
+            "a2": 5.3811976,
+        },
     },
     "dftb_mio": {
-        "bj-eeq-two": {"s6": 1.0, "s8": 1.1948145, "a1": 0.6074567, "a2": 4.9336133},
-        "bj-eeq-atm": {"s6": 1.0, "s8": 1.2916225, "a1": 0.5965326, "a2": 4.8778602},
+        "bj-eeq-two": {
+            "s6": 1.0,
+            "s8": 1.1948145,
+            "a1": 0.6074567,
+            "a2": 4.9336133,
+        },
+        "bj-eeq-atm": {
+            "s6": 1.0,
+            "s8": 1.2916225,
+            "a1": 0.5965326,
+            "a2": 4.8778602,
+        },
     },
     "dftb_ob2": {
-        "bj-eeq-two": {"s6": 1.0, "s8": 2.7611320, "a1": 0.6037249, "a2": 5.3900004},
-        "bj-eeq-atm": {"s6": 1.0, "s8": 2.9692689, "a1": 0.6068916, "a2": 5.4476789},
+        "bj-eeq-two": {
+            "s6": 1.0,
+            "s8": 2.7611320,
+            "a1": 0.6037249,
+            "a2": 5.3900004,
+        },
+        "bj-eeq-atm": {
+            "s6": 1.0,
+            "s8": 2.9692689,
+            "a1": 0.6068916,
+            "a2": 5.4476789,
+        },
     },
     "dftb_pbc": {
-        "bj-eeq-two": {"s6": 1.0, "s8": 1.7303734, "a1": 0.5546548, "a2": 4.7973454},
-        "bj-eeq-atm": {"s6": 1.0, "s8": 2.1667394, "a1": 0.5646391, "a2": 4.9576353},
+        "bj-eeq-two": {
+            "s6": 1.0,
+            "s8": 1.7303734,
+            "a1": 0.5546548,
+            "a2": 4.7973454,
+        },
+        "bj-eeq-atm": {
+            "s6": 1.0,
+            "s8": 2.1667394,
+            "a1": 0.5646391,
+            "a2": 4.9576353,
+        },
     },
 }
 
@@ -255,9 +306,18 @@ def get_params(
             d_low = damping.lower().strip()
             if d_low == "rational":
                 preference = ["bj"]
-            elif d_low == "mzero":
+            elif d_low == "chg":
+                preference = ["zero"]
+            elif d_low in ("mzero", "m-zero"):
                 preference = ["zerom"]
-            elif d_low in ("optimizedpower", "optimisedpower"):
+            elif d_low in (
+                "optimizedpower",
+                "optimisedpower",
+                "optpower",
+                "opt-power",
+                "optimized-power",
+                "optimised-power",
+            ):
                 preference = ["op"]
             else:
                 preference = [d_low]
@@ -270,7 +330,10 @@ def get_params(
 
     if m in ("d4", "d4s"):
         data = _load_d4_parameters()
-        if canonical in data["parameter"] and "d4" in data["parameter"][canonical]:
+        if (
+            canonical in data["parameter"]
+            and "d4" in data["parameter"][canonical]
+        ):
             entry = dict(data["parameter"][canonical]["d4"])
         elif canonical in _D4_EXTRA_PARAMETERS:
             entry = dict(_D4_EXTRA_PARAMETERS[canonical])

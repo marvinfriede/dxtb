@@ -20,6 +20,7 @@ Catalogue of supported dispersion models, charge models, model metadata, and
 model-damping validation rules matching Grimme-lab ``dftd/model/catalogue.f90``
 and ``dftd/param.f90``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -377,6 +378,7 @@ def resolve_charge_model_id(
         raise _InvalidModelTypeError(
             f"Boolean value '{qmodel}' is not a valid charge model identifier."
         )
+    qid: ChargeModelId
     if isinstance(qmodel, ChargeModelId):
         if qmodel == ChargeModelId.EEQBC:
             raise NotImplementedError(
@@ -388,20 +390,20 @@ def resolve_charge_model_id(
         try:
             qid = ChargeModelId(qmodel)
         except ValueError as exc:
-            raise ValueError(
-                f"Unknown charge model ID '{qmodel}'."
-            ) from exc
+            raise ValueError(f"Unknown charge model ID '{qmodel}'.") from exc
         if qid == ChargeModelId.EEQBC:
             raise NotImplementedError(
                 "Charge model 'eeqbc' is not supported in this release "
                 "because the upstream model is not finalized."
             )
-    else:
+    elif isinstance(qmodel, str):
         key = qmodel.lower().strip()
         if key in ("eeqbc", "eeqbc2025"):
             raise NotImplementedError(
-                f"Charge model '{qmodel}' is not supported in this release "
-                "because the upstream model is not finalized."
+                "Charge model '{qmodel}' is not supported in this release "
+                "because the upstream model is not finalized.".format(
+                    qmodel=qmodel
+                )
             )
         if key not in CHARGE_MODELS:
             known = ", ".join(sorted(CHARGE_MODELS))
@@ -409,6 +411,11 @@ def resolve_charge_model_id(
                 f"Unknown charge model '{qmodel}'; expected one of: {known}."
             )
         qid = CHARGE_MODELS[key]
+    else:
+        raise _InvalidModelTypeError(
+            "Expected str, int, ChargeModelId, or None for 'qmodel', got "
+            f"'{type(qmodel).__name__}'."
+        )
 
     if not meta.allowed_qmodels:
         raise ValueError(
@@ -444,13 +451,14 @@ def validate_model_damping(
     """
     meta = get_model_metadata(model)
     if not isinstance(damping, str):
-        from ..damping.select import TWO_BODY_DAMPINGS
+        from ..damping.base import ThreeBodyDamping, TwoBodyDamping
+        from ..damping.select import identify_damping
 
-        matched: str | None = None
-        for name, cls in TWO_BODY_DAMPINGS:
-            if isinstance(damping, cls):
-                matched = name
-                break
+        matched = (
+            identify_damping(damping)
+            if isinstance(damping, (TwoBodyDamping, ThreeBodyDamping))
+            else None
+        )
         if matched is None:
             raise ValueError(
                 f"Unknown two-body damping '{type(damping).__name__}' for "
@@ -458,8 +466,13 @@ def validate_model_damping(
             )
         key = matched
     else:
+        from ..damping.select import get_damping_id
+
         key = damping.lower().strip()
-        key = _DAMPING_ALIASES.get(key, key)
+        try:
+            key = get_damping_id(key, three_body=False)
+        except ValueError:
+            key = _DAMPING_ALIASES.get(key, key)
     if key not in meta.allowed_dampings:
         allowed = ", ".join(meta.allowed_dampings)
         raise ValueError(

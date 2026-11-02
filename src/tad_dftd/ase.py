@@ -67,7 +67,6 @@ Example
 
 from __future__ import annotations
 
-import copy
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -104,9 +103,12 @@ from .damping import (
     Damping,
     DampingParam,
     PairData,
+    ThreeBodyDamping,
     TripleData,
     TwoBodyDamping,
     damping_from_name,
+    get_damping_id,
+    identify_damping,
 )
 from .disp import dftd
 from .model.catalogue import (
@@ -163,25 +165,6 @@ _ALLOWED_PARAM_KEYS = frozenset(
         "rsxc",
     }
 )
-
-_TWO_BODY_NAME_ALIASES: dict[str, str] = {
-    "bj": "rational",
-    "bjm": "rational",
-    "chg": "zero",
-    "d1": "fermi",
-    "d2": "fermi",
-    "zerom": "mzero",
-    "m-zero": "mzero",
-    "op": "optimizedpower",
-    "optpower": "optimizedpower",
-    "optimisedpower": "optimizedpower",
-    "opt-power": "optimizedpower",
-    "optimized-power": "optimizedpower",
-    "optimised-power": "optimizedpower",
-    "tang_toennies": "screened",
-    "z-damping": "z",
-    "koide-bjm": "koide",
-}
 
 _DTYPE_ALIASES: dict[str, torch.dtype] = {
     "float64": torch.float64,
@@ -309,8 +292,6 @@ def _validate_tweaks_mapping(
 
     cleaned: dict[str, float] = {}
     for key, value in raw_items.items():
-        if value is None:
-            continue
         if isinstance(value, bool):
             raise _InvalidTypeConfigurationError(
                 f"Damping parameter '{key}' must be a real number, not bool."
@@ -343,17 +324,49 @@ def _resolve_damping(
     method: str | None,
     damping_hint: Mapping[str, Any] | Damping | None,
     tweaks: Mapping[str, float],
-) -> tuple[Damping, str, str | bool, str | None]:
+) -> tuple[Damping, str | None, str | bool, str | None]:
     """
     Resolve the two-body and three-body damping objects from ``damping_hint``,
     ``model``, ``method``, and ``params_tweaks``.
 
+    Preserves user-supplied :class:`Damping`, :class:`TwoBodyDamping`, and
+    :class:`ThreeBodyDamping` instances while identifying their canonical
+    damping families for model validation and functional parameter lookup.
+
     Returns ``(damping, canonical_2b, canonical_3b_or_false, raw_2b_hint)``.
     """
     if isinstance(damping_hint, Damping):
-        validate_model_damping(model_id, damping_hint.two)
-        d2_name = meta.default_damping_2b
-        d3_spec: str | bool = damping_hint.three is not None
+        if not isinstance(damping_hint.two, TwoBodyDamping):
+            raise _InvalidTypeConfigurationError(
+                "Expected 'damping_hint.two' to be a TwoBodyDamping instance, "
+                f"got '{type(damping_hint.two).__name__}'."
+            )
+        if damping_hint.three is not None and not isinstance(
+            damping_hint.three, ThreeBodyDamping
+        ):
+            raise _InvalidTypeConfigurationError(
+                "Expected 'damping_hint.three' to be a ThreeBodyDamping instance "
+                f"or None, got '{type(damping_hint.three).__name__}'."
+            )
+
+        d2_name = identify_damping(damping_hint.two)
+        if d2_name is not None:
+            try:
+                validate_model_damping(model_id, d2_name)
+            except ValueError as exc:
+                raise _ConfigurationError(str(exc)) from exc
+        elif meta.name in ("d1", "d2"):
+            raise _ConfigurationError(
+                f"Custom two-body damping '{type(damping_hint.two).__name__}' is "
+                f"not supported for dispersion model '{meta.label}'."
+            )
+
+        if damping_hint.three is None:
+            d3_spec: str | bool = False
+        else:
+            d3_name = identify_damping(damping_hint.three)
+            d3_spec = d3_name if d3_name is not None else "custom"
+
         return damping_hint, d2_name, d3_spec, None
 
     if damping_hint is None:
@@ -368,31 +381,49 @@ def _resolve_damping(
         hint = dict(damping_hint)
     else:
         raise _InvalidTypeConfigurationError(
-            "Expected 'damping_hint' to be a mapping with keys '2b'/'3b' or None, "
-            f"got '{type(damping_hint).__name__}'."
+            "Expected 'damping_hint' to be a mapping with keys '2b'/'3b', a "
+            f"Damping instance, or None, got '{type(damping_hint).__name__}'."
         )
 
     raw_2b = hint.get("2b")
     raw_3b = hint.get("3b")
 
-    if raw_2b is not None:
-        if isinstance(raw_2b, bool) or not isinstance(
-            raw_2b, (str, TwoBodyDamping)
-        ):
-            raise _InvalidTypeConfigurationError(
-                f"Invalid '2b' damping hint '{raw_2b}'; expected a damping name string."
-            )
-        validate_model_damping(model_id, raw_2b)
-        if isinstance(raw_2b, str):
-            raw_2b_clean = raw_2b.lower().strip()
-            d2_name = _TWO_BODY_NAME_ALIASES.get(raw_2b_clean, raw_2b_clean)
-        else:
-            d2_name = meta.default_damping_2b
-            raw_2b_clean = None
-    else:
-        raw_2b_clean = None
+    two_obj: TwoBodyDamping | None = None
+    raw_2b_clean: str | None = None
+
+    if raw_2b is None:
         d2_name = meta.default_damping_2b
-        validate_model_damping(model_id, d2_name)
+        try:
+            validate_model_damping(model_id, d2_name)
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
+    elif not isinstance(raw_2b, bool) and isinstance(raw_2b, str):
+        raw_2b_clean = raw_2b.lower().strip()
+        try:
+            validate_model_damping(model_id, raw_2b_clean)
+            d2_name = get_damping_id(raw_2b_clean, three_body=False)
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
+    elif not isinstance(raw_2b, bool) and isinstance(raw_2b, TwoBodyDamping):
+        two_obj = raw_2b
+        d2_name = identify_damping(raw_2b)
+        if d2_name is not None:
+            try:
+                validate_model_damping(model_id, d2_name)
+            except ValueError as exc:
+                raise _ConfigurationError(str(exc)) from exc
+        elif meta.name in ("d1", "d2"):
+            raise _ConfigurationError(
+                f"Custom two-body damping '{type(raw_2b).__name__}' is "
+                f"not supported for dispersion model '{meta.label}'."
+            )
+    else:
+        raise _InvalidTypeConfigurationError(
+            f"Invalid '2b' damping hint '{raw_2b}'; expected a damping name "
+            "string or TwoBodyDamping instance."
+        )
+
+    three_obj: ThreeBodyDamping | None = None
 
     if raw_3b is not None:
         if raw_3b is False or (
@@ -405,11 +436,23 @@ def _resolve_damping(
             and raw_3b.lower().strip() in ("zero_avg", "zero-avg")
         ):
             d3_spec = "zero_d3" if meta.name in ("d3", "d3s") else "zero_d4"
-        elif isinstance(raw_3b, str):
-            d3_spec = raw_3b.lower().strip()
+        elif not isinstance(raw_3b, bool) and isinstance(raw_3b, str):
+            try:
+                d3_spec = get_damping_id(
+                    raw_3b.lower().strip(), three_body=True
+                )
+            except ValueError as exc:
+                raise _ConfigurationError(str(exc)) from exc
+        elif not isinstance(raw_3b, bool) and isinstance(
+            raw_3b, ThreeBodyDamping
+        ):
+            three_obj = raw_3b
+            d3_name = identify_damping(raw_3b)
+            d3_spec = d3_name if d3_name is not None else "custom"
         else:
             raise _InvalidTypeConfigurationError(
-                f"Invalid '3b' damping hint '{raw_3b}'; expected a damping name string or 'none'."
+                f"Invalid '3b' damping hint '{raw_3b}'; expected a damping name "
+                "string, ThreeBodyDamping instance, or 'none'."
             )
     else:
         # When "3b" is not explicitly hinted:
@@ -431,12 +474,23 @@ def _resolve_damping(
         else:
             d3_spec = False
 
-    try:
-        damping = damping_from_name(d2_name, d3_spec, model=meta.name)
-    except ValueError as exc:
-        raise _ConfigurationError(str(exc)) from exc
+    if two_obj is None:
+        assert d2_name is not None
+        try:
+            two_obj = damping_from_name(d2_name, False, model=meta.name).two
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
 
-    return damping, d2_name, d3_spec, raw_2b_clean
+    if three_obj is None and d3_spec is not False:
+        assert isinstance(d3_spec, str)
+        try:
+            three_obj = damping_from_name(
+                meta.default_damping_2b, d3_spec, model=meta.name
+            ).three
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
+
+    return Damping(two=two_obj, three=three_obj), d2_name, d3_spec, raw_2b_clean
 
 
 def _resolve_parameters(
@@ -444,7 +498,7 @@ def _resolve_parameters(
     method: str | None,
     tweaks: Mapping[str, float],
     damping: Damping,
-    d2_name: str,
+    d2_name: str | None,
     d3_spec: str | bool,
     raw_2b_hint: str | None,
     *,
@@ -455,19 +509,33 @@ def _resolve_parameters(
     Resolve damping parameters from functional name and/or explicit parameter
     overrides and validate completeness against the selected ``damping``.
     """
-    if method is not None and not isinstance(method, str):
-        raise _InvalidTypeConfigurationError(
-            f"Expected 'method' to be a functional name string or None, got '{type(method).__name__}'."
-        )
-
-    method_clean = method.strip() if isinstance(method, str) else ""
-    has_method = bool(method_clean)
+    if method is not None:
+        if not isinstance(method, str):
+            raise _InvalidTypeConfigurationError(
+                f"Expected 'method' to be a functional name string or None, got '{type(method).__name__}'."
+            )
+        method_clean = method.strip()
+        if not method_clean:
+            raise _ConfigurationError(
+                "Expected 'method' to be a non-empty functional name string or None."
+            )
+        has_method = True
+    else:
+        method_clean = ""
+        has_method = False
 
     if has_method:
         if meta.model_id == DispersionModelId.D4SREV:
             raise _ConfigurationError(
                 "No functional damping parameter tables are available for model "
                 "'d4srev'; provide explicit parameters via 'params_tweaks'."
+            )
+
+        if d2_name is None:
+            raise _ConfigurationError(
+                f"No {meta.label} functional parameters are available for custom "
+                f"two-body damping '{type(damping.two).__name__}'; provide "
+                "explicit parameters via 'params_tweaks' with 'method=None'."
             )
 
         if meta.name in ("d1", "d2"):
@@ -495,7 +563,7 @@ def _resolve_parameters(
                     f"No {meta.label} functional parameters are available for "
                     f"three-body damping '{d3_spec}'."
                 )
-            damping_lookup = raw_2b_hint if raw_2b_hint is not None else d2_name
+            damping_lookup = "bjm" if raw_2b_hint == "bjm" else d2_name
 
         elif meta.name in ("d4", "d4s"):
             if d2_name != "rational" or (
@@ -618,8 +686,6 @@ def _resolve_cutoff(
 
     converted: dict[str, float] = {}
     for key, val in realspace_cutoff.items():
-        if val is None:
-            continue
         if isinstance(val, bool) or not isinstance(val, Real):
             raise _InvalidTypeConfigurationError(
                 f"Cutoff '{key}' must be a real number in Angstrom, got '{type(val).__name__}'."
@@ -649,28 +715,36 @@ def _resolve_qmodel(
     meta: ModelMetadata,
 ) -> str | None:
     """Resolve and validate the reference charge model for ``model_id``."""
-    if meta.charge_dep_2b:
-        qid = resolve_charge_model_id(qmodel, model=model_id)
-        return qid.name.lower() if qid is not None else "eeq"
+    try:
+        if meta.charge_dep_2b:
+            qid = resolve_charge_model_id(qmodel, model=model_id)
+            return qid.name.lower() if qid is not None else "eeq"
 
-    # For charge-independent models (D1, D2, D3, D3S), ignore the default "eeq"
-    # setting, but reject excluded ("eeqbc") or explicitly non-default charge models.
-    if qmodel in (
-        None,
-        "eeq",
-        "eeq2019",
-        ChargeModelId.EEQ,
-        1,
-    ) and not isinstance(qmodel, bool):
+        # For charge-independent models (D1, D2, D3, D3S), ignore the default "eeq"
+        # setting, but reject excluded ("eeqbc") or explicitly non-default charge models.
+        if qmodel in (
+            None,
+            "eeq",
+            "eeq2019",
+            ChargeModelId.EEQ,
+            1,
+        ) and not isinstance(qmodel, bool):
+            return None
+
+        resolve_charge_model_id(qmodel, model=model_id)
         return None
-
-    resolve_charge_model_id(qmodel, model=model_id)
-    return None
+    except NotImplementedError:
+        raise
+    except TypeError as exc:
+        raise _InvalidTypeConfigurationError(str(exc)) from exc
+    except ValueError as exc:
+        raise _ConfigurationError(str(exc)) from exc
 
 
 def _resolve_charge_options(
     charge: Any,
     charges_key: Any,
+    qmodel: str | None,
     meta: ModelMetadata,
 ) -> tuple[float | None, str | None]:
     """Validate total charge and external atomic partial charges key."""
@@ -701,7 +775,135 @@ def _resolve_charge_options(
             )
         resolved_key = charges_key.strip()
 
+    if qmodel not in (None, "eeq") and resolved_key is None:
+        raise _ConfigurationError(
+            f"Charge model '{qmodel}' requires external atomic partial charges "
+            "via 'charges_key'."
+        )
+
     return resolved_charge, resolved_key
+
+
+def _resolve_config(
+    parameters: Mapping[str, Any],
+    *,
+    default_model: str | int | DispersionModelId = "d4",
+) -> _ResolvedConfig:
+    """Validate and resolve a calculator parameter mapping into an immutable :class:`_ResolvedConfig`."""
+    with torch.inference_mode(False):
+        compute_stress = parameters.get("compute_stress", True)
+        if not isinstance(compute_stress, bool):
+            raise _InvalidTypeConfigurationError(
+                f"Expected 'compute_stress' to be a bool, got '{type(compute_stress).__name__}'."
+            )
+
+        device = _resolve_device(parameters.get("device", "cpu"))
+        dtype = _resolve_dtype(parameters.get("dtype", torch.float64))
+
+        raw_model = parameters.get("model")
+        if raw_model is None:
+            raw_model = default_model
+        try:
+            model_id = resolve_model_id(raw_model)
+        except NotImplementedError:
+            raise
+        except TypeError as exc:
+            raise _InvalidTypeConfigurationError(str(exc)) from exc
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
+
+        meta = get_model_metadata(model_id)
+
+        qmodel = _resolve_qmodel(
+            parameters.get("qmodel", "eeq"), model_id, meta
+        )
+        charge, charges_key = _resolve_charge_options(
+            parameters.get("charge"),
+            parameters.get("charges_key"),
+            qmodel,
+            meta,
+        )
+        cutoff = _resolve_cutoff(parameters.get("realspace_cutoff"), meta)
+        tweaks = _validate_tweaks_mapping(parameters.get("params_tweaks"))
+
+        method = parameters.get("method")
+        damping, d2_name, d3_spec, raw_2b_hint = _resolve_damping(
+            model_id,
+            meta,
+            method if isinstance(method, str) and method.strip() else None,
+            parameters.get("damping_hint"),
+            tweaks,
+        )
+        dparam = _resolve_parameters(
+            meta,
+            method,
+            tweaks,
+            damping,
+            d2_name,
+            d3_spec,
+            raw_2b_hint,
+            device=device,
+            dtype=dtype,
+        )
+
+        return _ResolvedConfig(
+            model_id=model_id,
+            meta=meta,
+            damping=damping,
+            param=dparam,
+            cutoff=cutoff,
+            qmodel=qmodel,
+            device=device,
+            dtype=dtype,
+            charge=charge,
+            charges_key=charges_key,
+            compute_stress=compute_stress,
+        )
+
+
+def _copy_parameter_value(value: Any) -> Any:
+    """Copy mutable mapping containers while preserving object instances."""
+    if isinstance(value, Mapping):
+        return {k: _copy_parameter_value(v) for k, v in value.items()}
+    return value
+
+
+def _parameters_equal(old: Any, new: Any) -> bool:
+    """Compare two calculator parameter values safely for change detection."""
+    if old is new:
+        if isinstance(
+            new,
+            (
+                Damping,
+                TwoBodyDamping,
+                ThreeBodyDamping,
+                Cutoff,
+                DampingParam,
+            ),
+        ):
+            return False
+        return True
+    if type(old) is not type(new):
+        return False
+    if isinstance(old, Mapping) and isinstance(new, Mapping):
+        if old.keys() != new.keys():
+            return False
+        return all(_parameters_equal(old[k], new[k]) for k in old)
+    if isinstance(
+        old,
+        (
+            Damping,
+            TwoBodyDamping,
+            ThreeBodyDamping,
+            Cutoff,
+            DampingParam,
+        ),
+    ):
+        return False
+    try:
+        return bool(old == new)
+    except Exception:
+        return False
 
 
 def _resolve_total_charge(
@@ -1003,16 +1205,21 @@ class DFTD(Calculator):
     method : str | None, optional
         Density functional name for parameter lookup (e.g. ``"PBE"``, ``"B3LYP"``).
     model : str | int | DispersionModelId, optional
-        Dispersion model identifier (``"d1"``, ``"d2"``, ``"d3"``, ``"d3s"``,
-        ``"d4"``, ``"d4s"``, ``"d4srev"``). Defaults to ``"d4"``.
-    params_tweaks : Mapping[str, Any] | None, optional
+        Dispersion model identifier: string name (``"d1"``, ``"d2"``, ``"d3"``,
+        ``"d3s"``, ``"d4"``, ``"d4s"``, ``"d4srev"``), enum member, or integer
+        model ID (``D1=10``, ``D2=20``, ``D3=30``, ``D3S=31``, ``D4=40``,
+        ``D4S=41``, ``D4Srev=42``; ``D5=50`` is excluded). Defaults to ``"d4"``.
+    params_tweaks : Mapping[str, Any] | DampingParam | None, optional
         Explicit damping parameters or overrides applied on top of ``method``.
-    damping_hint : Mapping[str, Any] | None, optional
-        Optional dictionary with ``"2b"`` and/or ``"3b"`` damping names
-        (use ``{"3b": "none"}`` to disable the three-body ATM term).
+    damping_hint : Mapping[str, Any] | Damping | None, optional
+        Optional dictionary with ``"2b"`` (damping name or :class:`TwoBodyDamping`
+        instance) and/or ``"3b"`` (damping name, :class:`ThreeBodyDamping`
+        instance, or ``"none"`` to disable ATM), or a direct :class:`Damping`
+        instance.
     realspace_cutoff : Mapping[str, float] | Cutoff | None, optional
         Optional real-space cutoffs (``disp2``, ``disp3``, ``cn``, ``cn_eeq``,
-        ``width2``, ``width3``) in Angstrom.
+        ``width2``, ``width3``) in Angstrom, or a native :class:`Cutoff`
+        instance in Bohr.
     charge : float | int | None, optional
         Explicit total system charge for automatic EEQ evaluation. If ``None``,
         determined from ``atoms.get_initial_charges().sum()`` (defaulting to ``0.0``).
@@ -1099,7 +1306,9 @@ class DFTD(Calculator):
             if value is not self._UNSET:
                 init_kwargs[key] = value
 
-        super().__init__(atoms=atoms, **init_kwargs)
+        super().__init__(atoms=None, **init_kwargs)
+        if atoms is not None:
+            atoms.calc = self
 
     def add_calculator(self, other: Calculator) -> SumCalculator:
         """
@@ -1110,102 +1319,62 @@ class DFTD(Calculator):
 
     def _resolve_current_config(self) -> _ResolvedConfig:
         """Validate and resolve the current ``self.parameters`` dictionary."""
-        with torch.inference_mode(False):
-            params = self.parameters
-            compute_stress = params.get("compute_stress", True)
-            if not isinstance(compute_stress, bool):
-                raise _InvalidTypeConfigurationError(
-                    f"Expected 'compute_stress' to be a bool, got '{type(compute_stress).__name__}'."
-                )
-
-            device = _resolve_device(params.get("device", "cpu"))
-            dtype = _resolve_dtype(params.get("dtype", torch.float64))
-
-            raw_model = params.get("model")
-            if raw_model is None:
-                raw_model = self.default_parameters["model"]
-            model_id = resolve_model_id(raw_model)
-            meta = get_model_metadata(model_id)
-
-            qmodel = _resolve_qmodel(
-                params.get("qmodel", "eeq"), model_id, meta
-            )
-            charge, charges_key = _resolve_charge_options(
-                params.get("charge"), params.get("charges_key"), meta
-            )
-            cutoff = _resolve_cutoff(params.get("realspace_cutoff"), meta)
-            tweaks = _validate_tweaks_mapping(params.get("params_tweaks"))
-
-            method = params.get("method")
-            damping, d2_name, d3_spec, raw_2b_hint = _resolve_damping(
-                model_id,
-                meta,
-                method if isinstance(method, str) and method.strip() else None,
-                params.get("damping_hint"),
-                tweaks,
-            )
-            dparam = _resolve_parameters(
-                meta,
-                method,
-                tweaks,
-                damping,
-                d2_name,
-                d3_spec,
-                raw_2b_hint,
-                device=device,
-                dtype=dtype,
-            )
-
-            return _ResolvedConfig(
-                model_id=model_id,
-                meta=meta,
-                damping=damping,
-                param=dparam,
-                cutoff=cutoff,
-                qmodel=qmodel,
-                device=device,
-                dtype=dtype,
-                charge=charge,
-                charges_key=charges_key,
-                compute_stress=compute_stress,
-            )
+        return _resolve_config(
+            self.parameters,
+            default_model=self.default_parameters["model"],
+        )
 
     def set(self, **kwargs: Any) -> dict[str, Any]:
-        """Set calculator parameters, defensively copying mutable mappings and resetting results."""
+        """
+        Transactionally validate and apply calculator parameter updates,
+        defensively copying mutable mappings and resetting cached results on change.
+        """
         unknown = sorted(set(kwargs) - set(self.default_parameters))
         if unknown:
             raise _InvalidTypeConfigurationError(
                 f"Unexpected keyword argument(s) for DFTD calculator: {', '.join(unknown)}."
             )
 
-        copied_kwargs: dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, Mapping):
-                copied_kwargs[key] = copy.deepcopy(dict(value))
-            else:
-                copied_kwargs[key] = copy.deepcopy(value)
-
-        # Force change detection if a mapping parameter is updated, even if the
-        # user mutated an previously passed dict in place before calling set().
-        prev_snapshot = {
-            k: copy.deepcopy(self.parameters.get(k)) for k in copied_kwargs
+        copied_kwargs = {
+            key: _copy_parameter_value(value) for key, value in kwargs.items()
         }
-        changed_parameters = super().set(**copied_kwargs)
-        for key, val in copied_kwargs.items():
-            if key not in changed_parameters and prev_snapshot.get(key) != val:
-                changed_parameters[key] = val
+        current_params = (
+            dict(self.parameters)
+            if getattr(self, "parameters", None) is not None
+            else dict(self.default_parameters)
+        )
+        candidate_params = {
+            **self.default_parameters,
+            **current_params,
+            **copied_kwargs,
+        }
 
-        # Always copy any mapping stored in self.parameters so external mutation
-        # of user dicts cannot silently alter internal state.
+        new_resolved_config = _resolve_config(
+            candidate_params,
+            default_model=self.default_parameters["model"],
+        )
+
+        had_prev_config = self._resolved_config is not None
+        changed_parameters: dict[str, Any] = {}
+        for key, val in copied_kwargs.items():
+            old_val = self.parameters.get(key)
+            if (
+                not had_prev_config
+                or key not in self.parameters
+                or not _parameters_equal(old_val, val)
+            ):
+                changed_parameters[key] = val
+            self.parameters[key] = val
+
         for key in ("params_tweaks", "damping_hint", "realspace_cutoff"):
             val = self.parameters.get(key)
             if isinstance(val, Mapping):
-                self.parameters[key] = copy.deepcopy(dict(val))
+                self.parameters[key] = _copy_parameter_value(val)
 
-        self._resolved_config = self._resolve_current_config()
+        self._resolved_config = new_resolved_config
 
         base_props = list(type(self).implemented_properties)
-        if not self._resolved_config.compute_stress:
+        if not new_resolved_config.compute_stress:
             self.implemented_properties = [
                 p for p in base_props if p != "stress"
             ]
@@ -1317,9 +1486,12 @@ class DFTD(Calculator):
                 self._resolved_config,
                 set(requested_props),
             )
-        except Exception:
+        except _StressNotDefinedError:
             if not had_cached_results:
                 self.reset()
+            raise
+        except Exception:
+            self.reset()
             raise
 
         if had_cached_results:
