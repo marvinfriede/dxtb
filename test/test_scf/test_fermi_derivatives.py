@@ -80,7 +80,6 @@ def _setup(name: str, ktemp: float, mode: str, steps: int | None = None):
         "fermi_etemp": ktemp,
         "fermi_maxiter": 500,
         "fermi_thresh": 1e-12,
-        "f_atol": 1e-10,
         "x_atol": 1e-10,
         "scf_mode": mode,
         "verbosity": 0,

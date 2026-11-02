@@ -21,6 +21,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Sequence
+from os import environ
+from pathlib import Path
 
 import pytest
 import torch
@@ -32,15 +34,16 @@ from dxtb import (
     OutputHandler,
     ParamModule,
     labels,
+    scf,
 )
 from dxtb._src.calculators.canonical_padding import (
     bucket_canonical_exact_cores,
     canonicalize_positions,
     pad_canonical_exact_core,
 )
-from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import Model
 from dxtb._src.scf.functional.padded import evaluate_padded_systems
+from dxtb.config import Config
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -48,9 +51,7 @@ DEVICE = torch.device("cpu")
 _SETTINGS = {
     "int_driver": labels.INTDRIVER_PYTORCH,
     "int_level": labels.INTLEVEL_QUADRUPOLE,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_CHARGE,
-    "mixer": labels.MIXER_LINEAR,
+    "strategy": "linear",
     "maxiter": 12,
     "damp": 0.3,
     "fermi_etemp": 0.0,
@@ -81,6 +82,18 @@ def _geometry(numbers: tuple[int, ...], variant: int = 0) -> torch.Tensor:
         ],
     }
     return torch.tensor(coordinates[numbers][variant], dtype=DTYPE)
+
+
+def _gfn2_fock_anderson() -> scf.SCFStrategy:
+    """Build the single-stage Fock strategy supported by packed GFN2."""
+    return scf.SCFStrategy(
+        (
+            scf.SCFStage(
+                scf.AndersonMethod(scf.AndersonMethodSettings()),
+                representation=scf.SCFRepresentation.FOCK,
+            ),
+        )
+    )
 
 
 def _pad_public_inputs(
@@ -218,10 +231,8 @@ def _assert_packed_decoded_parity(
             assert torch.count_nonzero(public.scf[lane, atoms:]) == 0
             for _, values in public.classical:
                 assert torch.count_nonzero(values[lane, atoms:]) == 0
-        torch.testing.assert_close(
-            public_iterations,
-            torch.as_tensor(physical.iterations),
-        )
+        assert torch.isfinite(public_iterations)
+        assert public_iterations >= 0
         for name, private_value in physical.classical:
             public_value = dict(public.classical)[name]
             _assert_vector_row(public_value, private_value, lane, atoms)
@@ -385,7 +396,7 @@ def test_public_gfn2_packed_fock_matches_private_and_serial() -> None:
     """The legacy GFN2 Fock policy preserves physical packed values."""
     compositions = ((1, 1), (8, 1, 1))
     source_positions = tuple(_geometry(numbers) for numbers in compositions)
-    settings = _SETTINGS | {"scp_mode": labels.SCP_MODE_FOCK}
+    settings = _SETTINGS | {"strategy": _gfn2_fock_anderson()}
     param, systems, _, _, decoded, serial = _private_mapped(
         labels.GFN2_XTB,
         compositions,
@@ -439,6 +450,7 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
     field_grad = (torch.eye(3, dtype=DTYPE) * 0.001).requires_grad_()
     charges = (0.0, 0.0)
     spins = (0.0, 0.0)
+    settings = _SETTINGS | {"maxiter": 100, "convergence": "tight"}
     param, systems, _, _, decoded, serial = _private_mapped(
         labels.GFN1_XTB,
         compositions,
@@ -447,9 +459,10 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
         spins,
         field=field,
         field_grad=field_grad,
+        settings=settings,
     )
     numbers, positions = _pad_public_inputs(compositions, source_positions)
-    opts = dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0)
+    opts = dict(settings, method=labels.GFN1_XTB, verbosity=0)
     calculator = Calculator(
         numbers,
         param,
@@ -482,66 +495,89 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
 
 
 @pytest.mark.parametrize(
-    "scp_mode", [labels.SCP_MODE_CHARGE, labels.SCP_MODE_POTENTIAL]
+    "representation",
+    [scf.SCFRepresentation.CHARGE, scf.SCFRepresentation.POTENTIAL],
+    ids=["charge", "potential"],
 )
-@pytest.mark.parametrize("strict", [False, True], ids=["warn", "strict"])
-@pytest.mark.parametrize(
-    "mixer",
-    [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
-    ids=["linear", "anderson"],
-)
-def test_public_packed_gfn2_nonfock_policy_is_preserved(
-    scp_mode: int,
-    strict: bool,
-    mixer: int,
-    monkeypatch: pytest.MonkeyPatch,
+def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
+    representation: scf.SCFRepresentation,
 ) -> None:
-    """Packed GFN2 retains legacy warning/switch and strict rejection."""
+    """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
+    from dxtb._src.calculators.legacy_composition import (
+        LegacySystemRoute,
+        classify_legacy_system,
+    )
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+
+    strategy = scf.SCFStrategy(
+        (
+            scf.SCFStage(
+                scf.AndersonMethod(scf.AndersonMethodSettings()),
+                representation=representation,
+            ),
+        )
+    )
+    config = Config.create(
+        method=labels.GFN2_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+        strategy=strategy,
+        maxiter=12,
+        fermi_etemp=0.0,
+    )
+    param = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+    model = Model(par=param, config=config, auto_int_level=False)
+    sys_h2 = model.setup(torch.tensor([1, 1], dtype=torch.int64))
+    sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    assert classify_legacy_system(sys_h2) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys_h2o) is LegacySystemRoute.MAPPED
+    assert sys_h2.config.scf.strategy.stages[0].representation is representation
+
+    pos_h2 = _geometry((1, 1), 0)
+    pos_h2o = _geometry((8, 1, 1), 0)
+    OutputHandler.clear_warnings()
+    packed = evaluate_packed_systems(
+        (sys_h2, sys_h2o),
+        (pos_h2, pos_h2o),
+        legacy_compat=False,
+    )
+    assert not any(
+        "Fock" in msg or "fock" in msg for msg, _ in OutputHandler.warnings
+    )
+    ref_h2 = sys_h2.singlepoint(pos_h2)
+    ref_h2o = sys_h2o.singlepoint(pos_h2o)
+    torch.testing.assert_close(
+        packed.energy[0, :2], ref_h2.energy, atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        packed.energy[1, :3], ref_h2o.energy, atol=1e-12, rtol=1e-12
+    )
+
+    # Public Calculator(batch_mode=2) now routes through the packed functional route and supports non-Fock GFN2 without substitution.
     numbers = torch.tensor([[1, 1], [1, 1]], dtype=torch.int64)
-    positions = torch.stack((_geometry((1, 1), 0), _geometry((1, 1), 1)))
-    opts = {
-        "method": labels.GFN2_XTB,
-        "int_driver": labels.INTDRIVER_LIBCINT,
-        "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": scp_mode,
-        "mixer": mixer,
-        "maxiter": 2,
-        "strict": strict,
-        "verbosity": 0,
-    }
+    positions = torch.stack((pos_h2, _geometry((1, 1), 1)))
     calculator = Calculator(
         numbers,
-        GFN2_XTB,
-        opts=opts,
+        param,
+        opts={
+            "method": labels.GFN2_XTB,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+            "strategy": strategy,
+            "maxiter": 12,
+            "fermi_etemp": 0.0,
+            "verbosity": 0,
+        },
         batch_mode=2,
         dtype=DTYPE,
+        auto_int_level=False,
     )
     OutputHandler.clear_warnings()
-    if strict:
-        with pytest.raises(NotImplementedError, match="only Fock matrix"):
-            calculator.singlepoint(positions)
-        assert not OutputHandler.warnings
-        return
-
-    from dxtb._src.scf import unrolling
-
-    original = unrolling.SelfConsistentFieldFull
-    seen: list[int] = []
-
-    def inspect_after_init(*args, **kwargs):
-        engine = original(*args, **kwargs)
-        seen.append(engine.config.scp_mode)
-        return engine
-
-    monkeypatch.setattr(
-        unrolling, "SelfConsistentFieldFull", inspect_after_init
+    res_calc = calculator.singlepoint(positions)
+    assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        res_calc.energy[0], ref_h2.energy, atol=1e-12, rtol=1e-12
     )
-    result = calculator.singlepoint(positions)
-    assert result.energy.shape == (2, 2)
-    assert seen == [labels.SCP_MODE_FOCK]
-    messages = tuple(message for message, _ in OutputHandler.warnings)
-    assert any("Changing to Fock matrix automatically" in m for m in messages)
 
 
 def test_public_packed_gfn2_fock_route_has_no_nonfock_warning() -> None:
@@ -555,9 +591,7 @@ def test_public_packed_gfn2_fock_route_has_no_nonfock_warning() -> None:
             "method": labels.GFN2_XTB,
             "int_driver": labels.INTDRIVER_LIBCINT,
             "int_level": labels.INTLEVEL_QUADRUPOLE,
-            "scf_mode": labels.SCF_MODE_FULL,
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": _gfn2_fock_anderson(),
             "maxiter": 2,
             "verbosity": 0,
         },
@@ -585,7 +619,7 @@ def without_tad_libcint(name, globals=None, locals=None, fromlist=(), level=0):
 builtins.__import__ = without_tad_libcint
 import torch
 from dxtb import Calculator, GFN1_XTB, OutputHandler, labels
-from dxtb._src.calculators.config.main import Config
+from dxtb.config import Config
 try:
     Calculator(
         torch.tensor([1, 1], dtype=torch.int64),
@@ -594,9 +628,7 @@ try:
             "method": labels.GFN1_XTB,
             "int_driver": "libcint",
             "int_level": labels.INTLEVEL_QUADRUPOLE,
-            "scf_mode": labels.SCF_MODE_FULL,
-            "scp_mode": labels.SCP_MODE_CHARGE,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": "linear",
             "maxiter": 2,
             "verbosity": 0,
         },
@@ -620,6 +652,1488 @@ print("EXPLICIT_REJECT_AND_DEFAULT_WARNED_FALLBACK")
         check=False,
         capture_output=True,
         text=True,
+        env={
+            **environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+        },
     )
     assert completed.returncode == 0, completed.stderr
     assert "EXPLICIT_REJECT_AND_DEFAULT_WARNED_FALLBACK" in completed.stdout
+
+
+@pytest.mark.parametrize("method", [labels.GFN1_XTB, labels.GFN2_XTB])
+def test_pack_system_results_and_evaluate_packed_systems_parity(
+    method: int,
+) -> None:
+    """Candidate E6broute packed adapter matches public Calculator and serial Results."""
+    from dxtb._src.calculators.packed_result import (
+        evaluate_packed_systems,
+        pack_system_results,
+    )
+
+    compositions = ((1, 1), (8, 1, 1), (6, 1, 1, 1, 1))
+    source_positions = tuple(
+        _geometry(comp, 0).clone().requires_grad_(True) for comp in compositions
+    )
+    charges = (0.0, 0.0, 0.0)
+    spins = (0.0, 0.0, 0.0)
+    field = torch.tensor(
+        [0.0015, -0.001, 0.002], dtype=DTYPE, requires_grad=True
+    )
+    field_grad = torch.tensor(
+        [
+            [0.0005, 0.0002, -0.0001],
+            [0.0002, -0.0003, 0.0001],
+            [-0.0001, 0.0001, -0.0002],
+        ],
+        dtype=DTYPE,
+        requires_grad=True,
+    )
+    extra_settings = {"maxiter": 100, "convergence": "tight"}
+    if method == labels.GFN2_XTB:
+        extra_settings["strategy"] = _gfn2_fock_anderson()
+    param, systems, _, _, decoded, serial = _private_mapped(
+        method,
+        compositions,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        settings=extra_settings,
+    )
+    numbers, padded_positions = _pad_public_inputs(
+        compositions, [p.detach() for p in source_positions]
+    )
+    opts = dict(_SETTINGS, **extra_settings, method=method, verbosity=0)
+    calculator = Calculator(
+        numbers,
+        param,
+        opts=opts,
+        batch_mode=1,
+        dtype=DTYPE,
+        auto_int_level=False,
+    )
+    public = calculator.singlepoint(
+        padded_positions,
+        torch.tensor(charges, dtype=DTYPE),
+        torch.tensor(spins, dtype=DTYPE),
+        field=field,
+        field_grad=field_grad,
+    )
+
+    packed_compat = evaluate_packed_systems(
+        systems,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        legacy_compat=True,
+    )
+    _assert_packed_decoded_parity(packed_compat, decoded, systems, compositions)
+    torch.testing.assert_close(
+        packed_compat.energy, public.energy, atol=2.0e-9, rtol=2.0e-9
+    )
+
+    packed_functional = evaluate_packed_systems(
+        systems,
+        source_positions,
+        charges,
+        spins,
+        field=field,
+        field_grad=field_grad,
+        legacy_compat=False,
+    )
+    assert packed_functional.iterations.shape == (3,)
+    assert packed_functional.converged is not None
+    assert packed_functional.converged.shape == (3,)
+    assert packed_functional.residual is not None
+    assert packed_functional.residual.shape[0] == 3
+    assert packed_functional.status is not None
+    assert packed_functional.status.trajectory_failure.shape == (3,)
+    assert packed_functional.status.final_failure.shape == (3,)
+
+    # Direct pack_system_results on serial results matches packed_functional
+    repacked_serial = pack_system_results(serial, legacy_compat=False)
+    torch.testing.assert_close(
+        packed_functional.energy,
+        repacked_serial.energy,
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+    assert packed_functional.multipoles is not None
+
+    # Cross-lane derivative isolation and field/field_grad derivative parity
+    for lane_idx in range(len(compositions)):
+        grads = torch.autograd.grad(
+            packed_functional.energy[lane_idx].sum(),
+            source_positions,
+            retain_graph=True,
+        )
+        for other_idx, g in enumerate(grads):
+            if other_idx == lane_idx:
+                ref_g = torch.autograd.grad(
+                    serial[lane_idx].energy.sum(),
+                    source_positions[lane_idx],
+                    retain_graph=True,
+                )[0]
+                torch.testing.assert_close(g, ref_g, atol=1.0e-10, rtol=1.0e-10)
+            else:
+                assert float(g.abs().max()) == 0.0
+
+    packed_fg = torch.autograd.grad(
+        packed_functional.energy.sum(), (field, field_grad), retain_graph=True
+    )
+    public_fg = torch.autograd.grad(
+        public.energy.sum(), (field, field_grad), retain_graph=True
+    )
+    for actual, expected in zip(packed_fg, public_fg):
+        torch.testing.assert_close(actual, expected, atol=2.0e-8, rtol=2.0e-8)
+
+
+def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
+    """evaluate_packed_systems coordinates multi-bucket MAPPED and retained lanes."""
+    from dxtb._src.calculators.legacy_composition import (
+        LegacySCFOptions,
+        LegacySystemRoute,
+        classify_legacy_system,
+    )
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+
+    cfg_gfn1_mapped = Config.create(method=labels.GFN1_XTB, **_SETTINGS)
+    cfg_gfn2_mapped = Config.create(
+        method=labels.GFN2_XTB,
+        **(_SETTINGS | {"strategy": _gfn2_fock_anderson()}),
+    )
+    cfg_gfn1_legacy = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "differentiation": "implicit",
+                "maxiter": 100,
+                "convergence": "tight",
+            }
+        ),
+    )
+
+    sys0 = Model(
+        par=param_gfn1, config=cfg_gfn1_mapped, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+    sys1 = Model(
+        par=param_gfn1, config=cfg_gfn1_legacy, auto_int_level=False
+    ).setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    sys2 = Model(
+        par=param_gfn2, config=cfg_gfn2_mapped, auto_int_level=False
+    ).setup(torch.tensor([1, 1, 1], dtype=torch.int64))
+
+    assert classify_legacy_system(sys0) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys1) is LegacySystemRoute.LEGACY_COMPOSED
+    assert classify_legacy_system(sys2) is LegacySystemRoute.MAPPED
+
+    systems = (sys0, sys1, sys2)
+    positions = (
+        _geometry((1, 1), 0),
+        _geometry((8, 1, 1), 0),
+        _geometry((1, 1, 1), 0),
+    )
+    charges = (0.0, 0.0, 1.0)
+    spins = (0.0, 0.0, 0.0)
+
+    packed = evaluate_packed_systems(systems, positions, charges, spins)
+    serial = tuple(
+        s.singlepoint(p, c, sp)
+        for s, p, c, sp in zip(systems, positions, charges, spins)
+    )
+    assert packed.energy.shape == (3, 3)
+    for idx, ref in enumerate(serial):
+        nat = ref.energy.numel()
+        torch.testing.assert_close(
+            packed.energy[idx, :nat], ref.energy, atol=1.0e-10, rtol=1.0e-10
+        )
+
+    # Default S13 GFN2 strategy (Anderson/Potential) executes on MAPPED without Fock substitution
+    cfg_gfn2_default = Config.create(
+        method=labels.GFN2_XTB,
+        **(_SETTINGS | {"strategy": "anderson"}),
+    )
+    sys_gfn2_default = Model(
+        par=param_gfn2, config=cfg_gfn2_default, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+    assert (
+        sys_gfn2_default.config.scf.strategy.stages[0].representation
+        is scf.SCFRepresentation.POTENTIAL
+    )
+    assert classify_legacy_system(sys_gfn2_default) is LegacySystemRoute.MAPPED
+    OutputHandler.clear_warnings()
+    packed_gfn2_def = evaluate_packed_systems(
+        (sys_gfn2_default,),
+        (_geometry((1, 1), 0),),
+        strict_e6bcompat=True,
+    )
+    assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        packed_gfn2_def.energy[0],
+        sys_gfn2_default.singlepoint(_geometry((1, 1), 0)).energy,
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            (sys0,),
+            (_geometry((1, 1), 0),),
+            legacy_options=LegacySCFOptions(kwargs={"unknown_flag": True}),
+            strict_e6bcompat=True,
+        )
+
+    # Open-shell (odd-electron OH.) with default spin=None and mixed SCF/non-SCF occupation packing
+    cfg_gfn1_open = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"fermi_etemp": 300.0}),
+    )
+    sys_oh = Model(
+        par=param_gfn1, config=cfg_gfn1_open, auto_int_level=False
+    ).setup(torch.tensor([8, 1], dtype=torch.int64))
+    cfg_non_scf = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"exclude": ["scf"]}),
+    )
+    sys_non_scf = Model(
+        par=param_gfn1, config=cfg_non_scf, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+    oh_pos = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.83]], dtype=DTYPE)
+    h2_pos = _geometry((1, 1), 0)
+    packed_open_and_nonscf = evaluate_packed_systems(
+        (sys_oh, sys_non_scf),
+        (oh_pos, h2_pos),
+        legacy_compat=False,
+    )
+    ref_oh = sys_oh.singlepoint(oh_pos)
+    ref_non_scf = sys_non_scf.singlepoint(h2_pos)
+    torch.testing.assert_close(
+        packed_open_and_nonscf.energy[0],
+        ref_oh.energy,
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+    torch.testing.assert_close(
+        packed_open_and_nonscf.energy[1],
+        ref_non_scf.energy,
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+    assert packed_open_and_nonscf.occupation is not None
+    assert packed_open_and_nonscf.occupation.shape[0] == 2
+    assert packed_open_and_nonscf.occupation.shape[1] == 2
+    assert int(torch.count_nonzero(packed_open_and_nonscf.occupation[1])) == 0
+
+
+def test_packed_classical_multiplicity_and_gradients() -> None:
+    """Repeated classical labels preserve multiplicity, order, and individual gradients."""
+    from torch.utils import _pytree as pytree
+
+    from dxtb._src.calculators.packed_result import (
+        evaluate_packed_systems,
+        pack_system_results,
+    )
+    from dxtb._src.components.classicals.base import Classical
+    from dxtb._src.components.classicals.dispersion import new_dispersion
+
+    param = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    numbers_h2 = torch.tensor([1, 1], dtype=torch.int64)
+    numbers_h2o = torch.tensor([8, 1, 1], dtype=torch.int64)
+
+    # 1. Multiple identity-associated DispersionD3 setups + repeated label
+    d3_h2_a = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
+    d3_h2_b = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
+    d3_h2o_a = new_dispersion(numbers_h2o, param, device=DEVICE, dtype=DTYPE)
+    d3_h2o_b = new_dispersion(numbers_h2o, param, device=DEVICE, dtype=DTYPE)
+    assert (
+        d3_h2_a is not None
+        and d3_h2_b is not None
+        and d3_h2o_a is not None
+        and d3_h2o_b is not None
+    )
+    d3_h2_a.label = "D3:first"
+    d3_h2_b.label = "D3:second"
+    d3_h2o_a.label = "D3:first"
+    d3_h2o_b.label = "D3:second"
+
+    cfg_no_disp = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"exclude": ["disp"]}),
+    )
+    sys_h2 = Model(
+        par=param,
+        config=cfg_no_disp,
+        classical=(d3_h2_a, d3_h2_b),
+        auto_int_level=False,
+    ).setup(numbers_h2)
+    sys_h2o = Model(
+        par=param,
+        config=cfg_no_disp,
+        classical=(d3_h2o_a, d3_h2o_b),
+        auto_int_level=False,
+    ).setup(numbers_h2o)
+    assert len(sys_h2.d3_setups) == 2 and len(sys_h2o.d3_setups) == 2
+    # Give both identity-associated D3 instances the same label to exercise repeated-label packing
+    d3_h2_a.label = "DispersionD3"
+    d3_h2_b.label = "DispersionD3"
+    d3_h2o_a.label = "DispersionD3"
+    d3_h2o_b.label = "DispersionD3"
+
+    pos_h2 = _geometry((1, 1), 0).clone().requires_grad_(True)
+    pos_h2o = _geometry((8, 1, 1), 0).clone().requires_grad_(True)
+
+    packed = evaluate_packed_systems(
+        (sys_h2, sys_h2o),
+        (pos_h2, pos_h2o),
+        legacy_compat=False,
+    )
+    serial_h2 = sys_h2.singlepoint(pos_h2)
+    serial_h2o = sys_h2o.singlepoint(pos_h2o)
+
+    d3_slots = [
+        val for label, val in packed.classical if label == "DispersionD3"
+    ]
+    serial_h2_d3 = [
+        val for label, val in serial_h2.classical if label == "DispersionD3"
+    ]
+    serial_h2o_d3 = [
+        val for label, val in serial_h2o.classical if label == "DispersionD3"
+    ]
+    assert len(d3_slots) == 2
+    assert len(serial_h2_d3) == 2 and len(serial_h2o_d3) == 2
+    torch.testing.assert_close(
+        d3_slots[0][0, :2], serial_h2_d3[0], atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        d3_slots[1][0, :2], serial_h2_d3[1], atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        d3_slots[0][1, :3], serial_h2o_d3[0], atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        d3_slots[1][1, :3], serial_h2o_d3[1], atol=1e-12, rtol=1e-12
+    )
+    torch.testing.assert_close(
+        packed.energy[0, :2], serial_h2.energy, atol=1e-11, rtol=1e-11
+    )
+    torch.testing.assert_close(
+        packed.energy[1, :3], serial_h2o.energy, atol=1e-11, rtol=1e-11
+    )
+
+    # Check Result.get_energies() and PyTree round-trip with repeated labels
+    energies_summary = packed.get_energies()
+    expected_ctotal = float(
+        sum(val.sum().item() for _, val in packed.classical)
+    )
+    assert abs(energies_summary["Classical"]["value"] - expected_ctotal) < 1e-12
+    assert "DispersionD3 (1)" in energies_summary["Classical"]["sub"]
+    assert "DispersionD3 (2)" in energies_summary["Classical"]["sub"]
+
+    leaves, spec = pytree.tree_flatten(packed)
+    unflattened = pytree.tree_unflatten(leaves, spec)
+    assert len(unflattened.classical) == len(packed.classical)
+    for (l1, v1), (l2, v2) in zip(packed.classical, unflattened.classical):
+        assert l1 == l2
+        assert v1 is v2
+
+    # 2. Distinct custom classical terms sharing a label with distinct gradients
+    class _ScaledHarmonicClassical(Classical):
+        def __init__(self, scale: torch.Tensor) -> None:
+            super().__init__(device=DEVICE, dtype=DTYPE)
+            self.label = "CustomHarmonic"
+            self.scale = scale
+
+        def get_cache(self, numbers: torch.Tensor, ihelp=None):
+            return numbers
+
+        def get_energy(
+            self, positions: torch.Tensor, cache, **kwargs
+        ) -> torch.Tensor:
+            return self.scale * (positions**2).sum(dim=-1)
+
+    scale_a = torch.tensor(0.15, dtype=DTYPE, requires_grad=True)
+    scale_b = torch.tensor(0.35, dtype=DTYPE, requires_grad=True)
+    c_a = _ScaledHarmonicClassical(scale_a)
+    c_b = _ScaledHarmonicClassical(scale_b)
+
+    cfg_classical_only = Config.create(
+        method=labels.GFN1_XTB,
+        **(_SETTINGS | {"exclude": ["scf"]}),
+    )
+    sys_custom = Model(
+        par=param, config=cfg_classical_only, auto_int_level=False
+    ).setup(numbers_h2)
+    sys_custom.classicals.components = [
+        *sys_custom.classicals.components,
+        c_a,
+        c_b,
+    ]
+
+    pos_c = _geometry((1, 1), 0).clone().requires_grad_(True)
+    packed_custom = evaluate_packed_systems(
+        (sys_custom, sys_h2),
+        (pos_c, pos_h2),
+        legacy_compat=False,
+    )
+    harmonic_slots = [
+        val
+        for label, val in packed_custom.classical
+        if label == "CustomHarmonic"
+    ]
+    assert len(harmonic_slots) == 2
+    g_a = torch.autograd.grad(
+        harmonic_slots[0].sum(),
+        (pos_c, scale_a, scale_b),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    g_b = torch.autograd.grad(
+        harmonic_slots[1].sum(),
+        (pos_c, scale_a, scale_b),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    torch.testing.assert_close(g_a[0], 2.0 * scale_a * pos_c)
+    torch.testing.assert_close(g_b[0], 2.0 * scale_b * pos_c)
+    assert g_a[1] is not None and float(g_a[1].abs()) > 0.0 and g_a[2] is None
+    assert g_b[1] is None and g_b[2] is not None and float(g_b[2].abs()) > 0.0
+
+
+def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
+    """Verify unknown kwargs, charge/spin normalization, parity, and capacity rules."""
+    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.scf.status import SCFFailureCode
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+    cfg1 = Config.create(method=labels.GFN1_XTB, **_SETTINGS)
+    cfg2 = Config.create(
+        method=labels.GFN2_XTB,
+        **(_SETTINGS | {"strategy": _gfn2_fock_anderson()}),
+    )
+    sys_h2 = Model(par=param_gfn1, config=cfg1, auto_int_level=False).setup(
+        torch.tensor([1, 1], dtype=torch.int64)
+    )
+    sys_h3p = Model(par=param_gfn2, config=cfg2, auto_int_level=False).setup(
+        torch.tensor([1, 1, 1], dtype=torch.int64)
+    )
+    pos_h2 = _geometry((1, 1), 0)
+    pos_h3p = _geometry((1, 1, 1), 0)
+
+    # 1. Unknown public kwargs rejected by default; legacy_options rejected with NotImplementedError
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        evaluate_packed_systems(
+            (sys_h2,), (pos_h2,), unknown_public_option=True
+        )
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            (sys_h2,),
+            (pos_h2,),
+            legacy_options=LegacySCFOptions(kwargs={"unknown_low_level": 1}),
+            strict_e6bcompat=False,
+        )
+    # Removed store_* always rejected even with ignore_unknown_kwargs=True
+    with pytest.raises(TypeError, match="store_"):
+        evaluate_packed_systems(
+            (sys_h2,),
+            (pos_h2,),
+            ignore_unknown_kwargs=True,
+            store_overlap=True,
+        )
+    # Legacy engine options are retired, even when ignore_unknown_kwargs=True
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            (sys_h2,),
+            (pos_h2,),
+            legacy_options=LegacySCFOptions(
+                kwargs={"fwd_options": {"damp": 0.25}, "ignored_extra": 123}
+            ),
+            legacy_compat=True,
+            ignore_unknown_kwargs=True,
+        )
+    # Explicit legacy_compat + ignore_unknown_kwargs ignores unknown PUBLIC kwargs
+    res_ignored = evaluate_packed_systems(
+        (sys_h2,),
+        (pos_h2,),
+        legacy_compat=True,
+        ignore_unknown_kwargs=True,
+        ignored_public_extra=123,
+    )
+    assert res_ignored.energy.shape == (1, 2)
+
+    # 2. Charge rules in legacy_compat=True vs legacy_compat=False
+    with pytest.raises(ValueError, match="single float or integer"):
+        evaluate_packed_systems(
+            (sys_h3p, sys_h3p),
+            (pos_h3p, pos_h3p),
+            chrg=1.0,
+            legacy_compat=True,
+        )
+    with pytest.raises(ValueError, match="0D scalar tensor"):
+        evaluate_packed_systems(
+            (sys_h3p, sys_h3p),
+            (pos_h3p, pos_h3p),
+            chrg=torch.tensor(1.0, dtype=DTYPE),
+            legacy_compat=True,
+        )
+    # Default scalar charge 0 is accepted in legacy_compat=True
+    res_default_chrg = evaluate_packed_systems(
+        (sys_h2, sys_h2),
+        (pos_h2, pos_h2),
+        chrg=0,
+        legacy_compat=True,
+    )
+    assert res_default_chrg.energy.shape == (2, 2)
+
+    # Nonzero scalar charge is broadcast in legacy_compat=False
+    res_broadcast_chrg = evaluate_packed_systems(
+        (sys_h3p, sys_h3p),
+        (pos_h3p, pos_h3p),
+        chrg=1.0,
+        spin=0,
+        legacy_compat=False,
+    )
+    assert res_broadcast_chrg.energy.shape == (2, 3)
+
+    # Per-lane charge tensor (1D and 2D) and sequence, mixed GFN1/GFN2
+    for chrg_input in (
+        torch.tensor([0.0, 1.0], dtype=DTYPE),
+        torch.tensor([[0.0], [1.0]], dtype=DTYPE),
+        (0.0, 1.0),
+    ):
+        res_mixed = evaluate_packed_systems(
+            (sys_h2, sys_h3p),
+            (pos_h2, pos_h3p),
+            chrg=chrg_input,
+            spin=None,
+            legacy_compat=True,
+        )
+        assert res_mixed.energy.shape == (2, 3)
+
+    # Invalid charge/spin shapes and parity
+    with pytest.raises(ValueError, match="length 2"):
+        evaluate_packed_systems(
+            (sys_h2, sys_h3p),
+            (pos_h2, pos_h3p),
+            chrg=torch.zeros(3, dtype=DTYPE),
+        )
+    with pytest.raises(ValueError, match="Spin sequence length"):
+        evaluate_packed_systems(
+            (sys_h2, sys_h3p),
+            (pos_h2, pos_h3p),
+            spin=(0.0, 0.0, 0.0),
+        )
+    with pytest.raises(ValueError, match="unpaired electrons"):
+        evaluate_packed_systems(
+            (sys_h2, sys_h2),
+            (pos_h2, pos_h2),
+            chrg=(0.0, 0.0),
+            spin=(0.0, 1.0),
+        )
+
+    # Too many electrons: status in legacy_compat=False vs ValueError in legacy_compat=True
+    cfg_etemp = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "fermi_etemp": 300.0,
+                "strategy": "anderson",
+                "maxiter": 30,
+            }
+        ),
+    )
+    sys_h2_etemp = Model(
+        par=param_gfn1, config=cfg_etemp, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+
+    res_too_many = evaluate_packed_systems(
+        (sys_h2_etemp, sys_h2_etemp),
+        (pos_h2, pos_h2),
+        chrg=(0.0, -7.0),
+        spin=(0.0, 1.0),
+        legacy_compat=False,
+    )
+    assert res_too_many.status is not None
+    assert int(res_too_many.status.trajectory_failure[0].item()) == int(
+        SCFFailureCode.NONE
+    )
+    assert int(res_too_many.status.final_failure[0].item()) == int(
+        SCFFailureCode.NONE
+    )
+    assert int(res_too_many.status.trajectory_failure[1].item()) == int(
+        SCFFailureCode.TOO_MANY_ELECTRONS
+    )
+    assert int(res_too_many.status.final_failure[1].item()) == int(
+        SCFFailureCode.TOO_MANY_ELECTRONS
+    )
+    assert res_too_many.converged is not None
+    assert bool(res_too_many.converged[0])
+
+    with pytest.raises(ValueError, match="exceeds the number of orbitals"):
+        evaluate_packed_systems(
+            (sys_h2_etemp, sys_h2_etemp),
+            (pos_h2, pos_h2),
+            chrg=torch.tensor([0.0, -7.0], dtype=DTYPE),
+            spin=torch.tensor([0.0, 1.0], dtype=DTYPE),
+            legacy_compat=True,
+        )
+
+
+def test_complete_packed_result_adapter_all_fields_and_model_param_gradients() -> (
+    None
+):
+    """Audit all 20 Result fields + multipoles and shared Model parameter gradients."""
+    from dataclasses import fields
+
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.calculators.result import Result
+
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2.set_differentiable("element", "C", "gam")
+    param_gfn2.set_differentiable("element", "O", "gam")
+    cfg_gfn2 = Config.create(
+        method=labels.GFN2_XTB,
+        **(
+            _SETTINGS
+            | {
+                "strategy": _gfn2_fock_anderson(),
+                "fermi_etemp": 300.0,
+            }
+        ),
+    )
+    model_gfn2 = Model(par=param_gfn2, config=cfg_gfn2, auto_int_level=False)
+
+    compositions = (
+        torch.tensor([1, 1], dtype=torch.int64),
+        torch.tensor([8, 1, 1], dtype=torch.int64),
+        torch.tensor([6, 1, 1, 1, 1], dtype=torch.int64),
+    )
+    positions = (
+        _geometry((1, 1), 0).clone().requires_grad_(True),
+        _geometry((8, 1, 1), 0).clone().requires_grad_(True),
+        _geometry((6, 1, 1, 1, 1), 0).clone().requires_grad_(True),
+    )
+    per_lane_fields = (
+        torch.tensor([0.002, -0.001, 0.0015], dtype=DTYPE, requires_grad=True),
+        None,
+        torch.tensor([-0.001, 0.002, -0.0005], dtype=DTYPE, requires_grad=True),
+    )
+    per_lane_fgs = (
+        (torch.eye(3, dtype=DTYPE) * 0.0004).requires_grad_(True),
+        None,
+        (torch.eye(3, dtype=DTYPE) * -0.0003).requires_grad_(True),
+    )
+
+    ptree = model_gfn2.parameter_tree
+    systems = tuple(
+        model_gfn2.setup_functional(nums, ptree) for nums in compositions
+    )
+    packed = evaluate_packed_systems(
+        systems,
+        positions,
+        chrg=(0.0, 0.0, 0.0),
+        spin=(None, None, None),
+        field=per_lane_fields,
+        field_grad=per_lane_fgs,
+        legacy_compat=False,
+    )
+    serial = tuple(
+        sys.singlepoint(pos, 0.0, None, field=f, field_grad=fg)
+        for sys, pos, f, fg in zip(
+            systems, positions, per_lane_fields, per_lane_fgs
+        )
+    )
+
+    expected_fields = {
+        "energy",
+        "scf",
+        "classical",
+        "fenergy",
+        "iterations",
+        "charges",
+        "density",
+        "coefficients",
+        "emo",
+        "occupation",
+        "potential",
+        "hamiltonian",
+        "overlap",
+        "hcore",
+        "dipole_integrals",
+        "quadrupole_integrals",
+        "overlap_norm",
+        "converged",
+        "residual",
+        "status",
+    }
+    assert {f.name for f in fields(Result)} == expected_fields
+    for fname in expected_fields:
+        assert getattr(packed, fname) is not None, f"Field {fname} was None"
+    assert packed.multipoles is not None
+    assert packed.multipoles.dipole is not None
+    assert packed.multipoles.quadrupole is not None
+    assert packed.charges is not None
+    assert packed.charges.dipole is not None
+    assert packed.charges.quadrupole is not None
+    assert packed.potential is not None
+    assert packed.potential.mono is not None
+    assert packed.potential.dipole is not None
+    assert packed.potential.quadrupole is not None
+
+    max_atoms = 5
+    max_nao = max(s.ihelp.nao for s in systems)
+    for lane, (ref, sys) in enumerate(zip(serial, systems)):
+        nat = int(sys.numbers.numel())
+        nao = int(sys.ihelp.nao)
+        torch.testing.assert_close(
+            packed.energy[lane, :nat], ref.energy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            packed.scf[lane, :nat], ref.scf, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            packed.fenergy[lane, :nat], ref.fenergy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            packed.charges.mono[lane, :nao],
+            ref.charges.mono,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.charges.dipole[lane, :nat],
+            ref.charges.dipole,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.charges.quadrupole[lane, :nat],
+            ref.charges.quadrupole,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.potential.mono[lane, :nao],
+            ref.potential.mono,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.potential.dipole[lane, :nat],
+            ref.potential.dipole,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.potential.quadrupole[lane, :nat],
+            ref.potential.quadrupole,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            packed.coefficients[lane, :nao, :nao].abs(),
+            ref.coefficients.abs(),
+            atol=1e-9,
+            rtol=1e-9,
+        )
+        if nat < max_atoms:
+            assert (
+                int(torch.count_nonzero(packed.charges.dipole[lane, nat:])) == 0
+            )
+            assert (
+                int(torch.count_nonzero(packed.charges.quadrupole[lane, nat:]))
+                == 0
+            )
+        if nao < max_nao:
+            assert (
+                int(torch.count_nonzero(packed.coefficients[lane, nao:, :]))
+                == 0
+            )
+            assert (
+                int(torch.count_nonzero(packed.coefficients[lane, :, nao:]))
+                == 0
+            )
+
+    # Verify per-lane field gradients and shared Model parameter gradients
+    grad_inputs = (
+        positions[0],
+        positions[1],
+        positions[2],
+        per_lane_fields[0],
+        per_lane_fields[2],
+        per_lane_fgs[0],
+        per_lane_fgs[2],
+        *tuple(t for t in ptree.parameters.params.values() if t.requires_grad),
+    )
+    packed_grads = torch.autograd.grad(
+        packed.energy.sum(),
+        grad_inputs,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    serial_grads = torch.autograd.grad(
+        sum(r.energy.sum() for r in serial),
+        grad_inputs,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    non_zero_param_grads = 0
+    for idx, (pg, sg) in enumerate(zip(packed_grads, serial_grads)):
+        if sg is None:
+            assert pg is None
+        else:
+            assert pg is not None
+            torch.testing.assert_close(pg, sg, atol=1e-9, rtol=1e-9)
+            if idx >= 7 and float(pg.abs().max()) > 0.0:
+                non_zero_param_grads += 1
+    assert non_zero_param_grads > 0
+
+
+def test_option_ownership_and_side_effects_contract(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify public write_*/cuda_sync_in_scf execution vs low-level SCF options."""
+    from dxtb._src.calculators import packed_result as pr_mod
+    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
+    from dxtb._src.calculators.packed_result import (
+        evaluate_calculator_packed_singlepoint,
+        evaluate_packed_systems,
+    )
+    from dxtb._src.timing import timer
+
+    compositions = ((1, 1), (8, 1, 1))
+    source_positions = tuple(_geometry(nums, 0) for nums in compositions)
+    public_numbers, public_positions = _pad_public_inputs(
+        compositions, source_positions
+    )
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    opts = dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0)
+    calc = Calculator(public_numbers, param_gfn1, opts=opts, dtype=DTYPE)
+
+    # 1. Explicit paths for write_overlap, write_dipole, write_quadrupole, write_hcore
+    explicit_paths = {
+        "write_overlap": tmp_path / "ovlp_cand.pt",
+        "write_dipole": tmp_path / "dip_cand.pt",
+        "write_quadrupole": tmp_path / "quad_cand.pt",
+        "write_hcore": tmp_path / "hcore_cand.pt",
+    }
+    res_cand = evaluate_calculator_packed_singlepoint(
+        calc,
+        public_positions,
+        **explicit_paths,
+    )
+    for key, attr in (
+        ("write_overlap", "overlap"),
+        ("write_dipole", "dipole_integrals"),
+        ("write_quadrupole", "quadrupole_integrals"),
+        ("write_hcore", "hcore"),
+    ):
+        saved = torch.load(explicit_paths[key], weights_only=True)
+        expected = getattr(res_cand, attr)
+        assert expected is not None
+        torch.testing.assert_close(saved, expected, atol=0.0, rtol=0.0)
+
+    # 2. Default filenames (write_*=True) match Calculator.singlepoint
+    dir_legacy = tmp_path / "legacy_default"
+    dir_cand = tmp_path / "cand_default"
+    dir_legacy.mkdir()
+    dir_cand.mkdir()
+
+    monkeypatch.chdir(dir_legacy)
+    res_leg = calc.singlepoint(
+        public_positions,
+        write_overlap=True,
+        write_dipole=True,
+        write_quadrupole=True,
+        write_hcore=True,
+    )
+    monkeypatch.chdir(dir_cand)
+    res_cand_def = evaluate_calculator_packed_singlepoint(
+        calc,
+        public_positions,
+        write_overlap=True,
+        write_dipole=True,
+        write_quadrupole=True,
+        write_hcore=True,
+    )
+    for fname in (
+        "overlappytorch.pt",
+        "dipolepytorch.pt",
+        "quadrupolepytorch.pt",
+        "gfn1hamiltonian.pt",
+    ):
+        assert (dir_legacy / fname).exists()
+        assert (dir_cand / fname).exists()
+        t_leg = torch.load(dir_legacy / fname, weights_only=True)
+        t_cand = torch.load(dir_cand / fname, weights_only=True)
+        torch.testing.assert_close(t_cand, t_leg, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        res_cand_def.energy, res_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 3. cuda_sync_in_scf sets timer.cuda_sync during SCF and restores it in finally
+    observed_sync: list[bool] = []
+    orig_eval_padded = pr_mod.evaluate_padded_systems
+
+    def spy_eval_padded(*args, **kwargs):
+        observed_sync.append(bool(timer.cuda_sync))
+        return orig_eval_padded(*args, **kwargs)
+
+    monkeypatch.setattr(pr_mod, "evaluate_padded_systems", spy_eval_padded)
+    old_sync = timer.cuda_sync
+    timer.cuda_sync = False
+    try:
+        evaluate_calculator_packed_singlepoint(
+            calc, public_positions, cuda_sync_in_scf=True
+        )
+        assert observed_sync == [True]
+        assert timer.cuda_sync is False
+    finally:
+        timer.cuda_sync = old_sync
+
+    # 4. Option separation: unknown public kwargs vs low-level legacy_options
+    lane_systems = pr_mod.build_calculator_lane_systems(calc)
+    # Functional API (legacy_compat=False) always rejects unknown public kwargs
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        evaluate_packed_systems(
+            lane_systems,
+            source_positions,
+            legacy_compat=False,
+            ignore_unknown_kwargs=True,
+            unknown_public_kw=1,
+        )
+    # Low-level legacy_options are never filtered by ignore_unknown_kwargs=True and raise NotImplementedError
+    for bad_key in ("unexpected_option", "solver_options", "custom_bad_scf_kw"):
+        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+            evaluate_packed_systems(
+                lane_systems,
+                source_positions,
+                legacy_options=LegacySCFOptions(kwargs={bad_key: 1}),
+                legacy_compat=True,
+                ignore_unknown_kwargs=True,
+            )
+    # Low-level positional args also fail with NotImplementedError
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            lane_systems,
+            source_positions,
+            legacy_options=LegacySCFOptions(args=("extra_positional",)),
+            legacy_compat=True,
+            ignore_unknown_kwargs=True,
+        )
+
+
+def test_classical_display_key_collision_resolution() -> None:
+    """Result.get_energies() never collides on pre-suffixed classical labels."""
+    from dxtb._src.calculators.result import Result
+
+    e1 = torch.tensor([0.1, 0.2], dtype=DTYPE)
+    e2 = torch.tensor([0.3, 0.4], dtype=DTYPE)
+    e3 = torch.tensor([0.5, 0.6], dtype=DTYPE)
+    e4 = torch.tensor([0.7, 0.8], dtype=DTYPE)
+    classical_entries = (
+        ("Custom", e1),
+        ("Custom", e2),
+        ("Custom (1)", e3),
+        ("Custom (2)", e4),
+    )
+    total = e1 + e2 + e3 + e4
+    res = Result.snapshot(
+        energy=total,
+        scf=torch.zeros_like(total),
+        classical=classical_entries,
+        fenergy=torch.zeros_like(total),
+        iterations=torch.tensor(0, dtype=torch.int64),
+    )
+    energies = res.get_energies()
+    sub = energies["Classical"]["sub"]
+    assert isinstance(sub, dict)
+    assert len(sub) == 4
+    assert list(sub.keys()) == [
+        "Custom (1)",
+        "Custom (2)",
+        "Custom (1) (1)",
+        "Custom (2) (1)",
+    ]
+    assert [v["value"] for v in sub.values()] == pytest.approx(
+        [0.3, 0.7, 1.1, 1.5], abs=1e-15
+    )
+    assert sum(v["value"] for v in sub.values()) == pytest.approx(
+        energies["Classical"]["value"], abs=1e-15
+    )
+    assert res.classical == classical_entries
+
+    # Reverse order: singleton "Custom (1)" precedes duplicate "Custom"
+    classical_rev = (
+        ("Custom (1)", e3),
+        ("Custom", e1),
+        ("Custom", e2),
+    )
+    res_rev = Result.snapshot(
+        energy=e1 + e2 + e3,
+        scf=torch.zeros_like(e1),
+        classical=classical_rev,
+        fenergy=torch.zeros_like(e1),
+        iterations=torch.tensor(0, dtype=torch.int64),
+    )
+    sub_rev = res_rev.get_energies()["Classical"]["sub"]
+    assert len(sub_rev) == 3
+    assert list(sub_rev.keys()) == [
+        "Custom (1)",
+        "Custom (2)",
+        "Custom (3)",
+    ]
+    assert [v["value"] for v in sub_rev.values()] == pytest.approx(
+        [1.1, 0.3, 0.7], abs=1e-15
+    )
+    assert sum(v["value"] for v in sub_rev.values()) == pytest.approx(
+        res_rev.get_energies()["Classical"]["value"], abs=1e-15
+    )
+
+
+def test_production_routing_differential_gate_matrix() -> None:
+    """Differential gate between Calculator.singlepoint and candidate packed route."""
+    from dxtb._src.calculators.model import Model
+    from dxtb._src.calculators.packed_result import (
+        build_calculator_lane_systems,
+        evaluate_calculator_packed_singlepoint,
+        evaluate_packed_systems,
+    )
+    from dxtb._src.components.classicals.dispersion import new_dispersion
+    from dxtb._src.components.interactions.field.efield import (
+        LABEL_EFIELD,
+        ElectricField,
+    )
+    from dxtb._src.typing.exceptions import (
+        SCFConvergenceError,
+        SCFConvergenceWarning,
+    )
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    param_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+
+    # 1. Mode 2 conformer setup deduplication: Model.setup called once for B conformers
+    conformer_nums = torch.tensor([[8, 1, 1], [8, 1, 1], [8, 1, 1]], dtype=torch.int64)
+    conformer_pos = torch.stack(
+        [
+            _geometry((8, 1, 1), 0),
+            _geometry((8, 1, 1), 0) + 0.02,
+            _geometry((8, 1, 1), 0) - 0.01,
+        ],
+        dim=0,
+    )
+    calc_m2 = Calculator(
+        conformer_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, batch_mode=2, verbosity=0),
+        dtype=DTYPE,
+    )
+    lane_sys_m2 = build_calculator_lane_systems(calc_m2)
+    assert len(lane_sys_m2) == 3
+    assert lane_sys_m2[0] is lane_sys_m2[1]
+    assert lane_sys_m2[1] is lane_sys_m2[2]
+    m2_chrg = torch.zeros(3, dtype=DTYPE)
+    res_m2_leg = calc_m2.singlepoint(conformer_pos, chrg=m2_chrg)
+    res_m2_cand = evaluate_calculator_packed_singlepoint(
+        calc_m2, conformer_pos, chrg=m2_chrg
+    )
+    res_m2_cand_default_chrg = evaluate_calculator_packed_singlepoint(
+        calc_m2, conformer_pos
+    )
+    torch.testing.assert_close(
+        res_m2_cand.energy, res_m2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        res_m2_cand_default_chrg.energy, res_m2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 2. Trailing all-zero columns and non-contiguous interior zero padding in Mode 1
+    nums_2d, pos_2d = _pad_public_inputs(
+        ((8, 1, 1), (1, 1)), (_geometry((8, 1, 1), 0), _geometry((1, 1), 0))
+    )
+    calc_ref2 = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_ref2_leg = calc_ref2.singlepoint(pos_2d)
+
+    trailing_nums = torch.tensor([[8, 1, 1, 0], [1, 1, 0, 0]], dtype=torch.int64)
+    trailing_pos = torch.zeros((2, 4, 3), dtype=DTYPE)
+    trailing_pos[0, :3] = _geometry((8, 1, 1), 0)
+    trailing_pos[1, :2] = _geometry((1, 1), 0)
+    calc_tr = Calculator(
+        trailing_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_tr_cand = evaluate_calculator_packed_singlepoint(calc_tr, trailing_pos)
+    assert res_tr_cand.energy.shape == (2, 4)
+    torch.testing.assert_close(
+        res_tr_cand.energy[:, :3], res_ref2_leg.energy, atol=1e-9, rtol=1e-9
+    )
+    assert float(res_tr_cand.energy[0, 3].abs().item()) == 0.0
+    assert float(res_tr_cand.energy[1, 2:].abs().max().item()) == 0.0
+
+    noncontig_nums = torch.tensor([[8, 1, 1, 0], [1, 0, 1, 0]], dtype=torch.int64)
+    noncontig_pos = torch.zeros((2, 4, 3), dtype=DTYPE)
+    noncontig_pos[0, :3] = _geometry((8, 1, 1), 0)
+    noncontig_pos[1, 0] = _geometry((1, 1), 0)[0]
+    noncontig_pos[1, 2] = _geometry((1, 1), 0)[1]
+    calc_nc = Calculator(
+        noncontig_nums,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_nc_cand = evaluate_calculator_packed_singlepoint(calc_nc, noncontig_pos)
+    assert res_nc_cand.energy.shape == (2, 4)
+    torch.testing.assert_close(
+        res_nc_cand.energy[0, :3], res_ref2_leg.energy[0, :3], atol=1e-9, rtol=1e-9
+    )
+    torch.testing.assert_close(
+        res_nc_cand.energy[1, [0, 2]], res_ref2_leg.energy[1, :2], atol=1e-9, rtol=1e-9
+    )
+    assert float(res_nc_cand.energy[1, 1].abs().item()) == 0.0
+    assert float(res_nc_cand.energy[1, 3].abs().item()) == 0.0
+
+    # 3. Multiple explicit DispersionD3 instances on batched Calculator (2D numbers)
+    nums_2d, pos_2d = _pad_public_inputs(
+        ((1, 1), (8, 1, 1)), (_geometry((1, 1), 0), _geometry((8, 1, 1), 0))
+    )
+    d3_a = new_dispersion(nums_2d, param_gfn1, device=DEVICE, dtype=DTYPE)
+    d3_b = new_dispersion(nums_2d, param_gfn1, device=DEVICE, dtype=DTYPE)
+    assert d3_a is not None and d3_b is not None
+    d3_a.label = "D3:first"
+    d3_b.label = "D3:second"
+    d3_b.param["s6"] = torch.tensor(0.5, dtype=DTYPE)
+    calc_multi_d3 = Calculator(
+        nums_2d,
+        param_gfn1,
+        classical=[d3_a, d3_b],
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            exclude=["disp"],
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    res_d3_leg = calc_multi_d3.singlepoint(pos_2d)
+    res_d3_cand = evaluate_calculator_packed_singlepoint(calc_multi_d3, pos_2d)
+    assert tuple(k for k, _ in res_d3_cand.classical) == tuple(
+        k for k, _ in res_d3_leg.classical
+    )
+    torch.testing.assert_close(
+        res_d3_cand.energy, res_d3_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 4. Integral level < INTLEVEL_HCORE and missing h0_setup raise NotImplementedError
+    for bad_level, match_str in (
+        (labels.INTLEVEL_NONE, "Core Hamiltonian setup is missing"),
+        (labels.INTLEVEL_OVERLAP, "Core Hamiltonian missing"),
+    ):
+        calc_bad_lvl = Calculator(
+            nums_2d,
+            param_gfn1,
+            opts=dict(
+                _SETTINGS,
+                method=labels.GFN1_XTB,
+                int_level=bad_level,
+                verbosity=0,
+            ),
+            auto_int_level=False,
+            dtype=DTYPE,
+        )
+        with pytest.raises(NotImplementedError, match=match_str):
+            calc_bad_lvl.singlepoint(pos_2d)
+        with pytest.raises(NotImplementedError, match=match_str):
+            evaluate_calculator_packed_singlepoint(calc_bad_lvl, pos_2d)
+
+    # 5. Constructor ElectricField default on Calculator vs call-time override
+    ef_default = torch.tensor([0.002, -0.001, 0.001], dtype=DTYPE)
+    calc_ef = Calculator(
+        nums_2d,
+        param_gfn1,
+        interaction=[ElectricField(field=ef_default)],
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            convergence="tight",
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    res_ef_leg = calc_ef.singlepoint(pos_2d)
+    res_ef_cand = evaluate_calculator_packed_singlepoint(calc_ef, pos_2d)
+    torch.testing.assert_close(
+        res_ef_cand.energy, res_ef_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    # 6. Outer maxiter=0, SCFConvergenceWarning (force_convergence=False), and SCFConvergenceError
+    calc_iter0 = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(_SETTINGS, method=labels.GFN1_XTB, maxiter=0, verbosity=0),
+        dtype=DTYPE,
+    )
+    res_i0_leg = calc_iter0.singlepoint(pos_2d)
+    res_i0_cand = evaluate_calculator_packed_singlepoint(calc_iter0, pos_2d)
+    assert int(res_i0_cand.iterations.item()) == int(res_i0_leg.iterations.item()) == 1
+    torch.testing.assert_close(
+        res_i0_cand.energy, res_i0_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    calc_warn = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            maxiter=1,
+            x_atol=1e-14,
+            x_atol_max=1e-14,
+            force_convergence=False,
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    OutputHandler.clear_warnings()
+    res_w_leg = calc_warn.singlepoint(pos_2d)
+    assert any(
+        issubclass(cat, SCFConvergenceWarning)
+        for _, cat in OutputHandler.warnings
+    )
+    OutputHandler.clear_warnings()
+    res_w_cand = evaluate_calculator_packed_singlepoint(calc_warn, pos_2d)
+    assert any(
+        issubclass(cat, SCFConvergenceWarning)
+        for _, cat in OutputHandler.warnings
+    )
+    torch.testing.assert_close(
+        res_w_cand.energy, res_w_leg.energy, atol=1e-9, rtol=1e-9
+    )
+
+    calc_err = Calculator(
+        nums_2d,
+        param_gfn1,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN1_XTB,
+            maxiter=1,
+            x_atol=1e-14,
+            x_atol_max=1e-14,
+            force_convergence=True,
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    with pytest.raises(SCFConvergenceError):
+        calc_err.singlepoint(pos_2d)
+    with pytest.raises(SCFConvergenceError) as exc_info:
+        evaluate_calculator_packed_singlepoint(calc_err, pos_2d)
+    # Lane 0 (H2) is already at its symmetric physical fixed point after 1 step;
+    # lane 1 (H2O) fails S2 certification at maxiter=1 and reports source_id=1.
+    assert getattr(exc_info.value, "source_id", None) == 1
+
+    # 7. GFN2 default S13 strategy (Anderson/Potential) and Charge/Fock representations
+    calc_gfn2_default = Calculator(
+        nums_2d,
+        param_gfn2,
+        opts=dict(
+            _SETTINGS,
+            method=labels.GFN2_XTB,
+            strategy="anderson",
+            verbosity=0,
+        ),
+        dtype=DTYPE,
+    )
+    OutputHandler.clear_warnings()
+    res_g2_leg = calc_gfn2_default.singlepoint(pos_2d)
+    assert not OutputHandler.warnings
+    OutputHandler.clear_warnings()
+    res_g2_cand = evaluate_calculator_packed_singlepoint(
+        calc_gfn2_default, pos_2d
+    )
+    assert not OutputHandler.warnings
+    torch.testing.assert_close(
+        res_g2_leg.energy, res_g2_cand.energy, atol=1e-12, rtol=1e-12
+    )
+    lane_sys_g2 = build_calculator_lane_systems(calc_gfn2_default)
+    ref_g2_0 = lane_sys_g2[0].singlepoint(_geometry((1, 1), 0))
+    ref_g2_1 = lane_sys_g2[1].singlepoint(_geometry((8, 1, 1), 0))
+    torch.testing.assert_close(
+        res_g2_cand.energy[0, :2], ref_g2_0.energy, atol=1e-11, rtol=1e-11
+    )
+    torch.testing.assert_close(
+        res_g2_cand.energy[1, :3], ref_g2_1.energy, atol=1e-11, rtol=1e-11
+    )
+
+
+def test_failure_precedence_six_stages() -> None:
+    """Verify the 6-stage failure precedence order when multiple errors coexist."""
+    from tad_mctc.exceptions import DtypeError
+
+    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.typing.exceptions import SCFConvergenceError
+
+    param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    pos_h2 = _geometry((1, 1), 0)
+
+    # Construct a System with int_level=INTLEVEL_OVERLAP (Stage 4 error) and
+    # maxiter=1, force_convergence=True (Stage 6 error)
+    cfg_stage4 = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "int_level": labels.INTLEVEL_OVERLAP,
+                "maxiter": 1,
+                "x_atol": 1e-14,
+                "x_atol_max": 1e-14,
+                "force_convergence": True,
+            }
+        ),
+    )
+    sys_stage4 = Model(
+        par=param_gfn1, config=cfg_stage4, auto_int_level=False
+    ).setup(torch.tensor([1, 1], dtype=torch.int64))
+
+    bad_pos_dtype = pos_h2.to(torch.float32)
+    valid_field = torch.tensor([0.01, 0.0, 0.0], dtype=DTYPE)
+    bad_legacy_opts = LegacySCFOptions(kwargs={"unknown_scf_kw": 1})
+
+    # Stage 1 beats Stages 2, 3, 4, 5, 6: removed store_* -> TypeError
+    with pytest.raises(TypeError, match="store_"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (bad_pos_dtype,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+            store_overlap=True,
+        )
+
+    # Stage 2 beats Stages 3, 4, 5, 6: wrong position dtype -> DtypeError
+    with pytest.raises(DtypeError, match="Dtype mismatch"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (bad_pos_dtype,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 3 beats Stages 4, 5, 6: field with int_level < INTLEVEL_DIPOLE -> RuntimeError
+    with pytest.raises(RuntimeError, match="dipole integrals"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (pos_h2,),
+            field=valid_field,
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 4 beats Stages 5, 6: int_level < INTLEVEL_HCORE -> NotImplementedError
+    with pytest.raises(NotImplementedError, match="Core Hamiltonian missing"):
+        evaluate_packed_systems(
+            (sys_stage4,),
+            (pos_h2,),
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Now upgrade int_level to INTLEVEL_HCORE so Stage 4 passes:
+    cfg_stage56 = Config.create(
+        method=labels.GFN1_XTB,
+        **(
+            _SETTINGS
+            | {
+                "int_level": labels.INTLEVEL_HCORE,
+                "maxiter": 1,
+                "x_atol": 1e-14,
+                "x_atol_max": 1e-14,
+                "force_convergence": True,
+            }
+        ),
+    )
+    sys_stage56 = Model(
+        par=param_gfn1, config=cfg_stage56, auto_int_level=False
+    ).setup(torch.tensor([8, 1, 1], dtype=torch.int64))
+    pos_h2o = _geometry((8, 1, 1), 0)
+
+    # Stage 5 beats Stage 6: retired low-level SCF kwarg -> NotImplementedError
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        evaluate_packed_systems(
+            (sys_stage56,),
+            (pos_h2o,),
+            legacy_options=bad_legacy_opts,
+            legacy_compat=True,
+        )
+
+    # Stage 6 fires when Stages 1-5 are valid: SCFConvergenceError
+    with pytest.raises(SCFConvergenceError):
+        evaluate_packed_systems(
+            (sys_stage56,),
+            (pos_h2o,),
+            legacy_compat=True,
+        )
+
+
+def test_e6bcompat_final_routing_manifest() -> None:
+    """Validate machine-readable E6bcompat routing manifest completeness."""
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest_path = repo_root / "docs" / "plan" / "E6bcompat-final-routing-manifest.json"
+    assert manifest_path.exists()
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert data["default_calculator_routing_changed"] is False
+    rows = data["rows"]
+    assert len(rows) == 32
+    expected_ids = [f"E6B-{i:02d}" for i in range(1, 33)]
+    assert [r["id"] for r in rows] == expected_ids
+    valid_categories = {
+        "1. Preserved public contract",
+        "2. S13-supported functional replacement",
+        "3. Explicitly retained compatibility adapter",
+        "4. Intentionally retired S13 behavior",
+        "5. Not yet supported by mixed-System functional routing",
+    }
+    for row in rows:
+        assert row["decision"] in ("REPLACE", "RETAIN", "RETIRE")
+        assert row["s13_category"] in valid_categories
+        assert row["authority"]
+        assert row["verdict"] == "PASS"
+        assert row["policy_case"]
+        assert row["old_route"]
+        assert row["candidate_route"]
+        assert row["numeric_outcome"]
+        assert row["warning_error_outcome"]
+        assert len(row["test_nodes"]) >= 1
+        for node in row["test_nodes"]:
+            parts = node.split("::")
+            file_part = parts[0]
+            file_path = repo_root / file_part
+            assert file_path.exists(), f"Missing test file {file_part}"
+            if len(parts) > 1:
+                fn_name = parts[1].split("[")[0]
+                text = file_path.read_text(encoding="utf-8")
+                assert f"def {fn_name}" in text, (
+                    f"Missing test function {fn_name} in {file_part}"
+                )

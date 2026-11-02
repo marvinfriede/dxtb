@@ -43,12 +43,10 @@ opts = {
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1.0e-10,
     "x_atol": 1.0e-10,
 }
 
 DIAG = [0, 2, 5]  # xx, yy, zz of (xx, yx, yy, zx, zy, zz)
-OFFDIAG = [1, 3, 4]  # yx, zx, zy
 
 sample_list = ["H2O", "SiH4", "MB16_43_01"]
 
@@ -62,20 +60,6 @@ def _calc(
         numbers, GFN2_XTB, interaction=[efg], opts=opts, **kwargs, **dd
     )
     return calc, field_grad
-
-
-def _point_moment(calc: Calculator, positions: Tensor) -> Tensor:
-    """Cartesian second moment ``Q_ij`` of the point charges and dipoles."""
-    res = calc.singlepoint(positions)
-    qat = calc.ihelp.reduce_orbital_to_atom(res.charges.mono)
-    mu = res.charges.dipole
-    assert mu is not None
-
-    return (
-        torch.einsum("...a,...ai,...aj->...ij", qat, positions, positions)
-        + torch.einsum("...ai,...aj->...ij", positions, mu)
-        + torch.einsum("...ai,...aj->...ij", mu, positions)
-    ).detach()
 
 
 @pytest.mark.parametrize("name", sample_list[:2])
@@ -112,27 +96,20 @@ def test_functorch(name: str) -> None:
     assert pytest.approx(ref.cpu(), abs=1e-8) == quad.cpu()
 
 
-@pytest.mark.parametrize("name", sample_list)
-def test_vs_analytical(name: str) -> None:
+@pytest.mark.parametrize("name", sample_list[:2])
+def test_get_quadrupole_and_system_quadrupole_parity(name: str) -> None:
     dd: DD = {"dtype": torch.double, "device": DEVICE}
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
     calc, _ = _calc(numbers, dd, grad=True)
     auto = calc.quadrupole(positions).detach()
-    ana = calc.quadrupole_analytical(positions).detach()
+    via_get = calc.get_quadrupole(positions).detach()
+    via_sys = calc.system.quadrupole(positions).detach()
 
-    # diagonal elements agree
-    assert pytest.approx(ana[DIAG].cpu(), abs=1e-6) == auto[DIAG].cpu()
-
-    # off-diagonal elements differ by 1.5 * Q_ij of the point charges and
-    # dipoles, which the analytical result counts twice
-    q = _point_moment(calc, positions)
-    off = torch.stack([q[1, 0], q[2, 0], q[2, 1]])
-    assert (
-        pytest.approx((ana[OFFDIAG] - auto[OFFDIAG]).cpu(), abs=1e-6)
-        == 1.5 * off.cpu()
-    )
+    assert pytest.approx(auto.cpu(), abs=1e-8) == via_get.cpu()
+    assert pytest.approx(auto.cpu(), abs=1e-8) == via_sys.cpu()
+    assert pytest.approx(auto[DIAG].sum().item(), abs=1e-8) == 0.0
 
 
 def test_batch() -> None:
@@ -199,10 +176,9 @@ def test_requires_field_gradient() -> None:
     with pytest.raises(RuntimeError, match="electric field gradient"):
         calc.quadrupole(positions)
     with pytest.raises(RuntimeError, match="electric field gradient"):
+        calc.get_quadrupole(positions)
+    with pytest.raises(RuntimeError, match="electric field gradient"):
         calc.quadrupole_numerical(positions)
-
-    # the analytical route needs no interaction
-    assert calc.get_quadrupole(positions).shape == (6,)
 
 
 def test_requires_grad() -> None:

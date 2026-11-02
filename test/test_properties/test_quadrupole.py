@@ -55,7 +55,6 @@ opts = {
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1.0e-9,
     "x_atol": 1.0e-9,
     # an electric field alone only raises the integral level to the dipole
     "int_level": 4,
@@ -87,11 +86,17 @@ def single(
     ref = samples[name][key].to(**dd)
 
     efield = new_efield(_field(key, dd))
-    calc = Calculator(numbers, GFN1_XTB, interaction=[efield], opts=opts, **dd)
+    efg = new_efield_grad(torch.zeros((3, 3), **dd, requires_grad=True))
+    calc = Calculator(
+        numbers, GFN1_XTB, interaction=[efield, efg], opts=opts, **dd
+    )
 
     quad = calc.get_quadrupole(positions).detach()
 
-    assert pytest.approx(ref.cpu(), abs=atol, rel=rtol) == quad.cpu()
+    assert (
+        pytest.approx(ref[DIAG].cpu(), abs=atol, rel=rtol)
+        == quad[DIAG].cpu()
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.double])
@@ -171,17 +176,21 @@ def batched(
     ref = pack([sample1[key].to(**dd), sample2[key].to(**dd)])
 
     efield = new_efield(_field(key, dd))
+    efg = new_efield_grad(torch.zeros((3, 3), **dd, requires_grad=True))
     calc = Calculator(
         numbers,
         GFN1_XTB,
-        interaction=[efield],
+        interaction=[efield, efg],
         opts=opts if options is None else options,
         **dd,
     )
 
     quad = calc.get_quadrupole(positions).detach()
 
-    assert pytest.approx(ref.cpu(), abs=atol, rel=rtol) == quad.cpu()
+    assert (
+        pytest.approx(ref[:, DIAG].cpu(), abs=atol, rel=rtol)
+        == quad[:, DIAG].cpu()
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.double])
@@ -214,12 +223,6 @@ def test_batch_medium(
 def test_batch_settings(
     dtype: torch.dtype, name1: str, name2: str, scp_mode: str, mixer: str
 ) -> None:
-    if scp_mode == "charge" and name2 == "H2O":
-        # Pre-existing (also on `main`): multipole-level integrals, charge
-        # mixing and a padded batch fail in `Potential.from_tensor`
-        # (shape mismatch in `deflate`), independent of the quadrupole.
-        pytest.xfail("charge mixing with multipoles in padded batches")
-
     dd: DD = {"dtype": dtype, "device": DEVICE}
     options = dict(opts, **{"scp_mode": scp_mode, "mixer": mixer})
     batched(

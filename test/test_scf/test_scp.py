@@ -66,7 +66,6 @@ def single(
             "mixer": mixer,
             "scf_mode": scf_mode,
             "scp_mode": scp_mode,
-            "f_atol": tol,
             "x_atol": tol,
             "int_driver": "pytorch",
         },
@@ -187,7 +186,6 @@ def batched(
             "mixer": mixer,
             "scf_mode": scf_mode,
             "scp_mode": scp_mode,
-            "f_atol": tol,
             "x_atol": tol,
         },
     )
@@ -299,7 +297,6 @@ def test_batch_three(
             "mixer": mixer,
             "scf_mode": scf_mode,
             "scp_mode": scp_mode,
-            "f_atol": tol,
             "x_atol": tol,
         },
     )

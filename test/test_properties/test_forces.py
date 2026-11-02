@@ -36,11 +36,11 @@ slist = ["H", "LiH", "H2O", "CH4", "SiH4"]
 slist_large = ["HHe", "PbH4-BiH3", "MB16_43_01"]  # "LYS_xao"
 
 opts = {
+    "fermi_diff_order": 0,
     "maxiter": 100,
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
 }
 
@@ -119,40 +119,22 @@ def execute(
     assert num_forces.grad_fn is None
     numforces = tensor_to_numpy(num_forces)
 
-    # required for autodiff of energy w.r.t. positions (Hessian)
     pos = positions.clone().detach().requires_grad_(True)
-
-    # manual jacobian
-    forces1 = tensor_to_numpy(calc.forces(pos, charge, grad_mode="row"))
+    forces1 = tensor_to_numpy(calc.forces(pos, charge))
+    assert pos.grad is None
     assert pytest.approx(numforces, abs=atol, rel=rtol) == forces1
 
-    # reset before another AD run
     calc.reset()
-    pos = positions.clone().detach().requires_grad_(True)
-
-    # jacrev of energy
-    forces2 = tensor_to_numpy(calc.forces(pos, charge, grad_mode="functorch"))
+    pos2 = positions.clone().detach().requires_grad_(True)
+    forces2 = tensor_to_numpy(calc.get_forces(pos2, charge))
+    assert pos2.grad is None
     assert pytest.approx(numforces, abs=atol, rel=rtol) == forces2
     assert pytest.approx(forces1, abs=atol, rel=rtol) == forces2
 
-    calc.reset()
-    pos = positions.clone().detach().requires_grad_(True)
-
-    # backward of energy
-    forces3 = tensor_to_numpy(calc.forces(pos, charge, grad_mode="backward"))
-    assert pytest.approx(numforces, abs=atol, rel=rtol) == forces3
-    assert pytest.approx(forces1, abs=atol, rel=rtol) == forces3
-    assert pytest.approx(forces2, abs=atol, rel=rtol) == forces3
-
-    calc.reset()
-    pos = positions.clone().detach().requires_grad_(True)
-
-    # standard torch.autograd.grad
-    forces4 = tensor_to_numpy(calc.forces(pos, charge, grad_mode="autograd"))
-    assert pytest.approx(numforces, abs=atol, rel=rtol) == forces4
-    assert pytest.approx(forces1, abs=atol, rel=rtol) == forces4
-    assert pytest.approx(forces2, abs=atol, rel=rtol) == forces4
-    assert pytest.approx(forces3, abs=atol, rel=rtol) == forces4
+    if numbers.ndim == 1:
+        pos3 = positions.clone().detach()
+        forces3 = tensor_to_numpy(calc.system.forces(pos3, charge))
+        assert pytest.approx(forces1, abs=atol, rel=rtol) == forces3
 
 
 @pytest.mark.parametrize("dtype", [torch.double])
@@ -170,20 +152,18 @@ def test_single_large(dtype: torch.dtype, name: str) -> None:
     single(name, dd=dd)
 
 
-# TODO: Batched Hessians are not supported yet
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", slist)
-def skip_test_batch(dtype: torch.dtype, name1: str, name2) -> None:
+def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
     batched(name1, name2, dd=dd)
 
 
-# TODO: Batched Hessians are not supported yet
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", slist_large)
-def skip_test_batch_large(dtype: torch.dtype, name1: str, name2) -> None:
+def test_batch_large(dtype: torch.dtype, name1: str, name2: str) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
     batched(name1, name2, dd=dd)

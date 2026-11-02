@@ -39,18 +39,19 @@ from dxtb._src.scf.functional import (
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import potential_initial_guess
+from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    potential_initial_guess,
-    setup_anderson_solver_settings,
     setup_simple_solver_settings,
     simple_mix,
-    solve_scf_anderson,
-    solve_scf_potential_anderson,
     solve_scf_potential_simple,
 )
-from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
+from dxtb.scf import LinearMethod
 
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_physical as solve_scf_anderson
+from ._anderson_helpers import solve_potential as solve_scf_potential_anderson
 from .test_functional_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
@@ -137,7 +138,7 @@ def _run_legacy_and_functional(
     legacy.engine.iterate_potential = record_map
     legacy_result = legacy.engine(legacy.initial_charges.clone())
     config = functional.system.config.scf
-    if config.mixer == labels.MIXER_LINEAR:
+    if isinstance(config.strategy.stages[0].method, LinearMethod):
         settings = setup_simple_solver_settings(config, guess.dtype)
         result = solve_scf_potential_simple(
             guess, functional.inputs, layout, settings
@@ -204,8 +205,8 @@ def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
     assert calls == int(result.iterations) + 1
 
 
-def test_potential_maxiter_zero_tracks_raw_and_final_fermi_status() -> None:
-    """One-shot potential mode tracks both spectra without outer convergence."""
+def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
+    """Zero-budget fixed-trip potential mode has no trajectory status."""
     _, result, _ = _run_legacy_and_functional(
         {
             "mixer": labels.MIXER_LINEAR,
@@ -214,11 +215,11 @@ def test_potential_maxiter_zero_tracks_raw_and_final_fermi_status() -> None:
         }
     )
     assert not bool(result.converged)
-    assert result.trajectory_status is not None
+    assert result.trajectory_status is None
     assert result.map_result.fermi_status is not None
     assert result.final_evaluation.fermi_status is not None
-    assert bool(result.trajectory_status.fermi_converged.all())
     assert bool(result.final_evaluation.fermi_status.converged.all())
+    assert int(result.iterations) == 1
     assert bool(functional_subsolves_ok(result))
     assert not bool(functional_converged_and_valid(result))
 
@@ -342,14 +343,14 @@ def test_gfn2_potential_padding_is_invariant_under_mixing(
         )
 
     mapped_pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
-    original = functional_map.potential_map
+    original = functional_problem.potential_map
 
     def record(value: torch.Tensor, inputs: object, layout: object):
         result = original(value, inputs, layout)
         mapped_pairs.append((value.clone(), result.mapped_x.clone()))
         return result
 
-    monkeypatch.setattr(functional_anderson, "potential_map", record)
+    monkeypatch.setattr(functional_problem, "potential_map", record)
     settings = setup_anderson_solver_settings(
         case.system.config.scf, guess.dtype
     )
@@ -408,7 +409,9 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
         ),
     )
     assert bool(result.map_result.fermi_status.converged.all())
-    assert bool(result.converged)
+    assert not bool(result.converged)
+    assert result.diagnostics.certification is not None
+    assert not bool(result.diagnostics.certification.result.stationarity_ok)
     assert not bool(functional_subsolves_ok(failed_final))
 
 
@@ -429,7 +432,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
         },
     )
     guess, layout = _initial_guess(case)
-    original = functional_solver.potential_map
+    original = functional_map.potential_map
     map_calls = 0
 
     def fail_initial_map(value: torch.Tensor, inputs: object, layout_: object):
@@ -451,7 +454,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
             )
         return result
 
-    monkeypatch.setattr(functional_solver, "potential_map", fail_initial_map)
+    monkeypatch.setattr(functional_problem, "potential_map", fail_initial_map)
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_potential_simple(guess, case.inputs, layout, settings)
     assert map_calls == 2

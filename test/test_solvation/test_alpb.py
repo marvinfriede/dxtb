@@ -35,7 +35,6 @@ from ..conftest import DEVICE
 from .samples import samples
 
 opts = {
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "scf_mode": labels.SCF_MODE_IMPLICIT,
     "scp_mode": labels.SCP_MODE_POTENTIAL,

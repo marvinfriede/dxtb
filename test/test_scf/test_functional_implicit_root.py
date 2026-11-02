@@ -5,11 +5,13 @@ from __future__ import annotations
 import pytest
 import torch
 
+from dxtb import labels
 from dxtb._src.scf.functional.implicit import (
     _require_linear_convergence,
     implicit_root,
     solve_linear,
 )
+from dxtb.scf import SCFDifferentiation
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
@@ -503,27 +505,42 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     [0, 1, 2],
     ids=("charge", "potential", "fock"),
 )
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_ANDERSON, labels.MIXER_BROYDEN],
+    ids=("anderson", "broyden"),
+)
 def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     representation: int,
+    mixer: int,
 ) -> None:
     from dataclasses import replace
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb.scf import SCFRepresentation, SCFResponseSettings
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     case = _case(
         "H2",
         method=GFN1_XTB,
         representation=representation,
+        mixer=mixer,
         tolerance=1.0e-12,
         temperature=0.0,
         field=field,
     )
     config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        response=SCFResponseSettings(
+            representation={
+                labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+                labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+                labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+            }[representation]
+        ),
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -541,6 +558,19 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         case.integrals,
     )
     assert bool(result.converged)
+    from test.test_scf.test_functional_root_derivatives import (
+        _initial_state,
+        _map_fn,
+    )
+
+    _, layout = _initial_state(case, case.inputs)
+    paired_map = _map_fn(case, case.inputs, layout)(result.root_x)
+    torch.testing.assert_close(paired_map.mapped_x, result.map_result.mapped_x)
+    root_gradient = torch.autograd.grad(
+        result.root_x.square().sum(), field, retain_graph=True
+    )[0]
+    assert torch.isfinite(root_gradient).all()
+    assert torch.linalg.vector_norm(root_gradient) > 0.0
     observable = result.energy.sum() + result.fenergy.sum()
     gradient = torch.autograd.grad(observable, field)[0][1]
 
@@ -553,13 +583,14 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
             "H2",
             method=GFN1_XTB,
             representation=representation,
+            mixer=mixer,
             tolerance=1.0e-12,
             temperature=0.0,
             field=perturbed_field,
         )
         perturbed_config = replace(
             perturbed.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
+            differentiation=SCFDifferentiation.IMPLICIT,
             maxiter=100,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -585,6 +616,174 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     )
 
 
+def test_switched_implicit_uses_final_fock_representation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A potential primal switched to CDIIS attaches and finalizes as Fock."""
+    from dataclasses import replace
+    from test.test_scf.test_functional_root_derivatives import _case
+
+    from dxtb import GFN2_XTB, labels
+    from dxtb._src.scf.functional import eager as eager_module
+    from dxtb._src.scf.functional.broyden import BroydenMethod
+    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.problem import SCFRepresentation
+    from dxtb._src.scf.functional.solver import SCFSolverSettings
+    from dxtb._src.scf.functional.strategy import (
+        SCFStage,
+        SCFStrategy,
+        SCFSwitchPolicy,
+    )
+    from dxtb.scf import SCFResponseSettings
+
+    field = torch.zeros(3, **_DD, requires_grad=True)
+    case = _case(
+        "H2O",
+        method=GFN2_XTB,
+        representation=labels.SCP_MODE_POTENTIAL,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=1.0e-9,
+        temperature=0.0,
+        field=field,
+    )
+    config = replace(
+        case.system.config.scf,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        response=SCFResponseSettings(representation=SCFRepresentation.FOCK),
+        maxiter=100,
+        x_atol=1.0e-9,
+        x_atol_max=1.0e-9,
+    )
+    settings = SCFSolverSettings(
+        maxiter=100,
+        mix_guess=False,
+        damp=0.5,
+        x_atol=1.0e-9,
+        x_atol_max=1.0e-9,
+    )
+    strategy = SCFStrategy(
+        (
+            SCFStage(
+                BroydenMethod(),
+                representation=SCFRepresentation.POTENTIAL,
+                switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
+            ),
+            SCFStage(
+                CDIISMethod(),
+                representation=SCFRepresentation.FOCK,
+                initial_damp=1.0,
+            ),
+        )
+    )
+
+    def prepare_strategy(scf_config, _dtype):
+        if scf_config.initial_representation is SCFRepresentation.FOCK:
+            return settings, SCFStrategy(
+                (
+                    SCFStage(
+                        CDIISMethod(),
+                        representation=SCFRepresentation.FOCK,
+                        initial_damp=1.0,
+                    ),
+                )
+            )
+        return settings, strategy
+
+    monkeypatch.setattr(eager_module, "_prepare_solver", prepare_strategy)
+
+    adapter_representations: list[int] = []
+    original_prepare = eager_module._SCFMapTensorTree.prepare
+
+    def record_adapter(cls, inputs, representation, potential_layout=None):
+        adapter_representations.append(representation)
+        return original_prepare(inputs, representation, potential_layout)
+
+    monkeypatch.setattr(
+        eager_module._SCFMapTensorTree,
+        "prepare",
+        classmethod(record_adapter),
+    )
+    result = eager_module.run_prepared_functional_implicit(
+        case.numbers,
+        case.initial_charges,
+        case.n0,
+        case.occupation,
+        case.nel,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+    )
+
+    assert bool(result.converged)
+    assert result.root_x.shape == case.integrals.overlap.shape
+    assert adapter_representations == [labels.SCP_MODE_FOCK]
+    torch.testing.assert_close(
+        result.root_x, result.map_result.spectral.hamiltonian
+    )
+
+    first = torch.autograd.grad(
+        result.energy.sum(), field, create_graph=True, retain_graph=True
+    )[0][1]
+    second = torch.autograd.grad(first, field)[0][1]
+    assert torch.isfinite(first) and torch.isfinite(second)
+
+    standalone_field = torch.zeros(3, **_DD, requires_grad=True)
+    standalone_case = _case(
+        "H2O",
+        method=GFN2_XTB,
+        representation=labels.SCP_MODE_FOCK,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=1.0e-9,
+        temperature=0.0,
+        field=standalone_field,
+    )
+    standalone_config = replace(
+        standalone_case.system.config.scf,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        response=SCFResponseSettings(representation=SCFRepresentation.FOCK),
+        maxiter=100,
+        x_atol=1.0e-9,
+        x_atol_max=1.0e-9,
+    )
+    standalone_result = eager_module.run_prepared_functional_implicit(
+        standalone_case.numbers,
+        standalone_case.initial_charges,
+        standalone_case.n0,
+        standalone_case.occupation,
+        standalone_case.nel,
+        standalone_case.interactions,
+        standalone_case.interaction_data,
+        standalone_case.system.ihelp,
+        standalone_config,
+        standalone_case.integrals,
+    )
+    assert bool(standalone_result.converged)
+    assert adapter_representations == [
+        labels.SCP_MODE_FOCK,
+        labels.SCP_MODE_FOCK,
+    ]
+    torch.testing.assert_close(
+        result.energy, standalone_result.energy, atol=2.0e-7, rtol=2.0e-7
+    )
+    standalone_first = torch.autograd.grad(
+        standalone_result.energy.sum(),
+        standalone_field,
+        create_graph=True,
+        retain_graph=True,
+    )[0][1]
+    standalone_second = torch.autograd.grad(standalone_first, standalone_field)[
+        0
+    ][1]
+    torch.testing.assert_close(
+        first, standalone_first, atol=2.0e-6, rtol=2.0e-5
+    )
+    torch.testing.assert_close(
+        second, standalone_second, atol=2.0e-5, rtol=2.0e-4
+    )
+
+
 def test_final_map_is_recomputed_from_the_detached_accepted_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -594,6 +793,7 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     from dxtb import GFN1_XTB, labels
     from dxtb._src.scf import functional as functional_package
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb.scf import SCFRepresentation, SCFResponseSettings
 
     case = _case(
         "H2",
@@ -603,9 +803,11 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
         tolerance=1.0e-12,
         temperature=0.0,
     )
+    assert case.system.h0_setup is not None
     config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        response=SCFResponseSettings(representation=SCFRepresentation.CHARGE),
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -670,7 +872,7 @@ def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
         )
         config = replace(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
+            differentiation=SCFDifferentiation.IMPLICIT,
             maxiter=300,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -715,7 +917,7 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
     )
     config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -780,12 +982,11 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
         for force_convergence in (False, True):
             config = replace(
                 case.system.config.scf,
-                scf_mode=labels.SCF_MODE_IMPLICIT,
+                differentiation=SCFDifferentiation.IMPLICIT,
                 maxiter=maxiter,
                 x_atol=1.0e-14,
                 x_atol_max=1.0e-14,
                 force_convergence=force_convergence,
-                strict=force_convergence,
             )
             with pytest.raises(SCFConvergenceError):
                 run_prepared_functional_implicit(
@@ -818,7 +1019,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
     )
     invalid_config = replace(
         invalid.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -838,7 +1039,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
         )
 
 
-def test_public_singlepoint_keeps_implicit_mode_on_legacy_route() -> None:
+def test_public_singlepoint_uses_functional_implicit_route() -> None:
     from dataclasses import replace
     from test.test_scf.test_functional_root_derivatives import _case
 
@@ -853,7 +1054,7 @@ def test_public_singlepoint_keeps_implicit_mode_on_legacy_route() -> None:
     )
     scf = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -865,12 +1066,9 @@ def test_public_singlepoint_keeps_implicit_mode_on_legacy_route() -> None:
     positions = case.positions.clone().requires_grad_(True)
     field = torch.zeros(3, **_DD, requires_grad=True)
     result = system.singlepoint(positions, field=field)
-    # System.singlepoint uses the fixed-trip boundary only for FULL mode.
-    # The implicit compatibility engine returns the legacy mapping, whose
-    # optional convergence metadata remains None under the B5.6 contract.
-    assert result.converged is None
-    assert result.residual is None
-    assert result.status is None
+    assert bool(result.converged)
+    assert result.residual is not None
+    assert result.status is not None
     field_gradient = torch.autograd.grad(
         result.energy.sum(), field, create_graph=True, retain_graph=True
     )[0]
@@ -925,8 +1123,11 @@ def test_public_functional_implicit_h2_float32_response() -> None:
     def energy_and_response(mode: int) -> tuple[torch.Tensor, torch.Tensor]:
         scf = replace(
             case.system.config.scf,
-            scf_mode=mode,
-            mixer=labels.MIXER_ANDERSON,
+            differentiation=(
+                SCFDifferentiation.IMPLICIT
+                if mode == labels.SCF_MODE_IMPLICIT
+                else SCFDifferentiation.UNROLLED
+            ),
             maxiter=100,
             x_atol=tolerance,
             x_atol_max=tolerance,
@@ -940,9 +1141,9 @@ def test_public_functional_implicit_h2_float32_response() -> None:
         )
         result = system.singlepoint(case.positions, field=field)
         if mode == labels.SCF_MODE_IMPLICIT:
-            assert result.converged is None
-            assert result.residual is None
-            assert result.status is None
+            assert result.converged is not None and bool(result.converged)
+            assert result.residual is not None
+            assert result.status is not None
         else:
             assert result.converged is not None and bool(result.converged)
         response = torch.autograd.grad(result.energy.sum(), field)[0][1]
@@ -964,7 +1165,7 @@ def test_public_functional_implicit_h2_float32_response() -> None:
     )
 
 
-def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
+def test_implicit_strategy_policy_selects_native_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
@@ -975,52 +1176,37 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     from dxtb._src.scf.functional import data as functional_data
     from dxtb._src.scf.iterator import _use_functional_implicit_route
     from dxtb.config import ConfigSCF
+    from dxtb.scf import AndersonMethod, strategy_preset
 
     case = _case("H2", method=GFN1_XTB, temperature=0.0)
-    base = replace(case.system.config.scf, scf_mode=labels.SCF_MODE_IMPLICIT)
+    base = replace(
+        case.system.config.scf,
+        differentiation=SCFDifferentiation.IMPLICIT,
+    )
     default = ConfigSCF()
-    assert default.mixer == labels.MIXER_BROYDEN
+    assert isinstance(default.strategy.stages[0].method, AndersonMethod)
 
-    # The implicit default preserves legacy ownership, where Broyden is
-    # ignored by the old implicit engine. Strictness remains FULL-specific.
-    for strict in (False, True):
-        broyden = replace(base, mixer=labels.MIXER_BROYDEN, strict=strict)
-        assert not _use_functional_implicit_route(
-            replace(broyden, mixer=default.mixer),
+    for name in ("linear", "anderson", "broyden", "cdiis"):
+        configured = replace(base, strategy=strategy_preset(name))
+        assert _use_functional_implicit_route(
+            configured,
             case.interactions,
             case.system.ihelp,
             case.numbers,
             case.integrals,
             legacy_engine_overrides=False,
         )
-        assert not _use_functional_implicit_route(
-            broyden,
-            case.interactions,
-            case.system.ihelp,
-            case.numbers,
-            case.integrals,
-            legacy_engine_overrides=False,
-        )
-        for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
-            assert _use_functional_implicit_route(
-                replace(base, mixer=mixer, strict=strict),
-                case.interactions,
-                case.system.ihelp,
-                case.numbers,
-                case.integrals,
-                legacy_engine_overrides=False,
-            )
 
     assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON),
+        base,
         case.interactions,
         case.system.ihelp,
         case.numbers,
         case.integrals,
         legacy_engine_overrides=True,
     )
-    assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON),
+    assert _use_functional_implicit_route(
+        base,
         case.interactions,
         SimpleNamespace(batch_mode=1),
         case.numbers,
@@ -1033,7 +1219,7 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
         lambda _: (False, "test extension"),
     )
     assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON),
+        base,
         case.interactions,
         case.system.ihelp,
         case.numbers,
@@ -1041,8 +1227,8 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
         legacy_engine_overrides=False,
     )
     monkeypatch.undo()
-    assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON),
+    assert _use_functional_implicit_route(
+        base,
         case.interactions,
         case.system.ihelp,
         case.numbers.unsqueeze(0),
@@ -1050,7 +1236,7 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
         legacy_engine_overrides=False,
     )
     assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON),
+        base,
         case.interactions,
         case.system.ihelp,
         case.numbers,
@@ -1058,7 +1244,7 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
         legacy_engine_overrides=False,
     )
     assert not _use_functional_implicit_route(
-        replace(base, mixer=labels.MIXER_ANDERSON, maxiter=-1),
+        replace(base, maxiter=-1),
         case.interactions,
         case.system.ihelp,
         case.numbers,
@@ -1068,7 +1254,6 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     assert not _use_functional_implicit_route(
         replace(
             base,
-            mixer=labels.MIXER_ANDERSON,
             fermi=replace(base.fermi, etemp=-1.0),
         ),
         case.interactions,
@@ -1080,7 +1265,6 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     assert not _use_functional_implicit_route(
         replace(
             base,
-            mixer=labels.MIXER_ANDERSON,
             fermi=replace(base.fermi, maxiter=-1),
         ),
         case.interactions,
@@ -1091,13 +1275,12 @@ def test_implicit_mixer_policy_keeps_broyden_on_legacy_route(
     )
 
 
-def test_public_implicit_broyden_default_matches_functional_forward_values() -> (
-    None
-):
+def test_public_implicit_strategy_values_agree_after_root_preparation() -> None:
     from dataclasses import replace
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
+    from dxtb.scf import strategy_preset
 
     case = _case(
         "H2",
@@ -1106,35 +1289,31 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
         tolerance=1.0e-12,
         temperature=0.0,
     )
-    legacy_config = replace(
+    broyden_config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
-        mixer=labels.MIXER_BROYDEN,
+        strategy=strategy_preset("broyden"),
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    functional_config = replace(legacy_config, mixer=labels.MIXER_ANDERSON)
+    functional_config = replace(
+        broyden_config, strategy=strategy_preset("anderson")
+    )
     functional_system = replace(
         case.system, config=replace(case.system.config, scf=functional_config)
     )
     functional = functional_system.singlepoint(
         case.positions, field=torch.zeros(3, **_DD)
     )
-    legacy_results = []
-    for strict in (False, True):
-        legacy_system = replace(
-            case.system,
-            config=replace(
-                case.system.config,
-                scf=replace(legacy_config, strict=strict),
-            ),
-        )
-        legacy_results.append(
-            legacy_system.singlepoint(
-                case.positions, field=torch.zeros(3, **_DD)
-            )
-        )
+
+    broyden_system = replace(
+        case.system,
+        config=replace(case.system.config, scf=broyden_config),
+    )
+    broyden_result = broyden_system.singlepoint(
+        case.positions, field=torch.zeros(3, **_DD)
+    )
 
     def assert_tree_close(actual, expected) -> None:
         if isinstance(actual, torch.Tensor):
@@ -1160,8 +1339,58 @@ def test_public_implicit_broyden_default_matches_functional_forward_values() -> 
         "emo",
         "occupation",
     ):
-        for legacy in legacy_results:
-            assert_tree_close(getattr(functional, name), getattr(legacy, name))
+        assert_tree_close(
+            getattr(functional, name), getattr(broyden_result, name)
+        )
+
+
+def test_iterator_routes_implicit_broyden_through_functional_primal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The implicit iterator acquires a certified native Broyden root."""
+    from dataclasses import replace
+    from test.test_scf.test_functional_root_derivatives import _case
+
+    from dxtb import GFN1_XTB, labels
+    from dxtb._src.scf import unrolling
+    from dxtb._src.scf.iterator import solve
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("implicit SCF must not instantiate legacy FULL")
+
+    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", forbidden)
+
+    case = _case(
+        "H2",
+        method=GFN1_XTB,
+        representation=labels.SCP_MODE_CHARGE,
+        mixer=labels.MIXER_BROYDEN,
+        tolerance=1.0e-10,
+        maxiter=100,
+        temperature=0.0,
+    )
+    assert case.system.h0_setup is not None
+
+    config = replace(
+        case.system.config.scf,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        maxiter=100,
+        x_atol=1.0e-10,
+        x_atol_max=1.0e-10,
+    )
+    result = solve(
+        case.numbers,
+        case.positions,
+        case.charge,
+        case.spin,
+        case.interactions,
+        case.interaction_data,
+        case.system.ihelp,
+        config,
+        case.integrals,
+        case.system.h0_setup.refocc,
+    )
+    assert bool(result.converged)
 
 
 def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
@@ -1195,7 +1424,7 @@ def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     )
     implicit_config = replace(
         implicit_case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -1246,7 +1475,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
-    from dxtb._src.scf.functional import solver
+    from dxtb._src.scf.functional import energy
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
 
     case = _case(
@@ -1259,7 +1488,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     )
     config = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
+        differentiation=SCFDifferentiation.IMPLICIT,
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -1276,7 +1505,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
 
     # the default equal partition evaluates only the trace
     for name in ("fermi_free_energy_matrix", "fermi_free_energy_trace"):
-        monkeypatch.setattr(solver, name, counting(getattr(solver, name)))
+        monkeypatch.setattr(energy, name, counting(getattr(energy, name)))
     electron_count = case.nel.clone().requires_grad_(True)
     result = run_prepared_functional_implicit(
         case.numbers,
@@ -1299,9 +1528,14 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
 
 
 @pytest.mark.slow
-def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "mixer",
+    [labels.MIXER_ANDERSON, labels.MIXER_BROYDEN],
+    ids=("anderson", "broyden"),
+)
+def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
+    mixer: int,
+) -> None:
     from test.test_scf.test_functional_root_derivatives import (
         _case,
         _initial_state,
@@ -1321,7 +1555,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
         "NO2",
         method=GFN2_XTB,
         representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_ANDERSON,
+        mixer=mixer,
         tolerance=tolerance,
         maxiter=300,
         temperature=300.0,
@@ -1412,6 +1646,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
             outcome.residual,
             outcome.trajectory_status,
             outcome.damping_state,
+            root_x=state,
         )
         return (finalized.energy + finalized.fenergy).sum()
 
@@ -1482,7 +1717,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd() -> 
             "NO2",
             method=GFN2_XTB,
             representation=labels.SCP_MODE_POTENTIAL,
-            mixer=labels.MIXER_ANDERSON,
+            mixer=mixer,
             tolerance=tolerance,
             maxiter=300,
             temperature=300.0,

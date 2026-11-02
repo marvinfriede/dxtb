@@ -382,8 +382,8 @@ def test_es2_subclass_uses_legacy_extension_path() -> None:
 
     assert system.es2_setup is None
     assert system.es2_interaction is None
-    result = system.singlepoint(positions)
-    assert torch.isfinite(result.energy).all()
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        system.singlepoint(positions)
     assert custom.cache_calls == 1
 
 
@@ -499,14 +499,14 @@ def test_es3_subclass_keeps_legacy_extension_and_mutation() -> None:
     )
 
     assert calc.system.es3_setup is None
-    first = calc.singlepoint(positions)
-    assert first.energy.isfinite().all()
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        calc.singlepoint(positions)
     assert custom.cache_calls == 1
     calc.interactions.update("ES3", extension_scale=torch.tensor(2.0, **DD))
     assert custom.extension_scale.item() == 2.0
-    second = calc.singlepoint(positions.clone())
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        calc.singlepoint(positions.clone())
     assert custom.cache_calls == 2
-    assert not torch.isclose(first.energy.sum(), second.energy.sum())
     calc.interactions.reset("ES3")
     assert custom.reset_calls == 1
     calc.reset()
@@ -748,3 +748,83 @@ def test_calculator_holds_the_system() -> None:
     assert calc.ihelp is calc.system.ihelp
     assert calc.classicals is calc.system.classicals
     assert calc.opts is calc.system.config
+
+
+def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_batch() -> None:
+    """Calculator prepares call-local setups so parameter backward and mutations work repeatedly."""
+    from dxtb._src.calculators.packed_result import build_calculator_lane_systems
+
+    numbers_1d = torch.tensor([8, 1, 1], device=DEVICE)
+    pos_1d = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]], **DD
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    par.set_differentiable("element", "O", "gam")
+    gam_param = par.get("element.O.gam")
+
+    calc_1d = Calculator(
+        numbers_1d, par, opts={"verbosity": 0}, **DD
+    )
+    sys_initial = calc_1d.system
+    assert calc_1d._ncalcs == 0
+
+    # Ordinary position derivatives preserve System identity across calls
+    pos_g = pos_1d.clone().requires_grad_(True)
+    f1 = calc_1d.forces(pos_g)
+    assert torch.isfinite(f1).all()
+    assert calc_1d._ncalcs == 1
+    assert calc_1d.system is sys_initial
+
+    # Repeated parameter backward passes succeed via call-local setup preparation
+    e1 = calc_1d.energy(pos_1d)
+    assert calc_1d._ncalcs == 2
+    (g_param_1,) = torch.autograd.grad(e1, gam_param)
+    assert torch.isfinite(g_param_1).all() and g_param_1.abs().item() > 0.0
+
+    e2 = calc_1d.energy(pos_1d)
+    assert calc_1d._ncalcs == 3
+    assert calc_1d.system is sys_initial
+    (g_param_2,) = torch.autograd.grad(e2, gam_param)
+    torch.testing.assert_close(g_param_1, g_param_2)
+
+    # In-place parameter mutation takes effect immediately on next evaluation
+    with torch.no_grad():
+        gam_param.add_(0.05)
+    e3 = calc_1d.energy(pos_1d)
+    assert not torch.isclose(e2, e3)
+
+    # Batched Calculator (mode 1 padded and mode 2 conformer): _ncalcs, call-local deduplication, and parameter gradients
+    numbers_2d = torch.tensor([[8, 1, 1], [1, 1, 0]], device=DEVICE)
+    pos_2d = torch.tensor(
+        [
+            [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4], [0.0, 0.0, 0.0]],
+        ],
+        **DD,
+    )
+    calc_2d = Calculator(
+        numbers_2d, par, opts={"verbosity": 0, "batch_mode": 1}, **DD
+    )
+    assert calc_2d._ncalcs == 0
+    res_b1 = calc_2d.singlepoint(pos_2d.detach())
+    assert calc_2d._ncalcs == 1
+    res_b2 = calc_2d.singlepoint(pos_2d.detach())
+    assert calc_2d._ncalcs == 2
+    torch.testing.assert_close(res_b1.energy, res_b2.energy)
+
+    # Conformer batch deduplicates identical lane compositions within a single call
+    numbers_conf = torch.tensor([[8, 1, 1], [8, 1, 1]], device=DEVICE)
+    calc_conf = Calculator(
+        numbers_conf, par, opts={"verbosity": 0, "batch_mode": 2}, **DD
+    )
+    conf_lanes = build_calculator_lane_systems(calc_conf)
+    assert conf_lanes[0] is conf_lanes[1]
+
+    # Repeated parameter backward passes on batched Calculator succeed cleanly
+    eb1 = calc_2d.energy(pos_2d).sum()
+    (gb_1,) = torch.autograd.grad(eb1, gam_param)
+    assert torch.isfinite(gb_1).all() and gb_1.abs().item() > 0.0
+
+    eb2 = calc_2d.energy(pos_2d).sum()
+    (gb_2,) = torch.autograd.grad(eb2, gam_param)
+    torch.testing.assert_close(gb_1, gb_2)

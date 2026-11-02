@@ -1,0 +1,69 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn2",
+  "charge": 1.0,
+  "spin": 1.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "adiis-cdiis",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 6,
+  "physical_maps": 3,
+  "certified": true,
+  "residual_l2": 2.6808715073948984e-08,
+  "residual_max": 1.3087790406984823e-08,
+  "energy": -4.431225111368875,
+  "wall_seconds": 0.08887999365106225,
+  "instrumented_wall_seconds": 0.09554845886304975,
+  "physical_map_seconds": 0.021466321777552366,
+  "map_diagnostic_seconds_removed": 0.006668465211987495,
+  "physical_map_trajectory": [
+    {
+      "energy": -4.430909212594949,
+      "fixed_point_l2": 0.039597806254602165,
+      "fixed_point_max": 0.01733775716501218
+    },
+    {
+      "energy": -4.4311501371054804,
+      "fixed_point_l2": 0.01820517261965186,
+      "fixed_point_max": 0.00963137209973386
+    },
+    {
+      "energy": -4.431205056718807,
+      "fixed_point_l2": 0.009184273840643771,
+      "fixed_point_max": 0.004875819328658215
+    }
+  ],
+  "physical_maps_recorded": 3,
+  "coefficient_optimizer_seconds": 0.0036448449827730656,
+  "coefficient_optimizer_evaluations": 6,
+  "coefficient_optimization": [
+    {
+      "history_size": 2,
+      "coefficients": [
+        0.5,
+        0.5
+      ],
+      "selected_energy": -4.4311501371054804,
+      "best_vertex_energy": -4.4311501371054804,
+      "optimizer_evaluations": 6,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.0036448449827730656
+    }
+  ],
+  "stage_iterations": [
+    3,
+    3
+  ]
+}

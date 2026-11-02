@@ -66,7 +66,7 @@ def converged_to_charges(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``data.eigen_options``.
+        :mod:`.ovlp_diag` .
 
     Returns
     -------
@@ -79,18 +79,18 @@ def converged_to_charges(
         Unknown `scp_mode` given.
     """
 
-    if config.scp_mode == labels.SCP_MODE_CHARGE:
+    if config._legacy_representation_code == labels.SCP_MODE_CHARGE:
         return Charges.from_tensor(
             x, data.charges, batch_mode=data.ihelp.batch_mode
         )
 
-    if config.scp_mode == labels.SCP_MODE_POTENTIAL:
+    if config._legacy_representation_code == labels.SCP_MODE_POTENTIAL:
         pot = Potential.from_tensor(
             x, data.potential, batch_mode=data.ihelp.batch_mode
         )
         return potential_to_charges(pot, data, config, diagonalizer)
 
-    if config.scp_mode == labels.SCP_MODE_FOCK:
+    if config._legacy_representation_code == labels.SCP_MODE_FOCK:
         zero = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         x = torch.where(x != defaults.PADNZ, x, zero)
 
@@ -98,7 +98,8 @@ def converged_to_charges(
         return density_to_charges(data.density, data, config)
 
     raise ValueError(
-        f"Unknown convergence target (SCP mode) '{config.scp_mode}'."
+        "Unknown SCF strategy representation "
+        f"'{config.initial_representation.value}'."
     )
 
 
@@ -155,7 +156,7 @@ def potential_to_charges(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``data.eigen_options``.
+        :mod:`.ovlp_diag` .
 
     Returns
     -------
@@ -187,7 +188,7 @@ def potential_to_density(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``data.eigen_options``.
+        :mod:`.ovlp_diag` .
 
     Returns
     -------
@@ -225,7 +226,9 @@ def density_to_charges(density: Tensor, data: _Data, cfg: ConfigSCF) -> Charges:
 
     # monopolar charges
     populations = einsum("...ik,...ki->...i", density, data.ints.overlap)
-    charges = Charges(mono=data.n0 - populations, batch_mode=data.ihelp.batch_mode)
+    charges = Charges(
+        mono=data.n0 - populations, batch_mode=data.ihelp.batch_mode
+    )
 
     # Atomic dipole moments (dipole charges)
     if data.ints.dipole is not None:
@@ -317,7 +320,7 @@ def hamiltonian_to_density(
     diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
         Diagonalizer of the Hamiltonian (returns eigenvalues and
         eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` with ``data.eigen_options``.
+        :mod:`.ovlp_diag` .
 
     Returns
     -------
@@ -326,9 +329,7 @@ def hamiltonian_to_density(
     """
 
     if diagonalizer is None:
-        data.evals, data.evecs = diagonalize(
-            hamiltonian, data.ints.overlap, data.eigen_options
-        )
+        data.evals, data.evecs = diagonalize(hamiltonian, data.ints.overlap)
     else:
         data.evals, data.evecs = diagonalizer(hamiltonian)
 

@@ -39,7 +39,6 @@ from ..test_classical.test_halogen.samples import samples as samples_hal
 from ..test_classical.test_repulsion.samples import samples as samples_rep
 
 opts = {
-    "f_atol": 1.0e-10,
     "x_atol": 1.0e-10,
     "maxiter": 50,
     "scf_mode": labels.SCF_MODE_FULL,

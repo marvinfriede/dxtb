@@ -19,61 +19,26 @@ Calculators: Base
 =================
 
 Base calculator for the extended tight-binding (xTB) models.
-This calculator provides analytical, autograd, and numerical versions of all
-properties.
+This calculator provides autograd and numerical versions of all properties.
 """
 
 from __future__ import annotations
 
-from dxtb._src.constants import defaults
-from dxtb._src.typing import Any, Tensor
-
-from .types.analytical import AnalyticalCalculator
 from .types.autograd import AutogradCalculator
 from .types.numerical import NumericalCalculator
 
 __all__ = ["Calculator"]
 
 
-class Calculator(AnalyticalCalculator, AutogradCalculator, NumericalCalculator):
+class Calculator(AutogradCalculator, NumericalCalculator):
     """
     Calculator for the extended tight-binding models (xTB).
     """
 
     implemented_properties = list(
         set(
-            AnalyticalCalculator.implemented_properties
-            + AutogradCalculator.implemented_properties
+            AutogradCalculator.implemented_properties
             + NumericalCalculator.implemented_properties
         )
     )
     """Names of implemented methods of the Calculator."""
-
-    # The main implementation can be found in calculator base classes:
-    # dxtb/_src/calculators/types/base.py
-    def calculate(
-        self,
-        properties: list[str],
-        positions: Tensor,
-        chrg: Tensor | float | int = defaults.CHRG,
-        spin: Tensor | float | int | None = defaults.SPIN,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        # The quadrupole moment is also available via autograd (`quadrupole`)
-        # and finite differences (`quadrupole_numerical`), but both need the
-        # field gradient interaction. The default route requires no such
-        # interaction and is the analytical one.
-        values = AutogradCalculator.calculate(
-            self,
-            [p for p in properties if p != "quadrupole"],
-            positions,
-            chrg,
-            spin,
-            **kwargs,
-        )
-
-        if "quadrupole" in properties:
-            values["quadrupole"] = self.quadrupole_analytical(
-                positions, chrg, spin, **kwargs
-            )
-        return values

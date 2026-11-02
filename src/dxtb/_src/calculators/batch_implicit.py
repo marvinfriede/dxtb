@@ -26,10 +26,6 @@ and mapped implicit differentiation.
 from __future__ import annotations
 
 import dataclasses
-import multiprocessing as mp
-import os
-import resource
-import time
 import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -98,7 +94,10 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.anderson import _solve_map_anderson
+from dxtb._src.scf.functional.certification import (
+    certify_scf_core_state,
+    resolve_certification_thresholds,
+)
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
     replace_tensor_leaves,
@@ -115,7 +114,7 @@ from dxtb._src.scf.functional.data import (
 from dxtb._src.scf.functional.eager import (
     _padded_charge_projections,
     _padded_potential_projections,
-    _solver_settings,
+    _prepare_solver,
     public_scf_status,
     resolve_full_scf_route,
 )
@@ -141,6 +140,15 @@ from dxtb._src.scf.functional.padded import (
     _padded_initial_guess,
     setup_padded_scf_inputs,
 )
+from dxtb._src.scf.functional.problem import (
+    SCFPhysicalState,
+    SCFProblem,
+    SCFRepresentation,
+)
+from dxtb._src.scf.functional.response import (
+    SCFResponseSettings,
+    prepare_response_root,
+)
 from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
@@ -148,7 +156,6 @@ from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_NONE,
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
     DampingState,
-    SCFSolverSettings,
     SCFTrajectoryStatus,
     _project_potential_padding,
     _solve_map,
@@ -158,6 +165,7 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf_potential,
 )
 from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
+from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.status import SCFStatus
@@ -170,7 +178,6 @@ from dxtb._src.wavefunction.filling import FermiStatus
 
 __all__ = [
     "RESPONSE_NOT_RUN",
-    "BatchPreparationDiagnostics",
     "BatchResponseDiagnostics",
     "BatchRootFailureCode",
     "ConvergedRootLaneRecord",
@@ -273,17 +280,36 @@ def implicit_root(
     *parameters: Tensor,
     raw_map: Callable[..., Tensor],
     method: Any = "bicgstab",
+    rtol: float = _LINEAR_SOLVE_RTOL,
+    atol: float = _LINEAR_SOLVE_ATOL,
+    maxiter: int | None = None,
 ) -> Tensor:
     """Attach implicit fixed-point derivatives with optional custom linear solver."""
     if method == "bicgstab":
-        return _functional_implicit_root(root_x, *parameters, raw_map=raw_map)
+        if (
+            rtol == _LINEAR_SOLVE_RTOL
+            and atol == _LINEAR_SOLVE_ATOL
+            and maxiter is None
+        ):
+            return _functional_implicit_root(
+                root_x, *parameters, raw_map=raw_map
+            )
+        return _functional_implicit_root(
+            root_x,
+            *parameters,
+            raw_map=raw_map,
+            rtol=rtol,
+            atol=atol,
+            maxiter=maxiter,
+        )
     return implicit_fixed_point(
         raw_map,
         root_x,
         *parameters,
         method=method,
-        rtol=_LINEAR_SOLVE_RTOL,
-        atol=_LINEAR_SOLVE_ATOL,
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter,
     )
 
 
@@ -313,6 +339,11 @@ class ConvergedRootLaneRecord:
     adapter: _SCFMapTensorTree
     parameters: tuple[Tensor, ...]
     root_x: Tensor
+    response_adapter: _SCFMapTensorTree | None
+    response_parameters: tuple[Tensor, ...] | None
+    response_root_x: Tensor | None
+    response_potential_layout: PotentialLayout | None
+    response_certification: Any | None
     iterations: Tensor
     solver_converged: Tensor
     solver_residual: Tensor
@@ -360,29 +391,15 @@ class _TensorValueSnapshot:
 
 
 @dataclass(frozen=True, eq=False)
-class BatchPreparationDiagnostics:
-    """Timing, CPU, and process-tree memory diagnostics for root preparation."""
-
-    num_workers: int
-    wall_time_s: float
-    parent_cpu_time_s: float
-    worker_cpu_time_s: float
-    total_cpu_time_s: float
-    parent_peak_rss_mb: float
-    worker_peak_rss_sum_mb: float
-    process_tree_peak_rss_mb: float
-    process_tree_pss_mb: float
-    worker_pids: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True, eq=False)
 class PreparedConvergedRootBatch:
     """Validated conformer batch sharing one :class:`System` or padded core owner."""
 
     system: System | PaddedExactSystemCore
     positions: Tensor
-    representation: int
-    effective_mixer: int
+    primal_representation: int
+    response_representation: int
+    response_settings: SCFResponseSettings
+    strategy_label: str
     lanes: tuple[ConvergedRootLaneRecord, ...]
     parameter_paths: tuple[str, ...]
     model_parameter_refs: tuple[Tensor, ...]
@@ -400,10 +417,10 @@ class PreparedConvergedRootBatch:
     lane_input_snapshots: tuple[tuple[_TensorValueSnapshot | None, ...], ...]
     parameter_snapshots: tuple[tuple[_TensorValueSnapshot, ...], ...]
     root_snapshots: tuple[_TensorValueSnapshot, ...]
+    response_root_snapshots: tuple[_TensorValueSnapshot | None, ...]
     input_tensor_versions: tuple[dict[str, int], ...]
     valid_lane_mask: Tensor
     all_roots_valid: bool
-    preparation_diagnostics: BatchPreparationDiagnostics | None = None
 
 
 def _unwrap_primal_tensor(x: Tensor) -> Tensor:
@@ -762,15 +779,15 @@ def _validate_system_and_positions(
             raise SCFConvergenceError(
                 "Implicit physical-root differentiation requires maxiter > 0."
             )
-        effective_mixer = (
-            labels.MIXER_ANDERSON
-            if config.scf.mixer == labels.MIXER_BROYDEN
-            else config.scf.mixer
+        strategy_label = " -> ".join(
+            type(stage.method).__name__.removesuffix("Method").lower()
+            for stage in config.scf.strategy.stages
         )
         route = SimpleNamespace(
             kind="functional",
-            representation=config.scf.scp_mode,
-            effective_mixer=effective_mixer,
+            representation=config.scf._legacy_representation_code,
+            strategy_label=strategy_label,
+            strategy=config.scf.strategy,
             reason=None,
             warning=None,
         )
@@ -868,6 +885,7 @@ def _validate_system_and_positions(
         system.interactions,
         system.ihelp,
         numbers,
+        allow_implicit=True,
     )
     if route.kind != "functional":
         raise NotImplementedError(
@@ -1275,9 +1293,7 @@ class _ResponseParamsMonitor(torch.autograd.Function):
         return tuple(p.clone() for p in params)
 
     @staticmethod
-    def backward(
-        ctx: Any, *grad_outputs: Tensor | None
-    ) -> tuple[None, ...]:
+    def backward(ctx: Any, *grad_outputs: Tensor | None) -> tuple[None, ...]:
         ctx.collector.record_outgoing(grad_outputs)
         return (None, *grad_outputs)
 
@@ -1366,9 +1382,7 @@ def classify_response_failure_status(
         confirmed_resp_fail = primal_ok & diag.confirmed_failure.to(
             device=device
         )
-        unclassified_nonfinite = (
-            primal_ok & ~confirmed_resp_fail & ~grad_finite
-        )
+        unclassified_nonfinite = primal_ok & ~confirmed_resp_fail & ~grad_finite
         updated_final = torch.where(
             confirmed_resp_fail,
             torch.full_like(
@@ -1591,6 +1605,17 @@ def _validate_prepared_primal(
         raise RuntimeError(
             "A prepared physical root tensor was modified; prepare roots again."
         )
+    if any(
+        lane.response_root_x is not None
+        and snapshot is not None
+        and not same(lane.response_root_x, snapshot)
+        for lane, snapshot in zip(
+            prepared.lanes, prepared.response_root_snapshots
+        )
+    ):
+        raise RuntimeError(
+            "A prepared response root tensor was modified; prepare roots again."
+        )
 
     for lane, expected_versions in zip(
         prepared.lanes, prepared.input_tensor_versions
@@ -1623,6 +1648,25 @@ def _validate_prepared_primal(
                 "were modified; prepare roots again."
             )
 
+    if prepared.response_representation != prepared.primal_representation:
+        for lane, param_snapshots in zip(
+            prepared.lanes, prepared.parameter_snapshots
+        ):
+            if not lane.root_valid:
+                continue
+            assert lane.response_adapter is not None
+            assert lane.response_parameters is not None
+            if len(lane.response_parameters) != len(param_snapshots) or any(
+                not same(param, snapshot)
+                for param, snapshot in zip(
+                    lane.response_parameters, param_snapshots
+                )
+            ):
+                raise RuntimeError(
+                    f"Prepared response parameters for lane {lane.lane_index} "
+                    "were modified; prepare roots again."
+                )
+
     current_inputs = tuple(
         zip(positions.unbind(0), charges, spins, fields, field_grads)
     )
@@ -1648,6 +1692,7 @@ class _LanePrimalSolveOutcome:
     """Detached primal fixed-point solve and validation result for one lane."""
 
     root_x: Tensor
+    map_result: Any
     iterations: Tensor
     lane_converged: Tensor
     lane_residual: Tensor
@@ -1665,130 +1710,15 @@ class _LanePrimalSolveOutcome:
     root_valid: bool
 
 
-def _snapshot_object_tree(obj: Any) -> Any:
-    """Recursively convert Tensor leaves to _TensorValueSnapshot bytes."""
-    if isinstance(obj, torch.Tensor):
-        return _snapshot_required_tensor(obj)
-    if isinstance(obj, CoreIndexData):
-        return (
-            "_CoreIndexData",
-            _snapshot_required_tensor(obj.shells_to_atom),
-            _snapshot_required_tensor(obj.orbitals_to_shell),
-        )
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return (
-            "_Dataclass",
-            type(obj),
-            {
-                f.name: _snapshot_object_tree(getattr(obj, f.name))
-                for f in dataclasses.fields(obj)
-            },
-        )
-    if isinstance(obj, tuple):
-        return tuple(_snapshot_object_tree(item) for item in obj)
-    if isinstance(obj, list):
-        return [_snapshot_object_tree(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _snapshot_object_tree(v) for k, v in obj.items()}
-    return obj
-
-
-def _restore_object_tree(
-    obj: Any, device: torch.device | None = None
-) -> Any:
-    """Recursively restore _TensorValueSnapshot leaves to detached Tensors."""
-    if isinstance(obj, _TensorValueSnapshot):
-        return obj.to_tensor(device=device)
-    if (
-        isinstance(obj, tuple)
-        and len(obj) == 3
-        and obj[0] == "_CoreIndexData"
-        and isinstance(obj[1], _TensorValueSnapshot)
-        and isinstance(obj[2], _TensorValueSnapshot)
-    ):
-        return CoreIndexData(
-            shells_to_atom=obj[1].to_tensor(device=device),
-            orbitals_to_shell=obj[2].to_tensor(device=device),
-        )
-    if (
-        isinstance(obj, tuple)
-        and len(obj) == 3
-        and obj[0] == "_Dataclass"
-        and isinstance(obj[1], type)
-        and isinstance(obj[2], dict)
-    ):
-        cls = obj[1]
-        restored_fields = {
-            k: _restore_object_tree(v, device=device)
-            for k, v in obj[2].items()
-        }
-        return cls(**restored_fields)
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return replace(
-            obj,
-            **{
-                f.name: _restore_object_tree(getattr(obj, f.name), device=device)
-                for f in dataclasses.fields(obj)
-            },
-        )
-    if isinstance(obj, tuple):
-        return tuple(
-            _restore_object_tree(item, device=device) for item in obj
-        )
-    if isinstance(obj, list):
-        return [_restore_object_tree(item, device=device) for item in obj]
-    if isinstance(obj, dict):
-        return {
-            k: _restore_object_tree(v, device=device) for k, v in obj.items()
-        }
-    return obj
-
-
-def _read_process_memory_mb() -> tuple[float, float]:
-    """Return (peak_rss_mb, current_pss_mb) for the current process."""
-    peak_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    pss_kb: float | None = None
-    try:
-        with open("/proc/self/status", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("VmHWM:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        peak_kb = max(peak_kb, float(parts[1]))
-                    break
-    except OSError:
-        pass
-    try:
-        with open("/proc/self/smaps_rollup", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("Pss:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        pss_kb = float(parts[1])
-                    break
-    except OSError:
-        pass
-    if pss_kb is None:
-        pss_kb = peak_kb
-    return peak_kb / 1024.0, pss_kb / 1024.0
-
-
-def _init_primal_worker() -> None:
-    """Enforce single-threaded BLAS/PyTorch execution inside worker processes."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    torch.set_num_threads(1)
-
-
 def _solve_and_validate_lane_primal(
     primal_inputs: SCFInputs,
     guess_charges: SCFCharges,
     numbers: Tensor,
     representation: int,
     settings: Any,
+    strategy: SCFStrategy,
     lane_padded: bool,
-    effective_mixer: int,
+    strategy_label: str,
     maxiter: int,
     damp_default: float,
     damp_dynamic_factor: float,
@@ -1810,33 +1740,33 @@ def _solve_and_validate_lane_primal(
         ) = _make_representation_projections(
             primal_inputs, representation, guess_charges, lane_padded
         )
+        solver_problem = None
+        if (
+            getattr(strategy.stages[0].method, "required_representation", None)
+            is SCFRepresentation.FOCK
+        ):
+            solver_problem = SCFProblem(
+                primal_inputs,
+                SCFRepresentation.FOCK,
+            )
 
         with eager_primal_fermi_scope(eager_primal_fermi):
-            if isinstance(settings, SCFSolverSettings):
-                outcome = _solve_map(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
-            else:
-                outcome = _solve_map_anderson(
-                    initial_state,
-                    settings,
-                    map_fn,
-                    state_projection=state_projection,
-                    eager=True,
-                )
+            outcome = _solve_map(
+                initial_state,
+                settings,
+                map_fn,
+                state_projection=state_projection,
+                problem=solver_problem,
+                strategy=strategy,
+                eager=True,
+            )
 
         with eager_primal_fermi_scope(False):
             adapter, primal_params = _SCFMapTensorTree.prepare(
                 primal_inputs, representation, layout
             )
             primal_params = tuple(p.clone() for p in primal_params)
-            independent_map = adapter.evaluate(
-                outcome.root_x, *primal_params
-            )
+            independent_map = adapter.evaluate(outcome.root_x, *primal_params)
             independent_mapped_x = (
                 state_projection(independent_map.mapped_x)
                 if (
@@ -1846,15 +1776,16 @@ def _solve_and_validate_lane_primal(
                 )
                 else independent_map.mapped_x
             )
+            certified_map_result = replace(
+                independent_map, mapped_x=independent_mapped_x
+            )
 
             if representation == labels.SCP_MODE_CHARGE:
-                final_spectral = independent_map.spectral
+                final_spectral = certified_map_result.spectral
             elif representation == labels.SCP_MODE_POTENTIAL:
                 assert layout is not None
                 final_state = unpack_potential(independent_mapped_x, layout)
-                final_spectral = evaluate_potential(
-                    final_state, primal_inputs
-                )
+                final_spectral = evaluate_potential(final_state, primal_inputs)
             else:
                 final_spectral = evaluate_hamiltonian(
                     independent_mapped_x, primal_inputs
@@ -1906,9 +1837,7 @@ def _solve_and_validate_lane_primal(
         if padding_valid and lane_padded and state_projection is not None:
             projected_root = state_projection(outcome.root_x)
             projected_mapped = state_projection(independent_mapped_x)
-            ao_matrix_mask = active_orb.unsqueeze(
-                -1
-            ) & active_orb.unsqueeze(-2)
+            ao_matrix_mask = active_orb.unsqueeze(-1) & active_orb.unsqueeze(-2)
             inactive_density_max = (
                 final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
                 .abs()
@@ -1965,20 +1894,15 @@ def _solve_and_validate_lane_primal(
             )
         elif not bool(outcome.converged):
             failure_code = int(BatchRootFailureCode.MAXITER_EXCEEDED)
-            mixer_label = (
-                "Simple"
-                if effective_mixer == labels.MIXER_LINEAR
-                else "Anderson"
-            )
             damp = (
                 damp_dynamic_factor
                 if bool(outcome.damping_state.switched)
                 else damp_default
             )
             failure_reason = (
-                f"SCF does not converge after {maxiter} "
-                f"cycles using {mixer_label} mixing with a damping factor "
-                f"of {damp} (residual L2={float(raw_residual_l2):.3e}, "
+                f"SCF did not certify after {maxiter} iterations using "
+                f"strategy '{strategy_label}' (damping {damp}; "
+                f"residual L2={float(raw_residual_l2):.3e}, "
                 f"max={float(raw_residual_max):.3e})."
             )
         elif not bool(
@@ -2024,6 +1948,7 @@ def _solve_and_validate_lane_primal(
             primal_params,
             _LanePrimalSolveOutcome(
                 root_x=outcome.root_x.detach(),
+                map_result=certified_map_result,
                 iterations=outcome.iterations.detach(),
                 lane_converged=lane_converged.detach(),
                 lane_residual=lane_residual.detach(),
@@ -2043,50 +1968,72 @@ def _solve_and_validate_lane_primal(
         )
 
 
-def _worker_solve_lane_task(task: tuple[Any, ...]) -> tuple[Any, ...]:
-    """Execute a single lane's detached primal solve inside an isolated worker."""
-    (
-        lane_index,
-        serialized_inputs,
-        serialized_guess,
-        serialized_numbers,
-        representation,
-        settings,
-        lane_padded,
-        effective_mixer,
-        maxiter,
-        damp_default,
-        damp_dynamic_factor,
-        eager_primal_fermi,
-    ) = task
-    torch.set_num_threads(1)
-    cpu_t0 = time.process_time()
-    primal_inputs = _restore_object_tree(serialized_inputs)
-    guess_charges = _restore_object_tree(serialized_guess)
-    numbers = _restore_object_tree(serialized_numbers)
-    _, _, _, solve_outcome = _solve_and_validate_lane_primal(
-        primal_inputs,
-        guess_charges,
-        numbers,
-        representation,
-        settings,
-        lane_padded,
-        effective_mixer,
-        maxiter,
-        damp_default,
-        damp_dynamic_factor,
-        eager_primal_fermi,
+def _scf_representation_from_label(representation: int) -> SCFRepresentation:
+    """Translate the controller representation label to its public enum."""
+    return {
+        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+    }[representation]
+
+
+def _prepare_lane_response_root(
+    inputs: SCFInputs,
+    primal_representation: int,
+    primal_layout: PotentialLayout | None,
+    solve: _LanePrimalSolveOutcome,
+    settings: Any,
+    response_settings: SCFResponseSettings,
+    *,
+    padded: bool,
+):
+    """Use shared S11 response conversion/certification for one valid lane."""
+    source_representation = _scf_representation_from_label(
+        primal_representation
     )
-    cpu_elapsed = time.process_time() - cpu_t0
-    peak_rss_mb, pss_mb = _read_process_memory_mb()
-    return (
-        lane_index,
-        _snapshot_object_tree(solve_outcome),
-        cpu_elapsed,
-        peak_rss_mb,
-        pss_mb,
-        os.getpid(),
+    problem = SCFProblem(
+        inputs,
+        source_representation,
+        potential_layout=primal_layout,
     )
+    thresholds = resolve_certification_thresholds(
+        problem,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
+        dtype=solve.root_x.dtype,
+        requested_x_atol=settings.requested_x_atol,
+        requested_x_atol_max=settings.requested_x_atol_max,
+    )
+    certification = certify_scf_core_state(
+        problem,
+        SCFPhysicalState(solve.root_x, solve.map_result),
+        thresholds,
+    )
+    primal_outcome = SimpleNamespace(
+        final_problem=problem,
+        root_x=solve.root_x,
+        map_result=solve.map_result,
+        converged=certification.certified,
+        certification=certification,
+        iterations=solve.iterations,
+        residual=solve.lane_residual,
+        trajectory_status=solve.trajectory_status,
+        damping_state=solve.damping_state,
+    )
+    target = (
+        source_representation
+        if response_settings.representation is None
+        else response_settings.representation
+    )
+    if padded and target is not source_representation:
+        raise ValueError(
+            "Padded conformer batches currently require response coordinates "
+            "to match the primal representation."
+        )
+    with eager_primal_fermi_scope(False):
+        return prepare_response_root(
+            primal_outcome, settings, response_settings
+        )
 
 
 def prepare_converged_root_batch(
@@ -2099,7 +2046,6 @@ def prepare_converged_root_batch(
     *,
     strict: bool | None = None,
     eager_primal_fermi: bool | str = False,
-    num_workers: int = 1,
 ) -> PreparedConvergedRootBatch:
     """Prepare and validate independent physical SCF roots for a conformer batch.
 
@@ -2117,7 +2063,7 @@ def prepare_converged_root_batch(
     field : Tensor | None, default None
         Shared ``(3,)`` or per-lane ``(B, 3)`` electric field.
     field_grad : Tensor | None, default None
-        Shared ``(3, 3)`` or per-lane ``(B, 3, 3)`` electric field gradient.
+        Shared ``(3, 3,)`` or per-lane ``(B, 3, 3)`` electric field gradient.
     strict : bool | None, default None
         ``force_convergence=True`` always raises on a failed lane. Otherwise,
         ``True`` enables strict batch validation and ``False`` or ``None``
@@ -2127,20 +2073,7 @@ def prepare_converged_root_batch(
         solving (``False``/``"static"``, ``True``/``"adaptive"``, or
         ``"spectral"``) while keeping post-preparation residual validation and
         differentiable evaluation on the fixed-depth Fermi formulation.
-    num_workers : int, default 1
-        Number of worker processes for detached physical root solving.
-        When ``> 1``, only detached byte snapshots cross process boundaries,
-        each worker executes single-threaded (`1` thread per worker), and
-        conformer ordering and validation semantics remain deterministic.
     """
-    if (
-        isinstance(num_workers, bool)
-        or not isinstance(num_workers, int)
-        or num_workers < 1
-    ):
-        raise ValueError("num_workers must be a positive integer.")
-    wall_t0 = time.perf_counter()
-    parent_cpu_t0 = time.process_time()
     (
         _core,
         numbers,
@@ -2151,7 +2084,7 @@ def prepare_converged_root_batch(
         core_index,
     ) = _validate_system_and_positions(system, positions, field, field_grad)
     batch_size = positions.shape[0]
-    effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
+    effective_scf_config = config.scf
     strict_mode = _resolve_strictness(effective_scf_config, strict)
 
     charges = _normalize_batch_scalar("charge", chrg, positions, batch_size)
@@ -2168,7 +2101,30 @@ def prepare_converged_root_batch(
     )
 
     representation = route.representation
-    settings = _solver_settings(effective_scf_config, positions.dtype)
+    response_settings = effective_scf_config.response
+    primal_response_representation = _scf_representation_from_label(
+        representation
+    )
+    requested_response_representation = (
+        primal_response_representation
+        if response_settings.representation is None
+        else response_settings.representation
+    )
+    if (
+        isinstance(system, PaddedExactSystemCore)
+        and requested_response_representation
+        is not primal_response_representation
+    ):
+        raise ValueError(
+            "Padded conformer batches currently require response coordinates "
+            "to match the primal representation."
+        )
+    response_representation = {
+        SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
+        SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
+        SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
+    }[requested_response_representation]
+    settings, strategy = _prepare_solver(effective_scf_config, positions.dtype)
     has_padding = bool((numbers == 0).any())
 
     external_input_ids = {
@@ -2191,19 +2147,8 @@ def prepare_converged_root_batch(
     eager_no_grad_build = (
         not is_compiling() and ft.get_interpreter_stack() is None
     )
-    if num_workers > 1:
-        if not eager_no_grad_build:
-            raise RuntimeError(
-                "Parallel physical-root preparation (num_workers > 1) is only "
-                "supported in eager execution outside functorch/compile transforms."
-            )
-        if positions.device.type != "cpu":
-            raise RuntimeError(
-                "Parallel physical-root preparation (num_workers > 1) is only "
-                "supported on CPU tensors."
-            )
 
-    lane_prebuilds: list[tuple[Any, ...]] = []
+    lanes: list[ConvergedRootLaneRecord] = []
     for lane_index in range(batch_size):
         lane_pos = positions[lane_index]
         lane_chrg = charges[lane_index]
@@ -2292,179 +2237,39 @@ def prepare_converged_root_batch(
                     )
                 ),
             )
-        lane_prebuilds.append(
-            (
-                lane_index,
-                lane_pos,
-                lane_chrg,
-                lane_spin,
-                lane_field,
-                lane_fgrad,
+
+        layout, adapter, primal_params, solve_outcome = (
+            _solve_and_validate_lane_primal(
                 primal_inputs,
-                primal_refocc,
-                primal_overlap_norm,
-                lane_padded,
                 guess_charges,
-            )
-        )
-
-    effective_workers = min(num_workers, batch_size)
-    worker_cpu_total_s = 0.0
-    worker_peak_rss_by_pid: dict[int, float] = {}
-    worker_pss_by_pid: dict[int, float] = {}
-    solved_lanes: list[
-        tuple[
-            PotentialLayout | None,
-            _SCFMapTensorTree,
-            tuple[Tensor, ...],
-            _LanePrimalSolveOutcome,
-        ]
-    ] = []
-
-    if effective_workers == 1:
-        for (
-            lane_index,
-            _lpos,
-            _lchrg,
-            _lspin,
-            _lfield,
-            _lfgrad,
-            primal_inputs,
-            _prefocc,
-            _ponorm,
-            lane_padded,
-            guess_charges,
-        ) in lane_prebuilds:
-            solved_lanes.append(
-                _solve_and_validate_lane_primal(
-                    primal_inputs,
-                    guess_charges,
-                    numbers,
-                    representation,
-                    settings,
-                    lane_padded,
-                    route.effective_mixer,
-                    effective_scf_config.maxiter,
-                    effective_scf_config.damp,
-                    effective_scf_config.damp_dynamic_factor,
-                    eager_primal_fermi,
-                )
-            )
-    else:
-        serialized_numbers = _snapshot_required_tensor(numbers)
-        tasks = [
-            (
-                lane_index,
-                _snapshot_object_tree(primal_inputs),
-                _snapshot_object_tree(guess_charges),
-                serialized_numbers,
+                numbers,
                 representation,
                 settings,
+                strategy,
                 lane_padded,
-                route.effective_mixer,
+                route.strategy_label,
                 effective_scf_config.maxiter,
                 effective_scf_config.damp,
                 effective_scf_config.damp_dynamic_factor,
                 eager_primal_fermi,
             )
-            for (
-                lane_index,
-                _lpos,
-                _lchrg,
-                _lspin,
-                _lfield,
-                _lfgrad,
-                primal_inputs,
-                _prefocc,
-                _ponorm,
-                lane_padded,
-                guess_charges,
-            ) in lane_prebuilds
-        ]
-        start_method = (
-            "fork"
-            if "fork" in mp.get_all_start_methods()
-            and not torch.cuda.is_initialized()
-            else "spawn"
         )
-        ctx = mp.get_context(start_method)
-        prev_threads = torch.get_num_threads()
-        try:
-            torch.set_num_threads(1)
-            with ctx.Pool(
-                processes=effective_workers, initializer=_init_primal_worker
-            ) as pool:
-                worker_outputs = pool.map(
-                    _worker_solve_lane_task, tasks, chunksize=1
-                )
-                parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
-        finally:
-            torch.set_num_threads(prev_threads)
 
-        worker_outputs.sort(key=lambda item: int(item[0]))
-        for (
-            lane_index,
-            _lpos,
-            _lchrg,
-            _lspin,
-            _lfield,
-            _lfgrad,
-            primal_inputs,
-            _prefocc,
-            _ponorm,
-            lane_padded,
-            guess_charges,
-        ), (
-            out_lane_idx,
-            serialized_outcome,
-            w_cpu_s,
-            w_peak_rss_mb,
-            w_pss_mb,
-            w_pid,
-        ) in zip(lane_prebuilds, worker_outputs):
-            assert lane_index == out_lane_idx
-            worker_cpu_total_s += float(w_cpu_s)
-            pid_int = int(w_pid)
-            worker_peak_rss_by_pid[pid_int] = max(
-                worker_peak_rss_by_pid.get(pid_int, 0.0), float(w_peak_rss_mb)
-            )
-            worker_pss_by_pid[pid_int] = max(
-                worker_pss_by_pid.get(pid_int, 0.0), float(w_pss_mb)
-            )
-            with torch.no_grad():
-                _, layout, _, _, _ = _make_representation_projections(
-                    primal_inputs, representation, guess_charges, lane_padded
-                )
-                adapter, primal_params = _SCFMapTensorTree.prepare(
-                    primal_inputs, representation, layout
-                )
-                primal_params = tuple(p.clone() for p in primal_params)
-            solve_outcome = _restore_object_tree(
-                serialized_outcome, device=positions.device
-            )
-            solved_lanes.append(
-                (layout, adapter, primal_params, solve_outcome)
+        same_representation = (
+            requested_response_representation is primal_response_representation
+        )
+        response_root = None
+        if solve_outcome.root_valid and not same_representation:
+            response_root = _prepare_lane_response_root(
+                primal_inputs,
+                representation,
+                layout,
+                solve_outcome,
+                settings,
+                response_settings,
+                padded=isinstance(system, PaddedExactSystemCore),
             )
 
-    lanes: list[ConvergedRootLaneRecord] = []
-    for (
-        lane_index,
-        lane_pos,
-        lane_chrg,
-        lane_spin,
-        lane_field,
-        lane_fgrad,
-        primal_inputs,
-        primal_refocc,
-        primal_overlap_norm,
-        _lane_padded,
-        _guess_charges,
-    ), (
-        layout,
-        adapter,
-        primal_params,
-        solve_outcome,
-    ) in zip(lane_prebuilds, solved_lanes):
         if not solve_outcome.root_valid:
             assert solve_outcome.failure_reason is not None
             if strict_mode:
@@ -2476,6 +2281,15 @@ def prepare_converged_root_batch(
             msg = f"[Lane {lane_index}] {solve_outcome.failure_reason}"
             warnings.warn(msg, SCFConvergenceWarning, stacklevel=2)
             OutputHandler.warn(msg, SCFConvergenceWarning)
+
+        primal_root_x = solve_outcome.root_x.detach()
+        response_root_x = (
+            None
+            if not solve_outcome.root_valid
+            else (
+                primal_root_x if same_representation else response_root.root_x
+            )
+        )
 
         lanes.append(
             ConvergedRootLaneRecord(
@@ -2497,7 +2311,40 @@ def prepare_converged_root_batch(
                 potential_layout=layout,
                 adapter=adapter,
                 parameters=primal_params,
-                root_x=solve_outcome.root_x.detach(),
+                root_x=primal_root_x,
+                response_adapter=(
+                    None
+                    if not solve_outcome.root_valid
+                    else (
+                        adapter
+                        if same_representation
+                        else response_root.adapter
+                    )
+                ),
+                response_parameters=(
+                    None
+                    if not solve_outcome.root_valid
+                    else (
+                        primal_params
+                        if same_representation
+                        else response_root.parameters
+                    )
+                ),
+                response_root_x=response_root_x,
+                response_potential_layout=(
+                    None
+                    if not solve_outcome.root_valid
+                    else (
+                        layout
+                        if same_representation
+                        else response_root.problem.potential_layout
+                    )
+                ),
+                response_certification=(
+                    None
+                    if not solve_outcome.root_valid or same_representation
+                    else response_root.certification
+                ),
                 iterations=solve_outcome.iterations,
                 solver_converged=solve_outcome.lane_converged,
                 solver_residual=solve_outcome.lane_residual,
@@ -2523,37 +2370,32 @@ def prepare_converged_root_batch(
         raise RuntimeError(
             "Conformer lanes produced incompatible SCF parameter trees."
         )
+    valid_response_lanes = [lane for lane in lanes if lane.root_valid]
+    response_parameter_paths = (
+        valid_response_lanes[0].response_adapter.parameter_paths
+        if valid_response_lanes
+        else ()
+    )
+    if any(
+        lane.response_adapter is None
+        or lane.response_adapter.parameter_paths != response_parameter_paths
+        for lane in valid_response_lanes
+    ):
+        raise RuntimeError(
+            "Valid conformer lanes produced incompatible response parameter trees."
+        )
     valid_mask = torch.tensor(
         [lane.root_valid for lane in lanes],
         dtype=torch.bool,
         device=positions.device,
     )
-    wall_elapsed_s = time.perf_counter() - wall_t0
-    parent_cpu_s = time.process_time() - parent_cpu_t0
-    if effective_workers == 1:
-        parent_peak_rss_mb, parent_pss_mb = _read_process_memory_mb()
-    else:
-        latest_peak_rss_mb, _ = _read_process_memory_mb()
-        parent_peak_rss_mb = max(parent_peak_rss_mb, latest_peak_rss_mb)
-    worker_rss_sum_mb = sum(worker_peak_rss_by_pid.values())
-    worker_pss_sum_mb = sum(worker_pss_by_pid.values())
-    prep_diagnostics = BatchPreparationDiagnostics(
-        num_workers=effective_workers,
-        wall_time_s=wall_elapsed_s,
-        parent_cpu_time_s=parent_cpu_s,
-        worker_cpu_time_s=worker_cpu_total_s,
-        total_cpu_time_s=parent_cpu_s + worker_cpu_total_s,
-        parent_peak_rss_mb=parent_peak_rss_mb,
-        worker_peak_rss_sum_mb=worker_rss_sum_mb,
-        process_tree_peak_rss_mb=parent_peak_rss_mb + worker_rss_sum_mb,
-        process_tree_pss_mb=parent_pss_mb + worker_pss_sum_mb,
-        worker_pids=tuple(sorted(worker_peak_rss_by_pid)),
-    )
     return PreparedConvergedRootBatch(
         system=system,
         positions=positions,
-        representation=representation,
-        effective_mixer=route.effective_mixer,
+        primal_representation=representation,
+        response_representation=response_representation,
+        response_settings=response_settings,
+        strategy_label=route.strategy_label,
         lanes=tuple(lanes),
         parameter_paths=parameter_paths,
         model_parameter_refs=model_parameter_refs,
@@ -2593,6 +2435,15 @@ def prepare_converged_root_batch(
         root_snapshots=tuple(
             _snapshot_required_tensor(lane.root_x) for lane in lanes
         ),
+        response_root_snapshots=tuple(
+            (
+                None
+                if lane.response_root_x is None
+                or response_representation == representation
+                else _snapshot_required_tensor(lane.response_root_x)
+            )
+            for lane in lanes
+        ),
         input_tensor_versions=tuple(
             {
                 path: int(_unwrap_primal_tensor(value)._version)
@@ -2602,7 +2453,6 @@ def prepare_converged_root_batch(
         ),
         valid_lane_mask=valid_mask,
         all_roots_valid=bool(valid_mask.all()),
-        preparation_diagnostics=prep_diagnostics,
     )
 
 
@@ -2881,7 +2731,7 @@ def _refresh_prepared_batch_inputs(
             f"Prepared batch has {len(prepared.lanes)} lanes, but positions "
             f"has {batch_size} lanes."
         )
-    effective_scf_config = replace(config.scf, mixer=route.effective_mixer)
+    effective_scf_config = config.scf
     if chrg is _UNSET:
         charges = tuple(
             lane.charge.to(device=positions.device, dtype=positions.dtype)
@@ -2985,12 +2835,37 @@ def _refresh_prepared_batch_inputs(
             lane_fgrad,
         )
         new_adapter, parameters = _SCFMapTensorTree.prepare(
-            inputs, prepared.representation, lane.potential_layout
+            inputs, prepared.primal_representation, lane.potential_layout
         )
         if new_adapter.parameter_paths != lane.adapter.parameter_paths:
             raise RuntimeError(
                 "Refreshed SCF input parameter paths do not match prepared batch."
             )
+        response_adapter = None
+        response_parameters = None
+        if lane.root_valid:
+            assert lane.response_adapter is not None
+            if (
+                prepared.response_representation
+                == prepared.primal_representation
+            ):
+                response_adapter, response_parameters = new_adapter, parameters
+            else:
+                response_adapter, response_parameters = (
+                    _SCFMapTensorTree.prepare(
+                        inputs,
+                        prepared.response_representation,
+                        lane.response_potential_layout,
+                    )
+                )
+            if (
+                response_adapter.parameter_paths
+                != lane.response_adapter.parameter_paths
+            ):
+                raise RuntimeError(
+                    "Refreshed SCF response parameter paths do not match "
+                    "the prepared response batch."
+                )
         root_valid = lane.root_valid
         failure_code = lane.failure_code
         failure_reason = lane.failure_reason
@@ -3053,6 +2928,8 @@ def _refresh_prepared_batch_inputs(
                 interaction_data=interaction_data,
                 inputs=inputs,
                 parameters=parameters,
+                response_adapter=response_adapter,
+                response_parameters=response_parameters,
                 solver_converged=solver_converged,
                 status=status,
                 failure_code=failure_code,
@@ -3098,14 +2975,26 @@ def _evaluate_valid_lanes_mapped(
     valid_lanes: list[ConvergedRootLaneRecord],
     valid_indices: list[int],
     representation: int,
+    primal_representation: int,
+    response_settings: SCFResponseSettings,
     device: torch.device,
     strict_mode: bool,
     response_diagnostics: ResponseDiagnosticCollector | None = None,
 ):
     """Evaluate valid conformer lanes simultaneously via vmap over implicit_root."""
     del valid_indices, strict_mode
-    adapter = valid_lanes[0].adapter
-    layout = valid_lanes[0].potential_layout
+    same_representation = representation == primal_representation
+    adapter = (
+        valid_lanes[0].adapter
+        if same_representation
+        else valid_lanes[0].response_adapter
+    )
+    assert adapter is not None
+    layout = (
+        valid_lanes[0].potential_layout
+        if same_representation
+        else valid_lanes[0].response_potential_layout
+    )
     param_count = len(adapter.parameter_paths)
     pot_state_proj: Callable[[Tensor], Tensor] | None = None
     if representation == labels.SCP_MODE_POTENTIAL and (
@@ -3123,7 +3012,13 @@ def _evaluate_valid_lanes_mapped(
         else adapter
     )
 
-    roots = torch.stack([lane.root_x for lane in valid_lanes], dim=0)
+    roots = torch.stack(
+        [
+            lane.root_x if same_representation else lane.response_root_x
+            for lane in valid_lanes
+        ],
+        dim=0,
+    )
     iterations_v = torch.stack([lane.iterations for lane in valid_lanes], dim=0)
     converged_v = torch.stack(
         [lane.solver_converged for lane in valid_lanes], dim=0
@@ -3138,7 +3033,17 @@ def _evaluate_valid_lanes_mapped(
         [lane.damping_state.switched for lane in valid_lanes], dim=0
     )
     stacked_params = tuple(
-        torch.stack([lane.parameters[p_idx] for lane in valid_lanes], dim=0)
+        torch.stack(
+            [
+                (
+                    lane.parameters
+                    if same_representation
+                    else lane.response_parameters
+                )[p_idx]
+                for lane in valid_lanes
+            ],
+            dim=0,
+        )
         for p_idx in range(param_count)
     )
 
@@ -3173,17 +3078,29 @@ def _evaluate_valid_lanes_mapped(
         )
 
     def _attach_lane_root(root: Tensor, *params: Tensor) -> Tensor:
+        if implicit_root is not _BATCH_DEFAULT_IMPLICIT_ROOT:
+            return implicit_root(root, *params, raw_map=raw_map)
         if (
-            response_diagnostics is not None
-            and implicit_root is _BATCH_DEFAULT_IMPLICIT_ROOT
+            response_diagnostics is None
+            and response_settings.rtol == _LINEAR_SOLVE_RTOL
+            and response_settings.atol == _LINEAR_SOLVE_ATOL
+            and response_settings.maxiter is None
         ):
-            return implicit_root(
-                root,
-                *params,
-                raw_map=raw_map,
-                method=response_diagnostics.solve,
-            )
-        return implicit_root(root, *params, raw_map=raw_map)
+            return _functional_implicit_root(root, *params, raw_map=raw_map)
+        method = (
+            "bicgstab"
+            if response_diagnostics is None
+            else response_diagnostics.solve
+        )
+        return implicit_root(
+            root,
+            *params,
+            raw_map=raw_map,
+            method=method,
+            rtol=response_settings.rtol,
+            atol=response_settings.atol,
+            maxiter=response_settings.maxiter,
+        )
 
     def _finalize_valid_lane(
         attached: Tensor,
@@ -3220,6 +3137,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         elif representation == labels.SCP_MODE_POTENTIAL:
             assert layout is not None
@@ -3232,6 +3150,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         else:
             finalized = finalize_scf_fock(
@@ -3242,6 +3161,7 @@ def _evaluate_valid_lanes_mapped(
                 residual,
                 traj_status,
                 damp_state,
+                root_x=attached,
             )
         dummy = finalized.energy.new_zeros(())
         q_dip = (
@@ -3543,7 +3463,6 @@ def evaluate_converged_root_batch(
     *,
     strict: bool | None = None,
     eager_primal_fermi: bool | str = False,
-    num_workers: int = 1,
     response_diagnostics: ResponseDiagnosticCollector | None = None,
 ) -> Result:
     """Evaluate a conformer batch using mapped implicit differentiation.
@@ -3579,7 +3498,7 @@ def evaluate_converged_root_batch(
                 field_grad,
                 strict_mode=effective_strict,
             )
-            representation = prepared.representation
+            representation = prepared.response_representation
             valid_indices = [
                 idx for idx, lane in enumerate(lanes) if lane.root_valid
             ]
@@ -3589,6 +3508,8 @@ def evaluate_converged_root_batch(
                     valid_lanes,
                     valid_indices,
                     representation,
+                    prepared.primal_representation,
+                    prepared.response_settings,
                     eval_positions.device,
                     effective_strict,
                     response_diagnostics=response_diagnostics,
@@ -3619,7 +3540,6 @@ def evaluate_converged_root_batch(
             field_grad=None if field_grad is _UNSET else field_grad,
             strict=strict,
             eager_primal_fermi=eager_primal_fermi,
-            num_workers=num_workers,
         )
         return evaluate_converged_root_batch(
             prepared,

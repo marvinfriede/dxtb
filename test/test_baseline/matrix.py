@@ -38,8 +38,7 @@ hyperpolarizability         central differences of polarizabilities
 pol_deriv                   central differences of polarizabilities
 ========================== ============================================
 
-Paths: ``analytical`` (dxtb's analytical first derivatives, and quantities
-derived from them), ``autograd`` (``torch.autograd``, the default of the
+Paths: ``autograd`` (``torch.autograd``, the default of the
 Calculator API), ``functorch`` (``torch.func.jacrev``, via the Calculator
 API where it offers it), ``forward`` (``torch.func.jacfwd``/``jvp``) and
 ``numerical`` (dxtb's numerical Calculator methods). Batches are compared
@@ -90,7 +89,6 @@ PARAMS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
 
 SCF_OPTIONS: dict[str, Any] = {
     "maxiter": 300,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "verbosity": 0,
 }
@@ -99,24 +97,24 @@ SCF_OPTIONS: dict[str, Any] = {
 QUANTITIES: dict[str, tuple[int, tuple[str, ...], tuple[str, ...]]] = {
     "forces": (
         1,
-        ("analytical", "autograd", "functorch", "forward", "numerical"),
+        ("autograd", "functorch", "forward", "numerical"),
         INPUTS,
     ),
     "dipole": (
         1,
-        ("analytical", "autograd", "functorch", "forward", "numerical"),
+        ("autograd", "functorch", "forward", "numerical"),
         INPUTS,
     ),
     "dE_dparam": (1, ("autograd", "forward"), ("single",)),
     "hessian": (2, ("autograd", "functorch", "forward", "numerical"), INPUTS),
     "polarizability": (
         2,
-        ("analytical", "autograd", "functorch", "forward", "numerical"),
+        ("autograd", "functorch", "forward", "numerical"),
         INPUTS,
     ),
     "dipole_deriv": (
         2,
-        ("analytical", "autograd", "functorch", "forward", "numerical"),
+        ("autograd", "functorch", "forward", "numerical"),
         INPUTS,
     ),
     "dforces_dparam": (2, ("autograd", "forward"), ("single",)),
@@ -509,12 +507,11 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
     from torch.func import jacfwd, jacrev, jvp
 
     if q == "forces":
-        if path == "analytical":
-            return calc().forces_analytical(pos_grad(), charge)
         if path == "autograd":
             return calc().forces(pos_grad(), charge)
         if path == "functorch":
-            return calc().forces(pos_grad(), charge, grad_mode="functorch")
+            c = calc()
+            return -jacrev(_func_energy(c, charge))(positions.clone())
         if path == "forward":
             c = calc()
             return -jacfwd(_func_energy(c, charge))(positions.clone())
@@ -522,10 +519,6 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
             return calc().forces_numerical(positions.clone(), charge)
 
     if q == "dipole":
-        if path == "analytical":
-            return calc(zero_field()).dipole_analytical(
-                positions.clone(), charge
-            )
         if path == "autograd":
             return calc(zero_field()).dipole(positions.clone(), charge)
         if path == "functorch":
@@ -554,12 +547,11 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
             return calc().hessian_numerical(positions.clone(), charge)
 
     if q == "polarizability":
-        if path in ("analytical", "autograd", "functorch"):
+        if path in ("autograd", "functorch"):
             return calc(zero_field()).polarizability(
                 positions.clone(),
                 charge,
                 use_functorch=path == "functorch",
-                use_analytical=path == "analytical",
             )
         if path == "forward":
             c = calc(zero_field(False))
@@ -571,11 +563,10 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
             )
 
     if q == "dipole_deriv":
-        if path in ("analytical", "autograd", "functorch"):
+        if path in ("autograd", "functorch"):
             return calc(zero_field()).dipole_deriv(
                 pos_grad(),
                 charge,
-                use_analytical_dipmom=path == "analytical",
                 use_functorch=path == "functorch",
             )
         if path == "forward":

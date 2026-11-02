@@ -28,6 +28,7 @@ from torch.func import grad, jacfwd, jacrev, jvp, vmap
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.batch_implicit import (
     BatchRootFailureCode,
+    ResponseDiagnosticCollector,
     _classify_fermi_code,
     _resolve_strictness,
     classify_response_failure_status,
@@ -56,6 +57,7 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb.config import Config
+from dxtb.scf import SCFRepresentation, SCFResponseSettings
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -104,7 +106,6 @@ def _build_system(
     maxiter: int = 200,
     x_atol: float = 1.0e-10,
     x_atol_max: float = 1.0e-10,
-    f_atol: float = 1.0e-10,
     force_convergence: bool = True,
     int_level: int | None = None,
     trainable_model: bool = False,
@@ -116,11 +117,17 @@ def _build_system(
         int_driver=labels.INTDRIVER_PYTORCH,
         scf_mode=labels.SCF_MODE_FULL,
         scp_mode=scp_mode,
+        response=SCFResponseSettings(
+            representation={
+                labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
+                labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
+                labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
+            }[scp_mode]
+        ),
         mixer=mixer,
         maxiter=maxiter,
         x_atol=x_atol,
         x_atol_max=x_atol_max,
-        f_atol=f_atol,
         fermi_etemp=etemp,
         fermi_partition=partition,
         force_convergence=force_convergence,
@@ -169,6 +176,178 @@ def _h2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.65]], dtype=DTYPE, device=DEVICE
     )
     return numbers, torch.stack((c0, c1), dim=0)
+
+
+@pytest.mark.parametrize(
+    "response_representation",
+    [
+        "default",
+        SCFRepresentation.POTENTIAL,
+        SCFRepresentation.CHARGE,
+        SCFRepresentation.FOCK,
+        None,
+    ],
+)
+def test_cdiis_fock_batch_uses_configured_response_coordinates(
+    response_representation: SCFRepresentation | None | str,
+) -> None:
+    """Batch IFT coordinates and derivatives match serial implicit SCF."""
+    numbers, positions = _h2_conformers()
+    positions = positions.requires_grad_(True)
+    response = (
+        None
+        if response_representation == "default"
+        else SCFResponseSettings(representation=response_representation)
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        convergence="tight",
+        response=response,
+        fermi_etemp=0.0,
+        force_convergence=True,
+    )
+    model = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=config,
+    )
+    system = model.setup(numbers, batch_mode=0)
+
+    prepared = prepare_converged_root_batch(system, positions)
+    expected_response = (
+        SCFRepresentation.POTENTIAL
+        if response_representation == "default"
+        else (
+            SCFRepresentation.FOCK
+            if response_representation is None
+            else response_representation
+        )
+    )
+    assert prepared.primal_representation == labels.SCP_MODE_FOCK
+    assert (
+        prepared.response_representation
+        == {
+            SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
+            SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
+            SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
+        }[expected_response]
+    )
+    assert prepared.all_roots_valid
+
+    batch_result = evaluate_converged_root_batch(prepared)
+    batch_gradient = torch.autograd.grad(
+        batch_result.energy.sum(), positions, retain_graph=True
+    )[0]
+
+    serial_results = [system.singlepoint(position) for position in positions]
+    serial_gradient = torch.autograd.grad(
+        torch.stack([result.energy.sum() for result in serial_results]).sum(),
+        positions,
+    )[0]
+    torch.testing.assert_close(
+        batch_result.energy,
+        torch.stack([result.energy for result in serial_results]),
+        atol=2.0e-9,
+        rtol=2.0e-9,
+    )
+    torch.testing.assert_close(
+        batch_gradient, serial_gradient, atol=2.0e-7, rtol=2.0e-7
+    )
+
+
+def test_batch_response_maxiter_is_shared_by_attachment_and_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured response maxiter controls the mapped IFT and its monitor."""
+    numbers, positions = _h2o_conformers()
+    positions = positions[:1].clone().requires_grad_(True)
+    response = SCFResponseSettings(
+        representation=SCFRepresentation.POTENTIAL,
+        rtol=0.0,
+        atol=0.0,
+        maxiter=1,
+    )
+    config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        convergence="tight",
+        response=response,
+        fermi_etemp=0.0,
+        force_convergence=True,
+    )
+    system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
+    ).setup(numbers, batch_mode=0)
+    prepared = prepare_converged_root_batch(system, positions)
+    assert prepared.all_roots_valid
+    diagnostics = ResponseDiagnosticCollector()
+    received_options: list[dict[str, object]] = []
+    solve = ResponseDiagnosticCollector.solve
+
+    def record_options(self, matvec, rhs, *params, **kwargs):
+        received_options.append(dict(kwargs))
+        return solve(self, matvec, rhs, *params, **kwargs)
+
+    monkeypatch.setattr(ResponseDiagnosticCollector, "solve", record_options)
+    result = evaluate_converged_root_batch(
+        prepared, response_diagnostics=diagnostics
+    )
+    gradient = torch.autograd.grad(result.energy.sum(), positions)[0]
+    assert bool(result.converged.all())
+    assert not bool(torch.isfinite(gradient).all())
+    assert diagnostics.iterations is not None
+    assert int(diagnostics.iterations.max().item()) <= 1
+    assert received_options
+    assert received_options[0]["rtol"] == response.rtol
+    assert received_options[0]["atol"] == response.atol
+    assert received_options[0]["maxiter"] == response.maxiter
+
+
+def test_padded_batch_rejects_unsupported_response_conversion() -> None:
+    """Padded cores reject mismatched response coordinates before mapping."""
+    h2_numbers = torch.tensor([1, 1], device=DEVICE)
+    h2_config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        fermi_etemp=0.0,
+    )
+    h2_system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=h2_config,
+    ).setup(h2_numbers, batch_mode=0)
+    h2o_numbers, _ = _h2o_conformers()
+    h2o_config = Config.create(
+        method=labels.GFN1_XTB,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_HCORE,
+        strategy="cdiis",
+        differentiation="implicit",
+        fermi_etemp=0.0,
+    )
+    h2o_system = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        config=h2o_config,
+    ).setup(h2o_numbers, batch_mode=0)
+    assert h2_system.exact_core is not None
+    assert h2o_system.exact_core is not None
+    bucket = bucket_canonical_exact_cores(
+        (h2_system.exact_core, h2o_system.exact_core)
+    )
+    padded = pad_canonical_exact_core(h2_system.exact_core, bucket, 0)
+    padded_positions = torch.zeros(
+        (1, padded.core.numbers.shape[0], 3), dtype=DTYPE, device=DEVICE
+    )
+    with pytest.raises(ValueError, match="require response coordinates"):
+        prepare_converged_root_batch(padded, padded_positions)
 
 
 def _no2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
@@ -2030,9 +2209,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                 return grad_out, torch.full(
                     (3, 3), float("nan"), dtype=DTYPE, device=DEVICE
                 )
-            return grad_out, torch.zeros(
-                (3, 3), dtype=DTYPE, device=DEVICE
-            )
+            return grad_out, torch.zeros((3, 3), dtype=DTYPE, device=DEVICE)
 
     def _hooked_classical_pos(sys_obj, l_pos, l_chrg):
         terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
@@ -2115,7 +2292,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_chrg
     )
-    chrg_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    chrg_leaf = torch.tensor(
+        0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
     for cs in (1, 2, 4):
         out_chrg_nan = stream_batch_value_and_grad(
             prepared,
@@ -2163,7 +2342,11 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     def _hooked_refresh_field(
         prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
     ):
-        if isinstance(f_in, torch.Tensor) and f_in.requires_grad and f_in.ndim == 2:
+        if (
+            isinstance(f_in, torch.Tensor)
+            and f_in.requires_grad
+            and f_in.ndim == 2
+        ):
             hooked_rows = []
             for row_idx in range(f_in.shape[0]):
                 is_l3 = bool(
@@ -2173,7 +2356,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                         atol=1e-12,
                     )
                 )
-                hooked_rows.append(_NanGradOnLane3Field.apply(f_in[row_idx], is_l3))
+                hooked_rows.append(
+                    _NanGradOnLane3Field.apply(f_in[row_idx], is_l3)
+                )
             f_in = torch.stack(hooked_rows, dim=0)
         return orig_refresh(
             prep_obj,
@@ -2220,7 +2405,11 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     def _hooked_refresh_spin(
         prep_obj, eval_pos, c_in, s_in, f_in, fg_in, *, strict_mode
     ):
-        if isinstance(s_in, torch.Tensor) and s_in.requires_grad and s_in.ndim == 1:
+        if (
+            isinstance(s_in, torch.Tensor)
+            and s_in.requires_grad
+            and s_in.ndim == 1
+        ):
             hooked_s = []
             for row_idx in range(s_in.shape[0]):
                 is_l1 = bool(
@@ -2230,7 +2419,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
                         atol=1e-12,
                     )
                 )
-                hooked_s.append(_NanGradOnLane3Field.apply(s_in[row_idx], is_l1))
+                hooked_s.append(
+                    _NanGradOnLane3Field.apply(s_in[row_idx], is_l1)
+                )
             s_in = torch.stack(hooked_s, dim=0)
         return orig_refresh(
             prep_obj,
@@ -2248,7 +2439,9 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_spin
     )
-    spin_leaf = torch.tensor(0.0, dtype=DTYPE, device=DEVICE, requires_grad=True)
+    spin_leaf = torch.tensor(
+        0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
+    )
     for cs in (1, 2):
         out_spin_nan = stream_batch_value_and_grad(
             prep_spin,
@@ -2308,9 +2501,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
         terms = orig_eval_classical(sys_obj, l_pos, l_chrg)
         if terms:
             lbl, val = terms[0]
-            val = _NanGradOnLane2ModelParam.apply(
-                val, l_pos, target_model_leaf
-            )
+            val = _NanGradOnLane2ModelParam.apply(val, l_pos, target_model_leaf)
             return ((lbl, val), *terms[1:])
         return terms
 
@@ -2455,15 +2646,13 @@ def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution()
 
 
 def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
-    """Verify static, adaptive, and spectral primal modes with streaming and thread-local scope safety."""
-    import concurrent.futures
-
+    """Verify static, adaptive, and spectral primal modes with streaming and scope safety."""
     from dxtb._src.scf.functional.spectral import (
         _current_primal_fermi_mode,
         eager_primal_fermi_scope,
     )
 
-    # 1. Nested contexts, exception restoration, invalid mode rejection, and thread isolation.
+    # 1. Nested contexts, exception restoration, and invalid mode rejection.
     assert _current_primal_fermi_mode() == "static"
     with pytest.raises(ValueError, match="eager_primal_fermi must be"):
         with eager_primal_fermi_scope("invalid_mode"):
@@ -2481,24 +2670,6 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
             raise RuntimeError("boom")
     except RuntimeError:
         pass
-    assert _current_primal_fermi_mode() == "static"
-
-    # Multi-thread isolation: another thread entering "spectral" or "adaptive" does not affect main thread.
-    def _worker_scope_check(mode_in: str) -> tuple[str, str]:
-        before = _current_primal_fermi_mode()
-        with eager_primal_fermi_scope(mode_in):
-            inside = _current_primal_fermi_mode()
-        after = _current_primal_fermi_mode()
-        assert before == "static" and after == "static"
-        return before, inside
-
-    with eager_primal_fermi_scope("adaptive"):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            f1 = ex.submit(_worker_scope_check, "spectral")
-            f2 = ex.submit(_worker_scope_check, "static")
-            assert f1.result() == ("static", "spectral")
-            assert f2.result() == ("static", "static")
-        assert _current_primal_fermi_mode() == "adaptive"
     assert _current_primal_fermi_mode() == "static"
 
     # 2. Closed-shell H2O (50K, 300K, 5000K) and open-shell NO2 (300K):
@@ -2549,9 +2720,7 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
                     assert g_m is None
                 else:
                     assert g_m is not None
-                    torch.testing.assert_close(
-                        g_m, g_s, atol=1e-9, rtol=1e-8
-                    )
+                    torch.testing.assert_close(g_m, g_s, atol=1e-9, rtol=1e-8)
 
     # Open-shell NO2 radical (Z=[7, 8, 8], spin=1.0)
     numbers_no2 = torch.tensor([7, 8, 8], device=DEVICE)
@@ -2601,10 +2770,10 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
         )
 
 
-def test_w2c11_parallel_root_preparation_parity_and_failure_semantics() -> (
+def test_w2c11_direct_system_spectral_prep_parity_and_failure_semantics() -> (
     None
 ):
-    """Process-isolated parallel root preparation preserves deterministic order and failure semantics."""
+    """Direct System streaming and batch evaluation with spectral prep match prepared batch."""
     numbers, base_positions = _h2o_conformers()
     c3 = base_positions[0].clone()
     c3[1, 2] -= 0.05
@@ -2614,90 +2783,51 @@ def test_w2c11_parallel_root_preparation_parity_and_failure_semantics() -> (
         numbers, etemp=300.0, force_convergence=False, trainable_model=True
     )
 
-    with pytest.raises(ValueError, match="positive integer"):
-        prepare_converged_root_batch(system, pos4, num_workers=0)
-
-    prep_w1 = prepare_converged_root_batch(
-        system, pos4, eager_primal_fermi="spectral", num_workers=1, strict=True
+    prep = prepare_converged_root_batch(
+        system, pos4, eager_primal_fermi="spectral", strict=True
     )
-    prep_w2 = prepare_converged_root_batch(
-        system, pos4, eager_primal_fermi="spectral", num_workers=2, strict=True
+    out_prep = stream_batch_value_and_grad(
+        prep, model, pos4, chunk_size=2, strict=True
     )
-    assert prep_w1.preparation_diagnostics is not None
-    assert prep_w2.preparation_diagnostics is not None
-    assert prep_w1.preparation_diagnostics.num_workers == 1
-    assert prep_w2.preparation_diagnostics.num_workers == 2
-    assert prep_w2.preparation_diagnostics.worker_cpu_time_s > 0.0
-    assert (
-        prep_w2.preparation_diagnostics.process_tree_peak_rss_mb
-        >= prep_w2.preparation_diagnostics.parent_peak_rss_mb
-    )
-    assert len(prep_w2.preparation_diagnostics.worker_pids) >= 1
-
-    for l1, l2 in zip(prep_w1.lanes, prep_w2.lanes):
-        assert l1.lane_index == l2.lane_index
-        assert l1.root_valid == l2.root_valid
-        torch.testing.assert_close(l1.root_x, l2.root_x, atol=1e-13, rtol=1e-13)
-        torch.testing.assert_close(
-            l1.raw_residual_l2, l2.raw_residual_l2, atol=1e-13, rtol=1e-13
-        )
-
-    out_w1 = stream_batch_value_and_grad(
-        prep_w1, model, pos4, chunk_size=2, strict=True
-    )
-    out_w2 = stream_batch_value_and_grad(
-        prep_w2, model, pos4, chunk_size=2, strict=True
-    )
-    out_sys_w2 = stream_batch_value_and_grad(
+    out_sys = stream_batch_value_and_grad(
         system,
         model,
         pos4,
         chunk_size=2,
         eager_primal_fermi="spectral",
-        num_workers=2,
         strict=True,
     )
-    eval_sys_w2 = evaluate_converged_root_batch(
+    eval_sys = evaluate_converged_root_batch(
         system,
         pos4,
         eager_primal_fermi="spectral",
-        num_workers=2,
         strict=True,
     )
-    torch.testing.assert_close(out_w1.energy, out_w2.energy, atol=1e-13, rtol=0)
     torch.testing.assert_close(
-        out_w1.energy, out_sys_w2.energy, atol=1e-13, rtol=0
+        out_prep.energy, out_sys.energy, atol=1e-13, rtol=0
     )
     torch.testing.assert_close(
-        out_w1.energy, eval_sys_w2.energy.sum(dim=-1), atol=1e-13, rtol=0
+        out_prep.energy, eval_sys.energy.sum(dim=-1), atol=1e-13, rtol=0
     )
     torch.testing.assert_close(
-        out_w1.position_gradient,
-        out_w2.position_gradient,
-        atol=1e-12,
-        rtol=1e-12,
-    )
-    torch.testing.assert_close(
-        out_w1.position_gradient,
-        out_sys_w2.position_gradient,
+        out_prep.position_gradient,
+        out_sys.position_gradient,
         atol=1e-12,
         rtol=1e-12,
     )
 
-    # Non-strict and strict failure propagation under num_workers=2:
+    # Non-strict and strict failure propagation:
     _, sys_max1 = _build_system(
         numbers, maxiter=1, force_convergence=False, etemp=300.0
     )
     with pytest.warns(SCFConvergenceWarning):
-        prep_fail_w2 = prepare_converged_root_batch(
-            sys_max1, pos4[:2], num_workers=2, strict=False
+        prep_fail = prepare_converged_root_batch(
+            sys_max1, pos4[:2], strict=False
         )
-    assert not prep_fail_w2.all_roots_valid
+    assert not prep_fail.all_roots_valid
     assert all(
         lane.failure_code == int(BatchRootFailureCode.MAXITER_EXCEEDED)
-        for lane in prep_fail_w2.lanes
+        for lane in prep_fail.lanes
     )
     with pytest.raises(SCFConvergenceError, match=r"\[Lane 0\]"):
-        prepare_converged_root_batch(
-            sys_max1, pos4[:2], num_workers=2, strict=True
-        )
+        prepare_converged_root_batch(sys_max1, pos4[:2], strict=True)

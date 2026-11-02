@@ -40,16 +40,18 @@ from dxtb._src.scf.functional import (
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional import map as functional_map
+from dxtb._src.scf.functional import potential_to_hamiltonian
+from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    potential_to_hamiltonian,
-    setup_anderson_solver_settings,
     setup_simple_solver_settings,
-    solve_scf_fock_anderson,
     solve_scf_fock_simple,
 )
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional import validate_fock_state
+from dxtb.scf import LinearMethod
 
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_fock as solve_scf_fock_anderson
 from .test_functional_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
@@ -124,7 +126,7 @@ def _run_legacy_and_functional(
     legacy.engine.iterate_fockian = record_map
     legacy_result = legacy.engine(legacy.initial_charges.clone())
     config = functional.system.config.scf
-    if config.mixer == labels.MIXER_LINEAR:
+    if isinstance(config.strategy.stages[0].method, LinearMethod):
         settings = setup_simple_solver_settings(config, guess.dtype)
         result = solve_scf_fock_simple(guess, functional.inputs, settings)
     else:
@@ -350,8 +352,8 @@ def test_fock_normal_convergence_matches_legacy(mixer: int) -> None:
 
 
 def test_fock_anderson_early_convergence_matches_selected_map() -> None:
-    """An early-converged Fock map remains selected through fixed trips."""
-    _, _, result, legacy = _run_legacy_and_functional(
+    """Raw convergence alone cannot stop before Fock certification passes."""
+    case, _, result, _ = _run_legacy_and_functional(
         {
             "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
@@ -362,9 +364,15 @@ def test_fock_anderson_early_convergence_matches_selected_map() -> None:
             "x_atol_max": 1.0e6,
         }
     )
-    _assert_public_parity(result, legacy)
     assert bool(result.converged)
-    assert int(result.iterations) == 2
+    assert int(result.iterations) > 2
+    assert result.diagnostics.certification is not None
+    assert bool(result.diagnostics.certification.result.certified)
+    expected = functional_problem.fock_map(result.root_x, case.inputs)
+    _assert_tensor_equal(result.map_result.mapped_x, expected.mapped_x)
+    _assert_tensor_equal(
+        result.map_result.spectral.density, expected.spectral.density
+    )
 
 
 @pytest.mark.parametrize(
@@ -446,7 +454,7 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
     )
     guess = _fock_guess(case)
     states: list[torch.Tensor] = []
-    original = functional_anderson.fock_map
+    original = functional_problem.fock_map
 
     def record(value: torch.Tensor, inputs: object):
         states.append(value.clone())
@@ -454,7 +462,7 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
         states.append(result.mapped_x.clone())
         return result
 
-    monkeypatch.setattr(functional_anderson, "fock_map", record)
+    monkeypatch.setattr(functional_problem, "fock_map", record)
     settings = setup_anderson_solver_settings(
         case.system.config.scf, guess.dtype
     )
@@ -505,7 +513,8 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
     assert calls == 2
     assert int(result.iterations) == 1
     assert not bool(result.converged)
-    assert result.trajectory_status is not None
+    assert result.trajectory_status is None
+    assert result.map_result.fermi_status is not None
     assert result.final_evaluation.fermi_status is not None
     assert bool(functional_subsolves_ok(result))
 
@@ -796,7 +805,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
         },
     )
     guess = _fock_guess(case)
-    original = functional_solver.fock_map
+    original = functional_problem.fock_map
     calls = 0
 
     def fail_initial(value: torch.Tensor, inputs: object):
@@ -815,11 +824,13 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
             )
         return result
 
-    monkeypatch.setattr(functional_solver, "fock_map", fail_initial)
+    monkeypatch.setattr(functional_problem, "fock_map", fail_initial)
     settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
     assert calls == 2
-    assert bool(result.converged)
+    assert not bool(result.converged)
+    assert result.diagnostics.certification is not None
+    assert not bool(result.diagnostics.certification.result.stationarity_ok)
     assert result.trajectory_status is not None
     assert not bool(result.trajectory_status.fermi_converged.all())
     assert result.map_result.fermi_status is not None
@@ -829,10 +840,10 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
     assert not bool(functional_subsolves_ok(result))
 
 
-def test_fock_valid_trajectory_with_invalid_final_spectrum(
+def test_fock_zero_budget_uses_final_status_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The separate final Fock spectrum contributes its own status."""
+    """Zero-budget Fock validity comes from the separate final spectrum."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
@@ -857,8 +868,9 @@ def test_fock_valid_trajectory_with_invalid_final_spectrum(
 
     monkeypatch.setattr(functional_solver, "evaluate_hamiltonian", fail_final)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
-    assert result.trajectory_status is not None
-    assert bool(result.trajectory_status.fermi_converged.all())
+    assert result.trajectory_status is None
+    assert result.map_result.fermi_status is not None
+    assert bool(result.map_result.fermi_status.converged.all())
     assert result.final_evaluation.fermi_status is not None
     assert not bool(result.final_evaluation.fermi_status.converged.all())
     assert not bool(functional_subsolves_ok(result))

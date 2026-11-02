@@ -122,7 +122,12 @@ def _require_linear_convergence(
 
 
 def implicit_root(
-    root_x: Tensor, *parameters: Tensor, raw_map: RawMap
+    root_x: Tensor,
+    *parameters: Tensor,
+    raw_map: RawMap,
+    rtol: float = _LINEAR_SOLVE_RTOL,
+    atol: float = _LINEAR_SOLVE_ATOL,
+    maxiter: int | None = None,
 ) -> Tensor:
     """Return ``root_x`` with derivatives from ``G(x, p) - x = 0``.
 
@@ -144,8 +149,9 @@ def implicit_root(
         root_x,
         *parameters,
         method="bicgstab",
-        rtol=_LINEAR_SOLVE_RTOL,
-        atol=_LINEAR_SOLVE_ATOL,
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter,
     )
 
 
@@ -160,13 +166,22 @@ class _PreparedSCFRoot:
     residual: Tensor
     trajectory_status: object | None
     damping_state: object
+    certification: object | None
     raw_map: RawMap
     parameters: tuple[Tensor, ...]
+    response_rtol: float = _LINEAR_SOLVE_RTOL
+    response_atol: float = _LINEAR_SOLVE_ATOL
+    response_maxiter: int | None = None
 
     def attach(self) -> Tensor:
         """Attach only the implicit root derivative; leave finalization out."""
         return implicit_root(
-            self.root_x, *self.parameters, raw_map=self.raw_map
+            self.root_x,
+            *self.parameters,
+            raw_map=self.raw_map,
+            rtol=self.response_rtol,
+            atol=self.response_atol,
+            maxiter=self.response_maxiter,
         )
 
 
@@ -179,29 +194,41 @@ def _prepare_scf_root(
     final_valid: Tensor,
     raw_map: RawMap,
     parameters: tuple[Tensor, ...],
+    response_rtol: float = _LINEAR_SOLVE_RTOL,
+    response_atol: float = _LINEAR_SOLVE_ATOL,
+    response_maxiter: int | None = None,
+    independent_map_result: object | None = None,
 ) -> _PreparedSCFRoot:
     """Validate the root against the exact inputs before differentiation."""
     if maxiter == 0:
         raise SCFConvergenceError(
             "Implicit physical-root differentiation requires maxiter > 0."
         )
-    valid = outcome.converged.all() & final_valid
-    status = outcome.trajectory_status
-    if status is not None:
-        valid = (
-            valid
-            & status.fermi_converged.all()
-            & status.electron_count_ok.all()
-            & ~status.invalid_temperature.any()
-            & ~status.too_many_electrons.any()
+    certification = getattr(outcome, "certification", None)
+    if certification is None:
+        raise SCFConvergenceError(
+            "Implicit physical-root differentiation requires an "
+            "authoritatively certified SCF root."
         )
+    converged = outcome.converged.all()
+    certified = certification.certified.all()
+    if bool(converged) != bool(certified):
+        raise RuntimeError(
+            "SCF outcome convergence and physical certification disagree."
+        )
+    valid = converged & certified & final_valid
 
     # Re-evaluate the raw physical map with the exact tensors that will be
-    # passed to the implicit attachment. This catches a root prepared for a
-    # different finite parameter value before it can enter the IFT boundary.
+    # passed to the implicit attachment. Alternate response preparation can
+    # provide its already evaluated adapter result, which is this independent
+    # exact-parameter check and the S2 candidate observation.
     with torch.no_grad():
-        independent_residual = raw_map(outcome.root_x, *parameters)
-        independent_residual = independent_residual - outcome.root_x
+        mapped_x = (
+            raw_map(outcome.root_x, *parameters)
+            if independent_map_result is None
+            else independent_map_result.mapped_x
+        )
+        independent_residual = mapped_x - outcome.root_x
         residual_norms = torch.stack(
             (
                 torch.linalg.vector_norm(independent_residual),
@@ -211,8 +238,8 @@ def _prepare_scf_root(
         residual_valid = torch.isfinite(independent_residual).all()
         residual_valid = (
             residual_valid
-            & (residual_norms[0] <= x_atol)
-            & (residual_norms[1] <= x_atol_max)
+            & (residual_norms[0] < x_atol)
+            & (residual_norms[1] < x_atol_max)
         )
     valid = valid & residual_valid
     if not bool(valid):
@@ -229,8 +256,12 @@ def _prepare_scf_root(
         residual=outcome.residual,
         trajectory_status=outcome.trajectory_status,
         damping_state=outcome.damping_state,
+        certification=getattr(outcome, "certification", None),
         raw_map=raw_map,
         parameters=parameters,
+        response_rtol=response_rtol,
+        response_atol=response_atol,
+        response_maxiter=response_maxiter,
     )
 
 

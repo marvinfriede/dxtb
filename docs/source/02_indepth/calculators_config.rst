@@ -9,6 +9,7 @@ Configuration
    General <../_autosummary/dxtb.config.Config>
    Integrals <../_autosummary/dxtb.config.ConfigIntegrals>
    SCF <../_autosummary/dxtb.config.ConfigSCF>
+   SCF strategies <scf_strategy>
    Labels <calculators_config_labels>
 
 

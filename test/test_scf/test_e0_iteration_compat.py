@@ -25,7 +25,8 @@ import torch
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler, Result
 from dxtb._src.constants import labels
-from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional import method as functional_method
+from dxtb._src.scf.functional import problem as functional_problem
 
 from ..utils import get_param_module
 from .samples import samples
@@ -163,8 +164,8 @@ def test_full_mode_iteration_compatibility(
 ) -> None:
     """Lock production map counts and raw final-map outputs for E4."""
     counts = {"map": 0, "mixer": 0}
-    original_map: Callable = functional_solver.scf_map
-    original_mixer: Callable = functional_solver.simple_mix
+    original_map: Callable = functional_problem.scf_map
+    original_mixer: Callable = functional_method.simple_mix
 
     def count_map(*args, **kwargs):
         counts["map"] += 1
@@ -174,8 +175,8 @@ def test_full_mode_iteration_compatibility(
         counts["mixer"] += 1
         return original_mixer(x_old, x_new, damp)
 
-    monkeypatch.setattr(functional_solver, "scf_map", count_map)
-    monkeypatch.setattr(functional_solver, "simple_mix", count_mixer)
+    monkeypatch.setattr(functional_problem, "scf_map", count_map)
+    monkeypatch.setattr(functional_method, "simple_mix", count_mixer)
 
     sample = samples["H2O"]
     numbers = sample["numbers"].to(device="cpu")
@@ -189,7 +190,6 @@ def test_full_mode_iteration_compatibility(
         "mix_guess": mix_guess,
         "damp": 0.25,
         "maxiter": maxiter,
-        "f_atol": 1.0e-12,
         "x_atol": 1.0e-12,
         "x_atol_max": 1.0e-12,
         "force_convergence": False,
@@ -224,7 +224,7 @@ def test_full_mode_iteration_compatibility(
             )
         else:
             assert any(
-                f"does not converge after {maxiter} cycles" in msg
+                f"did not certify after {maxiter} iterations" in msg
                 for msg, _ in OutputHandler.warnings
             )
     finally:
@@ -263,7 +263,7 @@ def test_full_mode_maxiter_zero_ignores_force_convergence() -> None:
 
 
 def _full_result(
-    *, f_atol: float, x_atol: float, x_atol_max: float
+    *, x_atol: float, x_atol_max: float
 ) -> tuple[Result, tuple[str, ...]]:
     sample = samples["H2O"]
     numbers = sample["numbers"].to(device="cpu")
@@ -277,7 +277,6 @@ def _full_result(
         "mix_guess": True,
         "damp": 0.25,
         "maxiter": 5,
-        "f_atol": f_atol,
         "x_atol": x_atol,
         "x_atol_max": x_atol_max,
         "force_convergence": False,
@@ -294,34 +293,14 @@ def _full_result(
     return result, warnings
 
 
-def test_full_f_atol_does_not_change_convergence() -> None:
-    """Full-mode stopping depends on x residual tolerances, not f_atol."""
-    loose, loose_warnings = _full_result(
-        f_atol=1.0e3, x_atol=1.0e-12, x_atol_max=1.0e-12
-    )
-    tight, tight_warnings = _full_result(
-        f_atol=1.0e-12, x_atol=1.0e-12, x_atol_max=1.0e-12
-    )
-
-    assert loose.iterations.item() == tight.iterations.item() == 6
-    torch.testing.assert_close(loose.energy, tight.energy, rtol=0.0, atol=0.0)
-    torch.testing.assert_close(
-        loose.charges.mono, tight.charges.mono, rtol=0.0, atol=0.0
-    )
-    assert loose_warnings == tight_warnings
-    assert any("does not converge" in warning for warning in tight_warnings)
-
-
 def test_full_x_atol_controls_convergence() -> None:
-    """The two raw-residual x tolerances determine full-mode stopping."""
-    loose, loose_warnings = _full_result(
-        f_atol=1.0e-8, x_atol=1.0e2, x_atol_max=1.0e2
-    )
-    tight, tight_warnings = _full_result(
-        f_atol=1.0e-8, x_atol=1.0e-12, x_atol_max=1.0e-12
-    )
+    """A loose raw residual cannot bypass physical certification."""
+    loose, loose_warnings = _full_result(x_atol=1.0e2, x_atol_max=1.0e2)
+    tight, tight_warnings = _full_result(x_atol=1.0e-12, x_atol_max=1.0e-12)
 
-    assert loose.iterations.item() == 2
+    assert loose.iterations.item() == 6
     assert tight.iterations.item() == 6
-    assert not any("does not converge" in warning for warning in loose_warnings)
-    assert any("does not converge" in warning for warning in tight_warnings)
+    assert not bool(loose.converged)
+    assert not bool(tight.converged)
+    assert any("did not certify" in warning for warning in loose_warnings)
+    assert any("did not certify" in warning for warning in tight_warnings)

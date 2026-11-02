@@ -1,0 +1,139 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2",
+  "model": "gfn1",
+  "charge": 0.0,
+  "spin": 0.0,
+  "stretch": 3.0,
+  "issue187_geometry": false,
+  "initial": "perturbed",
+  "strategy": "broyden",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 20,
+  "physical_maps": 20,
+  "certified": true,
+  "residual_l2": 5.305803752603255e-08,
+  "residual_max": 2.652901881505798e-08,
+  "energy": -0.9240884498499962,
+  "wall_seconds": 0.11316957720555365,
+  "instrumented_wall_seconds": 0.1219408749602735,
+  "physical_map_seconds": 0.08649345790036023,
+  "map_diagnostic_seconds_removed": 0.008771297754719853,
+  "physical_map_trajectory": [
+    {
+      "energy": -0.5080340887907095,
+      "fixed_point_l2": 1.15304927835668,
+      "fixed_point_max": 0.6928328459397425
+    },
+    {
+      "energy": -0.919442864916628,
+      "fixed_point_l2": 0.07141005794072483,
+      "fixed_point_max": 0.03570502897036265
+    },
+    {
+      "energy": -0.9240436612511064,
+      "fixed_point_l2": 0.007000031100919618,
+      "fixed_point_max": 0.0035000155504600478
+    },
+    {
+      "energy": -0.9240773956983308,
+      "fixed_point_l2": 0.0034775525192902307,
+      "fixed_point_max": 0.00173877625964515
+    },
+    {
+      "energy": -0.924085686703366,
+      "fixed_point_l2": 0.0017386480019070047,
+      "fixed_point_max": 0.0008693240009535613
+    },
+    {
+      "energy": -0.9240877590874816,
+      "fixed_point_l2": 0.0008693081660937213,
+      "fixed_point_max": 0.00043465408304702025
+    },
+    {
+      "energy": -0.9240882771608783,
+      "fixed_point_l2": 0.0004346521040299034,
+      "fixed_point_max": 0.0002173260520151321
+    },
+    {
+      "energy": -0.9240884066778129,
+      "fixed_point_l2": 0.00021732580464782492,
+      "fixed_point_max": 0.0001086629023240443
+    },
+    {
+      "energy": -0.9240884390569584,
+      "fixed_point_l2": 0.00010866287140344488,
+      "fixed_point_max": 5.4331435701771014e-05
+    },
+    {
+      "energy": -0.9240884471517391,
+      "fixed_point_l2": 5.4331431836709965e-05,
+      "fixed_point_max": 2.71657159183758e-05
+    },
+    {
+      "energy": -0.9240884491754339,
+      "fixed_point_l2": 2.7165715435435722e-05,
+      "fixed_point_max": 1.3582857717797658e-05
+    },
+    {
+      "energy": -0.9240884496813577,
+      "fixed_point_l2": 1.358285765681172e-05,
+      "fixed_point_max": 6.791428828478718e-06
+    },
+    {
+      "energy": -0.9240884498078386,
+      "fixed_point_l2": 6.7914288210749185e-06,
+      "fixed_point_max": 3.3957144105617454e-06
+    },
+    {
+      "energy": -0.924088449839459,
+      "fixed_point_l2": 3.395714409791528e-06,
+      "fixed_point_max": 1.6978572049547447e-06
+    },
+    {
+      "energy": -0.924088449847364,
+      "fixed_point_l2": 1.6978572045661666e-06,
+      "fixed_point_max": 8.489286024704334e-07
+    },
+    {
+      "energy": -0.9240884498493401,
+      "fixed_point_l2": 8.489286022692055e-07,
+      "fixed_point_max": 4.2446430122133894e-07
+    },
+    {
+      "energy": -0.9240884498498342,
+      "fixed_point_l2": 4.2446430133930013e-07,
+      "fixed_point_max": 2.122321507008751e-07
+    },
+    {
+      "energy": -0.9240884498499577,
+      "fixed_point_l2": 2.1223215039556376e-07,
+      "fixed_point_max": 1.0611607524635414e-07
+    },
+    {
+      "energy": -0.9240884498499887,
+      "fixed_point_l2": 1.061160750659429e-07,
+      "fixed_point_max": 5.305803757460481e-08
+    },
+    {
+      "energy": -0.9240884498499962,
+      "fixed_point_l2": 5.305803752603255e-08,
+      "fixed_point_max": 2.652901881505798e-08
+    }
+  ],
+  "physical_maps_recorded": 20,
+  "coefficient_optimizer_seconds": 0,
+  "coefficient_optimizer_evaluations": 0,
+  "coefficient_optimization": null,
+  "stage_iterations": [
+    20
+  ]
+}

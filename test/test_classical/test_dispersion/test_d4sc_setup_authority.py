@@ -198,7 +198,7 @@ def test_functional_d4sc_uses_system_owned_model_snapshot() -> None:
     setup = system.d4sc_setup
     assert type(setup) is D4SCCoreSetup
     assert setup is not None
-    assert system.config.scf.scf_mode == labels.SCF_MODE_FULL
+    assert system.config.scf.differentiation.value == "unrolled"
     full_before = system.singlepoint(positions)
     assert full_before.status is not None
 

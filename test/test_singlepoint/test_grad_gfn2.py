@@ -68,7 +68,6 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
         opts,
         **{
             "mixer": "anderson" if scf_mode == "full" else "broyden",
-            "f_atol": 1e-5 if dtype == torch.float else 1e-10,
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
             "scf_mode": scf_mode,
         },
@@ -127,7 +126,6 @@ def num_grad(
         **{
             "scf_mode": scf_mode,
             "mixer": "anderson" if scf_mode == "full" else "broyden",
-            "f_atol": 1e-5 if dd["dtype"] == torch.float else 1e-10,
             "x_atol": 1e-5 if dd["dtype"] == torch.float else 1e-10,
         },
     )

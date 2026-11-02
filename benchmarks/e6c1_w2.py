@@ -60,7 +60,6 @@ OPTIONS = {
     "scf_mode": "full",
     "mixer": "anderson",
     "maxiter": 300,
-    "f_atol": 1.0e-8,
     "x_atol": 1.0e-8,
     "int_driver": "pytorch",
     "fermi_etemp": 300.0,
@@ -133,7 +132,6 @@ def _build(
             scf_mode=labels.SCF_MODE_FULL,
             maxiter=args.maxiter,
             force_convergence=False,
-            f_atol=1.0e-8,
             x_atol=1.0e-8,
             fermi_etemp=300.0,
         )
@@ -391,7 +389,6 @@ def main() -> None:
             "mode": "full",
             "mixer": "anderson",
             "maxiter": args.maxiter,
-            "f_atol": 1.0e-8,
             "x_atol": 1.0e-8,
             "controller": (
                 "legacy-eager" if args.route == "legacy" else "fixed-trip"

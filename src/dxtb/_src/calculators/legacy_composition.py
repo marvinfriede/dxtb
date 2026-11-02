@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Private ordered composition for retained legacy single-System routes."""
+"""Private ordered composition for independent single-System evaluations."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class LegacySystemRoute(Enum):
 
 @dataclass(frozen=True)
 class LegacySCFOptions:
-    """Engine constructor extras retained by the low-level SCF contract."""
+    """Legacy engine constructor extras, now rejected explicitly."""
 
     args: tuple[Any, ...] = ()
     kwargs: Mapping[str, Any] | None = None
@@ -78,42 +78,88 @@ def classify_legacy_system(
         return LegacySystemRoute.REJECTED
 
     config = system.config
-    if config.scf.requires_iterations is False or {"all", "scf"} & set(
-        config.exclude
-    ):
+    if {"all", "scf"} & set(config.exclude):
+        if legacy_options is not None and (
+            legacy_options.args or legacy_options.kwargs
+        ):
+            raise NotImplementedError(
+                "Legacy SCF engine positional/keyword overrides are no longer "
+                "supported by functional SCF."
+            )
         return LegacySystemRoute.SEPARATE_ROUTE
 
     core = system.exact_core
-    if core is None:
-        return LegacySystemRoute.REJECTED
+    if (
+        core is None
+        or core.integral is None
+        or system.h0_setup is None
+        or config.ints.level < labels.INTLEVEL_HCORE
+    ):
+        return LegacySystemRoute.LEGACY_COMPOSED
 
-    if core.integral is None:
-        return LegacySystemRoute.REJECTED
+    if legacy_options is not None and (
+        legacy_options.args or legacy_options.kwargs
+    ):
+        raise NotImplementedError(
+            "Legacy SCF engine positional/keyword overrides are no longer "
+            "supported by functional SCF."
+        )
+
+    if config.scf.requires_iterations is False:
+        return LegacySystemRoute.SEPARATE_ROUTE
+
+    eligible, _ = functional_scf_interactions_eligible(system.interactions)
+    if not eligible:
+        names = ", ".join(
+            type(component).__name__
+            for component in system.interactions.components
+        )
+        raise NotImplementedError(
+            f"Functional SCF does not support interaction extension(s): {names}."
+        )
+
+    scf_config = config.scf
+    if scf_config.fermi.etemp < 0.0:
+        raise ValueError("Electronic Temperature must be non-negative.")
+    if scf_config.fermi.maxiter < 0:
+        raise ValueError("Fermi maxiter must be non-negative.")
+    if scf_config.maxiter < 0:
+        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+
+    if any(
+        type(stage.method).__name__ == "SOSCFMethod"
+        for stage in scf_config.strategy.stages
+    ):
+        kt = float(scf_config.fermi.etemp) * 3.166811563e-6
+        if kt >= 3.0e-7:
+            raise ValueError(
+                "SOSCF cannot be used with active Fermi smearing. Use "
+                "Anderson, Broyden, or CDIIS, or disable smearing explicitly."
+            )
+
+    eager_only = len(scf_config.strategy.stages) != 1 or any(
+        not getattr(stage.method, "supports_fixed_trip", True)
+        for stage in scf_config.strategy.stages
+    )
+    if scf_config.differentiation.value == "unrolled" and eager_only:
+        raise ValueError(
+            "This SCF strategy requires eager/implicit execution; "
+            "unrolled fixed-trip execution does not support its "
+            "dynamic or eager-only method stages."
+        )
+
     if core.integral.driver_type == labels.INTDRIVER_LIBCINT:
         return LegacySystemRoute.LEGACY_COMPOSED
     if core.integral.driver_type != labels.INTDRIVER_PYTORCH:
         return LegacySystemRoute.REJECTED
 
-    if legacy_options is not None and (
-        legacy_options.args or legacy_options.kwargs
+    if (
+        len(core.classical_terms) != len(system.classicals.components)
+        or system._active_exact_core() is None
+        or scf_config.differentiation.value == "implicit"
+        or eager_only
     ):
         return LegacySystemRoute.LEGACY_COMPOSED
-
-    if config.scf.scf_mode != labels.SCF_MODE_FULL:
-        return LegacySystemRoute.LEGACY_COMPOSED
-
-    eligible, _ = functional_scf_interactions_eligible(system.interactions)
-    if not eligible:
-        return LegacySystemRoute.LEGACY_COMPOSED
-
-    if len(core.classical_terms) != len(system.classicals.components):
-        return LegacySystemRoute.LEGACY_COMPOSED
-
-    scf_config = config.scf
-    if scf_config.fermi.etemp < 0.0 or scf_config.fermi.maxiter < 0:
-        return LegacySystemRoute.LEGACY_COMPOSED
-    if scf_config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
 
     return LegacySystemRoute.MAPPED
 
@@ -125,15 +171,11 @@ def compose_legacy_systems(
     spins: tuple[Tensor | float | int | None, ...] | None = None,
     *,
     source_ids: tuple[int, ...] | None = None,
-    field: Tensor | None = None,
-    field_grad: Tensor | None = None,
+    field: Tensor | tuple[Tensor | None, ...] | None = None,
+    field_grad: Tensor | tuple[Tensor | None, ...] | None = None,
     legacy_options: LegacySCFOptions | None = None,
 ) -> LegacyCompositionResult:
-    """Evaluate retained Systems independently and preserve input order.
-
-    This private boundary deliberately performs an outer Python composition
-    of independent legacy calls. It is not a fallback for the mapped route.
-    """
+    """Evaluate Systems independently and preserve input order."""
     count = len(systems)
     if count == 0:
         raise ValueError("Legacy composition requires at least one System.")
@@ -178,28 +220,29 @@ def compose_legacy_systems(
             f"legacy composition was not selected for source IDs {mapped}."
         )
 
-    kwargs = None if legacy_options is None else legacy_options.as_kwargs()
-    args = () if legacy_options is None else legacy_options.args
+    if isinstance(field, tuple) and len(field) != count:
+        raise ValueError("Systems and per-lane fields must have equal length.")
+    if isinstance(field_grad, tuple) and len(field_grad) != count:
+        raise ValueError(
+            "Systems and per-lane field gradients must have equal length."
+        )
     results_list: list[Result] = []
-    for source_id, system, position, charge, spin, route in zip(
-        source_ids, systems, positions, charges, spins, routes
+    for idx, (source_id, system, position, charge, spin, route) in enumerate(
+        zip(source_ids, systems, positions, charges, spins, routes)
     ):
+        lane_field = field[idx] if isinstance(field, tuple) else field
+        lane_field_grad = (
+            field_grad[idx] if isinstance(field_grad, tuple) else field_grad
+        )
         try:
             result = _singlepoint_impl(
                 system,
                 position,
                 charge,
                 spin,
-                field,
-                field_grad,
+                lane_field,
+                lane_field_grad,
                 fixed_trip=False,
-                force_legacy_scf=(
-                    route is LegacySystemRoute.LEGACY_COMPOSED
-                    or bool(args)
-                    or bool(kwargs)
-                ),
-                legacy_scf_args=args,
-                legacy_scf_kwargs=kwargs,
                 refresh_extension_caches=True,
             )
         except Exception as error:

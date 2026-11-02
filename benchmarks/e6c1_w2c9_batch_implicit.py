@@ -43,14 +43,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from benchmarks.baseline.workloads import conformers as frozen_conformers  # noqa: E402
+# isort: off
+from benchmarks.baseline.workloads import (
+    conformers as frozen_conformers,
+)  # noqa: E402
+
+# isort: on
 from dxtb import GFN1_XTB, ParamModule, labels  # noqa: E402
-from dxtb._src.calculators.model import Model  # noqa: E402
-from dxtb.config import Config  # noqa: E402
 from dxtb._src.calculators.batch_implicit import (  # noqa: E402
     evaluate_converged_root_batch,
     prepare_converged_root_batch,
 )
+from dxtb._src.calculators.model import Model  # noqa: E402
+from dxtb.config import Config  # noqa: E402
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -85,11 +90,9 @@ def cpu_model() -> str | None:
 
 def git_sha() -> str | None:
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-            ).strip()
-        )
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
     except Exception:
         return None
 
@@ -120,15 +123,12 @@ def setup_w2_model_and_system(
         scf_mode=labels.SCF_MODE_FULL,
         scp_mode=labels.SCP_MODE_CHARGE,
         maxiter=300,
-        f_atol=1.0e-8,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
         fermi_etemp=300.0,
         force_convergence=True,
     )
-    model = Model(
-        par=par, config=config, auto_int_level=True
-    )
+    model = Model(par=par, config=config, auto_int_level=True)
     trainable = gradient_mode == "positions-and-model"
     for p in model.par.parameters():
         if p.is_floating_point():
@@ -191,8 +191,10 @@ def _instrument_implicit_solve():
         else:
             res_norm = res_det.abs()
         rel_res = (
-            res_norm / rhs_norm.clamp_min(torch.finfo(rhs.dtype).tiny)
-        ).cpu().tolist()
+            (res_norm / rhs_norm.clamp_min(torch.finfo(rhs.dtype).tiny))
+            .cpu()
+            .tolist()
+        )
         solve_summaries.append(
             {
                 "pre_solver_s": pre_s,
@@ -207,7 +209,13 @@ def _instrument_implicit_solve():
         return res
 
     implicit_root_module.implicit_solve = traced_solve
-    return implicit_root_module, original, records, solve_summaries, backward_start
+    return (
+        implicit_root_module,
+        original,
+        records,
+        solve_summaries,
+        backward_start,
+    )
 
 
 def run_kernel_ab_benchmark() -> dict[str, Any]:
@@ -412,9 +420,7 @@ def run_batch_benchmark(
                 "solver_residual": lane.solver_residual.detach().cpu().tolist(),
                 "raw_residual_l2": float(lane.raw_residual_l2.item()),
                 "raw_residual_max": float(lane.raw_residual_max.item()),
-                "electron_count_error": float(
-                    lane.electron_count_error.item()
-                ),
+                "electron_count_error": float(lane.electron_count_error.item()),
                 "energy_eh": float(result.energy[lane.lane_index].sum().item()),
                 "scf_eh": float(result.scf[lane.lane_index].sum().item()),
                 "fenergy_eh": float(
@@ -511,10 +517,7 @@ def run_batch_benchmark(
         s_pos_grad_t = torch.stack(serial_pos_grads)
 
         energy_max_diff = float(
-            (result.energy.sum(dim=-1).detach() - s_energy_t)
-            .abs()
-            .max()
-            .item()
+            (result.energy.sum(dim=-1).detach() - s_energy_t).abs().max().item()
         )
         fenergy_max_diff = float(
             (result.fenergy.sum(dim=-1).detach() - s_fenergy_t)

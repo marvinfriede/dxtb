@@ -37,7 +37,6 @@ from .samples import samples
 
 opts = {
     "int_level": labels.INTLEVEL_DIPOLE,
-    "f_atol": 1.0e-10,
     "x_atol": 1.0e-10,
     "maxiter": 100,
     "damp": 0.3,
@@ -211,46 +210,44 @@ def test_gradgradcheck_batch(
     )
 
 
-def analytical_vs_autograd(
+def full_vs_implicit_autograd(
     numbers: Tensor, positions: Tensor, charge: Tensor, dd: DD
 ) -> None:
     field_vector = torch.tensor([-2.0, 1.0, 0.5], **dd) * VAA2AU
 
-    options = dict(opts, **{"scf_mode": labels.SCF_MODE_IMPLICIT})
+    options_imp = dict(opts, **{"scf_mode": labels.SCF_MODE_IMPLICIT})
+    options_full = dict(opts, **{"scf_mode": labels.SCF_MODE_FULL})
 
-    # separate calculators, so that no cached quantities are shared
-    calc = Calculator(
+    calc_imp = Calculator(
         numbers,
         GFN1_XTB,
         interaction=new_efield(field_vector),
-        opts=options,
+        opts=options_imp,
         **dd,
     )
     pos = positions.clone().requires_grad_(True)
-    energy = calc.energy(pos, charge)
-    (ref,) = torch.autograd.grad(-energy.sum(), pos)
+    ref = calc_imp.forces(pos, charge).detach()
 
-    calc = Calculator(
+    calc_full = Calculator(
         numbers,
         GFN1_XTB,
         interaction=new_efield(field_vector),
-        opts=options,
+        opts=options_full,
         **dd,
     )
     pos = positions.clone().requires_grad_(True)
-    forces = calc.forces_analytical(pos, charge).detach()
+    forces = calc_full.forces(pos, charge).detach()
 
-    assert pytest.approx(ref.cpu(), abs=1e-8, rel=1e-6) == forces.cpu()
+    assert pytest.approx(ref.cpu(), abs=1e-7, rel=1e-5) == forces.cpu()
 
 
 @pytest.mark.grad
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
-def test_analytical(dtype: torch.dtype) -> None:
+def test_full_vs_implicit_forces_with_field(dtype: torch.dtype) -> None:
     """
-    Check analytical forces in an electric field against autograd. The anion
-    has non-zero atomic charges and dipole moments, i.e., the gradient
-    contains the monopolar (:math:`-q_A F`) and the dipolar contribution.
+    Check autograd forces in an electric field across full and implicit SCF
+    modes for an anion with non-zero atomic charges and dipole moments.
     """
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -258,16 +255,16 @@ def test_analytical(dtype: torch.dtype) -> None:
     positions = samples["NO2"]["positions"].to(**dd)
     charge = torch.tensor(-1.0, **dd)
 
-    analytical_vs_autograd(numbers, positions, charge, dd)
+    full_vs_implicit_autograd(numbers, positions, charge, dd)
 
 
 @pytest.mark.grad
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
-def test_analytical_batch(dtype: torch.dtype) -> None:
+def test_full_vs_implicit_forces_with_field_batch(dtype: torch.dtype) -> None:
     """
-    Check analytical forces in an electric field against autograd for a
-    batch of a neutral molecule and an anion.
+    Check autograd forces in an electric field across full and implicit SCF
+    modes for a batch of a neutral molecule and an anion.
     """
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -286,4 +283,4 @@ def test_analytical_batch(dtype: torch.dtype) -> None:
     )
     charge = torch.tensor([0.0, -1.0], **dd)
 
-    analytical_vs_autograd(numbers, positions, charge, dd)
+    full_vs_implicit_autograd(numbers, positions, charge, dd)

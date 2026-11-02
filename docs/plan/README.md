@@ -18,6 +18,35 @@ API.
 | `E1.3-L2-official-d3.md` | Official tad-dftd3 0.7.0 integration, local mctc compatibility and s9 derivative acceptance |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
 | `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
+| `08-scf-redesign-overview.md` | Completed S0–S13 SCF architecture and final design invariants |
+| `30-scf-s13-defaults-api-closure.md` | Final S13 benchmark-selected defaults, public strategy API, and redesign closure |
+| `31-scf-s13.1-public-boundary-hardening.md` | S13.1 parser-authority and single/batch implicit-response consistency gate |
+| `09-scf-s0-audit.md` | S0 baseline classification, functional/legacy architecture inventory, and the synchronization gate before S1 |
+| `10-scf-s0.1-matrix-fermi-hardening.md` | S0.1 adaptive matrix-Fermi scaling for large spectra, transform checks, and updated S1 gate |
+| `11-scf-s0.1b-reconciliation.md` | Records published-kernel reconciliation, finite scaling envelope, bad-lane isolation, public failure behavior, transform checks, and performance cost |
+| `12-scf-s1-core-contracts.md` | S1 core physical-problem/state, method, single-stage strategy, controller reuse, and linear-route migration |
+| `13-scf-s1.1-zero-budget-status.md` | Restores the fixed-trip `maxiter=0` final-only status contract while preserving eager compatibility behavior |
+| `14-scf-s2a-certification-characterization.md` | Adds diagnostic physical certification metrics and records tolerance, representation, finite-temperature, and transform characterization before S2b integration |
+| `15-scf-s2a.1-certification-evidence-correction.md` | Corrects model provenance in S2a characterization, compares raw and orthogonalized stationarity, and records the evidence needed to choose S2b gates |
+| `16-scf-s2a.2-certification-policy.md` | Freezes the lazy-loader audit, size-aware stationarity scalar, electron-count rule, internal profiles, and S2b controller design |
+| `17-scf-s2b-authoritative-certification.md` | Makes physical certification authoritative for functional SCF, separates root validity from trajectory/finalization status, and records eager/fixed-trip integration and cost |
+| `18-scf-s2b.1-certification-hardening.md` | Restores full-diagnostic finite semantics, requires certification at implicit attachment, requires exact `root_x` at finalization, and makes profile tolerance inheritance explicit |
+| `19-scf-s3-linear-anderson-method-migration.md` | Migrates Anderson to `SCFMethod` and routes Linear/Anderson through the same one-stage strategy and controller |
+| `20-scf-s4-native-broyden.md` | Adds native limited-memory Broyden first-method updates, routes supported representations through the shared controller, and records rank/physical-case evidence |
+| `21-scf-s4-review-gate.md` | Records independent S4 equation/safeguard review, expanded rank and Fock evidence, the short-trajectory parity classification, and Python 3.10 dependency status |
+| `22-scf-s5-native-cdiis.md` | Adds internal Fock-space commutator CDIIS with orthogonalized stationarity errors, bounded Pulay history, dtype-aware conditioning safeguards, and standalone characterization |
+| `23-scf-s6-strategy-switching.md` | Adds eager multi-stage strategy control, compact-to-Fock observation conversion, Broyden/Anderson to CDIIS characterization, and fixed-trip inactive-lane sanitation |
+| `24-scf-s7-legacy-xitorch-retirement.md` | Makes functional iterative SCF authoritative, migrates GFN0's retained generalized eigensolve, fixes switched implicit representation ownership, and removes the vendored xitorch and retired SCF engines |
+| `25-scf-s8-fixed-occupation-soscf.md` | Adds eager Fock-space SOSCF for fixed occupations using xTB orbital gradients, matrix-free physical Hessian-vector products, safeguarded inner Newton steps, and density-consistent Fock seeds |
+| `26-scf-s9-finite-temperature-second-order.md` | Records why orbital-only SOSCF misses thermal occupation response and the evidence-based decision to retain first-order SCF for active smearing |
+| `27-scf-s10-energy-diis-startup.md` | Tests xTB density-energy/Fock consistency, audits conventional EDIIS and ADIIS models, benchmarks exact-energy density interpolation, and rejects production adoption because optimizer cost outweighs startup gains |
+| `28-scf-s11-differentiation-hardening.md` | Decouples certified-root response coordinates from primal strategy history and validates first-, second-, and third-order implicit response |
+| `29-scf-s12-transform-performance-hardening.md` | Records fixed-trip and vmap support boundaries, state isolation, compilation characterization, and performance evidence |
+| `30-scf-s13-defaults-api-closure.md` | Freezes the benchmark-backed default candidate, public strategy/differentiation vocabulary, convergence profiles, and remaining support boundaries |
+
+The SCF redesign is complete through S13. The final integrated gate and public
+API closure are recorded in `30-scf-s13-defaults-api-closure.md`; later
+enhancements listed there are outside this redesign.
 
 The design review referenced by the plan is not in the repository.
 
@@ -85,10 +114,7 @@ python -m test.test_baseline.tables              # tables for the report
 
 ## Known test flake
 
-`test/test_a_memory_leak/test_scf.py::test_xitorch[False-False-*]` (implicit
-SCF mode, no garbage collection between runs) fails intermittently and not
-reproducibly: it passed in some full runs and failed in others, also without
-the Fermi changes of T0.12 and at earlier commits. The leaked object is one
-tensor per call, freed by the garbage collector (the variants with
-`run_gc=True` pass), i.e., a reference cycle in the implicit solver. It is not
-investigated; the implicit solver is replaced or reworked in E0/E3.
+The historical xitorch memory-leak cases were replaced by functional
+implicit-SCF repeat-call checks in S7. See
+[`24-scf-s7-legacy-xitorch-retirement.md`](24-scf-s7-legacy-xitorch-retirement.md)
+for current results.

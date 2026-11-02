@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,8 +122,14 @@ def _prepare_case(
     if positions is None:
         positions = sample["positions"].to(device="cpu", dtype=dtype).clone()
     if par is None:
+        if method is GFN1_XTB:
+            parameter_model = "gfn1"
+        elif method is GFN2_XTB:
+            parameter_model = "gfn2"
+        else:
+            raise ValueError(f"Unknown parameter model {method!r}.")
         par = get_param_module(
-            "gfn1" if method == GFN1_XTB else "gfn2",
+            parameter_model,
             device="cpu",
             dtype=dtype,
         )
@@ -1126,9 +1133,7 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     assert not hasattr(case.inputs, "config")
     baseline = scf_map(case.x, case.inputs)
 
-    potential_config = replace(
-        case.system.config.scf, scp_mode=labels.SCP_MODE_POTENTIAL
-    )
+    potential_config = case.system.config.scf
     potential_inputs = setup_scf_inputs(
         case.system.numbers,
         case.integrals,
@@ -1200,7 +1205,6 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     # SCFInputs does not retain that config or the engine.
     case.engine.config = replace(
         case.engine.config,
-        scp_mode=labels.SCP_MODE_POTENTIAL,
         fermi=replace(case.engine.config.fermi, etemp=250.0),
     )
     after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
@@ -2576,16 +2580,10 @@ def test_b6a_functional_interaction_family_matrix(
     _assert_persistent_identity_unchanged(system, before)
 
 
-def test_functional_map_has_no_legacy_stateful_hooks() -> None:
+def test_functional_modules_have_no_legacy_stateful_hooks() -> None:
+    """All functional modules remain free of legacy mutable-owner hooks."""
     root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
-    # E3.1b's isolated implicit-root primitive is the sole custom transform
-    # boundary. Keep this architectural guard focused on the raw-map and
-    # solver implementation, which must remain ordinary functional code.
-    source = "\n".join(
-        path.read_text()
-        for path in root.glob("*.py")
-        if path.name != "implicit.py"
-    )
+    source = "\n".join(path.read_text() for path in root.glob("*.py"))
     for forbidden in (
         "_Data",
         ".cull(",
@@ -2594,9 +2592,48 @@ def test_functional_map_has_no_legacy_stateful_hooks() -> None:
         ".update(",
         "self._data",
         "object.__setattr__",
-        "torch.autograd.Function",
         "cache_is_latest",
+    ):
+        assert forbidden not in source
+
+
+def test_transform_capable_functional_paths_avoid_host_tensor_extraction() -> (
+    None
+):
+    """Transform-capable paths avoid host extraction at eager-only boundaries."""
+    root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
+    excluded_modules = {"implicit.py", "orbital.py", "soscf.py"}
+    sources = []
+    for path in root.glob("*.py"):
+        if path.name in excluded_modules:
+            continue
+        lines = path.read_text().splitlines()
+        if path.name == "spectral.py":
+            # The shared implementation's `if eager` arm is the sole detached
+            # host-selected schedule. Remove only that arm and retain its
+            # static counterpart under the transform-safety source guard.
+            tree = ast.parse("\n".join(lines))
+            implementation = next(
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "_matrix_fermi_impl"
+            )
+            eager_schedule = next(
+                node
+                for node in ast.walk(implementation)
+                if isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "eager"
+            )
+            lines[eager_schedule.lineno - 1 : eager_schedule.end_lineno] = [
+                "    doubling_steps = _FERMI_MAX_SCALE_POWER - 1"
+            ]
+        sources.append("\n".join(lines))
+    source = "\n".join(sources)
+    for forbidden in (
         ".item(",
         ".tolist(",
+        "torch.autograd.Function",
     ):
         assert forbidden not in source

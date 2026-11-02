@@ -97,8 +97,8 @@ other properties. The properties are computed by calling the respective
 `ASE <https://wiki.fysik.dtu.dk/ase/>`_.
 
 Depending on which calculator you choose, the properties are calculated using
-analytical, autograd, or numerical derivatives. The default uses automatic
-differentation. For details, see the calculator types.
+autograd or numerical derivatives. The default uses automatic
+differentiation. For details, see the calculator types.
 
 Calculators: Reusing results
 ============================
@@ -118,9 +118,6 @@ from dxtb._src.calculators.result import ChargeResult as ChargeResult
 from dxtb._src.calculators.result import Multipoles as Multipoles
 from dxtb._src.calculators.result import PotentialResult as PotentialResult
 from dxtb._src.calculators.result import Result as Result
-from dxtb._src.calculators.types import (
-    AnalyticalCalculator as AnalyticalCalculator,
-)
 from dxtb._src.calculators.types import AutogradCalculator as AutogradCalculator
 from dxtb._src.calculators.types import EnergyCalculator as EnergyCalculator
 from dxtb._src.calculators.types import (
@@ -131,7 +128,6 @@ __all__ = [
     "GFN0Calculator",
     "GFN1Calculator",
     "GFN2Calculator",
-    "AnalyticalCalculator",
     "AutogradCalculator",
     "EnergyCalculator",
     "NumericalCalculator",

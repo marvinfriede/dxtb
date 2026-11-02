@@ -1,0 +1,88 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn2",
+  "charge": 0.0,
+  "spin": 0.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "classic-cdiis",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 7,
+  "physical_maps": 4,
+  "certified": true,
+  "residual_l2": 6.139307252225853e-08,
+  "residual_max": 3.173313639637243e-08,
+  "energy": -5.104158799409646,
+  "wall_seconds": 0.11589205730706453,
+  "instrumented_wall_seconds": 0.12478726101107895,
+  "physical_map_seconds": 0.027866997057572007,
+  "map_diagnostic_seconds_removed": 0.00889520370401442,
+  "physical_map_trajectory": [
+    {
+      "energy": -5.102145940270505,
+      "fixed_point_l2": 0.08744321241360943,
+      "fixed_point_max": 0.04440009292778152
+    },
+    {
+      "energy": -5.103174885851274,
+      "fixed_point_l2": 0.06499892002472814,
+      "fixed_point_max": 0.03495109275608754
+    },
+    {
+      "energy": -5.103682105134184,
+      "fixed_point_l2": 0.046923163177384035,
+      "fixed_point_max": 0.02499610249232187
+    },
+    {
+      "energy": -5.104157359216089,
+      "fixed_point_l2": 0.0027805701785360874,
+      "fixed_point_max": 0.001441652427443485
+    }
+  ],
+  "physical_maps_recorded": 4,
+  "coefficient_optimizer_seconds": 0.015199635177850723,
+  "coefficient_optimizer_evaluations": 42,
+  "coefficient_optimization": [
+    {
+      "history_size": 2,
+      "coefficients": [
+        0.5542017650157881,
+        0.4457982349842119
+      ],
+      "selected_energy": -5.103745206445476,
+      "best_vertex_energy": -5.103682105134184,
+      "optimizer_evaluations": 21,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.00811366317793727
+    },
+    {
+      "history_size": 3,
+      "coefficients": [
+        0.2771008825078002,
+        0.27710088250805465,
+        0.44579823498414517
+      ],
+      "selected_energy": -5.103745206445476,
+      "best_vertex_energy": -5.103682105134184,
+      "optimizer_evaluations": 21,
+      "optimizer_failures": 0,
+      "used_best_vertex": false,
+      "optimizer_seconds": 0.007085971999913454
+    }
+  ],
+  "stage_iterations": [
+    4,
+    3
+  ]
+}

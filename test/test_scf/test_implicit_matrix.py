@@ -109,7 +109,6 @@ def _opts(mode: str) -> dict:
         "verbosity": 0,
         "maxiter": 300,
         "scf_mode": mode,
-        "f_atol": SCF_TOL,
         "x_atol": SCF_TOL,
         "x_atol_max": SCF_TOL,
         "force_convergence": True,

@@ -1,0 +1,139 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn2",
+  "charge": 1.0,
+  "spin": 1.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "broyden",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 20,
+  "physical_maps": 20,
+  "certified": true,
+  "residual_l2": 9.503134163881283e-08,
+  "residual_max": 4.611518467090292e-08,
+  "energy": -4.431225111368875,
+  "wall_seconds": 0.16153588355518878,
+  "instrumented_wall_seconds": 0.20471265795640647,
+  "physical_map_seconds": 0.13178670080378652,
+  "map_diagnostic_seconds_removed": 0.0431767744012177,
+  "physical_map_trajectory": [
+    {
+      "energy": -4.430909212594949,
+      "fixed_point_l2": 0.039597806254602165,
+      "fixed_point_max": 0.01733775716501218
+    },
+    {
+      "energy": -4.4311501371054804,
+      "fixed_point_l2": 0.01820517261965186,
+      "fixed_point_max": 0.00963137209973386
+    },
+    {
+      "energy": -4.431196064917777,
+      "fixed_point_l2": 0.011374990698863864,
+      "fixed_point_max": 0.006010912118739609
+    },
+    {
+      "energy": -4.431217887492243,
+      "fixed_point_l2": 0.005703493941956871,
+      "fixed_point_max": 0.0030086941873163076
+    },
+    {
+      "energy": -4.431223314966615,
+      "fixed_point_l2": 0.002860994256894267,
+      "fixed_point_max": 0.001506180608192298
+    },
+    {
+      "energy": -4.431224664556318,
+      "fixed_point_l2": 0.0014359764419838734,
+      "fixed_point_max": 0.0007541749495608707
+    },
+    {
+      "energy": -4.4312250002272275,
+      "fixed_point_l2": 0.0007211152020405857,
+      "fixed_point_max": 0.00037767036249480856
+    },
+    {
+      "energy": -4.4312250837224685,
+      "fixed_point_l2": 0.00036230866675944143,
+      "fixed_point_max": 0.00018913542890608426
+    },
+    {
+      "energy": -4.4312251044916655,
+      "fixed_point_l2": 0.0001821233534781895,
+      "fixed_point_max": 9.471893878321147e-05
+    },
+    {
+      "energy": -4.431225109658032,
+      "fixed_point_l2": 9.159302046627208e-05,
+      "fixed_point_max": 4.7434559315551184e-05
+    },
+    {
+      "energy": -4.4312251109432275,
+      "fixed_point_l2": 4.6085440986395536e-05,
+      "fixed_point_max": 2.3754160964672977e-05
+    },
+    {
+      "energy": -4.431225111263307,
+      "fixed_point_l2": 2.316043572608198e-05,
+      "fixed_point_max": 1.1875451956799843e-05
+    },
+    {
+      "energy": -4.431225111342688,
+      "fixed_point_l2": 1.1643868375234506e-05,
+      "fixed_point_max": 5.9363922301214345e-06
+    },
+    {
+      "energy": -4.431225111362379,
+      "fixed_point_l2": 5.856013788665042e-06,
+      "fixed_point_max": 2.9672624469734288e-06
+    },
+    {
+      "energy": -4.431225111367264,
+      "fixed_point_l2": 2.9460718368340936e-06,
+      "fixed_point_max": 1.4830298548096366e-06
+    },
+    {
+      "energy": -4.431225111368477,
+      "fixed_point_l2": 1.4825144992738845e-06,
+      "fixed_point_max": 7.41147522353991e-07
+    },
+    {
+      "energy": -4.431225111368778,
+      "fixed_point_l2": 7.46179229977003e-07,
+      "fixed_point_max": 3.703575105484802e-07
+    },
+    {
+      "energy": -4.431225111368851,
+      "fixed_point_l2": 3.756187685098448e-07,
+      "fixed_point_max": 1.850550215287683e-07
+    },
+    {
+      "energy": -4.431225111368871,
+      "fixed_point_l2": 1.8909535567241597e-07,
+      "fixed_point_max": 9.245829335480238e-08
+    },
+    {
+      "energy": -4.431225111368875,
+      "fixed_point_l2": 9.503134163881283e-08,
+      "fixed_point_max": 4.611518467090292e-08
+    }
+  ],
+  "physical_maps_recorded": 20,
+  "coefficient_optimizer_seconds": 0,
+  "coefficient_optimizer_evaluations": 0,
+  "coefficient_optimization": null,
+  "stage_iterations": [
+    20
+  ]
+}

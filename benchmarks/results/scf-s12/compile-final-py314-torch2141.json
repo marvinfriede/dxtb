@@ -1,0 +1,230 @@
+{
+  "compile_backend": "eager",
+  "compile_scope": "Dynamo/eager graph-break and value characterization; not optimized compilation",
+  "fixed_trip_affine": [
+    {
+      "backend": "eager",
+      "budget": 4,
+      "explain_seconds": 1.3272673189640045,
+      "first_call_seconds": 1.2460193638689816,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "steady_call_seconds": 0.001789991045370698,
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "budget": 8,
+      "explain_seconds": 2.1281444660853595,
+      "first_call_seconds": 2.1223478349857032,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "steady_call_seconds": 0.003197476966306567,
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "budget": 16,
+      "explain_seconds": 4.187045872909948,
+      "first_call_seconds": 3.8065622029826045,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "steady_call_seconds": 0.00540644396096468,
+      "value_parity": true
+    }
+  ],
+  "interoperability_threads": 1,
+  "intraop_threads": 1,
+  "physical_fixed_trip": [
+    {
+      "backend": "eager",
+      "budget": 4,
+      "compile_attempted": true,
+      "explain_seconds": 12.237100448925048,
+      "first_call_seconds": 12.26025061798282,
+      "graph_break_count": 28,
+      "graph_count": 29,
+      "method": "Linear",
+      "steady_call_seconds": 0.04503097594715655,
+      "supported": true,
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "budget": 8,
+      "compile_attempted": true,
+      "explain_seconds": 12.297995645087212,
+      "first_call_seconds": 11.950802684994414,
+      "graph_break_count": 28,
+      "graph_count": 29,
+      "method": "Linear",
+      "steady_call_seconds": 0.08022109419107437,
+      "supported": true,
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "budget": 16,
+      "compile_attempted": true,
+      "explain_seconds": 12.67972401692532,
+      "first_call_seconds": 12.736716859042645,
+      "graph_break_count": 28,
+      "graph_count": 29,
+      "method": "Linear",
+      "steady_call_seconds": 0.14838815899565816,
+      "supported": true,
+      "value_parity": true
+    }
+  ],
+  "physical_method_smokes": [
+    {
+      "backend": "eager",
+      "budget": 4,
+      "compile_attempted": false,
+      "eager_reference_error": "_LinAlgError: torch.linalg.solve: The solver failed because the input matrix is singular.",
+      "eager_reference_failed": true,
+      "method": "Anderson"
+    },
+    {
+      "backend": "eager",
+      "budget": 4,
+      "compile_attempted": true,
+      "explain_seconds": 13.733948678011075,
+      "first_call_seconds": 13.671566631877795,
+      "graph_break_count": 28,
+      "graph_count": 29,
+      "method": "Broyden",
+      "steady_call_seconds": 0.048560628201812506,
+      "supported": true,
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "budget": 4,
+      "compile_attempted": true,
+      "explain_seconds": 16.073780176928267,
+      "first_call_seconds": 16.62779205502011,
+      "graph_break_count": 28,
+      "graph_count": 29,
+      "method": "CDIIS",
+      "steady_call_seconds": 0.06467117904685438,
+      "supported": true,
+      "value_parity": true
+    }
+  ],
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "python": "3.14.8",
+  "raw_maps": [
+    {
+      "backend": "eager",
+      "case": "H2",
+      "explain_seconds": 4.540863746078685,
+      "first_call_seconds": 3.6639892428647727,
+      "fullgraph": false,
+      "graph_break_count": 18,
+      "graph_count": 19,
+      "jvp_max_error": 0.0,
+      "jvp_supported": true,
+      "max_value_error": 0.0,
+      "method": "GFN1-xTB",
+      "repeat_value_error": 0.0,
+      "representation": "charge",
+      "reverse_max_error": 4.3194614551822497e-16,
+      "reverse_supported": true,
+      "shape": [
+        3,
+        12
+      ],
+      "steady_call_seconds": 0.007214655866846442
+    },
+    {
+      "backend": "eager",
+      "case": "H2",
+      "explain_seconds": 6.1888423739001155,
+      "first_call_seconds": 6.1751303700730205,
+      "fullgraph": false,
+      "graph_break_count": 20,
+      "graph_count": 21,
+      "jvp_max_error": 0.0,
+      "jvp_supported": true,
+      "max_value_error": 0.0,
+      "method": "GFN1-xTB",
+      "repeat_value_error": 0.0,
+      "representation": "potential",
+      "reverse_max_error": 3.2144840960365547e-18,
+      "reverse_supported": true,
+      "shape": [
+        2,
+        6
+      ],
+      "steady_call_seconds": 0.00675012799911201
+    },
+    {
+      "backend": "eager",
+      "case": "H2",
+      "explain_seconds": 5.92722177086398,
+      "first_call_seconds": 5.593240474816412,
+      "fullgraph": false,
+      "graph_break_count": 18,
+      "graph_count": 19,
+      "jvp_max_error": 0.0,
+      "jvp_supported": true,
+      "max_value_error": 0.0,
+      "method": "GFN1-xTB",
+      "repeat_value_error": 0.0,
+      "representation": "fock",
+      "reverse_max_error": 3.2958239837547784e-17,
+      "reverse_supported": true,
+      "shape": [
+        4,
+        4
+      ],
+      "steady_call_seconds": 0.006468386854976416
+    }
+  ],
+  "source_sha": "d53f7fba6693347889928a71313afb05bc8eb0d4",
+  "torch": "2.14.1+cpu",
+  "transitions": [
+    {
+      "backend": "eager",
+      "explain_seconds": 0.04312131297774613,
+      "first_call_seconds": 0.040568731958046556,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "method": "Linear",
+      "representation": "fock",
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "explain_seconds": 0.18091203807853162,
+      "first_call_seconds": 0.1712240818887949,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "method": "Anderson",
+      "representation": "fock",
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "explain_seconds": 0.3416876238770783,
+      "first_call_seconds": 0.3334277661051601,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "method": "Broyden",
+      "representation": "fock",
+      "value_parity": true
+    },
+    {
+      "backend": "eager",
+      "explain_seconds": 1.020235731964931,
+      "first_call_seconds": 1.0003594721201807,
+      "graph_break_count": 0,
+      "graph_count": 1,
+      "method": "CDIIS",
+      "representation": "fock",
+      "value_parity": true
+    }
+  ],
+  "worktree_dirty": false
+}

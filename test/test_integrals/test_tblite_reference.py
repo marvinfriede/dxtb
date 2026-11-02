@@ -120,14 +120,15 @@ def test_quadrupole_matches_tblite(
     ref.set("accuracy", 1e-6)  # tight: tblite's default SCF is loose (~1e-5)
     expected = torch.from_numpy(ref.singlepoint().get("quadrupole")).to(**dd)
 
+    field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
     calc = dxtb.calculators.GFN2Calculator(
         numbers,
+        interaction=dxtb.components.field.new_efield_grad(field_grad, **dd),
         opts={
             "verbosity": 0,
             "int_driver": "pytorch",
             "int_algorithm": algorithm,
             "scf_mode": "full",
-            "f_atol": 1e-11,
             "x_atol": 1e-11,
         },
         **dd,
@@ -135,6 +136,24 @@ def test_quadrupole_matches_tblite(
     quad = calc.get_quadrupole(positions)
 
     assert quad.shape == (6,)
-    assert torch.allclose(quad, expected, atol=1e-7, rtol=0.0)
+    # Diagonal elements (xx, yy, zz) agree directly with tblite; off-diagonal
+    # elements (yx, zx, zy) differ by 1.5 * Q_ij of the point charges and
+    # dipoles, which tblite's analytical expression counts twice.
+    diag = [0, 2, 5]
+    offdiag = [1, 3, 4]
+    assert torch.allclose(quad[diag], expected[diag], atol=1e-7, rtol=0.0)
+    sp = calc.singlepoint(positions)
+    qat = calc.ihelp.reduce_orbital_to_atom(sp.charges.mono)
+    mu = sp.charges.dipole
+    assert mu is not None
+    q_pt = (
+        torch.einsum("...a,...ai,...aj->...ij", qat, positions, positions)
+        + torch.einsum("...ai,...aj->...ij", positions, mu)
+        + torch.einsum("...ai,...aj->...ij", mu, positions)
+    ).detach()
+    off = torch.stack([q_pt[1, 0], q_pt[2, 0], q_pt[2, 1]])
+    assert torch.allclose(
+        expected[offdiag] - quad[offdiag], 1.5 * off, atol=1e-7, rtol=0.0
+    )
     # traceless
     assert abs(float(quad[0] + quad[2] + quad[5])) < 1e-10

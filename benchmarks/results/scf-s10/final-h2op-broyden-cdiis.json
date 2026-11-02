@@ -1,0 +1,60 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn2",
+  "charge": 1.0,
+  "spin": 1.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "broyden-cdiis",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 7,
+  "physical_maps": 4,
+  "certified": true,
+  "residual_l2": 5.459535292627523e-08,
+  "residual_max": 2.8442396549088755e-08,
+  "energy": -4.431225111368875,
+  "wall_seconds": 0.08557171211577952,
+  "instrumented_wall_seconds": 0.09426124696619809,
+  "physical_map_seconds": 0.02701311488635838,
+  "map_diagnostic_seconds_removed": 0.008689534850418568,
+  "physical_map_trajectory": [
+    {
+      "energy": -4.430909212594949,
+      "fixed_point_l2": 0.039597806254602165,
+      "fixed_point_max": 0.01733775716501218
+    },
+    {
+      "energy": -4.4311501371054804,
+      "fixed_point_l2": 0.01820517261965186,
+      "fixed_point_max": 0.00963137209973386
+    },
+    {
+      "energy": -4.431196064917777,
+      "fixed_point_l2": 0.011374990698863864,
+      "fixed_point_max": 0.006010912118739609
+    },
+    {
+      "energy": -4.431217887492243,
+      "fixed_point_l2": 0.005703493941956871,
+      "fixed_point_max": 0.0030086941873163076
+    }
+  ],
+  "physical_maps_recorded": 4,
+  "coefficient_optimizer_seconds": 0,
+  "coefficient_optimizer_evaluations": 0,
+  "coefficient_optimization": null,
+  "stage_iterations": [
+    4,
+    3
+  ]
+}

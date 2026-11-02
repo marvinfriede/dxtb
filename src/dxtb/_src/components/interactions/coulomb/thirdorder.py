@@ -210,8 +210,10 @@ class ES3(Interaction):
         dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__(device, dtype)
-        self.hubbard_derivs = hubbard_derivs
-        self.shell_scale = shell_scale
+        self.hubbard_derivs = hubbard_derivs.to(**self.dd)
+        self.shell_scale = (
+            shell_scale if shell_scale is None else shell_scale.to(**self.dd)
+        )
 
     def update(self, **kwargs: Any) -> None:
         """ES3 parameters are fixed when the System is set up."""

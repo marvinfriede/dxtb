@@ -175,7 +175,6 @@ def setup_w2_model_and_system(
         scf_mode=labels.SCF_MODE_FULL,
         scp_mode=scp_label,
         maxiter=300,
-        f_atol=1.0e-8,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
         fermi_etemp=300.0,
@@ -199,9 +198,7 @@ def _make_weights(nconformers: int, weights_mode: str) -> torch.Tensor:
         return torch.linspace(0.5, 1.5, nconformers, dtype=DTYPE, device=DEVICE)
     if weights_mode == "mixed-sign-zero":
         pattern = [1.25, -0.75, 0.0, 0.5, -1.0, 0.25, 0.0, 0.8]
-        return torch.tensor(
-            pattern[:nconformers], dtype=DTYPE, device=DEVICE
-        )
+        return torch.tensor(pattern[:nconformers], dtype=DTYPE, device=DEVICE)
     raise ValueError(f"Unknown weights_mode '{weights_mode}'.")
 
 
@@ -363,9 +360,7 @@ def run_serial_reference(
     for idx in range(nconformers):
         lane_t0 = time.perf_counter()
         sys_i = model.setup(numbers, batch_mode=0)
-        pos_i = (
-            positions[idx : idx + 1].detach().clone().requires_grad_(True)
-        )
+        pos_i = positions[idx : idx + 1].detach().clone().requires_grad_(True)
         prep_i = prepare_converged_root_batch(
             sys_i,
             pos_i.detach(),
@@ -685,7 +680,12 @@ def run_integrated(
             for r in ref["root_xs"][:nconformers]
         ]
         root_diffs = [
-            float((prepared.lanes[i].root_x.detach() - ref_roots[i]).abs().max().item())
+            float(
+                (prepared.lanes[i].root_x.detach() - ref_roots[i])
+                .abs()
+                .max()
+                .item()
+            )
             for i in range(nconformers)
         ]
         per_lane_e_diff = (energy - ref_e).abs().cpu().tolist()
@@ -726,8 +726,8 @@ def run_integrated(
             parity_summary["model_param_connected_matches"] = meta_matches
             parity_summary["model_param_grad_max_abs_diff"] = param_max_abs
             parity_summary["model_param_grad_rel_l2_diff"] = (
-                (param_diff_sq**0.5) / max(ref_norm_sq**0.5, 1e-30)
-            )
+                param_diff_sq**0.5
+            ) / max(ref_norm_sq**0.5, 1e-30)
 
     return {
         "stage": "integrated",
@@ -802,7 +802,6 @@ def run_legacy_audit(
         "mixer": "anderson",
         "scp_mode": scp_mode,
         "maxiter": 300,
-        "f_atol": 1.0e-8,
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-5,
         "int_driver": "pytorch",
@@ -832,7 +831,11 @@ def run_legacy_audit(
         bwd_t0 = time.perf_counter()
         pos_grad = torch.autograd.grad(lane_energy.sum(), positions)[0].detach()
         backward_s = time.perf_counter() - bwd_t0
-        iterations = int(res.iterations.item()) if res.iterations.ndim == 0 else res.iterations.cpu().tolist()
+        iterations = (
+            int(res.iterations.item())
+            if res.iterations.ndim == 0
+            else res.iterations.cpu().tolist()
+        )
     elif route == "legacy-serial":
         setup_s = 0.0
         forward_s = 0.0
@@ -851,12 +854,7 @@ def run_legacy_audit(
                 device=DEVICE,
             )
             setup_s += time.perf_counter() - s_t0
-            pos_i = (
-                positions[idx]
-                .detach()
-                .clone()
-                .requires_grad_(True)
-            )
+            pos_i = positions[idx].detach().clone().requires_grad_(True)
             rss_monitor.set_phase("forward")
             f_t0 = time.perf_counter()
             res_i = calc_i.singlepoint(pos_i)
@@ -896,9 +894,7 @@ def run_legacy_audit(
             ref["position_gradient"][:nconformers], dtype=DTYPE, device=DEVICE
         )
         e_max_diff = float((lane_energy.detach() - ref_e).abs().max().item())
-        fe_max_diff = float(
-            (lane_fenergy.detach() - ref_fe).abs().max().item()
-        )
+        fe_max_diff = float((lane_fenergy.detach() - ref_fe).abs().max().item())
         pg_max_diff = float((pos_grad - ref_pg).abs().max().item())
         pg_norm_diff = float(
             abs(
@@ -945,7 +941,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--stage",
-        choices=("root-profile", "serial-reference", "integrated", "legacy-audit"),
+        choices=(
+            "root-profile",
+            "serial-reference",
+            "integrated",
+            "legacy-audit",
+        ),
         required=True,
     )
     parser.add_argument("--nconformers", type=int, default=1)

@@ -14,98 +14,94 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional Anderson mixing and fixed-trip SCF solver."""
+"""Anderson method and immutable method-local history for functional SCF."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import ClassVar, cast
 
 import torch
+from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
-from .data import PotentialLayout, SCFInputs, SCFMapResult
-from .map import fock_map, potential_map, scf_map
-from .solver import (
-    DynamicDampingSettings,
-    SCFSolveResult,
-    _project_potential_padding,
-    _resolve_tolerance,
-    _solve_map_control,
-    _solve_map_control_eager,
-    _SolverOutcome,
-    finalize_scf,
-    finalize_scf_fock,
-    finalize_scf_potential,
+from .method import (
+    SCFMethodContext,
+    SCFMethodProposal,
+    SCFMethodState,
 )
+from .problem import SCFPhysicalState, SCFProblem
 
 __all__ = [
+    "AndersonMethod",
+    "AndersonMethodSettings",
     "AndersonState",
-    "AndersonSettings",
     "anderson_mix",
-    "setup_anderson_solver_settings",
-    "solve_scf_anderson",
-    "solve_scf_potential_anderson",
-    "solve_scf_fock_anderson",
+    "setup_anderson_method_settings",
 ]
 
 
 @dataclass(frozen=True, eq=False)
-class AndersonSettings:
-    """Static root-finding settings for the functional Anderson solver."""
+class AndersonMethodSettings:
+    """Static numerical policy owned specifically by the Anderson method."""
 
-    maxiter: int
-    mix_guess: bool
-    damp: float
-    damp_init: float
-    generations: int
-    soft_start: bool
-    diagonal_offset: float | None
-    x_atol: float
-    x_atol_max: float
-    dynamic_damping: DynamicDampingSettings = DynamicDampingSettings()
+    damp_init: float = 0.1
+    generations: int = 5
+    soft_start: bool = True
+    diagonal_offset: float | None = 0.01
+
+
+class AndersonState(Node):
+    """Immutable, fixed-size PyTree history for one SCF transition."""
+
+    x_hist: Tensor = child()
+    f_hist: Tensor = child()
 
 
 @dataclass(frozen=True, eq=False)
-class AndersonState:
-    """Immutable, fixed-size history for one single-System mixer."""
+class AndersonMethod:
+    """Anderson proposal rule with explicit immutable history."""
 
-    x_hist: Tensor
-    f_hist: Tensor
+    supports_fixed_trip: ClassVar[bool] = True
 
+    settings: AndersonMethodSettings
 
-def setup_anderson_solver_settings(
-    config: ConfigSCF, dtype: torch.dtype
-) -> AndersonSettings:
-    """Resolve Anderson-only settings without mutating the configuration."""
-    if config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
-    if config.mixer != labels.MIXER_ANDERSON:
-        raise NotImplementedError(
-            "Functional Anderson settings require the effective Anderson mixer."
+    def propose(
+        self,
+        problem: SCFProblem,
+        physical_state: SCFPhysicalState,
+        method_state: SCFMethodState | None,
+        context: SCFMethodContext,
+    ) -> SCFMethodProposal:
+        """Propose one Anderson transition from the paired physical state."""
+        del problem
+        mixed, next_state = anderson_mix(
+            physical_state.x,
+            context.proposal_x,
+            cast(AndersonState | None, method_state),
+            self.settings,
+            context.step,
+            transition_active=context.transition_active,
+            damp=context.damp,
         )
-    if config.damp_generations < 1:
-        raise ValueError("Anderson generations must be at least 1.")
+        return SCFMethodProposal(x=mixed, state=next_state)
 
-    return AndersonSettings(
-        maxiter=config.maxiter,
-        mix_guess=config.mix_guess,
-        damp=config.damp,
-        damp_init=config.damp_init,
-        generations=config.damp_generations,
-        soft_start=config.damp_soft_start,
-        diagonal_offset=config.damp_diagonal_offset,
-        x_atol=_resolve_tolerance(config.x_atol, dtype),
-        x_atol_max=_resolve_tolerance(config.x_atol_max, dtype),
-        dynamic_damping=DynamicDampingSettings(
-            enabled=config.damp_dynamic,
-            factor=config.damp_dynamic_factor,
-        ),
-    )
+
+def setup_anderson_method_settings(
+    config: ConfigSCF,
+) -> AndersonMethodSettings:
+    """Resolve and validate only the effective Anderson method options."""
+    if not isinstance(config.strategy.stages[0].method, AndersonMethod):
+        raise NotImplementedError(
+            "Anderson settings require an Anderson strategy stage."
+        )
+    settings = config.strategy.stages[0].method.settings
+    if settings.generations < 1:
+        raise ValueError("Anderson generations must be at least 1.")
+    return settings
 
 
 def _select_state(
@@ -121,12 +117,13 @@ def anderson_mix(
     old: Tensor,
     mapped: Tensor,
     state: AndersonState | None,
-    settings: AndersonSettings,
+    settings: AndersonMethodSettings,
     step: int,
     transition_active: Tensor | None = None,
-    damp: Tensor | float | None = None,
+    *,
+    damp: Tensor | float,
 ) -> tuple[Tensor, AndersonState]:
-    """Apply one out-of-place transition matching the legacy Anderson mixer."""
+    """Apply one out-of-place Anderson transition."""
     flat_old = old.reshape(-1)
     flat_mapped = mapped.reshape(-1)
     if state is None:
@@ -177,7 +174,7 @@ def anderson_mix(
         f_bar = torch.einsum("h,hv->v", theta, -df)
         x_bar = x_bar + x_current[0]
         f_bar = f_bar + f_current[0]
-        mixed = x_bar + (settings.damp if damp is None else damp) * f_bar
+        mixed = x_bar + damp * f_bar
     else:
         mixed = x_current[0] + f_current[0] * settings.damp_init
 
@@ -189,177 +186,3 @@ def anderson_mix(
     if transition_active is not None:
         next_state = _select_state(transition_active, next_state, previous)
     return mixed.reshape_as(mapped), next_state
-
-
-def _solve_map_anderson(
-    guess: Tensor,
-    settings: AndersonSettings,
-    map_fn,
-    state_projection: Callable[[Tensor], Tensor] | None = None,
-    *,
-    eager: bool = False,
-    record_trace: bool = False,
-    residual_projection: Callable[[Tensor], Tensor] | None = None,
-    project_initial_state: bool = False,
-) -> _SolverOutcome:
-    """Run Anderson with transform-fixed or eager single-System control."""
-
-    def transition(
-        old: Tensor,
-        mapped: Tensor,
-        state: object | None,
-        step: int,
-        transition_active: Tensor,
-        damp: Tensor,
-    ) -> tuple[Tensor, object | None]:
-        mixed, next_state = anderson_mix(
-            old,
-            mapped,
-            cast(AndersonState | None, state),
-            settings,
-            step,
-            transition_active,
-            damp,
-        )
-        return mixed, next_state
-
-    controller = _solve_map_control_eager if eager else _solve_map_control
-    common = dict(
-        maxiter=settings.maxiter,
-        mix_guess=settings.mix_guess,
-        x_atol=settings.x_atol,
-        x_atol_max=settings.x_atol_max,
-        map_fn=map_fn,
-        mix_fn=transition,
-        state_projection=state_projection,
-        initial_damp=settings.damp,
-        damping_settings=settings.dynamic_damping,
-        residual_projection=residual_projection,
-        project_initial_state=project_initial_state,
-    )
-    if eager:
-        if (
-            record_trace
-            or residual_projection is not None
-            or project_initial_state
-        ):
-            raise ValueError(
-                "Solver trace/projection requires fixed-trip execution."
-            )
-        common.pop("residual_projection")
-        common.pop("project_initial_state")
-        return controller(guess, **common)
-    return controller(
-        guess,
-        **common,
-        record_trace=record_trace,
-    )
-
-
-def solve_scf_anderson(
-    guess: Tensor,
-    inputs: SCFInputs,
-    settings: AndersonSettings,
-    *,
-    eager: bool = False,
-    record_trace: bool = False,
-    state_projection: Callable[[Tensor], Tensor] | None = None,
-    residual_projection: Callable[[Tensor], Tensor] | None = None,
-    project_initial_state: bool = False,
-) -> SCFSolveResult:
-    """Solve charge mode with Anderson and selected eager/fixed control."""
-    outcome = _solve_map_anderson(
-        guess,
-        settings,
-        lambda x: scf_map(x, inputs),
-        state_projection=state_projection,
-        eager=eager,
-        record_trace=record_trace,
-        residual_projection=residual_projection,
-        project_initial_state=project_initial_state,
-    )
-    return finalize_scf(
-        outcome.map_result,
-        inputs,
-        outcome.iterations,
-        outcome.converged,
-        outcome.residual,
-        outcome.trajectory_status,
-        outcome.damping_state,
-        outcome.trace,
-    )
-
-
-def solve_scf_potential_anderson(
-    guess: Tensor,
-    inputs: SCFInputs,
-    layout: PotentialLayout,
-    settings: AndersonSettings,
-    *,
-    eager: bool = False,
-    record_trace: bool = False,
-    state_projection: Callable[[Tensor], Tensor] | None = None,
-    residual_projection: Callable[[Tensor], Tensor] | None = None,
-    project_initial_state: bool = False,
-) -> SCFSolveResult:
-    """Solve potential mode with Anderson and selected eager/fixed control."""
-    project = lambda value: _project_potential_padding(value, layout)
-    if state_projection is not None:
-        project = lambda value: state_projection(
-            _project_potential_padding(value, layout)
-        )
-    outcome = _solve_map_anderson(
-        guess,
-        settings,
-        lambda x: potential_map(x, inputs, layout),
-        state_projection=project,
-        eager=eager,
-        record_trace=record_trace,
-        residual_projection=residual_projection,
-        project_initial_state=project_initial_state,
-    )
-    return finalize_scf_potential(
-        outcome.map_result,
-        inputs,
-        layout,
-        outcome.iterations,
-        outcome.converged,
-        outcome.residual,
-        outcome.trajectory_status,
-        outcome.damping_state,
-        outcome.trace,
-    )
-
-
-def solve_scf_fock_anderson(
-    guess: Tensor,
-    inputs: SCFInputs,
-    settings: AndersonSettings,
-    *,
-    eager: bool = False,
-    record_trace: bool = False,
-    state_projection: Callable[[Tensor], Tensor] | None = None,
-    residual_projection: Callable[[Tensor], Tensor] | None = None,
-    project_initial_state: bool = False,
-) -> SCFSolveResult:
-    """Solve Fock mode with Anderson and selected eager/fixed control."""
-    outcome = _solve_map_anderson(
-        guess,
-        settings,
-        lambda x: fock_map(x, inputs),
-        state_projection=state_projection,
-        eager=eager,
-        record_trace=record_trace,
-        residual_projection=residual_projection,
-        project_initial_state=project_initial_state,
-    )
-    return finalize_scf_fock(
-        outcome.map_result,
-        inputs,
-        outcome.iterations,
-        outcome.converged,
-        outcome.residual,
-        outcome.trajectory_status,
-        outcome.damping_state,
-        outcome.trace,
-    )

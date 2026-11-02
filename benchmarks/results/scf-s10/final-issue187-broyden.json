@@ -1,0 +1,149 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "H2O",
+  "model": "gfn1",
+  "charge": 0.0,
+  "spin": 0.0,
+  "stretch": null,
+  "issue187_geometry": true,
+  "initial": "normal",
+  "strategy": "broyden",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 22,
+  "physical_maps": 22,
+  "certified": true,
+  "residual_l2": 6.10111868292816e-08,
+  "residual_max": 2.9184959837724733e-08,
+  "energy": -5.801739742097311,
+  "wall_seconds": 0.13072735629975796,
+  "instrumented_wall_seconds": 0.1402546961326152,
+  "physical_map_seconds": 0.10047665308229625,
+  "map_diagnostic_seconds_removed": 0.009527339832857251,
+  "physical_map_trajectory": [
+    {
+      "energy": -5.8004714247470615,
+      "fixed_point_l2": 0.08385348571769782,
+      "fixed_point_max": 0.03984630112902254
+    },
+    {
+      "energy": -5.80110682099085,
+      "fixed_point_l2": 0.05563183159135412,
+      "fixed_point_max": 0.026611942616958983
+    },
+    {
+      "energy": -5.801533328708365,
+      "fixed_point_l2": 0.031814564636707246,
+      "fixed_point_max": 0.015218743907817966
+    },
+    {
+      "energy": -5.801687987883436,
+      "fixed_point_l2": 0.015945703794629555,
+      "fixed_point_max": 0.007627745503407224
+    },
+    {
+      "energy": -5.801726777886749,
+      "fixed_point_l2": 0.007984622694136575,
+      "fixed_point_max": 0.003819501298377659
+    },
+    {
+      "energy": -5.801736497783351,
+      "fixed_point_l2": 0.003995300530617487,
+      "fixed_point_max": 0.0019111796828925054
+    },
+    {
+      "energy": -5.801738930608002,
+      "fixed_point_l2": 0.0019984050365825317,
+      "fixed_point_max": 0.0009559505082111786
+    },
+    {
+      "energy": -5.80173953917355,
+      "fixed_point_l2": 0.000999392832882578,
+      "fixed_point_max": 0.0004780661134317632
+    },
+    {
+      "energy": -5.801739691359966,
+      "fixed_point_l2": 0.0004997445393719405,
+      "fixed_point_max": 0.00023905599053580806
+    },
+    {
+      "energy": -5.801739729412184,
+      "fixed_point_l2": 0.00024988453912575383,
+      "fixed_point_max": 0.00011953382228857556
+    },
+    {
+      "energy": -5.801739738925934,
+      "fixed_point_l2": 0.0001249454521065086,
+      "fixed_point_max": 5.976841270860511e-05
+    },
+    {
+      "energy": -5.8017397413044565,
+      "fixed_point_l2": 6.247357876472402e-05,
+      "fixed_point_max": 2.988460390956904e-05
+    },
+    {
+      "energy": -5.801739741899096,
+      "fixed_point_l2": 3.12370310386621e-05,
+      "fixed_point_max": 1.4942412399410188e-05
+    },
+    {
+      "energy": -5.80173974204776,
+      "fixed_point_l2": 1.5618590166583567e-05,
+      "fixed_point_max": 7.471239336476199e-06
+    },
+    {
+      "energy": -5.801739742084924,
+      "fixed_point_l2": 7.80932086156796e-06,
+      "fixed_point_max": 3.735630715373528e-06
+    },
+    {
+      "energy": -5.801739742094214,
+      "fixed_point_l2": 3.904670433404028e-06,
+      "fixed_point_max": 1.867819500900314e-06
+    },
+    {
+      "energy": -5.801739742096538,
+      "fixed_point_l2": 1.9523394971189297e-06,
+      "fixed_point_max": 9.339114773743162e-07
+    },
+    {
+      "energy": -5.801739742097119,
+      "fixed_point_l2": 9.761717072767539e-07,
+      "fixed_point_max": 4.6695651539918615e-07
+    },
+    {
+      "energy": -5.801739742097264,
+      "fixed_point_l2": 4.880867898630839e-07,
+      "fixed_point_max": 2.3347862537770325e-07
+    },
+    {
+      "energy": -5.8017397420973005,
+      "fixed_point_l2": 2.440438507677185e-07,
+      "fixed_point_max": 1.1673949068535805e-07
+    },
+    {
+      "energy": -5.801739742097309,
+      "fixed_point_l2": 1.2202215173313277e-07,
+      "fixed_point_max": 5.836983357765391e-08
+    },
+    {
+      "energy": -5.801739742097311,
+      "fixed_point_l2": 6.10111868292816e-08,
+      "fixed_point_max": 2.9184959837724733e-08
+    }
+  ],
+  "physical_maps_recorded": 22,
+  "coefficient_optimizer_seconds": 0,
+  "coefficient_optimizer_evaluations": 0,
+  "coefficient_optimization": null,
+  "stage_iterations": [
+    22
+  ]
+}

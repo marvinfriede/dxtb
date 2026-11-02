@@ -306,7 +306,7 @@ class ElectricField(Interaction):
         The position dependence of the charges enters via the overlap
         derivative in the Hamiltonian gradient, and the position dependence
         of the dipole moments via the dipole integral gradient in
-        :meth:`~dxtb.Calculator.forces_analytical`.
+        :meth:`~dxtb.Calculator.forces`.
 
         Parameters
         ----------

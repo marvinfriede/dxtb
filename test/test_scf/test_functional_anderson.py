@@ -27,24 +27,30 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
 from dxtb._src.scf.functional import (
-    AndersonSettings,
     AndersonState,
     SCFCharges,
     SCFMapResult,
-    SCFSpectralResult,
     SCFPotential,
+    SCFSpectralResult,
 )
 from dxtb._src.scf.functional import anderson as anderson_module
-from dxtb._src.scf.functional import (
-    anderson_mix,
-    setup_anderson_solver_settings,
-    solve_scf_anderson,
-)
-from dxtb._src.scf.functional.anderson import _solve_map_anderson
+from dxtb._src.scf.functional import anderson_mix
+from dxtb._src.scf.functional.anderson import AndersonMethodSettings
+from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.mixer import Anderson
 
+from ._anderson_helpers import (
+    AndersonTestSettings,
+)
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_common as solve_common
+from ._anderson_helpers import solve_physical as solve_scf_anderson
 from .samples import samples
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_functional_map import (
+    _assert_directional_fd,
+    _assert_tensor_equal,
+    _prepare_case,
+)
 
 
 def _map_result(mapped: torch.Tensor) -> SCFMapResult:
@@ -70,8 +76,8 @@ def _settings(
     diagonal_offset: float | None = 0.01,
     damp: float = 0.4,
     damp_init: float = 0.1,
-) -> AndersonSettings:
-    return AndersonSettings(
+) -> AndersonTestSettings:
+    return AndersonTestSettings(
         maxiter=8,
         mix_guess=False,
         damp=damp,
@@ -214,7 +220,14 @@ def test_anderson_transition_matches_legacy_history(
         previous_state = state
         prior_x = None if state is None else state.x_hist.clone()
         prior_f = None if state is None else state.f_hist.clone()
-        actual, state = anderson_mix(old, mapped, state, settings, step)
+        actual, state = anderson_mix(
+            old,
+            mapped,
+            state,
+            settings.method(),
+            step,
+            damp=settings.damp,
+        )
         torch.testing.assert_close(actual, expected, rtol=1e-12, atol=1e-12)
         if previous_state is not None:
             assert prior_x is not None and prior_f is not None
@@ -258,14 +271,20 @@ def test_anderson_initial_map_history_semantics(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonSettings,
+        current_settings: AndersonMethodSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         calls.append((old.clone(), mapped.clone(), state, step))
         return original(
-            old, mapped, state, current_settings, step, transition_active, damp
+            old,
+            mapped,
+            state,
+            current_settings,
+            step,
+            transition_active=transition_active,
+            damp=damp,
         )
 
     monkeypatch.setattr(anderson_module, "anderson_mix", record)
@@ -274,7 +293,7 @@ def test_anderson_initial_map_history_semantics(
     def affine(x: torch.Tensor) -> SCFMapResult:
         return _map_result(0.3 * x + 0.4)
 
-    _solve_map_anderson(guess, settings, affine)
+    solve_common(guess, settings, affine)
     if mix_guess:
         assert calls[0][3] == 1
         assert calls[0][2] is None
@@ -314,13 +333,19 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonSettings,
+        current_settings: AndersonMethodSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active, damp
+            old,
+            mapped,
+            state,
+            current_settings,
+            step,
+            transition_active=transition_active,
+            damp=damp,
         )
         calls.append(
             (
@@ -340,7 +365,7 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
     def constant_residual(x: torch.Tensor) -> SCFMapResult:
         return _map_result(x + increment)
 
-    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    outcome = solve_common(guess, settings, constant_residual)
     assert outcome.converged.item() is True
     assert int(outcome.iterations) == 2
     torch.testing.assert_close(
@@ -383,13 +408,19 @@ def test_anderson_inactive_initial_transition_keeps_initialized_state(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonSettings,
+        current_settings: AndersonMethodSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active, damp
+            old,
+            mapped,
+            state,
+            current_settings,
+            step,
+            transition_active=transition_active,
+            damp=damp,
         )
         assert transition_active is not None
         calls.append(
@@ -402,7 +433,7 @@ def test_anderson_inactive_initial_transition_keeps_initialized_state(
     def constant_residual(x: torch.Tensor) -> SCFMapResult:
         return _map_result(x + 0.2)
 
-    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    outcome = solve_common(guess, settings, constant_residual)
     assert outcome.converged.item() is True
     assert int(outcome.iterations) == 2
     torch.testing.assert_close(
@@ -443,13 +474,19 @@ def test_anderson_history_freezes_after_two_active_transitions(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonSettings,
+        current_settings: AndersonMethodSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, AndersonState]:
         mixed, next_state = original(
-            old, mapped, state, current_settings, step, transition_active, damp
+            old,
+            mapped,
+            state,
+            current_settings,
+            step,
+            transition_active=transition_active,
+            damp=damp,
         )
         assert transition_active is not None
         states.append((step, transition_active.clone(), next_state))
@@ -460,7 +497,7 @@ def test_anderson_history_freezes_after_two_active_transitions(
     def affine(x: torch.Tensor) -> SCFMapResult:
         return _map_result(matrix @ x + bias)
 
-    outcome = _solve_map_anderson(guess, settings, affine)
+    outcome = solve_common(guess, settings, affine)
     assert outcome.converged.item() is True
     assert int(outcome.iterations) == 4
     assert [step for step, _, _ in states] == [1, 2, 3, 4]
@@ -492,9 +529,14 @@ def test_anderson_constant_residual_converges_without_next_transition() -> None:
     def constant_residual(x: torch.Tensor) -> SCFMapResult:
         return _map_result(x + increment)
 
-    outcome = _solve_map_anderson(guess, settings, constant_residual)
+    outcome = solve_common(guess, settings, constant_residual)
     legacy_first_mixed, _ = anderson_mix(
-        guess, constant_residual(guess).mapped_x, None, settings, 1
+        guess,
+        constant_residual(guess).mapped_x,
+        None,
+        settings.method(),
+        1,
+        damp=settings.damp,
     )
     legacy_candidate = constant_residual(legacy_first_mixed)
     torch.testing.assert_close(
@@ -504,7 +546,7 @@ def test_anderson_constant_residual_converges_without_next_transition() -> None:
     assert int(outcome.iterations) == 2
 
     def solve(value: torch.Tensor) -> torch.Tensor:
-        return _solve_map_anderson(
+        return solve_common(
             value, settings, constant_residual
         ).map_result.mapped_x.sum()
 
@@ -545,28 +587,45 @@ def test_anderson_soft_start_false_matches_legacy() -> None:
     assert int(result.actual.iterations) == 6
 
 
-def test_anderson_loose_convergence_keeps_first_result_safely() -> None:
-    """Inactive fixed trips do not replace results or solve singular history."""
-    result = _compare_legacy_anderson(
-        maxiter=14,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
+def _solve_loose_anderson_with_certification(maxiter: int):
+    """Large raw tolerances still require a valid selected physical root."""
+    options = {
+        "mixer": labels.MIXER_ANDERSON,
+        "maxiter": maxiter,
+        "mix_guess": True,
+        "x_atol": 1.0e6,
+        "x_atol_max": 1.0e6,
+    }
+    case = _prepare_case(GFN1_XTB, scf_options=options)
+    settings = setup_anderson_solver_settings(
+        case.system.config.scf, case.positions.dtype
     )
-    assert result.actual.converged.item() is True
-    assert int(result.actual.iterations) == 2
+    result = solve_scf_anderson(case.x, case.inputs, settings)
+    expected = SCFProblem(case.inputs, SCFRepresentation.CHARGE).evaluate(
+        result.root_x
+    )
+    _assert_tensor_equal(
+        result.map_result.mapped_x, expected.map_result.mapped_x
+    )
+    _assert_tensor_equal(
+        result.map_result.spectral.density,
+        expected.map_result.spectral.density,
+    )
+    return result
+
+
+def test_anderson_loose_convergence_keeps_first_result_safely() -> None:
+    """Inactive fixed trips preserve the first physically certified result."""
+    result = _solve_loose_anderson_with_certification(maxiter=14)
+    assert result.converged.item() is True
+    assert int(result.iterations) > 2
 
 
 def test_anderson_loose_tolerance_matches_first_converged_map() -> None:
-    """A loose criterion freezes the first eligible raw map result."""
-    result = _compare_legacy_anderson(
-        maxiter=20,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
-    )
-    assert result.actual.converged.item() is True
-    assert int(result.actual.iterations) == 2
+    """Raw-map candidacy waits for fresh-Fock physical certification."""
+    result = _solve_loose_anderson_with_certification(maxiter=20)
+    assert result.converged.item() is True
+    assert int(result.iterations) > 2
 
 
 def test_anderson_normal_convergence_matches_legacy() -> None:
@@ -595,11 +654,13 @@ def test_anderson_gfn2_multipole_solver_matches_legacy() -> None:
 
 def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
     """Anderson setup rejects Broyden and freezes dynamic settings."""
+    from dxtb.scf import AndersonMethod, SCFStrategy, strategy_preset
+
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_ANDERSON})
     config = case.system.config.scf
-    with pytest.raises(NotImplementedError, match="effective Anderson"):
+    with pytest.raises(NotImplementedError, match="require an Anderson"):
         setup_anderson_solver_settings(
-            replace(config, mixer=labels.MIXER_BROYDEN), torch.float64
+            replace(config, strategy=strategy_preset("broyden")), torch.float64
         )
     dynamic = setup_anderson_solver_settings(
         replace(config, damp_dynamic=True), torch.float64
@@ -607,7 +668,23 @@ def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
     assert dynamic.dynamic_damping.enabled
     with pytest.raises(ValueError, match="generations"):
         setup_anderson_solver_settings(
-            replace(config, damp_generations=0), torch.float64
+            replace(
+                config,
+                strategy=SCFStrategy(
+                    (
+                        replace(
+                            config.strategy.stages[0],
+                            method=AndersonMethod(
+                                replace(
+                                    config.strategy.stages[0].method.settings,
+                                    generations=0,
+                                )
+                            ),
+                        ),
+                    )
+                ),
+            ),
+            torch.float64,
         )
     invalid_legacy = Anderson(
         {
@@ -632,15 +709,16 @@ def test_anderson_tolerance_resolution_matches_legacy(
         x_atol_max=1.0e-11,
     )
     settings = setup_anderson_solver_settings(config, dtype)
+    anderson_settings = config.strategy.stages[0].method.settings
     mixer = Anderson(
         {
             "x_tol": config.x_atol,
             "x_tol_max": config.x_atol_max,
             "damp": config.damp,
-            "damp_init": config.damp_init,
-            "damp_generations": config.damp_generations,
-            "damp_soft_start": config.damp_soft_start,
-            "damp_diagonal_offset": config.damp_diagonal_offset,
+            "damp_init": anderson_settings.damp_init,
+            "damp_generations": anderson_settings.generations,
+            "damp_soft_start": anderson_settings.soft_start,
+            "damp_diagonal_offset": anderson_settings.diagonal_offset,
         }
     )
     old = torch.zeros(2, dtype=dtype)
@@ -651,35 +729,13 @@ def test_anderson_tolerance_resolution_matches_legacy(
     assert config.x_atol_max == 1.0e-11
 
 
-def test_legacy_full_mixer_resolution_contract() -> None:
-    """Legacy full mode resolves Broyden to Anderson or rejects strictly."""
-    linear = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
-    assert type(linear.engine.mixer).__name__ == "Simple"
-
-    anderson = _prepare_case(
-        GFN1_XTB, scf_options={"mixer": labels.MIXER_ANDERSON}
-    )
-    assert type(anderson.engine.mixer).__name__ == "Anderson"
-
+def test_packed_full_route_rejects_unsupported_broyden_explicitly() -> None:
+    """Packed FULL does not silently substitute another public strategy."""
     OutputHandler.clear_warnings()
-    fallback = _prepare_case(
-        GFN1_XTB, scf_options={"mixer": labels.MIXER_BROYDEN}
-    )
-    assert type(fallback.engine.mixer).__name__ == "Anderson"
-    warning_messages = [message for message, _ in OutputHandler.warnings]
-    assert len(warning_messages) == 1
-    assert warning_messages[0] == (
-        "Broyden mixer is not implemented for SCF with full gradient tracking. "
-        "Using Anderson mixer instead."
-    )
-
-    OutputHandler.clear_warnings()
-    with pytest.raises(
-        NotImplementedError, match="Broyden mixer is not implemented"
-    ):
+    with pytest.raises(NotImplementedError, match="does not support Broyden"):
         _prepare_case(
             GFN1_XTB,
-            scf_options={"mixer": labels.MIXER_BROYDEN, "strict": True},
+            scf_options={"mixer": labels.MIXER_BROYDEN},
         )
     assert OutputHandler.warnings == []
 
@@ -699,9 +755,7 @@ def test_anderson_solver_affine_transform_ladder() -> None:
         def affine(value: torch.Tensor) -> SCFMapResult:
             return _map_result(matrix @ value + offset)
 
-        return _solve_map_anderson(
-            x, settings, affine
-        ).map_result.mapped_x.sum()
+        return solve_common(x, settings, affine).map_result.mapped_x.sum()
 
     point = torch.tensor([0.1, -0.3], dtype=torch.float64)
     direction = torch.tensor([0.6, -0.8], dtype=torch.float64)
@@ -737,7 +791,7 @@ def test_anderson_solver_mixed_convergence_vmap() -> None:
         def affine(x: torch.Tensor) -> SCFMapResult:
             return _map_result(matrix @ x + bias)
 
-        outcome = _solve_map_anderson(initial, settings, affine)
+        outcome = solve_common(initial, settings, affine)
         return (
             outcome.map_result.mapped_x,
             outcome.iterations,
@@ -767,6 +821,25 @@ def test_anderson_solver_mixed_convergence_vmap() -> None:
 
 def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     """Position, parameter, and explicit-field graphs pass through Anderson."""
+    from tad_mctc import storch
+
+    def _disable_legacy_lorentzian_broadening(engine: object) -> None:
+        """Disable BaseTSCF's eps**0.5 Lorentzian gap broadening for exact parity."""
+
+        def _unbroadened_diagonalize(
+            hamiltonian: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            l_inv = engine._get_inv_cholesky()
+            return storch.eighb(
+                a=hamiltonian,
+                b=None,
+                l_inv=l_inv,
+                is_posdef=True,
+                broadening_method=None,
+            )
+
+        engine.diagonalize = _unbroadened_diagonalize
+
     positions = (
         samples["H2O"]["positions"]
         .to(device="cpu", dtype=torch.float64)
@@ -790,9 +863,22 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     grad = torch.autograd.grad(energy, positions, create_graph=True)[0]
     grad2 = torch.autograd.grad(grad.square().sum(), positions)[0]
     assert torch.isfinite(grad).all() and torch.isfinite(grad2).all()
+
+    def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
+        local = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
+        local_settings = setup_anderson_solver_settings(
+            local.system.config.scf, value.dtype
+        )
+        return solve_scf_anderson(
+            local.x, local.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_positions, positions, grad)
+
     legacy_geom = _prepare_case(
         GFN1_XTB, positions=positions, scf_options=options
     )
+    _disable_legacy_lorentzian_broadening(legacy_geom.engine)
     legacy_x = legacy_geom.engine.scf(legacy_geom.x, return_charges=False)
     legacy_charges = legacy_geom.engine.converged_to_charges(legacy_x)
     legacy_energy = legacy_geom.engine.get_energy(legacy_charges).sum()
@@ -821,6 +907,7 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     legacy_parameter_case = _prepare_case(
         GFN1_XTB, par=par, scf_options=options
     )
+    _disable_legacy_lorentzian_broadening(legacy_parameter_case.engine)
     legacy_parameter_x = legacy_parameter_case.engine.scf(
         legacy_parameter_case.x, return_charges=False
     )
@@ -850,9 +937,24 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
     field_grad = torch.autograd.grad(field_energy, field)[0]
     assert torch.isfinite(field_grad).all()
     assert torch.count_nonzero(field_grad) > 0
+
+    def energy_at_field(value: torch.Tensor) -> torch.Tensor:
+        local = _prepare_case(
+            GFN1_XTB, field=value, scf_options={**options, "maxiter": 1}
+        )
+        local_settings = setup_anderson_solver_settings(
+            local.system.config.scf, torch.float64
+        )
+        return solve_scf_anderson(
+            local.x, local.inputs, local_settings
+        ).energy.sum()
+
+    _assert_directional_fd(energy_at_field, field, field_grad)
+
     legacy_field_case = _prepare_case(
         GFN1_XTB, field=field, scf_options={**options, "maxiter": 1}
     )
+    _disable_legacy_lorentzian_broadening(legacy_field_case.engine)
     legacy_field_x = legacy_field_case.engine.scf(
         legacy_field_case.x, return_charges=False
     )

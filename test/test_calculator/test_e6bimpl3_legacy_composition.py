@@ -225,7 +225,7 @@ def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
         driver=labels.INTDRIVER_LIBCINT,
         interaction=(custom,),
     )
-    with pytest.raises(ValueError, match="Explicit field"):
+    with pytest.raises(NotImplementedError, match="interaction extension"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -233,38 +233,16 @@ def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
         )
 
 
-def test_custom_interaction_is_retained_and_order_independent() -> None:
+def test_custom_interaction_is_explicitly_unsupported() -> None:
     interaction = _NonzeroInteraction()
     na, nb = [1, 1], [3, 1]
     a = _system(na, interaction=(interaction,))
     b = _system(nb, interaction=(interaction,))
     pa, pb = _positions(na), _positions(nb)
-    assert classify_legacy_system(a) is LegacySystemRoute.LEGACY_COMPOSED
-    ab = compose_legacy_systems((a, b), (pa, pb))
-    ba = compose_legacy_systems((b, a), (pb, pa))
-    assert interaction.calls > 0
-    for result, system, pos in zip(ab.results, (a, b), (pa, pb)):
-        serial = system.singlepoint(pos)
-        torch.testing.assert_close(result.energy, serial.energy)
-        torch.testing.assert_close(result.scf, serial.scf)
-    for lhs, rhs in zip(ab.results, ba.results[::-1]):
-        torch.testing.assert_close(lhs.energy, rhs.energy)
-    assert interaction.calls > 0
-    baseline = _system(na).singlepoint(pa)
-    assert ab.results[0].potential is not None
-    assert baseline.potential is not None
-    assert not torch.allclose(
-        ab.results[0].potential.mono, baseline.potential.mono
-    )
-
-    mapped_pos = pa.clone().requires_grad_()
-    serial_pos = pa.clone().requires_grad_()
-    mapped = compose_legacy_systems((a,), (mapped_pos,)).results[0]
-    serial = a.singlepoint(serial_pos)
-    (mapped_grad,) = torch.autograd.grad(mapped.energy.sum(), mapped_pos)
-    (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
-    torch.testing.assert_close(mapped_grad, serial_grad)
-    assert torch.count_nonzero(mapped_grad) > 0
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        classify_legacy_system(a)
+    with pytest.raises(NotImplementedError, match="interaction extension"):
+        compose_legacy_systems((a, b), (pa, pb))
 
 
 def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
@@ -319,7 +297,7 @@ def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
     ],
     ids=["negative-temperature", "negative-fermi-maxiter"],
 )
-def test_legacy_owned_fermi_edges_select_legacy_route(
+def test_invalid_fermi_edges_are_rejected(
     options: dict[str, float | int],
 ) -> None:
     config = Config.create(
@@ -331,7 +309,10 @@ def test_legacy_owned_fermi_edges_select_legacy_route(
     system = Model(
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor([1, 1], device=DEVICE))
-    assert classify_legacy_system(system) is LegacySystemRoute.LEGACY_COMPOSED
+    with pytest.raises(
+        ValueError, match="Electronic Temperature|Fermi maxiter"
+    ):
+        classify_legacy_system(system)
 
 
 def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
@@ -371,7 +352,7 @@ def test_classical_only_calculation_retains_separate_route() -> None:
 def test_legacy_engine_keywords_are_not_filtered() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -382,7 +363,7 @@ def test_legacy_engine_keywords_are_not_filtered() -> None:
 def test_legacy_engine_positional_extras_are_not_filtered() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -390,9 +371,7 @@ def test_legacy_engine_positional_extras_are_not_filtered() -> None:
         )
 
 
-def test_legacy_engine_constructor_options_are_consumed_by_legacy_owner() -> (
-    None
-):
+def test_legacy_engine_constructor_options_are_retired() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
     options = LegacySCFOptions(
@@ -402,54 +381,26 @@ def test_legacy_engine_constructor_options_are_consumed_by_legacy_owner() -> (
             "eigen_options": {"method": "exacteig"},
         }
     )
-    result = compose_legacy_systems(
-        (system,), (_positions(numbers),), legacy_options=options
-    ).results[0]
-    assert torch.isfinite(result.energy).all()
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        compose_legacy_systems(
+            (system,), (_positions(numbers),), legacy_options=options
+        )
 
 
-def test_legacy_composition_preserves_option_values_and_constructor_merge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forward option identities and retain legacy constructor defaults."""
-    from dxtb._src.scf import unrolling
-
-    original = unrolling.SelfConsistentFieldFull
-    captured: dict[str, object] = {}
-
-    def capture(*args, **kwargs):
-        captured.update(kwargs)
-        engine = original(*args, **kwargs)
-        captured["engine"] = engine
-        return engine
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", capture)
+def test_legacy_composition_rejects_engine_option_dictionaries() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    fwd_options = {"damp": 0.25}
-    bck_options = {"posdef": False}
-    eigen_options = {"method": "exacteig"}
     options = LegacySCFOptions(
         kwargs={
-            "fwd_options": fwd_options,
-            "bck_options": bck_options,
-            "eigen_options": eigen_options,
+            "fwd_options": {"damp": 0.25},
+            "bck_options": {"posdef": False},
+            "eigen_options": {"method": "exacteig"},
         }
     )
-
-    compose_legacy_systems(
-        (system,), (_positions(numbers),), legacy_options=options
-    )
-
-    assert captured["fwd_options"] is fwd_options
-    assert captured["bck_options"] is bck_options
-    assert captured["eigen_options"] is eigen_options
-    assert captured["config"] is system.config.scf
-    engine = captured["engine"]
-    assert engine.fwd_options["damp"] == 0.25
-    assert engine.fwd_options["maxiter"] == system.config.scf.maxiter
-    assert engine.bck_options == {"posdef": False}
-    assert engine.eigen_options == {"method": "exacteig"}
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        compose_legacy_systems(
+            (system,), (_positions(numbers),), legacy_options=options
+        )
 
 
 @pytest.mark.parametrize(
@@ -461,7 +412,7 @@ def test_legacy_composition_preserves_malformed_option_errors(
     """Malformed legacy option mappings fail at the legacy owner."""
     numbers = [1, 1]
     system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(TypeError, match="mapping"):
+    with pytest.raises(NotImplementedError, match="overrides are no longer"):
         compose_legacy_systems(
             (system,),
             (_positions(numbers),),
@@ -553,3 +504,244 @@ def test_legacy_composer_propagates_numerical_failures(
             (system,), (_positions(numbers),), source_ids=(37,)
         )
     assert err.value.source_id == 37
+
+
+def test_s13_strategy_method_and_differentiation_eligibility() -> None:
+    """Verify Section 7/8 strategy, method, representation, and response routing."""
+    from dataclasses import replace
+
+    from dxtb import GFN2_XTB
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.scf.functional.padded import evaluate_padded_fixed_trip
+    from dxtb.scf import (
+        AndersonMethod,
+        AndersonMethodSettings,
+        BroydenMethod,
+        BroydenMethodSettings,
+        CDIISMethod,
+        CDIISMethodSettings,
+        LinearMethod,
+        SCFDifferentiation,
+        SCFRepresentation,
+        SCFResponseSettings,
+        SCFStage,
+        SCFStrategy,
+        SOSCFMethod,
+        strategy_preset,
+    )
+
+    par_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    par_gfn2 = ParamModule(GFN2_XTB, device=DEVICE, dtype=DTYPE)
+    nums_h2 = torch.tensor([1, 1], device=DEVICE)
+    nums_h2o = torch.tensor([8, 1, 1], device=DEVICE)
+    pos_h2 = _positions([1, 1])
+    pos_h2o = _positions([8, 1, 1])
+
+    anderson = AndersonMethod(AndersonMethodSettings())
+    broyden = BroydenMethod(BroydenMethodSettings())
+    cdiis = CDIISMethod(CDIISMethodSettings())
+    linear = LinearMethod()
+
+    # 1. Single-stage fixed-trip methods in unrolled mode -> MAPPED
+    mapped_strategies = [
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(linear, SCFRepresentation.CHARGE),)),
+        ),
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(linear, SCFRepresentation.POTENTIAL),)),
+        ),
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
+        ),
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(anderson, SCFRepresentation.CHARGE),)),
+        ),
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(broyden, SCFRepresentation.POTENTIAL),)),
+        ),
+        (
+            par_gfn1,
+            "GFN1-xTB",
+            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
+        ),
+        (
+            par_gfn2,
+            "GFN2-xTB",
+            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
+        ),
+        (
+            par_gfn2,
+            "GFN2-xTB",
+            SCFStrategy((SCFStage(anderson, SCFRepresentation.CHARGE),)),
+        ),
+        (
+            par_gfn2,
+            "GFN2-xTB",
+            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
+        ),
+    ]
+    for par, method_name, strat in mapped_strategies:
+        cfg = Config.create(
+            method=method_name,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            int_level=labels.INTLEVEL_QUADRUPOLE,
+            strategy=strat,
+            differentiation=SCFDifferentiation.UNROLLED,
+            convergence="tight",
+            maxiter=15,
+        )
+        model = Model(par=par, config=cfg)
+        s_a = model.setup(nums_h2)
+        s_b = model.setup(nums_h2o)
+        assert classify_legacy_system(s_a) is LegacySystemRoute.MAPPED
+        assert classify_legacy_system(s_b) is LegacySystemRoute.MAPPED
+        packed = evaluate_packed_systems((s_a, s_b), (pos_h2, pos_h2o))
+        ref_a = s_a.singlepoint(pos_h2)
+        ref_b = s_b.singlepoint(pos_h2o)
+        torch.testing.assert_close(
+            packed.energy[0, :2], ref_a.energy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            packed.energy[1, :3], ref_b.energy, atol=1e-11, rtol=1e-11
+        )
+
+    # 2. Multi-stage and SOSCF strategies:
+    #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and classify_legacy_system
+    #    - SOSCF rejected with active Fermi smearing (fermi_etemp > 0)
+    #    - routed to LEGACY_COMPOSED under IMPLICIT differentiation (with etemp=0 for SOSCF)
+    soscf_strat = SCFStrategy(
+        (SCFStage(SOSCFMethod(), SCFRepresentation.FOCK),)
+    )
+    base_cfg = Config.create(
+        method="GFN1-xTB",
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+        fermi_etemp=0.0,
+    )
+    base_sys = Model(par=par_gfn1, config=base_cfg).setup(nums_h2)
+    for bad_unrolled_strat in (
+        strategy_preset("broyden-cdiis"),
+        strategy_preset("cdiis-soscf"),
+        soscf_strat,
+    ):
+        with pytest.raises(ValueError, match="requires eager/implicit"):
+            Config.create(
+                method="GFN1-xTB",
+                int_driver=labels.INTDRIVER_PYTORCH,
+                int_level=labels.INTLEVEL_QUADRUPOLE,
+                strategy=bad_unrolled_strat,
+                differentiation=SCFDifferentiation.UNROLLED,
+                fermi_etemp=0.0,
+            )
+        bypassed_scf = replace(base_cfg.scf)
+        object.__setattr__(bypassed_scf, "strategy", bad_unrolled_strat)
+        bypassed_cfg = replace(base_cfg)
+        object.__setattr__(bypassed_cfg, "scf", bypassed_scf)
+        mutated_sys = replace(base_sys, config=bypassed_cfg)
+        with pytest.raises(
+            ValueError, match="requires eager/implicit|single-stage fixed-trip"
+        ):
+            classify_legacy_system(mutated_sys)
+
+    # Direct evaluate_padded_fixed_trip also rejects multi-stage or eager-only strategies
+    from types import SimpleNamespace
+
+    dummy_padded = SimpleNamespace(
+        core=SimpleNamespace(config=bypassed_cfg),
+    )
+    with pytest.raises(ValueError, match="single-stage"):
+        evaluate_padded_fixed_trip(
+            dummy_padded,  # type: ignore[arg-type]
+            pos_h2,
+            torch.tensor(0.0, dtype=DTYPE),
+            torch.tensor(0.0, dtype=DTYPE),
+        )
+
+    with pytest.raises(ValueError, match="active Fermi smearing"):
+        Config.create(
+            method="GFN1-xTB",
+            int_driver=labels.INTDRIVER_PYTORCH,
+            int_level=labels.INTLEVEL_QUADRUPOLE,
+            strategy=soscf_strat,
+            differentiation=SCFDifferentiation.IMPLICIT,
+            fermi_etemp=300.0,
+        )
+    base_smear_cfg = Config.create(
+        method="GFN1-xTB",
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_QUADRUPOLE,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        fermi_etemp=300.0,
+    )
+    bypassed_smear_scf = replace(base_smear_cfg.scf)
+    object.__setattr__(bypassed_smear_scf, "strategy", soscf_strat)
+    bypassed_smear_cfg = replace(base_smear_cfg)
+    object.__setattr__(bypassed_smear_cfg, "scf", bypassed_smear_scf)
+    sys_soscf_smear = replace(
+        Model(par=par_gfn1, config=base_smear_cfg).setup(nums_h2),
+        config=bypassed_smear_cfg,
+    )
+    with pytest.raises(
+        ValueError, match="active Fermi smearing|fixed-occupation"
+    ):
+        classify_legacy_system(sys_soscf_smear)
+
+    # Multi-stage and SOSCF (at etemp=0) + alternate response coordinates under IMPLICIT -> LEGACY_COMPOSED
+    implicit_cases = [
+        ("broyden-cdiis", SCFResponseSettings(representation=None)),
+        (
+            "cdiis-soscf",
+            SCFResponseSettings(representation=SCFRepresentation.POTENTIAL),
+        ),
+        (
+            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
+            SCFResponseSettings(representation=SCFRepresentation.POTENTIAL),
+        ),
+        (
+            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
+            SCFResponseSettings(representation=SCFRepresentation.CHARGE),
+        ),
+    ]
+    for strat, resp_settings in implicit_cases:
+        cfg_imp = Config.create(
+            method="GFN1-xTB",
+            int_driver=labels.INTDRIVER_PYTORCH,
+            int_level=labels.INTLEVEL_QUADRUPOLE,
+            strategy=strat,
+            differentiation=SCFDifferentiation.IMPLICIT,
+            response=resp_settings,
+            fermi_etemp=0.0,
+            convergence="tight",
+        )
+        model_imp = Model(par=par_gfn1, config=cfg_imp)
+        sys_imp_a = model_imp.setup(nums_h2)
+        sys_imp_b = model_imp.setup(nums_h2o)
+        assert (
+            classify_legacy_system(sys_imp_a)
+            is LegacySystemRoute.LEGACY_COMPOSED
+        )
+        p_a = pos_h2.detach().clone().requires_grad_(True)
+        p_b = pos_h2o.detach().clone().requires_grad_(True)
+        packed_imp = evaluate_packed_systems(
+            (sys_imp_a, sys_imp_b), (p_a, p_b)
+        )
+        (g_a, g_b) = torch.autograd.grad(
+            packed_imp.energy.sum(), (p_a, p_b)
+        )
+        p_b_ref = pos_h2o.detach().clone().requires_grad_(True)
+        ref_b = sys_imp_b.singlepoint(p_b_ref)
+        (g_b_ref,) = torch.autograd.grad(ref_b.energy.sum(), p_b_ref)
+        torch.testing.assert_close(
+            packed_imp.energy[1, :3], ref_b.energy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(g_b, g_b_ref, atol=1e-9, rtol=1e-9)

@@ -110,7 +110,6 @@ def test_grad(dtype: torch.dtype, name: str) -> None:
         **{
             "exclude": ["rep", "disp", "hal"],
             "maxiter": 50,
-            "f_atol": 1.0e-5,
             "x_atol": 1.0e-5,
         },
     )

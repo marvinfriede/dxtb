@@ -41,19 +41,17 @@ displacement of 0.01 bohr already gives correct derivatives).
 Implicit SCF uses a prepared physical-root boundary
 --------------------------------------------------
 
-Eligible single-System ``scf_mode="implicit"`` calculations use the
-functional physical-root derivative in eager calls and support ordinary
-``torch.autograd``. Primal root acquisition and convergence validation happen
-eagerly. The private prepared-root response supports ``torch.func``
-reverse/JVP transforms, ``jacfwd`` and ``vmap`` after that preparation.
-Wrapping public ``System.singlepoint`` or ``Calculator`` calls in a transform
-remains E6a scope; use ``scf_mode="full"`` for those public transform
-workflows until E6a lands. Batches, unsupported interactions and legacy solver
-overrides still use the legacy compatibility implementation. The default
-Broyden mixer also remains on the legacy implicit engine; explicitly select
-Simple or Anderson to use the functional physical-root route. Any functional
-implicit route rejects a nonconverged primal with ``SCFConvergenceError``
-regardless of ``force_convergence`` or ``strict``.
+``differentiation="implicit"`` uses the functional physical-root derivative. Root
+acquisition and physical validation happen eagerly; the prepared-root response
+supports ordinary ``torch.autograd`` and its documented ``torch.func``
+transforms. FULL and IMPLICIT iterative routes use the functional SCF
+controller. The public packed FULL batch route retains its established
+unrolled compatibility implementation. Unsupported interaction extensions
+and legacy solver overrides fail explicitly instead of selecting another
+engine. The experimental single-shot mode is retired because its derivatives
+were not exact. An implicit route rejects a nonconverged primal with
+``SCFConvergenceError`` for an uncertified primal root. The removed global
+``strict`` configuration flag does not alter single-System SCF policy.
 
 In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
 modes, and ``scf_mode="nonpure"`` existed; that mode was removed.
@@ -107,61 +105,30 @@ Running the test suite with several ``pytest-xdist`` workers is also much
 slower if each worker uses several threads; set ``OMP_NUM_THREADS=1``.
 
 
-Repeated derivatives on the same tensor raise an error
-------------------------------------------------------
-
-Calling ``calc.get_forces(positions)`` twice with the same ``positions``
-tensor raises ``RuntimeError: Trying to backward through the graph a second
-time``, because the second call reuses cached intermediate results whose
-graph the first call has freed.
-
-**Workaround:** create a new calculator, call ``calc.reset()`` (but see
-below), or pass a fresh tensor (``positions.detach().clone()``).
-
-
-``Calculator.forces`` fails for batched input
----------------------------------------------
-
-For a batch of systems, ``calc.forces(positions)`` (default
-``grad_mode="autograd"`` and ``"backward"``) raises ``RuntimeError: grad can
-be implicitly created only for scalar outputs``.
-
-**Workaround:** differentiate the sum of the energies, which gives the forces
-of every system because the systems are independent:
-
-.. code-block:: python
-
-    energy = calc.energy(positions)
-    (grad,) = torch.autograd.grad(energy.sum(), positions)
-    forces = -grad
-
-
 ``reset()`` cuts gradients to user-supplied tensors
 ---------------------------------------------------
 
 ``calc.reset()``, ``reset_all()`` and the ``reset_*`` methods of the
-interaction and classical lists replace the tensors of the components with
-detached copies. Gradients with respect to a tensor the user passed in, e.g.,
-``requires_grad=True`` component parameters, are then ``None``. Electric
-fields are per-evaluation inputs and are not component state; their graph is
-preserved across ``Calculator.reset()``. Setup-derived parameters are not reset;
-change them by constructing a new Model/System or Calculator.
+interaction and classical lists replace the tensors of custom components with
+detached copies. Gradients with respect to a tensor the user passed into a
+custom component, e.g., ``requires_grad=True`` component parameters, are then
+``None``. Electric fields are per-evaluation inputs and are not component
+state; their graph is preserved across ``Calculator.reset()``. ``Model.par``
+parameters are re-evaluated on each call and remain differentiable across
+``Calculator.reset()``.
 
-**Workaround:** for unmigrated component parameters, pass a fresh component or
+**Workaround:** for custom component parameters, pass a fresh component or
 rebuild the Calculator after reset if gradients to the original leaves matter.
 
 
 ``Calculator.to(device)`` does not move all state
 -------------------------------------------------
 
-``Calculator.to`` (and ``.type``) convert the components, but not every
-internal object (e.g., the :class:`~dxtb.IndexHelper` stays on the original
-device). The immutable ES2/ES3 setup values gathered by ``Model.setup`` also
-remain on their original dtype/device. Legacy constructor-field defaults are
-also retained at their original dtype/device because they are compatibility
-call inputs rather than interaction components. Evaluating after
-``Calculator.type`` is unsupported; construct a new Calculator with the
-requested dtype instead.
+``Calculator.to`` converts the components, but not every internal object
+(e.g., the :class:`~dxtb.IndexHelper` stays on the original device). Legacy
+constructor-field defaults are also retained at their original device because
+they are compatibility call inputs rather than interaction components.
+(Changing floating-point precision via ``Calculator.type(dtype)`` is supported.)
 
 **Workaround:** create the calculator on the target device
 (``Calculator(..., device=device)``).

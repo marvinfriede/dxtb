@@ -277,8 +277,8 @@ def setup_scf_inputs(
     if config.fermi.maxiter < 0:
         raise ValueError("Functional Fermi maxiter must be non-negative.")
     validate_functional_scf_interactions(interactions)
-    if numbers.ndim != 1 or ihelp.batch_mode != 0:
-        raise ValueError("E4.0 SCFInputs require one unbatched System.")
+    if numbers.ndim < 1:
+        raise ValueError("SCFInputs require an atomic-number axis.")
     if integrals.hcore is None or integrals.overlap is None:
         raise ValueError("SCFInputs require hcore and overlap integrals.")
     if core_index is not None:
@@ -411,8 +411,8 @@ def validate_functional_scf_interactions(
     """Reject interaction extensions without a functional-purity contract.
 
     The E4.0 raw map is guaranteed pure for exact migrated built-in
-    interactions. Arbitrary subclasses remain supported by the legacy SCF
-    route and must not be admitted to future functional SCF execution.
+    interactions. Arbitrary subclasses are rejected by functional SCF setup
+    and are not routed to a legacy iterative solver.
     """
     eligible, names = functional_scf_interactions_eligible(interactions)
     if not eligible:

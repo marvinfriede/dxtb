@@ -113,7 +113,6 @@ def analytical(
         opts,
         **{
             "mixer": "anderson" if scf_mode == "full" else "broyden",
-            "f_atol": 1e-5 if dtype == torch.float else 1e-10,
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
             "scf_mode": scf_mode,
         },
@@ -124,7 +123,7 @@ def analytical(
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
-    result = -calc.forces_analytical(positions, charge)
+    result = -calc.forces(positions, charge)
     gradient = result.detach()
 
     ref = load_from_npz(ref_grad, name, dtype)
@@ -153,7 +152,6 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
         opts,
         **{
             "mixer": "anderson" if scf_mode == "full" else "broyden",
-            "f_atol": 1e-5 if dtype == torch.float else 1e-10,
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
             "scf_mode": scf_mode,
         },

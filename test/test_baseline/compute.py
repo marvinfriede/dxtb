@@ -28,10 +28,9 @@ autograd of the energy through the unrolled SCF (``scf_mode="full"``):
 - forces: first derivative of the energy (positions);
 - Hessian: derivative of the forces (``derived_quantity="forces"``);
 - dipole: first derivative of the energy (electric field);
-- polarizability: derivative of the dipole (``use_analytical=False``);
+- polarizability: derivative of the dipole;
 - hyperpolarizability: derivative of the polarizability;
-- dipole derivative: positions derivative of the dipole
-  (``use_analytical_dipmom=False``);
+- dipole derivative: positions derivative of the dipole;
 - polarizability derivative: positions derivative of the polarizability.
 """
 
@@ -67,10 +66,9 @@ METHODS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
 DRIVERS = ("libcint", "pytorch")
 
 SCF_OPTIONS: dict[str, Any] = {
-    "scf_mode": "full",
-    "mixer": "anderson",
+    "strategy": "anderson",
+    "differentiation": "unrolled",
     "maxiter": 300,
-    "f_atol": 1e-10,
     "x_atol": 1e-10,
     "verbosity": 0,
 }
@@ -158,16 +156,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
 def _forces(system: System, method: str, driver: str) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver)
     pos = system.positions.clone().requires_grad_(True)
-    if not system.batched:
-        return {"forces": calc.forces(pos, *_args(system))}
-
-    # `Calculator.forces` differentiates the per-system energies with
-    # `torch.autograd.grad`, which needs a scalar and raises for batches
-    # (baseline finding). The systems are independent, so the gradient of
-    # the summed energy gives the forces of every entry.
-    energy = calc.energy(pos, *_args(system))
-    (grad,) = torch.autograd.grad(energy.sum(), pos)
-    return {"forces": -grad}
+    return {"forces": calc.forces(pos, *_args(system))}
 
 
 def _field() -> Tensor:
@@ -190,7 +179,7 @@ def _polarizability(
 ) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver, field=_field())
     pos = system.positions.clone()
-    alpha = calc.polarizability(pos, *_args(system), use_analytical=False)
+    alpha = calc.polarizability(pos, *_args(system))
     return {"polarizability": alpha}
 
 
@@ -199,7 +188,7 @@ def _dipole_deriv(
 ) -> dict[str, Tensor]:
     calc = _calculator(system, method, driver, field=_field())
     pos = system.positions.clone().requires_grad_(True)
-    dmu = calc.dipole_deriv(pos, *_args(system), use_analytical_dipmom=False)
+    dmu = calc.dipole_deriv(pos, *_args(system))
     return {"dipole_deriv": dmu}
 
 

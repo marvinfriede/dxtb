@@ -35,7 +35,8 @@ from torch.func import jacrev
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.scf.implicit import SelfConsistentFieldImplicit as SCF
+from dxtb._src.scf.pure.data import _Data
+from dxtb._src.scf.pure.energies import get_electronic_free_energy
 from dxtb._src.typing import DD
 from dxtb._src.wavefunction import filling
 from dxtb.config import ConfigSCF
@@ -269,24 +270,23 @@ def test_kt(dtype: torch.dtype, kt: float):
         def spread_shell_to_orbital(self, x: torch.Tensor) -> torch.Tensor:
             return x
 
-    scf = SCF(
-        d,  # type: ignore
-        focc,
-        d,
+    data = _Data(
+        occupation=focc,
+        n0=d,
         numbers=numbers,
         ihelp=_IndexHelper(),  # type: ignore
         cache=d,
         integrals=IntegralMatrices(hcore=dmat, overlap=dmat),
-        config=ConfigSCF.create(fermi_etemp=kt),
     )
-
-    scf._data.evals = emo[..., 0, :]  # the entropy reads the orbital energies
-    fenergy = scf.get_electronic_free_energy().sum(-1)
+    data.evals = emo[..., 0, :]  # the entropy reads the orbital energies
+    fenergy = get_electronic_free_energy(
+        data, ConfigSCF.create(fermi_etemp=kt)
+    ).sum(-1)
     ref = ref_fenergy[kt]
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == fenergy.cpu()
 
     with pytest.raises(ValueError):
-        replace(scf.config.fermi, partition=-3)
+        replace(ConfigSCF.create(fermi_etemp=kt).fermi, partition=-3)
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])

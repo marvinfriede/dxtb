@@ -67,6 +67,7 @@ def solve_nonselfconsistent(
     integrals: IntegralMatrices,
     n0: Tensor,
     occupation: Tensor,
+    *args: Any,
     **kwargs: Any,
 ) -> SCFResult:
     """
@@ -76,6 +77,11 @@ def solve_nonselfconsistent(
     to density-dependent interactions. Applying one arbitrary interaction pass
     would not be a well-defined physical model, so such components are rejected.
     """
+    if args or kwargs:
+        raise NotImplementedError(
+            "Legacy SCF engine positional/keyword overrides are no longer "
+            "supported by functional SCF."
+        )
     if len(interactions.components) > 0:
         interaction_labels = ", ".join(
             interaction.label for interaction in interactions.components
@@ -86,18 +92,13 @@ def solve_nonselfconsistent(
         )
 
     data = _Data(
-        occupation=occupation,
-        n0=n0,
+        occupation,
+        n0,
         numbers=numbers,
         ihelp=ihelp,
         cache=cache,
         integrals=integrals,
     )
-
-    data.eigen_options = {
-        "method": "exacteig",
-        **kwargs.pop("eigen_options", {}),
-    }
 
     # H0 is the full Hamiltonian for the non-self-consistent method.
     data.hamiltonian = integrals.hcore

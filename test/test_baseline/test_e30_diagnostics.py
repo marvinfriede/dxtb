@@ -24,27 +24,41 @@ import subprocess
 import sys
 import textwrap
 from dataclasses import replace
+from test.test_scf._anderson_helpers import (
+    from_config as setup_anderson_solver_settings,
+)
+from test.test_scf._anderson_helpers import solve_common as solve_common
 
 import numpy as np
 import pytest
 import torch
 from tad_mctc import storch
 
-from dxtb import Calculator, GFN1_XTB, GFN2_XTB
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
-from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.container import Charges
+from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.list import InteractionList
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.interactions import (
-    potential_from_charges as _core_potential_from_charges,
-)
 from dxtb._src.scf.functional.anderson import (
+    AndersonMethodSettings,
     AndersonState,
     anderson_mix,
-    _solve_map_anderson,
-    setup_anderson_solver_settings,
+)
+from dxtb._src.scf.functional.core import FunctionalInteractionSet
+from dxtb._src.scf.functional.data import (
+    SCFCharges,
+    SCFMapResult,
+    SCFPotential,
+    pack_potential,
+    potential_layout,
+    setup_scf_inputs,
+    unpack_potential,
+)
+from dxtb._src.scf.functional.eager import resolve_full_scf_route
+from dxtb._src.scf.functional.interactions import (
+    potential_from_charges as _core_potential_from_charges,
 )
 from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
@@ -54,23 +68,16 @@ from dxtb._src.scf.functional.map import (
     potential_map,
     potential_to_hamiltonian,
 )
-from dxtb._src.scf.functional.core import FunctionalInteractionSet
-from dxtb._src.scf.functional.data import (
-    SCFCharges,
-    SCFPotential,
-    pack_potential,
-    potential_layout,
-    setup_scf_inputs,
-    unpack_potential,
-)
-from dxtb._src.scf.functional.eager import resolve_full_scf_route
+from dxtb._src.scf.functional.problem import SCFProblem
 from dxtb._src.scf.functional.solver import (
     _project_potential_padding,
+    _solve_map,
     finalize_scf_potential,
     free_energy_from_spectral,
     interaction_energy_from_charges,
     simple_mix,
 )
+from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.utils import get_density
@@ -79,12 +86,12 @@ from dxtb._src.wavefunction.filling import get_fermi_occupation_core
 
 from .compute import (
     DRIVERS,
+    SCF_OPTIONS,
     _calculator,
     _hyperpolarizability,
     _pol_deriv,
     compute,
 )
-from .compute import SCF_OPTIONS
 from .molecules import SYSTEMS
 from .refdata import REFERENCE_DIR, load_reference
 from .tolerances import TBLITE
@@ -512,7 +519,7 @@ def _no2_functional_input(driver: str = "pytorch"):
         matrices,
     )
     assert route.kind == "functional"
-    effective_config = replace(calculator.opts.scf, mixer=route.effective_mixer)
+    effective_config = calculator.opts.scf
     inputs = setup_scf_inputs(
         model_system.numbers,
         matrices,
@@ -547,7 +554,7 @@ def _no2_functional_input(driver: str = "pytorch"):
     )
     initial_state, layout = potential_initial_guess(initial_charges, inputs)
     settings = setup_anderson_solver_settings(effective_config, positions.dtype)
-    outcome = _solve_map_anderson(
+    outcome = solve_common(
         initial_state,
         settings,
         lambda value: potential_map(value, inputs, layout),
@@ -565,6 +572,7 @@ def _no2_functional_input(driver: str = "pytorch"):
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        root_x=outcome.root_x,
     )
     # The map's selected state is the solver state. Public Result.potential is
     # deliberately not used here: it is evaluated after this state is mapped.
@@ -603,7 +611,7 @@ def _functional_solve_at(
             map_trace.append(_map_trace_record(value, result, len(map_trace)))
         return result
 
-    outcome = _solve_map_anderson(
+    outcome = solve_common(
         packed,
         settings,
         map_fn,
@@ -621,6 +629,7 @@ def _functional_solve_at(
         outcome.residual,
         outcome.trajectory_status,
         outcome.damping_state,
+        root_x=outcome.root_x,
     )
     return outcome, inputs, layout, finalized
 
@@ -659,7 +668,7 @@ def _prepare_functional_at(
         matrices,
     )
     assert route.kind == "functional"
-    config = replace(calculator.opts.scf, mixer=route.effective_mixer)
+    config = calculator.opts.scf
     if maxiter is not None:
         config = replace(config, maxiter=maxiter)
     if tolerance is not None:
@@ -936,7 +945,7 @@ def _fixed_n_anderson_at(
             current,
             selected.mapped_x,
             mixer_state,
-            settings,
+            settings.method(),
             step=1,
             damp=settings.damp,
         )
@@ -1021,7 +1030,7 @@ def _fixed_n_anderson_at(
                 current,
                 selected.mapped_x,
                 mixer_state,
-                settings,
+                settings.method(),
                 step=step,
                 transition_active=torch.ones(
                     (), dtype=torch.bool, device=current.device
@@ -1509,10 +1518,7 @@ def test_no2_gfn2_frozen_spectral_density_third_order_matches_fd(
         matrices,
     )
     assert route.kind == "functional"
-    effective_config = replace(
-        model_system.config.scf,
-        mixer=route.effective_mixer,
-    )
+    effective_config = model_system.config.scf
 
     # SCFInputs intentionally does not retain ConfigSCF. Check that deriving
     # its Fermi settings from the System config reproduces the prepared input.
@@ -4015,12 +4021,12 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
     result_a = case_a.singlepoint(
         positions.clone(), reference_system.charge, reference_system.spin, field
     )
-    # Case B changes only mixer/strict routing after historical Case A is done.
+    # Case B changes only the explicit strategy after historical Case A is done.
     field_b = torch.zeros(3, **_DD, requires_grad=True)
     case_b = Calculator(
         reference_system.numbers,
         GFN2_XTB,
-        opts={**options, "mixer": "broyden", "strict": False},
+        opts={**options, "strategy": "broyden"},
         interaction=[ElectricField(field_b)],
         device=torch.device("cpu"),
         dtype=torch.float64,
@@ -4033,7 +4039,7 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
         case_b.integrals,
     )
     assert route_b.kind == "functional"
-    assert route_b.effective_mixer == case_a.opts.scf.mixer
+    assert route_b.strategy_label == "broyden"
     result_b = case_b.system.singlepoint(
         positions.clone(), reference_system.charge, reference_system.spin, field
     )
@@ -4069,7 +4075,7 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
     hyper_b_calculator = Calculator(
         reference_system.numbers,
         GFN2_XTB,
-        opts={**options, "mixer": "broyden", "strict": False},
+        opts={**options, "strategy": "broyden"},
         interaction=[ElectricField(hyper_b_field)],
         device=torch.device("cpu"),
         dtype=torch.float64,
@@ -4078,7 +4084,7 @@ def test_no2_gfn2_case_a_and_production_route_agree() -> None:
     pol_b_calculator = Calculator(
         reference_system.numbers,
         GFN2_XTB,
-        opts={**options, "mixer": "broyden", "strict": False},
+        opts={**options, "strategy": "broyden"},
         interaction=[ElectricField(pol_b_field)],
         device=torch.device("cpu"),
         dtype=torch.float64,

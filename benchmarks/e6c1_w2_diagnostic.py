@@ -392,7 +392,6 @@ def main() -> None:
         scf_mode=labels.SCF_MODE_FULL,
         maxiter=args.maxiter,
         force_convergence=False,
-        f_atol=1.0e-8,
         x_atol=1.0e-8,
         fermi_etemp=300.0,
     )

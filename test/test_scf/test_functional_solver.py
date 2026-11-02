@@ -30,10 +30,12 @@ from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
     SCFCharges,
     SCFMapResult,
-    SCFSpectralResult,
     SCFPotential,
     SCFSolverSettings,
+    SCFSpectralResult,
     setup_simple_solver_settings,
+    setup_solver_settings,
+    simple_mix,
     solve_scf_simple,
 )
 from dxtb._src.scf.functional.solver import _solve_map
@@ -182,16 +184,31 @@ def test_simple_solver_budget_matrix_matches_legacy(
 
 
 def test_simple_solver_initial_mix_is_not_convergence_tested() -> None:
-    """A loose tolerance is first checked after the initial mixer step."""
-    comparison = _compare_legacy_simple(
-        maxiter=4,
-        mix_guess=True,
-        x_atol=1.0e6,
-        x_atol_max=1.0e6,
+    """The initial raw map seeds mix_guess but is not a root candidate."""
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            "mixer": labels.MIXER_LINEAR,
+            "maxiter": 4,
+            "mix_guess": True,
+            "x_atol": 1.0e6,
+            "x_atol_max": 1.0e6,
+        },
     )
-    assert len(comparison.calls) == 2
-    assert int(comparison.actual.iterations) == 2
-    assert comparison.actual.converged.item() is True
+    result = solve_scf_simple(
+        case.x,
+        case.inputs,
+        SCFSolverSettings(4, True, 0.2, 1.0e6, 1.0e6),
+        record_trace=True,
+    )
+    assert result.trace is not None
+    expected_first_iterate = simple_mix(
+        case.x, result.trace.raw_mapped[0], case.x.new_tensor(0.2)
+    )
+    torch.testing.assert_close(
+        result.trace.map_inputs[1], expected_first_iterate
+    )
+    assert int(result.iterations) > 1
 
 
 def test_simple_solver_nonconverged_result_uses_last_raw_map() -> None:
@@ -332,30 +349,32 @@ def test_simple_solver_tolerance_resolution_matches_legacy(
     assert config.x_atol_max == 1.0e-11
 
 
-def test_simple_solver_rejects_unsupported_mixer_and_resolves_damping() -> None:
-    """Simple setup refuses other mixers and freezes dynamic damping."""
+def test_common_solver_settings_resolve_independent_of_mixer() -> None:
+    """Controller settings are shared and independent of method choice."""
+    from dxtb.scf import strategy_preset
+
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
-    with pytest.raises(NotImplementedError, match="simple linear mixing"):
-        setup_simple_solver_settings(
-            replace(case.system.config.scf, mixer=labels.MIXER_ANDERSON),
-            torch.float64,
-        )
-    with pytest.raises(NotImplementedError, match="simple linear mixing"):
-        setup_simple_solver_settings(
-            replace(case.system.config.scf, mixer=labels.MIXER_BROYDEN),
-            torch.float64,
-        )
-    dynamic = setup_simple_solver_settings(
+    linear = setup_solver_settings(case.system.config.scf, torch.float64)
+    anderson = setup_solver_settings(
+        replace(case.system.config.scf, strategy=strategy_preset("anderson")),
+        torch.float64,
+    )
+    broyden = setup_solver_settings(
+        replace(case.system.config.scf, strategy=strategy_preset("broyden")),
+        torch.float64,
+    )
+    assert linear.maxiter == anderson.maxiter == broyden.maxiter
+    dynamic = setup_solver_settings(
         replace(
             case.system.config.scf,
-            mixer=labels.MIXER_LINEAR,
+            strategy=strategy_preset("linear"),
             damp_dynamic=True,
         ),
         torch.float64,
     )
     assert dynamic.dynamic_damping.enabled
     with pytest.raises(ValueError, match="maxiter >= 0"):
-        setup_simple_solver_settings(
+        setup_solver_settings(
             replace(case.system.config.scf, maxiter=-1), torch.float64
         )
 

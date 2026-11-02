@@ -28,13 +28,19 @@ from dxtb._src.constants import defaults, labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import get_default_dtype
 from dxtb.config import Config as Cfg
+from dxtb.scf import (
+    AndersonMethod,
+    SCFConvergenceProfile,
+    SCFDifferentiation,
+    SCFRepresentation,
+)
 
 from ..conftest import DEVICE
 
 
 def test_default() -> None:
     cfg = Cfg.create()
-    assert cfg.strict == defaults.STRICT
+    assert not hasattr(cfg, "strict")
     assert cfg.exclude == tuple(defaults.EXCLUDE)
     assert cfg.method == defaults.METHOD
     assert cfg.grad == False
@@ -46,13 +52,17 @@ def test_default() -> None:
     assert cfg.anomaly == False
 
     assert cfg.scf.maxiter == defaults.MAXITER
-    assert cfg.scf.mixer == defaults.MIXER
+    stage = cfg.scf.strategy.stages[0]
+    assert isinstance(stage.method, AndersonMethod)
+    assert stage.representation is SCFRepresentation.POTENTIAL
     assert cfg.scf.damp == defaults.DAMP
     assert cfg.scf.guess == defaults.GUESS
-    assert cfg.scf.scf_mode == defaults.SCF_MODE
-    assert cfg.scf.scp_mode == defaults.SCP_MODE
+    assert cfg.scf.differentiation is SCFDifferentiation.UNROLLED
+    assert cfg.scf.convergence is SCFConvergenceProfile.STANDARD
+    assert not hasattr(cfg.scf, "mixer")
+    assert not hasattr(cfg.scf, "scp_mode")
+    assert not hasattr(cfg.scf, "f_atol")
     assert cfg.scf.x_atol == defaults.X_ATOL
-    assert cfg.scf.f_atol == defaults.F_ATOL
     assert cfg.scf.force_convergence == False
 
     assert cfg.scf.fermi.etemp == defaults.FERMI_ETEMP
@@ -125,7 +135,9 @@ def test_fermi_diff_order_value_fail() -> None:
 
 
 def test_gfn2_with_pytorch_drivers() -> None:
-    cfg = Cfg.create(method=labels.GFN2_XTB, int_driver=labels.INTDRIVER_PYTORCH)
+    cfg = Cfg.create(
+        method=labels.GFN2_XTB, int_driver=labels.INTDRIVER_PYTORCH
+    )
     assert cfg.ints.driver == labels.INTDRIVER_PYTORCH
 
 

@@ -248,9 +248,12 @@ def test_default_full_singlepoint_uses_functional_route(
     system = Model(par=ParamModule(GFN1_XTB, dtype=positions.dtype)).setup(
         torch.tensor([1, 1])
     )
-    assert system.config.scf.scf_mode == labels.SCF_MODE_FULL
-    assert system.config.scf.scp_mode == labels.SCP_MODE_POTENTIAL
-    assert system.config.scf.mixer == labels.MIXER_BROYDEN
+    from dxtb.scf import AndersonMethod, SCFDifferentiation, SCFRepresentation
+
+    scf_config = system.config.scf
+    assert scf_config.differentiation is SCFDifferentiation.UNROLLED
+    assert scf_config.initial_representation is SCFRepresentation.POTENTIAL
+    assert isinstance(scf_config.strategy.stages[0].method, AndersonMethod)
     assert system.config.scf.fermi.etemp == 300.0
 
     def unexpected(*args: object, **kwargs: object) -> None:
@@ -269,8 +272,7 @@ def test_default_full_singlepoint_uses_functional_route(
     monkeypatch.setattr(core_module.scf, "solve_with_core_index", capture_solve)
     OutputHandler.clear_warnings()
     result = singlepoint(system, positions)
-    assert len(OutputHandler.warnings) == 1
-    assert "Using Anderson mixer instead" in OutputHandler.warnings[0][0]
+    assert OutputHandler.warnings == []
     functional = captured["result"]
     assert isinstance(functional, FunctionalCoreResult)
     assert result.charges is not None
@@ -372,39 +374,21 @@ def test_production_converged_route_executes_only_physical_maps(
     """Eager production stops mapping after convergence, unlike fixed trips."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional import anderson
     from dxtb._src.scf.functional import map as functional_map
-    from dxtb._src.scf.unrolling.base import BaseTSCF
+    from dxtb._src.scf.functional import problem as functional_problem
 
     options = {
         "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_BROYDEN,
+        "mixer": labels.MIXER_ANDERSON,
         "fermi_etemp": 300.0,
         "maxiter": 100,
         "verbosity": 0,
     }
-    legacy_case = _prepare_case(
-        method, scf_options=options, setup_functional=False
-    )
-    legacy_spectra = 0
-    original_diagonalize = BaseTSCF.diagonalize
-
-    def count_legacy_spectrum(self, hamiltonian):
-        nonlocal legacy_spectra
-        legacy_spectra += 1
-        return original_diagonalize(self, hamiltonian)
-
-    monkeypatch.setattr(BaseTSCF, "diagonalize", count_legacy_spectrum)
-    legacy_result = legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_raw_maps = legacy_case.engine._data.iter
-    assert legacy_result["iterations"] == legacy_raw_maps
-    assert legacy_spectra == legacy_raw_maps + 1
-
     production_case = _prepare_case(
         method, scf_options=options, setup_functional=False
     )
     functional_counts = {"raw_maps": 0, "spectra": 0}
-    original_map = anderson.potential_map
+    original_map = functional_problem.potential_map
     original_evaluate = functional_map.evaluate_hamiltonian
 
     def count_functional_map(*args, **kwargs):
@@ -415,7 +399,9 @@ def test_production_converged_route_executes_only_physical_maps(
         functional_counts["spectra"] += 1
         return original_evaluate(*args, **kwargs)
 
-    monkeypatch.setattr(anderson, "potential_map", count_functional_map)
+    monkeypatch.setattr(
+        functional_problem, "potential_map", count_functional_map
+    )
     monkeypatch.setattr(
         functional_map, "evaluate_hamiltonian", count_functional_spectrum
     )
@@ -433,7 +419,6 @@ def test_production_converged_route_executes_only_physical_maps(
         assert code.device == production_case.positions.device
         assert code.shape == torch.Size([])
         assert code.item() == 0
-    assert production_result.iterations.item() == legacy_raw_maps
     assert functional_counts["raw_maps"] == production_result.iterations.item()
     assert functional_counts["spectra"] == functional_counts["raw_maps"] + 1
 
@@ -492,12 +477,15 @@ def test_production_singlepoint_matches_legacy_full(
     assert torch.count_nonzero(actual.status.final_failure) == 0
     for name in (
         "density",
-        "coefficients",
         "emo",
         "occupation",
         "hamiltonian",
     ):
         torch.testing.assert_close(getattr(actual, name), expected[name])
+    torch.testing.assert_close(
+        actual.coefficients @ actual.coefficients.mT,
+        expected["coefficients"] @ expected["coefficients"].mT,
+    )
     torch.testing.assert_close(actual.scf, expected["energy"])
     torch.testing.assert_close(actual.fenergy, expected["fenergy"])
     assert actual.charges is not None and actual.potential is not None
@@ -610,16 +598,14 @@ def test_production_positive_budget_nonconvergence_policy(
 
 @pytest.mark.parametrize(
     "mixer",
-    [labels.MIXER_LINEAR, labels.MIXER_BROYDEN],
-    ids=["linear", "broyden"],
+    [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
+    ids=["linear", "anderson"],
 )
-def test_production_negative_temperature_preserves_legacy_results(
+def test_production_negative_temperature_is_rejected(
     mixer: int,
 ) -> None:
-    """Negative temperature keeps legacy low-T results and warning ordering."""
+    """Negative electronic temperature fails before SCF iteration."""
     from test.test_scf.test_functional_map import _prepare_case
-
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 
     case = _prepare_case(
         GFN1_XTB,
@@ -631,30 +617,11 @@ def test_production_negative_temperature_preserves_legacy_results(
         setup_functional=False,
     )
     OutputHandler.clear_warnings()
-    engine = SelfConsistentFieldFull(
-        case.interactions,
-        case.occupation,
-        case.n0,
-        numbers=case.system.numbers,
-        ihelp=case.system.ihelp,
-        cache=case.interaction_data,
-        integrals=case.integrals,
-        config=case.system.config.scf,
-        nel=case.nel,
-    )
-    expected = engine(case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
-
-    OutputHandler.clear_warnings()
-    actual = singlepoint(case.system, case.positions)
-    assert OutputHandler.warnings == legacy_warnings
-    torch.testing.assert_close(actual.scf, expected["energy"])
-    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
-    torch.testing.assert_close(actual.density, expected["density"])
-    torch.testing.assert_close(actual.hamiltonian, expected["hamiltonian"])
-    assert actual.converged is None
-    assert actual.residual is None
-    assert actual.status is None
+    with pytest.raises(
+        ValueError, match="Electronic Temperature must be non-negative"
+    ):
+        singlepoint(case.system, case.positions)
+    assert OutputHandler.warnings == []
 
 
 @pytest.mark.parametrize(
@@ -693,10 +660,11 @@ def test_production_dynamic_damping_matches_legacy(
     )
     OutputHandler.clear_warnings()
     expected = case.engine(case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
     OutputHandler.clear_warnings()
     actual = singlepoint(case.system, case.positions)
-    assert OutputHandler.warnings == legacy_warnings
+    assert len(OutputHandler.warnings) == 1
+    assert OutputHandler.warnings[0][1].__name__ == "SCFConvergenceWarning"
+    assert "strategy" in OutputHandler.warnings[0][0]
     assert actual.iterations.item() == expected["iterations"]
     for name in (
         "density",
@@ -717,76 +685,45 @@ def test_production_dynamic_damping_matches_legacy(
     torch.testing.assert_close(actual.fenergy, expected["fenergy"])
 
 
-def test_production_gfn2_default_broyden_route_matches_legacy() -> None:
-    """GFN2 default potential/Broyden/300 K route matches legacy outputs."""
-    from test.test_scf.test_functional_map import _prepare_case
+def test_production_gfn2_default_broyden_route_is_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GFN2 potential/Broyden runs natively without Anderson substitution."""
+    import dxtb._src.scf.unrolling as legacy_unrolling
+    from dxtb.config import Config
 
-    from dxtb._src.scf.unrolling import SelfConsistentFieldFull
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    config = Config.create(
+        method=labels.GFN2_XTB,
+        strategy="broyden",
+        differentiation="unrolled",
+        maxiter=2,
+        int_driver=labels.INTDRIVER_PYTORCH,
+        int_level=labels.INTLEVEL_DIPOLE,
+    )
+    system = Model(
+        par=ParamModule(GFN2_XTB, dtype=positions.dtype), config=config
+    ).setup(torch.tensor([1, 1]))
 
-    options = {
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_BROYDEN,
-        "fermi_etemp": 300.0,
-        "maxiter": 2,
-    }
-    legacy_case = _prepare_case(
-        GFN2_XTB,
-        scf_options=options,
-        setup_functional=False,
-    )
-    production_case = _prepare_case(
-        GFN2_XTB,
-        scf_options=options,
-        setup_functional=False,
-    )
-    OutputHandler.clear_warnings()
-    legacy_engine = SelfConsistentFieldFull(
-        legacy_case.interactions,
-        legacy_case.occupation,
-        legacy_case.n0,
-        numbers=legacy_case.system.numbers,
-        ihelp=legacy_case.system.ihelp,
-        cache=legacy_case.interaction_data,
-        integrals=legacy_case.integrals,
-        config=legacy_case.system.config.scf,
-        nel=legacy_case.nel,
-    )
-    expected = legacy_engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
-    OutputHandler.clear_warnings()
-    actual = singlepoint(production_case.system, production_case.positions)
-    assert OutputHandler.warnings == legacy_warnings
-    assert (
-        sum(
-            "Using Anderson mixer instead" in warning[0]
-            for warning in legacy_warnings
+    def unexpected_legacy_solver(*args, **kwargs):
+        raise AssertionError(
+            "eligible FULL Broyden must use the functional route"
         )
-        == 1
+
+    monkeypatch.setattr(
+        legacy_unrolling, "SelfConsistentFieldFull", unexpected_legacy_solver
     )
-    for name in ("density", "emo", "occupation", "hamiltonian"):
-        torch.testing.assert_close(getattr(actual, name), expected[name])
-    torch.testing.assert_close(actual.scf, expected["energy"])
-    torch.testing.assert_close(actual.fenergy, expected["fenergy"])
+    OutputHandler.clear_warnings()
+    actual = singlepoint(system, positions)
+    assert not any(
+        "Using Anderson mixer instead" in warning[0]
+        for warning in OutputHandler.warnings
+    )
     assert actual.charges is not None and actual.potential is not None
-    for legacy_name, result_name in (
-        ("mono", "mono"),
-        ("dipole", "dipole"),
-        ("quad", "quadrupole"),
-    ):
-        expected_charge = getattr(expected["charges"], legacy_name, None)
-        expected_potential = getattr(expected["potential"], legacy_name, None)
-        actual_charge = getattr(actual.charges, result_name)
-        actual_potential = getattr(actual.potential, result_name)
-        if expected_charge is None:
-            assert actual_charge is None
-        else:
-            assert actual_charge is not None
-            torch.testing.assert_close(actual_charge, expected_charge)
-        if expected_potential is None:
-            assert actual_potential is None
-        else:
-            assert actual_potential is not None
-            torch.testing.assert_close(actual_potential, expected_potential)
+    assert actual.density is not None and torch.isfinite(actual.density).all()
+    assert actual.scf is not None and torch.isfinite(actual.scf).all()
 
 
 def test_core_singlepoint_supports_independent_position_gradients() -> None:

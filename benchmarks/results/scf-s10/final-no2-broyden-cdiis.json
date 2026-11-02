@@ -1,0 +1,80 @@
+{
+  "source_sha": "4facb57b32a65e42c8ce64249ff031f7d2121e85",
+  "source_tree_dirty": false,
+  "python": "3.14.8",
+  "torch": "2.14.1+cpu",
+  "platform": "Linux-6.4.0-150600.23.103-default-x86_64-with-glibc2.38",
+  "machine": "x86_64",
+  "dtype": "torch.float64",
+  "threads": 1,
+  "case": "NO2",
+  "model": "gfn2",
+  "charge": 0.0,
+  "spin": 1.0,
+  "stretch": null,
+  "issue187_geometry": false,
+  "initial": "normal",
+  "strategy": "broyden-cdiis",
+  "capacity": 6,
+  "switch_l2": 0.01,
+  "iterations": 14,
+  "physical_maps": 8,
+  "certified": true,
+  "residual_l2": 5.167713567993859e-09,
+  "residual_max": 2.946056065766811e-09,
+  "energy": -10.953075803272053,
+  "wall_seconds": 0.17074523936025798,
+  "instrumented_wall_seconds": 0.18809271906502545,
+  "physical_map_seconds": 0.056734748650342226,
+  "map_diagnostic_seconds_removed": 0.017347479704767466,
+  "physical_map_trajectory": [
+    {
+      "energy": -10.864671891645916,
+      "fixed_point_l2": 0.39348420426990915,
+      "fixed_point_max": 0.19694794466523952
+    },
+    {
+      "energy": -10.786488182532164,
+      "fixed_point_l2": 0.6017883203113813,
+      "fixed_point_max": 0.2945879977582744
+    },
+    {
+      "energy": -10.925750339386934,
+      "fixed_point_l2": 0.23301184513299097,
+      "fixed_point_max": 0.10918903566010735
+    },
+    {
+      "energy": -10.94673987990792,
+      "fixed_point_l2": 0.11133818976681324,
+      "fixed_point_max": 0.05101677024488527
+    },
+    {
+      "energy": -10.951490211954777,
+      "fixed_point_l2": 0.05572730712738936,
+      "fixed_point_max": 0.025196681768133722
+    },
+    {
+      "energy": -10.95267578830574,
+      "fixed_point_l2": 0.028094209366297355,
+      "fixed_point_max": 0.01275526378954872
+    },
+    {
+      "energy": -10.95297477620478,
+      "fixed_point_l2": 0.01419043726396675,
+      "fixed_point_max": 0.006538671645375915
+    },
+    {
+      "energy": -10.95305028754073,
+      "fixed_point_l2": 0.007171254202571035,
+      "fixed_point_max": 0.00334956791198171
+    }
+  ],
+  "physical_maps_recorded": 8,
+  "coefficient_optimizer_seconds": 0,
+  "coefficient_optimizer_evaluations": 0,
+  "coefficient_optimization": null,
+  "stage_iterations": [
+    8,
+    6
+  ]
+}

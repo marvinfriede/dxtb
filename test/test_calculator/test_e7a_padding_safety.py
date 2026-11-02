@@ -21,7 +21,7 @@ from dxtb._src.calculators.canonical_padding import (
 )
 from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import Model
-from dxtb._src.scf.functional import solver as functional_solver
+from dxtb._src.scf.functional import energy as functional_energy
 from dxtb._src.scf.functional.padded import (
     _prepare_padded_interactions,
     evaluate_padded_systems,
@@ -227,7 +227,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
     positions = tuple(value.requires_grad_() for value in positions)
 
     trace_calls = 0
-    trace = functional_solver.fermi_free_energy_trace
+    trace = functional_energy.fermi_free_energy_trace
 
     def record_trace(*args, **kwargs):
         nonlocal trace_calls
@@ -235,7 +235,7 @@ def test_finite_temperature_trace_is_padding_safe_through_mixed_gfn1(
         return trace(*args, **kwargs)
 
     monkeypatch.setattr(
-        functional_solver, "fermi_free_energy_trace", record_trace
+        functional_energy, "fermi_free_energy_trace", record_trace
     )
 
     def mapped_energies(values):
@@ -707,3 +707,162 @@ def test_mixed_full_energy_third_derivative_has_both_lane_tangents(
         serial_energy, source, *source_direction_sets
     )
     torch.testing.assert_close(mapped_third, serial_third, atol=3e-5, rtol=3e-5)
+
+
+@pytest.mark.parametrize("method", [labels.GFN1_XTB, labels.GFN2_XTB])
+def test_broader_e7_padding_safety_audit_matrix(method: int) -> None:
+    """Comprehensive E7 audit across all primitives, adversarial padding, and 1st-3rd derivatives."""
+    from dxtb._src.calculators.padded_integrals import (
+        evaluate_padded_integrals,
+    )
+    from dxtb._src.scf.functional.padded import (
+        evaluate_padded_spectrum,
+        setup_padded_scf_inputs,
+    )
+
+    compositions = ((1, 1), (8, 1, 1))
+    systems, bucket, padded, source, positions, charges, spins = _build_systems(
+        method, compositions, maxiter=2, temperature=300.0
+    )
+    core0 = padded[0]
+    inactive_atoms = ~core0.validity.atoms
+    inactive_orbs = ~core0.validity.orbitals
+    assert bool(inactive_atoms.any()) and bool(inactive_orbs.any())
+
+    # Construct 3 adversarial padding coordinate patterns for lane 0:
+    # (a) zero-valued (0, 0, 0) -- coincident with active atom 0 at origin!
+    # (b) coincident with active atom 1 at (0, 0, 1.42)
+    # (c) noncontiguous displaced coordinates
+    pos_zero = positions[0].detach().clone()
+    pos_zero[inactive_atoms] = 0.0
+    pos_coincident = positions[0].detach().clone()
+    pos_coincident[inactive_atoms] = positions[0].detach()[1]
+    pos_displaced = positions[0].detach().clone()
+    pos_displaced[inactive_atoms] = torch.tensor(
+        [-42.0, 19.5, 88.0], dtype=DTYPE
+    )
+
+    ref_integrals = evaluate_padded_integrals(core0, pos_zero, charges[0])
+    ref_inputs = setup_padded_scf_inputs(
+        core0, ref_integrals, pos_zero, charges[0], spins[0]
+    )
+    ref_spec = evaluate_padded_spectrum(ref_inputs)
+
+    for adv_pos in (pos_zero, pos_coincident, pos_displaced):
+        adv_req = adv_pos.clone().requires_grad_(True)
+        ints = evaluate_padded_integrals(core0, adv_req, charges[0])
+        inp = setup_padded_scf_inputs(
+            core0, ints, adv_req, charges[0], spins[0]
+        )
+        spec = evaluate_padded_spectrum(inp)
+
+        # 1. Generalized overlap, inverse-sqrt factorization, orbital masks, occupations
+        assert bool(torch.isfinite(inp.integrals.overlap).all())
+        assert bool(torch.isfinite(inp.inverse_cholesky).all())
+        torch.testing.assert_close(
+            inp.integrals.overlap, ref_inputs.integrals.overlap
+        )
+        torch.testing.assert_close(
+            inp.inverse_cholesky, ref_inputs.inverse_cholesky
+        )
+        assert int( torch.count_nonzero(inp.n0[inactive_orbs])) == 0
+
+        # 2. Interactions: ES2, ES3, AES2, D4SC (CN + dispmat)
+        for entry, ref_entry in zip(
+            inp.interactions.entries, ref_inputs.interactions.entries
+        ):
+            assert entry.kind == ref_entry.kind
+            for name, tensor in entry.data:
+                ref_tensor = ref_entry.tensor(name)
+                assert bool(torch.isfinite(tensor).all())
+                torch.testing.assert_close(tensor, ref_tensor)
+                if tensor.numel() > 0 and tensor.requires_grad:
+                    (g_int,) = torch.autograd.grad(
+                        tensor.sum(), adv_req, retain_graph=True
+                    )
+                    assert bool(torch.isfinite(g_int).all())
+                    assert int(torch.count_nonzero(g_int[inactive_atoms])) == 0
+
+        # 3. Spectral transformations: density, coefficients, emo, charges
+        for attr in ("hamiltonian", "density", "emo", "Occupation" if False else "occupation", "charges"):
+            val = getattr(spec, attr)
+            ref_val = getattr(ref_spec, attr)
+            assert bool(torch.isfinite(val).all())
+            torch.testing.assert_close(val, ref_val)
+        assert int(torch.count_nonzero(spec.charges[inactive_orbs])) == 0
+        assert int(torch.count_nonzero(spec.density[inactive_orbs, :])) == 0
+        assert int(torch.count_nonzero(spec.density[:, inactive_orbs])) == 0
+
+    # 4. Full mapped evaluation: classical terms, potential assembly, residuals
+    adv_batch = (pos_coincident.requires_grad_(True), positions[1].clone().requires_grad_(True))
+    mapped, decoded = evaluate_padded_systems(
+        padded, bucket, adv_batch, charges, spins
+    )
+    assert mapped.residual is not None and bool(torch.isfinite(mapped.residual).all())
+    assert mapped.potential is not None and mapped.potential.mono is not None
+    assert bool(torch.isfinite(mapped.potential.mono).all())
+    assert int(torch.count_nonzero(mapped.potential.mono[0, inactive_orbs])) == 0
+    for _, cval in mapped.classical:
+        assert bool(torch.isfinite(cval).all())
+        assert int(torch.count_nonzero(cval[0, inactive_atoms])) == 0
+
+
+def test_mixed_valid_and_invalid_padded_lanes_isolation() -> None:
+    """An invalid electron-count lane in vmap does not contaminate valid lanes or derivatives."""
+    from tad_mctc.tree import stack
+    from dxtb._src.scf.functional.padded import (
+        decode_padded_result,
+        evaluate_padded_fixed_trip,
+    )
+
+    compositions = ((1, 1), (8, 1, 1))
+    systems, bucket, padded, source, positions, _, spins = _build_systems(
+        labels.GFN1_XTB, compositions, maxiter=2, temperature=300.0
+    )
+    # Lane 0 has an impossible negative charge (-20.0 -> 22 electrons in 4 orbitals),
+    # while Lane 1 is a valid neutral water molecule.
+    bad_charges = (
+        torch.tensor(-20.0, dtype=DTYPE),
+        torch.tensor(0.0, dtype=DTYPE),
+    )
+    stacked_core = stack(padded)
+
+    def run_vmap(pos_tuple):
+        return torch.func.vmap(
+            lambda core, pos, chrg, sp: evaluate_padded_fixed_trip(
+                core, pos, chrg, sp
+            )
+        )(
+            stacked_core,
+            torch.stack(pos_tuple),
+            torch.stack(bad_charges),
+            torch.stack(spins),
+        )
+
+    pos_req = tuple(p.clone().requires_grad_(True) for p in positions)
+    mapped = run_vmap(pos_req)
+    assert mapped.status is not None
+    # Lane 0 records a trajectory/final Fermi failure code; Lane 1 succeeds with 0
+    assert int(mapped.status.trajectory_failure[0]) != 0 or int(
+        mapped.status.final_failure[0]
+    ) != 0
+    assert int(mapped.status.trajectory_failure[1]) == 0
+    assert int(mapped.status.final_failure[1]) == 0
+
+    decoded_valid = decode_padded_result(
+        mapped, bucket, bucket.indices[1], lane_index=1
+    )
+    serial_valid = systems[1].singlepoint(
+        source[1], chrg=bad_charges[1], spin=spins[1]
+    )
+    torch.testing.assert_close(
+        decoded_valid.energy, serial_valid.energy, atol=3e-9, rtol=3e-9
+    )
+
+    # 1st and 2nd derivatives of valid lane 1 are finite and unaffected by invalid lane 0
+    grads = torch.autograd.grad(
+        decoded_valid.energy.sum(), pos_req, retain_graph=True
+    )
+    assert int(torch.count_nonzero(grads[0])) == 0
+    assert bool(torch.isfinite(grads[1]).all())
+

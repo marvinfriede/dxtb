@@ -25,8 +25,6 @@ import torch
 from tad_mctc.convert import symmetrize
 from torch.autograd.gradcheck import gradcheck
 
-from dxtb._src.exlibs.xitorch import LinearOperator
-from dxtb._src.exlibs.xitorch.linalg import symeig
 from dxtb._src.typing import Tensor
 
 from ..conftest import DEVICE
@@ -88,25 +86,23 @@ hamiltonian = torch.tensor(
 )
 
 
-def test_xtlsymeig() -> None:
+def test_torch_symeig() -> None:
     a = torch.rand(8, 8, dtype=torch.double, device=DEVICE)
     a.requires_grad_(True)
 
     def eigen_proxy(m: Tensor):
         m = symmetrize(m, force=True)
-        m_op = LinearOperator.m(m, is_hermitian=True)
-        return symeig(m_op)
+        return torch.linalg.eigh(m)
 
     assert gradcheck(eigen_proxy, a)
 
 
 @pytest.mark.xfail
-def test_xtlsymeig_degen() -> None:
+def test_torch_symeig_degen() -> None:
     hamiltonian.detach_().requires_grad_(True)
 
     def eigen_proxy(m: Tensor):
         m = symmetrize(m, force=True)
-        m_op = LinearOperator.m(m, is_hermitian=True)
-        return symeig(m_op, bck_options={"degen_rtol": 1e-1})
+        return torch.linalg.eigh(m)
 
     assert gradcheck(eigen_proxy, hamiltonian)

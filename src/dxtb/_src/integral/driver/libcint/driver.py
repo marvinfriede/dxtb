@@ -129,9 +129,9 @@ class LibcintBasisNode(Node):
         alphas, coeffs = self.create_libcint_cgtos()
         shells_by_element: dict[int, list[libcint.Shell]] = {}
         shell = 0
-        unique_numbers = self.unique.detach().cpu().tolist()
-        shell_counts = self.ushells_per_unique.detach().cpu().tolist()
-        angular = self.unique_angular.detach().cpu().tolist()
+        unique_numbers = [int(x.item()) for x in self.unique]
+        shell_counts = [int(x.item()) for x in self.ushells_per_unique]
+        angular = [int(x.item()) for x in self.unique_angular]
         for number, count in zip(unique_numbers, shell_counts):
             number = int(number)
             if int(count) == 0:

@@ -275,7 +275,10 @@ class SelfConsistentFieldFull(BaseTSCF):
                     slicers["orbital"] = [slice(0, i) for i in [norb_new]]
                     norb = norb_new
                     _norb = _norb_new
-                    if self.config.scp_mode == labels.SCP_MODE_FOCK:
+                    if (
+                        self.config._legacy_representation_code
+                        == labels.SCP_MODE_FOCK
+                    ):
                         mpdim = norb
                 if nsh > nsh_new:
                     slicers["shell"] = [slice(0, i) for i in [nsh_new]]

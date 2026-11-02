@@ -23,25 +23,27 @@ from dataclasses import replace
 import torch
 from torch.func import vmap
 
+from dxtb import GFN1_XTB, labels
 from dxtb._src.scf.functional import (
-    AndersonSettings,
     SCFCharges,
     SCFMapResult,
     SCFSolverSettings,
     SCFSpectralResult,
     anderson_mix,
 )
-from dxtb._src.scf.functional.anderson import (
-    _solve_map_anderson,
-    setup_anderson_solver_settings,
-)
+from dxtb._src.scf.functional.anderson import anderson_mix
+from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     _solve_map_control,
     setup_simple_solver_settings,
 )
-from dxtb import GFN1_XTB, labels
 
+from ._anderson_helpers import (
+    AndersonTestSettings,
+)
+from ._anderson_helpers import from_config as setup_anderson_solver_settings
+from ._anderson_helpers import solve_common as solve_common
 from .test_functional_map import _prepare_case
 
 
@@ -71,10 +73,7 @@ def _run_simple(
         x_atol=0.0,
         x_atol_max=0.0,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active, damp: (
-            old + (mapped - old) * damp,
-            None,
-        ),
+        method=LinearMethod(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -120,10 +119,7 @@ def test_dynamic_damping_switches_after_transition_for_next_step() -> None:
         x_atol=0.0,
         x_atol_max=0.0,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active, damp: (
-            old + (mapped - old) * damp,
-            None,
-        ),
+        method=LinearMethod(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -156,10 +152,7 @@ def test_mix_guess_does_not_switch_and_convergence_freezes_damping() -> None:
         x_atol=1.0,
         x_atol_max=1.0,
         map_fn=map_fn,
-        mix_fn=lambda old, mapped, state, step, active, damp: (
-            old + (mapped - old) * damp,
-            None,
-        ),
+        method=LinearMethod(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -195,7 +188,7 @@ def test_dynamic_damping_is_lane_local_under_vmap() -> None:
 
 def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
     """Mapped Anderson lanes switch ordinary damping independently."""
-    settings = AndersonSettings(
+    settings = AndersonTestSettings(
         maxiter=3,
         mix_guess=False,
         damp=0.2,
@@ -218,7 +211,7 @@ def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
         def map_fn(value: torch.Tensor) -> SCFMapResult:
             return _map_result(matrix @ value + offset)
 
-        outcome = _solve_map_anderson(initial, settings, map_fn)
+        outcome = solve_common(initial, settings, map_fn)
         return (
             outcome.map_result.mapped_x,
             outcome.iterations,
@@ -242,18 +235,36 @@ def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
 
 
 def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
-    """Both functional mixers freeze the configured dynamic factor."""
+    """Linear and Anderson stages freeze the configured dynamic factor."""
+    from dxtb.scf import (
+        LinearMethod,
+        SCFRepresentation,
+        SCFStage,
+        SCFStrategy,
+        strategy_preset,
+    )
+
     case = _prepare_case(GFN1_XTB)
-    config = replace(
+    linear = replace(
         case.system.config.scf,
-        mixer=labels.MIXER_LINEAR,
+        strategy=SCFStrategy(
+            (
+                SCFStage(
+                    LinearMethod(), representation=SCFRepresentation.POTENTIAL
+                ),
+            )
+        ),
         damp_dynamic=True,
         damp_dynamic_factor=0.73,
     )
-    simple = setup_simple_solver_settings(config, torch.float64)
-    anderson = setup_anderson_solver_settings(
-        replace(config, mixer=labels.MIXER_ANDERSON), torch.float64
+    anderson_config = replace(
+        case.system.config.scf,
+        strategy=strategy_preset("anderson"),
+        damp_dynamic=True,
+        damp_dynamic_factor=0.73,
     )
+    simple = setup_simple_solver_settings(linear, torch.float64)
+    anderson = setup_anderson_solver_settings(anderson_config, torch.float64)
     assert simple.dynamic_damping.enabled
     assert anderson.dynamic_damping.enabled
     assert simple.dynamic_damping.factor == 0.73
@@ -264,7 +275,7 @@ def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
 
 def test_anderson_warmup_keeps_damp_init_after_dynamic_switch() -> None:
     """Dynamic ordinary damping does not change Anderson warm-up damping."""
-    settings = AndersonSettings(
+    settings = AndersonTestSettings(
         maxiter=3,
         mix_guess=False,
         damp=0.25,
@@ -283,7 +294,7 @@ def test_anderson_warmup_keeps_damp_init_after_dynamic_switch() -> None:
     def map_fn(value: torch.Tensor) -> SCFMapResult:
         return _map_result(matrix @ value + offset)
 
-    outcome = _solve_map_anderson(initial, settings, map_fn)
+    outcome = solve_common(initial, settings, map_fn)
     # Two raw transition residuals are below 0.1 and switch ordinary damp.
     torch.testing.assert_close(
         outcome.damping_state.value, torch.tensor(0.8, dtype=torch.float64)
@@ -293,7 +304,7 @@ def test_anderson_warmup_keeps_damp_init_after_dynamic_switch() -> None:
 
 def test_anderson_warmup_uses_damp_init_not_runtime_damping() -> None:
     """Warm-up transitions retain damp_init after ordinary damping changes."""
-    settings = AndersonSettings(
+    settings = AndersonTestSettings(
         maxiter=3,
         mix_guess=False,
         damp=0.25,
@@ -306,9 +317,13 @@ def test_anderson_warmup_uses_damp_init_not_runtime_damping() -> None:
     )
     old = torch.zeros(2, dtype=torch.float64)
     mapped = torch.ones_like(old)
-    first, state = anderson_mix(old, mapped, None, settings, 1, damp=0.8)
+    first, state = anderson_mix(
+        old, mapped, None, settings.method(), 1, damp=0.8
+    )
     torch.testing.assert_close(first, torch.full_like(old, 0.1))
-    second, _ = anderson_mix(first, mapped, state, settings, 2, damp=0.8)
+    second, _ = anderson_mix(
+        first, mapped, state, settings.method(), 2, damp=0.8
+    )
     torch.testing.assert_close(
         second, first + (mapped - first) * settings.damp_init
     )

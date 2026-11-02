@@ -154,20 +154,17 @@ class Driver:
         io.OutputHandler.write(config.info(), v=5)
         io.OutputHandler.write_stdout("", v=5)
 
-        # The analytical IR, Raman and dipole calculations need the full SCF
-        # with the Anderson mixer. Broyden is not supported in full SCF mode.
+        # The IR, Raman and dipole calculations use the
+        # transform-compatible single-stage Anderson strategy.
         scf = config.scf
         if args.ir is True or args.raman is True or args.dipole is True:
+            from dxtb.scf import SCFDifferentiation, strategy_preset
+
             scf = replace(
                 scf,
-                scf_mode=labels.SCF_MODE_FULL,
-                mixer=labels.MIXER_ANDERSON,
+                differentiation=SCFDifferentiation.UNROLLED,
+                strategy=strategy_preset("anderson"),
             )
-        elif (
-            scf.scf_mode == labels.SCF_MODE_FULL
-            and scf.mixer == labels.MIXER_BROYDEN
-        ):
-            scf = replace(scf, mixer=labels.MIXER_ANDERSON)
         config = replace(config, scf=scf)
 
         # first tensor when using CUDA takes a long time to initialize...
@@ -351,7 +348,7 @@ class Driver:
 
         if args.dipole is True:
             timer.start("Dipole")
-            mu = calc.dipole_analytical(positions, chrg)
+            mu = calc.dipole(positions, chrg)
             timer.stop("Dipole")
             print("Dipole Moment\n", mu)
 

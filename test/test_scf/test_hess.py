@@ -40,7 +40,6 @@ opts = {
     "maxiter": 50,
     "scf_mode": labels.SCF_MODE_FULL,
     "scp_mode": labels.SCP_MODE_POTENTIAL,
-    "f_atol": 1.0e-12,
     "x_atol": 1.0e-12,
     "verbosity": 0,
 }

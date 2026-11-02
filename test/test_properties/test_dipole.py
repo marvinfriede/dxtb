@@ -46,7 +46,6 @@ opts = {
     "mixer": "anderson",
     "scf_mode": "full",
     "verbosity": 0,
-    "f_atol": 1.0e-10,
     "x_atol": 1.0e-10,
 }
 
@@ -127,11 +126,6 @@ def execute(
     num = tensor_to_numpy(calc.dipole_numerical(positions, charge))
     assert pytest.approx(npref, abs=atol, rel=rtol) == num
 
-    # analytical
-    dip0 = tensor_to_numpy(calc.dipole_analytical(positions, charge))
-    assert pytest.approx(npref, abs=atol, rel=rtol) == dip0
-    assert pytest.approx(num, abs=atol, rel=rtol) == dip0
-
     # Explicit field values remain differentiable without list mutation.
     field_vector.requires_grad_(True)
 
@@ -139,13 +133,11 @@ def execute(
     dip1 = tensor_to_numpy(calc.dipole(positions, charge, use_functorch=False))
     assert pytest.approx(npref, abs=atol, rel=rtol) == dip1
     assert pytest.approx(num, abs=atol, rel=rtol) == dip1
-    assert pytest.approx(dip0, abs=atol, rel=rtol) == dip1
 
     # jacrev of energy
     dip2 = tensor_to_numpy(calc.dipole(positions, charge, use_functorch=True))
     assert pytest.approx(npref, abs=atol, rel=rtol) == dip2
     assert pytest.approx(num, abs=atol, rel=rtol) == dip2
-    assert pytest.approx(dip0, abs=atol, rel=rtol) == dip2
     assert pytest.approx(dip1, abs=atol, rel=rtol) == dip2
 
 

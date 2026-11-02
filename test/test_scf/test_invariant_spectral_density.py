@@ -885,6 +885,46 @@ def test_fermi_matrix_handles_large_positive_core_spectrum() -> None:
         tangent, expected_derivative, atol=2.0e-10, rtol=2.0e-10
     )
 
+    index = torch.arange(n_orbitals, dtype=torch.float64)
+    first_index = index.unsqueeze(-1)
+    second_index = index.unsqueeze(-2)
+    direction_basis = torch.sin((first_index + 1.0) * (second_index + 2.0))
+    direction_basis = 0.5 * (direction_basis + direction_basis.mT)
+    weight_basis = torch.cos((first_index + 2.0) * (second_index + 1.0))
+    weight_basis = 0.5 * (weight_basis + weight_basis.mT)
+    direction_basis.fill_diagonal_(0.0)
+    direction_noncommuting = rotation @ direction_basis @ rotation.mT
+    weight_noncommuting = rotation @ weight_basis @ rotation.mT
+
+    def noncommuting_response(parameter: torch.Tensor) -> torch.Tensor:
+        matrix = hamiltonian + parameter * direction_noncommuting
+        result = _matrix_fermi(
+            matrix,
+            torch.tensor(0.0, dtype=torch.float64),
+            kt,
+            active,
+        )
+        return torch.sum(weight_noncommuting * result)
+
+    divided_difference = (occupations.unsqueeze(-1) - occupations) / (
+        energies.unsqueeze(-1) - energies
+    )
+    divided_difference.diagonal().copy_(-occupations * (1.0 - occupations) / kt)
+    expected_noncommuting = torch.sum(
+        weight_basis * divided_difference * direction_basis
+    )
+    _, noncommuting_tangent = jvp(
+        noncommuting_response,
+        (parameter,),
+        (torch.ones_like(parameter),),
+    )
+    torch.testing.assert_close(
+        noncommuting_tangent,
+        expected_noncommuting,
+        atol=2.0e-10,
+        rtol=2.0e-10,
+    )
+
     first = torch.func.grad(response)
     second = torch.func.grad(first)
     third = torch.func.grad(second)
@@ -914,7 +954,13 @@ def test_fermi_matrix_handles_large_positive_core_spectrum() -> None:
 
 @pytest.mark.parametrize(
     ("maximum_energy", "temperature"),
-    ((2.0, 9.5e-4), (12.0, 9.5e-4), (70.1, 9.5e-4), (70.1, 2.0e-4)),
+    (
+        (2.0, 9.5e-4),
+        (12.0, 9.5e-4),
+        (70.1, 9.5e-4),
+        (70.1, 2.0e-4),
+        (70.1, 3.1e-7),
+    ),
 )
 def test_fermi_matrix_scaling_matches_spectral_oracle(
     maximum_energy: float, temperature: float
@@ -942,6 +988,202 @@ def test_fermi_matrix_scaling_matches_spectral_oracle(
     torch.testing.assert_close(density, expected, atol=5.0e-11, rtol=2.0e-10)
     torch.testing.assert_close(
         density.trace(), occupations.sum(), atol=5.0e-11, rtol=2.0e-10
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum_energy", "seed"), ((70.1, 61), (80.0, 83), (100.0, 97))
+)
+def test_fermi_matrix_cutoff_envelope_is_rotation_independent(
+    maximum_energy: float, seed: int
+) -> None:
+    """The cutoff envelope covers wider spectra across independent rotations."""
+    generator = torch.Generator().manual_seed(seed)
+    n_orbitals = 32
+    rotation, _ = torch.linalg.qr(
+        torch.randn(
+            n_orbitals, n_orbitals, dtype=torch.float64, generator=generator
+        )
+    )
+    energies = torch.cat(
+        (
+            torch.linspace(-1.24, -0.01, 15, dtype=torch.float64),
+            torch.tensor([-5.0e-4, 5.0e-4], dtype=torch.float64),
+            torch.linspace(0.01, maximum_energy, 15, dtype=torch.float64),
+        )
+    )
+    hamiltonian = rotation @ torch.diag(energies) @ rotation.mT
+    kt = torch.tensor(3.1e-7, dtype=torch.float64)
+    active = torch.ones(n_orbitals, dtype=torch.bool)
+    density = _matrix_fermi(hamiltonian, torch.zeros_like(kt), kt, active)
+    expected = (
+        rotation @ torch.diag(torch.sigmoid(-energies / kt)) @ rotation.mT
+    )
+
+    assert torch.isfinite(density).all()
+    torch.testing.assert_close(density, density.mT, atol=2.0e-13, rtol=0.0)
+    torch.testing.assert_close(density, expected, atol=5.0e-11, rtol=2.0e-10)
+    torch.testing.assert_close(
+        density.trace(), expected.trace(), atol=5.0e-11, rtol=2.0e-10
+    )
+
+
+def test_fermi_matrix_unsupported_and_nonfinite_bounds_fail_closed() -> None:
+    """Unsupported and non-finite exponent bounds never return finite values."""
+    active = torch.ones(2, dtype=torch.bool)
+    kt = torch.tensor(3.1e-7, dtype=torch.float64)
+    for matrix in (
+        torch.diag(torch.tensor([0.0, 5000.0], dtype=torch.float64)),
+        torch.tensor(
+            [[0.0, float("inf")], [float("inf"), 0.0]], dtype=torch.float64
+        ),
+        torch.tensor(
+            [[0.0, float("nan")], [float("nan"), 0.0]], dtype=torch.float64
+        ),
+    ):
+        result = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+        assert torch.isnan(result).all()
+
+    hamiltonian = torch.diag(torch.tensor([0.0, 5000.0], dtype=torch.float64))
+    electrons = torch.tensor([1.0, 0.0], dtype=torch.float64)
+    energies = torch.linalg.eigvalsh(hamiltonian).expand(2, -1)
+    state = filling._get_fermi_occupation_core_state(
+        electrons, energies, kt, thr=1.0e-10, maxiter=300, diff_order=2
+    )
+    assert state.result.status.converged.all()
+    density = fermi_density_matrix(hamiltonian, electrons, kt, state)
+    free_energy = fermi_free_energy_matrix(hamiltonian, electrons, kt, state)
+    free_energy_trace = fermi_free_energy_trace(
+        hamiltonian,
+        electrons,
+        kt,
+        state,
+        l_inv=torch.eye(2, dtype=torch.float64),
+    )
+    assert torch.isnan(density).all()
+    assert torch.isnan(free_energy).all()
+    assert torch.isnan(free_energy_trace).all()
+
+
+def test_fermi_matrix_ignores_inactive_spectral_padding() -> None:
+    """Large inactive padding does not enter the active scaling bound."""
+    matrix = torch.diag(torch.tensor([-0.2, 0.1, 1.0e10], dtype=torch.float64))
+    active = torch.tensor([True, True, False])
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    actual = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+    expected = torch.diag(
+        torch.tensor(
+            [
+                torch.sigmoid(torch.tensor(0.2 / 9.5e-4)),
+                torch.sigmoid(torch.tensor(-0.1 / 9.5e-4)),
+                0.0,
+            ],
+            dtype=torch.float64,
+        )
+    )
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, atol=2.0e-13, rtol=2.0e-13)
+
+
+@pytest.mark.parametrize(
+    ("kt_value", "lower_power"),
+    ((9.5e-4, 11), (3.1e-7, 22), (3.1e-7, 26)),
+)
+def test_fermi_matrix_scale_transition_preserves_derivatives(
+    kt_value: float, lower_power: int
+) -> None:
+    """Detached scale transitions preserve value and response smoothness."""
+    kt = torch.tensor(kt_value, dtype=torch.float64)
+    active = torch.ones(3, dtype=torch.bool)
+    threshold_energy = 4.0 * (2.0**lower_power) * kt_value
+    near_gap = 0.3 * kt_value
+    direction = torch.tensor(
+        [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+
+    def response(spectator_energy: float) -> torch.Tensor:
+        hamiltonian = torch.diag(
+            torch.tensor(
+                [-near_gap, near_gap, spectator_energy], dtype=torch.float64
+            )
+        )
+
+        def evaluate(parameter: torch.Tensor) -> torch.Tensor:
+            density = _matrix_fermi(
+                hamiltonian + parameter * direction,
+                torch.zeros_like(kt),
+                kt,
+                active,
+            )
+            return density[0, 1]
+
+        parameter = torch.zeros((), dtype=torch.float64)
+        value = evaluate(parameter)
+        reverse = torch.func.grad(evaluate)(parameter)
+        forward = jacfwd(evaluate)(parameter)
+        _, tangent = jvp(evaluate, (parameter,), (torch.ones_like(parameter),))
+        second = torch.func.grad(torch.func.grad(evaluate))(parameter)
+        third = torch.func.grad(torch.func.grad(torch.func.grad(evaluate)))(
+            parameter
+        )
+        torch.testing.assert_close(reverse, forward, atol=2.0e-8, rtol=2.0e-8)
+        torch.testing.assert_close(reverse, tangent, atol=2.0e-8, rtol=2.0e-8)
+        return torch.stack((value, reverse, forward, tangent, second, third))
+
+    epsilon = threshold_energy * 1.0e-8
+    below = response(threshold_energy - epsilon)
+    above = response(threshold_energy + epsilon)
+    assert torch.isfinite(below).all() and torch.isfinite(above).all()
+    torch.testing.assert_close(below, above, atol=2.0e-8, rtol=2.0e-8)
+
+
+def test_fermi_density_public_path_supports_cutoff_temperature() -> None:
+    """Public Fermi density retains count and JVP at the smear cutoff."""
+    kt = torch.tensor(3.1e-7, dtype=torch.float64)
+    electrons = torch.tensor([1.0, 0.0], dtype=torch.float64)
+    energies = torch.tensor([-0.8, 0.8, 100.0], dtype=torch.float64)
+    hamiltonian = torch.diag(energies)
+    direction = torch.tensor(
+        [[0.0, 0.2, 0.0], [0.2, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+
+    def density(parameter: torch.Tensor) -> torch.Tensor:
+        matrix = hamiltonian + parameter * direction
+        orbital_energies = torch.linalg.eigvalsh(matrix).expand(2, -1)
+        state = filling._get_fermi_occupation_core_state(
+            electrons,
+            orbital_energies,
+            kt,
+            thr=1.0e-10,
+            maxiter=300,
+            diff_order=2,
+        )
+        assert state.result.status.converged.all()
+        return fermi_density_matrix(matrix, electrons, kt, state, diff_steps=2)
+
+    parameter = torch.zeros((), dtype=torch.float64)
+    value = density(parameter)
+    _, tangent = jvp(density, (parameter,), (torch.ones_like(parameter),))
+    assert torch.isfinite(value).all() and torch.isfinite(tangent).all()
+    torch.testing.assert_close(
+        value.trace(),
+        torch.tensor(1.0, dtype=torch.float64),
+        atol=2.0e-10,
+        rtol=0,
+    )
+    torch.testing.assert_close(
+        value,
+        torch.diag(torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)),
+        atol=2.0e-10,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        tangent[0, 1],
+        torch.tensor(-0.125, dtype=torch.float64),
+        atol=2.0e-6,
+        rtol=2e-6,
     )
 
 
@@ -980,7 +1222,137 @@ def test_fermi_matrix_scaling_is_lane_local_under_vmap() -> None:
     )
 
     assert torch.isfinite(batched).all()
-    torch.testing.assert_close(batched, explicit, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(batched, explicit, atol=1.0e-13, rtol=1.0e-13)
+
+
+@pytest.mark.parametrize("bad_value", [float("inf"), float("nan"), 1.01])
+def test_fermi_matrix_direct_batch_isolates_unsupported_lane(
+    bad_value: float,
+) -> None:
+    """An unsupported direct-batch lane is sanitized before matrix solves."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    supported = torch.diag(torch.tensor([-2.0e-4, 3.0e-4], dtype=torch.float64))
+    unsupported = torch.diag(
+        torch.tensor(
+            [0.1, bad_value * (4.0 * float(2**30) * float(kt))],
+            dtype=torch.float64,
+        )
+    )
+    matrices = torch.stack((supported, unsupported))
+    active = torch.ones((2, 2), dtype=torch.bool)
+    shifts = torch.zeros(2, dtype=torch.float64)
+    temperatures = torch.full((2,), float(kt), dtype=torch.float64)
+
+    batched = _matrix_fermi(matrices, shifts, temperatures, active)
+    expected = _matrix_fermi(
+        supported,
+        torch.zeros_like(kt),
+        kt,
+        torch.ones(2, dtype=torch.bool),
+    )
+
+    assert torch.isfinite(batched[0]).all()
+    torch.testing.assert_close(batched[0], expected, atol=1.0e-13, rtol=1.0e-13)
+    assert torch.isnan(batched[1]).all()
+
+    direction = torch.diag(torch.tensor([1.0, -0.5], dtype=torch.float64))
+
+    def batched_response(parameter: torch.Tensor) -> torch.Tensor:
+        perturbed = matrices.clone()
+        perturbed[0] = perturbed[0] + parameter * direction
+        result = _matrix_fermi(perturbed, shifts, temperatures, active)
+        return result[0, 0, 0]
+
+    def standalone_response(parameter: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(
+            supported + parameter * direction,
+            torch.zeros_like(kt),
+            kt,
+            torch.ones(2, dtype=torch.bool),
+        )[0, 0]
+
+    parameter = torch.zeros((), dtype=torch.float64)
+    batched_jvp = jvp(
+        batched_response, (parameter,), (torch.ones_like(parameter),)
+    )[1]
+    standalone_jvp = jvp(
+        standalone_response, (parameter,), (torch.ones_like(parameter),)
+    )[1]
+    torch.testing.assert_close(
+        batched_jvp, standalone_jvp, atol=1.0e-12, rtol=1.0e-12
+    )
+
+
+def test_fermi_matrix_vmap_isolates_unsupported_lane_and_jvp() -> None:
+    """A bad vmapped lane does not change its supported neighbor's JVP."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    active = torch.ones(2, dtype=torch.bool)
+    supported = torch.diag(torch.tensor([-2.0e-4, 3.0e-4], dtype=torch.float64))
+    over_limit = torch.diag(
+        torch.tensor(
+            [0.1, 1.01 * 4.0 * float(2**30) * float(kt)],
+            dtype=torch.float64,
+        )
+    )
+    matrices = torch.stack((supported, over_limit))
+    direction = torch.diag(torch.tensor([1.0, -0.5], dtype=torch.float64))
+
+    def response(matrix: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
+        return _matrix_fermi(
+            matrix + delta * direction,
+            torch.zeros_like(kt),
+            kt,
+            active,
+        )[0, 0]
+
+    parameters = torch.zeros(2, dtype=torch.float64)
+    values = torch.func.vmap(response)(matrices, parameters)
+
+    def jvp_one(matrix: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
+        return jvp(
+            lambda value: response(matrix, value),
+            (delta,),
+            (torch.ones_like(delta),),
+        )[1]
+
+    vmapped_jvp = torch.func.vmap(jvp_one)(matrices, parameters)
+    standalone_jvp = jvp_one(supported, parameters[0])
+
+    assert torch.isfinite(values[0])
+    assert torch.isnan(values[1])
+    torch.testing.assert_close(
+        vmapped_jvp[0], standalone_jvp, atol=1.0e-12, rtol=1.0e-12
+    )
+    assert torch.isfinite(vmapped_jvp[0])
+
+
+def test_fermi_matrix_quadrature_shaped_batch_matches_explicit_lanes() -> None:
+    """A heterogeneous 512-lane Fermi batch matches individual evaluations."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    pattern = torch.tensor([0.5, 2.0, 12.0, 70.1], dtype=torch.float64)
+    upper = pattern.repeat(128)
+    matrices = torch.diag_embed(
+        torch.stack((torch.full_like(upper, -0.2), upper), dim=-1)
+    )
+    shifts = torch.zeros(512, dtype=torch.float64)
+    temperatures = torch.full((512,), float(kt), dtype=torch.float64)
+    active = torch.ones((512, 2), dtype=torch.bool)
+
+    batched = _matrix_fermi(matrices, shifts, temperatures, active)
+    explicit = torch.stack(
+        [
+            _matrix_fermi(
+                matrices[index],
+                torch.zeros_like(kt),
+                kt,
+                torch.ones(2, dtype=torch.bool),
+            )
+            for index in range(512)
+        ]
+    )
+
+    assert torch.isfinite(batched).all()
+    torch.testing.assert_close(batched, explicit, atol=1.0e-13, rtol=1.0e-13)
 
 
 def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:

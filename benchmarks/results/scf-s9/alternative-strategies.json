@@ -1,0 +1,174 @@
+[
+  {
+    "case": "no2-2000k",
+    "certified": true,
+    "electron_count_error": 0.0,
+    "energy": -10.952048699718482,
+    "fixed_point_l2": 2.3815862391154268e-08,
+    "fixed_point_max": 1.5510963971565594e-08,
+    "fractional_orbital_channels": 5,
+    "free_energy": -0.001301747736804633,
+    "iterations": 16,
+    "kt": 0.0063336231269112,
+    "maximum_fractional_hole": 0.9999889647190419,
+    "minimum_fractional_occupation": 1.1035280958124852e-05,
+    "nao": 12,
+    "newton_events": [],
+    "representation": "potential",
+    "smear": true,
+    "stage_iterations": [
+      16
+    ],
+    "state_dimension": 54,
+    "stationarity": 5.429982341120188e-09,
+    "strategy": "anderson",
+    "switch_count": 0,
+    "switch_threshold": null,
+    "wall_seconds": 1.1429178030230105
+  },
+  {
+    "case": "no2-2000k",
+    "certified": true,
+    "electron_count_error": -3.552713678800501e-15,
+    "energy": -10.95204869962727,
+    "fixed_point_l2": 3.2601513074129637e-09,
+    "fixed_point_max": 1.360916504489218e-09,
+    "fractional_orbital_channels": 5,
+    "free_energy": -0.0013017478280158343,
+    "iterations": 10,
+    "kt": 0.0063336231269112,
+    "maximum_fractional_hole": 0.999988964722814,
+    "minimum_fractional_occupation": 1.1035277186033834e-05,
+    "nao": 12,
+    "newton_events": [
+      {
+        "fixed_point_fallback": false,
+        "jvps": 6,
+        "linear_converged": true,
+        "linear_iterations": 3,
+        "linear_residual": 2.5070603837774514e-06,
+        "residual_norm": 0.008903592546012477,
+        "step_norm": 0.004971030366283607,
+        "step_scale": 1.0
+      },
+      {
+        "fixed_point_fallback": false,
+        "jvps": 7,
+        "linear_converged": true,
+        "linear_iterations": 4,
+        "linear_residual": 3.2616536307981053e-09,
+        "residual_norm": 9.852658721052515e-06,
+        "step_norm": 7.616558380768241e-06,
+        "step_scale": 1.0
+      },
+      {
+        "fixed_point_fallback": false,
+        "jvps": 7,
+        "linear_converged": true,
+        "linear_iterations": 4,
+        "linear_residual": 3.2616536307981053e-09,
+        "residual_norm": 9.852658721052515e-06,
+        "step_norm": 7.616558380768241e-06,
+        "step_scale": 1.0
+      }
+    ],
+    "representation": "potential",
+    "smear": true,
+    "stage_iterations": [
+      8,
+      2
+    ],
+    "state_dimension": 54,
+    "stationarity": 7.188689733692667e-10,
+    "strategy": "anderson-newton",
+    "switch_count": 1,
+    "switch_threshold": 0.01,
+    "wall_seconds": 4.9886306039988995
+  },
+  {
+    "case": "no2-2000k",
+    "certified": true,
+    "electron_count_error": -1.0658141036401503e-14,
+    "energy": -10.952048699687733,
+    "fixed_point_l2": 4.4812699944147464e-08,
+    "fixed_point_max": 2.1852696097113267e-08,
+    "fractional_orbital_channels": 5,
+    "free_energy": -0.0013017477675554307,
+    "iterations": 25,
+    "kt": 0.0063336231269112,
+    "maximum_fractional_hole": 0.9999889647273532,
+    "minimum_fractional_occupation": 1.1035272646784129e-05,
+    "nao": 12,
+    "newton_events": [],
+    "representation": "fock",
+    "smear": true,
+    "stage_iterations": [
+      25
+    ],
+    "state_dimension": 144,
+    "stationarity": 1.987026943506983e-08,
+    "strategy": "cdiis",
+    "switch_count": 0,
+    "switch_threshold": null,
+    "wall_seconds": 1.8015857900027186
+  },
+  {
+    "case": "no2-2000k",
+    "certified": true,
+    "electron_count_error": -7.105427357601002e-15,
+    "energy": -10.952048699632982,
+    "fixed_point_l2": 5.2659164449365335e-09,
+    "fixed_point_max": 1.362639223678741e-09,
+    "fractional_orbital_channels": 5,
+    "free_energy": -0.0013017478223047608,
+    "iterations": 9,
+    "kt": 0.0063336231269112,
+    "maximum_fractional_hole": 0.9999889647225478,
+    "minimum_fractional_occupation": 1.1035277452179738e-05,
+    "nao": 12,
+    "newton_events": [
+      {
+        "fixed_point_fallback": false,
+        "jvps": 7,
+        "linear_converged": true,
+        "linear_iterations": 4,
+        "linear_residual": 1.6875677057790656e-07,
+        "residual_norm": 0.009742064097376572,
+        "step_norm": 0.0039379682477834466,
+        "step_scale": 1.0
+      },
+      {
+        "fixed_point_fallback": false,
+        "jvps": 7,
+        "linear_converged": true,
+        "linear_iterations": 4,
+        "linear_residual": 5.265969410258836e-09,
+        "residual_norm": 1.0847659307885982e-05,
+        "step_norm": 8.758936957278382e-06,
+        "step_scale": 1.0
+      },
+      {
+        "fixed_point_fallback": false,
+        "jvps": 7,
+        "linear_converged": true,
+        "linear_iterations": 4,
+        "linear_residual": 5.265969410258836e-09,
+        "residual_norm": 1.0847659307885982e-05,
+        "step_norm": 8.758936957278382e-06,
+        "step_scale": 1.0
+      }
+    ],
+    "representation": "fock",
+    "smear": true,
+    "stage_iterations": [
+      7,
+      2
+    ],
+    "state_dimension": 144,
+    "stationarity": 8.285992271072235e-10,
+    "strategy": "cdiis-newton",
+    "switch_count": 1,
+    "switch_threshold": 0.01,
+    "wall_seconds": 5.339601953048259
+  }
+]

@@ -123,9 +123,9 @@ class GetPropertiesMixin(ABC):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        grad_mode: Literal[
-            "autograd", "backward", "functorch", "row"
-        ] = "autograd",
+        *,
+        create_graph: bool = False,
+        retain_graph: bool | None = None,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -135,17 +135,6 @@ class GetPropertiesMixin(ABC):
 
             f = -\dfrac{\partial E}{\partial R}
 
-        One can calculate the Jacobian either row-by-row using the standard
-        :func:`torch.autograd.grad` with unit vectors in the VJP or using
-        :mod:`torch.func`'s function transforms (e.g.,
-        :func:`torch.func.jacrev`).
-
-        .. note::
-
-            Using :mod:`torch.func`'s function transforms can apparently be only
-            used once. Hence, for example, the Hessian and the dipole
-            derivatives cannot be both calculated with functorch.
-
         Parameters
         ----------
         positions : Tensor
@@ -154,13 +143,12 @@ class GetPropertiesMixin(ABC):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        grad_mode: Literal, optional
-            Specify the mode for gradient calculation. Possible options are:
-
-            - "autograd" (default): Use PyTorch's :func:`torch.autograd.grad`.
-            - "backward": Use PyTorch's backward function.
-            - "functorch": Use functorch's `jacrev`.
-            - "row": Use PyTorch's autograd row-by-row (unnecessary here).
+        create_graph : bool, optional
+            If ``True``, graph of the derivative will be constructed, allowing
+            to compute higher order derivative products. Defaults to ``False``.
+        retain_graph : bool, optional
+            If ``True``, the graph used to compute the grad will be retained.
+            Defaults to ``False``.
 
         Returns
         -------
@@ -172,7 +160,8 @@ class GetPropertiesMixin(ABC):
             positions,
             chrg=chrg,
             spin=spin,
-            grad_mode=grad_mode,
+            create_graph=create_graph,
+            retain_graph=retain_graph,
             **kwargs,
         )
         assert isinstance(prop, Tensor)
