@@ -64,6 +64,7 @@ Example
 >>> energy = atoms.get_potential_energy()
 >>> forces = atoms.get_forces()
 """
+
 from __future__ import annotations
 
 import copy
@@ -221,7 +222,9 @@ def _resolve_device(device: str | torch.device | Any) -> torch.device:
     try:
         resolved = torch.device(device)
     except (RuntimeError, ValueError) as exc:
-        raise _ConfigurationError(f"Invalid PyTorch device '{device}'.") from exc
+        raise _ConfigurationError(
+            f"Invalid PyTorch device '{device}'."
+        ) from exc
 
     if resolved.type == "cpu":
         return resolved
@@ -422,7 +425,9 @@ def _resolve_damping(
         elif raw_2b is not None:
             d3_spec = False
         elif method is not None:
-            d3_spec = "zero_d4" if meta.name in ("d4", "d4s", "d4srev") else False
+            d3_spec = (
+                "zero_d4" if meta.name in ("d4", "d4s", "d4srev") else False
+            )
         else:
             d3_spec = False
 
@@ -474,7 +479,13 @@ def _resolve_parameters(
             damping_lookup: str | list[str] | None = "fermi"
 
         elif meta.name in ("d3", "d3s"):
-            if d2_name not in ("rational", "zero", "mzero", "optimizedpower", "cso"):
+            if d2_name not in (
+                "rational",
+                "zero",
+                "mzero",
+                "optimizedpower",
+                "cso",
+            ):
                 raise _ConfigurationError(
                     f"No {meta.label} functional parameters are available for "
                     f"two-body damping '{d2_name}'."
@@ -488,7 +499,8 @@ def _resolve_parameters(
 
         elif meta.name in ("d4", "d4s"):
             if d2_name != "rational" or (
-                raw_2b_hint is not None and raw_2b_hint not in ("rational", "bj")
+                raw_2b_hint is not None
+                and raw_2b_hint not in ("rational", "bj")
             ):
                 raise _ConfigurationError(
                     f"No {meta.label} functional parameters are available for "
@@ -643,9 +655,13 @@ def _resolve_qmodel(
 
     # For charge-independent models (D1, D2, D3, D3S), ignore the default "eeq"
     # setting, but reject excluded ("eeqbc") or explicitly non-default charge models.
-    if qmodel in (None, "eeq", "eeq2019", ChargeModelId.EEQ, 1) and not isinstance(
-        qmodel, bool
-    ):
+    if qmodel in (
+        None,
+        "eeq",
+        "eeq2019",
+        ChargeModelId.EEQ,
+        1,
+    ) and not isinstance(qmodel, bool):
         return None
 
     resolve_charge_model_id(qmodel, model=model_id)
@@ -727,10 +743,14 @@ def _resolve_external_charges(
         )
 
     raw_arr = np.asarray(atoms.arrays[cfg.charges_key])
-    if (
-        raw_arr.dtype.kind in ("b", "c", "O", "S", "U", "V")
-        or not np.issubdtype(raw_arr.dtype, np.number)
-    ):
+    if raw_arr.dtype.kind in (
+        "b",
+        "c",
+        "O",
+        "S",
+        "U",
+        "V",
+    ) or not np.issubdtype(raw_arr.dtype, np.number):
         raise ValueError(
             f"External atomic partial charges '{cfg.charges_key}' must have a "
             f"real numeric dtype, got '{raw_arr.dtype}'."
@@ -839,8 +859,7 @@ def _build_structure(
             )
 
         lattice_bohr = (
-            torch.as_tensor(raw_cell, dtype=cfg.dtype, device=cfg.device)
-            / Bohr
+            torch.as_tensor(raw_cell, dtype=cfg.dtype, device=cfg.device) / Bohr
         )
         periodic: torch.Tensor | None = torch.as_tensor(
             pbc_flags, dtype=torch.bool, device=cfg.device
@@ -955,17 +974,16 @@ def _calculate_energy_and_derivatives(
     }
 
     if grad_pos is not None:
-        forces_ev_ang = (-grad_pos.detach().cpu().numpy().astype(np.float64)) * (
-            Hartree / Bohr
-        )
+        forces_ev_ang = (
+            -grad_pos.detach().cpu().numpy().astype(np.float64)
+        ) * (Hartree / Bohr)
         results["forces"] = forces_ev_ang
 
     if virial_eh is not None:
         assert volume_ang3 is not None and volume_ang3 > 0.0
-        stress_3x3_ev_ang3 = (
-            virial_eh.detach().cpu().numpy().astype(np.float64)
-            * (Hartree / volume_ang3)
-        )
+        stress_3x3_ev_ang3 = virial_eh.detach().cpu().numpy().astype(
+            np.float64
+        ) * (Hartree / volume_ang3)
         results["stress"] = np.asarray(
             full_3x3_to_voigt_6_stress(stress_3x3_ev_ang3), dtype=np.float64
         )
@@ -1041,7 +1059,9 @@ class DFTD(Calculator):
         atoms: Atoms | None = None,
         method: str | None | object = _UNSET,
         model: str | int | DispersionModelId | object = _UNSET,
-        params_tweaks: Mapping[str, Any] | DampingParam | None | object = _UNSET,
+        params_tweaks: (
+            Mapping[str, Any] | DampingParam | None | object
+        ) = _UNSET,
         damping_hint: Mapping[str, Any] | Damping | None | object = _UNSET,
         realspace_cutoff: Mapping[str, float] | Cutoff | None | object = _UNSET,
         *,
@@ -1055,7 +1075,9 @@ class DFTD(Calculator):
     ) -> None:
         """Initialize the DFTD ASE calculator."""
         self._resolved_config: _ResolvedConfig | None = None
-        self._last_external_charges: np.ndarray[Any, np.dtype[np.float64]] | None = None
+        self._last_external_charges: (
+            np.ndarray[Any, np.dtype[np.float64]] | None
+        ) = None
         self.results: dict[str, Any] = {}
         self.implemented_properties = list(type(self).implemented_properties)
 
@@ -1263,9 +1285,8 @@ class DFTD(Calculator):
         """
         if properties is None:
             target_atoms = atoms if atoms is not None else self.atoms
-            if (
-                target_atoms is not None
-                and bool(np.asarray(target_atoms.get_pbc(), dtype=bool).all())
+            if target_atoms is not None and bool(
+                np.asarray(target_atoms.get_pbc(), dtype=bool).all()
             ):
                 requested_props = list(self.implemented_properties)
             else:

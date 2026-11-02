@@ -8,6 +8,7 @@
 """
 Tests for the native ASE calculator interface ``tad_dftd.ase``.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,7 +33,6 @@ from ase.stress import (  # type: ignore[import-untyped]
     full_3x3_to_voigt_6_stress,
 )
 from ase.units import Bohr, Hartree  # type: ignore[import-untyped]
-
 from tad_mctc import Structure
 from tad_mctc.data.structures import get_structure
 
@@ -86,8 +86,12 @@ def test_parameter_modes() -> None:
     assert cfg1 is not None
     assert isinstance(cfg1.damping.two, RationalTwoBody)
     assert isinstance(cfg1.damping.three, ZeroThreeBodyD4)
-    assert cfg1.param.s6 is not None and pytest.approx(float(cfg1.param.s6)) == 1.0
-    assert cfg1.param.s9 is not None and pytest.approx(float(cfg1.param.s9)) == 1.0
+    assert (
+        cfg1.param.s6 is not None and pytest.approx(float(cfg1.param.s6)) == 1.0
+    )
+    assert (
+        cfg1.param.s9 is not None and pytest.approx(float(cfg1.param.s9)) == 1.0
+    )
 
     # Mode 2: Explicit parameters without method
     calc2 = DFTD(
@@ -103,7 +107,10 @@ def test_parameter_modes() -> None:
     assert cfg2 is not None
     assert isinstance(cfg2.damping.two, RationalTwoBody)
     assert cfg2.damping.three is None
-    assert cfg2.param.s8 is not None and pytest.approx(float(cfg2.param.s8)) == 0.7875
+    assert (
+        cfg2.param.s8 is not None
+        and pytest.approx(float(cfg2.param.s8)) == 0.7875
+    )
 
     # Mode 3: Functional parameters with explicit overrides (including s9=0.0)
     calc3 = DFTD(
@@ -115,7 +122,9 @@ def test_parameter_modes() -> None:
     assert cfg3 is not None
     assert cfg3.damping.three is None
     assert cfg3.param.s9 is not None and float(cfg3.param.s9) == 0.0
-    assert cfg3.param.s8 is not None and pytest.approx(float(cfg3.param.s8)) == 0.5
+    assert (
+        cfg3.param.s8 is not None and pytest.approx(float(cfg3.param.s8)) == 0.5
+    )
 
     # Mode 4: Explicit damping choice
     calc4 = DFTD(
@@ -127,7 +136,10 @@ def test_parameter_modes() -> None:
     assert cfg4 is not None
     assert isinstance(cfg4.damping.two, ZeroTwoBody)
     assert cfg4.damping.three is None
-    assert cfg4.param.rs6 is not None and pytest.approx(float(cfg4.param.rs6)) == 1.217
+    assert (
+        cfg4.param.rs6 is not None
+        and pytest.approx(float(cfg4.param.rs6)) == 1.217
+    )
 
     # Mode 4b: D3 with explicit 3B zero-avg enabled
     calc4b = DFTD(
@@ -178,7 +190,9 @@ def test_damping_aliases_and_cutoff_conversion() -> None:
         damping_hint={"2b": "mzero", "3b": "none"},
     )
     assert calc_mzero._resolved_config is not None
-    assert isinstance(calc_mzero._resolved_config.damping.two, ModifiedZeroTwoBody)
+    assert isinstance(
+        calc_mzero._resolved_config.damping.two, ModifiedZeroTwoBody
+    )
 
     calc_op = DFTD(
         method="PBE",
@@ -186,12 +200,19 @@ def test_damping_aliases_and_cutoff_conversion() -> None:
         damping_hint={"2b": "optimizedpower", "3b": "none"},
     )
     assert calc_op._resolved_config is not None
-    assert isinstance(calc_op._resolved_config.damping.two, OptimizedPowerTwoBody)
+    assert isinstance(
+        calc_op._resolved_config.damping.two, OptimizedPowerTwoBody
+    )
 
     calc_cut = DFTD(
         method="PBE",
         model="d4",
-        realspace_cutoff={"disp2": 25.0, "disp3": 15.0, "cn": 10.0, "cn_eeq": 12.0},
+        realspace_cutoff={
+            "disp2": 25.0,
+            "disp3": 15.0,
+            "cn": 10.0,
+            "cn_eeq": 12.0,
+        },
     )
     cutoff = calc_cut._resolved_config.cutoff  # type: ignore[union-attr]
     assert pytest.approx(float(cutoff.disp2)) == 25.0 / Bohr
@@ -203,19 +224,28 @@ def test_damping_aliases_and_cutoff_conversion() -> None:
 def test_configuration_validation_errors() -> None:
     """Verify clear exceptions for invalid methods, parameters, dampings, models, and devices."""
     # Missing both method and params_tweaks
-    with pytest.raises((InputError, ValueError), match="Either a functional 'method'"):
+    with pytest.raises(
+        (InputError, ValueError), match="Either a functional 'method'"
+    ):
         DFTD(model="d4")
 
     # Unknown functional method
-    with pytest.raises((InputError, ValueError), match="(?i)unknown|no .* parameters"):
+    with pytest.raises(
+        (InputError, ValueError), match="(?i)unknown|no .* parameters"
+    ):
         DFTD(method="not-a-real-functional", model="d4")
 
     # Missing required parameters in Mode 2
-    with pytest.raises((InputError, ValueError), match="requires the parameter"):
+    with pytest.raises(
+        (InputError, ValueError), match="requires the parameter"
+    ):
         DFTD(model="d3", params_tweaks={"s6": 1.0, "s8": 0.5})
 
     # Unsupported parameter name in params_tweaks
-    with pytest.raises((InputError, TypeError, ValueError), match="Unsupported damping parameter"):
+    with pytest.raises(
+        (InputError, TypeError, ValueError),
+        match="Unsupported damping parameter",
+    ):
         DFTD(method="PBE", model="d4", params_tweaks={"not_a_param": 1.0})
 
     # Incompatible model and damping combination (e.g. D1 with rational)
@@ -227,11 +257,19 @@ def test_configuration_validation_errors() -> None:
         DFTD(
             model="d4",
             damping_hint={"2b": "cso"},
-            params_tweaks={"s6": 1.0, "a1": 1.0, "a2": 2.5, "a3": 0.0, "a4": 6.0},
+            params_tweaks={
+                "s6": 1.0,
+                "a1": 1.0,
+                "a2": 2.5,
+                "a3": 0.0,
+                "a4": 6.0,
+            },
         )
 
     # D4 with method and non-rational damping that has no D4 functional table
-    with pytest.raises((InputError, ValueError), match="No D4 functional parameters"):
+    with pytest.raises(
+        (InputError, ValueError), match="No D4 functional parameters"
+    ):
         DFTD(method="PBE", model="d4", damping_hint={"2b": "zero"})
 
     # D4Srev with functional name (no published method table)
@@ -243,10 +281,14 @@ def test_configuration_validation_errors() -> None:
         DFTD(method="PBE", model="d5")
 
     # Excluded EEQBC charge model
-    with pytest.raises(NotImplementedError, match="not supported in this release"):
+    with pytest.raises(
+        NotImplementedError, match="not supported in this release"
+    ):
         DFTD(method="PBE", model="d4", qmodel="eeqbc")
 
-    with pytest.raises(NotImplementedError, match="not supported in this release"):
+    with pytest.raises(
+        NotImplementedError, match="not supported in this release"
+    ):
         DFTD(method="PBE", model="d4", qmodel="eeqbc2025")
 
     # Unknown dispersion model
@@ -254,7 +296,9 @@ def test_configuration_validation_errors() -> None:
         DFTD(method="PBE", model="d99")
 
     # charges_key on charge-independent model (D3)
-    with pytest.raises((InputError, ValueError), match="does not use atomic partial charges"):
+    with pytest.raises(
+        (InputError, ValueError), match="does not use atomic partial charges"
+    ):
         DFTD(method="PBE", model="d3", charges_key="q")
 
     # Unknown cutoff key
@@ -266,14 +310,21 @@ def test_configuration_validation_errors() -> None:
         DFTD(method="PBE", model="d4", realspace_cutoff={"disp2": -5.0})
 
     # Invalid device or dtype
-    with pytest.raises((InputError, ValueError), match="Invalid PyTorch device|Unsupported PyTorch device"):
+    with pytest.raises(
+        (InputError, ValueError),
+        match="Invalid PyTorch device|Unsupported PyTorch device",
+    ):
         DFTD(method="PBE", model="d4", device="opencl:0")
 
-    with pytest.raises((InputError, ValueError), match="Unsupported dtype|Unknown dtype"):
+    with pytest.raises(
+        (InputError, ValueError), match="Unsupported dtype|Unknown dtype"
+    ):
         DFTD(method="PBE", model="d4", dtype=torch.int64)
 
     # Unexpected keyword argument in set() / __init__()
-    with pytest.raises((InputError, TypeError, ValueError), match="Unexpected keyword argument"):
+    with pytest.raises(
+        (InputError, TypeError, ValueError), match="Unexpected keyword argument"
+    ):
         DFTD(method="PBE", model="d4", cache_api=True)
 
 
@@ -306,11 +357,7 @@ except ModuleNotFoundError as exc:
 else:
     raise AssertionError("Expected ModuleNotFoundError when importing tad_dftd.ase without ASE")
 """
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k != "PYTHONPATH"
-    }
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     env["PYTHONPATH"] = str(SRC_DIR)
     proc = subprocess.run(
         [
@@ -323,7 +370,9 @@ else:
         text=True,
         check=False,
     )
-    assert proc.returncode == 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    assert (
+        proc.returncode == 0
+    ), f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
 
 
 @pytest.mark.parametrize(
@@ -361,7 +410,10 @@ def test_all_seven_models_energy_and_forces_evaluation(
     assert isinstance(energies, np.ndarray)
     assert energies.shape == (3,)
     assert pytest.approx(float(energies.sum()), rel=1e-14, abs=1e-14) == energy
-    assert pytest.approx(atoms.calc.results["free_energy"], rel=1e-14, abs=1e-14) == energy
+    assert (
+        pytest.approx(atoms.calc.results["free_energy"], rel=1e-14, abs=1e-14)
+        == energy
+    )
 
     assert isinstance(forces, np.ndarray)
     assert forces.shape == (3, 3)
@@ -369,7 +421,9 @@ def test_all_seven_models_energy_and_forces_evaluation(
     # Net translational force on an isolated molecule must vanish
     assert np.max(np.abs(forces.sum(axis=0))) < 1e-12
     # Input Atoms positions must not be mutated
-    np.testing.assert_allclose(atoms.get_positions(), orig_pos, atol=0.0, rtol=0.0)
+    np.testing.assert_allclose(
+        atoms.get_positions(), orig_pos, atol=0.0, rtol=0.0
+    )
 
 
 @pytest.mark.parametrize(
@@ -472,7 +526,10 @@ def test_direct_numerical_parity_with_native_dftd(
     grad_native = torch.autograd.grad(e_native, pos_bohr)[0]
     f_native = (-grad_native.detach().numpy()) * (Hartree / Bohr)
 
-    assert pytest.approx(float(e_native.item()) * Hartree, rel=1e-14, abs=1e-14) == e_ase
+    assert (
+        pytest.approx(float(e_native.item()) * Hartree, rel=1e-14, abs=1e-14)
+        == e_ase
+    )
     np.testing.assert_allclose(
         es_ase, es_native.detach().numpy() * Hartree, rtol=1e-14, atol=1e-14
     )
@@ -498,7 +555,10 @@ def test_fortran_dftd_ase_reference_parity() -> None:
             [+5.97028977e-21, +4.98420762e-05, -1.28883224e-04],
         ]
     )
-    assert pytest.approx(-0.021665446836610567, abs=1e-9) == atoms1.get_potential_energy()
+    assert (
+        pytest.approx(-0.021665446836610567, abs=1e-9)
+        == atoms1.get_potential_energy()
+    )
     np.testing.assert_allclose(atoms1.get_forces(), ref_forces1, atol=1e-6)
 
     # 2. PBE-D4S on bicyclobutane (energy + forces)
@@ -518,7 +578,10 @@ def test_fortran_dftd_ase_reference_parity() -> None:
             [1.57814347e-03, 5.62735538e-19, 5.57602199e-04],
         ]
     )
-    assert pytest.approx(-0.16377494406788423, abs=1e-12) == atoms2.get_potential_energy()
+    assert (
+        pytest.approx(-0.16377494406788423, abs=1e-12)
+        == atoms2.get_potential_energy()
+    )
     np.testing.assert_allclose(atoms2.get_forces(), ref_forces2, atol=1e-6)
 
     # 3. BLYP-D3S on OH2LiNi
@@ -537,13 +600,21 @@ def test_fortran_dftd_ase_reference_parity() -> None:
         ),
     )
     atoms3.calc = DFTD(method="BLYP", model="d3s")
-    assert pytest.approx(-1.0101127823439129e-02 * Hartree, abs=1e-9) == atoms3.get_potential_energy()
-    np.testing.assert_allclose(np.sum(atoms3.get_forces(), axis=0), np.zeros(3), atol=1e-12)
+    assert (
+        pytest.approx(-1.0101127823439129e-02 * Hartree, abs=1e-9)
+        == atoms3.get_potential_energy()
+    )
+    np.testing.assert_allclose(
+        np.sum(atoms3.get_forces(), axis=0), np.zeros(3), atol=1e-12
+    )
 
     # 4. PBE-D4 without ATM (3b="none") on bicyclobutane
     atoms4 = molecule("bicyclobutane")
     atoms4.calc = DFTD(method="PBE", model="d4", damping_hint={"3b": "none"})
-    assert pytest.approx(-0.15427642282371362, abs=1e-12) == atoms4.get_potential_energy()
+    assert (
+        pytest.approx(-0.15427642282371362, abs=1e-12)
+        == atoms4.get_potential_energy()
+    )
 
     # 5. TPSS-D4 on C2H6CHOH (energy + forces)
     atoms5 = molecule("C2H6CHOH")
@@ -564,13 +635,19 @@ def test_fortran_dftd_ase_reference_parity() -> None:
             [-4.80380448e-03, +3.72436466e-03, -3.53417437e-04],
         ]
     )
-    assert pytest.approx(-0.24206732765720423, abs=1e-8) == atoms5.get_potential_energy()
+    assert (
+        pytest.approx(-0.24206732765720423, abs=1e-8)
+        == atoms5.get_potential_energy()
+    )
     np.testing.assert_allclose(atoms5.get_forces(), ref_forces5, atol=1e-6)
 
     # 6. PBE-D4 on H2O
     atoms6 = molecule("H2O")
     atoms6.calc = DFTD4(method="pbe")
-    assert pytest.approx(-0.005358475432239303, abs=1e-10) == atoms6.get_potential_energy()
+    assert (
+        pytest.approx(-0.005358475432239303, abs=1e-10)
+        == atoms6.get_potential_energy()
+    )
 
     # 7. PBE-D3(BJ) on MB16-43-01 (from Fortran test_ase_dftd3_bj)
     atoms7 = Atoms(
@@ -600,7 +677,10 @@ def test_fortran_dftd_ase_reference_parity() -> None:
         ),
     )
     atoms7.calc = DFTD3(method="PBE")
-    assert pytest.approx(-1.7882220155186028e-02 * Hartree, abs=1e-9) == atoms7.get_potential_energy()
+    assert (
+        pytest.approx(-1.7882220155186028e-02 * Hartree, abs=1e-9)
+        == atoms7.get_potential_energy()
+    )
 
     # 8. RPBE-D3(0) on MB16-43-09 (from Fortran test_ase_dftd3_zero)
     atoms8 = Atoms(
@@ -629,8 +709,13 @@ def test_fortran_dftd_ase_reference_parity() -> None:
             * Bohr
         ),
     )
-    atoms8.calc = DFTD3(method="RPBE", damping_hint={"2b": "zero", "3b": "none"})
-    assert pytest.approx(-2.0178760785797962e-02 * Hartree, abs=1e-9) == atoms8.get_potential_energy()
+    atoms8.calc = DFTD3(
+        method="RPBE", damping_hint={"2b": "zero", "3b": "none"}
+    )
+    assert (
+        pytest.approx(-2.0178760785797962e-02 * Hartree, abs=1e-9)
+        == atoms8.get_potential_energy()
+    )
 
 
 @pytest.mark.parametrize(
@@ -801,7 +886,11 @@ def test_periodic_fortran_reference_parity_all_models() -> None:
                 )
 
     # Also verify X23 3D molecular crystal references via ASE calculator
-    cut_x23_d12 = {"cn": 30.0 * Bohr, "disp2": 60.0 * Bohr, "disp3": 15.0 * Bohr}
+    cut_x23_d12 = {
+        "cn": 30.0 * Bohr,
+        "disp2": 60.0 * Bohr,
+        "disp3": 15.0 * Bohr,
+    }
     cut_x23_d3 = {"cn": 40.0 * Bohr, "disp2": 60.0 * Bohr, "disp3": 15.0 * Bohr}
 
     for dataset_name, model_name, method_name, hint, cut_dict, ref_eh in [
@@ -906,9 +995,9 @@ def test_periodic_stress_central_finite_differences_and_virial_identity(
     pos_t = (
         torch.tensor(positions_ang, dtype=torch.float64) / Bohr
     ).requires_grad_(True)
-    lat_t = (
-        torch.tensor(cell_ang, dtype=torch.float64) / Bohr
-    ).requires_grad_(True)
+    lat_t = (torch.tensor(cell_ang, dtype=torch.float64) / Bohr).requires_grad_(
+        True
+    )
     s_native = Structure(
         numbers=torch.tensor(numbers, dtype=torch.long),
         positions=pos_t,
@@ -933,9 +1022,14 @@ def test_periodic_stress_central_finite_differences_and_virial_identity(
         full_3x3_to_voigt_6_stress(virial_ident * (Hartree / vol_ang3)),
         dtype=np.float64,
     )
-    np.testing.assert_allclose(stress_voigt, voigt_ident, rtol=1e-13, atol=1e-13)
     np.testing.assert_allclose(
-        forces_ase, -g_pos.detach().numpy() * (Hartree / Bohr), rtol=1e-13, atol=1e-13
+        stress_voigt, voigt_ident, rtol=1e-13, atol=1e-13
+    )
+    np.testing.assert_allclose(
+        forces_ase,
+        -g_pos.detach().numpy() * (Hartree / Bohr),
+        rtol=1e-13,
+        atol=1e-13,
     )
 
     # Central finite differences over all 3x3 strain components (diagonal and off-diagonal)
@@ -965,11 +1059,28 @@ def test_periodic_stress_central_finite_differences_and_virial_identity(
     assert pytest.approx(stress_3x3_fd[0, 0], rel=1e-14) == stress_voigt_fd[0]
     assert pytest.approx(stress_3x3_fd[1, 1], rel=1e-14) == stress_voigt_fd[1]
     assert pytest.approx(stress_3x3_fd[2, 2], rel=1e-14) == stress_voigt_fd[2]
-    assert pytest.approx(0.5 * (stress_3x3_fd[1, 2] + stress_3x3_fd[2, 1]), rel=1e-14) == stress_voigt_fd[3]
-    assert pytest.approx(0.5 * (stress_3x3_fd[0, 2] + stress_3x3_fd[2, 0]), rel=1e-14) == stress_voigt_fd[4]
-    assert pytest.approx(0.5 * (stress_3x3_fd[0, 1] + stress_3x3_fd[1, 0]), rel=1e-14) == stress_voigt_fd[5]
+    assert (
+        pytest.approx(
+            0.5 * (stress_3x3_fd[1, 2] + stress_3x3_fd[2, 1]), rel=1e-14
+        )
+        == stress_voigt_fd[3]
+    )
+    assert (
+        pytest.approx(
+            0.5 * (stress_3x3_fd[0, 2] + stress_3x3_fd[2, 0]), rel=1e-14
+        )
+        == stress_voigt_fd[4]
+    )
+    assert (
+        pytest.approx(
+            0.5 * (stress_3x3_fd[0, 1] + stress_3x3_fd[1, 0]), rel=1e-14
+        )
+        == stress_voigt_fd[5]
+    )
 
-    np.testing.assert_allclose(stress_voigt, stress_voigt_fd, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(
+        stress_voigt, stress_voigt_fd, rtol=1e-6, atol=1e-8
+    )
 
 
 def test_stress_restrictions_and_errors() -> None:
@@ -978,7 +1089,9 @@ def test_stress_restrictions_and_errors() -> None:
     mol = molecule("H2O")
     mol.calc = DFTD(method="PBE", model="d4")
     assert mol.get_potential_energy() < 0.0
-    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+    with pytest.raises(
+        (PropertyNotImplementedError, ValueError), match="3D periodic"
+    ):
         mol.get_stress()
 
     # 1D periodic system
@@ -991,7 +1104,9 @@ def test_stress_restrictions_and_errors() -> None:
     chain.calc = DFTD(method="PBE", model="d3")
     assert chain.get_potential_energy() < 0.0
     assert chain.get_forces().shape == (2, 3)
-    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+    with pytest.raises(
+        (PropertyNotImplementedError, ValueError), match="3D periodic"
+    ):
         chain.get_stress()
 
     # 2D periodic slab
@@ -1004,7 +1119,9 @@ def test_stress_restrictions_and_errors() -> None:
     slab.calc = DFTD(method="PBE", model="d3")
     assert slab.get_potential_energy() < 0.0
     assert slab.get_forces().shape == (2, 3)
-    with pytest.raises((PropertyNotImplementedError, ValueError), match="3D periodic"):
+    with pytest.raises(
+        (PropertyNotImplementedError, ValueError), match="3D periodic"
+    ):
         slab.get_stress()
 
     # Degenerate 3D periodic cell (zero volume)
@@ -1015,7 +1132,10 @@ def test_stress_restrictions_and_errors() -> None:
         pbc=[True, True, True],
     )
     degen.calc = DFTD(method="PBE", model="d3")
-    with pytest.raises((PropertyNotImplementedError, ValueError), match="degenerate|zero volume"):
+    with pytest.raises(
+        (PropertyNotImplementedError, ValueError),
+        match="degenerate|zero volume",
+    ):
         degen.get_stress()
 
     # 3D periodic cell with compute_stress=False
@@ -1047,13 +1167,19 @@ def test_charge_workflows_and_validation() -> None:
     atoms_initq = molecule("H2O")
     atoms_initq.set_initial_charges([0.4, 0.3, 0.3])
     atoms_initq.calc = DFTD(method="PBE", model="d4")
-    assert pytest.approx(e_cation, rel=1e-14, abs=1e-14) == atoms_initq.get_potential_energy()
+    assert (
+        pytest.approx(e_cation, rel=1e-14, abs=1e-14)
+        == atoms_initq.get_potential_energy()
+    )
 
     # Explicit charge=0.0 overrides nonzero initial_charges
     atoms_override = molecule("H2O")
     atoms_override.set_initial_charges([0.4, 0.3, 0.3])
     atoms_override.calc = DFTD(method="PBE", model="d4", charge=0.0)
-    assert pytest.approx(e_neutral, rel=1e-14, abs=1e-14) == atoms_override.get_potential_energy()
+    assert (
+        pytest.approx(e_neutral, rel=1e-14, abs=1e-14)
+        == atoms_override.get_potential_energy()
+    )
 
     # 2. 3D periodic automatic EEQ
     cryst = Atoms(
@@ -1065,7 +1191,12 @@ def test_charge_workflows_and_validation() -> None:
     cryst.calc = DFTD(
         method="PBE",
         model="d4",
-        realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+        realspace_cutoff={
+            "disp2": 10.0,
+            "disp3": 8.0,
+            "cn": 8.0,
+            "cn_eeq": 8.0,
+        },
     )
     assert cryst.get_potential_energy() < 0.0
     assert cryst.get_forces().shape == (2, 3)
@@ -1103,9 +1234,15 @@ def test_charge_workflows_and_validation() -> None:
         q=torch.tensor(q_custom, dtype=torch.float64),
     ).sum()
     g_nat_ext = torch.autograd.grad(e_nat_ext, pos_t)[0]
-    assert pytest.approx(float(e_nat_ext.item()) * Hartree, rel=1e-14, abs=1e-14) == e_ext
+    assert (
+        pytest.approx(float(e_nat_ext.item()) * Hartree, rel=1e-14, abs=1e-14)
+        == e_ext
+    )
     np.testing.assert_allclose(
-        f_ext, -g_nat_ext.detach().numpy() * (Hartree / Bohr), rtol=1e-13, atol=1e-13
+        f_ext,
+        -g_nat_ext.detach().numpy() * (Hartree / Bohr),
+        rtol=1e-13,
+        atol=1e-13,
     )
 
     # 4. Automatic 1D and 2D periodic EEQ is rejected, while external charges_key works
@@ -1119,18 +1256,30 @@ def test_charge_workflows_and_validation() -> None:
         partial_atoms.calc = DFTD(
             method="PBE",
             model="d4",
-            realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+            realspace_cutoff={
+                "disp2": 10.0,
+                "disp3": 8.0,
+                "cn": 8.0,
+                "cn_eeq": 8.0,
+            },
         )
         with pytest.raises((NotImplementedError, ValueError), match="1D|2D|3D"):
             partial_atoms.get_potential_energy()
 
         # Supplying external charges makes 1D/2D D4 work
-        partial_atoms.set_array("q_ext", np.array([0.15, -0.15], dtype=np.float64))
+        partial_atoms.set_array(
+            "q_ext", np.array([0.15, -0.15], dtype=np.float64)
+        )
         partial_atoms.calc = DFTD(
             method="PBE",
             model="d4",
             charges_key="q_ext",
-            realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+            realspace_cutoff={
+                "disp2": 10.0,
+                "disp3": 8.0,
+                "cn": 8.0,
+                "cn_eeq": 8.0,
+            },
         )
         assert partial_atoms.get_potential_energy() < 0.0
         assert partial_atoms.get_forces().shape == (2, 3)
@@ -1183,7 +1332,9 @@ def test_ase_lifecycle_parameter_set_and_defensive_copies() -> None:
     assert calc.parameters["params_tweaks"]["s8"] == pytest.approx(0.9)
     assert calc.parameters["damping_hint"]["3b"] == "zero_d4"
     assert calc.parameters["realspace_cutoff"]["disp2"] == pytest.approx(30.0)
-    assert atoms.get_potential_energy() == pytest.approx(e0, rel=1e-15, abs=1e-15)
+    assert atoms.get_potential_energy() == pytest.approx(
+        e0, rel=1e-15, abs=1e-15
+    )
 
     # Updating method and model via .set() clears results and recomputes
     calc.set(method="PBE", model="d3", params_tweaks=None, damping_hint=None)
@@ -1278,7 +1429,12 @@ def test_ase_lifecycle_geometry_and_charge_array_invalidation(
         method="PBE",
         model="d4",
         charges_key="q_custom",
-        realspace_cutoff={"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0},
+        realspace_cutoff={
+            "disp2": 10.0,
+            "disp3": 8.0,
+            "cn": 8.0,
+            "cn_eeq": 8.0,
+        },
     )
     atoms.calc = calc
 
@@ -1381,14 +1537,20 @@ def test_ase_lifecycle_isolation_copy_and_repeated_updates() -> None:
     assert "stress" not in calc2.implemented_properties
     assert calc1.parameters["method"] == "PBE"
     assert calc2.parameters["method"] == "B3LYP"
-    assert atoms1.get_potential_energy() == pytest.approx(e1, rel=1e-15, abs=1e-15)
-    assert atoms2.get_potential_energy() == pytest.approx(e2, rel=1e-15, abs=1e-15)
+    assert atoms1.get_potential_energy() == pytest.approx(
+        e1, rel=1e-15, abs=1e-15
+    )
+    assert atoms2.get_potential_energy() == pytest.approx(
+        e2, rel=1e-15, abs=1e-15
+    )
 
     # Atoms.copy() creates an independent Atoms object with calc=None
     atoms1_copy = atoms1.copy()
     assert atoms1_copy.calc is None
     atoms1_copy.positions[0, 0] += 0.5
-    assert atoms1.get_potential_energy() == pytest.approx(e1, rel=1e-15, abs=1e-15)
+    assert atoms1.get_potential_energy() == pytest.approx(
+        e1, rel=1e-15, abs=1e-15
+    )
 
     # 30 successive geometry updates do not retain tensors or autograd graphs
     traj_atoms = molecule("H2O")
@@ -1410,4 +1572,95 @@ def test_ase_lifecycle_isolation_copy_and_repeated_updates() -> None:
     assert len(set(round(val, 10) for val in energies)) == 30
 
 
+def test_ase_workflows_sum_calculator_and_optimization() -> None:
+    """
+    Verify SumCalculator([EMT(), DFTD(...)]), DFTD(...).add_calculator(EMT()),
+    and BFGS geometry optimization using EMT() + DFTD(method="PBE", model="d4").
+    """
+    from ase.calculators.emt import EMT  # type: ignore[import-untyped]
+    from ase.calculators.mixing import (  # type: ignore[import-untyped]
+        SumCalculator,
+    )
+    from ase.optimize import BFGS  # type: ignore[import-untyped]
 
+    atoms_base = molecule("H2O")
+    atoms_base.positions[1, 0] += 0.12
+
+    atoms_emt = atoms_base.copy()
+    atoms_emt.calc = EMT()
+    e_emt = atoms_emt.get_potential_energy()
+    f_emt = atoms_emt.get_forces()
+
+    atoms_d4 = atoms_base.copy()
+    atoms_d4.calc = DFTD(method="PBE", model="d4")
+    e_d4 = atoms_d4.get_potential_energy()
+    f_d4 = atoms_d4.get_forces()
+
+    # 1. SumCalculator([EMT(), DFTD(...)])
+    atoms_sum = atoms_base.copy()
+    atoms_sum.calc = SumCalculator([EMT(), DFTD(method="PBE", model="d4")])
+    e_sum = atoms_sum.get_potential_energy()
+    f_sum = atoms_sum.get_forces()
+    assert pytest.approx(e_emt + e_d4, rel=1e-14, abs=1e-14) == e_sum
+    np.testing.assert_allclose(f_sum, f_emt + f_d4, rtol=1e-13, atol=1e-13)
+
+    # 2. DFTD(...).add_calculator(EMT())
+    atoms_add = atoms_base.copy()
+    atoms_add.calc = DFTD(method="PBE", model="d4").add_calculator(EMT())
+    assert (
+        pytest.approx(e_sum, rel=1e-14, abs=1e-14)
+        == atoms_add.get_potential_energy()
+    )
+    np.testing.assert_allclose(
+        atoms_add.get_forces(), f_sum, rtol=1e-13, atol=1e-13
+    )
+
+    # 3. Short BFGS geometry optimization on a distorted H2O molecule
+    opt_atoms = atoms_base.copy()
+    opt_atoms.calc = SumCalculator([EMT(), DFTD(method="PBE", model="d4")])
+    e_initial = opt_atoms.get_potential_energy()
+    fmax_initial = float(np.max(np.linalg.norm(opt_atoms.get_forces(), axis=1)))
+    assert fmax_initial > 0.2
+
+    opt = BFGS(opt_atoms, logfile=None)
+    converged = opt.run(fmax=0.02, steps=40)
+    e_final = opt_atoms.get_potential_energy()
+    fmax_final = float(np.max(np.linalg.norm(opt_atoms.get_forces(), axis=1)))
+
+    assert converged
+    assert e_final < e_initial
+    assert fmax_final <= 0.02
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA device not available in this environment",
+)
+def test_ase_cuda_device_parity() -> None:
+    """Verify CPU and CUDA dispersion energy, forces, and stress parity when CUDA is available."""
+    atoms_cpu = Atoms(
+        numbers=[14, 6],
+        positions=[[0.0, 0.0, 0.0], [1.9, 1.9, 1.9]],
+        cell=[4.5, 4.5, 4.5],
+        pbc=[True, True, True],
+    )
+    atoms_cuda = atoms_cpu.copy()
+    cut = {"disp2": 10.0, "disp3": 8.0, "cn": 8.0, "cn_eeq": 8.0}
+
+    atoms_cpu.calc = DFTD(
+        method="PBE", model="d4", realspace_cutoff=cut, device="cpu"
+    )
+    atoms_cuda.calc = DFTD(
+        method="PBE", model="d4", realspace_cutoff=cut, device="cuda"
+    )
+
+    assert (
+        pytest.approx(atoms_cpu.get_potential_energy(), rel=1e-12, abs=1e-12)
+        == atoms_cuda.get_potential_energy()
+    )
+    np.testing.assert_allclose(
+        atoms_cuda.get_forces(), atoms_cpu.get_forces(), rtol=1e-11, atol=1e-11
+    )
+    np.testing.assert_allclose(
+        atoms_cuda.get_stress(), atoms_cpu.get_stress(), rtol=1e-11, atol=1e-11
+    )
