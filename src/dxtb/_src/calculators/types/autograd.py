@@ -23,6 +23,7 @@ Calculator for the extended tight-binding model with automatic gradients.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import logging
 
 import torch
@@ -40,6 +41,7 @@ from ..properties.vibration import (
     vib_analysis,
 )
 from . import decorators as cdec
+from .base import reject_removed_store_kwargs
 from .energy import _UNSET, EnergyCalculator
 
 __all__ = ["AutogradCalculator"]
@@ -88,9 +90,9 @@ class AutogradCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        grad_mode: Literal[
-            "autograd", "backward", "functorch", "row"
-        ] = "autograd",
+        *,
+        create_graph: bool = False,
+        retain_graph: bool | None = None,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -100,17 +102,6 @@ class AutogradCalculator(EnergyCalculator):
 
             f = -\dfrac{\partial E}{\partial R}
 
-        One can calculate the Jacobian either row-by-row using the standard
-        :func:`torch.autograd.grad` with unit vectors in the VJP or using
-        :mod:`torch.func`'s function transforms (e.g.,
-        :func:`torch.func.jacrev`).
-
-        .. note::
-
-            Using :mod:`torch.func`'s function transforms can apparently be only
-            used once. Hence, for example, the Hessian and the dipole
-            derivatives cannot be both calculated with functorch.
-
         Parameters
         ----------
         positions : Tensor
@@ -119,81 +110,42 @@ class AutogradCalculator(EnergyCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        grad_mode: Literal, optional
-            Specify the mode for gradient calculation. Possible options are:
-
-            - "autograd" (default): Use PyTorch's :func:`torch.autograd.grad`.
-            - "backward": Use PyTorch's backward function.
-            - "functorch": Use functorch's `jacrev`.
-            - "row": Use PyTorch's autograd row-by-row (unnecessary here).
+        create_graph : bool, optional
+            If ``True``, graph of the derivative will be constructed, allowing
+            to compute higher order derivative products. Defaults to ``False``.
+        retain_graph : bool | None, optional
+            If ``True``, the graph used to compute the grad will be retained.
+            If ``None``, defaults to ``create_graph``.
 
         Returns
         -------
         Tensor
             Atomic forces of shape ``(..., nat, 3)``.
         """
+        reject_removed_store_kwargs(kwargs)
         OutputHandler.write_stdout("\nForces", v=5)
         OutputHandler.write_stdout("------\n", v=5)
         logger.debug("Forces: Starting.")
 
-        # These options belong to the derivative operation, not the energy
-        # calculation itself.
-        kw = {
-            "create_graph": kwargs.pop("create_graph", False),
-            "retain_graph": kwargs.pop("retain_graph", False),
-        }
+        e = self.energy(positions, chrg, spin, **kwargs)
+        scalar_e = e.sum() if e.ndim > 0 else e
 
-        if grad_mode == "autograd":
-            e = self.energy(positions, chrg, spin, **kwargs)
-
-            timer.start("Forces")
-            (deriv,) = torch.autograd.grad(
-                e, positions, grad_outputs=torch.ones_like(e), **kw
-            )
-            timer.stop("Forces")
-
-        elif grad_mode == "backward":
-            e = self.energy(positions, chrg, spin, **kwargs)
-
-            timer.start("Forces")
-            e.sum().backward(**kw)
-            timer.stop("Forces")
-
-            assert positions.grad is not None
-            deriv = positions.grad
-
-        elif grad_mode == "functorch":
-            # pylint: disable=import-outside-toplevel
-            from torch.func import jacrev
-
-            # jacrev requires a scalar from `self.energy`!
-            deriv = jacrev(self.energy, argnums=0)(
-                positions, chrg, spin, **kwargs
-            )
-
-            assert isinstance(deriv, Tensor)
-
-        elif grad_mode == "row":
-            # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jac
-
-            energy = self.energy(positions, chrg, spin, **kwargs)
-
-            timer.start("Forces")
-            deriv = jac(energy, positions, **kw).reshape(*positions.shape)
-            timer.stop("Forces")
-
-        else:
-            raise ValueError(f"Unknown grad_mode: {grad_mode}")
-
-        logger.debug(
-            "Forces: Re-enforcing contiguous memory layout after "
-            "autodiff (grad_mode=%s).",
-            grad_mode,
+        timer.start("Forces")
+        (deriv,) = torch.autograd.grad(
+            scalar_e,
+            positions,
+            create_graph=create_graph,
+            retain_graph=create_graph if retain_graph is None else retain_graph,
         )
+        timer.stop("Forces")
+
+        forces = -deriv
+        if self.ihelp.batch_mode > 0:
+            pad_mask = (self.numbers == 0).unsqueeze(-1)
+            forces = torch.where(pad_mask, torch.zeros_like(forces), forces)
 
         logger.debug("Forces: All finished.")
-        return -deriv
+        return forces
 
     @cdec.requires_positions_grad
     def hessian(
@@ -244,6 +196,7 @@ class AutogradCalculator(EnergyCalculator):
         RuntimeError
             Positions tensor does not have ``requires_grad=True``.
         """
+        reject_removed_store_kwargs(kwargs)
         if self.ihelp.batch_mode > 0:
             raise NotImplementedError(
                 "Hessian calculation is not supported in batch mode. "
@@ -258,9 +211,13 @@ class AutogradCalculator(EnergyCalculator):
 
             # jacrev requires a scalar from `self.energy`!
             if derived_quantity == "forces":
-                hess_func = jacrev(self.forces, argnums=0)
-                # specifiy grad_mode here!
-                hess = hess_func(positions, chrg, spin, "functorch", **kwargs)
+
+                def forces_fn(pos: Tensor) -> Tensor:
+                    return self.forces(
+                        pos, chrg, spin, create_graph=True, **kwargs
+                    )
+
+                hess = jacrev(forces_fn)(positions)
 
             elif derived_quantity == "energy":
 
@@ -282,12 +239,10 @@ class AutogradCalculator(EnergyCalculator):
                 # pylint: disable=import-outside-toplevel
                 from tad_mctc.autograd import jac
 
-                grad_mode = kwargs.pop("grad_mode", "autograd")
                 forces = self.forces(
                     positions,
                     chrg,
                     spin,
-                    grad_mode=grad_mode,
                     create_graph=True,
                     retain_graph=True,
                     **kwargs,
@@ -411,8 +366,8 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the electric dipole moment :math:`\mu` via AD.
@@ -465,9 +420,11 @@ class AutogradCalculator(EnergyCalculator):
             from torch.func import jacrev
 
             def wrapped_energy(f: Tensor) -> Tensor:
-                return self.energy(
-                    positions, chrg, spin, field=f, field_grad=field_grad
+                f_arg = tuple(f.unbind(0)) if f.ndim == 2 else f
+                e = self.energy(
+                    positions, chrg, spin, field=f_arg, field_grad=field_grad
                 )
+                return e.sum() if f.ndim == 2 else e
 
             dip = jacrev(wrapped_energy)(field)
             assert isinstance(dip, Tensor)
@@ -476,10 +433,14 @@ class AutogradCalculator(EnergyCalculator):
             from tad_mctc.autograd import jac
 
             # calculate electric dipole contribution from xtb energy: -de/dE
+            f_arg = tuple(field.unbind(0)) if field.ndim == 2 else field
             energy = self.energy(
-                positions, chrg, spin, field=field, field_grad=field_grad
+                positions, chrg, spin, field=f_arg, field_grad=field_grad
             )
-            dip = jac(energy, field)
+            if field.ndim == 2:
+                dip = jac(energy.sum(), field).reshape_as(field)
+            else:
+                dip = jac(energy, field)
 
         if dip.is_contiguous() is False:
             logger.debug(
@@ -497,8 +458,8 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        field_grad: Tensor | None | object = _UNSET,
-        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Calculate the traceless electric quadrupole moment :math:`\Theta` via
@@ -554,9 +515,11 @@ class AutogradCalculator(EnergyCalculator):
             from torch.func import jacrev
 
             def wrapped_energy(g: Tensor) -> Tensor:
-                return self.energy(
-                    positions, chrg, spin, field=field, field_grad=g
+                g_arg = tuple(g.unbind(0)) if g.ndim == 3 else g
+                e = self.energy(
+                    positions, chrg, spin, field=field, field_grad=g_arg
                 )
+                return e.sum() if g.ndim == 3 else e
 
             deriv = jacrev(wrapped_energy)(field_grad)
             assert isinstance(deriv, Tensor)
@@ -564,10 +527,18 @@ class AutogradCalculator(EnergyCalculator):
             # pylint: disable=import-outside-toplevel
             from tad_mctc.autograd import jac
 
-            energy = self.energy(
-                positions, chrg, spin, field=field, field_grad=field_grad
+            g_arg = (
+                tuple(field_grad.unbind(0))
+                if field_grad.ndim == 3
+                else field_grad
             )
-            deriv = jac(energy, field_grad)
+            energy = self.energy(
+                positions, chrg, spin, field=field, field_grad=g_arg
+            )
+            if field_grad.ndim == 3:
+                deriv = jac(energy.sum(), field_grad)
+            else:
+                deriv = jac(energy, field_grad)
 
         # `jac` flattens the (3, 3) input, `jacrev` does not: (..., 3, 3)
         deriv = deriv.reshape(*self.numbers.shape[:-1], 3, 3)
@@ -1057,7 +1028,8 @@ class AutogradCalculator(EnergyCalculator):
         ):
             self.classicals.reset_all()
             self.interactions.reset_all()
-            self.integrals.reset_all()
+            if self._integrals is not None:
+                self._integrals.reset_all()
 
         # calculate nuclear dipole derivative dmu/dR: (..., 3, nat, 3)
         dmu_dr = self.dipole_deriv(
@@ -1116,7 +1088,8 @@ class AutogradCalculator(EnergyCalculator):
         ):
             self.classicals.reset_all()
             self.interactions.reset_all()
-            self.integrals.reset_all()
+            if self._integrals is not None:
+                self._integrals.reset_all()
 
         # d(..., 3, 3) / d(..., nat, 3) -> (..., 3, 3, nat, 3)
         da_dr = self.pol_deriv(

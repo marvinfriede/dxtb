@@ -23,6 +23,8 @@ Base calculator for the energy calculation of an extended tight-binding model.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.io.checks import content_checks, shape_checks
@@ -74,7 +76,7 @@ class EnergyCalculator(BaseCalculator):
         "opts",
         "classicals",
         "interactions",
-        "integrals",
+        "_integrals",
         "ihelp",
     ]
 
@@ -83,8 +85,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
@@ -172,40 +174,45 @@ class EnergyCalculator(BaseCalculator):
         kwargs: dict[str, Any],
     ) -> Result:
         """Adapt a pure System result to legacy Calculator state and options."""
-        self._ensure_system_current()
+        eval_system = self._prepare_eval_system()
         old_cuda_sync = timer.cuda_sync
         timer.cuda_sync = kwargs.get(
             "cuda_sync_in_scf", False if self.device.type == "cpu" else True
         )
         try:
             result = _singlepoint_eager(
-                self.system, positions, charge, spin, field, field_grad
+                eval_system, positions, charge, spin, field, field_grad
             )
         finally:
             timer.cuda_sync = old_cuda_sync
 
-        # Legacy integral wrappers remain for write_* default filenames.
-        # Per-call matrices stay on the returned Result.
-        for key, matrix, integral in (
-            ("write_overlap", result.overlap, self.integrals.overlap),
-            ("write_dipole", result.dipole_integrals, self.integrals.dipole),
-            (
-                "write_quadrupole",
-                result.quadrupole_integrals,
-                self.integrals.quadrupole,
-            ),
-            ("write_hcore", result.hcore, self.integrals.hcore),
-        ):
-            path = kwargs.get(key, False)
-            if path is False or matrix is None:
-                continue
-            if path is None or path is True:
-                if integral is None:
-                    raise RuntimeError(
-                        f"No legacy label is available for {key}."
-                    )
-                path = integral.label.casefold() + ".pt"
-            torch.save(matrix, path)
+        if self._integrals is not None:
+            for key, matrix, integral in (
+                ("write_overlap", result.overlap, self._integrals.overlap),
+                ("write_dipole", result.dipole_integrals, self._integrals.dipole),
+                (
+                    "write_quadrupole",
+                    result.quadrupole_integrals,
+                    self._integrals.quadrupole,
+                ),
+                ("write_hcore", result.hcore, self._integrals.hcore),
+            ):
+                path = kwargs.get(key, False)
+                if path is False or matrix is None:
+                    continue
+                if path is None or path is True:
+                    if integral is None:
+                        raise RuntimeError(
+                            f"No legacy label is available for {key}."
+                        )
+                    path = integral.label.casefold() + ".pt"
+                torch.save(matrix, path)
+        else:
+            from dxtb._src.calculators.packed_result import (
+                _write_packed_integrals,
+            )
+
+            _write_packed_integrals(result, eval_system, kwargs)
 
         self._ncalcs += 1
         return result
@@ -215,8 +222,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         """
@@ -243,30 +250,46 @@ class EnergyCalculator(BaseCalculator):
 
     def _resolve_fields(
         self,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
-    ) -> tuple[Tensor | None, Tensor | None]:
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+    ) -> tuple[
+        Tensor | Sequence[Tensor | None] | None,
+        Tensor | Sequence[Tensor | None] | None,
+    ]:
         """Resolve omitted Calculator fields against constructor defaults."""
         resolved_field = self._field_default if field is _UNSET else field
         resolved_grad = (
             self._field_grad_default if field_grad is _UNSET else field_grad
         )
-        if resolved_field is not None and not isinstance(
-            resolved_field, Tensor
+        allow_seq = self.numbers.ndim > 1
+        if resolved_field is not None and not (
+            isinstance(resolved_field, Tensor)
+            or (
+                allow_seq
+                and isinstance(resolved_field, Sequence)
+                and not isinstance(resolved_field, (str, bytes))
+            )
         ):
             raise TypeError("field must be a Tensor or None.")
-        if resolved_grad is not None and not isinstance(resolved_grad, Tensor):
+        if resolved_grad is not None and not (
+            isinstance(resolved_grad, Tensor)
+            or (
+                allow_seq
+                and isinstance(resolved_grad, Sequence)
+                and not isinstance(resolved_grad, (str, bytes))
+            )
+        ):
             raise TypeError("field_grad must be a Tensor or None.")
         return resolved_field, resolved_grad
 
     def _resolve_response_fields(
         self,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
         *,
         needs_field: bool = False,
         needs_field_grad: bool = False,
-    ) -> tuple[Tensor | None, Tensor | None]:
+    ) -> tuple[Any, Any]:
         """Resolve standard response inputs and explain custom extensions."""
         resolved_field, resolved_grad = self._resolve_fields(field, field_grad)
         component_labels = {
@@ -299,6 +322,51 @@ class EnergyCalculator(BaseCalculator):
                 "exact ElectricFieldGrad compatibility default or provide a "
                 "custom response implementation."
             )
+
+        if (
+            needs_field
+            and isinstance(resolved_field, Sequence)
+            and not isinstance(resolved_field, (str, bytes))
+        ):
+            batch_size = int(self.numbers.shape[0])
+            if len(resolved_field) != batch_size:
+                raise ValueError(
+                    f"field sequence length {len(resolved_field)} must match "
+                    f"batch size {batch_size}."
+                )
+            if any(
+                item is None or not isinstance(item, Tensor) or item.shape != (3,)
+                for item in resolved_field
+            ):
+                raise ValueError(
+                    "field sequence for dipole response must contain (3,) "
+                    "Tensors for every lane."
+                )
+            resolved_field = torch.stack(list(resolved_field), dim=0)
+
+        if (
+            needs_field_grad
+            and isinstance(resolved_grad, Sequence)
+            and not isinstance(resolved_grad, (str, bytes))
+        ):
+            batch_size = int(self.numbers.shape[0])
+            if len(resolved_grad) != batch_size:
+                raise ValueError(
+                    f"field_grad sequence length {len(resolved_grad)} must "
+                    f"match batch size {batch_size}."
+                )
+            if any(
+                item is None
+                or not isinstance(item, Tensor)
+                or item.shape != (3, 3)
+                for item in resolved_grad
+            ):
+                raise ValueError(
+                    "field_grad sequence for quadrupole response must contain "
+                    "(3, 3) Tensors for every lane."
+                )
+            resolved_grad = torch.stack(list(resolved_grad), dim=0)
+
         return resolved_field, resolved_grad
 
     def bond_orders(

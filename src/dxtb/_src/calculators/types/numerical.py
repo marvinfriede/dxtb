@@ -530,10 +530,14 @@ class NumericalCalculator(EnergyCalculator):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):
                     positions[..., i, j] += step_size
-                    r = _dipfcn(positions, chrg, spin, **kwargs)
+                    r = _dipfcn(
+                        positions, chrg, spin, step_size=step_size, **kwargs
+                    )
 
                     positions[..., i, j] -= 2 * step_size
-                    l = _dipfcn(positions, chrg, spin, **kwargs)
+                    l = _dipfcn(
+                        positions, chrg, spin, step_size=step_size, **kwargs
+                    )
 
                     positions[..., i, j] += step_size
                     deriv[..., :, i, j] = 0.5 * (r - l) / step_size
@@ -611,6 +615,7 @@ class NumericalCalculator(EnergyCalculator):
                     positions,
                     chrg,
                     spin,
+                    step_size=step_size,
                     field=field + step_size * direction,
                     field_grad=field_grad,
                 )
@@ -618,6 +623,7 @@ class NumericalCalculator(EnergyCalculator):
                     positions,
                     chrg,
                     spin,
+                    step_size=step_size,
                     field=field - step_size * direction,
                     field_grad=field_grad,
                 )
@@ -638,7 +644,7 @@ class NumericalCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        step_size: int | float = defaults.STEP_SIZE,
+        step_size: int | float = 2e-4,
         field: Tensor | None | object = _UNSET,
         field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
@@ -695,6 +701,7 @@ class NumericalCalculator(EnergyCalculator):
                         positions,
                         chrg,
                         spin,
+                        step_size=step_size,
                         field=field,
                         field_grad=field_grad,
                     )
@@ -704,6 +711,7 @@ class NumericalCalculator(EnergyCalculator):
                         positions,
                         chrg,
                         spin,
+                        step_size=step_size,
                         field=field,
                         field_grad=field_grad,
                     )
@@ -731,7 +739,7 @@ class NumericalCalculator(EnergyCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        step_size: int | float = defaults.STEP_SIZE,
+        step_size: int | float = 2e-4,
         field: Tensor | None | object = _UNSET,
         field_grad: Tensor | None | object = _UNSET,
     ) -> Tensor:
@@ -786,6 +794,7 @@ class NumericalCalculator(EnergyCalculator):
                     positions,
                     chrg,
                     spin,
+                    step_size=step_size,
                     field=field + step_size * direction,
                     field_grad=field_grad,
                 )
@@ -793,6 +802,7 @@ class NumericalCalculator(EnergyCalculator):
                     positions,
                     chrg,
                     spin,
+                    step_size=step_size,
                     field=field - step_size * direction,
                     field_grad=field_grad,
                 )
@@ -922,11 +932,12 @@ class NumericalCalculator(EnergyCalculator):
         )
 
         # d(3, 3) / d(nat, 3) -> (3, 3, nat, 3) -> (3, 3, nat*3)
+        pol_step_size = 2e-4 if step_size == defaults.STEP_SIZE else step_size
         da_dr = self.pol_deriv_numerical(
             positions,
             chrg,
             spin,
-            step_size=step_size,
+            step_size=pol_step_size,
             field=field,
             field_grad=field_grad,
         )

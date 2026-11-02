@@ -45,11 +45,43 @@ from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import _call_tensor
 from dxtb._src.calculators.types.base import (
+    _convert_eval_system_dtype,
     _convert_system_dtype,
     reject_removed_store_kwargs,
 )
+from dxtb._src.components.classicals import (
+    IES,
+    DispersionD3,
+    DispersionD4,
+    Halogen,
+    Repulsion,
+    ShortRangeBond,
+)
+from dxtb._src.components.interactions.coulomb import (
+    AES2,
+    ES2,
+    ES3,
+)
+from dxtb._src.components.interactions.dispersion import DispersionD4SC
+from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
+
+_BUILTIN_CLASSICAL_TYPES = (
+    DispersionD3,
+    DispersionD4,
+    Halogen,
+    IES,
+    Repulsion,
+    ShortRangeBond,
+)
+_BUILTIN_INTERACTION_TYPES = (
+    AES2,
+    ES2,
+    ES3,
+    DispersionD4SC,
+    GeneralizedBorn,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.scf.functional.eager import _raise_failure_code
 from dxtb._src.scf.functional.padded import (
@@ -842,6 +874,7 @@ def _normalize_packed_fields(
     legacy_compat: bool,
 ) -> list[Tensor | None]:
     """Normalize shared or per-lane perturbation tensors."""
+    _ = legacy_compat
     count = len(lane_positions)
     if value is None:
         return [None for _ in lane_positions]
@@ -851,15 +884,16 @@ def _normalize_packed_fields(
                 _call_tensor(name, value, pos, expected_shape)
                 for pos in lane_positions
             ]
-        if not legacy_compat and value.shape == (count, *expected_shape):
+        if value.shape == (count, *expected_shape):
             return [
                 _call_tensor(name, value[idx], pos, expected_shape)
                 for idx, pos in enumerate(lane_positions)
             ]
         raise ValueError(
-            f"{name} must have shape {expected_shape}, got {tuple(value.shape)}."
+            f"{name} must have shape {expected_shape} or "
+            f"{(count, *expected_shape)}, got {tuple(value.shape)}."
         )
-    if not legacy_compat and isinstance(value, Sequence):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         if len(value) != count:
             raise ValueError(
                 f"{name} sequence length {len(value)} does not match "
@@ -1436,57 +1470,26 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
 
     Identical unpadded lane compositions (such as all conformers in
     ``batch_mode == 2`` or repeated compositions in ``batch_mode == 1``) reuse
-    a single ``Model.setup(..., batch_mode=0)`` call and share the resulting
-    immutable ``System`` value.
+    a single ``Model.setup(..., batch_mode=0)`` call within the evaluation and
+    share the resulting immutable ``System`` value.
     """
-    if hasattr(calc, "_ensure_system_current"):
-        calc._ensure_system_current()
     if calc.numbers.ndim == 1:
+        if hasattr(calc, "_prepare_eval_system"):
+            return (calc._prepare_eval_system(),)
         return (calc.system,)
 
+    from dxtb._src.calculators.types.base import (
+        _convert_eval_system_dtype,
+        _sanitize_inference_param_module,
+    )
+
+    _sanitize_inference_param_module(calc.model.par)
     batch_size = int(calc.numbers.shape[0])
     source_classicals = tuple(calc.classicals.components)
     source_interactions = tuple(calc.interactions.components)
     model_classicals = tuple(calc.model.classical)
     model_interactions = tuple(calc.model.interaction)
-    caller_owned_ids = {
-        *(id(c) for c in model_classicals),
-        *(id(c) for c in model_interactions),
-        *(id(c) for c in source_classicals),
-        *(id(c) for c in source_interactions),
-    }
 
-    comp_nums_sig = tuple(
-        (id(c), id(c.numbers), int(c.numbers._version))
-        for c in model_classicals
-        if getattr(c, "numbers", None) is not None
-        and isinstance(c.numbers, Tensor)
-    )
-    lane_setup_sig = (
-        getattr(calc, "_model_param_sig", None),
-        calc.dtype,
-        calc.device,
-        id(calc.numbers),
-        int(calc.numbers._version),
-        calc.opts,
-        tuple((id(c), c.label) for c in source_classicals),
-        tuple((id(c), c.label) for c in source_interactions),
-        comp_nums_sig,
-    )
-    memo_entry = getattr(calc, "_lane_systems_memo", None)
-    if memo_entry is not None:
-        prev_sig, memo_systems = memo_entry
-        if prev_sig == lane_setup_sig and all(
-            sys._active_exact_core() is not None for sys in memo_systems
-        ):
-            return memo_systems
-
-    has_2d_classical_nums = any(
-        getattr(c, "numbers", None) is not None
-        and isinstance(c.numbers, Tensor)
-        and c.numbers.ndim == 2
-        for c in model_classicals
-    )
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
 
@@ -1497,14 +1500,14 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         real_mask = row_raw > 0
         row_nums = row_raw[real_mask]
         comp_nums_key = tuple(
-            (id(c), tuple(int(x) for x in c.numbers[idx][real_mask].tolist()))
+            (id(c), tuple(int(x.item()) for x in c.numbers[idx][real_mask]))
             for c in model_classicals
             if getattr(c, "numbers", None) is not None
             and isinstance(c.numbers, Tensor)
             and c.numbers.ndim == 2
         )
         dedup_key = (
-            tuple(int(x) for x in row_nums.tolist()),
+            tuple(int(x.item()) for x in row_nums),
             comp_nums_key,
             calc.opts,
             calc.dtype,
@@ -1516,34 +1519,46 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         if lane_sys is None:
             lane_classical_list = []
             for c_idx, comp in enumerate(model_classicals):
-                c_copy = comp
-                if (
+                has_2d_nums = (
                     getattr(comp, "numbers", None) is not None
                     and isinstance(comp.numbers, Tensor)
                     and comp.numbers.ndim == 2
-                ):
-                    c_copy = copy.copy(comp)
+                )
+                needs_copy = (
+                    has_2d_nums
+                    or has_label_collision
+                    or type(comp) in _BUILTIN_CLASSICAL_TYPES
+                    or (
+                        c_idx < len(source_classicals)
+                        and comp.label != source_classicals[c_idx].label
+                    )
+                )
+                c_copy = copy.copy(comp) if needs_copy else comp
+                if has_2d_nums:
                     c_copy.numbers = comp.numbers[idx][real_mask]
-                elif has_label_collision:
-                    c_copy = copy.copy(comp)
                 if has_label_collision:
                     c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
                 lane_classical_list.append(c_copy)
 
-            lane_model = (
-                calc.model
+            lane_interaction_list = [
+                copy.copy(inter)
                 if (
-                    not (has_2d_classical_nums or has_label_collision)
-                    and calc.opts == calc.model.config
-                    and not calc.model.auto_int_level
+                    type(inter) in _BUILTIN_INTERACTION_TYPES
+                    or (
+                        i_idx < len(source_interactions)
+                        and inter.label != source_interactions[i_idx].label
+                    )
                 )
-                else Model(
-                    par=calc.model.par,
-                    config=calc.opts,
-                    classical=tuple(lane_classical_list),
-                    interaction=calc.model.interaction,
-                    auto_int_level=False,
-                )
+                else inter
+                for i_idx, inter in enumerate(model_interactions)
+            ]
+
+            lane_model = Model(
+                par=calc.model.par,
+                config=calc.opts,
+                classical=tuple(lane_classical_list),
+                interaction=tuple(lane_interaction_list),
+                auto_int_level=False,
             )
             setup_dd = (
                 calc.model.par.dd
@@ -1555,22 +1570,14 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 lane_sys,
                 source_classicals,
                 source_interactions,
-                caller_owned_ids,
+                set(),
             )
             if calc.dtype != calc.model.par.dtype:
-                lane_sys = _convert_system_dtype(
-                    lane_sys,
-                    calc.dtype,
-                    classicals=lane_sys.classicals.type(calc.dtype),
-                    interactions=lane_sys.interactions.type(calc.dtype),
-                )
+                lane_sys = _convert_eval_system_dtype(lane_sys, calc.dtype)
             lane_memo[dedup_key] = lane_sys
         lane_systems.append(lane_sys)
 
-    result_tuple = tuple(lane_systems)
-    if hasattr(calc, "_lane_systems_memo"):
-        calc._lane_systems_memo = (lane_setup_sig, result_tuple)
-    return result_tuple
+    return tuple(lane_systems)
 
 
 def evaluate_calculator_packed_singlepoint(
