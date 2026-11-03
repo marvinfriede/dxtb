@@ -4,14 +4,14 @@
 
 - **Main integration repository**: `marvinfriede/dxtb` (`/tmp1/friede/dxtb-agentic/dxtb`)
 - **Base branch**: `origin/claude/tender-dijkstra-cda42s`
-- **Recorded base commit SHA**: `abdb4562a0607475e775072277b63f82501363a0`
-- **Isolated worktree & branch**: `/tmp1/friede/dxtb-agentic/worktrees/unified-tad-dftd` on `feature/unified-tad-dftd`
+- **Recorded base commit SHA**: `abdb4562a0607475e775072277b63f82501363a0` (merged onto target `fba253dd766566507cd6db2797b6926aa35c95c2` at `f51776e23348df71bebf00fd268bdc6615d1c934`)
+- **Merged target commit SHA (`M1`)**: `f51776e23348df71bebf00fd268bdc6615d1c934` on `claude/tender-dijkstra-cda42s`
 - **Authoritative Fortran reference (`grimme-lab/dftd`)**: `/tmp1/friede/work/dftd-grimme-lab/dftd` at commit SHA `d2740777049b2a77fd5acc86c4e1abe75d5374ee` (branch `split-c-api-tests`)
 - **Modified PyTorch `tad-dftd3` reference**: `/tmp1/friede/dxtb-agentic/tad-dftd3` at commit SHA `954c0f2237c348063e0b8190cb2cb108a49cc3d9` (branch `neighborlist`)
 
 ## 2. Package Architecture (`src/tad_dftd/`)
 
-`tad_dftd` is an independent top-level Python package inside `src/tad_dftd/` that depends only on `torch` (`>=2.7.0,<3`), `tad-mctc` (`>=0.11.3`), `tad-multicharge` (`>=0.8.0`), `tomli` (on Python < 3.11), and standard library modules. It never imports `dxtb`, `tad_dftd3`, or `tad_dftd4`.
+`tad_dftd` is an independent top-level Python package inside `src/tad_dftd/` that depends only on `torch` (`>=2.7.0,<3`), `tad-mctc` (`>=0.11.3`), `tad-multicharge` (`>=0.8.0`), `tomli` (on Python < 3.11), `typing-extensions`, standard library modules, and optionally `ase` (`>=3.22.0`) + `numpy` when importing `tad_dftd.ase`. It never imports `dxtb`, `tad_dftd3`, or `tad_dftd4`.
 
 ```text
 src/tad_dftd/
@@ -22,6 +22,7 @@ src/tad_dftd/
 ├── COPYING
 ├── COPYING.LESSER
 ├── PROVENANCE.md
+├── ase.py
 ├── typing.py
 ├── defaults.py
 ├── exception.py
@@ -42,6 +43,8 @@ src/tad_dftd/
 │   ├── table.py
 │   ├── tanh.py
 │   ├── wfpair.py
+│   ├── wfpair-d3s.pt
+│   ├── wfpair-d4s.pt
 │   └── zeff.py
 ├── integrator/
 │   ├── __init__.py
