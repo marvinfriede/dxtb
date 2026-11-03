@@ -19,8 +19,6 @@ src/tad_dftd/
 ├── __version__.py
 ├── py.typed
 ├── LICENSE
-├── COPYING
-├── COPYING.LESSER
 ├── PROVENANCE.md
 ├── ase.py
 ├── typing.py
