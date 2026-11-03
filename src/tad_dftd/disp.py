@@ -14,6 +14,7 @@ High-level entrypoints for evaluating dispersion energies (:func:`dftd`,
 :func:`dftd4s`, :func:`dftd4srev`, :func:`get_properties`, :func:`dispersion`,
 :func:`dispersion2`, :func:`dispersion3`).
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -352,6 +353,38 @@ def dftd4srev(
     )(structure, param, q=q, damping=damping, pairs=pairs)
 
 
+_DFTD_DISPATCH: dict[DispersionModelId, Any] = {
+    DispersionModelId.D1: dftd1,
+    DispersionModelId.D2: dftd2,
+    DispersionModelId.D3: dftd3,
+    DispersionModelId.D3S: dftd3s,
+    DispersionModelId.D4: dftd4,
+    DispersionModelId.D4S: dftd4s,
+    DispersionModelId.D4SREV: dftd4srev,
+}
+
+_MODEL_CLASSES: dict[
+    DispersionModelId,
+    type[
+        D1Model
+        | D2Model
+        | D3Model
+        | D3SModel
+        | D4Model
+        | D4SModel
+        | D4SrevModel
+    ],
+] = {
+    DispersionModelId.D1: D1Model,
+    DispersionModelId.D2: D2Model,
+    DispersionModelId.D3: D3Model,
+    DispersionModelId.D3S: D3SModel,
+    DispersionModelId.D4: D4Model,
+    DispersionModelId.D4S: D4SModel,
+    DispersionModelId.D4SREV: D4SrevModel,
+}
+
+
 def dftd(
     structure: Structure,
     param: Param,
@@ -373,74 +406,9 @@ def dftd(
         if cutoff is None
         else cutoff
     )
-    if model_id == DispersionModelId.D1:
-        return dftd1(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D2:
-        return dftd2(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D3:
-        return dftd3(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D3S:
-        return dftd3s(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D4:
-        return dftd4(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D4S:
-        return dftd4s(
-            structure,
-            param,
-            damping=damping,
-            pairs=pairs,
-            cutoff=cut,
-            max_triples=max_triples,
-            checkpoint=checkpoint,
-            **kwargs,
-        )
-    if model_id == DispersionModelId.D4SREV:
-        return dftd4srev(
+    fn = _DFTD_DISPATCH.get(model_id)
+    if fn is not None:
+        return fn(
             structure,
             param,
             damping=damping,
@@ -480,48 +448,28 @@ def get_properties(
     Evaluate dispersion model properties (`cn`, `c6`, `c8`, and optional `q`,
     `alphadd`, `alphaqq`) matching ``get_properties`` in ``dftd/disp.f90``.
     """
-    if isinstance(model, (D1Model, D2Model, D3Model, D3SModel)):
-        return model.get_properties(structure, pairs=pairs, cn=cn)
-    if isinstance(model, (D4Model, D4SModel, D4SrevModel)):
-        return model.get_properties(structure, pairs=pairs, cn=cn, q=q)
+    if isinstance(
+        model,
+        (D1Model, D2Model, D3Model, D3SModel, D4Model, D4SModel, D4SrevModel),
+    ):
+        model_inst = model
+    else:
+        model_id = resolve_model_id(model)
+        cut = (
+            get_model_metadata(model_id).default_cutoff
+            if cutoff is None
+            else cutoff
+        )
+        cls = _MODEL_CLASSES.get(model_id)
+        if cls is None:
+            raise NotImplementedError(
+                f"Dispersion model '{model}' is not yet wired into get_properties()."
+            )
+        model_inst = cls(cutoff=cut, **kwargs)
 
-    model_id = resolve_model_id(model)
-    cut = (
-        get_model_metadata(model_id).default_cutoff
-        if cutoff is None
-        else cutoff
-    )
-    if model_id == DispersionModelId.D1:
-        return D1Model(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn
-        )
-    if model_id == DispersionModelId.D2:
-        return D2Model(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn
-        )
-    if model_id == DispersionModelId.D3:
-        return D3Model(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn
-        )
-    if model_id == DispersionModelId.D3S:
-        return D3SModel(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn
-        )
-    if model_id == DispersionModelId.D4:
-        return D4Model(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn, q=q
-        )
-    if model_id == DispersionModelId.D4S:
-        return D4SModel(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn, q=q
-        )
-    if model_id == DispersionModelId.D4SREV:
-        return D4SrevModel(cutoff=cut, **kwargs).get_properties(
-            structure, pairs=pairs, cn=cn, q=q
-        )
-    raise NotImplementedError(
-        f"Dispersion model '{model}' is not yet wired into get_properties()."
-    )
+    if isinstance(model_inst, (D1Model, D2Model, D3Model, D3SModel)):
+        return model_inst.get_properties(structure, pairs=pairs, cn=cn)
+    return model_inst.get_properties(structure, pairs=pairs, cn=cn, q=q)
 
 
 def _legacy_damping_param(
@@ -826,11 +774,14 @@ def validate_numbers(
     from .data.table import guard_numbers
 
     model_id = resolve_model_id(model)
-    like = torch.zeros(1, device=numbers.device, dtype=torch.float64)
     if model_id == DispersionModelId.D1:
-        return _validate_d1_numbers(numbers, D1_C6(device=like.device, dtype=like.dtype))
+        return _validate_d1_numbers(
+            numbers, D1_C6(device=numbers.device, dtype=torch.float64)
+        )
     if model_id == DispersionModelId.D2:
-        return _validate_d2_numbers(numbers, D2_C6(device=like.device, dtype=like.dtype))
+        return _validate_d2_numbers(
+            numbers, D2_C6(device=numbers.device, dtype=torch.float64)
+        )
     if model_id == DispersionModelId.D3:
         return _validate_d3_numbers(numbers)
     if model_id == DispersionModelId.D3S:

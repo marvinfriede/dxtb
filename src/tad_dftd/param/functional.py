@@ -255,37 +255,21 @@ def get_params(
     canonical = aliases.get(normalized, normalized)
     m = model.lower().strip()
 
-    if m == "d1":
-        if canonical not in _D1_PARAMETERS:
+    if m in ("d1", "d2"):
+        table = _D1_PARAMETERS if m == "d1" else _D2_PARAMETERS
+        label = m.upper()
+        if canonical not in table:
             raise KeyError(
-                f"unknown D1 functional {functional!r} (normalized: {canonical!r})"
+                f"unknown {label} functional {functional!r} (normalized: {canonical!r})"
             )
         if damping is not None:
             variants = [damping] if isinstance(damping, str) else damping
-            if not any(v.lower() in ("fermi", "d1") for v in variants):
+            if not any(v.lower() in ("fermi", m) for v in variants):
                 raise ValueError(
                     f"none of the requested damping variants {variants!r} are "
-                    "available for D1"
+                    f"available for {label}"
                 )
-        merged = dict(_D1_PARAMETERS[canonical])
-        if not keep_meta:
-            for key in _META_KEYS:
-                merged.pop(key, None)
-        return _to_tensor_dict(merged, dtype=dtype, device=device)
-
-    if m == "d2":
-        if canonical not in _D2_PARAMETERS:
-            raise KeyError(
-                f"unknown D2 functional {functional!r} (normalized: {canonical!r})"
-            )
-        if damping is not None:
-            variants = [damping] if isinstance(damping, str) else damping
-            if not any(v.lower() in ("fermi", "d2") for v in variants):
-                raise ValueError(
-                    f"none of the requested damping variants {variants!r} are "
-                    "available for D2"
-                )
-        merged = dict(_D2_PARAMETERS[canonical])
+        merged = dict(table[canonical])
         if not keep_meta:
             for key in _META_KEYS:
                 merged.pop(key, None)
@@ -303,24 +287,20 @@ def get_params(
         if damping is None:
             preference = list(data["default"]["d3"])
         elif isinstance(damping, str):
+            from ..damping.select import get_damping_id
+
             d_low = damping.lower().strip()
-            if d_low == "rational":
-                preference = ["bj"]
-            elif d_low == "chg":
-                preference = ["zero"]
-            elif d_low in ("mzero", "m-zero"):
-                preference = ["zerom"]
-            elif d_low in (
-                "optimizedpower",
-                "optimisedpower",
-                "optpower",
-                "opt-power",
-                "optimized-power",
-                "optimised-power",
-            ):
-                preference = ["op"]
-            else:
-                preference = [d_low]
+            if d_low != "bjm":
+                try:
+                    d_low = get_damping_id(d_low, three_body=False)
+                except ValueError:
+                    pass
+            toml_map = {
+                "rational": "bj",
+                "mzero": "zerom",
+                "optimizedpower": "op",
+            }
+            preference = [toml_map.get(d_low, d_low)]
         else:
             preference = list(damping)
 

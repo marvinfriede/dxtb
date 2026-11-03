@@ -130,16 +130,9 @@ def damping_from_name(
     norm_2b = _TWO_BODY_ALIASES.get(clean_2b, clean_2b)
 
     if three_body is True:
-        m = model.lower().strip()
-        if m in ("d1", "d2", "d4", "d4s", "d4srev"):
-            three_body = "zero_d4"
-        elif m in ("d5", "dft-d5", "dftd5"):
-            raise NotImplementedError(
-                "Dispersion model 'D5' is not yet implemented because the "
-                "upstream reference is not finalized."
-            )
-        else:
-            three_body = "zero_d3"
+        from ..model.catalogue import get_model_metadata
+
+        three_body = get_model_metadata(model).default_damping_3b or "zero_d4"
 
     three = None
     if three_body is not False and three_body is not None:

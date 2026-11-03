@@ -160,13 +160,11 @@ print(
 """
 
 
-def run_ase_isolation_check(
-    *,
-    import_root: Path = SRC_DIR,
+def _build_isolated_env(
+    import_root: Path,
     forbid_repo_root: Path | None = None,
-    cwd: Path | None = None,
 ) -> dict[str, str]:
-    """Run the deterministic ASE import-blocked subprocess check."""
+    """Construct a subprocess environment with ``import_root`` first on ``PYTHONPATH``."""
     env = dict(os.environ)
     raw_pp = env.get("PYTHONPATH", "")
     pp_entries = [p for p in raw_pp.split(os.pathsep) if p]
@@ -181,10 +179,20 @@ def run_ase_isolation_check(
     else:
         env.pop("TAD_DFTD_FORBID_REPO_ROOT", None)
 
-    env["TAD_DFTD_EXPECTED_IMPORT_ROOT"] = str(import_root.resolve())
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(import_root.resolve()), *pp_entries]
-    )
+    resolved_import = import_root.resolve()
+    env["TAD_DFTD_EXPECTED_IMPORT_ROOT"] = str(resolved_import)
+    env["PYTHONPATH"] = os.pathsep.join([str(resolved_import), *pp_entries])
+    return env
+
+
+def run_ase_isolation_check(
+    *,
+    import_root: Path = SRC_DIR,
+    forbid_repo_root: Path | None = None,
+    cwd: Path | None = None,
+) -> dict[str, str]:
+    """Run the deterministic ASE import-blocked subprocess check."""
+    env = _build_isolated_env(import_root, forbid_repo_root)
     proc = subprocess.run(
         [sys.executable, "-c", _ISOLATION_SCRIPT],
         cwd=str(cwd) if cwd is not None else None,
@@ -272,17 +280,7 @@ def run_installed_wheel_ase_verification(
         )
 
         # 8. Verify installed wheel with ASE available
-        env = dict(os.environ)
-        raw_pp = env.get("PYTHONPATH", "")
-        resolved_repo = REPO_ROOT.resolve()
-        pp_entries = [
-            p
-            for p in raw_pp.split(os.pathsep)
-            if p and not Path(p).resolve().is_relative_to(resolved_repo)
-        ]
-        env["PYTHONPATH"] = os.pathsep.join([str(install_target), *pp_entries])
-        env["TAD_DFTD_EXPECTED_IMPORT_ROOT"] = str(install_target)
-        env["TAD_DFTD_FORBID_REPO_ROOT"] = str(resolved_repo)
+        env = _build_isolated_env(install_target, REPO_ROOT)
 
         ase_proc = subprocess.run(
             [sys.executable, "-c", _INSTALLED_WITH_ASE_SCRIPT],

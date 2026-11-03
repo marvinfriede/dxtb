@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from numbers import Real
 from typing import Any
 
@@ -141,32 +141,9 @@ class _StressNotDefinedError(PropertyNotImplementedError, ValueError):
 
 _ALLOWED_DAMPING_HINT_KEYS = frozenset({"2b", "3b"})
 
-_ALLOWED_CUTOFF_KEYS = frozenset(
-    {"disp2", "disp3", "cn", "cn_eeq", "width2", "width3"}
-)
+_ALLOWED_CUTOFF_KEYS = frozenset(f.name for f in fields(Cutoff))
 
-_ALLOWED_PARAM_KEYS = frozenset(
-    {
-        "s6",
-        "s8",
-        "s9",
-        "s10",
-        "a1",
-        "a2",
-        "a3",
-        "a4",
-        "a13",
-        "a23",
-        "rs6",
-        "rs8",
-        "rs9",
-        "alp",
-        "alp3",
-        "bet",
-        "sxc",
-        "rsxc",
-    }
-)
+_ALLOWED_PARAM_KEYS = frozenset(DampingParam._child_names)
 
 _DTYPE_ALIASES: dict[str, torch.dtype] = {
     "float64": torch.float64,
@@ -241,9 +218,17 @@ class _ResolvedConfig:
     charge: float | None
     charges_key: str | None
     compute_stress: bool
-    cacheable_damping: bool
     tweaks_snapshot: tuple[tuple[str, float], ...]
     param_snapshot: tuple[tuple[str, float], ...]
+
+    @property
+    def cacheable_damping(self) -> bool:
+        """Return whether ``self.damping`` is an unmodified stateless built-in damping."""
+        return _is_stateless_builtin_damping(self.damping)
+
+    def has_param_drift(self, parameters: Mapping[str, Any]) -> bool:
+        """Return whether ``params_tweaks`` or ``self.param`` has drifted since resolution."""
+        return _has_mutable_param_drift(parameters, self)
 
 
 def _resolve_device(device: str | torch.device | Any) -> torch.device:
@@ -399,29 +384,13 @@ def _resolve_damping(
                 "Expected 'damping_hint.three' to be a ThreeBodyDamping instance "
                 f"or None, got '{type(damping_hint.three).__name__}'."
             )
-
-        d2_name = identify_damping(damping_hint.two)
-        if d2_name is not None:
-            try:
-                validate_model_damping(model_id, d2_name)
-            except ValueError as exc:
-                raise _ConfigurationError(str(exc)) from exc
-        elif meta.name in ("d1", "d2"):
-            raise _ConfigurationError(
-                f"Custom two-body damping '{type(damping_hint.two).__name__}' is "
-                f"not supported for dispersion model '{meta.label}'."
-            )
-
-        if damping_hint.three is None:
-            d3_spec: str | bool = False
-        else:
-            d3_name = identify_damping(damping_hint.three)
-            d3_spec = d3_name if d3_name is not None else "custom"
-
-        return damping_hint, d2_name, d3_spec, None
-
-    if damping_hint is None:
-        hint: dict[str, Any] = {}
+        raw_2b: Any = damping_hint.two
+        raw_3b: Any = (
+            False if damping_hint.three is None else damping_hint.three
+        )
+    elif damping_hint is None:
+        raw_2b = None
+        raw_3b = None
     elif isinstance(damping_hint, Mapping):
         unknown = sorted(set(damping_hint) - _ALLOWED_DAMPING_HINT_KEYS)
         if unknown:
@@ -429,21 +398,19 @@ def _resolve_damping(
                 f"Unknown key(s) in 'damping_hint': {', '.join(unknown)}; "
                 "expected '2b' and/or '3b'."
             )
-        hint = dict(damping_hint)
+        raw_2b = damping_hint.get("2b")
+        raw_3b = damping_hint.get("3b")
     else:
         raise _InvalidTypeConfigurationError(
             "Expected 'damping_hint' to be a mapping with keys '2b'/'3b', a "
             f"Damping instance, or None, got '{type(damping_hint).__name__}'."
         )
 
-    raw_2b = hint.get("2b")
-    raw_3b = hint.get("3b")
-
     two_obj: TwoBodyDamping | None = None
     raw_2b_clean: str | None = None
 
     if raw_2b is None:
-        d2_name = meta.default_damping_2b
+        d2_name: str | None = meta.default_damping_2b
         try:
             validate_model_damping(model_id, d2_name)
         except ValueError as exc:
@@ -475,18 +442,19 @@ def _resolve_damping(
         )
 
     three_obj: ThreeBodyDamping | None = None
+    default_3b = meta.default_damping_3b or "zero_d4"
 
     if raw_3b is not None:
         if raw_3b is False or (
             isinstance(raw_3b, str)
             and raw_3b.lower().strip() in ("none", "false", "off")
         ):
-            d3_spec = False
+            d3_spec: str | bool = False
         elif raw_3b is True or (
             isinstance(raw_3b, str)
             and raw_3b.lower().strip() in ("zero_avg", "zero-avg")
         ):
-            d3_spec = "zero_d3" if meta.name in ("d3", "d3s") else "zero_d4"
+            d3_spec = default_3b
         elif not isinstance(raw_3b, bool) and isinstance(raw_3b, str):
             try:
                 d3_spec = get_damping_id(
@@ -512,18 +480,25 @@ def _resolve_damping(
         # - Else if a functional method is provided, enable ATM by default for D4/D4S/D4Srev and disable for D1/D2/D3/D3S (matching Fortran catalogue.f90).
         # - Else (explicit params_tweaks without method and without s9), disable ATM.
         if "s9" in tweaks:
-            if tweaks["s9"] == 0.0:
-                d3_spec = False
-            else:
-                d3_spec = "zero_d3" if meta.name in ("d3", "d3s") else "zero_d4"
+            d3_spec = False if tweaks["s9"] == 0.0 else default_3b
         elif raw_2b is not None:
             d3_spec = False
-        elif method is not None:
-            d3_spec = (
-                "zero_d4" if meta.name in ("d4", "d4s", "d4srev") else False
-            )
+        elif method is not None and meta.name in ("d4", "d4s", "d4srev"):
+            d3_spec = default_3b
         else:
             d3_spec = False
+
+    if isinstance(damping_hint, Damping):
+        return damping_hint, d2_name, d3_spec, raw_2b_clean
+
+    if two_obj is None and three_obj is None:
+        assert d2_name is not None
+        assert isinstance(d3_spec, (str, bool))
+        try:
+            resolved = damping_from_name(d2_name, d3_spec, model=meta.name)
+        except ValueError as exc:
+            raise _ConfigurationError(str(exc)) from exc
+        return resolved, d2_name, d3_spec, raw_2b_clean
 
     if two_obj is None:
         assert d2_name is not None
@@ -909,7 +884,6 @@ def _resolve_config(
             charge=charge,
             charges_key=charges_key,
             compute_stress=compute_stress,
-            cacheable_damping=_is_stateless_builtin_damping(damping),
             tweaks_snapshot=tuple(sorted(tweaks.items())),
             param_snapshot=_snapshot_damping_param(dparam),
         )
@@ -948,21 +922,23 @@ def _copy_parameter_value(value: Any) -> Any:
     return value
 
 
+_ALWAYS_UNEQUAL_PARAM_TYPES = (
+    Damping,
+    TwoBodyDamping,
+    ThreeBodyDamping,
+    Cutoff,
+    DampingParam,
+    torch.Tensor,
+)
+
+
 def _parameters_equal(old: Any, new: Any) -> bool:
     """Compare two calculator parameter values safely for change detection."""
+    if isinstance(old, _ALWAYS_UNEQUAL_PARAM_TYPES) or isinstance(
+        new, _ALWAYS_UNEQUAL_PARAM_TYPES
+    ):
+        return False
     if old is new:
-        if isinstance(
-            new,
-            (
-                Damping,
-                TwoBodyDamping,
-                ThreeBodyDamping,
-                Cutoff,
-                DampingParam,
-                torch.Tensor,
-            ),
-        ):
-            return False
         return True
     if type(old) is not type(new):
         return False
@@ -970,18 +946,6 @@ def _parameters_equal(old: Any, new: Any) -> bool:
         if old.keys() != new.keys():
             return False
         return all(_parameters_equal(old[k], new[k]) for k in old)
-    if isinstance(
-        old,
-        (
-            Damping,
-            TwoBodyDamping,
-            ThreeBodyDamping,
-            Cutoff,
-            DampingParam,
-            torch.Tensor,
-        ),
-    ):
-        return False
     try:
         return bool(old == new)
     except Exception:
@@ -1451,11 +1415,6 @@ class DFTD(Calculator):
                 changed_parameters[key] = val
             self.parameters[key] = val
 
-        for key in ("params_tweaks", "damping_hint", "realspace_cutoff"):
-            val = self.parameters.get(key)
-            if isinstance(val, Mapping):
-                self.parameters[key] = _copy_parameter_value(val)
-
         self._resolved_config = new_resolved_config
 
         base_props = list(type(self).implemented_properties)
@@ -1485,13 +1444,10 @@ class DFTD(Calculator):
         changes = list(super().check_state(atoms, tol=tol))
         cfg = self._resolved_config
         if self.atoms is not None and cfg is not None:
-            if (
-                not cfg.cacheable_damping
-                or not _is_stateless_builtin_damping(cfg.damping)
-            ) and "damping_state" not in changes:
+            if not cfg.cacheable_damping and "damping_state" not in changes:
                 changes.append("damping_state")
             if (
-                _has_mutable_param_drift(self.parameters, cfg)
+                cfg.has_param_drift(self.parameters)
                 and "params_tweaks" not in changes
             ):
                 changes.append("params_tweaks")
@@ -1515,9 +1471,10 @@ class DFTD(Calculator):
                     changes.append(change_tag)
                 elif has_in_atoms:
                     curr = np.asarray(atoms.arrays[key])
+                    cached_ref = self._last_external_charges
                     ref = (
-                        self._last_external_charges
-                        if self._last_external_charges is not None
+                        cached_ref
+                        if cached_ref is not None
                         else np.asarray(self.atoms.arrays[key])
                     )
                     if (
@@ -1528,10 +1485,15 @@ class DFTD(Calculator):
                         changes.append(change_tag)
                     else:
                         curr_f64 = curr.astype(np.float64, copy=False)
-                        ref_f64 = ref.astype(np.float64, copy=False)
+                        if cached_ref is not None:
+                            ref_f64 = cached_ref
+                            ref_finite = True
+                        else:
+                            ref_f64 = ref.astype(np.float64, copy=False)
+                            ref_finite = bool(np.all(np.isfinite(ref_f64)))
                         if not (
                             np.all(np.isfinite(curr_f64))
-                            and np.all(np.isfinite(ref_f64))
+                            and ref_finite
                             and np.allclose(
                                 curr_f64, ref_f64, rtol=0.0, atol=tol
                             )
@@ -1576,15 +1538,18 @@ class DFTD(Calculator):
         else:
             requested_props = list(properties)
 
+        cfg = self._resolved_config
+        param_drift = (
+            cfg is None
+            or "params_tweaks" in system_changes
+            or cfg.has_param_drift(self.parameters)
+        )
         had_cached_results = (
             bool(self.results)
             and not system_changes
-            and self._resolved_config is not None
-            and self._resolved_config.cacheable_damping
-            and _is_stateless_builtin_damping(self._resolved_config.damping)
-            and not _has_mutable_param_drift(
-                self.parameters, self._resolved_config
-            )
+            and cfg is not None
+            and cfg.cacheable_damping
+            and not param_drift
         )
         super().calculate(
             atoms=atoms,
@@ -1598,10 +1563,9 @@ class DFTD(Calculator):
             )
 
         try:
-            if self._resolved_config is None or _has_mutable_param_drift(
-                self.parameters, self._resolved_config
-            ):
+            if param_drift:
                 self._resolved_config = self._resolve_current_config()
+            assert self._resolved_config is not None
 
             new_results = _calculate_energy_and_derivatives(
                 self.atoms,

@@ -11,10 +11,6 @@ Tests for the native ASE calculator interface ``tad_dftd.ase``.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -48,14 +44,10 @@ from tad_dftd.damping import (
     ZeroThreeBodyD3,
     ZeroThreeBodyD4,
     ZeroTwoBody,
-    damping_from_name,
 )
 from tad_dftd.model.catalogue import DispersionModelId
 
 from .test_ase_isolation import run_ase_isolation_check
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = REPO_ROOT / "src"
 
 
 def test_public_interface_and_convenience_subclasses() -> None:
@@ -2294,10 +2286,18 @@ def test_stateful_damping_and_mutable_param_cache_consistency(
     ).detach()
     numbers = torch.tensor(atoms.get_atomic_numbers(), dtype=torch.long)
 
-    def eval_direct(calc_obj: DFTD) -> tuple[float, np.ndarray]:
+    def eval_direct(
+        calc_obj: DFTD, target_atoms: Atoms = atoms
+    ) -> tuple[float, np.ndarray]:
         cfg = calc_obj._resolved_config
         assert cfg is not None
-        pos_g = pos_bohr.clone().requires_grad_(True)
+        pos_g = (
+            torch.tensor(target_atoms.get_positions(), dtype=torch.float64)
+            / Bohr
+        ).requires_grad_(True)
+        numbers = torch.tensor(
+            target_atoms.get_atomic_numbers(), dtype=torch.long
+        )
         struct = Structure(
             numbers=numbers,
             positions=pos_g,
@@ -2401,33 +2401,6 @@ def test_stateful_damping_and_mutable_param_cache_consistency(
             return self.scale * super().__call__(*args, **kwargs)
 
     atoms_3b = molecule("bicyclobutane")
-    pos_3b_bohr = (
-        torch.tensor(atoms_3b.get_positions(), dtype=torch.float64) / Bohr
-    ).detach()
-    numbers_3b = torch.tensor(atoms_3b.get_atomic_numbers(), dtype=torch.long)
-
-    def eval_direct_3b(calc_obj: DFTD) -> tuple[float, np.ndarray]:
-        cfg = calc_obj._resolved_config
-        assert cfg is not None
-        pos_g = pos_3b_bohr.clone().requires_grad_(True)
-        struct = Structure(
-            numbers=numbers_3b,
-            positions=pos_g,
-            charge=torch.tensor(0.0, dtype=torch.float64),
-        )
-        e_t = dftd(
-            struct,
-            cfg.param,
-            model=cfg.model_id,
-            damping=cfg.damping,
-            cutoff=cfg.cutoff,
-        ).sum()
-        (g_t,) = torch.autograd.grad(e_t, pos_g)
-        return (
-            float(e_t.item()) * Hartree,
-            (-g_t.detach().numpy()) * (Hartree / Bohr),
-        )
-
     damping_3b = _ScaledZeroThreeBodyD3(scale=1.0)
     calc_3b = DFTD(
         method="PBE",
@@ -2441,7 +2414,7 @@ def test_stateful_damping_and_mutable_param_cache_consistency(
 
     e3_1 = atoms_3b.get_potential_energy()
     f3_1 = atoms_3b.get_forces()
-    e3_1_ref, f3_1_ref = eval_direct_3b(calc_3b)
+    e3_1_ref, f3_1_ref = eval_direct(calc_3b, atoms_3b)
     assert e3_1 == pytest.approx(e3_1_ref, rel=1e-14, abs=1e-14)
     np.testing.assert_allclose(f3_1, f3_1_ref, rtol=1e-13, atol=1e-13)
 
@@ -2449,7 +2422,7 @@ def test_stateful_damping_and_mutable_param_cache_consistency(
     damping_3b.scale = 50.0
     e3_2 = atoms_3b.get_potential_energy()
     f3_2 = atoms_3b.get_forces()
-    e3_2_ref, f3_2_ref = eval_direct_3b(calc_3b)
+    e3_2_ref, f3_2_ref = eval_direct(calc_3b, atoms_3b)
     assert abs(e3_2 - e3_1) > 1.0e-3
     assert e3_2 == pytest.approx(e3_2_ref, rel=1e-14, abs=1e-14)
     np.testing.assert_allclose(f3_2, f3_2_ref, rtol=1e-13, atol=1e-13)

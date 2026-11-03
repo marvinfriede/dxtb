@@ -290,6 +290,10 @@ MODEL_ALLOWED_DAMPINGS: dict[str, tuple[str, ...]] = {
     k: v.allowed_dampings for k, v in DISPERSION_MODELS.items()
 }
 
+_MODEL_METADATA_BY_ID: dict[DispersionModelId, ModelMetadata] = {
+    v.model_id: v for v in DISPERSION_MODELS.values()
+}
+
 
 class _InvalidModelTypeError(TypeError, ValueError):
     """Exception raised when a boolean or invalid type is passed as a model ID."""
@@ -303,16 +307,13 @@ def resolve_model_id(
         raise _InvalidModelTypeError(
             f"Boolean value '{model}' is not a valid dispersion model identifier."
         )
-    if isinstance(model, DispersionModelId):
-        if model == DispersionModelId.D5:
-            raise NotImplementedError(
-                "Dispersion model 'D5' is not yet implemented because the "
-                "upstream reference is not finalized."
-            )
-        return model
     if isinstance(model, int):
         try:
-            model_id = DispersionModelId(model)
+            model_id = (
+                model
+                if isinstance(model, DispersionModelId)
+                else DispersionModelId(model)
+            )
         except ValueError as exc:
             valid = ", ".join(
                 f"{m.value} ({m.name})"
@@ -354,11 +355,7 @@ def resolve_model_id(
 
 def get_model_metadata(model: str | int | DispersionModelId) -> ModelMetadata:
     """Return the :class:`ModelMetadata` for ``model``."""
-    model_id = resolve_model_id(model)
-    for meta in DISPERSION_MODELS.values():
-        if meta.model_id == model_id:
-            return meta
-    raise ValueError(f"Unknown dispersion model '{model}'.")
+    return _MODEL_METADATA_BY_ID[resolve_model_id(model)]
 
 
 def resolve_charge_model_id(
@@ -379,16 +376,13 @@ def resolve_charge_model_id(
             f"Boolean value '{qmodel}' is not a valid charge model identifier."
         )
     qid: ChargeModelId
-    if isinstance(qmodel, ChargeModelId):
-        if qmodel == ChargeModelId.EEQBC:
-            raise NotImplementedError(
-                "Charge model 'eeqbc' is not supported in this release "
-                "because the upstream model is not finalized."
-            )
-        qid = qmodel
-    elif isinstance(qmodel, int):
+    if isinstance(qmodel, int):
         try:
-            qid = ChargeModelId(qmodel)
+            qid = (
+                qmodel
+                if isinstance(qmodel, ChargeModelId)
+                else ChargeModelId(qmodel)
+            )
         except ValueError as exc:
             raise ValueError(f"Unknown charge model ID '{qmodel}'.") from exc
         if qid == ChargeModelId.EEQBC:
@@ -400,10 +394,8 @@ def resolve_charge_model_id(
         key = qmodel.lower().strip()
         if key in ("eeqbc", "eeqbc2025"):
             raise NotImplementedError(
-                "Charge model '{qmodel}' is not supported in this release "
-                "because the upstream model is not finalized.".format(
-                    qmodel=qmodel
-                )
+                f"Charge model '{qmodel}' is not supported in this release "
+                "because the upstream model is not finalized."
             )
         if key not in CHARGE_MODELS:
             known = ", ".join(sorted(CHARGE_MODELS))
@@ -428,18 +420,6 @@ def resolve_charge_model_id(
             f"dispersion model '{meta.label}' (allowed: {allowed})."
         )
     return qid
-
-
-_DAMPING_ALIASES: dict[str, str] = {
-    "optpower": "optimizedpower",
-    "opt-power": "optimizedpower",
-    "optimized-power": "optimizedpower",
-    "optimised-power": "optimizedpower",
-    "m-zero": "mzero",
-    "tang_toennies": "screened",
-    "z-damping": "z",
-    "koide-bjm": "koide",
-}
 
 
 def validate_model_damping(
@@ -472,7 +452,7 @@ def validate_model_damping(
         try:
             key = get_damping_id(key, three_body=False)
         except ValueError:
-            key = _DAMPING_ALIASES.get(key, key)
+            pass
     if key not in meta.allowed_dampings:
         allowed = ", ".join(meta.allowed_dampings)
         raise ValueError(

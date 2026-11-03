@@ -62,13 +62,7 @@ Param: TypeAlias = DampingParam | Mapping[str, Any]
 
 
 def _default_d1_cutoff() -> Cutoff:
-    return Cutoff(
-        disp2=defaults.D1_DISP2_CUTOFF,
-        disp3=defaults.D3_DISP3_CUTOFF,
-        cn=defaults.D3_CN_CUTOFF,
-        width2=defaults.D3_DISP2_WIDTH,
-        width3=defaults.D3_DISP3_WIDTH,
-    )
+    return Cutoff.from_model("d1")
 
 
 def _validate_d1_numbers(numbers: Tensor, c6_table: Tensor) -> Tensor:
