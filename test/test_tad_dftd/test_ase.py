@@ -2341,6 +2341,27 @@ def test_stateful_damping_and_mutable_param_cache_consistency(
         np.testing.assert_allclose(atoms.get_forces(), f_bi, rtol=0.0, atol=0.0)
         assert call_count == 2
 
+    # 1b. Built-in damping object that dynamically acquires state after construction transitions to non-cacheable
+    builtin_dyn = RationalTwoBody()
+    calc_dyn = DFTD(
+        method="PBE",
+        model="d3",
+        damping_hint={"2b": builtin_dyn, "3b": "none"},
+    )
+    assert calc_dyn._resolved_config is not None
+    assert calc_dyn._resolved_config.cacheable_damping is True
+    atoms.calc = calc_dyn
+    call_count = 0
+    e_dyn = atoms.get_potential_energy()
+    assert call_count == 1
+    assert atoms.get_potential_energy() == e_dyn
+    assert call_count == 1
+    builtin_dyn.dynamic_state = 2.0  # type: ignore[attr-defined]
+    assert calc_dyn._resolved_config.cacheable_damping is False
+    assert "damping_state" in calc_dyn.check_state(atoms)
+    assert atoms.get_potential_energy() == e_dyn
+    assert call_count == 2
+
     # 2, 3, 4, 5. Stateful 2B damping subclass: preserves identity, matches direct dftd(),
     # never returns stale energy/forces on in-place state change, and set(damping_hint=same_instance) resets
     class _ScaledRationalTwoBody(RationalTwoBody):

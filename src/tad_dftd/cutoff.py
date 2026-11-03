@@ -12,6 +12,7 @@ Real-space cutoffs
 One real-space cutoff per part of a dispersion model, in Bohr, plus optional
 quintic :math:`C^2` smooth switching widths ``width2`` and ``width3``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
@@ -93,7 +94,11 @@ class Cutoff:
         """
         m = model.lower().strip()
         if m in ("d1", "d2"):
-            def_disp2 = defaults.D1_DISP2_CUTOFF
+            def_disp2 = (
+                defaults.D1_DISP2_CUTOFF
+                if m == "d1"
+                else defaults.D2_DISP2_CUTOFF
+            )
             def_disp3 = defaults.D3_DISP3_CUTOFF
             def_cn = defaults.D3_CN_CUTOFF
             def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF

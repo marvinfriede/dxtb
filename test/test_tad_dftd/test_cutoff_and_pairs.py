@@ -17,6 +17,7 @@
 """
 Tests for ``tad_dftd.cutoff`` and ``tad_dftd.pairs``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -28,8 +29,13 @@ from tad_dftd.cutoff import Cutoff, smooth_cutoff
 from tad_dftd.pairs import DensePairs, SparsePairs
 
 
-def test_cutoff_validation_and_from_model() -> None:
+def test_cutoff_validation_and_from_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify Cutoff construction, validation, and model-specific defaults."""
+    from tad_dftd.model.d1 import _default_d1_cutoff
+    from tad_dftd.model.d2 import _default_d2_cutoff
+
     c_default = Cutoff()
     assert c_default.cn == defaults.D3_CN_CUTOFF
     assert c_default.disp2 == defaults.D3_DISP2_CUTOFF
@@ -40,6 +46,18 @@ def test_cutoff_validation_and_from_model() -> None:
 
     c_d1 = Cutoff.from_model("d1")
     assert c_d1.disp2 == defaults.D1_DISP2_CUTOFF
+    assert _default_d1_cutoff().disp2 == defaults.D1_DISP2_CUTOFF
+
+    c_d2 = Cutoff.from_model("d2")
+    assert c_d2.disp2 == defaults.D2_DISP2_CUTOFF
+    assert _default_d2_cutoff().disp2 == defaults.D2_DISP2_CUTOFF
+
+    monkeypatch.setattr(defaults, "D1_DISP2_CUTOFF", 81.0)
+    monkeypatch.setattr(defaults, "D2_DISP2_CUTOFF", 82.0)
+    assert Cutoff.from_model("d1").disp2 == 81.0
+    assert Cutoff.from_model("d2").disp2 == 82.0
+    assert _default_d1_cutoff().disp2 == 81.0
+    assert _default_d2_cutoff().disp2 == 82.0
 
     c_d4 = Cutoff.from_model("d4")
     assert c_d4.cn == defaults.D4_CN_CUTOFF
@@ -58,7 +76,9 @@ def test_cutoff_validation_and_from_model() -> None:
 
 def test_smooth_cutoff_behavior_and_grad() -> None:
     """Verify quintic C2 smooth_cutoff switching function and its derivatives."""
-    r = torch.tensor([20.0, 40.0, 45.0, 50.0, 55.0], dtype=torch.float64, requires_grad=True)
+    r = torch.tensor(
+        [20.0, 40.0, 45.0, 50.0, 55.0], dtype=torch.float64, requires_grad=True
+    )
     s = smooth_cutoff(r, cutoff=50.0, width=10.0)
 
     # r <= 40 -> 1.0; r = 45 (midpoint) -> 0.5; r >= 50 -> 0.0
@@ -101,7 +121,11 @@ def test_dense_and_sparse_pairs_molecular_and_periodic() -> None:
     # Displace an atom by more than half skin -> stale becomes True
     displaced = mctc.Structure(
         numbers=numbers,
-        positions=positions + torch.tensor([[1.5, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float64),
+        positions=positions
+        + torch.tensor(
+            [[1.5, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            dtype=torch.float64,
+        ),
     )
     assert sp.stale(displaced).item()
 
@@ -110,7 +134,9 @@ def test_dense_and_sparse_pairs_molecular_and_periodic() -> None:
     periodic = torch.tensor([True, True, True])
     cell = mctc.Structure(
         numbers=torch.tensor([6, 6], dtype=torch.long),
-        positions=torch.tensor([[0.0, 0.0, 0.0], [2.5, 2.5, 2.5]], dtype=torch.float64),
+        positions=torch.tensor(
+            [[0.0, 0.0, 0.0], [2.5, 2.5, 2.5]], dtype=torch.float64
+        ),
         lattice=lattice,
         periodic=periodic,
     )

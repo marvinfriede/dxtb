@@ -1,9 +1,9 @@
 # Upstream Corrective Specification: Safe Partial-Periodic EEQ Handling in `tad-multicharge`
 
-- **Target upstream repository**: `tad-mctc/tad-multicharge`
+- **Target upstream repositories**: `grimme-lab/multicharge` and `tad-mctc/tad-multicharge`
 - **Observed upstream version in `dxtb` environments**: `tad-multicharge == 0.8.0`
-- **Severity**: High (silent unphysical 3D Ewald execution under `torch.func.vmap` / `torch.compile`)
-- **Classification in `marvinfriede/dxtb` (`tad_dftd` / `tad_dftd.ase`)**: **Inherited upstream dependency limitation** — `tad_dftd` does **not** introduce new exposure to this hazard; in fact, `tad_dftd` adds defensive eager validation (`_validate_periodic_eeq` in `src/tad_dftd/disp.py`) and `tad_dftd.ase` normalizes `pbc=[False, False, False]` cells to `lattice=None, periodic=None` (`_build_structure` in `src/tad_dftd/ase.py`).
+- **Status**: Tracked upstream — 1D and 2D periodic EEQ electrostatics are being implemented upstream in Fortran `multicharge` and will be updated in `tad-multicharge` separately.
+- **Classification in `marvinfriede/dxtb` (`tad_dftd` / `tad_dftd.ase`)**: **Inherited upstream dependency behavior** — `tad_dftd` delegates automatic EEQ evaluation directly to `tad-multicharge` via `tad_dftd.charge.get_charges` -> `tad_dftd.charge.eeq.get_eeq_charges` -> `tad_multicharge.model.eeq.EEQModel`, while `tad_dftd.ase` normalizes `pbc=[False, False, False]` cells to `lattice=None, periodic=None` (`DFTD._build_structure` in `src/tad_dftd/ase.py`).
 
 ---
 
@@ -54,13 +54,19 @@ This creates two concrete defects:
 
 ---
 
-## 2. Exposure Classification in `dxtb` (`tad_dftd` and `tad_dftd.ase`)
+## 2. Actual Automatic-EEQ Dispatch in `tad_dftd` and `tad_dftd.ase`
 
-- **Inherited vs. newly introduced**: This behavior is **inherited directly from `tad-multicharge==0.8.0`**. Neither `tad_dftd` nor `tad_dftd.ase` introduces new exposure.
-- **Mitigations already present in `tad_dftd` and `tad_dftd.ase`**:
-  1. `tad_dftd.disp._validate_periodic_eeq` checks `periodic` before invoking `tad_multicharge.get_eeq`, raising `NotImplementedError` in eager mode (and when `periodic` is an unbatched tensor inside `jacrev`/`jacfwd` over `positions`/`lattice`) whenever `periodic.any() and not periodic.all()`.
-  2. `tad_dftd.disp._compute_eeq_charges` strips `lattice` and `periodic` (passing `lattice=None, periodic=None` to `Structure`) when `not periodic.any()` in eager mode, ensuring `0D-with-lattice` (`periodic = [False, False, False]`) uses the 0D Coulomb kernel in `tad_dftd`.
-  3. `tad_dftd.ase._build_structure` sets `lattice = None` and `periodic = None` whenever `not any(pbc)` (`has_any_pbc is False`), and executes in eager mode where `_validate_periodic_eeq` immediately rejects 1D/2D `pbc` without `charges_key`.
+- **Native `tad_dftd` automatic-EEQ call chain**:
+  1. `tad_dftd.dftd(structure, param, model="d4" | "d4s" | "d4srev")` dispatches to `dftd4` / `dftd4s` / `dftd4srev`, which instantiates `D4Model` / `D4SModel` / `D4SrevModel` (`src/tad_dftd/model/d4.py`).
+  2. When external atomic partial charges `q` are not provided (`q is None`), `D4Model.environment` (and `D4SModel.environment` / `D4SrevModel.environment`) calls `tad_dftd.charge.get_charges(structure.numbers, structure.positions, charge, qmod=self.qmodel, lattice=structure.lattice, periodic=structure.periodic, cutoff=self.cutoff.cn_eeq)`.
+  3. `tad_dftd.charge.get_charges` (`src/tad_dftd/charge/__init__.py`) validates element numbers and delegates to `tad_dftd.charge.eeq.get_eeq_charges` (`src/tad_dftd/charge/eeq.py`), which constructs a `tad_mctc.io.structure.Structure` with the passed `lattice` and `periodic` tensors and invokes `tad_multicharge.model.eeq.EEQModel.param2019(...)(struct, return_energy=False)`.
+  4. Native `tad_dftd` does **not** perform separate `periodic` pre-validation or strip `lattice` in `src/tad_dftd/disp.py`; all `lattice` / `periodic` branching and the eager `NotImplementedError` check happen inside `tad_multicharge.model.eeq.EEQModel.get_coulomb_matrix`.
+- **ASE `tad_dftd.ase` automatic-EEQ call chain**:
+  1. `DFTD._build_structure` (`src/tad_dftd/ase.py`) inspects `pbc = [bool(x) for x in atoms.get_pbc()]` and sets `has_any_pbc = any(pbc)`.
+  2. When `has_any_pbc` is `False` (`pbc = [False, False, False]`), `DFTD._build_structure` sets `lattice_t = None` and `periodic_t = None` even if `atoms.cell` is non-zero, so `0D-with-cell` ASE `Atoms` objects always reach `_coulomb_matrix_0d` in `tad-multicharge`.
+  3. When `has_any_pbc` is `True` and `charges_key is None`, `DFTD.calculate` runs in eager mode and passes `lattice_t` and `periodic_t` to `tad_dftd.dftd`, where `tad_multicharge.model.eeq.EEQModel.get_coulomb_matrix` raises `NotImplementedError` for 1D or 2D `pbc`.
+- **Upstream resolution**:
+  - Genuine 1D and 2D periodic EEQ electrostatics are being implemented upstream in Fortran `grimme-lab/multicharge` and will be ported to `tad-mctc/tad-multicharge` in a separate upstream update.
 
 ---
 

@@ -17,6 +17,7 @@
 """
 Tests for ``tad_dftd.model.catalogue`` and ``tad_dftd.param``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -43,9 +44,13 @@ def test_model_catalogue_and_damping_validation() -> None:
     assert resolve_model_id("dft-d3") == DispersionModelId.D3
     assert resolve_model_id("D4Srev") == DispersionModelId.D4SREV
 
-    with pytest.raises(NotImplementedError, match="not supported in this release"):
+    with pytest.raises(
+        NotImplementedError, match="not supported in this release"
+    ):
         resolve_charge_model_id("eeqbc", model="d4srev")
-    with pytest.raises(NotImplementedError, match="not supported in this release"):
+    with pytest.raises(
+        NotImplementedError, match="not supported in this release"
+    ):
         resolve_charge_model_id("eeqbc2025", model="d4")
 
     with pytest.raises(NotImplementedError, match="not yet implemented"):
@@ -65,7 +70,16 @@ def test_model_catalogue_and_damping_validation() -> None:
         validate_model_damping("d2", "rational")
 
     # D3 allows rational, zero, mzero, optimizedpower, cso, z, koide, screened
-    for d in ("rational", "zero", "mzero", "optimizedpower", "cso", "z", "koide", "screened"):
+    for d in (
+        "rational",
+        "zero",
+        "mzero",
+        "optimizedpower",
+        "cso",
+        "z",
+        "koide",
+        "screened",
+    ):
         validate_model_damping("d3", d)
     with pytest.raises(ValueError, match="not supported"):
         validate_model_damping("d3", "fermi")
@@ -108,7 +122,9 @@ def test_functional_parameter_lookup() -> None:
     assert pytest.approx(p_d2_pbe["s6"].item(), rel=1e-6) == 0.75
 
     # DampingParam.from_functional constructs DampingParam
-    dp = DampingParam.from_functional("PBE", model="d3", damping="rational", dtype=torch.float64)
+    dp = DampingParam.from_functional(
+        "PBE", model="d3", damping="rational", dtype=torch.float64
+    )
     assert isinstance(dp, DampingParam)
     assert isinstance(dp.a1, torch.Tensor)
     assert pytest.approx(dp.a1.item(), rel=1e-6) == 0.4289
@@ -121,6 +137,7 @@ def test_element_ranges_padding_and_transform_validation_all_models() -> None:
     across all 7 dispersion models (H2.2).
     """
     from tad_mctc import Structure
+
     from tad_dftd import dftd
 
     # 1. Catalogue max_elem matches documented maximum Z per model
@@ -136,9 +153,7 @@ def test_element_ranges_padding_and_transform_validation_all_models() -> None:
     for name, max_z in expected_max_elem.items():
         assert DISPERSION_MODELS[name].max_elem == max_z
 
-    pos2 = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 0.0, 4.2]], dtype=torch.float64
-    )
+    pos2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 4.2]], dtype=torch.float64)
     pos3 = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 4.2], [9.0, 9.0, 9.0]],
         dtype=torch.float64,
@@ -262,27 +277,34 @@ def test_compiled_unsupported_elements_all_models_and_backends(
        exception (`IndexError` or `RuntimeError`).
     3. Public `validate_numbers` raises `ValueError` at the structure boundary.
     """
-    from tad_dftd import dftd, validate_numbers
     from tad_mctc import Structure
 
-    pos2 = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 0.0, 3.2]], dtype=torch.float64
-    )
+    from tad_dftd import dftd, validate_numbers
+
+    pos2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 3.2]], dtype=torch.float64)
     p_fermi = {"s6": 1.0, "rs6": 1.0, "alp": 20.0}
     p_bj = {"s6": 1.0, "s8": 0.8, "a1": 0.4, "a2": 4.5, "s9": 1.0}
     q2 = torch.zeros(2, dtype=torch.float64)
 
     def run_d1(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
-        return dftd(Structure(numbers=nums, positions=pos), p_fermi, model="d1").sum()
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_fermi, model="d1"
+        ).sum()
 
     def run_d2(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
-        return dftd(Structure(numbers=nums, positions=pos), p_fermi, model="d2").sum()
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_fermi, model="d2"
+        ).sum()
 
     def run_d3(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
-        return dftd(Structure(numbers=nums, positions=pos), p_bj, model="d3").sum()
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_bj, model="d3"
+        ).sum()
 
     def run_d3s(nums: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
-        return dftd(Structure(numbers=nums, positions=pos), p_bj, model="d3s").sum()
+        return dftd(
+            Structure(numbers=nums, positions=pos), p_bj, model="d3s"
+        ).sum()
 
     def run_d4_ext(
         nums: torch.Tensor, pos: torch.Tensor, q_in: torch.Tensor
@@ -398,8 +420,9 @@ def test_integer_model_id_dispatch_and_validation() -> None:
     resolve_model_id, get_model_metadata, dftd, get_properties, and
     validate_numbers.
     """
-    from tad_dftd import dftd, get_properties, validate_numbers
     from tad_mctc import Structure
+
+    from tad_dftd import dftd, get_properties, validate_numbers
 
     mol = Structure(
         numbers=torch.tensor([8, 1, 1], dtype=torch.long),
@@ -441,8 +464,12 @@ def test_integer_model_id_dispatch_and_validation() -> None:
         props_int = get_properties(mol, model=int_id)
         props_str = get_properties(mol, model=str_id)
         props_enum = get_properties(mol, model=enum_id)
-        torch.testing.assert_close(props_int.c6, props_str.c6, atol=0.0, rtol=0.0)
-        torch.testing.assert_close(props_int.c6, props_enum.c6, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(
+            props_int.c6, props_str.c6, atol=0.0, rtol=0.0
+        )
+        torch.testing.assert_close(
+            props_int.c6, props_enum.c6, atol=0.0, rtol=0.0
+        )
 
         v_int = validate_numbers(mol.numbers, model=int_id)
         v_str = validate_numbers(mol.numbers, model=str_id)
@@ -498,4 +525,308 @@ def test_integer_model_id_dispatch_and_validation() -> None:
             resolve_charge_model_id(bad_bool, model=40)
 
 
+def test_a1h_dispatch_and_parameter_resolution_equivalence() -> None:
+    """
+    Verify A1-H.1 and A1-H.2:
+    1. _DFTD_DISPATCH and _MODEL_CLASSES equivalence across all 7 models and
+       forwarded arguments (structure, param, damping, pairs, cutoff,
+       max_triples, checkpoint, model-specific kwargs, external charges,
+       and both string/int IDs and instantiated model objects in get_properties).
+    2. Authoritative parameter and damping alias resolution across all
+       representative functionals and damping variants, including BJM vs BJ.
+    """
+    from tad_mctc import Structure
 
+    from tad_dftd import (
+        Cutoff,
+        D1Model,
+        D2Model,
+        D3Model,
+        D3SModel,
+        D4Model,
+        D4SModel,
+        D4SrevModel,
+        DensePairs,
+        damping_from_name,
+        dftd,
+        dftd1,
+        dftd2,
+        dftd3,
+        dftd3s,
+        dftd4,
+        dftd4s,
+        dftd4srev,
+        get_properties,
+    )
+
+    mol = Structure(
+        numbers=torch.tensor([8, 1, 1], dtype=torch.long),
+        positions=torch.tensor(
+            [[0.0, 0.0, 0.0], [0.0, 1.43, -1.10], [0.0, -1.43, -1.10]],
+            dtype=torch.float64,
+        ),
+    )
+    cut = Cutoff(cn=25.0, disp2=45.0, disp3=20.0, cn_eeq=22.0)
+    pairs = DensePairs.build(mol, cut)
+    q_ext = torch.tensor([-0.6, 0.3, 0.3], dtype=torch.float64)
+
+    p_d1 = param.get_params(
+        "BLYP", model="d1", damping="fermi", dtype=torch.float64
+    )
+    p_d2 = param.get_params(
+        "PBE", model="d2", damping="fermi", dtype=torch.float64
+    )
+    p_d3_bj = param.get_params(
+        "PBE", model="d3", damping="bj", dtype=torch.float64
+    )
+    p_d3_zero = param.get_params(
+        "PBE", model="d3", damping="zero", dtype=torch.float64
+    )
+    p_d3_bjm = param.get_params(
+        "BLYP", model="d3", damping="bjm", dtype=torch.float64
+    )
+    p_d3_blyp_bj = param.get_params(
+        "BLYP", model="d3", damping="bj", dtype=torch.float64
+    )
+    p_d3_mzero = param.get_params(
+        "BLYP", model="d3", damping="mzero", dtype=torch.float64
+    )
+    p_d3_op = param.get_params(
+        "BLYP", model="d3", damping="op", dtype=torch.float64
+    )
+    p_d3s = param.get_params(
+        "BLYP", model="d3s", damping="rational", dtype=torch.float64
+    )
+    p_d4 = param.get_params(
+        "PBE", model="d4", damping="bj", dtype=torch.float64
+    )
+    p_d4s = param.get_params(
+        "PBE", model="d4s", damping="bj", dtype=torch.float64
+    )
+    p_d4srev = {"s6": 1.0, "s8": 0.9, "a1": 0.4, "a2": 4.5, "s9": 1.0}
+
+    # Check BJM vs BJ distinct parameters on BLYP
+    assert not torch.allclose(p_d3_bjm["s8"], p_d3_blyp_bj["s8"])
+    assert pytest.approx(p_d3_bjm["s8"].item(), rel=1e-14) == 1.875007
+    assert pytest.approx(p_d3_bjm["a1"].item(), rel=1e-14) == 0.448486
+    assert pytest.approx(p_d3_bjm["a2"].item(), rel=1e-14) == 3.610679
+
+    # Check all damping aliases return identical parameter dicts
+    for alias in ("fermi", "d1"):
+        p_al = param.get_params(
+            "BLYP", model="d1", damping=alias, dtype=torch.float64
+        )
+        for k in p_d1:
+            torch.testing.assert_close(p_al[k], p_d1[k], atol=0.0, rtol=0.0)
+    for alias in ("fermi", "d2"):
+        p_al = param.get_params(
+            "PBE", model="d2", damping=alias, dtype=torch.float64
+        )
+        for k in p_d2:
+            torch.testing.assert_close(p_al[k], p_d2[k], atol=0.0, rtol=0.0)
+    for alias in ("bj", "rational"):
+        p_al = param.get_params(
+            "PBE", model="d3", damping=alias, dtype=torch.float64
+        )
+        for k in p_d3_bj:
+            torch.testing.assert_close(p_al[k], p_d3_bj[k], atol=0.0, rtol=0.0)
+    for alias in ("zero", "chg"):
+        p_al = param.get_params(
+            "PBE", model="d3", damping=alias, dtype=torch.float64
+        )
+        for k in p_d3_zero:
+            torch.testing.assert_close(
+                p_al[k], p_d3_zero[k], atol=0.0, rtol=0.0
+            )
+    for alias in ("mzero", "zerom", "m-zero"):
+        p_al = param.get_params(
+            "BLYP", model="d3", damping=alias, dtype=torch.float64
+        )
+        for k in p_d3_mzero:
+            torch.testing.assert_close(
+                p_al[k], p_d3_mzero[k], atol=0.0, rtol=0.0
+            )
+    for alias in (
+        "op",
+        "optimizedpower",
+        "optimisedpower",
+        "optpower",
+        "opt-power",
+        "optimized-power",
+        "optimised-power",
+    ):
+        p_al = param.get_params(
+            "BLYP", model="d3", damping=alias, dtype=torch.float64
+        )
+        for k in p_d3_op:
+            torch.testing.assert_close(p_al[k], p_d3_op[k], atol=0.0, rtol=0.0)
+
+    # Check _DFTD_DISPATCH equivalence with direct dftd1..dftd4srev functions
+    damp_fermi = damping_from_name("fermi", False, model="d1")
+    damp_bj_d3 = damping_from_name("rational", True, model="d3")
+    damp_bj_d4 = damping_from_name("rational", True, model="d4")
+
+    torch.testing.assert_close(
+        dftd(
+            mol,
+            p_d1,
+            model="d1",
+            damping=damp_fermi,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        dftd1(
+            mol,
+            p_d1,
+            damping=damp_fermi,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        atol=0.0,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        dftd(
+            mol,
+            p_d2,
+            model="d2",
+            damping=damp_fermi,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        dftd2(
+            mol,
+            p_d2,
+            damping=damp_fermi,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        atol=0.0,
+        rtol=0.0,
+    )
+    from tad_dftd import ncoord
+
+    torch.testing.assert_close(
+        dftd(
+            mol,
+            p_d3_bj,
+            model="d3",
+            damping=damp_bj_d3,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+            counting_function=ncoord.exp_count,
+        ),
+        dftd3(
+            mol,
+            p_d3_bj,
+            damping=damp_bj_d3,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+            counting_function=ncoord.exp_count,
+        ),
+        atol=0.0,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        dftd(
+            mol,
+            p_d3s,
+            model="d3s",
+            damping=damp_bj_d3,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        dftd3s(
+            mol,
+            p_d3s,
+            damping=damp_bj_d3,
+            pairs=pairs,
+            cutoff=cut,
+            max_triples=1000,
+            checkpoint=True,
+        ),
+        atol=0.0,
+        rtol=0.0,
+    )
+    for m_str, fn_direct, p_cur in (
+        ("d4", dftd4, p_d4),
+        ("d4s", dftd4s, p_d4s),
+        ("d4srev", dftd4srev, p_d4srev),
+    ):
+        torch.testing.assert_close(
+            dftd(
+                mol,
+                p_cur,
+                model=m_str,
+                damping=damp_bj_d4,
+                pairs=pairs,
+                cutoff=cut,
+                max_triples=1000,
+                checkpoint=True,
+                q=q_ext,
+            ),
+            fn_direct(
+                mol,
+                p_cur,
+                damping=damp_bj_d4,
+                pairs=pairs,
+                cutoff=cut,
+                max_triples=1000,
+                checkpoint=True,
+                q=q_ext,
+            ),
+            atol=0.0,
+            rtol=0.0,
+        )
+
+    # Check get_properties with string/int IDs vs instantiated model objects
+    for m_str, cls in (
+        ("d1", D1Model),
+        ("d2", D2Model),
+        ("d3", D3Model),
+        ("d3s", D3SModel),
+    ):
+        inst = cls(cutoff=cut)
+        pr_str = get_properties(mol, model=m_str, pairs=pairs, cutoff=cut)
+        pr_inst = get_properties(mol, model=inst, pairs=pairs)
+        torch.testing.assert_close(pr_str.cn, pr_inst.cn, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(pr_str.c6, pr_inst.c6, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(pr_str.c8, pr_inst.c8, atol=0.0, rtol=0.0)
+
+    for m_str, cls in (
+        ("d4", D4Model),
+        ("d4s", D4SModel),
+        ("d4srev", D4SrevModel),
+    ):
+        inst = cls(cutoff=cut)
+        pr_str = get_properties(
+            mol, model=m_str, pairs=pairs, cutoff=cut, q=q_ext
+        )
+        pr_inst = get_properties(mol, model=inst, pairs=pairs, q=q_ext)
+        torch.testing.assert_close(pr_str.cn, pr_inst.cn, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(pr_str.c6, pr_inst.c6, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(pr_str.c8, pr_inst.c8, atol=0.0, rtol=0.0)
+        assert pr_str.q is not None and pr_inst.q is not None
+        torch.testing.assert_close(pr_str.q, pr_inst.q, atol=0.0, rtol=0.0)
+        assert pr_str.alphadd is not None and pr_inst.alphadd is not None
+        torch.testing.assert_close(
+            pr_str.alphadd, pr_inst.alphadd, atol=0.0, rtol=0.0
+        )
+        assert pr_str.alphaqq is not None and pr_inst.alphaqq is not None
+        torch.testing.assert_close(
+            pr_str.alphaqq, pr_inst.alphaqq, atol=0.0, rtol=0.0
+        )
