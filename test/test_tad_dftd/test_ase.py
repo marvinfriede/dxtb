@@ -2262,3 +2262,264 @@ def test_no_silent_configuration_substitutions_audit() -> None:
         (InputError, TypeError, ValueError), match="real number|numeric"
     ):
         DFTD(method="PBE", model="d4", realspace_cutoff={"disp2": None})
+
+
+def test_stateful_damping_and_mutable_param_cache_consistency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify A1-G.1: built-in stateless damping retains normal ASE caching while
+    stateful/custom damping subclasses and in-place mutated DampingParam tensors
+    never return stale cached energies or forces.
+    """
+    import tad_dftd.ase as ase_mod
+
+    call_count = 0
+    orig_calc_fn = ase_mod._calculate_energy_and_derivatives
+
+    def counting_calc(
+        atoms_arg: Atoms, cfg_arg: Any, props_arg: set[str]
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return orig_calc_fn(atoms_arg, cfg_arg, props_arg)
+
+    monkeypatch.setattr(
+        ase_mod, "_calculate_energy_and_derivatives", counting_calc
+    )
+
+    atoms = molecule("H2O")
+    pos_bohr = (
+        torch.tensor(atoms.get_positions(), dtype=torch.float64) / Bohr
+    ).detach()
+    numbers = torch.tensor(atoms.get_atomic_numbers(), dtype=torch.long)
+
+    def eval_direct(calc_obj: DFTD) -> tuple[float, np.ndarray]:
+        cfg = calc_obj._resolved_config
+        assert cfg is not None
+        pos_g = pos_bohr.clone().requires_grad_(True)
+        struct = Structure(
+            numbers=numbers,
+            positions=pos_g,
+            charge=torch.tensor(0.0, dtype=torch.float64),
+        )
+        extra_kw: dict[str, Any] = {}
+        if cfg.qmodel is not None:
+            extra_kw["qmodel"] = cfg.qmodel
+        e_t = dftd(
+            struct,
+            cfg.param,
+            model=cfg.model_id,
+            damping=cfg.damping,
+            cutoff=cfg.cutoff,
+            **extra_kw,
+        ).sum()
+        (g_t,) = torch.autograd.grad(e_t, pos_g)
+        return (
+            float(e_t.item()) * Hartree,
+            (-g_t.detach().numpy()) * (Hartree / Bohr),
+        )
+
+    # 1. Built-in stateless damping (string-named and explicit instances) retains normal ASE caching
+    for hint_builtin in (
+        {"2b": "rational", "3b": "none"},
+        {"2b": RationalTwoBody(), "3b": "none"},
+        Damping(two=RationalTwoBody(), three=ZeroThreeBodyD3()),
+    ):
+        call_count = 0
+        calc_bi = DFTD(method="PBE", model="d3", damping_hint=hint_builtin)
+        assert calc_bi._resolved_config is not None
+        assert calc_bi._resolved_config.cacheable_damping is True
+        atoms.calc = calc_bi
+        e_bi = atoms.get_potential_energy()
+        assert call_count == 1
+        assert atoms.get_potential_energy() == e_bi
+        assert calc_bi.get_potential_energy() == e_bi
+        assert call_count == 1
+        f_bi = atoms.get_forces()
+        assert call_count == 2
+        np.testing.assert_allclose(atoms.get_forces(), f_bi, rtol=0.0, atol=0.0)
+        assert call_count == 2
+
+    # 2, 3, 4, 5. Stateful 2B damping subclass: preserves identity, matches direct dftd(),
+    # never returns stale energy/forces on in-place state change, and set(damping_hint=same_instance) resets
+    class _ScaledRationalTwoBody(RationalTwoBody):
+        def __init__(self, scale: float) -> None:
+            self.scale = scale
+
+        def __call__(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+            return self.scale * super().__call__(*args, **kwargs)
+
+    damping_2b = _ScaledRationalTwoBody(scale=1.0)
+    calc_2b = DFTD(
+        method="PBE",
+        model="d3",
+        damping_hint={"2b": damping_2b, "3b": "none"},
+    )
+    assert calc_2b._resolved_config is not None
+    assert calc_2b._resolved_config.damping.two is damping_2b
+    assert calc_2b._resolved_config.cacheable_damping is False
+    atoms.calc = calc_2b
+
+    e1 = atoms.get_potential_energy()
+    f1 = atoms.get_forces()
+    e1_ref, f1_ref = eval_direct(calc_2b)
+    assert e1 == pytest.approx(e1_ref, rel=1e-14, abs=1e-14)
+    np.testing.assert_allclose(f1, f1_ref, rtol=1e-13, atol=1e-13)
+
+    # Mutate damping_2b.scale in place without calling calc.set()
+    damping_2b.scale = 2.0
+    e2 = atoms.get_potential_energy()
+    f2 = atoms.get_forces()
+    e2_ref, f2_ref = eval_direct(calc_2b)
+    assert abs(e2 - e1) > 5.0e-3
+    assert e2 == pytest.approx(2.0 * e1, rel=1e-14, abs=1e-14)
+    assert e2 == pytest.approx(e2_ref, rel=1e-14, abs=1e-14)
+    np.testing.assert_allclose(f2, 2.0 * f1, rtol=1e-13, atol=1e-13)
+    np.testing.assert_allclose(f2, f2_ref, rtol=1e-13, atol=1e-13)
+
+    # Also verify calc.get_potential_energy() (without explicit atoms argument) does not return stale energy
+    damping_2b.scale = 0.5
+    e_half = calc_2b.get_potential_energy()
+    assert e_half == pytest.approx(0.5 * e1, rel=1e-14, abs=1e-14)
+
+    # 5. Explicit calc.set(damping_hint=same_instance) invalidates results
+    damping_2b.scale = 1.75
+    changed = calc_2b.set(damping_hint={"2b": damping_2b, "3b": "none"})
+    assert "damping_hint" in changed
+    assert calc_2b.results == {}
+    assert atoms.get_potential_energy() == pytest.approx(
+        1.75 * e1, rel=1e-14, abs=1e-14
+    )
+
+    # 6. Stateful 3B damping subclass and full Damping container containing custom instances
+    class _ScaledZeroThreeBodyD3(ZeroThreeBodyD3):
+        def __init__(self, scale: float) -> None:
+            self.scale = scale
+
+        def __call__(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+            return self.scale * super().__call__(*args, **kwargs)
+
+    atoms_3b = molecule("bicyclobutane")
+    pos_3b_bohr = (
+        torch.tensor(atoms_3b.get_positions(), dtype=torch.float64) / Bohr
+    ).detach()
+    numbers_3b = torch.tensor(atoms_3b.get_atomic_numbers(), dtype=torch.long)
+
+    def eval_direct_3b(calc_obj: DFTD) -> tuple[float, np.ndarray]:
+        cfg = calc_obj._resolved_config
+        assert cfg is not None
+        pos_g = pos_3b_bohr.clone().requires_grad_(True)
+        struct = Structure(
+            numbers=numbers_3b,
+            positions=pos_g,
+            charge=torch.tensor(0.0, dtype=torch.float64),
+        )
+        e_t = dftd(
+            struct,
+            cfg.param,
+            model=cfg.model_id,
+            damping=cfg.damping,
+            cutoff=cfg.cutoff,
+        ).sum()
+        (g_t,) = torch.autograd.grad(e_t, pos_g)
+        return (
+            float(e_t.item()) * Hartree,
+            (-g_t.detach().numpy()) * (Hartree / Bohr),
+        )
+
+    damping_3b = _ScaledZeroThreeBodyD3(scale=1.0)
+    calc_3b = DFTD(
+        method="PBE",
+        model="d3",
+        damping_hint={"2b": "rational", "3b": damping_3b},
+    )
+    assert calc_3b._resolved_config is not None
+    assert calc_3b._resolved_config.damping.three is damping_3b
+    assert calc_3b._resolved_config.cacheable_damping is False
+    atoms_3b.calc = calc_3b
+
+    e3_1 = atoms_3b.get_potential_energy()
+    f3_1 = atoms_3b.get_forces()
+    e3_1_ref, f3_1_ref = eval_direct_3b(calc_3b)
+    assert e3_1 == pytest.approx(e3_1_ref, rel=1e-14, abs=1e-14)
+    np.testing.assert_allclose(f3_1, f3_1_ref, rtol=1e-13, atol=1e-13)
+
+    # Mutate 3B scale so 3B contribution changes energy and forces significantly
+    damping_3b.scale = 50.0
+    e3_2 = atoms_3b.get_potential_energy()
+    f3_2 = atoms_3b.get_forces()
+    e3_2_ref, f3_2_ref = eval_direct_3b(calc_3b)
+    assert abs(e3_2 - e3_1) > 1.0e-3
+    assert e3_2 == pytest.approx(e3_2_ref, rel=1e-14, abs=1e-14)
+    np.testing.assert_allclose(f3_2, f3_2_ref, rtol=1e-13, atol=1e-13)
+
+    # Full Damping container with custom instances
+    damping_2b.scale = 1.0
+    damping_3b.scale = 1.0
+    damp_container = Damping(two=damping_2b, three=damping_3b)
+    calc_cont = DFTD(method="PBE", model="d3", damping_hint=damp_container)
+    assert calc_cont._resolved_config is not None
+    assert calc_cont._resolved_config.damping is damp_container
+    assert calc_cont._resolved_config.cacheable_damping is False
+    atoms.calc = calc_cont
+    ec_1 = atoms.get_potential_energy()
+    damping_2b.scale = 2.5
+    ec_2 = atoms.get_potential_energy()
+    ec_2_ref, _ = eval_direct(calc_cont)
+    assert abs(ec_2 - ec_1) > 5.0e-3
+    assert ec_2 == pytest.approx(ec_2_ref, rel=1e-14, abs=1e-14)
+    assert "damping_hint" in calc_cont.set(damping_hint=damp_container)
+    assert calc_cont.results == {}
+
+    # Direct DampingParam input with in-place tensor modification
+    s8_tensor = torch.tensor(0.7875, dtype=torch.float64)
+    dparam_in = DampingParam(
+        s6=torch.tensor(1.0, dtype=torch.float64),
+        s8=s8_tensor,
+        a1=torch.tensor(0.4289, dtype=torch.float64),
+        a2=torch.tensor(4.4407, dtype=torch.float64),
+    )
+    calc_dp = DFTD(model="d3", params_tweaks=dparam_in)
+    atoms.calc = calc_dp
+    call_count = 0
+    edp_1 = atoms.get_potential_energy()
+    assert call_count == 1
+    # Unchanged DampingParam hits cache
+    assert atoms.get_potential_energy() == edp_1
+    assert call_count == 1
+
+    # In-place tensor modification on dparam_in.s8 invalidates cache and updates energy
+    s8_tensor.fill_(2.5)
+    edp_2 = atoms.get_potential_energy()
+    edp_2_ref, _ = eval_direct(calc_dp)
+    assert call_count == 2
+    assert abs(edp_2 - edp_1) > 1.0e-3
+    assert edp_2 == pytest.approx(edp_2_ref, rel=1e-14, abs=1e-14)
+
+    # In-place mutation to NaN fails loudly and clears stale results
+    s8_tensor.fill_(float("nan"))
+    with pytest.raises((InputError, ValueError), match="finite"):
+        atoms.get_potential_energy()
+    assert calc_dp.results == {}
+
+    # 7. Native PyTorch autograd behavior is completely unaffected
+    damping_2b.scale = 1.3
+    pos_grad = pos_bohr.clone().requires_grad_(True)
+    p_native = param.get_params("PBE", model="d3", dtype=torch.float64)
+
+    def native_energy_fn(p_pos: torch.Tensor) -> torch.Tensor:
+        mol_t = Structure(numbers=numbers, positions=p_pos)
+        return dftd(
+            mol_t,
+            p_native,
+            model="d3",
+            damping=Damping(two=damping_2b, three=None),
+        ).sum()
+
+    e_val = native_energy_fn(pos_grad)
+    (g1,) = torch.autograd.grad(e_val, pos_grad, create_graph=True)
+    (g2,) = torch.autograd.grad(g1.sum(), pos_grad)
+    assert torch.isfinite(e_val)
+    assert g1.shape == (3, 3) and torch.isfinite(g1).all()
+    assert g2.shape == (3, 3) and torch.isfinite(g2).all()

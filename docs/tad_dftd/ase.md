@@ -213,12 +213,31 @@ All inputs and outputs at the ASE boundary use standard ASE units, while interna
 
 ---
 
+## Caching and Custom / Stateful Damping Objects
+
+`DFTD` integrates with ASE's `Calculator.check_state()` caching mechanism:
+
+- **Built-in stateless damping classes** (`RationalTwoBody`, `ZeroTwoBody`, `ZeroD1TwoBody`, `ZeroD2TwoBody`, `TangToenniesTwoBody`, `ZeroThreeBody`, `ZeroThreeBodyD3`) and string damping selectors (`"rational"`, `"zero"`, `"atm"`, etc.) are recognized as stateless. Repeated property queries (`get_potential_energy()`, `get_forces()`, `get_stress()`) on an unchanged `Atoms` object reuse `calc.results` without re-evaluating the PyTorch dispersion graph.
+- **Custom or stateful damping subclasses** (for example, a user-defined subclass of `RationalTwoBody` or `ZeroThreeBodyD3` carrying mutable attributes such as `self.scale`, or any built-in damping instance with custom instance attributes attached to `__dict__`) are preserved by reference and treated as **non-cacheable** (`"damping_state"` is reported by `check_state()`).
+  - *Correctness guarantee*: Mutating an attribute on a custom damping object between ASE calls always triggers a fresh dispersion evaluation and never returns stale `energy`, `energies`, `forces`, or `stress`.
+  - *Performance note*: Because arbitrary Python object state cannot be introspected cheaply without fragility, using a custom damping subclass re-evaluates `tad_dftd.dftd` on each `get_potential_energy()` / `get_forces()` call unless the damping logic is expressed via standard stateless damping classes and `params_tweaks`.
+- **In-place `DampingParam` tensor mutations**: If `params_tweaks` supplies a `DampingParam` instance or a dictionary containing `torch.Tensor` values and those tensors are mutated in place (e.g., `param.s8.fill_(...)`), `DFTD` detects the drift against an internal value snapshot (`"params_tweaks"` in `check_state()`), re-resolves the damping parameters, and recomputes all results.
+
+---
+
 ## Limitations and Scope
 
 - **Excluded upstream models**: `D5` and `EEQBC` / `EEQBC2025` are unfinished upstream and raise `NotImplementedError`.
 - **`D4Srev` parameterization**: `D4Srev` does not have functional lookup tables (`method="..."` is rejected); supply explicit damping parameters via `params_tweaks`.
-- **1D and 2D periodic charge-dependent models**: Automatic periodic EEQ is implemented for 0D molecules and 3D periodic crystals (`pbc=[True, True, True]`). For 1D or 2D periodic systems with `D4`, `D4S`, or `D4Srev`, supply external atomic partial charges via `charges_key`.
-- **Periodic stress**: Analytical stress is only defined for non-degenerate 3D periodic cells (`pbc=[True, True, True]`) when `compute_stress=True`. Requesting stress on 0D, 1D, or 2D structures or when `compute_stress=False` raises `PropertyNotImplementedError` (also a `ValueError` subclass).
+- **1D and 2D periodic charge-dependent models (EEQ limitation)**:
+  - Charge-independent models (`D1`, `D2`, `D3`, `D3S`) support 0D, 1D, 2D, and 3D periodicity directly.
+  - Charge-dependent models (`D4`, `D4S`, `D4Srev`) support 1D and 2D periodic systems when external atomic partial charges are supplied (`charges_key` in `tad_dftd.ase` or `q=...` in `tad_dftd.dftd`).
+  - Automatic EEQ charge evaluation (`tad-multicharge`) is currently implemented only for 0D molecules (`pbc=[False, False, False]`) and 3D periodic crystals (`pbc=[True, True, True]`). Requesting automatic EEQ on 1D or 2D periodic structures raises `NotImplementedError`.
+  - **Inherited upstream `tad-multicharge` note (`v0.8.0`)**: In `tad-multicharge==0.8.0`, the `NotImplementedError` guard inside `EEQModel.get_coulomb_matrix` is skipped when `periodic` is a batched `functorch` tensor (`torch.func.vmap`) or during `torch.compile`, and `structure.lattice is not None` with `periodic=[False, False, False]` enters the 3D Ewald branch unless normalized beforehand. This is an **inherited upstream limitation** in `tad-multicharge`, not a regression introduced by `tad_dftd`. `tad_dftd` mitigates the `0D-with-lattice` case in eager mode by stripping `lattice`/`periodic` when `not periodic.any()`, and `tad_dftd.ase` normalizes `pbc=[False, False, False]` to `lattice=None, periodic=None`. See [`upstream_multicharge_periodic_eeq_issue.md`](upstream_multicharge_periodic_eeq_issue.md) for the upstream corrective specification.
+- **Periodic stress vs. 1D/2D strain derivatives**:
+  - In the underlying `tad_dftd` dispersion models, lattice and strain derivatives ($\partial E / \partial \varepsilon$ and $\partial E / \partial L$) along periodic directions are mathematically well-defined for 1D, 2D, and 3D periodic systems whenever charges are available (or for charge-independent models).
+  - In `tad_dftd.ase`, the ASE `stress` property (`atoms.get_stress()`, in units of $\text{eV}/\text{\AA}^3$, defined as $\sigma = V^{-1} \partial E / \partial \varepsilon$) is **intentionally restricted to non-degenerate 3D periodic cells (`pbc=[True, True, True]`)** when `compute_stress=True`.
+  - This restriction is an ASE interface convention rather than a dispersion-kernel limitation: 1D and 2D periodic systems lack a physically intrinsic 3D cell volume $V$ (their perpendicular bounding-box lengths are arbitrary vacuum padding). Requesting `atoms.get_stress()` on 0D, 1D, or 2D structures or when `compute_stress=False` raises `PropertyNotImplementedError` (also a `ValueError` subclass).
 
 ---
 

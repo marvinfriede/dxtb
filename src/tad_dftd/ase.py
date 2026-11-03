@@ -100,6 +100,8 @@ from tad_mctc import Structure
 
 from .cutoff import Cutoff
 from .damping import (
+    THREE_BODY_DAMPINGS,
+    TWO_BODY_DAMPINGS,
     Damping,
     DampingParam,
     PairData,
@@ -177,6 +179,52 @@ _DTYPE_ALIASES: dict[str, torch.dtype] = {
     "torch.float32": torch.float32,
 }
 
+_STATELESS_2B_TYPES: frozenset[type[TwoBodyDamping]] = frozenset(
+    cls_2b for _, cls_2b in TWO_BODY_DAMPINGS
+)
+
+_STATELESS_3B_TYPES: frozenset[type[ThreeBodyDamping]] = frozenset(
+    cls_3b for _, cls_3b in THREE_BODY_DAMPINGS
+)
+
+
+def _is_stateless_builtin_damping(damping: Damping) -> bool:
+    """
+    Return ``True`` if ``damping`` and its two-body/three-body components are
+    unmodified instances of the built-in stateless catalogue damping classes.
+    """
+    if type(damping) is not Damping:
+        return False
+    two = damping.two
+    if type(two) not in _STATELESS_2B_TYPES or bool(
+        getattr(two, "__dict__", None)
+    ):
+        return False
+    three = damping.three
+    if three is not None and (
+        type(three) not in _STATELESS_3B_TYPES
+        or bool(getattr(three, "__dict__", None))
+    ):
+        return False
+    return True
+
+
+def _snapshot_damping_param(
+    param: DampingParam,
+) -> tuple[tuple[str, float], ...]:
+    """Capture a canonical sorted ``(name, float_value)`` snapshot of ``param``."""
+    items: list[tuple[str, float]] = []
+    for name in sorted(param._child_names):
+        val = getattr(param, name)
+        if val is not None:
+            fval = (
+                float(val.detach().cpu().item())
+                if isinstance(val, torch.Tensor)
+                else float(val)
+            )
+            items.append((name, fval))
+    return tuple(items)
+
 
 @dataclass(frozen=True)
 class _ResolvedConfig:
@@ -193,6 +241,9 @@ class _ResolvedConfig:
     charge: float | None
     charges_key: str | None
     compute_stress: bool
+    cacheable_damping: bool
+    tweaks_snapshot: tuple[tuple[str, float], ...]
+    param_snapshot: tuple[tuple[str, float], ...]
 
 
 def _resolve_device(device: str | torch.device | Any) -> torch.device:
@@ -858,7 +909,36 @@ def _resolve_config(
             charge=charge,
             charges_key=charges_key,
             compute_stress=compute_stress,
+            cacheable_damping=_is_stateless_builtin_damping(damping),
+            tweaks_snapshot=tuple(sorted(tweaks.items())),
+            param_snapshot=_snapshot_damping_param(dparam),
         )
+
+
+def _has_mutable_param_drift(
+    parameters: Mapping[str, Any],
+    cfg: _ResolvedConfig,
+) -> bool:
+    """
+    Return ``True`` if ``params_tweaks`` (e.g., a :class:`DampingParam` or
+    mapping with tensor values) or ``cfg.param`` has been modified in place
+    since ``cfg`` was resolved.
+    """
+    try:
+        current_tweaks = tuple(
+            sorted(
+                _validate_tweaks_mapping(
+                    parameters.get("params_tweaks")
+                ).items()
+            )
+        )
+        if current_tweaks != cfg.tweaks_snapshot:
+            return True
+        if _snapshot_damping_param(cfg.param) != cfg.param_snapshot:
+            return True
+    except Exception:
+        return True
+    return False
 
 
 def _copy_parameter_value(value: Any) -> Any:
@@ -879,6 +959,7 @@ def _parameters_equal(old: Any, new: Any) -> bool:
                 ThreeBodyDamping,
                 Cutoff,
                 DampingParam,
+                torch.Tensor,
             ),
         ):
             return False
@@ -897,6 +978,7 @@ def _parameters_equal(old: Any, new: Any) -> bool:
             ThreeBodyDamping,
             Cutoff,
             DampingParam,
+            torch.Tensor,
         ),
     ):
         return False
@@ -1215,7 +1297,10 @@ class DFTD(Calculator):
         Optional dictionary with ``"2b"`` (damping name or :class:`TwoBodyDamping`
         instance) and/or ``"3b"`` (damping name, :class:`ThreeBodyDamping`
         instance, or ``"none"`` to disable ATM), or a direct :class:`Damping`
-        instance.
+        instance. Built-in stateless catalogue damping classes retain normal ASE
+        result caching across unchanged :class:`~ase.atoms.Atoms` states, whereas
+        custom or stateful damping subclasses bypass ASE result reuse so in-place
+        mutations of damping state never return stale energies or derivatives.
     realspace_cutoff : Mapping[str, float] | Cutoff | None, optional
         Optional real-space cutoffs (``disp2``, ``disp3``, ``cn``, ``cn_eeq``,
         ``width2``, ``width3``) in Angstrom, or a native :class:`Cutoff`
@@ -1394,10 +1479,23 @@ class DFTD(Calculator):
     def check_state(self, atoms: Atoms, tol: float = 1e-15) -> list[str]:
         """
         Check for any system changes since the last calculation, including
-        changes to ``atoms.arrays[charges_key]`` when external charges are enabled.
+        changes to ``atoms.arrays[charges_key]`` when external charges are enabled,
+        in-place tensor edits in ``params_tweaks``, and custom/stateful damping objects.
         """
         changes = list(super().check_state(atoms, tol=tol))
         cfg = self._resolved_config
+        if self.atoms is not None and cfg is not None:
+            if (
+                not cfg.cacheable_damping
+                or not _is_stateless_builtin_damping(cfg.damping)
+            ) and "damping_state" not in changes:
+                changes.append("damping_state")
+            if (
+                _has_mutable_param_drift(self.parameters, cfg)
+                and "params_tweaks" not in changes
+            ):
+                changes.append("params_tweaks")
+
         charges_key = (
             cfg.charges_key
             if cfg is not None
@@ -1442,6 +1540,19 @@ class DFTD(Calculator):
 
         return changes
 
+    def get_property(
+        self,
+        name: str,
+        atoms: Atoms | None = None,
+        allow_calculation: bool = True,
+    ) -> Any:
+        """Return a calculated property, checking state even when ``atoms`` is omitted."""
+        if atoms is None:
+            atoms = self.atoms
+        return super().get_property(
+            name, atoms=atoms, allow_calculation=allow_calculation
+        )
+
     def calculate(
         self,
         atoms: Atoms | None = None,
@@ -1465,7 +1576,16 @@ class DFTD(Calculator):
         else:
             requested_props = list(properties)
 
-        had_cached_results = bool(self.results) and not system_changes
+        had_cached_results = (
+            bool(self.results)
+            and not system_changes
+            and self._resolved_config is not None
+            and self._resolved_config.cacheable_damping
+            and _is_stateless_builtin_damping(self._resolved_config.damping)
+            and not _has_mutable_param_drift(
+                self.parameters, self._resolved_config
+            )
+        )
         super().calculate(
             atoms=atoms,
             properties=requested_props,
@@ -1477,10 +1597,12 @@ class DFTD(Calculator):
                 "No ASE Atoms object is associated with the calculator."
             )
 
-        if self._resolved_config is None:
-            self._resolved_config = self._resolve_current_config()
-
         try:
+            if self._resolved_config is None or _has_mutable_param_drift(
+                self.parameters, self._resolved_config
+            ):
+                self._resolved_config = self._resolve_current_config()
+
             new_results = _calculate_energy_and_derivatives(
                 self.atoms,
                 self._resolved_config,
