@@ -1612,3 +1612,102 @@ def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> N
     ):
         with pytest.raises(NotImplementedError):
             num_method(pos_2d, chrg=chrg_2d, field=f_2d, field_grad=fg_2d)
+
+
+def test_derived_quantity_contract_explicit_validation() -> None:
+    """derived_quantity must never be silently ignored when use_functorch=False."""
+    numbers, positions = _lih_geometry()
+    calc = Calculator(
+        numbers,
+        GFN1_XTB,
+        opts={
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_DIPOLE,
+            "verbosity": 0,
+        },
+        **DD,
+    )
+    field = torch.tensor([0.001, -0.002, 0.0015], **DD, requires_grad=True)
+
+    # Supported use_functorch=False formulations succeed
+    alpha_dip = calc.polarizability(
+        positions, use_functorch=False, derived_quantity="dipole", field=field
+    )
+    chi_dip = calc.pol_deriv(
+        positions.clone().requires_grad_(True),
+        use_functorch=False,
+        derived_quantity="dipole",
+        field=field,
+    )
+    beta_pol = calc.hyperpolarizability(
+        positions, use_functorch=False, derived_quantity="pol", field=field
+    )
+    beta_polarizability = calc.hyperpolarizability(
+        positions,
+        use_functorch=False,
+        derived_quantity="polarizability",
+        field=field,
+    )
+    assert alpha_dip.shape == (3, 3)
+    assert chi_dip.shape == (3, 3, 2, 3)
+    assert torch.allclose(beta_pol, beta_polarizability, atol=1e-12, rtol=1e-12)
+
+    # Unsupported use_functorch=False formulations raise ValueError instead of silently ignoring derived_quantity
+    with pytest.raises(ValueError, match="use_functorch=False"):
+        calc.polarizability(
+            positions,
+            use_functorch=False,
+            derived_quantity="energy",
+            field=field,
+        )
+
+    with pytest.raises(ValueError, match="use_functorch=False"):
+        calc.pol_deriv(
+            positions.clone().requires_grad_(True),
+            use_functorch=False,
+            derived_quantity="energy",
+            field=field,
+        )
+
+    for unsupported_dq in ("dipole", "energy"):
+        with pytest.raises(ValueError, match="use_functorch=False"):
+            calc.hyperpolarizability(
+                positions,
+                use_functorch=False,
+                derived_quantity=unsupported_dq,  # type: ignore[arg-type]
+                field=field,
+            )
+
+    # Unknown derived_quantity raises ValueError for both use_functorch=False and True
+    for uf in (False, True):
+        with pytest.raises(ValueError, match="Unknown `derived_quantity`"):
+            calc.pol_deriv(
+                positions.clone().requires_grad_(True),
+                use_functorch=uf,
+                derived_quantity="invalid",  # type: ignore[arg-type]
+                field=field,
+            )
+
+    # Supported use_functorch=True formulations agree across derived_quantity options
+    alpha_ft_dip = calc.polarizability(
+        positions, use_functorch=True, derived_quantity="dipole", field=field
+    )
+    alpha_ft_ene = calc.polarizability(
+        positions, use_functorch=True, derived_quantity="energy", field=field
+    )
+    assert torch.allclose(alpha_ft_dip, alpha_ft_ene, atol=1e-9, rtol=1e-8)
+
+    chi_ft_dip = calc.pol_deriv(
+        positions.clone().requires_grad_(True),
+        use_functorch=True,
+        derived_quantity="dipole",
+        field=field,
+    )
+    chi_ft_ene = calc.pol_deriv(
+        positions.clone().requires_grad_(True),
+        use_functorch=True,
+        derived_quantity="energy",
+        field=field,
+    )
+    assert torch.allclose(chi_ft_dip, chi_ft_ene, atol=1e-8, rtol=1e-7)
+

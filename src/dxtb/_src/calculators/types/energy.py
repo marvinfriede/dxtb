@@ -181,7 +181,13 @@ class EnergyCalculator(BaseCalculator):
         )
         try:
             result = _singlepoint_eager(
-                eval_system, positions, charge, spin, field, field_grad
+                eval_system,
+                positions,
+                charge,
+                spin,
+                field,
+                field_grad,
+                use_captured_extension_cache=True,
             )
         finally:
             timer.cuda_sync = old_cuda_sync

@@ -906,23 +906,6 @@ def _normalize_packed_fields(
     raise TypeError(f"Unsupported {name} input type {type(value)}.")
 
 
-def _normalize_system_for_e6bcompat(
-    system: System,
-    *,
-    strict_e6bcompat: bool = False,
-) -> System:
-    """Return the System without altering its S13 SCF strategy or representation.
-
-    The mapped functional evaluator (:func:`evaluate_padded_systems`) natively
-    implements GFN1 and GFN2 across ``CHARGE``, ``POTENTIAL``, and ``FOCK``
-    representations for single-stage fixed-trip strategies, while eager/implicit
-    and multi-stage strategies route through :func:`compose_legacy_systems`.
-    The S13 default (``Anderson/Potential``) is never silently converted to Fock.
-    """
-    _ = strict_e6bcompat
-    return system
-
-
 def _default_integral_write_path(key: str, system: System) -> str:
     """Return the established legacy default `<label.casefold()>.pt` filename."""
     if key == "write_hcore":
@@ -1181,15 +1164,10 @@ def evaluate_packed_systems(
                 f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
 
-    normalized_systems = [
-        _normalize_system_for_e6bcompat(sys, strict_e6bcompat=strict_e6bcompat)
-        for sys in systems
-    ]
-
-    #Low-level legacy_options are forwarded unchanged without filtering.
+    # Low-level legacy_options are forwarded unchanged without filtering.
     routes = [
         classify_legacy_system(sys, legacy_options=legacy_options)
-        for sys in normalized_systems
+        for sys in systems
     ]
     rejected = [
         idx
@@ -1218,7 +1196,7 @@ def evaluate_packed_systems(
         if mapped_indices:
             groups: dict[tuple[object, ...], list[int]] = {}
             for source_id in mapped_indices:
-                core = normalized_systems[source_id].exact_core
+                core = systems[source_id].exact_core
                 assert core is not None
                 d4_cutoffs = tuple(
                     float(descriptor.setup.cutoff.cn_eeq)
@@ -1235,9 +1213,9 @@ def evaluate_packed_systems(
 
             for group_source_ids in groups.values():
                 group_cores = tuple(
-                    normalized_systems[sid].exact_core
+                    systems[sid].exact_core
                     for sid in group_source_ids
-                    if normalized_systems[sid].exact_core is not None
+                    if systems[sid].exact_core is not None
                 )
                 bucket = bucket_canonical_exact_cores(group_cores)
                 padded_cores = tuple(
@@ -1319,7 +1297,7 @@ def evaluate_packed_systems(
                 for source_id, result in zip(group_source_ids, decoded):
                     if legacy_compat:
                         _enforce_decoded_eager_policy(
-                            result, normalized_systems[source_id], source_id
+                            result, systems[source_id], source_id
                         )
                     ordered_results[source_id] = result
 
@@ -1335,7 +1313,7 @@ def evaluate_packed_systems(
         ]
         if retained_indices:
             composed = compose_legacy_systems(
-                tuple(normalized_systems[idx] for idx in retained_indices),
+                tuple(systems[idx] for idx in retained_indices),
                 tuple(lane_positions[idx] for idx in retained_indices),
                 tuple(lane_charges[idx] for idx in retained_indices),
                 tuple(lane_spins[idx] for idx in retained_indices),
@@ -1360,7 +1338,7 @@ def evaluate_packed_systems(
         target_atoms=effective_target_atoms,
         atom_masks=atom_masks,
     )
-    _write_packed_integrals(packed_result, normalized_systems[0], kwargs)
+    _write_packed_integrals(packed_result, systems[0], kwargs)
     return packed_result
 
 
@@ -1533,10 +1511,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     has_2d_nums
                     or has_label_collision
                     or type(comp) in _BUILTIN_CLASSICAL_TYPES
-                    or (
-                        c_idx < len(source_classicals)
-                        and comp.label != source_classicals[c_idx].label
-                    )
                 )
                 c_copy = copy.copy(comp) if needs_copy else comp
                 if has_2d_nums:
@@ -1547,15 +1521,9 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
 
             lane_interaction_list = [
                 copy.copy(inter)
-                if (
-                    type(inter) in _BUILTIN_INTERACTION_TYPES
-                    or (
-                        i_idx < len(source_interactions)
-                        and inter.label != source_interactions[i_idx].label
-                    )
-                )
+                if type(inter) in _BUILTIN_INTERACTION_TYPES
                 else inter
-                for i_idx, inter in enumerate(model_interactions)
+                for inter in model_interactions
             ]
 
             lane_model = Model(

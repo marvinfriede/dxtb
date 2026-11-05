@@ -668,10 +668,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             needs_copy = (
                 type(comp) in _BUILTIN_CLASSICAL_TYPES
                 or has_label_collision
-                or (
-                    idx < len(source_classicals)
-                    and comp.label != source_classicals[idx].label
-                )
             )
             if needs_copy:
                 c_copy = copy.copy(comp)
@@ -683,15 +679,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         eval_interactions = [
             copy.copy(inter)
-            if (
-                type(inter) in _BUILTIN_INTERACTION_TYPES
-                or (
-                    i_idx < len(source_interactions)
-                    and inter.label != source_interactions[i_idx].label
-                )
-            )
+            if type(inter) in _BUILTIN_INTERACTION_TYPES
             else inter
-            for i_idx, inter in enumerate(self.model.interaction)
+            for inter in self.model.interaction
         ]
         setup_model = Model(
             par=self.model.par,

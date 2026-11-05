@@ -19,7 +19,7 @@ from dxtb import IndexHelper
 from dxtb._src.components.interactions import InteractionListCache
 from dxtb._src.components.interactions.container import ContainerData
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Slicers, Tensor
+from dxtb._src.typing import Tensor
 
 __all__ = ["_Data"]
 
@@ -142,38 +142,3 @@ class _Data:
         self.iter = 0
         self.init_zeros()
 
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        """
-        Update the tensor attributes based on the given conditions.
-
-        Parameters
-        ----------
-        conv : Tensor
-            Condition tensor.
-        slicers : Slicers
-            Slicer objects for selecting data from tensors.
-        """
-        onedim = tuple([~conv, *slicers["orbital"]])
-        onedim_atom = tuple([~conv, *slicers["atom"]])
-        twodim = tuple([~conv, *slicers["orbital"], *slicers["orbital"]])
-        threedim = tuple(
-            [~conv, (...), *slicers["orbital"], *slicers["orbital"]]
-        )
-
-        self.ints = self.ints.slice(twodim, threedim)
-
-        self.numbers = self.numbers[onedim_atom]
-        self.hamiltonian = self.hamiltonian[twodim]
-        self.density = self.density[twodim]
-        self.occupation = self.occupation[twodim]
-        self.nel = self.nel[~conv]
-        self.evecs = self.evecs[twodim]
-        self.evals = self.evals[onedim]
-        self.energy = self.energy[onedim]
-        self.n0 = self.n0[onedim]
-        self.ihelp.cull(conv, slicers=slicers)
-        self.cache.cull(conv, slicers=slicers)
-
-        self.old_charges = self.old_charges[onedim]
-        self.old_energy = self.old_energy[onedim_atom]
-        self.old_density = self.old_density[twodim]

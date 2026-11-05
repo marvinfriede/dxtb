@@ -479,10 +479,19 @@ def singlepoint(
     spin: Tensor | float | int | None = defaults.SPIN,
     field: Tensor | None = None,
     field_grad: Tensor | None = None,
+    *,
+    use_captured_extension_cache: bool = False,
 ) -> Result:
     """Run the internal eager singlepoint adapter retained for compatibility."""
     return _singlepoint_impl(
-        system, positions, chrg, spin, field, field_grad, fixed_trip=False
+        system,
+        positions,
+        chrg,
+        spin,
+        field,
+        field_grad,
+        fixed_trip=False,
+        use_captured_extension_cache=use_captured_extension_cache,
     )
 
 
@@ -513,6 +522,7 @@ def _singlepoint_impl(
     *,
     fixed_trip: bool,
     refresh_extension_caches: bool = False,
+    use_captured_extension_cache: bool = False,
 ) -> Result:
     """Share setup, physical kernels, and Result construction by controller."""
     core = system._active_exact_core()
@@ -694,28 +704,48 @@ def _singlepoint_impl(
                     and type(component) is not Repulsion
                 ):
                     # Custom subclasses remain on their legacy extension path.
-                    # Refresh their call data so supported update/reset
-                    # behavior is observed; exact Repulsion uses System setup.
-                    setup = component.get_cache(system.numbers, system.ihelp)
+                    # Refresh their call data unless Model.setup just populated
+                    # it for this call-local System; exact Repulsion uses System setup.
+                    setup = (
+                        system._classical_extension_cache[component.label]
+                        if use_captured_extension_cache
+                        and component.label in system._classical_extension_cache
+                        else component.get_cache(system.numbers, system.ihelp)
+                    )
                 elif (
                     isinstance(component, ShortRangeBond)
                     and type(component) is not ShortRangeBond
                 ):
                     # Custom subclasses retain their legacy extension hooks.
-                    setup = component.get_cache(system.numbers, system.ihelp)
+                    setup = (
+                        system._classical_extension_cache[component.label]
+                        if use_captured_extension_cache
+                        and component.label in system._classical_extension_cache
+                        else component.get_cache(system.numbers, system.ihelp)
+                    )
                 elif (
                     isinstance(component, DispersionD4)
                     and type(component) is not DispersionD4
                 ):
                     # D4 subclasses are legacy extensions. Refresh their
                     # cache each evaluation so updates affect the next call.
-                    setup = component.get_cache(system.numbers, system.ihelp)
+                    setup = (
+                        system._classical_extension_cache[component.label]
+                        if use_captured_extension_cache
+                        and component.label in system._classical_extension_cache
+                        else component.get_cache(system.numbers, system.ihelp)
+                    )
                 elif (
                     isinstance(component, Halogen)
                     and type(component) is not Halogen
                 ):
                     # Custom subclasses retain cache-driven legacy behavior.
-                    setup = component.get_cache(system.numbers, system.ihelp)
+                    setup = (
+                        system._classical_extension_cache[component.label]
+                        if use_captured_extension_cache
+                        and component.label in system._classical_extension_cache
+                        else component.get_cache(system.numbers, system.ihelp)
+                    )
                 elif isinstance(captured_setup, IESCoreSetup) or (
                     captured_setup is None and component is system.ies_classical
                 ):
@@ -738,7 +768,12 @@ def _singlepoint_impl(
                     continue
                 elif isinstance(component, IES) and type(component) is not IES:
                     # Custom IES subclasses retain their cache-driven hooks.
-                    setup = component.get_cache(system.numbers, system.ihelp)
+                    setup = (
+                        system._classical_extension_cache[component.label]
+                        if use_captured_extension_cache
+                        and component.label in system._classical_extension_cache
+                        else component.get_cache(system.numbers, system.ihelp)
+                    )
                 else:
                     setup = system._classical_extension_cache[component.label]
                 classical.append(

@@ -666,11 +666,15 @@ class AutogradCalculator(EnergyCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        use_functorch: bool, optional
+        use_functorch : bool, optional
             Whether to use functorch or the standard (slower) autograd.
-        derived_quantity: Literal['energy', 'dipole'], optional
-            Which derivative to calculate for the polarizability, i.e.,
-            derivative of dipole moment or energy w.r.t field.
+            Defaults to ``False``.
+        derived_quantity : Literal['energy', 'dipole'], optional
+            Formulation used to compute the polarizability:
+            ``'dipole'`` computes :math:`\partial \mu / \partial F` (supported
+            for both ``use_functorch=False`` and ``use_functorch=True``), while
+            ``'energy'`` computes :math:`-\partial^2 E / \partial F^2` and
+            requires ``use_functorch=True``. Defaults to ``'dipole'``.
 
         Returns
         -------
@@ -682,6 +686,11 @@ class AutogradCalculator(EnergyCalculator):
                 f"Unknown `derived_quantity` '{derived_quantity}'. The "
                 "polarizability can be calculated as the derivative of the "
                 "'dipole' moment or the 'energy'."
+            )
+        if not use_functorch and derived_quantity != "dipole":
+            raise ValueError(
+                "polarizability with use_functorch=False only supports "
+                "derived_quantity='dipole'."
             )
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
@@ -808,11 +817,17 @@ class AutogradCalculator(EnergyCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        use_functorch: bool, optional
+        use_functorch : bool, optional
             Whether to use functorch or the standard (slower) autograd.
-        derived_quantity: Literal['energy', 'dipole'], optional
-            Which derivative to calculate for the polarizability, i.e.,
-            derivative of dipole moment or energy w.r.t field.
+            Defaults to ``False``.
+        derived_quantity : Literal['energy', 'dipole'], optional
+            Formulation used for the inner polarizability before differentiating
+            w.r.t. nuclear coordinates: ``'dipole'`` differentiates
+            :math:`\alpha = \partial \mu / \partial F` (supported for both
+            ``use_functorch=False`` and ``use_functorch=True``), while
+            ``'energy'`` differentiates
+            :math:`\alpha = -\partial^2 E / \partial F^2` and requires
+            ``use_functorch=True``. Defaults to ``'dipole'``.
 
         Returns
         -------
@@ -820,6 +835,17 @@ class AutogradCalculator(EnergyCalculator):
             Polarizability derivative shape ``(..., 3, 3, nat, 3)``.
         """
         reject_removed_store_kwargs(kwargs)
+        if derived_quantity not in ("dipole", "energy"):
+            raise ValueError(
+                f"Unknown `derived_quantity` '{derived_quantity}'. The "
+                "polarizability derivative can be calculated from the "
+                "'dipole' or 'energy' polarizability formulation."
+            )
+        if not use_functorch and derived_quantity != "dipole":
+            raise ValueError(
+                "pol_deriv with use_functorch=False only supports "
+                "derived_quantity='dipole'."
+            )
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
         )
@@ -924,10 +950,18 @@ class AutogradCalculator(EnergyCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
-        use_functorch: bool, optional
+        use_functorch : bool, optional
             Whether to use functorch or the standard (slower) autograd.
-        derived_quantity: Literal['energy', 'dipole', 'polarizability', 'pol'], optional
-            Which derivative to calculate for the hyperpolarizability.
+            Defaults to ``False``.
+        derived_quantity : Literal['energy', 'dipole', 'polarizability', 'pol'], optional
+            Formulation used to compute the hyperpolarizability:
+            ``'pol'`` or ``'polarizability'`` computes
+            :math:`\partial \alpha / \partial F` (supported for both
+            ``use_functorch=False`` and ``use_functorch=True``), ``'dipole'``
+            computes :math:`\partial^2 \mu / \partial F^2` (requires
+            ``use_functorch=True``), and ``'energy'`` computes
+            :math:`-\partial^3 E / \partial F^3` (requires
+            ``use_functorch=True``). Defaults to ``'pol'``.
 
         Returns
         -------
@@ -939,6 +973,14 @@ class AutogradCalculator(EnergyCalculator):
                 f"Unknown `derived_quantity` '{derived_quantity}'. The "
                 "hyperpolarizability can be calculated as the derivative of "
                 "'pol'/'polarizability', 'dipole', or 'energy'."
+            )
+        if not use_functorch and derived_quantity not in (
+            "pol",
+            "polarizability",
+        ):
+            raise ValueError(
+                "hyperpolarizability with use_functorch=False only supports "
+                "derived_quantity in ('pol', 'polarizability')."
             )
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
@@ -1117,15 +1159,6 @@ class AutogradCalculator(EnergyCalculator):
             positions, chrg, spin, use_functorch=use_functorch, **kwargs
         )
 
-        if (
-            self.ihelp.batch_mode == 0
-            and self.system._active_exact_core() is None
-        ):
-            self.classicals.reset_all()
-            self.interactions.reset_all()
-            if self._integrals is not None:
-                self._integrals.reset_all()
-
         # calculate nuclear dipole derivative dmu/dR: (..., 3, nat, 3)
         dmu_dr = self.dipole_deriv(
             positions, chrg, spin, use_functorch=use_functorch, **kwargs
@@ -1176,15 +1209,6 @@ class AutogradCalculator(EnergyCalculator):
         vib_res = self.vibration(
             positions, chrg, spin, use_functorch=use_functorch, **kwargs
         )
-
-        if (
-            self.ihelp.batch_mode == 0
-            and self.system._active_exact_core() is None
-        ):
-            self.classicals.reset_all()
-            self.interactions.reset_all()
-            if self._integrals is not None:
-                self._integrals.reset_all()
 
         # d(..., 3, 3) / d(..., nat, 3) -> (..., 3, 3, nat, 3)
         da_dr = self.pol_deriv(
