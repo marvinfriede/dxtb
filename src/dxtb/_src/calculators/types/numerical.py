@@ -23,6 +23,7 @@ Calculator for the extended tight-binding model with numerical differentiation.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import logging
 
 import torch
@@ -52,16 +53,25 @@ class NumericalCalculator(EnergyCalculator):
     implemented_properties = EnergyCalculator.implemented_properties + [
         "forces",
         "hessian",
+        "vibration",
         "normal_modes",
         "frequencies",
         "dipole",
         "quadrupole",
         "dipole_deriv",
+        "dipole_derivatives",
         "polarizability",
         "pol_deriv",
+        "polarizability_derivatives",
         "hyperpolarizability",
         "ir",
+        "ir_intensity",
+        "ir_intensities",
         "raman",
+        "raman_intensity",
+        "raman_intensities",
+        "rama_depol",
+        "raman_depol",
     ]
     """Names of implemented methods of the Calculator."""
 
@@ -72,8 +82,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -201,6 +211,12 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
+        if self.ihelp.batch_mode > 0:
+            raise NotImplementedError(
+                "Hessian calculation is not supported in batch mode. "
+                "Please use the single system mode."
+            )
+
         field, field_grad = self._resolve_fields(field, field_grad)
 
         def _gradfcn(pos: Tensor) -> Tensor:
@@ -314,8 +330,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the electric dipole moment :math:`\mu`.
@@ -359,7 +375,7 @@ class NumericalCalculator(EnergyCalculator):
         for i in range(3):
             with OutputHandler.with_verbosity(0):
                 direction = torch.zeros_like(field)
-                direction[i] = 1.0
+                direction[..., i] = 1.0
                 gr = self.energy(
                     positions,
                     chrg,
@@ -392,8 +408,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field_grad: Tensor | None | object = _UNSET,
-        field: Tensor | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the traceless electric quadrupole moment
@@ -444,7 +460,7 @@ class NumericalCalculator(EnergyCalculator):
         for k, (i, j) in enumerate(zip(rows.tolist(), cols.tolist())):
             with OutputHandler.with_verbosity(0):
                 direction = torch.zeros_like(field_grad)
-                direction[i, j] = 1.0
+                direction[..., i, j] = 1.0
                 gr = self.energy(
                     positions,
                     chrg,
@@ -550,9 +566,15 @@ class NumericalCalculator(EnergyCalculator):
                 gc.collect()
             gc.collect()
 
+        if self.ihelp.batch_mode > 0:
+            pad_mask = (self.numbers == 0).unsqueeze(1).unsqueeze(-1)
+            deriv = torch.where(pad_mask, torch.zeros_like(deriv), deriv)
+
         logger.debug("Dipole derivative (numerical): All finished.")
 
         return deriv
+
+    dipole_derivatives_numerical = dipole_deriv_numerical
 
     @cdec.numerical
     def polarizability_numerical(
@@ -561,8 +583,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the polarizability tensor :math:`\alpha`.
@@ -610,7 +632,7 @@ class NumericalCalculator(EnergyCalculator):
         for i in range(3):
             with OutputHandler.with_verbosity(0):
                 direction = torch.zeros_like(field)
-                direction[i] = 1.0
+                direction[..., i] = 1.0
                 gr = _dipfcn(
                     positions,
                     chrg,
@@ -645,8 +667,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = 2e-4,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the cartesian polarizability derivative
@@ -729,9 +751,17 @@ class NumericalCalculator(EnergyCalculator):
                 gc.collect()
             gc.collect()
 
+        if self.ihelp.batch_mode > 0:
+            pad_mask = (
+                (self.numbers == 0).unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+            )
+            deriv = torch.where(pad_mask, torch.zeros_like(deriv), deriv)
+
         logger.debug("Polarizability numerical derivative: All finished.")
 
         return deriv
+
+    polarizability_derivatives_numerical = pol_deriv_numerical
 
     @cdec.numerical
     def hyperpolarizability_numerical(
@@ -740,8 +770,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = 2e-4,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     ) -> Tensor:
         r"""
         Numerically calculate the hyper polarizability tensor :math:`\beta`.
@@ -789,7 +819,7 @@ class NumericalCalculator(EnergyCalculator):
         for i in range(3):
             with OutputHandler.with_verbosity(0):
                 direction = torch.zeros_like(field)
-                direction[i] = 1.0
+                direction[..., i] = 1.0
                 gr = self.polarizability_numerical(
                     positions,
                     chrg,
@@ -991,18 +1021,27 @@ class NumericalCalculator(EnergyCalculator):
             for name in ("polarizability_derivatives", "pol_deriv"):
                 if name in properties:
                     values[name] = value
-        if {"ir", "ir_intensities"} & set(properties):
+        if {"ir", "ir_intensities", "ir_intensity"} & set(properties):
             ir_result = self.ir_numerical(positions, chrg, spin, **kwargs)
             if "ir" in properties:
                 values["ir"] = ir_result
-            if "ir_intensities" in properties:
-                values["ir_intensities"] = ir_result.ints
-        if {"raman", "raman_intensities", "raman_depol"} & set(properties):
+            for name in ("ir_intensities", "ir_intensity"):
+                if name in properties:
+                    values[name] = ir_result.ints
+        if {
+            "raman",
+            "raman_intensities",
+            "raman_intensity",
+            "raman_depol",
+            "rama_depol",
+        } & set(properties):
             raman_result = self.raman_numerical(positions, chrg, spin, **kwargs)
             if "raman" in properties:
                 values["raman"] = raman_result
-            if "raman_intensities" in properties:
-                values["raman_intensities"] = raman_result.ints
-            if "raman_depol" in properties:
-                values["raman_depol"] = raman_result.depol
+            for name in ("raman_intensities", "raman_intensity"):
+                if name in properties:
+                    values[name] = raman_result.ints
+            for name in ("raman_depol", "rama_depol"):
+                if name in properties:
+                    values[name] = raman_result.depol
         return values

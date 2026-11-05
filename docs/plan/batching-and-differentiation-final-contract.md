@@ -9,8 +9,8 @@ This document defines the final architectural contract for batching, differentia
    - Explicit batched `Calculator` evaluation (`numbers` shaped `(B, Nmax)`, `positions` shaped `(B, Nmax, 3)`, supporting `batch_mode=1` padded heterogeneous batches and `batch_mode=2` unpadded conformer batches) backed by `evaluate_calculator_packed_singlepoint` (`E6broute`).
    - Functional `torch.vmap` over `System` (`torch.vmap(system.singlepoint)`, `torch.vmap(system.energy)`, `torch.vmap(system.forces)`).
 2. **Shared and Per-Lane Electric Perturbations**:
-   - Batched `Calculator` and `evaluate_packed_systems` accept shared `(3,)` / `(3, 3)` tensors, per-lane `(B, 3)` / `(B, 3, 3)` tensors, and length-`B` sequences `Sequence[Tensor | None]` for `field` and `field_grad`.
-   - Ambiguous shapes (`(3, 3)` for `field`, `(3, 3, 3)` for `field_grad`, or mismatched sequence lengths) raise a clear `ValueError`.
+   - Batched `Calculator` and `evaluate_packed_systems` accept shared `(3,)` / `(3, 3)` tensors, per-lane `(B, 3)` / `(B, 3, 3)` tensors (for all batch sizes including `B == 3`, disambiguated by tensor rank), and length-`B` sequences `Sequence[Tensor | None]` for `field` and `field_grad`.
+   - Malformed shapes (e.g., `(2, 3)` when `B == 3`, `(3, 3, 3)` for `field`, `(3,)` for `field_grad`, or mismatched sequence lengths) raise a clear `ValueError`.
 3. **Complete Removal of `grad_mode` and Single Authoritative AD Force Definition**:
    - The public `grad_mode` selector and all its dispatch branches (`"autograd"`, `"backward"`, `"functorch"`, `"row"`) are removed from `AutogradCalculator.forces`, `GetPropertiesMixin.get_forces`, and `AutogradCalculator.hessian`.
    - Passing `grad_mode` by keyword or as a 4th positional argument to `forces` / `get_forces` raises `TypeError`.
@@ -44,13 +44,13 @@ Both batched `Calculator` methods (`singlepoint`, `energy`, `forces`, `dipole`, 
 
 - **`field`**:
   - `None`: no external electric field (or falls back to `calc._field_default` on `Calculator`).
-  - Shared `Tensor` of shape `(3,)`: broadcast across all `B` lanes while preserving autograd graph connectivity to the shared tensor.
-  - Per-lane `Tensor` of shape `(B, 3)` (when `B != 3`; for `B == 3`, a `(3, 3)` tensor is rejected as ambiguous with `field_grad`—pass `tuple(field)` of three `(3,)` tensors instead): sliced per lane `field[i]` while preserving autograd graph connectivity back to the `(B, 3)` tensor.
+  - Shared `Tensor` of shape `(3,)` (rank 1): broadcast across all `B` lanes while preserving autograd graph connectivity to the shared tensor.
+  - Per-lane `Tensor` of shape `(B, 3)` (rank 2, including `(3, 3)` when `B == 3`): sliced per lane `field[i]` while preserving autograd graph connectivity back to the `(B, 3)` tensor.
   - `Sequence[Tensor | None]` of length `B`: per-lane optional `(3,)` tensors.
 - **`field_grad`**:
   - `None`: no external field gradient (or falls back to `calc._field_grad_default` on `Calculator`).
-  - Shared `Tensor` of shape `(3, 3)`: broadcast across all `B` lanes.
-  - Per-lane `Tensor` of shape `(B, 3, 3)` (when `B != 3`; for `B == 3`, a `(3, 3, 3)` tensor is rejected as ambiguous—pass `tuple(field_grad)` of three `(3, 3)` tensors instead): sliced per lane `field_grad[i]`.
+  - Shared `Tensor` of shape `(3, 3)` (rank 2): broadcast across all `B` lanes.
+  - Per-lane `Tensor` of shape `(B, 3, 3)` (rank 3, including `(3, 3, 3)` when `B == 3`): sliced per lane `field_grad[i]`.
   - `Sequence[Tensor | None]` of length `B`: per-lane optional `(3, 3)` tensors.
 
 In `evaluate_packed_systems`, `MAPPED` bucket grouping includes `(lane_fields[i] is not None, lane_field_grads[i] is not None)` in the bucket key and passes either a shared tensor or a stacked `(B_bucket, ...)` tensor to `evaluate_padded_systems`.

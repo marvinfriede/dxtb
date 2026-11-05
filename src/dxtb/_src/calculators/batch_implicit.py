@@ -225,7 +225,7 @@ class BatchRootFailureCode(IntEnum):
 def classify_batch_failure_category(final_failure: Tensor) -> tuple[str, ...]:
     """Map per-lane ``BatchRootFailureCode`` values to canonical category names."""
     categories: list[str] = []
-    for raw_code in final_failure.detach().reshape(-1).tolist():
+    for raw_code in final_failure.detach().reshape(-1):
         code = int(raw_code)
         if code == int(BatchRootFailureCode.NONE):
             categories.append("success")

@@ -218,6 +218,13 @@ class ParamGetterMixin:
                     "Cannot set a non-float value to be differentiable."
                 )
 
+            if p.is_inference():
+                raise RuntimeError(
+                    "Cannot set an inference-mode tensor in ParamModule to be "
+                    "differentiable (requires_grad=True). Construct or replace "
+                    "the parameter outside torch.inference_mode()."
+                )
+
             module.param.requires_grad_(True)
             return
 
@@ -384,7 +391,10 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
                 )
 
             # Convert scalar values to 1D tensors for concatenation
-            collected.append(torch.atleast_1d(param_module.param))
+            param_val = param_module.param
+            if param_val.is_inference() and not torch.is_inference_mode_enabled():
+                param_val = param_val.detach().clone()
+            collected.append(torch.atleast_1d(param_val))
 
         if len(collected) > 0:
             return torch.cat(collected, dim=0)
@@ -465,11 +475,17 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
                 if key1 in par_pair:
                     p = par_pair[key1]
                     assert isinstance(p, ParameterModule)
-                    value = p.param.view(-1)[0]
+                    param_val = p.param
+                    if param_val.is_inference() and not torch.is_inference_mode_enabled():
+                        param_val = param_val.detach().clone()
+                    value = param_val.view(-1)[0]
                 elif key2 in par_pair:
                     p = par_pair[key2]
                     assert isinstance(p, ParameterModule)
-                    value = p.param.view(-1)[0]
+                    param_val = p.param
+                    if param_val.is_inference() and not torch.is_inference_mode_enabled():
+                        param_val = param_val.detach().clone()
+                    value = param_val.view(-1)[0]
                 else:
                     value = torch.tensor(1.0, **self.dd)
 

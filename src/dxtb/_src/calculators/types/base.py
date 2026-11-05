@@ -124,24 +124,6 @@ def reject_removed_cache_options(opts: dict[str, Any]) -> None:
         )
 
 
-def _sanitize_inference_param_module(par: ParamModule) -> None:
-    """Replace any inference-mode parameter or buffer tensors on ``par`` with normal clones."""
-    if not any(
-        t.is_inference() for t in (*par.parameters(), *par.buffers())
-    ):
-        return
-    with torch.inference_mode(False):
-        for mod in par.modules():
-            for name, p in list(mod._parameters.items()):
-                if p is not None and p.is_inference():
-                    mod._parameters[name] = torch.nn.Parameter(
-                        p.clone(), requires_grad=p.requires_grad
-                    )
-            for name, b in list(mod._buffers.items()):
-                if b is not None and b.is_inference():
-                    mod._buffers[name] = b.clone()
-
-
 def _convert_system_dtype(
     system: System,
     dtype: torch.dtype,
@@ -517,8 +499,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             # Internally, we will always use the differentiable parameter model.
             if not isinstance(par, ParamModule):
                 par = ParamModule(par, **self.dd)
-            else:
-                _sanitize_inference_param_module(par)
 
             # If method not explicitly set in options, we try to get it from the
             # parametrization.
@@ -669,15 +649,31 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             _sync_lane_system_labels,
         )
 
-        _sanitize_inference_param_module(self.model.par)
         source_classicals = tuple(self.classicals.components)
         source_interactions = tuple(self.interactions.components)
+        caller_owned_ids = {
+            id(c)
+            for c in (
+                *self.model.classical,
+                *self.model.interaction,
+                *source_classicals,
+                *source_interactions,
+            )
+        }
         current_labels = [c.label for c in source_classicals]
         has_label_collision = len(set(current_labels)) < len(current_labels)
 
         eval_classicals = []
         for idx, comp in enumerate(self.model.classical):
-            if type(comp) in _BUILTIN_CLASSICAL_TYPES or has_label_collision:
+            needs_copy = (
+                type(comp) in _BUILTIN_CLASSICAL_TYPES
+                or has_label_collision
+                or (
+                    idx < len(source_classicals)
+                    and comp.label != source_classicals[idx].label
+                )
+            )
+            if needs_copy:
                 c_copy = copy.copy(comp)
                 if has_label_collision:
                     c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
@@ -687,9 +683,15 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         eval_interactions = [
             copy.copy(inter)
-            if type(inter) in _BUILTIN_INTERACTION_TYPES
+            if (
+                type(inter) in _BUILTIN_INTERACTION_TYPES
+                or (
+                    i_idx < len(source_interactions)
+                    and inter.label != source_interactions[i_idx].label
+                )
+            )
             else inter
-            for inter in self.model.interaction
+            for i_idx, inter in enumerate(self.model.interaction)
         ]
         setup_model = Model(
             par=self.model.par,
@@ -712,7 +714,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             eval_sys,
             source_classicals,
             source_interactions,
-            set(),
+            caller_owned_ids,
         )
         if self.dtype != self.model.par.dtype:
             eval_sys = _convert_eval_system_dtype(eval_sys, self.dtype)

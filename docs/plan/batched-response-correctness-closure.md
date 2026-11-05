@@ -1,0 +1,158 @@
+# Batched Response Correctness and Final API Closure
+
+## 1. Executive Summary
+
+This document records the final property-level batch correctness hardening, `B == 3` electric perturbation rank disambiguation, inference-mode `ParamModule` parameter ownership policy, caller-owned component isolation, and full API closure on `claude/tender-dijkstra-cda42s`:
+
+1. **Final Per-Property Batch Contract**: Every public `Calculator` property (`energy`, `forces`, `hessian`, `dipole`, `quadrupole`, `polarizability`, `dipole_deriv`/`dipole_derivatives`, `pol_deriv`/`polarizability_derivatives`, `hyperpolarizability`, `vibration`/`frequencies`/`normal_modes`, `ir`/`ir_intensity`/`ir_intensities`, `raman`/`raman_intensity`/`raman_intensities`/`rama_depol`/`raman_depol`, `bond_orders`, and SCF outputs `charges`, `coefficients`, `density`, `iterations`, `mo_energies`, `occupation`, `potential`) has a documented, verified contract across single `System`, explicit conformer batches (`batch_mode=2`), explicit padded heterogeneous batches (`batch_mode=1`, trailing and non-contiguous zero padding), and `torch.vmap` over functional `System`.
+2. **Lane-Local Higher-Order Batched Electric Responses**:
+   - `AutogradCalculator` and `NumericalCalculator` return lane-local tensors for batched higher-order electric responses:
+     - `polarizability` / `polarizability_numerical`: `(B, 3, 3)` with $\alpha_{bij} = -\frac{\partial^2 E_b}{\partial F_{bi}\partial F_{bj}}$.
+     - `dipole_deriv` / `dipole_derivatives` / `dipole_deriv_numerical` / `dipole_derivatives_numerical`: `(B, 3, N_{\max}, 3)` with $\left(\frac{\partial \mu}{\partial R}\right)_{biAj} = \frac{\partial \mu_{bi}}{\partial R_{bAj}}$ and exact zeros on inactive padded atom slots (`numbers[b, A] == 0`).
+     - `pol_deriv` / `polarizability_derivatives` / `pol_deriv_numerical` / `polarizability_derivatives_numerical`: `(B, 3, 3, N_{\max}, 3)` with $\chi_{bijAk} = \frac{\partial \alpha_{bij}}{\partial R_{bAk}}$ and exact zeros on inactive padded atom slots (`numbers[b, A] == 0`).
+     - `hyperpolarizability` / `hyperpolarizability_numerical`: `(B, 3, 3, 3)` with $\beta_{bijk} = \frac{\partial \alpha_{bij}}{\partial F_{bk}} = -\frac{\partial^3 E_b}{\partial F_{bi}\partial F_{bj}\partial F_{bk}}$.
+   - None of these methods materialize cross-lane Jacobians (`(B, 3, B, 3)`, `(B, 3, B, Nmax, 3)`, `(B, 3, 3, B, Nmax, 3)`, or `(B, 3, 3, B, 3)`), and all support both `use_functorch=False` and `use_functorch=True`, both shared `(3,)` and per-lane `(B, 3)` fields, and all supported `derived_quantity` formulations while preserving differentiability with respect to `Model.par`, `positions`, and `field`.
+3. **Rank-Based `B == 3` Field and Field-Gradient Disambiguation**:
+   - Because shared electric fields have rank 1 (`(3,)`) whereas per-lane batched fields have rank 2 (`(B, 3)` = `(3, 3)` when `B == 3`), and shared field gradients have rank 2 (`(3, 3)`) whereas per-lane batched field gradients have rank 3 (`(B, 3, 3)` = `(3, 3, 3)` when `B == 3`), tensor rank uniquely disambiguates shared versus per-lane perturbations for all batch sizes including `B == 3`.
+   - Both `_normalize_packed_fields` (`src/dxtb/_src/calculators/packed_result.py`) and `EnergyCalculator._resolve_fields` (`src/dxtb/_src/calculators/types/energy.py`) validate tensor shapes directly without rejecting `B == 3` tensor inputs.
+4. **Inference-Mode `ParamModule` Ownership Preservation**:
+   - `ParamModule.__init__` (`src/dxtb/_src/param/module/param.py`) wraps `nn.Parameter` and buffer creation in `with torch.inference_mode(False):`, ensuring parameters and buffers are normal tensors from birth even when `ParamModule(...)` is constructed inside `with torch.inference_mode():`.
+   - In-place parameter replacement (`_sanitize_inference_param_module`) is removed from `BaseCalculator` and `packed_result.py`. If a caller manually injects an inference tensor into a `ParamModule`, `Model.setup` (`src/dxtb/_src/calculators/model.py`) and `ParamElementsPairsMixin` (`src/dxtb/_src/param/module/utils.py`) transiently substitute a non-inference clone only for the setup call while preserving the caller's original parameter/buffer object references on `ParamModule`, and `ParamModule.set_differentiable` raises a clear `RuntimeError` if asked to set `requires_grad=True` on an inference tensor.
+5. **Call-Local Setup and Caller-Owned Component Isolation**:
+   - Both `BaseCalculator._prepare_eval_system` and `build_calculator_lane_systems` pass the full set of caller-owned `Classical` and `Interaction` component IDs (`self.model.classical`, `self.model.interaction`, `self.classicals.components`, `self.interactions.components`) into `_sync_lane_system_labels`, copying any caller-owned component before restoring or mutating its `.label` or `.numbers`.
+
+---
+
+## 2. Final Per-Property Batch Contract
+
+| Property / Method | 1D Single `System` Input / Output Shape | 2D Batched `Calculator` (`batch_mode=1` Padded / `batch_mode=2` Conformer) Input / Output Shape | `torch.vmap` Over `System` | Shared vs. Per-Lane Field / Field-Grad Semantics | Padding Masking (`numbers == 0`) & Lane Isolation | Supported SCF Differentiation & Integral Backends | Higher-Order AD Support |
+|---|---|---|---|---|---|---|---|
+| `energy` / `get_energy` / `get_potential_energy` | `pos: (N, 3)` -> `()` scalar | `pos: (B, Nmax, 3)` -> `(B,)` | `vmap(sys.energy)(pos)` -> `(B,)` | `field`: `None`, `(3,)`, `(B, 3)`, or len-`B` seq; `field_grad`: `None`, `(3, 3)`, `(B, 3, 3)`, or len-`B` seq | Inactive atoms stripped per lane; source lane order `0..B-1` preserved; $\frac{\partial E_b}{\partial X_{b'}} = 0$ for $b \neq b'$ | `UNROLLED` (`"full"`), `IMPLICIT` (`"implicit"`), `non-scf` (`GFN0`); `pytorch` (AD + eager) and `libcint` | 1st–3rd order (`grad`, `jacrev`, `jvp`, `jacfwd`, `hessian`) on `UNROLLED` + `pytorch`; 1st order on `IMPLICIT` |
+| `forces` / `get_forces` / `forces_numerical` | `pos: (N, 3)` -> `(N, 3)` | `pos: (B, Nmax, 3)` -> `(B, Nmax, 3)` | `vmap(sys.forces)(pos)` -> `(B, N, 3)` | Same as `energy` | Exact `0.0` at `numbers[b, A] == 0`; zero cross-lane derivative blocks | `UNROLLED` (`"full"`), `IMPLICIT` (`"implicit"`), `non-scf`; `pytorch` and `libcint` | Differentiable w.r.t. `pos`, `field`, `field_grad`, `Model.par` (`create_graph=True` on `UNROLLED`) |
+| `hessian` / `get_hessian` / `hessian_numerical` | `pos: (N, 3)` -> `(N, 3, N, 3)` or `(3N, 3N)` (`matrix=True`) | **Unsupported in batch mode**: raises `NotImplementedError` | `vmap(sys.hessian)(pos)` -> `(B, N, 3, N, 3)` | Single-system `field: (3,)`, `field_grad: (3, 3)` | N/A on `Calculator` batch mode (`NotImplementedError`); supported for conformers via `vmap(sys.hessian)` | `UNROLLED` (`"full"`), `non-scf`; `pytorch` (`use_functorch=True/False`) and `libcint` (`use_functorch=False` or numerical) | 2nd-order nuclear derivative; differentiable w.r.t. `pos`/`Model.par` on `UNROLLED` |
+| `dipole` / `get_dipole` / `get_dipole_moment` / `dipole_numerical` | `pos: (N, 3)` -> `(3,)` | `pos: (B, Nmax, 3)` -> `(B, 3)` | `vmap(sys.dipole)(pos)` -> `(B, 3)` | `field`: `(3,)` shared, `(B, 3)` per-lane, or len-`B` seq of `(3,)` tensors (requires `INTLEVEL_DIPOLE`) | Lane-local $\mu_{bi} = -\frac{\partial E_b}{\partial F_{bi}}$; $\frac{\partial \mu_b}{\partial F_{b'}} = 0$ for $b \neq b'$ | `UNROLLED` (`"full"`), `IMPLICIT` (`"implicit"`); `pytorch` (`use_functorch=True/False`) and `libcint` (`use_functorch=False` / numerical) | Differentiable w.r.t. `pos`, `field`, `Model.par` |
+| `quadrupole` / `get_quadrupole` / `get_quadrupole_moment` / `quadrupole_numerical` | `pos: (N, 3)` -> `(6,)` traceless Voigt `[xx, xy, yy, xz, yz, zz]` | `pos: (B, Nmax, 3)` -> `(B, 6)` | `vmap(sys.quadrupole)(pos)` -> `(B, 6)` | `field_grad`: `(3, 3)` shared, `(B, 3, 3)` per-lane, or len-`B` seq of `(3, 3)` tensors (requires `INTLEVEL_QUADRUPOLE`) | Lane-local traceless Voigt quadrupole; $\frac{\partial Q_b}{\partial (\nabla F)_{b'}} = 0$ for $b \neq b'$ | `UNROLLED` (`"full"`), `IMPLICIT` (`"implicit"`); `pytorch` (`use_functorch=True/False`) and `libcint` (`use_functorch=False` / numerical) | Differentiable w.r.t. `pos`, `field_grad`, `Model.par` |
+| `polarizability` / `get_polarizability` / `polarizability_numerical` | `pos: (N, 3)` -> `(3, 3)` | `pos: (B, Nmax, 3)` -> `(B, 3, 3)` | `vmap(sys.polarizability)(pos)` -> `(B, 3, 3)` | `field`: `(3,)` shared, `(B, 3)` per-lane, or len-`B` seq of `(3,)` tensors (`INTLEVEL_DIPOLE`) | Lane-local $\alpha_{bij} = -\frac{\partial^2 E_b}{\partial F_{bi}\partial F_{bj}}$; no `(B, 3, B, 3)` cross-lane tensor | `UNROLLED` (`"full"`); `pytorch` (`use_functorch=True/False`, `derived_quantity="dipole"` or `"energy"`), numerical | Differentiable w.r.t. `Model.par`, `pos`, and `field` |
+| `dipole_deriv` / `dipole_derivatives` / `get_dipole_deriv` / `get_dipole_derivatives` / `dipole_deriv_numerical` | `pos: (N, 3)` -> `(3, N, 3)` | `pos: (B, Nmax, 3)` -> `(B, 3, Nmax, 3)` | `vmap(sys.dipole_deriv)(pos)` -> `(B, 3, N, 3)` | `field`: `(3,)` shared, `(B, 3)` per-lane, or len-`B` seq (`INTLEVEL_DIPOLE`) | Lane-local $\frac{\partial \mu_{bi}}{\partial R_{bAj}}$; exact `0.0` at `numbers[b, A] == 0` | `UNROLLED` (`"full"`); `pytorch` (`use_functorch=True/False`), numerical | 2nd-order mixed field/nuclear derivative |
+| `pol_deriv` / `polarizability_derivatives` / `get_pol_deriv` / `get_polarizability_derivatives` / `pol_deriv_numerical` | `pos: (N, 3)` -> `(3, 3, N, 3)` | `pos: (B, Nmax, 3)` -> `(B, 3, 3, Nmax, 3)` | `vmap(sys.pol_deriv)(pos)` -> `(B, 3, 3, N, 3)` | `field`: `(3,)` shared, `(B, 3)` per-lane, or len-`B` seq (`INTLEVEL_DIPOLE`) | Lane-local $\frac{\partial \alpha_{bij}}{\partial R_{bAk}}$; exact `0.0` at `numbers[b, A] == 0` | `UNROLLED` (`"full"`); `pytorch` (`use_functorch=True/False`, `derived_quantity="dipole"` or `"energy"`), numerical | 3rd-order mixed field/nuclear derivative |
+| `hyperpolarizability` / `get_hyperpolarizability` / `hyperpolarizability_numerical` | `pos: (N, 3)` -> `(3, 3, 3)` | `pos: (B, Nmax, 3)` -> `(B, 3, 3, 3)` | `vmap(sys.hyperpolarizability)(pos)` -> `(B, 3, 3, 3)` | `field`: `(3,)` shared, `(B, 3)` per-lane, or len-`B` seq (`INTLEVEL_DIPOLE`) | Lane-local $\beta_{bijk} = \frac{\partial \alpha_{bij}}{\partial F_{bk}}$; no `(B, 3, 3, B, 3)` cross-lane tensor | `UNROLLED` (`"full"`); `pytorch` (`use_functorch=True/False`, `derived_quantity` in `("pol", "polarizability", "dipole", "energy")`), numerical | 3rd-order electric field derivative |
+| `vibration` / `frequencies` / `normal_modes` / `vibration_numerical` | `pos: (N, 3)` -> `VibResult(freqs: (nfreqs,), modes: (3N, nfreqs))` | **Unsupported in batch mode**: raises `NotImplementedError` | Supported via `System.vibration` per conformer | Single-system `field: (3,)`, `field_grad: (3, 3)` | N/A on `Calculator` batch mode (`NotImplementedError`, since `nfreqs = 3N_b - 6` or `3N_b - 5` varies with molecule size/linearity) | `UNROLLED` (`"full"`), `non-scf`; `pytorch` and numerical | Differentiable through `hessian` and `eigh` for non-degenerate modes |
+| `ir` / `ir_intensity` / `ir_intensities` / `ir_numerical` | `pos: (N, 3)` -> `IRResult(freqs: (nfreqs,), ints: (nfreqs,))` or `(nfreqs,)` | **Unsupported in batch mode**: raises `NotImplementedError` | Supported via `System.ir` per conformer | Single-system `field: (3,)`, `field_grad: (3, 3)` (`INTLEVEL_DIPOLE`) | N/A on `Calculator` batch mode (`NotImplementedError`) | `UNROLLED` (`"full"`); `pytorch` and numerical | Composes `vibration` and `dipole_deriv` |
+| `raman` / `raman_intensity` / `raman_intensities` / `rama_depol` / `raman_depol` / `raman_numerical` | `pos: (N, 3)` -> `RamanResult(freqs, ints, depol)` or `(nfreqs,)` | **Unsupported in batch mode**: raises `NotImplementedError` | Supported via `System.raman` per conformer | Single-system `field: (3,)`, `field_grad: (3, 3)` (`INTLEVEL_DIPOLE`) | N/A on `Calculator` batch mode (`NotImplementedError`) | `UNROLLED` (`"full"`); `pytorch` and numerical | Composes `vibration` and `pol_deriv` |
+| `bond_orders` / `get_bond_orders` | `pos: (N, 3)` -> `(N, N)` | `pos: (B, Nmax, 3)` -> `(B, Nmax, Nmax)` | `vmap(sys.bond_orders)(pos)` -> `(B, N, N)` | Same as `energy` | Exact `0.0` on rows and columns where `numbers[b, A] == 0` | `UNROLLED`, `IMPLICIT`, `non-scf`; `pytorch` and `libcint` | Differentiable w.r.t. `pos`, `field`, `Model.par` |
+| SCF Result properties (`charges`, `coefficients`, `density`, `iterations`, `mo_energies`, `occupation`, `potential`) | `(nao,)` / `(nao, nao)` / `()` | Packed `(B, nao_max)` / `(B, nao_max, nao_max)` / `(B,)` | `vmap(sys.singlepoint)(pos)` | Same as `energy` | Zero-padded to `nao_max` / `Nmax` in source lane order `0..B-1` | `UNROLLED`, `IMPLICIT`, `non-scf`; `pytorch` and `libcint` | Differentiable (`charges`, `density`, `potential`, `coefficients`, `mo_energies`) |
+
+---
+
+## 3. Lane-Local Higher-Order Batched Electric Responses
+
+Because batch lanes in `evaluate_calculator_packed_singlepoint` represent independent molecules or conformers ($\frac{\partial E_b}{\partial F_{b'}} = 0$ and $\frac{\partial E_b}{\partial R_{b'}} = 0$ for $b \neq b'$), summing a per-lane response tensor over the batch dimension (`dim=0`) before applying a reverse-mode vector-Jacobian product (`tad_mctc.autograd.jac` or `torch.func.jacrev`) recovers the exact lane-local derivatives in a fixed number of VJP passes ($3$ passes for $\mu$ or $\alpha$, $9$ passes for $\chi$ or $\beta$) without ever materializing cross-lane derivative blocks:
+
+1. **Dipole (`AutogradCalculator.dipole`, `NumericalCalculator.dipole_numerical`)**:
+   - Shared field `F: (3,)`: `jac( -e, F )` or `jacrev(-energy)(F)` directly yields `(B, 3)`.
+   - Per-lane field `F: (B, 3)`: `jac( -e.sum(), F )` or `jacrev(lambda f: -energy(f).sum())(F)` directly yields `(B, 3)` with $\mu_{bi} = -\frac{\partial E_b}{\partial F_{bi}}$.
+   - Numerical finite differences perturb `direction = torch.zeros_like(field); direction[..., i] = 1.0`, perturbing all lanes in parallel along Cartesian component $i \in \{0, 1, 2\}$.
+2. **Quadrupole (`AutogradCalculator.quadrupole`, `NumericalCalculator.quadrupole_numerical`)**:
+   - Shared field gradient `G: (3, 3)`: `jac( -e, G )` or `jacrev(-energy)(G)` yields `(B, 3, 3)`.
+   - Per-lane field gradient `G: (B, 3, 3)`: `jac( -e.sum(), G )` or `jacrev(lambda g: -energy(g).sum())(G)` yields `(B, 3, 3)`.
+   - Symmetrized, detrace-projected, and packed into Voigt order `(B, 6)`.
+3. **Polarizability (`AutogradCalculator.polarizability`, `NumericalCalculator.polarizability_numerical`)**:
+   - Shared field `F: (3,)`: differentiates `dipole` (`(B, 3)`) w.r.t. `(3,)` -> `(B, 3, 3)`.
+   - Per-lane field `F: (B, 3)`: differentiates `dipole(...).sum(dim=0)` (`(3,)`) w.r.t. `F: (B, 3)` -> `(3, B, 3)` and permutes `.movedim(0, 1)` -> `(B, 3, 3)` (and similarly for `derived_quantity="energy"` via `jacrev` over `grad_sum`).
+4. **Dipole Derivatives (`AutogradCalculator.dipole_deriv`, `NumericalCalculator.dipole_deriv_numerical`)**:
+   - Differentiates `dipole(...).sum(dim=0)` (`(3,)`) w.r.t. `positions: (B, Nmax, 3)` -> `(3, B, Nmax, 3)` and permutes `.movedim(1, 0)` -> `(B, 3, Nmax, 3)`.
+   - Masks inactive padded atoms (`self.numbers == 0`) to exact zeros via `torch.where`.
+5. **Polarizability Derivatives (`AutogradCalculator.pol_deriv`, `NumericalCalculator.pol_deriv_numerical`)**:
+   - Differentiates `polarizability(...).sum(dim=0)` (`(3, 3)`) w.r.t. `positions: (B, Nmax, 3)` -> `(3, 3, B, Nmax, 3)` and permutes `.movedim(2, 0)` -> `(B, 3, 3, Nmax, 3)`.
+   - Masks inactive padded atoms (`self.numbers == 0`) to exact zeros via `torch.where`.
+6. **Hyperpolarizability (`AutogradCalculator.hyperpolarizability`, `NumericalCalculator.hyperpolarizability_numerical`)**:
+   - Shared field `F: (3,)`: differentiates `polarizability` (`(B, 3, 3)`) w.r.t. `(3,)` -> `(B, 3, 3, 3)` (or nested `jacrev` on `dipole` / `energy`).
+   - Per-lane field `F: (B, 3)`: differentiates `polarizability(...).sum(dim=0)` (`(3, 3)`) w.r.t. `F: (B, 3)` -> `(3, 3, B, 3)` and permutes `.movedim(2, 0)` -> `(B, 3, 3, 3)` across all four `derived_quantity` options (`"pol"`, `"polarizability"`, `"dipole"`, `"energy"`).
+
+---
+
+## 4. Shared Versus Per-Lane Field and Field-Gradient Semantics (Including `B == 3`)
+
+For any batch size $B \ge 1$ (including $B = 3$):
+
+- **`field` input**:
+  - Rank-1 `Tensor` of shape `(3,)`: **shared** electric field applied identically to all $B$ lanes.
+  - Rank-2 `Tensor` of shape `(B, 3)` (which is `(3, 3)` when $B = 3$): **per-lane** electric field where `field[b]` is applied to lane $b$.
+  - `Sequence[Tensor | None]` of length $B$: **per-lane** optional `(3,)` electric fields.
+  - Any other tensor shape (e.g., `(2, 3)` when $B = 3$, `(B, 4)`, or rank $\ge 3$) or sequence length $\neq B$ raises a `ValueError`.
+- **`field_grad` input**:
+  - Rank-2 `Tensor` of shape `(3, 3)`: **shared** electric field gradient applied identically to all $B$ lanes.
+  - Rank-3 `Tensor` of shape `(B, 3, 3)` (which is `(3, 3, 3)` when $B = 3$): **per-lane** electric field gradient where `field_grad[b]` is applied to lane $b$.
+  - `Sequence[Tensor | None]` of length $B$: **per-lane** optional `(3, 3)` electric field gradients.
+  - Any other tensor shape (e.g., `(3,)`, `(2, 3, 3)` when $B = 3$, or rank $\ge 4$) or sequence length $\neq B$ raises a `ValueError`.
+
+Because `field` and `field_grad` are passed as distinct arguments and shared vs. per-lane inputs always differ in tensor rank (`ndim == 1` vs. `ndim == 2` for `field`; `ndim == 2` vs. `ndim == 3` for `field_grad`), $B = 3$ requires no special-case rejection.
+
+---
+
+## 5. Inference-Mode Parameter Ownership Policy
+
+1. **Construction under `torch.inference_mode()`**:
+   - `ParamModule.__init__` (`src/dxtb/_src/param/module/param.py`) wraps parameter tree conversion and buffer registration inside `with torch.inference_mode(False):`.
+   - Consequently, `par = ParamModule(GFN1_XTB, ...)` constructed inside `with torch.inference_mode():` creates normal (non-inference) `nn.Parameter` and buffer tensors from the outset. External references captured during construction (`ref = par.get("element.O.gam")`) remain identical (`par.get("element.O.gam") is ref`) before and after `Calculator` construction, evaluation, `par.set_differentiable(...)`, `loss.backward()`, and `optimizer.step()`.
+2. **No Silent In-Place Parameter Replacement**:
+   - `BaseCalculator` and `packed_result.py` never replace `nn.Parameter` or buffer entries on a caller-owned `ParamModule`.
+   - If a caller manually injects an inference-mode tensor into a `ParamModule` (`p.is_inference() == True`) and evaluates a `Model` or `Calculator` outside `torch.inference_mode()`, `Model.setup` (`src/dxtb/_src/calculators/model.py`) and `ParamElementsPairsMixin` (`src/dxtb/_src/param/module/utils.py`) use non-inference clones transiently during setup while leaving the caller's `ParamModule` parameter and buffer references untouched.
+   - If a caller explicitly requests gradient tracking (`par.set_differentiable(...)`) on a manually injected inference-mode tensor, `ParamGetterMixin._set_differentiable_recursive` raises a descriptive `RuntimeError` explaining that PyTorch inference-mode tensors cannot enable `requires_grad=True` in place.
+
+---
+
+## 6. Call-Local Setup and Component Isolation Contract
+
+1. **Caller-Owned Component Isolation**:
+   - Both `BaseCalculator._prepare_eval_system` (`src/dxtb/_src/calculators/types/base.py`) and `build_calculator_lane_systems` (`src/dxtb/_src/calculators/packed_result.py`) collect the object identities of all caller-reachable `Classical` and `Interaction` instances (`self.model.classical`, `self.model.interaction`, `self.classicals.components`, `self.interactions.components`) and pass `caller_owned_ids` to `_sync_lane_system_labels`.
+   - Whenever a setup component is in `caller_owned_ids` and its `.label` or `.numbers` needs to be synchronized or sliced for a single-system or lane evaluation, `copy.copy(comp)` is created first and synchronized across `system.classicals` / `system.interactions`, `exact_core`, and `_exact_compatibility` so caller-owned component instances are never mutated in place.
+2. **Legacy Differentiation Switch Status**:
+   - `grad_mode` remains completely removed.
+   - `SCFDifferentiation.UNROLLED` (`scf_mode="full"`) and `SCFDifferentiation.IMPLICIT` (`scf_mode="implicit"`) remain the authoritative S13 SCF differentiation modes.
+   - `use_functorch` and `derived_quantity` remain supported on `AutogradCalculator` higher-order response methods (`hessian`, `dipole`, `quadrupole`, `polarizability`, `dipole_deriv`, `pol_deriv`, `hyperpolarizability`, `vibration`, `ir`, `raman`), and stale docstrings claiming `torch.func` transforms could only be used once have been removed.
+
+---
+
+## 7. Multi-Environment and Full Regression Verification Results
+
+1. **Five-Environment Focused Response and Lifecycle Gate**:
+   - Command:
+     `OMP_NUM_THREADS=1 <env>/bin/pytest -q -n 8 --dist worksteal -m "not large" test/test_calculator/test_batch_differentiation_lifecycle.py test/test_calculator/test_field_inputs.py test/test_properties/test_dipole.py test/test_properties/test_quadrupole.py`
+     (plus `test/test_properties/test_dipole_deriv.py`, `test/test_properties/test_pol.py`, `test/test_properties/test_pol_deriv.py`, and `test/test_properties/test_hyperpol.py`):
+   - `py3.10-torch2.7.0`: **114 passed**, 0 failed (resolved PyTorch 2.7 `GradTrackingTensor.tolist()` storage error in `canonical_padding.py:_int_matrix_to_rows` and `batch_implicit.py:classify_batch_failure_category`).
+   - `py3.11-torch2.8.0`: **114 passed**, 0 failed.
+   - `py3.12-torch2.11.0`: **114 passed**, 0 failed.
+   - `py3.12-torch2.13.0`: **106 passed**, 0 failed (`test_batch_differentiation_lifecycle.py`, `test_field_inputs.py`, `test_dipole.py`, `test_quadrupole.py`).
+   - `py3.14-torch2.14.1`: **106 passed**, 0 failed (`test_batch_differentiation_lifecycle.py`, `test_field_inputs.py`, `test_dipole.py`, `test_quadrupole.py`) + **16 passed**, 0 failed across `test_dipole_deriv.py`, `test_pol.py`, `test_pol_deriv.py`, and `test_hyperpol.py` (including unskipped `test_batch` and `test_batch_field`).
+2. **S13 668-Test Gate (`py3.14-torch2.14.1`)**:
+   - Command:
+     `OMP_NUM_THREADS=1 /tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1/bin/pytest -q -n 8 --dist worksteal test/test_scf/test_functional_*.py test/test_calculator/test_e6a0_system_vmap.py`
+   - Result: **668 passed, 0 failed, 0 skipped, 0 xfailed, 0 errors**.
+3. **Full Broad Regression Suite (`py3.14-torch2.14.1`)**:
+   - Command:
+     `OMP_NUM_THREADS=1 /tmp1/friede/dxtb-agentic/envs/py3.14-torch2.14.1/bin/pytest -q -n 8 --dist worksteal -m "not large and not slow" test`
+   - Result:
+     - **Collected**: `6267` (with `test_quadrupole_fieldgrad.py::test_batch` re-verified `1 passed in 43.08s` outside `-n 8` concurrent `libcint` worker contention)
+     - **Passed**: `6093` (up from `6049` at baseline)
+     - **Failed**: `119` (0 new failures; all 119 match the documented pre-existing baseline failure inventory in `docs/plan/batching-and-differentiation-final-contract.md`)
+     - **Skipped**: `32`
+     - **Xfailed**: `23`
+     - **Xpassed**: `0`
+     - **Errors**: `0`
+
+---
+
+## 8. Independent Review Summary
+
+- Reviewer subagent `5e84127d-fb75-4c13-9f06-f6dcd0e7a7ed` (`Independent Architecture and Code Reviewer`) audited all production diffs, tests, and documentation against the 13 mandatory checklist items.
+- **Verdict**: **APPROVED** with **0 `BLOCKER`**, **0 `MAJOR`**, and **0 `MINOR`** issues.
+- One optional type-annotation nit (`Sequence[Tensor | None]` on `field`/`field_grad` parameters in `NumericalCalculator` and `evaluate_calculator_packed_singlepoint`) was also applied.
+
+---
+
+## 9. Final Branch Inventory
+
+- **Local branches**: `claude/tender-dijkstra-cda42s`
+- **Remote branches**: `origin/claude/tender-dijkstra-cda42s` and `origin/main` (`origin/HEAD -> origin/main`); `feature/unified-tad-dftd` is already merged into `claude/tender-dijkstra-cda42s` at `07a948b3c1f695ed680e972fc89b9b1c42aa164a` and cleaned up.
+- **S0–S13.1 SCF Core**: `git diff origin/claude/tender-dijkstra-cda42s -- src/dxtb/_src/scf/` is empty (0 lines changed).

@@ -1478,17 +1478,22 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
             return (calc._prepare_eval_system(),)
         return (calc.system,)
 
-    from dxtb._src.calculators.types.base import (
-        _convert_eval_system_dtype,
-        _sanitize_inference_param_module,
-    )
+    from dxtb._src.calculators.types.base import _convert_eval_system_dtype
 
-    _sanitize_inference_param_module(calc.model.par)
     batch_size = int(calc.numbers.shape[0])
     source_classicals = tuple(calc.classicals.components)
     source_interactions = tuple(calc.interactions.components)
     model_classicals = tuple(calc.model.classical)
     model_interactions = tuple(calc.model.interaction)
+    caller_owned_ids = {
+        id(c)
+        for c in (
+            *model_classicals,
+            *model_interactions,
+            *source_classicals,
+            *source_interactions,
+        )
+    }
 
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
@@ -1570,7 +1575,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 lane_sys,
                 source_classicals,
                 source_interactions,
-                set(),
+                caller_owned_ids,
             )
             if calc.dtype != calc.model.par.dtype:
                 lane_sys = _convert_eval_system_dtype(lane_sys, calc.dtype)
@@ -1585,8 +1590,8 @@ def evaluate_calculator_packed_singlepoint(
     positions: Tensor,
     chrg: Tensor | float | int = defaults.CHRG,
     spin: Tensor | float | int | None = defaults.SPIN,
-    field: Tensor | None | object = _UNSET,
-    field_grad: Tensor | None | object = _UNSET,
+    field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+    field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     *,
     strict_e6bcompat: bool = False,
     ignore_unknown_kwargs: bool = True,

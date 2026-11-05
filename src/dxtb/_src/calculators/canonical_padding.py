@@ -632,6 +632,14 @@ def _expected_pair_idx(
     return rows[:, None] * nao + cols[None, :]
 
 
+def _int_matrix_to_rows(t: Tensor) -> list[list[int]]:
+    """Convert a 2D integer tensor to nested Python lists (safe inside torch.func)."""
+    try:
+        return t.tolist()
+    except RuntimeError:
+        return [[int(v) for v in row] for row in t]
+
+
 def _mapped_pair_class(
     core: ExactSystemCore,
     mapping: CanonicalCoreMap,
@@ -696,13 +704,14 @@ def _mapped_pair_class(
                 raise ValueError(
                     "PairPlan AO destination is outside its source stride."
                 )
+            old_idx_rows = _int_matrix_to_rows(old_idx)
             mapped_rows = [
                 [
                     mapping.orbitals[int(value) // pair_plan.nao] * target_nao
                     + mapping.orbitals[int(value) % pair_plan.nao]
                     for value in row
                 ]
-                for row in old_idx.tolist()
+                for row in old_idx_rows
             ]
             if flipped:
                 mapped_rows = [
@@ -721,12 +730,13 @@ def _mapped_pair_class(
                 target_nao,
                 device=old_idx.device,
             )
-            if mapped_rows != expected.tolist():
+            expected_rows = _int_matrix_to_rows(expected)
+            if mapped_rows != expected_rows:
                 raise ValueError(
                     "Mapped PairPlan AO destinations are invalid for "
                     f"source shells {(old_i, old_j)} mapped to {(new_i, new_j)}: "
-                    f"source idx {old_idx.tolist()} with nao={pair_plan.nao}, "
-                    f"got {mapped_rows}, expected {expected.tolist()}."
+                    f"source idx {old_idx_rows} with nao={pair_plan.nao}, "
+                    f"got {mapped_rows}, expected {expected_rows}."
                 )
             pair = (new_i, new_j)
             weight = float(pair_class.weight[entry])

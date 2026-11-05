@@ -202,37 +202,36 @@ def test_single_field(dtype: torch.dtype, name: str) -> None:
     single(name, field_vector, dd=dd)
 
 
-# TODO: Batched derivatives are not supported yet
+@pytest.mark.slow
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", slist)
-def skip_test_batch(dtype: torch.dtype, name1: str, name2) -> None:
+def test_batch(dtype: torch.dtype, name1: str, name2) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     field_vector = torch.tensor([0.0, 0.0, 0.0], **dd) * VAA2AU
     batched(name1, name2, field_vector, dd=dd)
 
 
-# TODO: Batched derivatives are not supported yet
 @pytest.mark.large
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", slist_large)
-def skip_test_batch_large(dtype: torch.dtype, name1: str, name2) -> None:
+def test_batch_large(dtype: torch.dtype, name1: str, name2) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     field_vector = torch.tensor([0.0, 0.0, 0.0], **dd) * VAA2AU
     batched(name1, name2, field_vector, dd=dd)
 
 
-# TODO: Batched derivatives are not supported yet
+@pytest.mark.slow
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", slist)
-def skip_test_batch_field(dtype: torch.dtype, name1: str, name2) -> None:
+def test_batch_field(dtype: torch.dtype, name1: str, name2) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     field_vector = torch.tensor([-2.0, 0.5, 1.5], **dd) * VAA2AU

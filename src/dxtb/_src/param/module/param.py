@@ -69,13 +69,14 @@ class ParamModule(nn.Module, ParamElementsPairsMixin):
         """
         super().__init__()
 
-        # Recursively convert the dictionary into a parameter tree.
-        self.parameter_tree = _convert(par.clean_model_dump(), device, dtype)
+        with torch.inference_mode(False):
+            # Recursively convert the dictionary into a parameter tree.
+            self.parameter_tree = _convert(par.clean_model_dump(), device, dtype)
 
-        # Dummy tensor to get the device and dtype.
-        self.register_buffer(
-            "dummy", torch.empty(0, device=device, dtype=dtype)
-        )
+            # Dummy tensor to get the device and dtype.
+            self.register_buffer(
+                "dummy", torch.empty(0, device=device, dtype=dtype)
+            )
 
     @property
     def device(self) -> torch.device:

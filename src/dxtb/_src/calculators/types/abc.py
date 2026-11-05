@@ -358,11 +358,12 @@ class GetPropertiesMixin(ABC):
         **kwargs: Any,
     ) -> Tensor:
         prop = self.get_property(
-            "ir", positions, chrg=chrg, spin=spin, **kwargs
+            "ir_intensities", positions, chrg=chrg, spin=spin, **kwargs
         )
-        assert isinstance(prop, IRResult)
-
-        return prop.ints
+        if isinstance(prop, IRResult):
+            return prop.ints
+        assert isinstance(prop, Tensor)
+        return prop
 
     def get_raman(
         self,
@@ -385,11 +386,12 @@ class GetPropertiesMixin(ABC):
         **kwargs: Any,
     ) -> Tensor:
         prop = self.get_property(
-            "raman_intensity", positions, chrg=chrg, spin=spin, **kwargs
+            "raman_intensities", positions, chrg=chrg, spin=spin, **kwargs
         )
-        assert isinstance(prop, RamanResult)
-
-        return prop.ints
+        if isinstance(prop, RamanResult):
+            return prop.ints
+        assert isinstance(prop, Tensor)
+        return prop
 
     def get_raman_depol(
         self,
@@ -401,9 +403,10 @@ class GetPropertiesMixin(ABC):
         prop = self.get_property(
             "raman_depol", positions, chrg=chrg, spin=spin, **kwargs
         )
-        assert isinstance(prop, RamanResult)
-
-        return prop.depol
+        if isinstance(prop, RamanResult):
+            return prop.depol
+        assert isinstance(prop, Tensor)
+        return prop
 
     # SCF properties
 
@@ -564,3 +567,7 @@ class GetPropertiesMixin(ABC):
         assert isinstance(prop.mono, Tensor)
 
         return prop.mono
+
+    get_ir_intensity = get_ir_intensities
+    get_raman_intensity = get_raman_intensities
+    get_rama_depol = get_raman_depol

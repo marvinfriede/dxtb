@@ -625,3 +625,990 @@ def test_caller_owned_components_are_not_mutated_and_exact_core_stays_active() -
 
     res_conf = calc_conf.singlepoint(conf_pos)
     assert torch.isfinite(res_conf.total).all()
+
+
+@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
+def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
+    scf_mode: str,
+) -> None:
+    """Batched dipole, quadrupole, polarizability, dipole_deriv, and bond_orders match serial Systems."""
+    num_w, pos_w = _water_geometry(0.0)
+    num_l, pos_l = _lih_geometry(0.0)
+    # Non-contiguous padding in lane 1: [3, 0, 1]
+    padded_nums = torch.tensor([[8, 1, 1], [3, 0, 1]], device=DEVICE)
+    padded_pos = torch.stack(
+        [
+            pos_w,
+            torch.stack([pos_l[0], torch.zeros(3, **DD), pos_l[1]], dim=0),
+        ],
+        dim=0,
+    )
+
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": scf_mode,
+        "mixer": "anderson",
+        "maxiter": 12,
+        "x_atol": 1e-10,
+    }
+    par = ParamModule(GFN1_XTB, **DD)
+
+    calc_batch = Calculator(padded_nums, par, opts=opts, **DD)
+    calc_w = Calculator(num_w, par, opts=opts, **DD)
+    calc_l = Calculator(num_l, par, opts=opts, **DD)
+
+    shared_f = torch.tensor([0.01, -0.015, 0.02], **DD, requires_grad=True)
+    lane_f = torch.tensor(
+        [[0.01, -0.015, 0.02], [-0.02, 0.01, -0.01]],
+        **DD,
+        requires_grad=True,
+    )
+    shared_fg = torch.tensor(
+        [[0.01, 0.005, 0.0], [0.005, -0.01, 0.002], [0.0, 0.002, 0.0]],
+        **DD,
+        requires_grad=True,
+    )
+    lane_fg = torch.stack([shared_fg.detach(), -0.5 * shared_fg.detach()]).requires_grad_(True)
+
+    # 1. Bond orders (including non-contiguous padding in lane 1)
+    bo_batch = calc_batch.bond_orders(padded_pos)
+    bo_w = calc_w.bond_orders(pos_w)
+    bo_l = calc_l.bond_orders(pos_l)
+    assert bo_batch.shape == (2, 3, 3)
+    torch.testing.assert_close(bo_batch[0], bo_w, atol=1e-9, rtol=1e-9)
+    torch.testing.assert_close(
+        bo_batch[1, [0, 2]][:, [0, 2]], bo_l, atol=1e-9, rtol=1e-9
+    )
+    assert torch.all(bo_batch[1, 1, :] == 0.0)
+    assert torch.all(bo_batch[1, :, 1] == 0.0)
+
+    # 2. Shared and per-lane dipole & quadrupole (supported for both "full" and "implicit")
+    for f_in, f_lanes in (
+        (shared_f, (shared_f, shared_f)),
+        (lane_f, (lane_f[0], lane_f[1])),
+    ):
+        dip_0 = calc_w.dipole(
+            pos_w,
+            use_functorch=False,
+            field=f_lanes[0].detach().requires_grad_(True),
+        )
+        dip_1 = calc_l.dipole(
+            pos_l,
+            use_functorch=False,
+            field=f_lanes[1].detach().requires_grad_(True),
+        )
+        if scf_mode == "full":
+            pol_0 = calc_w.polarizability(
+                pos_w,
+                use_functorch=False,
+                field=f_lanes[0].detach().requires_grad_(True),
+            )
+            pol_1 = calc_l.polarizability(
+                pos_l,
+                use_functorch=False,
+                field=f_lanes[1].detach().requires_grad_(True),
+            )
+            dmu_0 = calc_w.dipole_deriv(
+                pos_w.clone().requires_grad_(True),
+                use_functorch=False,
+                field=f_lanes[0].detach().requires_grad_(True),
+            )
+            dmu_1 = calc_l.dipole_deriv(
+                pos_l.clone().requires_grad_(True),
+                use_functorch=False,
+                field=f_lanes[1].detach().requires_grad_(True),
+            )
+        for use_ft in (False, True):
+            f_arg = f_in.detach() if use_ft else f_in
+            dip_b = calc_batch.dipole(
+                padded_pos, use_functorch=use_ft, field=f_arg
+            )
+            assert dip_b.shape == (2, 3)
+            torch.testing.assert_close(dip_b[0], dip_0, atol=1e-7, rtol=1e-7)
+            torch.testing.assert_close(dip_b[1], dip_1, atol=1e-7, rtol=1e-7)
+
+            if scf_mode != "full":
+                continue
+
+            # Polarizability (both derived_quantity="dipole" and "energy")
+            dq_list = ("dipole",) if not use_ft else ("dipole", "energy")
+            for dq in dq_list:
+                pol_b = calc_batch.polarizability(
+                    padded_pos,
+                    use_functorch=use_ft,
+                    derived_quantity=dq,
+                    field=f_arg,
+                )
+                assert pol_b.shape == (2, 3, 3)
+                torch.testing.assert_close(
+                    pol_b[0], pol_0, atol=1e-6, rtol=1e-6
+                )
+                torch.testing.assert_close(
+                    pol_b[1], pol_1, atol=1e-6, rtol=1e-6
+                )
+
+            # Dipole derivatives (including non-contiguous padding mask)
+            pos_b_grad = padded_pos.clone().requires_grad_(True)
+            dmu_b = calc_batch.dipole_deriv(
+                pos_b_grad, use_functorch=use_ft, field=f_arg
+            )
+            assert dmu_b.shape == (2, 3, 3, 3)
+            torch.testing.assert_close(dmu_b[0], dmu_0, atol=1e-6, rtol=1e-6)
+            torch.testing.assert_close(
+                dmu_b[1, :, [0, 2], :], dmu_1, atol=1e-6, rtol=1e-6
+            )
+            assert torch.all(dmu_b[1, :, 1, :] == 0.0)
+
+    for fg_in, fg_lanes in (
+        (shared_fg, (shared_fg, shared_fg)),
+        (lane_fg, (lane_fg[0], lane_fg[1])),
+    ):
+        quad_0 = calc_w.quadrupole(
+            pos_w,
+            use_functorch=False,
+            field_grad=fg_lanes[0].detach().requires_grad_(True),
+        )
+        quad_1 = calc_l.quadrupole(
+            pos_l,
+            use_functorch=False,
+            field_grad=fg_lanes[1].detach().requires_grad_(True),
+        )
+        for use_ft in (False, True):
+            fg_arg = fg_in.detach() if use_ft else fg_in
+            quad_b = calc_batch.quadrupole(
+                padded_pos, use_functorch=use_ft, field_grad=fg_arg
+            )
+            assert quad_b.shape == (2, 6)
+            torch.testing.assert_close(quad_b[0], quad_0, atol=1e-7, rtol=1e-7)
+            torch.testing.assert_close(quad_b[1], quad_1, atol=1e-7, rtol=1e-7)
+
+    if scf_mode != "full":
+        return
+
+    # 3. Differentiability of batched polarizability w.r.t. Model.par, positions, and field
+    par.set_differentiable("element", "O", "gam")
+    gam_leaf = par.get("element.O.gam")
+    p_grad = padded_pos.clone().requires_grad_(True)
+    f_grad = lane_f.detach().clone().requires_grad_(True)
+    pol_diff = calc_batch.polarizability(
+        p_grad, use_functorch=True, field=f_grad
+    )
+    loss_b = (pol_diff**2).sum()
+    g_par_b, g_pos_b, g_f_b = torch.autograd.grad(
+        loss_b, (gam_leaf, p_grad, f_grad)
+    )
+
+    p0_g = pos_w.clone().requires_grad_(True)
+    p1_g = pos_l.clone().requires_grad_(True)
+    f0_g = lane_f[0].detach().clone().requires_grad_(True)
+    f1_g = lane_f[1].detach().clone().requires_grad_(True)
+    pol_s0 = calc_w.polarizability(p0_g, use_functorch=True, field=f0_g)
+    pol_s1 = calc_l.polarizability(p1_g, use_functorch=True, field=f1_g)
+    loss_s = (pol_s0**2).sum() + (pol_s1**2).sum()
+    g_par_s, g_pos0_s, g_pos1_s, g_f0_s, g_f1_s = torch.autograd.grad(
+        loss_s, (gam_leaf, p0_g, p1_g, f0_g, f1_g)
+    )
+    torch.testing.assert_close(g_par_b, g_par_s, atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(g_pos_b[0], g_pos0_s, atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(
+        g_pos_b[1, [0, 2]], g_pos1_s, atol=1e-6, rtol=1e-6
+    )
+    assert torch.all(g_pos_b[1, 1] == 0.0)
+    torch.testing.assert_close(
+        g_f_b, torch.stack([g_f0_s, g_f1_s], dim=0), atol=1e-6, rtol=1e-6
+    )
+
+    # 4. Numerical per-lane responses on a compact 2-lane s-shell batch
+    small_nums = torch.tensor([[1, 1], [1, 0]], device=DEVICE)
+    small_pos = torch.tensor(
+        [
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ],
+        **DD,
+    )
+    small_chrg = torch.tensor([0.0, 1.0], **DD)
+    calc_small = Calculator(small_nums, GFN1_XTB, opts=opts, **DD)
+    calc_s0 = Calculator(
+        torch.tensor([1, 1], device=DEVICE), GFN1_XTB, opts=opts, **DD
+    )
+    dip_num_b = calc_small.dipole_numerical(
+        small_pos, small_chrg, field=lane_f.detach()
+    )
+    dip_num_0 = calc_s0.dipole_numerical(
+        small_pos[0], 0.0, field=lane_f[0].detach()
+    )
+    torch.testing.assert_close(
+        dip_num_b[0], dip_num_0, atol=1e-7, rtol=1e-7
+    )
+    pol_num_b = calc_small.polarizability_numerical(
+        small_pos, small_chrg, field=lane_f.detach()
+    )
+    pol_num_0 = calc_s0.polarizability_numerical(
+        small_pos[0], 0.0, field=lane_f[0].detach()
+    )
+    torch.testing.assert_close(
+        pol_num_b[0], pol_num_0, atol=1e-6, rtol=1e-6
+    )
+    quad_num_b = calc_small.quadrupole_numerical(
+        small_pos, small_chrg, field_grad=lane_fg.detach()
+    )
+    quad_num_0 = calc_s0.quadrupole_numerical(
+        small_pos[0], 0.0, field_grad=lane_fg[0].detach()
+    )
+    torch.testing.assert_close(
+        quad_num_b[0], quad_num_0, atol=1e-7, rtol=1e-7
+    )
+
+
+def test_batched_third_order_electric_responses_match_serial() -> None:
+    """Batched pol_deriv and hyperpolarizability match serial Systems for shared and per-lane fields."""
+    num_l, pos_l = _lih_geometry(0.0)
+    num_h2 = torch.tensor([1, 1], device=DEVICE)
+    pos_h2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], **DD)
+    # Non-contiguous padding in lane 1: [1, 0, 1] and trailing padding in lane 0: [3, 1, 0]
+    padded_nums = torch.tensor([[3, 1, 0], [1, 0, 1]], device=DEVICE)
+    padded_pos = torch.stack(
+        [
+            torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0),
+            torch.stack([pos_h2[0], torch.zeros(3, **DD), pos_h2[1]], dim=0),
+        ],
+        dim=0,
+    )
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "int_level": labels.INTLEVEL_DIPOLE,
+        "scf_mode": "full",
+        "mixer": "anderson",
+        "maxiter": 2,
+        "x_atol": 1e-10,
+    }
+    calc_batch = Calculator(padded_nums, GFN1_XTB, opts=opts, **DD)
+    calc_0 = Calculator(num_l, GFN1_XTB, opts=opts, **DD)
+    calc_1 = Calculator(num_h2, GFN1_XTB, opts=opts, **DD)
+
+    shared_f = torch.tensor([0.01, -0.015, 0.02], **DD)
+    lane_f = torch.tensor(
+        [[0.01, -0.015, 0.02], [-0.02, 0.01, -0.01]], **DD
+    )
+
+    chi_0 = calc_0.pol_deriv(
+        pos_l.clone().requires_grad_(True),
+        use_functorch=False,
+        field=shared_f.clone().requires_grad_(True),
+    )
+    beta_0 = calc_0.hyperpolarizability(
+        pos_l,
+        use_functorch=False,
+        field=shared_f.clone().requires_grad_(True),
+    )
+
+    for f_in, f_lane1 in ((shared_f, shared_f), (lane_f, lane_f[1])):
+        chi_1 = calc_1.pol_deriv(
+            pos_h2.clone().requires_grad_(True),
+            use_functorch=False,
+            field=f_lane1.clone().requires_grad_(True),
+        )
+        beta_1 = calc_1.hyperpolarizability(
+            pos_h2,
+            use_functorch=False,
+            field=f_lane1.clone().requires_grad_(True),
+        )
+        for use_ft in (False, True):
+            f_arg = f_in.clone().requires_grad_(not use_ft)
+            dq_list = (
+                ("dipole",)
+                if (not use_ft or f_in is shared_f)
+                else ("dipole", "energy")
+            )
+            for dq in dq_list:
+                chi_b = calc_batch.pol_deriv(
+                    padded_pos.clone().requires_grad_(True),
+                    use_functorch=use_ft,
+                    derived_quantity=dq,
+                    field=f_arg,
+                )
+                assert chi_b.shape == (2, 3, 3, 3, 3)
+                torch.testing.assert_close(
+                    chi_b[0, :, :, :2, :], chi_0, atol=1e-5, rtol=1e-5
+                )
+                torch.testing.assert_close(
+                    chi_b[1, :, :, [0, 2], :], chi_1, atol=1e-5, rtol=1e-5
+                )
+                assert torch.all(chi_b[0, :, :, 2, :] == 0.0)
+                assert torch.all(chi_b[1, :, :, 1, :] == 0.0)
+
+            beta_dqs = (
+                ("pol",)
+                if (not use_ft or f_in is shared_f)
+                else ("pol", "polarizability", "dipole", "energy")
+            )
+            for b_dq in beta_dqs:
+                beta_b = calc_batch.hyperpolarizability(
+                    padded_pos,
+                    use_functorch=use_ft,
+                    derived_quantity=b_dq,
+                    field=f_in.clone().requires_grad_(not use_ft),
+                )
+                assert beta_b.shape == (2, 3, 3, 3)
+                torch.testing.assert_close(
+                    beta_b[0], beta_0, atol=1e-5, rtol=1e-5
+                )
+                torch.testing.assert_close(
+                    beta_b[1], beta_1, atol=1e-5, rtol=1e-5
+                )
+
+
+def test_cross_lane_derivative_isolation_for_fields_and_positions() -> None:
+    """Perturbing or differentiating lane 0 inputs never contaminates lane 1."""
+    _, pos_w1 = _water_geometry(0.0)
+    _, pos_l = _lih_geometry(0.0)
+    padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
+    padded_pos = torch.stack(
+        [pos_w1, torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0)],
+        dim=0,
+    )
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": "full",
+        "mixer": "anderson",
+        "maxiter": 12,
+        "x_atol": 1e-10,
+    }
+    calc = Calculator(padded_nums, GFN1_XTB, opts=opts, **DD)
+
+    f_base = torch.tensor(
+        [[0.01, -0.02, 0.015], [-0.015, 0.025, -0.01]], **DD
+    )
+    f_pert0 = f_base.clone()
+    f_pert0[0] = torch.tensor([0.05, 0.04, -0.03], **DD)
+
+    # Perturbing lane 0 field leaves lane 1 outputs unchanged
+    e_base = calc.energy(padded_pos, field=f_base)
+    e_pert0 = calc.energy(padded_pos, field=f_pert0)
+    assert not torch.isclose(e_base[0], e_pert0[0])
+    torch.testing.assert_close(e_base[1], e_pert0[1], atol=1e-12, rtol=1e-12)
+
+    for prop_name in ("dipole", "polarizability", "hyperpolarizability"):
+        fn = getattr(calc, prop_name)
+        v_base = fn(padded_pos, use_functorch=True, field=f_base)
+        v_pert0 = fn(padded_pos, use_functorch=True, field=f_pert0)
+        assert not torch.allclose(v_base[0], v_pert0[0])
+        torch.testing.assert_close(
+            v_base[1], v_pert0[1], atol=1e-11, rtol=1e-11
+        )
+
+    # Cross-lane field derivative blocks d(lane 1)/d(field[0]) == 0
+    f_leaf = f_base.clone().requires_grad_(True)
+    e_vec = calc.energy(padded_pos, field=f_leaf)
+    (de1_df,) = torch.autograd.grad(e_vec[1], f_leaf, retain_graph=True)
+    assert torch.all(de1_df[0] == 0.0)
+    assert torch.count_nonzero(de1_df[1]) > 0
+
+    mu_vec = calc.dipole(padded_pos, use_functorch=True, field=f_leaf)
+    (dmu1_df,) = torch.autograd.grad(mu_vec[1].sum(), f_leaf, retain_graph=True)
+    assert torch.all(dmu1_df[0] == 0.0)
+    assert torch.count_nonzero(dmu1_df[1]) > 0
+
+    alpha_vec = calc.polarizability(
+        padded_pos, use_functorch=True, field=f_leaf
+    )
+    (da1_df,) = torch.autograd.grad(alpha_vec[1].sum(), f_leaf)
+    assert torch.all(da1_df[0] == 0.0)
+    assert torch.count_nonzero(da1_df[1]) > 0
+
+    # Cross-lane field_grad derivative blocks d(lane 1)/d(field_grad[0]) == 0
+    fg_base = torch.stack(
+        [
+            torch.eye(3, **DD) * 0.01,
+            torch.tensor(
+                [[0.01, 0.005, 0.0], [0.005, -0.01, 0.0], [0.0, 0.0, 0.0]],
+                **DD,
+            ),
+        ],
+        dim=0,
+    ).requires_grad_(True)
+    e_fg = calc.energy(padded_pos, field_grad=fg_base)
+    (de1_dfg,) = torch.autograd.grad(e_fg[1], fg_base, retain_graph=True)
+    assert torch.all(de1_dfg[0] == 0.0)
+    assert torch.count_nonzero(de1_dfg[1]) > 0
+
+    quad_fg = calc.quadrupole(padded_pos, use_functorch=True, field_grad=fg_base)
+    (dq1_dfg,) = torch.autograd.grad(quad_fg[1].sum(), fg_base)
+    assert torch.all(dq1_dfg[0] == 0.0)
+    assert torch.count_nonzero(dq1_dfg[1]) > 0
+
+    # Cross-lane position derivative blocks d(lane 1)/d(positions[0]) == 0
+    pos_leaf = padded_pos.clone().requires_grad_(True)
+    e_pos = calc.energy(pos_leaf, field=f_base)
+    (de1_dr,) = torch.autograd.grad(e_pos[1], pos_leaf, retain_graph=True)
+    assert torch.all(de1_dr[0] == 0.0)
+    assert torch.all(de1_dr[1, 2] == 0.0)
+    assert torch.count_nonzero(de1_dr[1, :2]) > 0
+
+    mu_pos = calc.dipole(pos_leaf, use_functorch=True, field=f_base)
+    (dmu1_dr,) = torch.autograd.grad(
+        mu_pos[1].sum(), pos_leaf, retain_graph=True
+    )
+    assert torch.all(dmu1_dr[0] == 0.0)
+    assert torch.all(dmu1_dr[1, 2] == 0.0)
+
+    alpha_pos = calc.polarizability(pos_leaf, use_functorch=True, field=f_base)
+    (da1_dr,) = torch.autograd.grad(alpha_pos[1].sum(), pos_leaf)
+    assert torch.all(da1_dr[0] == 0.0)
+    assert torch.all(da1_dr[1, 2] == 0.0)
+
+
+def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
+    """Three-lane (B == 3) batches disambiguate shared vs per-lane fields by tensor rank."""
+    num_w1, pos_w1 = _water_geometry(0.0)
+    num_w2, pos_w2 = _water_geometry(0.04)
+    num_l, pos_l = _lih_geometry(0.0)
+
+    nums_b3 = torch.tensor([[8, 1, 1], [8, 1, 1], [3, 1, 0]], device=DEVICE)
+    pos_b3 = torch.stack(
+        [pos_w1, pos_w2, torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0)],
+        dim=0,
+    )
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": "full",
+        "mixer": "anderson",
+        "maxiter": 12,
+        "x_atol": 1e-10,
+    }
+    calc_b3 = Calculator(nums_b3, GFN1_XTB, opts=opts, **DD)
+    serial_calcs = (
+        Calculator(num_w1, GFN1_XTB, opts=opts, **DD),
+        Calculator(num_w2, GFN1_XTB, opts=opts, **DD),
+        Calculator(num_l, GFN1_XTB, opts=opts, **DD),
+    )
+    serial_pos = (pos_w1, pos_w2, pos_l)
+
+    # 1. Shared field (3,) vs per-lane field (3, 3) when B == 3
+    f_shared = torch.tensor([0.01, -0.02, 0.03], **DD, requires_grad=True)
+    f_batched = torch.tensor(
+        [
+            [0.01, -0.02, 0.03],
+            [-0.015, 0.025, -0.01],
+            [0.02, 0.01, -0.025],
+        ],
+        **DD,
+        requires_grad=True,
+    )
+    f_seq = [f_batched[i].detach().clone().requires_grad_(True) for i in range(3)]
+
+    e_shared = calc_b3.energy(pos_b3, field=f_shared)
+    e_shared_ref = torch.stack(
+        [c.energy(p, field=f_shared.detach()) for c, p in zip(serial_calcs, serial_pos)]
+    )
+    torch.testing.assert_close(e_shared, e_shared_ref, atol=1e-9, rtol=1e-9)
+
+    e_batched = calc_b3.energy(pos_b3, field=f_batched)
+    e_seq = calc_b3.energy(pos_b3, field=f_seq)
+    e_batched_ref = torch.stack(
+        [
+            c.energy(p, field=f_batched[i].detach())
+            for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+        ]
+    )
+    torch.testing.assert_close(e_batched, e_batched_ref, atol=1e-9, rtol=1e-9)
+    torch.testing.assert_close(e_seq, e_batched_ref, atol=1e-9, rtol=1e-9)
+
+    for use_ft in (False, True):
+        dip_sh = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_shared)
+        dip_ba = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_batched)
+        dip_sq = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_seq)
+        dip_sh_ref = torch.stack(
+            [
+                c.dipole(
+                    p,
+                    use_functorch=use_ft,
+                    field=f_shared.detach().requires_grad_(True),
+                )
+                for c, p in zip(serial_calcs, serial_pos)
+            ]
+        )
+        dip_ba_ref = torch.stack(
+            [
+                c.dipole(
+                    p,
+                    use_functorch=use_ft,
+                    field=f_batched[i].detach().requires_grad_(True),
+                )
+                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+            ]
+        )
+        torch.testing.assert_close(dip_sh, dip_sh_ref, atol=1e-7, rtol=1e-7)
+        torch.testing.assert_close(dip_ba, dip_ba_ref, atol=1e-7, rtol=1e-7)
+        torch.testing.assert_close(dip_sq, dip_ba_ref, atol=1e-7, rtol=1e-7)
+
+        pol_sh = calc_b3.polarizability(
+            pos_b3, use_functorch=use_ft, field=f_shared
+        )
+        pol_ba = calc_b3.polarizability(
+            pos_b3, use_functorch=use_ft, field=f_batched
+        )
+        pol_sh_ref = torch.stack(
+            [
+                c.polarizability(
+                    p,
+                    use_functorch=use_ft,
+                    field=f_shared.detach().requires_grad_(True),
+                )
+                for c, p in zip(serial_calcs, serial_pos)
+            ]
+        )
+        pol_ba_ref = torch.stack(
+            [
+                c.polarizability(
+                    p,
+                    use_functorch=use_ft,
+                    field=f_batched[i].detach().requires_grad_(True),
+                )
+                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+            ]
+        )
+        torch.testing.assert_close(pol_sh, pol_sh_ref, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(pol_ba, pol_ba_ref, atol=1e-6, rtol=1e-6)
+
+    # 2. Shared field_grad (3, 3) vs per-lane field_grad (3, 3, 3) when B == 3
+    fg_shared = torch.tensor(
+        [[0.01, 0.005, 0.0], [0.005, -0.01, 0.002], [0.0, 0.002, 0.0]],
+        **DD,
+        requires_grad=True,
+    )
+    fg_batched = torch.stack(
+        [
+            fg_shared.detach(),
+            -0.5 * fg_shared.detach(),
+            0.8 * fg_shared.detach(),
+        ],
+        dim=0,
+    ).requires_grad_(True)
+    fg_seq = [
+        fg_batched[i].detach().clone().requires_grad_(True) for i in range(3)
+    ]
+
+    for use_ft in (False, True):
+        q_sh = calc_b3.quadrupole(
+            pos_b3, use_functorch=use_ft, field_grad=fg_shared
+        )
+        q_ba = calc_b3.quadrupole(
+            pos_b3, use_functorch=use_ft, field_grad=fg_batched
+        )
+        q_sq = calc_b3.quadrupole(
+            pos_b3, use_functorch=use_ft, field_grad=fg_seq
+        )
+        q_sh_ref = torch.stack(
+            [
+                c.quadrupole(
+                    p,
+                    use_functorch=use_ft,
+                    field_grad=fg_shared.detach().requires_grad_(True),
+                )
+                for c, p in zip(serial_calcs, serial_pos)
+            ]
+        )
+        q_ba_ref = torch.stack(
+            [
+                c.quadrupole(
+                    p,
+                    use_functorch=use_ft,
+                    field_grad=fg_batched[i].detach().requires_grad_(True),
+                )
+                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+            ]
+        )
+        torch.testing.assert_close(q_sh, q_sh_ref, atol=1e-7, rtol=1e-7)
+        torch.testing.assert_close(q_ba, q_ba_ref, atol=1e-7, rtol=1e-7)
+        torch.testing.assert_close(q_sq, q_ba_ref, atol=1e-7, rtol=1e-7)
+
+    # 3. Malformed field and field_grad shapes raise ValueError
+    for bad_field in (
+        torch.zeros((2, 3), **DD),
+        torch.zeros((4, 3), **DD),
+        torch.zeros((3, 3, 3), **DD),
+    ):
+        with pytest.raises(ValueError, match="field"):
+            calc_b3.energy(pos_b3, field=bad_field)
+        with pytest.raises(ValueError, match="field"):
+            calc_b3.dipole(pos_b3, use_functorch=True, field=bad_field)
+
+    for bad_fg in (
+        torch.zeros((3,), **DD),
+        torch.zeros((2, 3, 3), **DD),
+        torch.zeros((3, 3, 3, 3), **DD),
+    ):
+        with pytest.raises(ValueError, match="field_grad"):
+            calc_b3.energy(pos_b3, field_grad=bad_fg)
+        with pytest.raises(ValueError, match="field_grad"):
+            calc_b3.quadrupole(pos_b3, use_functorch=True, field_grad=bad_fg)
+
+
+def test_inference_mode_param_module_ownership_and_identity() -> None:
+    """Caller-owned ParamModule references are never silently replaced across inference-mode transitions."""
+    num_w, pos_w = _water_geometry(0.0)
+    _, pos_l = _lih_geometry(0.0)
+    padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
+    padded_pos = torch.stack(
+        [pos_w, torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0)],
+        dim=0,
+    )
+    opts = {"verbosity": 0, "int_driver": "pytorch", "scf_mode": "full"}
+
+    # 1. Normal preexisting ParamModule: all parameter and buffer identities preserved
+    par_norm = ParamModule(GFN1_XTB, **DD)
+    par_norm.set_differentiable("element", "O", "gam")
+    norm_params_before = {
+        k: v for k, v in par_norm.named_parameters()
+    }
+    norm_buffers_before = {
+        k: v for k, v in par_norm.named_buffers()
+    }
+    calc_norm = Calculator(num_w, par_norm, opts=opts, **DD)
+    _ = calc_norm.energy(pos_w)
+    for k, v in par_norm.named_parameters():
+        assert v is norm_params_before[k]
+    for k, v in par_norm.named_buffers():
+        assert v is norm_buffers_before[k]
+
+    # 2. ParamModule constructed under torch.inference_mode() with retained external references
+    with torch.inference_mode():
+        par_inf = ParamModule(GFN1_XTB, **DD)
+        o_gam_ref = par_inf.get("element.O.gam")
+        h_zeff_ref = par_inf.get("element.H.zeff")
+        dummy_buf_ref = par_inf.dummy
+        calc_inf_1d = Calculator(num_w, par_inf, opts=opts, **DD)
+        calc_inf_2d = Calculator(padded_nums, par_inf, opts=opts, **DD)
+        _ = calc_inf_1d.energy(pos_w)
+        _ = calc_inf_2d.energy(padded_pos)
+
+    assert not o_gam_ref.is_inference()
+    assert not h_zeff_ref.is_inference()
+    assert not dummy_buf_ref.is_inference()
+    assert par_inf.get("element.O.gam") is o_gam_ref
+    assert par_inf.get("element.H.zeff") is h_zeff_ref
+    assert par_inf.dummy is dummy_buf_ref
+
+    par_inf.set_differentiable("element", "O", "gam")
+    assert o_gam_ref.requires_grad is True
+    assert h_zeff_ref.requires_grad is False
+    assert par_inf.get("element.O.gam") is o_gam_ref
+
+    # Optimizer holds the original reference captured inside inference_mode
+    optimizer = torch.optim.SGD([o_gam_ref], lr=0.1)
+    optimizer.zero_grad()
+    loss = calc_inf_1d.energy(pos_w) + calc_inf_2d.energy(padded_pos).sum()
+    loss.backward()
+    assert o_gam_ref.grad is not None and torch.isfinite(o_gam_ref.grad)
+    val_before_step = o_gam_ref.detach().clone()
+    optimizer.step()
+    assert not torch.equal(o_gam_ref, val_before_step)
+    assert par_inf.get("element.O.gam") is o_gam_ref
+
+    # 3. ParamModule containing both normal and manually-injected inference tensors
+    par_mixed = ParamModule(GFN1_XTB, **DD)
+    par_mixed.set_differentiable("element", "O", "gam")
+    o_gam_mixed = par_mixed.get("element.O.gam")
+    orig_h_gam_val = par_mixed.get("element.H.gam").detach().clone()
+    with torch.inference_mode():
+        inf_h_gam = torch.nn.Parameter(
+            orig_h_gam_val.clone(), requires_grad=False
+        )
+        inf_buf = torch.zeros(1, **DD)
+    assert inf_h_gam.is_inference() and inf_buf.is_inference()
+    par_mixed.get("element.H.gam", unwrapped=False)._parameters["param"] = (
+        inf_h_gam
+    )
+    par_mixed.register_buffer("custom_inf_buf", inf_buf)
+
+    calc_mixed_1d = Calculator(num_w, par_mixed, opts=opts, **DD)
+    calc_mixed_2d = Calculator(padded_nums, par_mixed, opts=opts, **DD)
+    e_m1 = calc_mixed_1d.energy(pos_w)
+    e_m2 = calc_mixed_2d.energy(padded_pos)
+    (g_m1,) = torch.autograd.grad(e_m1, o_gam_mixed)
+    (g_m2,) = torch.autograd.grad(e_m2.sum(), o_gam_mixed)
+    assert torch.isfinite(g_m1) and torch.isfinite(g_m2)
+
+    # Caller's inference-tensor parameter and buffer references are NOT replaced in-place
+    assert par_mixed.get("element.H.gam") is inf_h_gam
+    assert par_mixed.get("element.H.gam").is_inference()
+    assert par_mixed.get("element.O.gam") is o_gam_mixed
+    assert par_mixed._buffers["custom_inf_buf"] is inf_buf
+
+    # Requesting gradient tracking on the inference tensor raises a clear RuntimeError
+    with pytest.raises(RuntimeError, match="inference-mode tensor"):
+        par_mixed.set_differentiable("element", "H", "gam")
+
+    # 4. Module parameter replaced between calculations is immediately observed
+    new_o_gam = torch.nn.Parameter(
+        o_gam_mixed.detach().clone() + 0.05, requires_grad=True
+    )
+    par_mixed.get("element.O.gam", unwrapped=False)._parameters["param"] = (
+        new_o_gam
+    )
+    e_after_replace = calc_mixed_1d.energy(pos_w)
+    assert not torch.isclose(e_after_replace, e_m1)
+    (g_new,) = torch.autograd.grad(e_after_replace, new_o_gam)
+    assert torch.isfinite(g_new) and g_new.abs().item() > 0.0
+    assert par_mixed.get("element.O.gam") is new_o_gam
+
+
+def test_call_local_setup_preserves_custom_component_labels_and_state() -> None:
+    """Label restoration and repeated evaluation never mutate caller-owned custom components."""
+    from dxtb._src.components.classicals.base import Classical, ClassicalCache
+    from dxtb._src.components.interactions.base import (
+        Interaction,
+        InteractionCache,
+    )
+
+    class CustomSpringClassical(Classical):
+        def __init__(self, scale: Tensor) -> None:
+            super().__init__(device=scale.device, dtype=scale.dtype)
+            self.scale = scale
+            self.label = "CustomSpring"
+
+        def get_cache(
+            self, numbers: Tensor | None = None, ihelp: object | None = None
+        ) -> ClassicalCache:
+            _ = (numbers, ihelp)
+            return ClassicalCache()
+
+        def get_energy(
+            self, positions: Tensor, cache: ClassicalCache, **kwargs: object
+        ) -> Tensor:
+            _ = (cache, kwargs)
+            return self.scale * (positions**2).sum(dim=-1)
+
+    class CustomShiftInteraction(Interaction):
+        def __init__(self, shift: Tensor) -> None:
+            super().__init__(device=shift.device, dtype=shift.dtype)
+            self.shift = shift
+            self.label = "CustomShift"
+
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: object | None = None,
+        ) -> InteractionCache:
+            _ = (numbers, positions, ihelp)
+            return InteractionCache()
+
+        def get_monopole_atom_energy(
+            self, cache: InteractionCache, qat: Tensor, **kwargs: object
+        ) -> Tensor:
+            _ = (cache, kwargs)
+            return self.shift * (qat**2)
+
+    num_w, pos_w = _water_geometry(0.0)
+    _, pos_l = _lih_geometry(0.0)
+    padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
+    padded_pos = torch.stack(
+        [pos_w, torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0)],
+        dim=0,
+    )
+
+    scale = torch.tensor(0.02, **DD, requires_grad=True)
+    shift = torch.tensor(0.01, **DD)
+    custom_cls = CustomSpringClassical(scale)
+    custom_int = CustomShiftInteraction(shift)
+    par = ParamModule(GFN1_XTB, **DD)
+    d3_a = new_dispersion(padded_nums, par, **DD)
+    unique_nums = torch.unique(padded_nums[padded_nums > 0])
+    es2_a = new_es2(unique_nums, par, **DD)
+    assert d3_a is not None and es2_a is not None
+
+    calc_b = Calculator(
+        padded_nums,
+        par,
+        classical=(d3_a, custom_cls),
+        interaction=(es2_a,),
+        opts={"verbosity": 0, "exclude": ["disp", "es2"], "batch_mode": 1},
+        **DD,
+    )
+    # Replace calc.classicals component with a renamed instance while Model
+    # still holds the caller's custom_cls with its caller-owned label:
+    custom_cls.label = "CallerOwnedSpring"
+    es2_a.label = "CallerOwnedES2"
+    copy_cls = CustomSpringClassical(scale)
+    copy_cls.label = "RenamedSpringOnCalc"
+    calc_b.classicals.components[-1] = copy_cls
+
+    e_b = calc_b.energy(padded_pos)
+    (g_scale,) = torch.autograd.grad(e_b.sum(), scale)
+    assert torch.isfinite(g_scale) and g_scale.abs().item() > 0.0
+    assert custom_cls.label == "CallerOwnedSpring"
+    assert es2_a.label == "CallerOwnedES2"
+    assert d3_a.label == "DispersionD3"
+
+    # Also verify custom Interaction label isolation on 1D _prepare_eval_system
+    # and 2D build_calculator_lane_systems
+    calc_int_1d = Calculator(
+        num_w,
+        par,
+        interaction=(custom_int,),
+        opts={"verbosity": 0, "exclude": ["scf"]},
+        **DD,
+    )
+    custom_int.label = "CallerOwnedShift"
+    copy_int = CustomShiftInteraction(shift)
+    copy_int.label = "RenamedShiftOnCalc"
+    calc_int_1d.interactions.components[-1] = copy_int
+    eval_sys_1d = calc_int_1d._prepare_eval_system()
+    assert eval_sys_1d.interactions.components[-1].label == "RenamedShiftOnCalc"
+    assert custom_int.label == "CallerOwnedShift"
+
+    calc_int_2d = Calculator(
+        padded_nums,
+        par,
+        interaction=(custom_int,),
+        opts={"verbosity": 0, "exclude": ["scf"], "batch_mode": 1},
+        **DD,
+    )
+    custom_int.label = "CallerOwnedShift"
+    calc_int_2d.interactions.components[-1] = copy_int
+    lanes_2d = build_calculator_lane_systems(calc_int_2d)
+    for lane in lanes_2d:
+        assert lane.interactions.components[-1].label == "RenamedShiftOnCalc"
+    assert custom_int.label == "CallerOwnedShift"
+
+
+def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> None:
+    """Every entry in implemented_properties dispatches cleanly and rejects unsupported batch modes."""
+    from dxtb._src.calculators.types.autograd import AutogradCalculator
+    from dxtb._src.calculators.types.numerical import NumericalCalculator
+
+    assert set(Calculator.implemented_properties) == set(
+        AutogradCalculator.implemented_properties
+    )
+    assert set(Calculator.implemented_properties) == set(
+        NumericalCalculator.implemented_properties
+    )
+
+    # Use H2 (1D) and [H2, H+] (2D) for fast full-property verification
+    num_1d = torch.tensor([1, 1], device=DEVICE)
+    pos_1d = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], **DD)
+    num_2d = torch.tensor([[1, 1], [1, 0]], device=DEVICE)
+    pos_2d = torch.tensor(
+        [
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ],
+        **DD,
+    )
+    chrg_2d = torch.tensor([0.0, 1.0], **DD)
+
+    f_1d = torch.tensor([0.01, -0.01, 0.02], **DD, requires_grad=True)
+    fg_1d = (torch.eye(3, **DD) * 0.01).requires_grad_(True)
+    f_2d = torch.tensor(
+        [[0.01, -0.01, 0.02], [-0.01, 0.02, -0.01]], **DD, requires_grad=True
+    )
+    fg_2d = torch.stack(
+        [torch.eye(3, **DD) * 0.01, -torch.eye(3, **DD) * 0.01], dim=0
+    ).requires_grad_(True)
+
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "int_level": labels.INTLEVEL_QUADRUPOLE,
+        "scf_mode": "full",
+        "mixer": "anderson",
+        "maxiter": 0,
+    }
+    calc_1d = Calculator(num_1d, GFN1_XTB, opts=opts, **DD)
+    calc_2d = Calculator(num_2d, GFN1_XTB, opts=opts, **DD)
+
+    # 1D: Every implemented property works through get_property, get_<prop>, and calculate
+    all_1d = calc_1d.calculate(
+        list(calc_1d.implemented_properties),
+        pos_1d.clone().requires_grad_(True),
+        use_functorch=False,
+        field=f_1d,
+        field_grad=fg_1d,
+    )
+    for prop in calc_1d.implemented_properties:
+        assert prop in all_1d
+        val_gp = calc_1d.get_property(
+            prop,
+            pos_1d.clone().requires_grad_(True),
+            use_functorch=False,
+            field=f_1d,
+            field_grad=fg_1d,
+        )
+        assert type(val_gp) is type(all_1d[prop])
+        getter = getattr(calc_1d, f"get_{prop}")
+        val_getter = getter(
+            pos_1d.clone().requires_grad_(True),
+            use_functorch=False,
+            field=f_1d,
+            field_grad=fg_1d,
+        )
+        assert val_getter is not None
+
+    # 2D: Supported batched properties succeed; single-System-only properties raise NotImplementedError
+    single_only_props = {
+        "hessian",
+        "vibration",
+        "normal_modes",
+        "frequencies",
+        "ir",
+        "ir_intensity",
+        "ir_intensities",
+        "raman",
+        "raman_intensity",
+        "raman_intensities",
+        "rama_depol",
+        "raman_depol",
+    }
+    supported_batch_props = [
+        p for p in calc_2d.implemented_properties if p not in single_only_props
+    ]
+    all_2d = calc_2d.calculate(
+        supported_batch_props,
+        pos_2d.clone().requires_grad_(True),
+        chrg=chrg_2d,
+        use_functorch=False,
+        field=f_2d,
+        field_grad=fg_2d,
+    )
+    for prop in supported_batch_props:
+        assert prop in all_2d
+
+    for prop in single_only_props:
+        with pytest.raises(NotImplementedError):
+            calc_2d.get_property(
+                prop,
+                pos_2d.clone().requires_grad_(True),
+                chrg=chrg_2d,
+                use_functorch=True,
+                field=f_2d,
+                field_grad=fg_2d,
+            )
+        with pytest.raises(NotImplementedError):
+            calc_2d.calculate(
+                [prop],
+                pos_2d.clone().requires_grad_(True),
+                chrg=chrg_2d,
+                use_functorch=True,
+                field=f_2d,
+                field_grad=fg_2d,
+            )
+
+    for num_method in (
+        calc_2d.hessian_numerical,
+        calc_2d.vibration_numerical,
+        calc_2d.ir_numerical,
+        calc_2d.raman_numerical,
+    ):
+        with pytest.raises(NotImplementedError):
+            num_method(pos_2d, chrg=chrg_2d, field=f_2d, field_grad=fg_2d)

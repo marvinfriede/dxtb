@@ -1400,6 +1400,37 @@ class Model:
             Data of the system that depends on `numbers` only.
         """
         par = self.par
+        if not torch.is_inference_mode_enabled() and any(
+            t.is_inference() for t in (*par.parameters(), *par.buffers())
+        ):
+            for name, val in (
+                *par.named_parameters(),
+                *par.named_buffers(),
+            ):
+                if val.is_inference() and val.requires_grad:
+                    raise RuntimeError(
+                        f"ParamModule entry '{name}' is an inference-mode "
+                        "tensor with requires_grad=True and cannot participate "
+                        "in autograd. Construct or replace the parameter "
+                        "outside torch.inference_mode()."
+                    )
+            state = {
+                f"par.{name}": (
+                    val.detach().clone() if val.is_inference() else val
+                )
+                for name, val in (
+                    *par.named_parameters(),
+                    *par.named_buffers(),
+                )
+            }
+            return torch.func.functional_call(
+                _ModelSetupAdapter(self),
+                state,
+                (numbers,),
+                {"batch_mode": batch_mode, "dd": dd},
+                strict=True,
+            )
+
         config = self.config
         exclude = set(config.exclude)
         dd = par.dd if dd is None else dd

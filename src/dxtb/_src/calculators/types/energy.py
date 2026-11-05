@@ -280,6 +280,37 @@ class EnergyCalculator(BaseCalculator):
             )
         ):
             raise TypeError("field_grad must be a Tensor or None.")
+        if isinstance(resolved_field, Tensor):
+            if self.numbers.ndim == 1:
+                if resolved_field.shape != (3,):
+                    raise ValueError(
+                        "Electric field must have shape (3,), got "
+                        f"{tuple(resolved_field.shape)}."
+                    )
+            else:
+                batch_size = int(self.numbers.shape[0])
+                if resolved_field.shape not in ((3,), (batch_size, 3)):
+                    raise ValueError(
+                        "field must have shape (3,) or "
+                        f"({batch_size}, 3), got {tuple(resolved_field.shape)}."
+                    )
+
+        if isinstance(resolved_grad, Tensor):
+            if self.numbers.ndim == 1:
+                if resolved_grad.shape != (3, 3):
+                    raise ValueError(
+                        "Electric field gradient must have shape (3, 3), got "
+                        f"{tuple(resolved_grad.shape)}."
+                    )
+            else:
+                batch_size = int(self.numbers.shape[0])
+                if resolved_grad.shape not in ((3, 3), (batch_size, 3, 3)):
+                    raise ValueError(
+                        "field_grad must have shape (3, 3) or "
+                        f"({batch_size}, 3, 3), got "
+                        f"{tuple(resolved_grad.shape)}."
+                    )
+
         return resolved_field, resolved_grad
 
     def _resolve_response_fields(
