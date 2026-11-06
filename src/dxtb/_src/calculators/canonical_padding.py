@@ -27,13 +27,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from torch.utils._pytree import tree_flatten_with_path
+from torch.utils._pytree import tree_flatten, tree_flatten_with_path
 
 from dxtb._src.calculators.model import ExactSystemCore
 from dxtb._src.calculators.padding import (
+    _NORMALIZED_CLASSICAL_FIELDS,
+    _NORMALIZED_INTERACTION_FIELDS,
     PaddedCoreValidity,
     PaddedExactSystemCore,
     _backend,
+    _path_parts,
     _setup_static_signature,
     _validate_d3_reference_shapes,
 )
@@ -240,6 +243,21 @@ def _source_layout(core: ExactSystemCore) -> _SourceLayout:
     )
 
 
+_OPTIONAL_H0_FIELDS = (
+    "kq",
+    "kqat",
+    "h0rad",
+    "kdiff",
+    "enshell",
+    "enscale4",
+    "eeq_model",
+    "cn_radii",
+    "cn_cutoff",
+    "cn_max",
+    "cn_kcn",
+)
+
+
 def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
     """Static data that must agree before canonicalizing dimensions."""
     backend = _backend(core)
@@ -247,6 +265,8 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
     integral = core.integral
     if integral is None:
         raise TypeError("Canonical mixed-element padding needs an integral.")
+    if integral.intlevel < labels.INTLEVEL_HCORE:
+        raise ValueError("Canonical padding requires HCORE integral level.")
     h0 = core.h0_setup
     if h0 is None:
         raise TypeError("Canonical mixed-element padding needs H0 setup.")
@@ -264,20 +284,7 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
             "Canonical padding requires matching GFN1/GFN2 configuration "
             "and H0 method metadata."
         )
-    optional_h0 = (
-        "kq",
-        "kqat",
-        "h0rad",
-        "kdiff",
-        "enshell",
-        "enscale4",
-        "eeq_model",
-        "cn_radii",
-        "cn_cutoff",
-        "cn_max",
-        "cn_kcn",
-    )
-    if any(getattr(h0, name) is not None for name in optional_h0):
+    if any(getattr(h0, name) is not None for name in _OPTIONAL_H0_FIELDS):
         raise TypeError(
             f"Canonical {h0.method.upper()} padding does not support "
             "optional H0 data in this package."
@@ -315,25 +322,9 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
                 "Canonical GFN2 padding does not support custom D4SC model "
                 "extra entries."
             )
-    h0_optional = tuple(
-        getattr(h0, name) is not None
-        for name in (
-            "kq",
-            "kqat",
-            "h0rad",
-            "kdiff",
-            "enshell",
-            "enscale4",
-            "eeq_model",
-            "cn_radii",
-            "cn_cutoff",
-            "cn_max",
-            "cn_kcn",
-        )
-    )
     dynamic_tensors = tuple(
         leaf
-        for leaf in torch.utils._pytree.tree_flatten(core)[0]
+        for leaf in tree_flatten(core)[0]
         if isinstance(leaf, torch.Tensor)
     )
     for leaf in dynamic_tensors:
@@ -351,18 +342,17 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
             raise TypeError(
                 "Floating setup leaves must match the ExactSystemCore effective dtype."
             )
-        if not leaf.is_floating_point() and leaf.dtype != core.numbers.dtype:
-            if leaf.dtype is not torch.bool:
-                raise TypeError(
-                    "Structural integer setup leaves must match the atomic-number dtype."
-                )
+        if (
+            not leaf.is_floating_point()
+            and leaf.dtype != core.numbers.dtype
+            and leaf.dtype is not torch.bool
+        ):
+            raise TypeError(
+                "Structural integer setup leaves must match the atomic-number dtype."
+            )
     dtypes = tuple(
         sorted(
-            {
-                (leaf.dtype, leaf.device, leaf.layout)
-                for leaf in dynamic_tensors
-                if isinstance(leaf, torch.Tensor)
-            },
+            {(leaf.dtype, leaf.device, leaf.layout) for leaf in dynamic_tensors},
             key=lambda item: (str(item[0]), str(item[1]), str(item[2])),
         )
     )
@@ -405,7 +395,6 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
         )
         for term in core.interaction_terms
     )
-    retained_shapes = _retained_tensor_shapes(core)
     return (
         core.config,
         core.effective_dtype,
@@ -417,30 +406,11 @@ def _base_signature(core: ExactSystemCore) -> tuple[object, ...]:
         backend.algorithm,
         h0.method,
         h0.cn_kind,
-        h0_optional,
         dtypes,
         classical,
         interactions,
-        retained_shapes,
+        _retained_tensor_shapes(core),
     )
-
-
-def _path_parts(path: tuple[object, ...]) -> tuple[str | int, ...]:
-    """Convert registered pytree paths to stable attribute/index values."""
-    parts: list[str | int] = []
-    for key in path:
-        name = getattr(key, "name", None)
-        index = getattr(key, "idx", None)
-        if isinstance(name, str):
-            parts.append(name)
-        elif isinstance(index, int):
-            parts.append(index)
-        else:
-            raise TypeError(
-                "Canonical padding cannot classify pytree path key "
-                f"{type(key).__name__}."
-            )
-    return tuple(parts)
 
 
 def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
@@ -470,15 +440,13 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
         return True
     if (
         len(parts) == 4
-        and parts[:3] == ("integral", "backend", "alphas")
-        and isinstance(parts[3], int)
-    ) or (
-        len(parts) == 4
-        and parts[:3] == ("integral", "backend", "coeffs")
+        and parts[:3]
+        in {
+            ("integral", "backend", "alphas"),
+            ("integral", "backend", "coeffs"),
+        }
         and isinstance(parts[3], int)
     ):
-        # Their shape is checked against the source shell type in _source_layout
-        # and tuple positions are rebuilt from the canonical shell map.
         return True
     if (
         len(parts) == 6
@@ -489,53 +457,10 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
         return True
     if len(parts) != 4 or not isinstance(parts[1], int) or parts[2] != "setup":
         return False
-    field = parts[3]
     if parts[0] == "classical_terms":
-        if field == "model_rc6":
-            return True
-        return field in {
-            "numbers",
-            "xbond",
-            "atomic_radii",
-            "halogen_mask",
-            "base_mask",
-            "valid_atom_mask",
-            "pair_type_mask",
-            "neighbor_type_mask",
-            "setup_numbers",
-            "component_numbers",
-            "rcov",
-            "r4r2",
-            "rvdw",
-            "arep",
-            "zeff",
-            "kexp",
-            "mask",
-            "model_numbers",
-            "compatibility_q",
-        }
+        return parts[3] in _NORMALIZED_CLASSICAL_FIELDS
     if parts[0] == "interaction_terms":
-        if field == "model_rc6":
-            return True
-        return field in {
-            "atom_pair_mask",
-            "atom_mask",
-            "atom_hubbard",
-            "shell_pair_mask",
-            "shell_mask",
-            "shell_hubbard",
-            "shells_to_atom",
-            "hubbard_derivs",
-            "numbers",
-            "dkernel",
-            "qkernel",
-            "rad",
-            "vcn",
-            "pair_mask",
-            "rcov",
-            "r4r2",
-            "pair_weight",
-        }
+        return parts[3] in _NORMALIZED_INTERACTION_FIELDS
     return False
 
 
@@ -990,25 +915,6 @@ def _remap_h0(
     mapping: CanonicalCoreMap,
 ) -> H0SetupNode:
     """Remap method-specific H0 element and shell tables explicitly."""
-    optional = (
-        "kq",
-        "kqat",
-        "h0rad",
-        "kdiff",
-        "enshell",
-        "enscale4",
-        "eeq_model",
-        "cn_radii",
-        "cn_cutoff",
-        "cn_max",
-        "cn_kcn",
-    )
-    if any(getattr(h0, name) is not None for name in optional):
-        raise TypeError(
-            f"Canonical {h0.method.upper()} padding does not support "
-            "optional H0 data in this package."
-        )
-
     n_elements = len(bucket.elements)
     n_shell_types = len(bucket.shell_types)
     shell_types = mapping.shell_types
@@ -1054,6 +960,7 @@ def _remap_h0(
         "unique": element_tensor,
         "hscale": _scatter_square(h0.hscale, shell_types, n_shell_types),
         "kpair": _scatter_square(h0.kpair, elements, n_elements),
+        "enscale": h0.enscale,
     }
     for name in shell_vectors:
         updates[name] = _scatter_vector(
@@ -1061,7 +968,6 @@ def _remap_h0(
         )
     for name in element_vectors:
         updates[name] = _scatter_vector(getattr(h0, name), elements, n_elements)
-    updates["enscale"] = h0.enscale
     return h0.replace(**updates)
 
 
@@ -1112,17 +1018,6 @@ def _remap_family_setup(
             ),
         )
     if isinstance(setup, DispersionD4CoreSetup):
-        if setup.model_numbers.shape != (len(mapping.atoms),):
-            raise ValueError("D4 model numbers do not match source atoms.")
-        if setup.rcov.shape != (len(mapping.atoms),) or setup.r4r2.shape != (
-            len(mapping.atoms),
-        ):
-            raise ValueError("D4 atom tables do not match source atoms.")
-        if (
-            setup.compatibility_q is not None
-            and setup.compatibility_q.shape != (len(mapping.atoms),)
-        ):
-            raise ValueError("D4 compatibility charges do not match atoms.")
         return setup.replace(
             numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
             model_numbers=_scatter_vector(
@@ -1142,16 +1037,6 @@ def _remap_family_setup(
             ),
         )
     if isinstance(setup, ES2CoreSetup):
-        atom_count = len(mapping.atoms)
-        shell_count = len(mapping.shells)
-        if setup.atom_pair_mask.shape != (
-            atom_count,
-            atom_count,
-        ) or setup.atom_mask.shape != (
-            atom_count,
-            atom_count,
-        ):
-            raise ValueError("ES2 atom masks do not match source atom count.")
         if setup.shell_resolved:
             if (
                 setup.atom_hubbard is not None
@@ -1163,32 +1048,18 @@ def _remap_family_setup(
                 raise ValueError(
                     "Shell-resolved ES2 has inconsistent optional children."
                 )
-            if (
-                setup.shell_pair_mask.shape != (shell_count, shell_count)
-                or setup.shell_mask.shape != (shell_count, shell_count)
-                or setup.shell_hubbard.shape != (shell_count,)
-                or setup.shells_to_atom.shape != (shell_count,)
-            ):
-                raise ValueError(
-                    "Shell-resolved ES2 children do not match source shells."
-                )
-            inverse_atoms = {
-                target: source for source, target in enumerate(mapping.atoms)
-            }
-            expected_source_map = tuple(
-                inverse_atoms[bucket.shells_to_atom[target_shell]]
-                for target_shell in mapping.shells
-            )
-            actual_source_map = tuple(
-                int(value.item()) for value in setup.shells_to_atom
-            )
-            if actual_source_map != expected_source_map:
+            mapped_atoms = [
+                mapping.atoms[int(atom)] for atom in setup.shells_to_atom
+            ]
+            expected_atoms = [
+                bucket.shells_to_atom[shell] for shell in mapping.shells
+            ]
+            if mapped_atoms != expected_atoms:
                 raise ValueError(
                     "ES2 shell-to-atom mapping disagrees with source structure."
                 )
         elif (
             setup.atom_hubbard is None
-            or setup.atom_hubbard.shape != (atom_count,)
             or setup.shell_pair_mask is not None
             or setup.shell_mask is not None
             or setup.shell_hubbard is not None
@@ -1197,25 +1068,6 @@ def _remap_family_setup(
             raise ValueError(
                 "Atom-resolved ES2 has inconsistent optional children."
             )
-        shell_hubbard = (
-            None
-            if setup.shell_hubbard is None
-            else _scatter_vector(setup.shell_hubbard, mapping.shells, n_shells)
-        )
-        atom_hubbard = (
-            None
-            if setup.atom_hubbard is None
-            else _scatter_vector(setup.atom_hubbard, mapping.atoms, n_atoms)
-        )
-        shells_to_atom = (
-            None
-            if setup.shells_to_atom is None
-            else torch.tensor(
-                bucket.shells_to_atom,
-                dtype=setup.shells_to_atom.dtype,
-                device=setup.shells_to_atom.device,
-            )
-        )
         return setup.replace(
             atom_pair_mask=_scatter_square(
                 setup.atom_pair_mask, mapping.atoms, n_atoms, fill=False
@@ -1223,7 +1075,11 @@ def _remap_family_setup(
             atom_mask=_scatter_square(
                 setup.atom_mask, mapping.atoms, n_atoms, fill=False
             ),
-            atom_hubbard=atom_hubbard,
+            atom_hubbard=(
+                None
+                if setup.atom_hubbard is None
+                else _scatter_vector(setup.atom_hubbard, mapping.atoms, n_atoms)
+            ),
             shell_pair_mask=(
                 None
                 if setup.shell_pair_mask is None
@@ -1238,27 +1094,32 @@ def _remap_family_setup(
                     setup.shell_mask, mapping.shells, n_shells, fill=False
                 )
             ),
-            shell_hubbard=shell_hubbard,
-            shells_to_atom=shells_to_atom,
+            shell_hubbard=(
+                None
+                if setup.shell_hubbard is None
+                else _scatter_vector(
+                    setup.shell_hubbard, mapping.shells, n_shells
+                )
+            ),
+            shells_to_atom=(
+                None
+                if setup.shells_to_atom is None
+                else torch.tensor(
+                    bucket.shells_to_atom,
+                    dtype=setup.shells_to_atom.dtype,
+                    device=setup.shells_to_atom.device,
+                )
+            ),
         )
     if isinstance(setup, ES3CoreSetup):
-        if setup.shell_resolved:
-            return setup.replace(
-                hubbard_derivs=_scatter_vector(
-                    setup.hubbard_derivs, mapping.shells, n_shells
-                )
-            )
+        indices = mapping.shells if setup.shell_resolved else mapping.atoms
+        target_size = n_shells if setup.shell_resolved else n_atoms
         return setup.replace(
             hubbard_derivs=_scatter_vector(
-                setup.hubbard_derivs, mapping.atoms, n_atoms
+                setup.hubbard_derivs, indices, target_size
             )
         )
     if isinstance(setup, AES2CoreSetup):
-        for name in ("numbers", "dkernel", "qkernel", "rad", "vcn"):
-            if getattr(setup, name).shape != (len(mapping.atoms),):
-                raise ValueError(f"AES2 {name} does not match source atoms.")
-        if setup.pair_mask.shape != (len(mapping.atoms), len(mapping.atoms)):
-            raise ValueError("AES2 pair mask does not match source atoms.")
         return setup.replace(
             numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
             dkernel=_scatter_vector(setup.dkernel, mapping.atoms, n_atoms),
@@ -1270,11 +1131,6 @@ def _remap_family_setup(
             ),
         )
     if isinstance(setup, D4SCCoreSetup):
-        for name in ("numbers", "rcov", "r4r2"):
-            if getattr(setup, name).shape != (len(mapping.atoms),):
-                raise ValueError(f"D4SC {name} does not match source atoms.")
-        if setup.pair_weight.shape != (len(mapping.atoms), len(mapping.atoms)):
-            raise ValueError("D4SC pair weights do not match source atoms.")
         return setup.replace(
             numbers=_scatter_vector(setup.numbers, mapping.atoms, n_atoms),
             rcov=_scatter_vector(setup.rcov, mapping.atoms, n_atoms),
@@ -1291,102 +1147,50 @@ def _remap_family_setup(
     )
 
 
+def _validity_mask(
+    indices: tuple[int, ...], size: int, device: torch.device
+) -> Tensor:
+    """Create a 1D boolean mask with True at the mapped target indices."""
+    mask = torch.zeros(size, dtype=torch.bool, device=device)
+    idx = torch.tensor(indices, dtype=torch.int64, device=device)
+    return mask.index_fill(0, idx, True)
+
+
 def pad_canonical_exact_core(
     core: ExactSystemCore,
     bucket: CanonicalCoreBucket,
     input_index: int,
 ) -> PaddedExactSystemCore:
     """Map one complete exact core to the bucket's canonical structural tree."""
-    if _base_signature(core) != bucket.signature[0]:
-        raise ValueError("Core does not match the canonical bucket metadata.")
     try:
         mapping = dict(bucket.source_maps)[input_index]
         pair_source = dict(bucket.source_pair_shells)[input_index]
     except KeyError as exc:
         raise ValueError("Input index is not a member of this bucket.") from exc
-    layout = _source_layout(core)
-    if len(mapping.atoms) != core.numbers.numel():
-        raise ValueError("Canonical source map does not match the core.")
-    if tuple(bucket.atom_elements[index] for index in mapping.atoms) != (
-        layout.atom_elements
+    if tuple(bucket.atom_elements[i] for i in mapping.atoms) != _tensor_ints(
+        core.numbers
     ):
         raise ValueError(
             "Canonical atom map does not describe this source core."
         )
-    if tuple(bucket.elements[index] for index in mapping.elements) != (
-        layout.element_values
-    ):
-        raise ValueError(
-            "Canonical element map does not describe this source core."
-        )
-    if tuple(bucket.shell_types[index] for index in mapping.shell_types) != (
-        layout.shell_type_keys
-    ):
-        raise ValueError(
-            "Canonical shell-type map does not describe this source core."
-        )
-    if tuple(bucket.shells_to_atom[index] for index in mapping.shells) != tuple(
-        mapping.atoms[atom] for atom in layout.shell_atoms
-    ):
-        raise ValueError(
-            "Canonical shell map does not describe this source core."
-        )
-    if tuple(bucket.shells_to_type[index] for index in mapping.shells) != tuple(
-        mapping.shell_types[type_index] for type_index in layout.shells_to_type
-    ):
-        raise ValueError(
-            "Canonical shell-type map does not describe this source core."
-        )
-    if tuple(
-        bucket.orbitals_to_shell[index] for index in mapping.orbitals
-    ) != tuple(mapping.shells[shell] for shell in layout.orbitals_to_shell):
-        raise ValueError("Canonical AO map does not describe this source core.")
 
     backend = _backend(core)
-    current_pair_entries, current_source_pairs = _mapped_pair_class(
-        core,
-        mapping,
-        layout,
-        bucket.ao_offsets,
-        bucket.orbitals,
-    )
-    expected_source_pairs = {
-        key: set(pairs)
-        for key, pairs in zip(bucket.pair_classes, pair_source)
-        if pairs
-    }
-    if current_source_pairs != expected_source_pairs:
-        raise ValueError(
-            "Current PairPlan shell-pair structure does not match the "
-            "canonical bucket source mapping."
-        )
-    if set(current_pair_entries) - set(bucket.pair_classes):
-        raise ValueError("Current PairPlan has an unrecorded canonical class.")
-    expected_classes = {
-        key: set(pairs)
-        for key, pairs in zip(bucket.pair_classes, bucket.pair_shells)
-    }
-    if any(
-        not pairs.issubset(expected_classes[key])
-        for key, pairs in current_source_pairs.items()
-    ):
-        raise ValueError("Current PairPlan has an unrecorded canonical pair.")
+    assert core.integral is not None and core.h0_setup is not None
+    device = core.numbers.device
+    dtype = core.effective_dtype
 
-    source_type_to_target = mapping.shell_types
+    # Place real shell-type basis tensors at their canonical indices and fill
+    # absent shell types with positive dummy exponents/coefficients.
     alpha_by_target: list[Tensor | None] = [None] * len(bucket.shell_types)
     coeff_by_target: list[Tensor | None] = [None] * len(bucket.shell_types)
-    for source_type, target_type in enumerate(source_type_to_target):
+    for source_type, target_type in enumerate(mapping.shell_types):
         alpha_by_target[target_type] = backend.alphas[source_type]
         coeff_by_target[target_type] = backend.coeffs[source_type]
     alphas = tuple(
         (
             value
             if value is not None
-            else torch.ones(
-                bucket.alpha_shapes[i],
-                dtype=core.effective_dtype,
-                device=core.numbers.device,
-            )
+            else torch.ones(bucket.alpha_shapes[i], dtype=dtype, device=device)
         )
         for i, value in enumerate(alpha_by_target)
     )
@@ -1394,11 +1198,7 @@ def pad_canonical_exact_core(
         (
             value
             if value is not None
-            else torch.ones(
-                bucket.coeff_shapes[i],
-                dtype=core.effective_dtype,
-                device=core.numbers.device,
-            )
+            else torch.ones(bucket.coeff_shapes[i], dtype=dtype, device=device)
         )
         for i, value in enumerate(coeff_by_target)
     )
@@ -1418,20 +1218,16 @@ def pad_canonical_exact_core(
                     angular_j,
                     bucket.ao_offsets,
                     bucket.orbitals,
-                    device=core.numbers.device,
+                    device=device,
                 )
                 for ib, jk in pairs
             ]
         )
-        pair_tensor = torch.tensor(
-            pairs, dtype=torch.int64, device=core.numbers.device
-        )
+        pair_tensor = torch.tensor(pairs, dtype=torch.int64, device=device)
         weights = torch.where(
             pair_tensor[:, 0] == pair_tensor[:, 1],
-            pair_tensor.new_full(
-                (len(pairs),), 0.5, dtype=core.effective_dtype
-            ),
-            pair_tensor.new_ones((len(pairs),), dtype=core.effective_dtype),
+            pair_tensor.new_full((len(pairs),), 0.5, dtype=dtype),
+            pair_tensor.new_ones((len(pairs),), dtype=dtype),
         )
         pair_nodes.append(
             PairClassNode(
@@ -1450,7 +1246,7 @@ def pad_canonical_exact_core(
             torch.tensor(
                 [pair in source_pairs for pair in pairs],
                 dtype=torch.bool,
-                device=core.numbers.device,
+                device=device,
             )
         )
 
@@ -1495,54 +1291,14 @@ def pad_canonical_exact_core(
         interaction_terms=interactions,
     )
     validity = PaddedCoreValidity(
-        atoms=torch.zeros(
-            bucket.atoms, dtype=torch.bool, device=core.numbers.device
-        ).index_fill(
-            0,
-            torch.tensor(
-                mapping.atoms, dtype=torch.int64, device=core.numbers.device
-            ),
-            True,
+        atoms=_validity_mask(mapping.atoms, bucket.atoms, device),
+        shells=_validity_mask(mapping.shells, bucket.shells, device),
+        orbitals=_validity_mask(mapping.orbitals, bucket.orbitals, device),
+        unique_elements=_validity_mask(
+            mapping.elements, len(bucket.elements), device
         ),
-        shells=torch.zeros(
-            bucket.shells, dtype=torch.bool, device=core.numbers.device
-        ).index_fill(
-            0,
-            torch.tensor(
-                mapping.shells, dtype=torch.int64, device=core.numbers.device
-            ),
-            True,
-        ),
-        orbitals=torch.zeros(
-            bucket.orbitals, dtype=torch.bool, device=core.numbers.device
-        ).index_fill(
-            0,
-            torch.tensor(
-                mapping.orbitals, dtype=torch.int64, device=core.numbers.device
-            ),
-            True,
-        ),
-        unique_elements=torch.zeros(
-            len(bucket.elements), dtype=torch.bool, device=core.numbers.device
-        ).index_fill(
-            0,
-            torch.tensor(
-                mapping.elements, dtype=torch.int64, device=core.numbers.device
-            ),
-            True,
-        ),
-        unique_shell_types=torch.zeros(
-            len(bucket.shell_types),
-            dtype=torch.bool,
-            device=core.numbers.device,
-        ).index_fill(
-            0,
-            torch.tensor(
-                mapping.shell_types,
-                dtype=torch.int64,
-                device=core.numbers.device,
-            ),
-            True,
+        unique_shell_types=_validity_mask(
+            mapping.shell_types, len(bucket.shell_types), device
         ),
         pair_entries=tuple(pair_masks),
     )

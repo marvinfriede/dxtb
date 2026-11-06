@@ -116,6 +116,14 @@ _KNOWN_PUBLIC_SINGLEPOINT_KWARGS = frozenset(
 )
 
 
+def _is_prefix_mask(mask: Tensor, target_len: int) -> bool:
+    """Return True when ``mask`` selects a contiguous leading prefix."""
+    nat = int(mask.sum().item())
+    return bool(
+        torch.equal(mask, torch.arange(target_len, device=mask.device) < nat)
+    )
+
+
 def _pad_last_dim(
     tensors: Sequence[Tensor],
     target_len: int,
@@ -126,14 +134,7 @@ def _pad_last_dim(
     if atom_masks is not None:
         placed: list[Tensor] = []
         for t, mask in zip(tensors, atom_masks):
-            nat = int(mask.sum().item())
-            is_contiguous = bool(
-                torch.equal(
-                    mask,
-                    torch.arange(target_len, device=mask.device) < nat,
-                )
-            )
-            if is_contiguous:
+            if _is_prefix_mask(mask, target_len):
                 placed.append(
                     t
                     if t.shape[-1] == target_len
@@ -145,15 +146,33 @@ def _pad_last_dim(
                 placed.append(out)
         return torch.stack(placed, dim=0)
 
-    padded = [
-        (
+    return torch.stack(
+        [
             t
             if t.shape[-1] == target_len
             else F.pad(t, (0, target_len - t.shape[-1]))
-        )
-        for t in tensors
+            for t in tensors
+        ],
+        dim=0,
+    )
+
+
+def _pad_optional_last_dim(
+    tensors: Sequence[Tensor | None],
+    target_len: int,
+    *,
+    zero_shapes: Sequence[tuple[int, ...]],
+    like: Tensor,
+    atom_masks: Sequence[Tensor] | None = None,
+) -> Tensor | None:
+    """Right-pad optional 1D/ND tensors along their last dim when any is present."""
+    if all(t is None for t in tensors):
+        return None
+    filled = [
+        t if t is not None else like.new_zeros(shape)
+        for t, shape in zip(tensors, zero_shapes)
     ]
-    return torch.stack(padded, dim=0)
+    return _pad_last_dim(filled, target_len, atom_masks=atom_masks)
 
 
 def _pad_atom_multipole(
@@ -173,25 +192,12 @@ def _pad_atom_multipole(
             padded.append(
                 like.new_zeros((*like.shape[:-1], target_atoms, components))
             )
-        elif atom_masks is not None:
-            mask = atom_masks[idx]
-            nat = int(mask.sum().item())
-            is_contiguous = bool(
-                torch.equal(
-                    mask,
-                    torch.arange(target_atoms, device=mask.device) < nat,
-                )
-            )
-            if is_contiguous:
-                padded.append(
-                    t
-                    if t.shape[-2] == target_atoms
-                    else F.pad(t, (0, 0, 0, target_atoms - t.shape[-2]))
-                )
-            else:
-                out = t.new_zeros((*t.shape[:-2], target_atoms, components))
-                out[..., mask, :] = t
-                padded.append(out)
+        elif atom_masks is not None and not _is_prefix_mask(
+            atom_masks[idx], target_atoms
+        ):
+            out = t.new_zeros((*t.shape[:-2], target_atoms, components))
+            out[..., atom_masks[idx], :] = t
+            padded.append(out)
         elif t.shape[-2] == target_atoms:
             padded.append(t)
         else:
@@ -302,40 +308,26 @@ def pack_system_results(
     max_orbitals = max(_orbital_extent(r) for r in results)
     max_mos = max(_mo_extent(r, max_orbitals) for r in results)
 
+    atom_shapes = [(int(r.energy.shape[-1]),) for r in results]
+    orb_shapes = [(max_orbitals,) for _ in results]
+    mo_shapes = [(max_mos,) for _ in results]
+
     energy = _pad_last_dim(
         [r.energy for r in results], max_atoms, atom_masks=atom_masks
     )
-    scf = (
-        None
-        if all(r.scf is None for r in results)
-        else _pad_last_dim(
-            [
-                (
-                    r.scf
-                    if r.scf is not None
-                    else ref.new_zeros((int(r.energy.shape[-1]),))
-                )
-                for r in results
-            ],
-            max_atoms,
-            atom_masks=atom_masks,
-        )
+    scf = _pad_optional_last_dim(
+        [r.scf for r in results],
+        max_atoms,
+        zero_shapes=atom_shapes,
+        like=ref,
+        atom_masks=atom_masks,
     )
-    fenergy = (
-        None
-        if all(r.fenergy is None for r in results)
-        else _pad_last_dim(
-            [
-                (
-                    r.fenergy
-                    if r.fenergy is not None
-                    else ref.new_zeros((int(r.energy.shape[-1]),))
-                )
-                for r in results
-            ],
-            max_atoms,
-            atom_masks=atom_masks,
-        )
+    fenergy = _pad_optional_last_dim(
+        [r.fenergy for r in results],
+        max_atoms,
+        zero_shapes=atom_shapes,
+        like=ref,
+        atom_masks=atom_masks,
     )
 
     # Classical contributions in deterministic first-seen occurrence order
@@ -374,17 +366,13 @@ def pack_system_results(
     if all(r.charges is None for r in results):
         charges = None
     else:
-        mono = _pad_last_dim(
-            [
-                (
-                    r.charges.mono
-                    if r.charges is not None
-                    else ref.new_zeros((max_orbitals,))
-                )
-                for r in results
-            ],
+        mono = _pad_optional_last_dim(
+            [None if r.charges is None else r.charges.mono for r in results],
             max_orbitals,
+            zero_shapes=orb_shapes,
+            like=ref,
         )
+        assert mono is not None
         dipole = _pad_atom_multipole(
             [None if r.charges is None else r.charges.dipole for r in results],
             max_atoms,
@@ -408,25 +396,14 @@ def pack_system_results(
     if all(r.potential is None for r in results):
         potential = None
     else:
-        pmono = (
-            None
-            if all(
-                r.potential is None or r.potential.mono is None for r in results
-            )
-            else _pad_last_dim(
-                [
-                    (
-                        r.potential.mono
-                        if (
-                            r.potential is not None
-                            and r.potential.mono is not None
-                        )
-                        else ref.new_zeros((max_orbitals,))
-                    )
-                    for r in results
-                ],
-                max_orbitals,
-            )
+        pmono = _pad_optional_last_dim(
+            [
+                None if r.potential is None else r.potential.mono
+                for r in results
+            ],
+            max_orbitals,
+            zero_shapes=orb_shapes,
+            like=ref,
         )
         pdipole = _pad_atom_multipole(
             [
@@ -458,16 +435,11 @@ def pack_system_results(
     coefficients = _pad_matrix_2d(
         [r.coefficients for r in results], max_orbitals, max_mos, like=ref
     )
-    emo = (
-        None
-        if all(r.emo is None for r in results)
-        else _pad_last_dim(
-            [
-                r.emo if r.emo is not None else ref.new_zeros((max_mos,))
-                for r in results
-            ],
-            max_mos,
-        )
+    emo = _pad_optional_last_dim(
+        [r.emo for r in results],
+        max_mos,
+        zero_shapes=mo_shapes,
+        like=ref,
     )
     if all(r.occupation is None for r in results):
         occupation = None
@@ -475,16 +447,11 @@ def pack_system_results(
         occ_prefix = next(
             r.occupation.shape[:-1] for r in results if r.occupation is not None
         )
-        occupation = _pad_last_dim(
-            [
-                (
-                    r.occupation
-                    if r.occupation is not None
-                    else ref.new_zeros((*occ_prefix, max_mos))
-                )
-                for r in results
-            ],
+        occupation = _pad_optional_last_dim(
+            [r.occupation for r in results],
             max_mos,
+            zero_shapes=[(*occ_prefix, max_mos) for _ in results],
+            like=ref,
         )
     hamiltonian = _pad_matrix_2d(
         [r.hamiltonian for r in results], max_orbitals, max_orbitals, like=ref
@@ -507,20 +474,11 @@ def pack_system_results(
         max_orbitals,
         like=ref,
     )
-    overlap_norm = (
-        None
-        if all(r.overlap_norm is None for r in results)
-        else _pad_last_dim(
-            [
-                (
-                    r.overlap_norm
-                    if r.overlap_norm is not None
-                    else ref.new_zeros((max_orbitals,))
-                )
-                for r in results
-            ],
-            max_orbitals,
-        )
+    overlap_norm = _pad_optional_last_dim(
+        [r.overlap_norm for r in results],
+        max_orbitals,
+        zero_shapes=orb_shapes,
+        like=ref,
     )
 
     lane_iters = torch.stack([r.iterations.reshape(()) for r in results], dim=0)
@@ -1250,40 +1208,27 @@ def evaluate_packed_systems(
                         padded_spin_list.append(s_opt)
                 padded_spin = tuple(padded_spin_list)
 
-                first_field = lane_fields[group_source_ids[0]]
-                if first_field is None:
-                    bucket_field = None
-                elif all(
-                    lane_fields[sid] is first_field for sid in group_source_ids
-                ):
-                    bucket_field = first_field
-                else:
-                    bucket_field = torch.stack(
+                def _bucket_perturbation(
+                    lane_values: Sequence[Tensor | None],
+                ) -> Tensor | None:
+                    first = lane_values[group_source_ids[0]]
+                    if first is None:
+                        return None
+                    if all(
+                        lane_values[sid] is first for sid in group_source_ids
+                    ):
+                        return first
+                    return torch.stack(
                         [
-                            lane_fields[sid]
+                            lane_values[sid]
                             for sid in group_source_ids
-                            if lane_fields[sid] is not None
+                            if lane_values[sid] is not None
                         ],
                         dim=0,
                     )
 
-                first_fg = lane_field_grads[group_source_ids[0]]
-                if first_fg is None:
-                    bucket_field_grad = None
-                elif all(
-                    lane_field_grads[sid] is first_fg
-                    for sid in group_source_ids
-                ):
-                    bucket_field_grad = first_fg
-                else:
-                    bucket_field_grad = torch.stack(
-                        [
-                            lane_field_grads[sid]
-                            for sid in group_source_ids
-                            if lane_field_grads[sid] is not None
-                        ],
-                        dim=0,
-                    )
+                bucket_field = _bucket_perturbation(lane_fields)
+                bucket_field_grad = _bucket_perturbation(lane_field_grads)
 
                 _, decoded = evaluate_padded_systems(
                     padded_cores,

@@ -254,6 +254,42 @@ class EnergyCalculator(BaseCalculator):
         )
         return result.energy.sum(-1, keepdim=kwargs.get("keepdim", False))
 
+    def _validate_resolved_perturbation(
+        self,
+        value: Any,
+        *,
+        name: str,
+        display_name: str,
+        expected_shape: tuple[int, ...],
+    ) -> None:
+        if value is None:
+            return
+        allow_seq = self.numbers.ndim > 1
+        if not (
+            isinstance(value, Tensor)
+            or (
+                allow_seq
+                and isinstance(value, Sequence)
+                and not isinstance(value, (str, bytes))
+            )
+        ):
+            raise TypeError(f"{name} must be a Tensor or None.")
+        if not isinstance(value, Tensor):
+            return
+        if self.numbers.ndim == 1:
+            if value.shape != expected_shape:
+                raise ValueError(
+                    f"{display_name} must have shape {expected_shape}, got "
+                    f"{tuple(value.shape)}."
+                )
+        else:
+            batch_size = int(self.numbers.shape[0])
+            if value.shape not in (expected_shape, (batch_size, *expected_shape)):
+                raise ValueError(
+                    f"{name} must have shape {expected_shape} or "
+                    f"{(batch_size, *expected_shape)}, got {tuple(value.shape)}."
+                )
+
     def _resolve_fields(
         self,
         field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
@@ -267,57 +303,49 @@ class EnergyCalculator(BaseCalculator):
         resolved_grad = (
             self._field_grad_default if field_grad is _UNSET else field_grad
         )
-        allow_seq = self.numbers.ndim > 1
-        if resolved_field is not None and not (
-            isinstance(resolved_field, Tensor)
-            or (
-                allow_seq
-                and isinstance(resolved_field, Sequence)
-                and not isinstance(resolved_field, (str, bytes))
-            )
-        ):
-            raise TypeError("field must be a Tensor or None.")
-        if resolved_grad is not None and not (
-            isinstance(resolved_grad, Tensor)
-            or (
-                allow_seq
-                and isinstance(resolved_grad, Sequence)
-                and not isinstance(resolved_grad, (str, bytes))
-            )
-        ):
-            raise TypeError("field_grad must be a Tensor or None.")
-        if isinstance(resolved_field, Tensor):
-            if self.numbers.ndim == 1:
-                if resolved_field.shape != (3,):
-                    raise ValueError(
-                        "Electric field must have shape (3,), got "
-                        f"{tuple(resolved_field.shape)}."
-                    )
-            else:
-                batch_size = int(self.numbers.shape[0])
-                if resolved_field.shape not in ((3,), (batch_size, 3)):
-                    raise ValueError(
-                        "field must have shape (3,) or "
-                        f"({batch_size}, 3), got {tuple(resolved_field.shape)}."
-                    )
-
-        if isinstance(resolved_grad, Tensor):
-            if self.numbers.ndim == 1:
-                if resolved_grad.shape != (3, 3):
-                    raise ValueError(
-                        "Electric field gradient must have shape (3, 3), got "
-                        f"{tuple(resolved_grad.shape)}."
-                    )
-            else:
-                batch_size = int(self.numbers.shape[0])
-                if resolved_grad.shape not in ((3, 3), (batch_size, 3, 3)):
-                    raise ValueError(
-                        "field_grad must have shape (3, 3) or "
-                        f"({batch_size}, 3, 3), got "
-                        f"{tuple(resolved_grad.shape)}."
-                    )
-
+        self._validate_resolved_perturbation(
+            resolved_field,
+            name="field",
+            display_name="Electric field",
+            expected_shape=(3,),
+        )
+        self._validate_resolved_perturbation(
+            resolved_grad,
+            name="field_grad",
+            display_name="Electric field gradient",
+            expected_shape=(3, 3),
+        )
         return resolved_field, resolved_grad
+
+    def _stack_response_perturbation(
+        self,
+        value: Any,
+        *,
+        name: str,
+        response_name: str,
+        expected_shape: tuple[int, ...],
+    ) -> Any:
+        if not (
+            isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+        ):
+            return value
+        batch_size = int(self.numbers.shape[0])
+        if len(value) != batch_size:
+            raise ValueError(
+                f"{name} sequence length {len(value)} must match "
+                f"batch size {batch_size}."
+            )
+        if any(
+            item is None
+            or not isinstance(item, Tensor)
+            or item.shape != expected_shape
+            for item in value
+        ):
+            raise ValueError(
+                f"{name} sequence for {response_name} response must contain "
+                f"{expected_shape} Tensors for every lane."
+            )
+        return torch.stack(list(value), dim=0)
 
     def _resolve_response_fields(
         self,
@@ -360,50 +388,20 @@ class EnergyCalculator(BaseCalculator):
                 "custom response implementation."
             )
 
-        if (
-            needs_field
-            and isinstance(resolved_field, Sequence)
-            and not isinstance(resolved_field, (str, bytes))
-        ):
-            batch_size = int(self.numbers.shape[0])
-            if len(resolved_field) != batch_size:
-                raise ValueError(
-                    f"field sequence length {len(resolved_field)} must match "
-                    f"batch size {batch_size}."
-                )
-            if any(
-                item is None or not isinstance(item, Tensor) or item.shape != (3,)
-                for item in resolved_field
-            ):
-                raise ValueError(
-                    "field sequence for dipole response must contain (3,) "
-                    "Tensors for every lane."
-                )
-            resolved_field = torch.stack(list(resolved_field), dim=0)
-
-        if (
-            needs_field_grad
-            and isinstance(resolved_grad, Sequence)
-            and not isinstance(resolved_grad, (str, bytes))
-        ):
-            batch_size = int(self.numbers.shape[0])
-            if len(resolved_grad) != batch_size:
-                raise ValueError(
-                    f"field_grad sequence length {len(resolved_grad)} must "
-                    f"match batch size {batch_size}."
-                )
-            if any(
-                item is None
-                or not isinstance(item, Tensor)
-                or item.shape != (3, 3)
-                for item in resolved_grad
-            ):
-                raise ValueError(
-                    "field_grad sequence for quadrupole response must contain "
-                    "(3, 3) Tensors for every lane."
-                )
-            resolved_grad = torch.stack(list(resolved_grad), dim=0)
-
+        if needs_field:
+            resolved_field = self._stack_response_perturbation(
+                resolved_field,
+                name="field",
+                response_name="dipole",
+                expected_shape=(3,),
+            )
+        if needs_field_grad:
+            resolved_grad = self._stack_response_perturbation(
+                resolved_grad,
+                name="field_grad",
+                response_name="quadrupole",
+                expected_shape=(3, 3),
+            )
         return resolved_field, resolved_grad
 
     def bond_orders(

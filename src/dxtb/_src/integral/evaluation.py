@@ -197,25 +197,20 @@ def build_integral_matrices(
     pair_validity: Sequence[Tensor] | None = None,
 ) -> tuple[IntegralMatrices, Tensor, Tensor]:
     """Build all requested matrices from explicit setup and current inputs."""
+    if setup.intlevel > labels.INTLEVEL_MAX:
+        raise RuntimeError(
+            f"An integral level of '{setup.intlevel}' is requested, "
+            "but the quadrupole integral is the highest supported "
+            "moment."
+        )
+
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
-        native_ket_moments = False
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
         integral_setup = setup.pytorch
         raw_overlap = build_overlap_pytorch(
             integral_setup, positions, pair_validity=pair_validity
         )
-
-        def build_dipole() -> Tensor:
-            return build_dipole_pytorch(
-                integral_setup, positions, pair_validity=pair_validity
-            )
-
-        def build_quadrupole() -> Tensor:
-            return build_quadrupole_pytorch(
-                integral_setup, positions, pair_validity=pair_validity
-            )
-
         ihelp = (
             integral_setup.index
             if isinstance(integral_setup, PytorchIntegralSetupNode)
@@ -227,18 +222,10 @@ def build_integral_matrices(
             raise ValueError(
                 "Pair-entry validity is supported only by the PyTorch driver."
             )
-        native_ket_moments = True
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
         call_data = setup_libcint(setup.libcint, positions)
         raw_overlap = build_overlap_libcint(call_data)
-
-        def build_dipole() -> Tensor:
-            return build_dipole_libcint(call_data)
-
-        def build_quadrupole() -> Tensor:
-            return build_quadrupole_libcint(call_data)
-
         ihelp = call_data.ihelp
         integral_positions = positions.to(device=raw_overlap.device)
     else:
@@ -250,44 +237,44 @@ def build_integral_matrices(
     quadrupole = None
 
     if setup.intlevel >= labels.INTLEVEL_DIPOLE:
-        raw_dipole = normalize_integral_matrix(build_dipole(), backend_norm)
-        if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            if setup.intlevel > labels.INTLEVEL_MAX:
-                raise RuntimeError(
-                    f"An integral level of '{setup.intlevel}' is requested, "
-                    "but the quadrupole integral is the highest supported "
-                    "moment."
-                )
-            raw_quadrupole = normalize_integral_matrix(
-                build_quadrupole(), backend_norm
+        if setup.driver_type == labels.INTDRIVER_PYTORCH:
+            raw_dipole = normalize_integral_matrix(
+                build_dipole_pytorch(
+                    integral_setup, positions, pair_validity=pair_validity
+                ),
+                backend_norm,
             )
-            if native_ket_moments:
-                # tad-libcint 0.4 returns native ket-centered j/jj moments;
-                # jj is already packed as xx, yx, yy, zx, zy, zz.
-                quadrupole = raw_quadrupole
-                dipole = raw_dipole
-            else:
-                quadrupole = reduce_quadrupole_9_to_6(raw_quadrupole)
-                orbital_positions = ihelp.spread_atom_to_orbital(
-                    integral_positions, dim=-2, extra=True
+            orbital_positions = ihelp.spread_atom_to_orbital(
+                integral_positions, dim=-2, extra=True
+            )
+            dipole = shift_dipole_origin(
+                raw_dipole, overlap, orbital_positions
+            )
+            if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
+                raw_quadrupole = normalize_integral_matrix(
+                    build_quadrupole_pytorch(
+                        integral_setup, positions, pair_validity=pair_validity
+                    ),
+                    backend_norm,
                 )
                 quadrupole = shift_quadrupole_origin(
-                    quadrupole, raw_dipole, overlap, orbital_positions
+                    reduce_quadrupole_9_to_6(raw_quadrupole),
+                    raw_dipole,
+                    overlap,
+                    orbital_positions,
                 )
-                dipole = shift_dipole_origin(
-                    raw_dipole, overlap, orbital_positions
-                )
-            quadrupole = make_quadrupole_traceless(quadrupole)
+                quadrupole = make_quadrupole_traceless(quadrupole)
         else:
-            if native_ket_moments:
-                dipole = raw_dipole
-            else:
-                orbital_positions = ihelp.spread_atom_to_orbital(
-                    integral_positions, dim=-2, extra=True
+            # tad-libcint 0.4 returns native ket-centered j/jj moments;
+            # jj is already packed as xx, yx, yy, zx, zy, zz.
+            dipole = normalize_integral_matrix(
+                build_dipole_libcint(call_data), backend_norm
+            )
+            if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
+                raw_quadrupole = normalize_integral_matrix(
+                    build_quadrupole_libcint(call_data), backend_norm
                 )
-                dipole = shift_dipole_origin(
-                    raw_dipole, overlap, orbital_positions
-                )
+                quadrupole = make_quadrupole_traceless(raw_quadrupole)
 
     target_device = positions.device
     overlap_norm = backend_norm.to(device=target_device)

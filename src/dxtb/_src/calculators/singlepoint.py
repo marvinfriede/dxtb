@@ -181,38 +181,47 @@ def _evaluate_classical_descriptor(
     """Evaluate a captured built-in term without component dispatch."""
     setup = descriptor.setup
     if descriptor.kind == "d3":
-        if not isinstance(setup, DispersionD3CoreSetup):
-            raise TypeError("D3 descriptor has an invalid setup value.")
-        return dispersion_d3_energy(setup, positions)
+        return dispersion_d3_energy(setup, positions)  # type: ignore[arg-type]
     if descriptor.kind == "repulsion":
-        if not isinstance(setup, RepulsionCoreSetup):
-            raise TypeError("Repulsion descriptor has an invalid setup value.")
         energy = repulsion_energy(
             positions,
-            setup.mask,
-            setup.arep,
-            setup.kexp,
-            setup.zeff,
-            setup.cutoff,
+            setup.mask,  # type: ignore[union-attr]
+            setup.arep,  # type: ignore[union-attr]
+            setup.kexp,  # type: ignore[union-attr]
+            setup.zeff,  # type: ignore[union-attr]
+            setup.cutoff,  # type: ignore[union-attr]
         )
         return 0.5 * torch.sum(energy, dim=-1)
     if descriptor.kind == "srb":
-        if not isinstance(setup, ShortRangeBondCoreSetup):
-            raise TypeError("SRB descriptor has an invalid setup value.")
-        return short_range_bond_energy(setup, positions)
+        return short_range_bond_energy(setup, positions)  # type: ignore[arg-type]
     if descriptor.kind == "d4":
-        if not isinstance(setup, DispersionD4CoreSetup):
-            raise TypeError("D4 descriptor has an invalid setup value.")
-        return dispersion_d4_energy(setup, positions, charge, q=q)
+        return dispersion_d4_energy(setup, positions, charge, q=q)  # type: ignore[arg-type]
     if descriptor.kind == "ies":
-        if not isinstance(setup, IESCoreSetup):
-            raise TypeError("IES descriptor has an invalid setup value.")
-        return ies_energy(setup, positions, charge)
+        return ies_energy(setup, positions, charge)  # type: ignore[arg-type]
     if descriptor.kind == "halogen":
-        if not isinstance(setup, HalogenCoreSetup):
-            raise TypeError("Halogen descriptor has an invalid setup value.")
-        return halogen_energy(setup, positions)
+        return halogen_energy(setup, positions)  # type: ignore[arg-type]
     raise RuntimeError(f"Unknown classical term kind '{descriptor.kind}'.")
+
+
+def _build_builtin_interaction_cache(setup: Any, positions: Tensor) -> Any:
+    """Build call-local cache data from a captured built-in interaction setup."""
+    if isinstance(setup, ES2CoreSetup):
+        return ES2Cache(
+            build_es2_coulomb(setup, positions),
+            shell_resolved=setup.shell_resolved,
+        )
+    if isinstance(setup, ES3CoreSetup):
+        return ES3Cache(
+            setup.hubbard_derivs,
+            shell_resolved=setup.shell_resolved,
+        )
+    if isinstance(setup, AES2CoreSetup):
+        return build_aes2_data(setup, positions)
+    if isinstance(setup, D4SCCoreSetup):
+        return build_d4sc_data(setup, positions)
+    if isinstance(setup, GeneralizedBornCoreSetup):
+        return build_generalized_born_data(setup, positions)
+    raise TypeError(f"Unsupported built-in interaction setup {type(setup)}.")
 
 
 class _SystemInteractionData(InteractionListCache):
@@ -233,12 +242,7 @@ class _SystemInteractionData(InteractionListCache):
 def _interaction_data(
     system: System, positions: Tensor, interactions=None
 ) -> InteractionListCache:
-    """Build call-local interaction data for one SCF evaluation.
-
-    Exact ES2, ES3, AES2, D4SC, and GeneralizedBorn use explicit System setup values. Other
-    interactions keep their current cache APIs until their B6a packages, but
-    returned data is local to this call.
-    """
+    """Build call-local interaction data for one SCF evaluation."""
     interactions = system.interactions if interactions is None else interactions
     core = system._active_exact_core()
     descriptors = (
@@ -273,41 +277,10 @@ def _interaction_data(
             ):
                 descriptor = None
         if descriptor is not None:
-            setup = descriptor.setup
             functional_kinds[descriptor.label] = descriptor.kind
-            if descriptor.kind == "es2":
-                if not isinstance(setup, ES2CoreSetup):
-                    raise TypeError("ES2 descriptor has an invalid setup.")
-                matrix = build_es2_coulomb(setup, positions)
-                data[descriptor.label] = ES2Cache(
-                    matrix, shell_resolved=setup.shell_resolved
-                )
-            elif descriptor.kind == "es3":
-                if not isinstance(setup, ES3CoreSetup):
-                    raise TypeError("ES3 descriptor has an invalid setup.")
-                data[descriptor.label] = ES3Cache(
-                    setup.hubbard_derivs, shell_resolved=setup.shell_resolved
-                )
-            elif descriptor.kind == "aes2":
-                if not isinstance(setup, AES2CoreSetup):
-                    raise TypeError("AES2 descriptor has an invalid setup.")
-                data[descriptor.label] = build_aes2_data(setup, positions)
-            elif descriptor.kind == "d4sc":
-                if not isinstance(setup, D4SCCoreSetup):
-                    raise TypeError("D4SC descriptor has an invalid setup.")
-                data[descriptor.label] = build_d4sc_data(setup, positions)
-            elif descriptor.kind == "generalized_born":
-                if not isinstance(setup, GeneralizedBornCoreSetup):
-                    raise TypeError(
-                        "GeneralizedBorn descriptor has an invalid setup."
-                    )
-                data[descriptor.label] = build_generalized_born_data(
-                    setup, positions
-                )
-            else:
-                raise RuntimeError(
-                    f"Unknown interaction term kind '{descriptor.kind}'."
-                )
+            data[descriptor.label] = _build_builtin_interaction_cache(
+                descriptor.setup, positions
+            )
             continue
 
         captured_setup = (
@@ -321,80 +294,46 @@ def _interaction_data(
             data[interaction.label] = build_electric_field_grad_data(
                 positions, interaction.field_grad
             )
-        elif isinstance(captured_setup, ES2CoreSetup) or (
-            captured_setup is None and interaction is system.es2_interaction
+        elif isinstance(
+            captured_setup,
+            (
+                ES2CoreSetup,
+                ES3CoreSetup,
+                AES2CoreSetup,
+                D4SCCoreSetup,
+                GeneralizedBornCoreSetup,
+            ),
         ):
-            setup = (
-                captured_setup
-                if isinstance(captured_setup, ES2CoreSetup)
-                else system.es2_setup
+            data[interaction.label] = _build_builtin_interaction_cache(
+                captured_setup, positions
+            )
+        elif captured_setup is None and interaction in (
+            system.es2_interaction,
+            system.es3_interaction,
+            system.aes2_interaction,
+            system.d4sc_interaction,
+            system.generalized_born_interaction,
+        ):
+            setup_pairs = (
+                (system.es2_interaction, system.es2_setup, "ES2"),
+                (system.es3_interaction, system.es3_setup, "ES3"),
+                (system.aes2_interaction, system.aes2_setup, "AES2"),
+                (system.d4sc_interaction, system.d4sc_setup, "D4SC"),
+                (
+                    system.generalized_born_interaction,
+                    system.generalized_born_setup,
+                    "GeneralizedBorn",
+                ),
+            )
+            setup, name = next(
+                (s, label)
+                for owner, s, label in setup_pairs
+                if interaction is owner
             )
             if setup is None:
-                raise RuntimeError("Single-system ES2 setup is missing.")
-            matrix = build_es2_coulomb(setup, positions)
-            data[interaction.label] = ES2Cache(
-                matrix, shell_resolved=setup.shell_resolved
-            )
-        elif isinstance(captured_setup, ES3CoreSetup) or (
-            captured_setup is None and interaction is system.es3_interaction
-        ):
-            setup = (
-                captured_setup
-                if isinstance(captured_setup, ES3CoreSetup)
-                else system.es3_setup
-            )
-            if setup is None:
-                raise RuntimeError("Single-system ES3 setup is missing.")
-            data[interaction.label] = ES3Cache(
-                setup.hubbard_derivs,
-                shell_resolved=setup.shell_resolved,
-            )
-        elif isinstance(captured_setup, AES2CoreSetup) or (
-            captured_setup is None and interaction is system.aes2_interaction
-        ):
-            setup = (
-                captured_setup
-                if isinstance(captured_setup, AES2CoreSetup)
-                else system.aes2_setup
-            )
-            if setup is None:
-                raise RuntimeError("Single-system AES2 setup is missing.")
-            data[interaction.label] = build_aes2_data(setup, positions)
-        elif isinstance(captured_setup, D4SCCoreSetup) or (
-            captured_setup is None and interaction is system.d4sc_interaction
-        ):
-            setup = (
-                captured_setup
-                if isinstance(captured_setup, D4SCCoreSetup)
-                else system.d4sc_setup
-            )
-            if setup is None:
-                raise RuntimeError("Single-system D4SC setup is missing.")
-            data[interaction.label] = build_d4sc_data(setup, positions)
-        elif isinstance(captured_setup, GeneralizedBornCoreSetup) or (
-            captured_setup is None
-            and interaction is system.generalized_born_interaction
-        ):
-            setup = (
-                captured_setup
-                if isinstance(captured_setup, GeneralizedBornCoreSetup)
-                else system.generalized_born_setup
-            )
-            if setup is None:
-                raise RuntimeError(
-                    "Single-system GeneralizedBorn setup is missing."
-                )
-            data[interaction.label] = build_generalized_born_data(
+                raise RuntimeError(f"Single-system {name} setup is missing.")
+            data[interaction.label] = _build_builtin_interaction_cache(
                 setup, positions
-            )
-        elif (
-            isinstance(interaction, GeneralizedBorn)
-            and type(interaction) is not GeneralizedBorn
-        ):
-            data[interaction.label] = interaction.get_cache(
-                numbers=(core.numbers if core is not None else system.numbers),
-                positions=positions,
-                ihelp=system.ihelp,
             )
         else:
             data[interaction.label] = interaction.get_cache(
@@ -699,53 +638,6 @@ def _singlepoint_impl(
                     setup = system.repulsion_setup
                 elif component is system.srb_classical:
                     setup = system.srb_setup
-                elif (
-                    isinstance(component, Repulsion)
-                    and type(component) is not Repulsion
-                ):
-                    # Custom subclasses remain on their legacy extension path.
-                    # Refresh their call data unless Model.setup just populated
-                    # it for this call-local System; exact Repulsion uses System setup.
-                    setup = (
-                        system._classical_extension_cache[component.label]
-                        if use_captured_extension_cache
-                        and component.label in system._classical_extension_cache
-                        else component.get_cache(system.numbers, system.ihelp)
-                    )
-                elif (
-                    isinstance(component, ShortRangeBond)
-                    and type(component) is not ShortRangeBond
-                ):
-                    # Custom subclasses retain their legacy extension hooks.
-                    setup = (
-                        system._classical_extension_cache[component.label]
-                        if use_captured_extension_cache
-                        and component.label in system._classical_extension_cache
-                        else component.get_cache(system.numbers, system.ihelp)
-                    )
-                elif (
-                    isinstance(component, DispersionD4)
-                    and type(component) is not DispersionD4
-                ):
-                    # D4 subclasses are legacy extensions. Refresh their
-                    # cache each evaluation so updates affect the next call.
-                    setup = (
-                        system._classical_extension_cache[component.label]
-                        if use_captured_extension_cache
-                        and component.label in system._classical_extension_cache
-                        else component.get_cache(system.numbers, system.ihelp)
-                    )
-                elif (
-                    isinstance(component, Halogen)
-                    and type(component) is not Halogen
-                ):
-                    # Custom subclasses retain cache-driven legacy behavior.
-                    setup = (
-                        system._classical_extension_cache[component.label]
-                        if use_captured_extension_cache
-                        and component.label in system._classical_extension_cache
-                        else component.get_cache(system.numbers, system.ihelp)
-                    )
                 elif isinstance(captured_setup, IESCoreSetup) or (
                     captured_setup is None and component is system.ies_classical
                 ):
@@ -766,8 +658,19 @@ def _singlepoint_impl(
                     )
                     timer.stop(component.label)
                     continue
-                elif isinstance(component, IES) and type(component) is not IES:
-                    # Custom IES subclasses retain their cache-driven hooks.
+                elif isinstance(
+                    component,
+                    (Repulsion, ShortRangeBond, DispersionD4, Halogen, IES),
+                ) and type(component) not in (
+                    Repulsion,
+                    ShortRangeBond,
+                    DispersionD4,
+                    Halogen,
+                    IES,
+                ):
+                    # Custom subclasses retain their legacy extension hooks.
+                    # Refresh their call data unless Model.setup just populated
+                    # it for this call-local System; exact built-ins use System setup.
                     setup = (
                         system._classical_extension_cache[component.label]
                         if use_captured_extension_cache
@@ -873,21 +776,7 @@ def _singlepoint_impl(
         if core is not None and core_index is not None
         else {}
     )
-    if fixed_trip and config.scf.differentiation.value == "implicit":
-        scf_results = scf_solve(
-            numbers,
-            positions,
-            charge,
-            spin_tensor,
-            call_interactions,
-            interaction_data,
-            system.ihelp,
-            config.scf,
-            matrices,
-            refocc,
-            **scf_kwargs,
-        )
-    elif fixed_trip:
+    if fixed_trip and config.scf.differentiation.value != "implicit":
         from dxtb._src.scf.functional.eager import run_system_fixed_trip
 
         scf_results = run_system_fixed_trip(

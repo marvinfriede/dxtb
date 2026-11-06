@@ -340,62 +340,37 @@ def test_mapped_h0_parameter_gradient_reaches_single_model_owner():
 
 
 def test_padded_integral_evaluator_rejects_invalid_inputs():
-    """Malformed core setup and call tensors fail before numerical kernels."""
+    """Malformed core setup and call tensors fail at the setup/bucketing boundary."""
     numbers = torch.tensor([1, 1], dtype=torch.int64)
     system = _model().setup(numbers)
     assert system.exact_core is not None
     bucket = bucket_canonical_exact_cores((system.exact_core,))
-    padded = pad_canonical_exact_core(system.exact_core, bucket, 0)
-    positions = canonicalize_positions(_positions((1, 1)), bucket, 0)
-    charge = torch.zeros((), dtype=DTYPE)
+    raw_positions = _positions((1, 1))
 
     with pytest.raises(ValueError, match="Positions do not match"):
-        evaluate_padded_integrals(padded, positions[:1], charge)
-    with pytest.raises(TypeError, match="effective dtype"):
-        evaluate_padded_integrals(padded, positions.float(), charge.float())
-    with pytest.raises(ValueError, match="scalar charge"):
-        evaluate_padded_integrals(padded, positions, charge.reshape(1))
+        canonicalize_positions(raw_positions[:1], bucket, 0)
 
-    with pytest.raises(ValueError, match="H0 setup"):
-        evaluate_padded_integrals(
-            padded.replace(core=padded.core.replace(h0_setup=None)),
-            positions,
-            charge,
+    with pytest.raises(TypeError, match="H0 setup"):
+        bucket_canonical_exact_cores(
+            (system.exact_core.replace(h0_setup=None),)
         )
-    with pytest.raises(ValueError, match="integral setup"):
-        evaluate_padded_integrals(
-            padded.replace(core=padded.core.replace(integral=None)),
-            positions,
-            charge,
+    with pytest.raises(TypeError, match="PyTorch backend"):
+        bucket_canonical_exact_cores(
+            (system.exact_core.replace(integral=None),)
         )
+    assert system.exact_core.integral is not None
     with pytest.raises(ValueError, match="HCORE"):
-        evaluate_padded_integrals(
-            padded.replace(
-                core=padded.core.replace(
-                    integral=padded.core.integral.replace(
+        bucket_canonical_exact_cores(
+            (
+                system.exact_core.replace(
+                    integral=system.exact_core.integral.replace(
                         intlevel=labels.INTLEVEL_OVERLAP
                     )
-                )
-            ),
-            positions,
-            charge,
+                ),
+            )
         )
     with pytest.raises(TypeError, match="does not match driver"):
-        padded.core.integral.replace(driver_type=labels.INTDRIVER_LIBCINT)
-
-    masks = padded.validity.pair_entries
-    malformed = (
-        torch.zeros(masks[0].numel() + 1, dtype=torch.bool),
-        *masks[1:],
-    )
-    with pytest.raises(ValueError, match="entry mask has an invalid shape"):
-        evaluate_padded_integrals(
-            padded.replace(
-                validity=padded.validity.replace(pair_entries=malformed)
-            ),
-            positions,
-            charge,
-        )
+        system.exact_core.integral.replace(driver_type=labels.INTDRIVER_LIBCINT)
 
 
 def test_gfn2_canonical_integral_path_builds_the_registered_core():

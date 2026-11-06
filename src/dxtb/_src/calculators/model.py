@@ -381,7 +381,7 @@ class _ModelSetupAdapter(nn.Module):
         super().__init__()
         self.par = model.par
         # Keep the compatibility façade outside the registered module tree.
-        object.__setattr__(self, "_model", model)
+        self.__dict__["_model"] = model
 
     def forward(
         self,
@@ -958,6 +958,35 @@ class System:
                 return entry.setup
         return None
 
+    def _builtin_classical_setup(self, component: Classical) -> Any:
+        if component is self.repulsion_classical:
+            return self.repulsion_setup
+        if component is self.srb_classical:
+            return self.srb_setup
+        if component is self.d4_classical:
+            return self.d4_setup
+        if component is self.ies_classical:
+            return self.ies_setup
+        if component is self.halogen_classical:
+            return self.halogen_setup
+        return next(
+            (value for owner, value in self.d3_setups if owner is component),
+            None,
+        )
+
+    def _builtin_interaction_setup(self, interaction: Interaction) -> Any:
+        if interaction is self.es2_interaction:
+            return self.es2_setup
+        if interaction is self.es3_interaction:
+            return self.es3_setup
+        if interaction is self.aes2_interaction:
+            return self.aes2_setup
+        if interaction is self.d4sc_interaction:
+            return self.d4sc_setup
+        if interaction is self.generalized_born_interaction:
+            return self.generalized_born_setup
+        return None
+
     def _active_exact_core(self) -> ExactSystemCore | None:
         """Return the captured core while its façade setup references agree."""
         core = self.exact_core
@@ -1019,26 +1048,7 @@ class System:
             tuple[str, str, int, CoreSetup, bool, tuple[str, ...]]
         ] = []
         for position, component in enumerate(self.classicals.components):
-            setup = None
-            if component is self.repulsion_classical:
-                setup = self.repulsion_setup
-            elif component is self.srb_classical:
-                setup = self.srb_setup
-            elif component is self.d4_classical:
-                setup = self.d4_setup
-            elif component is self.ies_classical:
-                setup = self.ies_setup
-            elif component is self.halogen_classical:
-                setup = self.halogen_setup
-            else:
-                setup = next(
-                    (
-                        value
-                        for owner, value in self.d3_setups
-                        if owner is component
-                    ),
-                    None,
-                )
+            setup = self._builtin_classical_setup(component)
             if isinstance(
                 setup,
                 (
@@ -1072,18 +1082,7 @@ class System:
             tuple[str, str, int, CoreSetup, tuple[str, ...]]
         ] = []
         for position, interaction in enumerate(self.interactions.components):
-            if interaction is self.es2_interaction:
-                setup = self.es2_setup
-            elif interaction is self.es3_interaction:
-                setup = self.es3_setup
-            elif interaction is self.aes2_interaction:
-                setup = self.aes2_setup
-            elif interaction is self.d4sc_interaction:
-                setup = self.d4sc_setup
-            elif interaction is self.generalized_born_interaction:
-                setup = self.generalized_born_setup
-            else:
-                setup = None
+            setup = self._builtin_interaction_setup(interaction)
             if isinstance(
                 setup,
                 (
@@ -1157,13 +1156,7 @@ class System:
 
     @property
     def classical_cache(self) -> ClassicalListCache:
-        """Build a compatibility view over captured setup values on demand.
-
-        Single-System core setup Nodes remain the sole persistent owners for
-        exact built-in terms. Custom extension setup data is retained in a
-        separate compatibility cache. Packed systems keep their established
-        complete legacy cache.
-        """
+        """Build a compatibility view over captured setup values on demand."""
         if self.batch_mode != 0:
             if self._packed_classical_cache is None:
                 return ClassicalListCache()
@@ -1171,30 +1164,11 @@ class System:
 
         cache = ClassicalListCache()
         for component in self.classicals.components:
-            if component is self.repulsion_classical:
-                setup = self.repulsion_setup
-            elif component is self.srb_classical:
-                setup = self.srb_setup
-            elif component is self.d4_classical:
-                setup = self.d4_setup
-            elif component is self.ies_classical:
-                setup = self.ies_setup
-            elif component is self.halogen_classical:
-                setup = self.halogen_setup
-            else:
-                setup = next(
-                    (
-                        captured
-                        for d3_component, captured in self.d3_setups
-                        if component is d3_component
-                    ),
-                    None,
-                )
-                if setup is None:
-                    if component.label not in self._classical_extension_cache:
-                        continue
-                    setup = self._classical_extension_cache[component.label]
-
+            setup = self._builtin_classical_setup(component)
+            if setup is None:
+                if component.label not in self._classical_extension_cache:
+                    continue
+                setup = self._classical_extension_cache[component.label]
             if setup is not None:
                 cache[component.label] = setup
         return cache
@@ -1687,11 +1661,13 @@ class Model:
         )
         halogen_setup = None
 
+        classical_setup_refs: list[CoreSetupRef] = []
+        classical_terms: list[ClassicalTermDescriptor] = []
         if batch_mode == 0:
-            for component in classicals.components:
+            for position, component in enumerate(classicals.components):
                 timer.start(component.label, parent_uid="Classicals")
+                legacy_setup = component.get_cache(numbers, ihelp)
                 if type(component) is DispersionD3:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, DispersionD3Cache)
                     setup = core_dispersion_d3_setup(
                         legacy_setup,
@@ -1702,42 +1678,47 @@ class Model:
                     )
                     d3_setups.append((component, setup))
                 elif type(component) is Repulsion:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, RepulsionSetup)
                     setup = core_repulsion_setup(legacy_setup)
                     repulsion_setup = setup
                 elif type(component) is ShortRangeBond:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, ShortRangeBondSetup)
                     setup = core_srb_setup(legacy_setup)
                     srb_setup = setup
                 elif type(component) is DispersionD4:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, DispersionD4Setup)
                     setup = core_dispersion_d4_setup(legacy_setup)
                     d4_setup = setup
                 elif type(component) is IES:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, IESSetup)
                     setup = core_ies_setup(legacy_setup)
                     ies_setup = setup
                 elif type(component) is Halogen:
-                    legacy_setup = component.get_cache(numbers, ihelp)
                     assert isinstance(legacy_setup, HalogenSetup)
                     setup = core_halogen_setup(legacy_setup)
                     halogen_setup = setup
                 else:
-                    setup = component.get_cache(numbers, ihelp)
-                if type(component) not in (
-                    DispersionD3,
-                    Repulsion,
-                    ShortRangeBond,
-                    DispersionD4,
-                    IES,
-                    Halogen,
-                ):
+                    setup = legacy_setup
                     classical_extension_cache[component.label] = setup
                 timer.stop(component.label)
+
+                kind = _classical_term_kind(component, setup)
+                if kind is not None:
+                    classical_setup_refs.append(
+                        CoreSetupRef(
+                            id(component), component.label, position, setup
+                        )
+                    )
+                    classical_terms.append(
+                        ClassicalTermDescriptor(
+                            kind=kind[0],
+                            label=component.label,
+                            position=position,
+                            setup=setup,
+                            charge_dependent=kind[1],
+                            geometry_inputs=("positions",),
+                        )
+                    )
         else:
             packed_classical_cache = classicals.get_cache(numbers, ihelp)
             if repulsion_classical is not None:
@@ -1769,9 +1750,6 @@ class Model:
                 if batch_mode == 0
                 else setup_h0(numbers, par, ihelp, **dd)
             )
-            # B4's pure evaluation core handles one system. Keep existing
-            # Calculator batching on its legacy adapter until the later
-            # batching package supplies stacked-System/vmap evaluation.
             if batch_mode == 0:
                 integral_setup = setup_integral_evaluation(
                     numbers,
@@ -1790,62 +1768,6 @@ class Model:
         exact_core = None
         exact_compatibility = None
         if batch_mode == 0:
-            classical_setup_refs: list[CoreSetupRef] = []
-            classical_terms: list[ClassicalTermDescriptor] = []
-            for position, component in enumerate(classicals.components):
-                if type(component) is DispersionD3:
-                    setup = next(
-                        (
-                            captured
-                            for owner, captured in d3_setups
-                            if owner is component
-                        ),
-                        None,
-                    )
-                elif component is repulsion_classical:
-                    setup = repulsion_setup
-                elif component is srb_classical:
-                    setup = srb_setup
-                elif component is d4_classical:
-                    setup = d4_setup
-                elif component is ies_classical:
-                    setup = ies_setup
-                elif component is halogen_classical:
-                    setup = halogen_setup
-                else:
-                    setup = None
-                if setup is not None and isinstance(
-                    setup,
-                    (
-                        RepulsionCoreSetup,
-                        ShortRangeBondCoreSetup,
-                        DispersionD3CoreSetup,
-                        DispersionD4CoreSetup,
-                        IESCoreSetup,
-                        HalogenCoreSetup,
-                    ),
-                ):
-                    classical_setup_refs.append(
-                        CoreSetupRef(
-                            id(component), component.label, position, setup
-                        )
-                    )
-                    kind = _classical_term_kind(component, setup)
-                    if kind is None:
-                        raise RuntimeError(
-                            "Exact classical setup has no built-in descriptor."
-                        )
-                    classical_terms.append(
-                        ClassicalTermDescriptor(
-                            kind=kind[0],
-                            label=component.label,
-                            position=position,
-                            setup=setup,
-                            charge_dependent=kind[1],
-                            geometry_inputs=("positions",),
-                        )
-                    )
-
             interaction_setup_refs: list[CoreSetupRef] = []
             interaction_terms: list[InteractionTermDescriptor] = []
             for position, interaction in enumerate(interactions.components):

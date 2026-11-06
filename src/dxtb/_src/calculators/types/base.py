@@ -186,18 +186,7 @@ def _convert_system_dtype(
 
 def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     """Convert a call-local evaluation System and its exact core setups to ``dtype``."""
-    integral_setup = (
-        None
-        if system.integral_setup is None
-        else system.integral_setup.to(dtype=dtype)
-    )
-    h0_setup = (
-        None
-        if system.h0_setup is None
-        else system.h0_setup.to(dtype=dtype)
-    )
-    exact_core = system.exact_core
-    if exact_core is None:
+    if system.exact_core is None:
         return _convert_system_dtype(
             system,
             dtype,
@@ -205,31 +194,11 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             interactions=system.interactions.type(dtype),
         )
 
-    exact_core = exact_core.to(dtype=dtype)
-    backend_setup = (
-        integral_setup.pytorch
-        if integral_setup is not None and integral_setup.pytorch is not None
-        else (
-            integral_setup.libcint
-            if integral_setup is not None
-            else None
-        )
-    )
-    core_integral = None
-    if integral_setup is not None:
-        from dxtb._src.calculators.model import IntegralBackendNode
-
-        core_integral = IntegralBackendNode(
-            driver_type=integral_setup.driver_type,
-            intlevel=integral_setup.intlevel,
-            logical_device=system.numbers.device,
-            backend=backend_setup,
-        )
-    exact_core = exact_core.replace(
-        effective_dtype=dtype,
-        integral=core_integral,
-        h0_setup=(h0_setup if isinstance(h0_setup, H0SetupNode) else None),
-    )
+    base = _convert_system_dtype(system, dtype)
+    exact_core = base.exact_core
+    assert exact_core is not None
+    integral_setup = base.integral_setup
+    h0_setup = base.h0_setup
 
     c_setup_by_pos = {
         term.position: term.setup for term in exact_core.classical_terms

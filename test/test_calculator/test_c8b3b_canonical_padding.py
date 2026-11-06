@@ -700,11 +700,10 @@ def test_retained_dynamic_shapes_are_validated_before_bucket_creation() -> None:
     torch.testing.assert_close(updated_descriptor.setup.gexp, updated_value)
 
 
-def test_stale_bucket_revalidates_source_pairplan() -> None:
-    """Do not replace changed source pair data with captured bucket values."""
+def test_bucket_validates_source_pairplan() -> None:
+    """Reject malformed source PairPlan AO destinations during bucket construction."""
     _, h2 = _system((1, 1))
     _, water = _system((8, 1, 1))
-    bucket = bucket_canonical_exact_cores((h2, water))
     assert h2.integral is not None and h2.integral.backend is not None
     backend = h2.integral.backend
     first = backend.pair_plan.classes[0]
@@ -720,7 +719,7 @@ def test_stale_bucket_revalidates_source_pairplan() -> None:
         )
     )
     with pytest.raises(ValueError, match="Mapped PairPlan AO destinations"):
-        pad_canonical_exact_core(changed_core, bucket, 0)
+        bucket_canonical_exact_cores((changed_core, water))
 
 
 @pytest.mark.parametrize("numbers", [(8, 1, 1), (1, 1, 8)])
