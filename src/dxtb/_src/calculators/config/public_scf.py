@@ -120,10 +120,8 @@ class ConfigSCF:
             raise TypeError("response must be SCFResponseSettings.")
         if not isinstance(self.differentiation, SCFDifferentiation):
             try:
-                object.__setattr__(
-                    self,
-                    "differentiation",
-                    SCFDifferentiation(self.differentiation),
+                self.__dict__["differentiation"] = SCFDifferentiation(
+                    self.differentiation
                 )
             except ValueError as exc:
                 raise ValueError(
@@ -131,8 +129,8 @@ class ConfigSCF:
                 ) from exc
         if not isinstance(self.convergence, SCFConvergenceProfile):
             try:
-                object.__setattr__(
-                    self, "convergence", SCFConvergenceProfile(self.convergence)
+                self.__dict__["convergence"] = SCFConvergenceProfile(
+                    self.convergence
                 )
             except ValueError as exc:
                 raise ValueError(
@@ -148,9 +146,9 @@ class ConfigSCF:
             SCFConvergenceProfile.HIGHER_ORDER: (1.0e-12, 1.0e-12),
         }[self.convergence]
         if self.x_atol is None:
-            object.__setattr__(self, "x_atol", thresholds[0])
+            self.__dict__["x_atol"] = thresholds[0]
         if self.x_atol_max is None:
-            object.__setattr__(self, "x_atol_max", thresholds[1])
+            self.__dict__["x_atol_max"] = thresholds[1]
 
         initial = _first_representation(self.strategy)
         self.strategy.resolve_representations(initial)

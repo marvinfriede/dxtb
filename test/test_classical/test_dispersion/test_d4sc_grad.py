@@ -47,7 +47,7 @@ def test_single(name: str) -> None:
 
     sample = samples[name]
     numbers = sample["numbers"].to(DEVICE)
-    positions = sample["positions"].to(**dd)
+    positions = sample["positions"].to(**dd).clone()
 
     disp = new_d4sc(numbers, GFN2_XTB, **dd)
     assert disp is not None

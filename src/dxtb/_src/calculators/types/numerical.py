@@ -130,6 +130,7 @@ class NumericalCalculator(EnergyCalculator):
             v=4,
         )
 
+        positions = positions.clone()
         for i in range(self.numbers.shape[-1]):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):
@@ -542,6 +543,7 @@ class NumericalCalculator(EnergyCalculator):
         count = 1
         nsteps = 3 * self.numbers.shape[-1]
 
+        positions = positions.clone()
         for i in range(self.numbers.shape[-1]):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):
@@ -715,6 +717,7 @@ class NumericalCalculator(EnergyCalculator):
 
         count = 1
         nsteps = 3 * self.numbers.shape[-1]
+        positions = positions.clone()
         for i in range(self.numbers.shape[-1]):
             for j in range(3):
                 with OutputHandler.with_verbosity(0):

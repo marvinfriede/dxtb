@@ -1244,5 +1244,10 @@ def merge_nested_dicts(
     """
     for key in b:
         if key in a:
-            b[key].update(a[key])
+            b[key].update(
+                {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in a[key].items()
+                }
+            )
     return b

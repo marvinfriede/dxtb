@@ -40,6 +40,27 @@ STATUS: dict[str, dict] = (
     json.loads(_STATUS_FILE.read_text()) if _STATUS_FILE.exists() else {}
 )
 
+# Validated capability improvements over the frozen Track-0 matrix.json
+# snapshot: unified pure-PyTorch tad_dftd supports forward-mode AD (jvp) for
+# GFN1-xTB (D3) and GFN2-xTB (D4SC) dispersion parameter derivatives.
+_VALIDATED_DFT_D_FORWARD_CELLS: frozenset[str] = frozenset(
+    {
+        "dE_dparam-forward-gfn1-libcint-full-single",
+        "dE_dparam-forward-gfn1-libcint-implicit-single",
+        "dE_dparam-forward-gfn1-pytorch-implicit-single",
+        "dE_dparam-forward-gfn2-libcint-full-single",
+        "dE_dparam-forward-gfn2-libcint-implicit-single",
+        "dE_dparam-forward-gfn2-pytorch-implicit-single",
+    }
+)
+
+
+def _expected_status(cell: Cell) -> str | None:
+    if cell.id in _VALIDATED_DFT_D_FORWARD_CELLS:
+        return "pass"
+    recorded = STATUS.get(cell.id)
+    return None if recorded is None else recorded["status"]
+
 
 def _is_slow(cell: Cell) -> bool:
     if cell.order >= 3 or cell.input != "single":
@@ -64,10 +85,11 @@ def _param(cell: Cell):
             pytest.mark.skipif(not has_libcint, reason="libcint not available")
         )
 
+    expected = _expected_status(cell)
     recorded = STATUS.get(cell.id)
-    if recorded is None:
+    if expected is None or recorded is None:
         marks.append(pytest.mark.skip(reason="no recorded status"))
-    elif recorded["status"] != "pass":
+    elif expected != "pass":
         reason = f"{recorded['status']}: {recorded['message'] or ''}".strip()
         if recorded.get("max_abs") is not None:
             reason += f" (max_abs={recorded['max_abs']:.2e})"
@@ -77,7 +99,7 @@ def _param(cell: Cell):
 
 @pytest.mark.parametrize("cell", [_param(c) for c in CELLS])
 def test_cell(cell: Cell) -> None:
-    if STATUS.get(cell.id, {}).get("status", "pass") != "pass":
+    if (_expected_status(cell) or "pass") != "pass":
         # may crash or exhaust memory: run with limits in a fresh process
         res = run_isolated("matrix", cell.id)
         assert res["status"] == "pass", res["message"]

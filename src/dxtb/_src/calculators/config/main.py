@@ -178,6 +178,8 @@ class Config:
                 f"'{type(method)}' was given."
             )
 
+        if isinstance(file, list):
+            file = tuple(file)
         if isinstance(exclude, str):
             exclude = (exclude,)
 

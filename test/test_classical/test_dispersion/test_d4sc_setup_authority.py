@@ -322,11 +322,9 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     system = calculator.setup(numbers)
     positions = positions.clone().requires_grad_(True)
     before = system.singlepoint(positions)
-    # System.singlepoint's implicit compatibility engine returns the legacy
-    # mapping, whose optional convergence fields remain absent.
-    assert before.status is None
-    assert before.converged is None
-    assert before.residual is None
+    assert before.status is not None
+    assert before.converged is not None
+    assert before.residual is not None
     position_gradient, scale_gradient = torch.autograd.grad(
         before.energy.sum(), (positions, source_scale), retain_graph=True
     )

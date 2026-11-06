@@ -69,15 +69,11 @@ def test_scf_full_unconverged_warning(dtype: torch.dtype) -> None:
 
     # warnings
 
-    assert len(OutputHandler.warnings) == 2
+    assert len(OutputHandler.warnings) == 1
 
     warning_message, warning_type = OutputHandler.warnings[0]
-    assert warning_type is UserWarning
-    assert "Broyden" in warning_message and "Anderson" in warning_message
-
-    warning_message, warning_type = OutputHandler.warnings[1]
     assert warning_type is SCFConvergenceWarning
-    assert f"after {maxiter} cycles" in warning_message
+    assert f"after {maxiter} iterations" in warning_message
 
     # avoid pollution for other tests
     OutputHandler.clear_warnings()

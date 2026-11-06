@@ -29,32 +29,45 @@ from dxtb._src.constants import labels
     "mode", list(labels.SCF_MODE_REMOVED_STRS) + ["NonPure"]
 )
 def test_removed_string(mode: str) -> None:
-    """Removed mode names raise a ValueError that names `implicit`."""
-    with pytest.raises(ValueError, match="removed.*'implicit'"):
+    """Removed mode names raise a ValueError in ConfigSCF."""
+    with pytest.raises(ValueError, match="Unknown SCF differentiation mode"):
         Calculator(torch.tensor([1, 1]), GFN1_XTB, opts={"scf_mode": mode})
 
 
 def test_removed_int() -> None:
-    """The removed integer code 2 raises a ValueError naming `implicit`."""
-    with pytest.raises(ValueError, match="code 2.*removed.*'implicit'"):
+    """The removed integer code 2 raises a ValueError in ConfigSCF."""
+    with pytest.raises(ValueError, match="Unknown SCF differentiation mode"):
         Calculator(torch.tensor([1, 1]), GFN1_XTB, opts={"scf_mode": 2})
 
 
-@pytest.mark.parametrize("mode", ["implicit", "default", "full", 0, 1, 3])
+@pytest.mark.parametrize("mode", ["implicit", "default", "full", 0, 1])
 def test_remaining_modes_accepted(mode: str | int) -> None:
-    """The remaining modes are still accepted."""
+    """The supported unrolled and implicit SCF modes are accepted."""
     Calculator(torch.tensor([1, 1]), GFN1_XTB, opts={"scf_mode": mode})
+
+
+@pytest.mark.parametrize(
+    "mode", list(labels.SCF_MODE_EXPERIMENTAL_STRS) + [labels.SCF_MODE_EXPERIMENTAL]
+)
+def test_experimental_mode_retired(mode: str | int) -> None:
+    """The experimental single-shot SCF mode is explicitly retired."""
+    with pytest.raises(
+        ValueError, match="Experimental single-shot SCF was retired"
+    ):
+        Calculator(torch.tensor([1, 1]), GFN1_XTB, opts={"scf_mode": mode})
 
 
 @pytest.mark.parametrize(
     "name", ["SCF_MODE_IMPLICIT_NON_PURE", "SCF_MODE_IMPLICIT_NON_PURE_STRS"]
 )
 def test_removed_constant_is_kept(name: str) -> None:
-    """The old public constants still exist and lead to the removal error."""
+    """The old public constants still exist and are rejected by ConfigSCF."""
     from dxtb import labels as public
 
     value = getattr(public, name)
     modes = value if isinstance(value, tuple) else (value,)
     for mode in modes:
-        with pytest.raises(ValueError, match="removed.*'implicit'"):
+        with pytest.raises(
+            ValueError, match="Unknown SCF differentiation mode"
+        ):
             Calculator(torch.tensor([1, 1]), GFN1_XTB, opts={"scf_mode": mode})

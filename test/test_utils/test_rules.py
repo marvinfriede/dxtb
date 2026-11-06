@@ -237,8 +237,8 @@ def test_d4sc_uses_frozen_setup_and_call_local_model() -> None:
 
     singlepoint = (SRC / "_src" / "calculators" / "singlepoint.py").read_text()
     assert "system.d4sc_interaction" in singlepoint
-    assert "build_d4sc_data(" in singlepoint
-    assert "system.d4sc_setup, positions" in singlepoint
+    assert "system.d4sc_setup" in singlepoint
+    assert "build_d4sc_data(setup, positions)" in singlepoint
 
     interaction_list = (
         SRC / "_src" / "components" / "interactions" / "list.py"

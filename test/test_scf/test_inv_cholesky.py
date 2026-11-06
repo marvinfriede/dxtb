@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc import storch
 from tad_mctc.convert import symbol_to_number
 
 from dxtb import GFN1_XTB, Calculator
+from dxtb._src.scf.functional import data as scf_data
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
@@ -45,13 +45,13 @@ def test_factor_computed_once(
     )
 
     calls = []
-    original = storch.inv_cholesky_factor
+    original = scf_data._symmetric_inverse_sqrt
 
     def counting(*args, **kwargs):
         calls.append(1)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(storch, "inv_cholesky_factor", counting)
+    monkeypatch.setattr(scf_data, "_symmetric_inverse_sqrt", counting)
 
     calc = Calculator(numbers, GFN1_XTB, opts={"verbosity": 0}, **dd)
     calc.get_energy(positions.clone().requires_grad_(True))

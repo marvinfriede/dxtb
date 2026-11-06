@@ -66,6 +66,12 @@ class SelfConsistentFieldFull(BaseTSCF):
         maxiter = self.config.maxiter
         batched = self._data.ihelp.batch_mode
 
+        if batched != 0 and maxiter > 0:
+            raise NotImplementedError(
+                "Batched SCF execution on SelfConsistentFieldFull is retired; "
+                "use functional packed SCF or compose_legacy_systems."
+            )
+
         # Evaluate initial guess outside of SCF loop to make maxiter=0 possible.
         q_new = fcn(guess)
         if OutputHandler.verbosity >= 3:  # pragma: no cover
@@ -77,12 +83,6 @@ class SelfConsistentFieldFull(BaseTSCF):
             if return_charges is True:
                 return self.converged_to_charges(q_new)
             return q_new
-
-        if batched != 0:
-            raise NotImplementedError(
-                "Batched SCF execution on SelfConsistentFieldFull is retired; "
-                "use functional packed SCF or compose_legacy_systems."
-            )
 
         # Also mix the initial guess with the first SCF iteration
         if self.config.mix_guess is True:

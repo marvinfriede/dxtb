@@ -38,7 +38,7 @@ from dxtb._src.typing import DD, Tensor
 from ..conftest import DEVICE
 from ..molecules import mols
 
-MODES = ["full", "implicit", "experimental"]
+MODES = ["full", "implicit"]
 
 C2 = ([6, 6], [[0.0, 0.0, 0.0], [0.0, 0.0, 2.9]])
 

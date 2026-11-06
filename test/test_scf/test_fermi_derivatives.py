@@ -62,9 +62,8 @@ HESSIAN_ATOL = {"full": 5e-8, "implicit": 5e-8}
 TOO_FEW_FORCES = 1e-4
 TOO_FEW_HESSIAN = {"C2": 1e-2, "BeH2": 1e-5}
 
-# All SCF differentiation modes. The forces of the single-shot mode are exact
-# since the energy is variational.
-MODES = ["full", "implicit", "experimental"]
+# Supported SCF differentiation modes.
+MODES = ["full", "implicit"]
 
 
 def _setup(name: str, ktemp: float, mode: str, steps: int | None = None):
@@ -203,19 +202,10 @@ def test_hessian(name: str, ktemp: float, mode: str) -> None:
     assert _hessian_error(name, ktemp, mode, 1) > TOO_FEW_HESSIAN[name]
 
 
-# The second derivative of the single-shot mode is not exact for BeH2 for
-# reasons unrelated to the Fermi smearing: the error does not change with the
-# number of steps (three or five steps give the same). It is the linearly
-# convergent case (Bolte, Pauwels and Vaiter, Corollary 1). The measured error
-# must not grow by more than a factor of 10.
-NOT_EXACT = {
-    "experimental": 5.4e-4,
-}
-
-
-@pytest.mark.grad
-@pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("mode", NOT_EXACT)
-def test_hessian_not_exact(mode: str) -> None:
-    """The inexact Hessians of BeH2 stay at their recorded errors."""
-    assert _hessian_error("BeH2", 25000.0, mode, None) < 10 * NOT_EXACT[mode]
+def test_experimental_mode_retired() -> None:
+    """Experimental single-shot SCF mode is explicitly retired."""
+    pos, energy = _setup("BeH2", 25000.0, "experimental", None)
+    with pytest.raises(
+        ValueError, match="Experimental single-shot SCF was retired"
+    ):
+        energy(pos)
