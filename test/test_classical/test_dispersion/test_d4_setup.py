@@ -122,10 +122,8 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     assert first is not second
     direct_classical_cache = system.classicals.get_cache(numbers, system.ihelp)
     assert type(direct_classical_cache["DispersionD4"]) is DispersionD4Setup
-    assert system.d4_classical.cache is None
-    assert system.d4_classical._cachevars is None
-    system.d4_classical.cache_disable()
-    assert system.d4_classical.get_cache(numbers) is not second
+    assert not hasattr(system.d4_classical, "cache")
+    assert not hasattr(system.d4_classical, "_cachevars")
 
     assert isinstance(setup, Node)
     leaves, spec = _pytree.tree_flatten(setup)

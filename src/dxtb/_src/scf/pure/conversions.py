@@ -2,8 +2,7 @@
 Conversions
 ===========
 
-Conversion of charges, potential, hamiltonian, ... implemented as pure
-functions in order to avoid RAM leak due to circular references.
+Charge and density conversions used by the non-self-consistent GFN0 path.
 """
 
 from __future__ import annotations
@@ -12,9 +11,7 @@ import torch
 from tad_mctc.math import einsum
 from tad_mctc.units.energy import KELVIN2AU
 
-from dxtb._src.components.interactions import InteractionList
-from dxtb._src.components.interactions.container import Charges, Potential
-from dxtb._src.constants import defaults, labels
+from dxtb._src.components.interactions.container import Charges
 from dxtb._src.timing.decorator import timer_decorator
 from dxtb._src.typing import Callable, Tensor
 from dxtb._src.wavefunction import filling
@@ -25,179 +22,11 @@ from .data import _Data
 from .ovlp_diag import diagonalize
 
 __all__ = [
-    "converged_to_charges",
-    "charges_to_potential",
-    "potential_to_charges",
-    "potential_to_density",
     "density_to_charges",
-    "potential_to_hamiltonian",
     "hamiltonian_to_density",
 ]
 
-# NOTE:
-# Conversion methods are designed as semi-pure functions (i.e. contain
-# `data.attr = x`). Therefore, make sure to delete attributes manually at end
-# of scope (i.e. `del data.attr`).
-#
-# These functions are the only implementation of the SCF map. The stateful
-# methods of `BaseSCF` call them with the SCF's own data and diagonalizer, and
-# the implicit SCF uses them on a snapshot of the data (stateless map).
-
 Diagonalizer = Callable[[Tensor], "tuple[Tensor, Tensor]"]
-
-
-def converged_to_charges(
-    x: Tensor,
-    data: _Data,
-    config: ConfigSCF,
-    diagonalizer: Diagonalizer | None = None,
-) -> Charges:
-    """
-    Convert the converged property to charges.
-
-    Parameters
-    ----------
-    x : Tensor
-        Converged property (scp).
-    data: _Data
-        Object holding SCF data.
-    cfg: SCFConfig
-        Configuration for SCF settings.
-    diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
-        Diagonalizer of the Hamiltonian (returns eigenvalues and
-        eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` .
-
-    Returns
-    -------
-    Tensor
-        Orbital-resolved partial charges
-
-    Raises
-    ------
-    ValueError
-        Unknown `scp_mode` given.
-    """
-
-    if config._legacy_representation_code == labels.SCP_MODE_CHARGE:
-        return Charges.from_tensor(
-            x, data.charges, batch_mode=data.ihelp.batch_mode
-        )
-
-    if config._legacy_representation_code == labels.SCP_MODE_POTENTIAL:
-        pot = Potential.from_tensor(
-            x, data.potential, batch_mode=data.ihelp.batch_mode
-        )
-        return potential_to_charges(pot, data, config, diagonalizer)
-
-    if config._legacy_representation_code == labels.SCP_MODE_FOCK:
-        zero = torch.tensor(0.0, device=x.device, dtype=x.dtype)
-        x = torch.where(x != defaults.PADNZ, x, zero)
-
-        data.density = hamiltonian_to_density(x, data, config, diagonalizer)
-        return density_to_charges(data.density, data, config)
-
-    raise ValueError(
-        "Unknown SCF strategy representation "
-        f"'{config.initial_representation.value}'."
-    )
-
-
-@timer_decorator("Potential", "SCF")
-def charges_to_potential(
-    charges: Charges, interactions: InteractionList, data: _Data
-) -> Potential:
-    """
-    Compute the potential from the orbital charges.
-
-    Parameters
-    ----------
-    charges : Tensor
-        Orbital-resolved partial charges vector.
-    interactions : InteractionList
-        Collection of `Interation` objects.
-    data: _Data
-        Storage for tensors which become part of autograd graph within SCF cycles.
-
-    Returns
-    -------
-    Tensor
-        Potential vector for each orbital partial charge.
-    """
-
-    potential = interactions.get_potential(data.cache, charges, data.ihelp)
-    data.potential = {
-        "mono": potential.mono_shape,
-        "dipole": potential.dipole_shape,
-        "quad": potential.quad_shape,
-        "label": potential.label,
-    }
-
-    return potential
-
-
-def potential_to_charges(
-    potential: Potential,
-    data: _Data,
-    cfg: ConfigSCF,
-    diagonalizer: Diagonalizer | None = None,
-) -> Charges:
-    """
-    Compute the orbital charges from the potential.
-
-    Parameters
-    ----------
-    potential : Tensor
-        Potential vector for each orbital partial charge.
-    data: _Data
-        Data cache for intermediary storage during self-consistency.
-    cfg: SCFConfig
-        Configuration for SCF settings.
-    diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
-        Diagonalizer of the Hamiltonian (returns eigenvalues and
-        eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` .
-
-    Returns
-    -------
-    Tensor
-        Orbital-resolved partial charges vector.
-    """
-
-    data.density = potential_to_density(potential, data, cfg, diagonalizer)
-    return density_to_charges(data.density, data, cfg)
-
-
-def potential_to_density(
-    potential: Potential,
-    data: _Data,
-    cfg: ConfigSCF,
-    diagonalizer: Diagonalizer | None = None,
-) -> Tensor:
-    """
-    Obtain the density matrix from the potential.
-
-    Parameters
-    ----------
-    potential : Tensor
-        Potential vector for each orbital partial charge.
-    data: _Data
-        Data cache for intermediary storage during self-consistency.
-    cfg: SCFConfig
-        Configuration for SCF settings.
-    diagonalizer : Callable[[Tensor], tuple[Tensor, Tensor]] | None, optional
-        Diagonalizer of the Hamiltonian (returns eigenvalues and
-        eigenvectors). Defaults to the generalized eigensolver of
-        :mod:`.ovlp_diag` .
-
-    Returns
-    -------
-    Tensor
-        Density matrix.
-    """
-
-    data.hamiltonian = potential_to_hamiltonian(potential, data)
-    return hamiltonian_to_density(data.hamiltonian, data, cfg, diagonalizer)
 
 
 @timer_decorator("Charges", "SCF")
@@ -252,52 +81,6 @@ def density_to_charges(density: Tensor, data: _Data, cfg: ConfigSCF) -> Charges:
         )
 
     return charges
-
-
-@timer_decorator("Fock build", "SCF")
-def potential_to_hamiltonian(potential: Potential, data: _Data) -> Tensor:
-    """
-    Compute the Hamiltonian from the potential.
-
-    Parameters
-    ----------
-    potential : Tensor
-        Potential vector for each orbital partial charge.
-    data: _Data
-        Data cache for intermediary storage during self-consistency.
-
-    Returns
-    -------
-    Tensor
-        Hamiltonian matrix.
-    """
-    h1 = data.ints.hcore
-
-    if potential.mono is not None:
-        v = potential.mono.unsqueeze(-1) + potential.mono.unsqueeze(-2)
-        h1 = h1 - (0.5 * data.ints.overlap * v)
-
-    def add_vmp_to_h1(h1: Tensor, mpint: Tensor, vmp: Tensor) -> Tensor:
-        # spread potential to orbitals
-        v = data.ihelp.spread_atom_to_orbital(vmp, dim=-2, extra=True)
-
-        # Form dot product over the the multipolar components.
-        #  - shape multipole integral: (..., x, norb, norb)
-        #  - shape multipole potential: (..., norb, x)
-        tmp = 0.5 * einsum("...kij,...jk->...ij", mpint, v)
-        return h1 - (tmp + tmp.mT)
-
-    if potential.dipole is not None:
-        dpint = data.ints.dipole
-        if dpint is not None:
-            h1 = add_vmp_to_h1(h1, dpint, potential.dipole)
-
-    if potential.quad is not None:
-        qpint = data.ints.quadrupole
-        if qpint is not None:
-            h1 = add_vmp_to_h1(h1, qpint, potential.quad)
-
-    return h1
 
 
 def hamiltonian_to_density(

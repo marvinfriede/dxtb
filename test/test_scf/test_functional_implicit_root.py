@@ -1333,13 +1333,7 @@ def test_iterator_routes_implicit_broyden_through_functional_primal(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB, labels
-    from dxtb._src.scf import unrolling
     from dxtb._src.scf.iterator import solve
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("implicit SCF must not instantiate legacy FULL")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", forbidden)
 
     case = _case(
         "H2",

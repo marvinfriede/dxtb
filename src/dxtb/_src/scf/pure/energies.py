@@ -22,7 +22,6 @@ from .data import _Data
 
 __all__ = [
     "get_energy",
-    "get_energy_as_dict",
     "get_electronic_free_energy",
 ]
 
@@ -49,35 +48,6 @@ def get_energy(
     """
     energy = data.ihelp.reduce_orbital_to_atom(data.energy)
     return energy + interactions.get_energy(charges, data.cache, data.ihelp)
-
-
-def get_energy_as_dict(
-    charges: Charges, data: _Data, interactions: InteractionList
-) -> dict[str, Tensor]:
-    """
-    Get the energy of the system with the given charges.
-
-    Parameters
-    ----------
-    charges : Tensor
-        Orbital charges vector.
-    data: _Data
-        Storage for tensors which become part of autograd graph within SCF cycles.
-    interactions : InteractionList
-        Collection of `Interation` objects.
-
-    Returns
-    -------
-    Tensor
-        Energy of the system.
-    """
-    energy_h0 = {"h0": data.energy}
-
-    energy_interactions = interactions.get_energy_as_dict(
-        charges, data.cache, data.ihelp
-    )
-
-    return {**energy_h0, **energy_interactions}
 
 
 def get_electronic_free_energy(data: _Data, cfg: ConfigSCF) -> Tensor:

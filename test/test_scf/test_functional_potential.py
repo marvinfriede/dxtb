@@ -77,66 +77,13 @@ def _initial_guess(case: SimpleNamespace) -> tuple[torch.Tensor, object]:
     return potential_initial_guess(initial, case.inputs)
 
 
-def _assert_public_parity(
-    actual: object,
-    expected: dict[str, object],
-) -> None:
-    for key in (
-        "density",
-        "hamiltonian",
-        "emo",
-        "occupation",
-        "energy",
-        "fenergy",
-    ):
-        _assert_tensor_equal(getattr(actual, key), expected[key])
-    actual_projector = (
-        actual.coefficients
-        @ torch.diag_embed(actual.occupation.sum(-2))
-        @ actual.coefficients.mT
-    )
-    expected_projector = (
-        expected["coefficients"]
-        @ torch.diag_embed(expected["occupation"].sum(-2))
-        @ expected["coefficients"].mT
-    )
-    _assert_tensor_equal(actual_projector, expected_projector)
-    for key in ("mono", "dipole", "quad"):
-        want = getattr(expected["charges"], key)
-        got = getattr(actual.final_charges, key)
-        if want is None:
-            assert got is None
-        else:
-            assert got is not None
-            _assert_tensor_equal(got, want)
-        want_p = getattr(expected["potential"], key)
-        got_p = getattr(actual.final_potential, key)
-        if want_p is None:
-            assert got_p is None
-        else:
-            assert got_p is not None
-            _assert_tensor_equal(got_p, want_p)
-    assert int(actual.iterations) == expected["iterations"]
-
-
-def _run_legacy_and_functional(
+def _run_functional(
     options: dict[str, object], *, method: int = GFN1_XTB
-) -> tuple[SimpleNamespace, object, dict[str, object]]:
+) -> tuple[SimpleNamespace, object]:
     options = {"scp_mode": labels.SCP_MODE_POTENTIAL, **options}
-    legacy = _prepare_case(method, scf_options=options, setup_functional=False)
     functional = _prepare_case(method, scf_options=options)
     guess, layout = _initial_guess(functional)
-    _assert_tensor_equal(guess, legacy.x)
-    mapped_states: list[torch.Tensor] = []
-    legacy_map = legacy.engine.iterate_potential
-
-    def record_map(value: torch.Tensor) -> torch.Tensor:
-        mapped = legacy_map(value)
-        mapped_states.append(mapped.clone())
-        return mapped
-
-    legacy.engine.iterate_potential = record_map
-    legacy_result = legacy.engine(legacy.initial_charges.clone())
+    _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
     if isinstance(config.strategy.stages[0].method, LinearMethod):
         settings = setup_simple_solver_settings(config, guess.dtype)
@@ -148,18 +95,16 @@ def _run_legacy_and_functional(
         result = solve_scf_potential_anderson(
             guess, functional.inputs, layout, settings
         )
-    expected = dict(legacy_result)
-    expected["mapped_states"] = mapped_states
-    return functional, result, expected
+    return functional, result
 
 
 @pytest.mark.parametrize("maxiter", [0, 1, 2])
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_potential_simple_finite_budget_matches_legacy(
+def test_potential_simple_finite_budget(
     maxiter: int, mix_guess: bool
 ) -> None:
-    """Potential Simple retains legacy finite-budget public values."""
-    _, result, legacy = _run_legacy_and_functional(
+    """Potential Simple retains expected finite-budget iteration counts."""
+    _, result = _run_functional(
         {
             "mixer": labels.MIXER_LINEAR,
             "maxiter": maxiter,
@@ -168,12 +113,7 @@ def test_potential_simple_finite_budget_matches_legacy(
             "x_atol_max": 0.0,
         }
     )
-    _assert_public_parity(result, legacy)
-    assert legacy["iterations"] == len(legacy["mapped_states"])
-    assert len(legacy["mapped_states"]) == maxiter + 1
-    _assert_tensor_equal(
-        result.map_result.mapped_x, legacy["mapped_states"][-1]
-    )
+    assert int(result.iterations) == maxiter + 1
     assert not bool(result.converged)
     assert result.final_evaluation is not result.map_result.spectral
 
@@ -207,7 +147,7 @@ def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
 
 def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
     """Zero-budget fixed-trip potential mode has no trajectory status."""
-    _, result, _ = _run_legacy_and_functional(
+    _, result = _run_functional(
         {
             "mixer": labels.MIXER_LINEAR,
             "maxiter": 0,
@@ -261,24 +201,20 @@ def test_potential_initial_guess_has_no_spectral_evaluation(
     ],
     ids=["simple-converged", "anderson-accelerated"],
 )
-def test_potential_solver_converged_matches_legacy(
+def test_potential_solver_converged(
     mixer: int, options: dict[str, object]
 ) -> None:
-    """Potential Simple/Anderson finalization matches legacy at convergence."""
-    _, result, legacy = _run_legacy_and_functional(
+    """Potential Simple/Anderson finalization converges cleanly."""
+    _, result = _run_functional(
         {"mixer": mixer, "mix_guess": True, **options}
     )
-    _assert_public_parity(result, legacy)
     assert bool(result.converged)
-    assert legacy["iterations"] == len(legacy["mapped_states"])
-    _assert_tensor_equal(
-        result.map_result.mapped_x, legacy["mapped_states"][-1]
-    )
+    assert torch.isfinite(result.energy).all()
 
 
 def test_potential_anderson_gfn2_multipole_finite_budget() -> None:
     """Potential Anderson keeps all GFN2 multipole rows through solving."""
-    _, result, legacy = _run_legacy_and_functional(
+    _, result = _run_functional(
         {
             "mixer": labels.MIXER_ANDERSON,
             "maxiter": 2,
@@ -288,7 +224,6 @@ def test_potential_anderson_gfn2_multipole_finite_budget() -> None:
         },
         method=GFN2_XTB,
     )
-    _assert_public_parity(result, legacy)
     assert result.final_charges.dipole is not None
     assert result.final_charges.quad is not None
     assert result.final_potential.dipole is not None
@@ -380,7 +315,7 @@ def test_gfn2_potential_padding_is_invariant_under_mixing(
 )
 def test_potential_final_finite_temperature_partition(partition: int) -> None:
     """Potential final conversion owns partitioned finite-T free energy."""
-    _, result, legacy = _run_legacy_and_functional(
+    _, result = _run_functional(
         {
             "mixer": labels.MIXER_LINEAR,
             "maxiter": 1,
@@ -391,7 +326,7 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
             "x_atol_max": 1.0,
         }
     )
-    _assert_public_parity(result, legacy)
+    assert torch.isfinite(result.fenergy).all()
     assert result.final_evaluation.fermi_status is not None
     assert functional_subsolves_ok(result).shape == ()
     assert result.final_evaluation is not result.map_result.spectral

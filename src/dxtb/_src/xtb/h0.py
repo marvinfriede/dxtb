@@ -311,55 +311,6 @@ def core_h0_setup(setup: H0Setup) -> H0SetupNode:
     )
 
 
-def legacy_h0_setup(setup: H0SetupNode, ihelp: IndexHelper) -> H0Setup:
-    """Build an isolated legacy view for the Calculator-owned H0 adapter.
-
-    Setup tensors are cloned with their autograd edges intact so mutable
-    legacy Hamiltonians cannot write through into the System-owned Node.
-    """
-
-    def clone(value: Tensor | None) -> Tensor | None:
-        return None if value is None else value.clone()
-
-    eeq_model = None
-    if setup.eeq_model is not None:
-        eeq_model = EEQModel(
-            chi=setup.eeq_model.chi.clone(),
-            kcn=setup.eeq_model.kcn.clone(),
-            eta=setup.eeq_model.eta.clone(),
-            rad=setup.eeq_model.rad.clone(),
-        )
-
-    return H0Setup(
-        method=setup.method,
-        numbers=setup.numbers.clone(),
-        unique=setup.unique.clone(),
-        ihelp=ihelp,
-        hscale=setup.hscale.clone(),
-        kcn=setup.kcn.clone(),
-        kpair=setup.kpair.clone(),
-        refocc=setup.refocc.clone(),
-        selfenergy=setup.selfenergy.clone(),
-        shpoly=setup.shpoly.clone(),
-        valence=setup.valence.clone(),
-        en=setup.en.clone(),
-        enscale=setup.enscale.clone(),
-        rad=setup.rad.clone(),
-        cn=setup.cn,
-        kq=clone(setup.kq),
-        kqat=clone(setup.kqat),
-        h0rad=clone(setup.h0rad),
-        kdiff=clone(setup.kdiff),
-        enshell=clone(setup.enshell),
-        enscale4=clone(setup.enscale4),
-        eeq_model=eeq_model,
-        cn_radii=clone(setup.cn_radii),
-        cn_cutoff=clone(setup.cn_cutoff),
-        cn_max=clone(setup.cn_max),
-        cn_kcn=clone(setup.cn_kcn),
-    )
-
-
 def setup_h0_core(
     numbers: Tensor,
     par: Param | ParamModule,

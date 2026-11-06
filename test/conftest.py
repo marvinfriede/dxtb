@@ -200,7 +200,6 @@ LAYER_MARKERS: dict[str, tuple[str, ...]] = {
     "test_coulomb": ("physics_values",),
     "test_external": ("efield",),
     "test_hamiltonian": ("integrals", "physics_values"),
-    "test_indexhelper/test_culling.py": ("batch_mode",),
     "test_integrals": ("integrals",),
     "test_interaction": ("physics_values",),
     "test_interaction/test_cache.py": ("cache",),

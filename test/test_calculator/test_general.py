@@ -50,14 +50,10 @@ def run_asserts(c: Calculator, dtype: torch.dtype) -> None:
     assert c.dtype == dtype
     assert c.classicals.dtype == dtype
     assert c.interactions.dtype == dtype
-
-    assert c.integrals.dtype == dtype
-    assert c.integrals.hcore is not None
-    assert c.integrals.hcore.dtype == dtype
-    assert c.integrals.overlap is not None
-    assert c.integrals.overlap.dtype == dtype
-
-    assert c.integrals.dtype == dtype
+    assert not hasattr(c, "integrals")
+    assert c.system.integral_setup is not None
+    assert c.system.h0_setup is not None
+    assert c.system.h0_setup.hscale.dtype == dtype
 
 
 @pytest.mark.parametrize(
@@ -95,19 +91,6 @@ def test_change_type_after_energy(int_driver: str) -> None:
     calc_64.energy(pos)
 
     run_asserts(calc_64, dtype)
-
-    # extra asserts on initialized
-    driver = calc_64.integrals.mgr.driver
-    # Matrix construction uses System setup values; the compatibility driver
-    # retains no current geometry or basis state after singlepoint.
-    assert driver.is_setup() is False
-    with pytest.raises(RuntimeError, match="Basis has not been setup"):
-        _ = driver.basis
-
-    assert calc_64.integrals.hcore is not None
-    assert calc_64.integrals.hcore.dtype == dtype
-    assert calc_64.integrals.overlap is not None
-    assert calc_64.integrals.overlap.dtype == dtype
 
     ############################################################################
 

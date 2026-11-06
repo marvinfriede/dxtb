@@ -27,7 +27,7 @@ from __future__ import annotations
 import torch
 
 from dxtb import IndexHelper
-from dxtb._src.typing import Any, Slicers, Tensor, TensorOrTensors, final
+from dxtb._src.typing import Any, Tensor, TensorOrTensors, final
 
 from ...components.base import Component, ComponentCache
 from .container import Charges, Potential
@@ -42,12 +42,6 @@ class InteractionCache(ComponentCache):
     """
 
     __slots__: list[str] = []
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        """Remove converged data from the cache."""
-
-    def restore(self) -> None:
-        """Restore the cache from the last iteration."""
 
 
 class Interaction(Component):

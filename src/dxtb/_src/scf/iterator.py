@@ -44,8 +44,8 @@ from dxtb._src.typing import Any, Tensor
 from dxtb._src.wavefunction import filling
 from dxtb.config import ConfigSCF
 
-from .base import SCFResult
 from .guess import get_guess
+from .result import SCFResult
 
 if TYPE_CHECKING:
     from .functional.core import CoreIndexData
@@ -307,45 +307,28 @@ def _solve_impl(
             numbers,
             integrals,
         )
-        if route.kind == "functional":
-            if route.warning is not None:
-                OutputHandler.warn(route.warning)
-            result = run_prepared_functional_full(
-                numbers,
-                charges,
-                n0,
-                occupation,
-                nab,
-                interactions,
-                cache,
-                ihelp,
-                config,
-                integrals,
-                route,
-                core_index=core_index,
-                core_index_owner=core_index_owner,
-            )
-            return apply_functional_full_policy(result, config, route)
-
-        if route.kind != "batch_compat":
-            raise RuntimeError(f"Unknown FULL route kind {route.kind}.")
-        from .unrolling import SelfConsistentFieldFull as SCF
+        if route.warning is not None:
+            OutputHandler.warn(route.warning)
+        result = run_prepared_functional_full(
+            numbers,
+            charges,
+            n0,
+            occupation,
+            nab,
+            interactions,
+            cache,
+            ihelp,
+            config,
+            integrals,
+            route,
+            core_index=core_index,
+            core_index_owner=core_index_owner,
+        )
+        return apply_functional_full_policy(result, config, route)
     else:
         raise ValueError(
             f"Unknown differentiation policy '{config.differentiation}'."
         )
-
-    return SCF(
-        interactions,
-        occupation,
-        n0,
-        numbers=numbers,
-        ihelp=ihelp,
-        cache=cache,
-        integrals=integrals,
-        config=config,
-        nel=nab,
-    )(charges)
 
 
 def get_refocc(

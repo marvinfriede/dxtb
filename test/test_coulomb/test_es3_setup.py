@@ -83,15 +83,11 @@ def test_es3_setup_and_get_cache_are_call_local() -> None:
     first = interaction.get_cache(numbers=numbers, ihelp=system.ihelp)
     second = interaction.get_cache(numbers=numbers, ihelp=system.ihelp)
     assert first is not second
-    assert interaction.cache is None
-    assert interaction._cachevars is None
-    assert interaction._cachegrad is None
+    assert not hasattr(interaction, "cache")
+    assert not hasattr(interaction, "_cachevars")
+    assert not hasattr(interaction, "_cachegrad")
     torch.testing.assert_close(first.hd, system.es3_setup.hubbard_derivs)
-
-    interaction.cache_disable()
-    third = interaction.get_cache(numbers=numbers, ihelp=system.ihelp)
-    assert third is not second
-    torch.testing.assert_close(third.hd, second.hd)
+    torch.testing.assert_close(second.hd, first.hd)
 
 
 def test_es3_setup_parameter_gradient_rebuilds_system() -> None:

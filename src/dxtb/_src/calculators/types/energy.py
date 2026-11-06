@@ -76,7 +76,6 @@ class EnergyCalculator(BaseCalculator):
         "opts",
         "classicals",
         "interactions",
-        "_integrals",
         "ihelp",
     ]
 
@@ -192,33 +191,11 @@ class EnergyCalculator(BaseCalculator):
         finally:
             timer.cuda_sync = old_cuda_sync
 
-        if self._integrals is not None:
-            for key, matrix, integral in (
-                ("write_overlap", result.overlap, self._integrals.overlap),
-                ("write_dipole", result.dipole_integrals, self._integrals.dipole),
-                (
-                    "write_quadrupole",
-                    result.quadrupole_integrals,
-                    self._integrals.quadrupole,
-                ),
-                ("write_hcore", result.hcore, self._integrals.hcore),
-            ):
-                path = kwargs.get(key, False)
-                if path is False or matrix is None:
-                    continue
-                if path is None or path is True:
-                    if integral is None:
-                        raise RuntimeError(
-                            f"No legacy label is available for {key}."
-                        )
-                    path = integral.label.casefold() + ".pt"
-                torch.save(matrix, path)
-        else:
-            from dxtb._src.calculators.packed_result import (
-                _write_packed_integrals,
-            )
+        from dxtb._src.calculators.packed_result import (
+            _write_packed_integrals,
+        )
 
-            _write_packed_integrals(result, eval_system, kwargs)
+        _write_packed_integrals(result, eval_system, kwargs)
 
         self._ncalcs += 1
         return result

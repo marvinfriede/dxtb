@@ -14,13 +14,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Private ordered composition for independent single-System evaluations."""
+"""Ordered evaluation for independent single-System calculations."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Any, Mapping
 
 from torch import Tensor
 
@@ -31,62 +27,28 @@ from dxtb._src.calculators.singlepoint import _singlepoint_impl
 from dxtb._src.scf.functional.data import functional_scf_interactions_eligible
 
 __all__ = [
-    "LegacyCompositionResult",
-    "LegacySCFOptions",
-    "LegacySystemRoute",
+    "can_pad_system",
     "classify_legacy_system",
     "compose_legacy_systems",
 ]
 
 
-class LegacySystemRoute(Enum):
-    """Static execution ownership for one independently prepared System."""
+def can_pad_system(system: System) -> bool:
+    """Return True if ``system`` can use canonical padded vmap evaluation.
 
-    MAPPED = auto()
-    LEGACY_COMPOSED = auto()
-    SEPARATE_ROUTE = auto()
-    REJECTED = auto()
-
-
-@dataclass(frozen=True)
-class LegacySCFOptions:
-    """Legacy engine constructor extras, now rejected explicitly."""
-
-    args: tuple[Any, ...] = ()
-    kwargs: Mapping[str, Any] | None = None
-
-    def as_kwargs(self) -> dict[str, Any]:
-        """Return a call-local mapping while retaining value identity."""
-        return {} if self.kwargs is None else dict(self.kwargs)
-
-
-@dataclass(frozen=True)
-class LegacyCompositionResult:
-    """Ordered physical Results from retained independent System calls."""
-
-    source_ids: tuple[int, ...]
-    results: tuple[Result, ...]
-
-
-def classify_legacy_system(
-    system: System,
-    *,
-    legacy_options: LegacySCFOptions | None = None,
-) -> LegacySystemRoute:
-    """Classify a retained call using setup and extension metadata only."""
+    Returns False when ``system`` must be evaluated independently via
+    :func:`compose_legacy_systems`, and raises ``ValueError`` or
+    ``NotImplementedError`` on invalid configurations.
+    """
     if system.batch_mode != 0 or system.numbers.ndim != 1:
-        return LegacySystemRoute.REJECTED
+        raise ValueError(
+            "Independent System evaluation requires single-System "
+            "(batch_mode=0) instances."
+        )
 
     config = system.config
     if {"all", "scf"} & set(config.exclude):
-        if legacy_options is not None and (
-            legacy_options.args or legacy_options.kwargs
-        ):
-            raise NotImplementedError(
-                "Legacy SCF engine positional/keyword overrides are no longer "
-                "supported by functional SCF."
-            )
-        return LegacySystemRoute.SEPARATE_ROUTE
+        return False
 
     core = system.exact_core
     if (
@@ -95,18 +57,10 @@ def classify_legacy_system(
         or system.h0_setup is None
         or config.ints.level < labels.INTLEVEL_HCORE
     ):
-        return LegacySystemRoute.LEGACY_COMPOSED
-
-    if legacy_options is not None and (
-        legacy_options.args or legacy_options.kwargs
-    ):
-        raise NotImplementedError(
-            "Legacy SCF engine positional/keyword overrides are no longer "
-            "supported by functional SCF."
-        )
+        return False
 
     if config.scf.requires_iterations is False:
-        return LegacySystemRoute.SEPARATE_ROUTE
+        return False
 
     eligible, _ = functional_scf_interactions_eligible(system.interactions)
     if not eligible:
@@ -149,9 +103,11 @@ def classify_legacy_system(
         )
 
     if core.integral.driver_type == labels.INTDRIVER_LIBCINT:
-        return LegacySystemRoute.LEGACY_COMPOSED
+        return False
     if core.integral.driver_type != labels.INTDRIVER_PYTORCH:
-        return LegacySystemRoute.REJECTED
+        raise ValueError(
+            f"Unsupported integral driver {core.integral.driver_type}."
+        )
 
     if (
         len(core.classical_terms) != len(system.classicals.components)
@@ -159,9 +115,12 @@ def classify_legacy_system(
         or scf_config.differentiation.value == "implicit"
         or eager_only
     ):
-        return LegacySystemRoute.LEGACY_COMPOSED
+        return False
 
-    return LegacySystemRoute.MAPPED
+    return True
+
+
+classify_legacy_system = can_pad_system
 
 
 def compose_legacy_systems(
@@ -173,12 +132,13 @@ def compose_legacy_systems(
     source_ids: tuple[int, ...] | None = None,
     field: Tensor | tuple[Tensor | None, ...] | None = None,
     field_grad: Tensor | tuple[Tensor | None, ...] | None = None,
-    legacy_options: LegacySCFOptions | None = None,
-) -> LegacyCompositionResult:
-    """Evaluate Systems independently and preserve input order."""
+) -> tuple[Result, ...]:
+    """Evaluate Systems independently and return Results in input order."""
     count = len(systems)
     if count == 0:
-        raise ValueError("Legacy composition requires at least one System.")
+        raise ValueError(
+            "Independent System evaluation requires at least one System."
+        )
     if len(positions) != count:
         raise ValueError("Systems and positions must have the same length.")
     if charges is None:
@@ -196,28 +156,15 @@ def compose_legacy_systems(
     if any(not isinstance(source_id, int) for source_id in source_ids):
         raise TypeError("Source identifiers must be integers.")
 
-    routes = tuple(
-        classify_legacy_system(system, legacy_options=legacy_options)
-        for system in systems
-    )
-    rejected = [
+    padded_eligible = [
         source_ids[i]
-        for i, route in enumerate(routes)
-        if route is LegacySystemRoute.REJECTED
+        for i, system in enumerate(systems)
+        if can_pad_system(system)
     ]
-    if rejected:
-        raise ValueError(
-            f"Systems {rejected} are not supported by retained composition."
-        )
-    mapped = [
-        source_ids[i]
-        for i, route in enumerate(routes)
-        if route is LegacySystemRoute.MAPPED
-    ]
-    if mapped:
+    if padded_eligible:
         raise ValueError(
             "Mapped-eligible Systems must use the private mapped evaluator; "
-            f"legacy composition was not selected for source IDs {mapped}."
+            f"independent evaluation was not selected for source IDs {padded_eligible}."
         )
 
     if isinstance(field, tuple) and len(field) != count:
@@ -226,9 +173,10 @@ def compose_legacy_systems(
         raise ValueError(
             "Systems and per-lane field gradients must have equal length."
         )
-    results_list: list[Result] = []
-    for idx, (source_id, system, position, charge, spin, route) in enumerate(
-        zip(source_ids, systems, positions, charges, spins, routes)
+
+    results: list[Result] = []
+    for idx, (source_id, system, position, charge, spin) in enumerate(
+        zip(source_ids, systems, positions, charges, spins)
     ):
         lane_field = field[idx] if isinstance(field, tuple) else field
         lane_field_grad = (
@@ -246,18 +194,10 @@ def compose_legacy_systems(
                 refresh_extension_caches=True,
             )
         except Exception as error:
-            # Keep the original exception object and category while making
-            # the failing source entry identifiable to compatibility callers.
             try:
                 setattr(error, "source_id", source_id)
             except (AttributeError, TypeError):
                 pass
-            add_note = getattr(error, "add_note", None)
-            if add_note is not None:
-                add_note(
-                    f"Legacy composition failed for source ID {source_id}."
-                )
             raise
-        results_list.append(result)
-    results = tuple(results_list)
-    return LegacyCompositionResult(source_ids=source_ids, results=results)
+        results.append(result)
+    return tuple(results)

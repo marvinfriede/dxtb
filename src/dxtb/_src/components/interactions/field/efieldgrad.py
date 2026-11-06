@@ -28,7 +28,7 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
-from dxtb._src.typing import Any, Slicers, Tensor, override
+from dxtb._src.typing import Any, Tensor, override
 from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
@@ -66,9 +66,6 @@ class ElectricFieldGradCache(InteractionCache):
     Restart data for the electric field gradient interaction.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     vat: Tensor
     """
     Atom-resolved monopolar potential from the instantaneous electric field
@@ -87,7 +84,7 @@ class ElectricFieldGradCache(InteractionCache):
     gradient (shape: ``(..., nat, 6)``).
     """
 
-    __slots__ = ["__store", "vat", "vdp", "vqp"]
+    __slots__ = ["vat", "vdp", "vqp"]
 
     def __init__(
         self,
@@ -104,38 +101,6 @@ class ElectricFieldGradCache(InteractionCache):
         self.vat = vat
         self.vdp = vdp
         self.vqp = vqp
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        vat: Tensor
-        vdp: Tensor
-        vqp: Tensor
-
-        def __init__(self, vat: Tensor, vdp: Tensor, vqp: Tensor) -> None:
-            self.vat = vat
-            self.vdp = vdp
-            self.vqp = vqp
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(self.vat, self.vdp, self.vqp)
-
-        slicer = slicers["atom"]
-        self.vat = self.vat[tuple([~conv, *slicer])]
-        self.vdp = self.vdp[tuple([~conv, *slicer, ...])]
-        self.vqp = self.vqp[tuple([~conv, *slicer, ...])]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.vat = self.__store.vat
-        self.vdp = self.__store.vdp
-        self.vqp = self.__store.vqp
 
 
 class ElectricFieldGrad(Interaction):

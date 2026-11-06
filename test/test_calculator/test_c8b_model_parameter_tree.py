@@ -1163,8 +1163,7 @@ def test_functional_setup_preserves_packed_mode_compatibility() -> None:
     )
     assert functional.batch_mode == 1
     assert functional.exact_core is None
-    assert functional._packed_classical_cache is not None
-    assert functional.classical_cache is functional._packed_classical_cache
+    assert not hasattr(functional, "_packed_classical_cache")
     assert functional.repulsion_setup is not None
     expected_delta = torch.zeros_like(functional.repulsion_setup.arep)
     expected_delta[..., 0, 1] = 0.4

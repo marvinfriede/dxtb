@@ -186,27 +186,15 @@ def resolve_full_scf_route(
             f"{names}."
         )
 
-    stage = config.strategy.stages[0]
     representation = config._legacy_representation_code
     strategy_label = " -> ".join(
         type(item.method).__name__.removesuffix("Method").lower()
         for item in config.strategy.stages
     )
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
-        if len(config.strategy.stages) != 1 or type(stage.method).__name__ in (
-            "CDIISMethod",
-            "SOSCFMethod",
-        ):
-            raise NotImplementedError(
-                "The packed FULL compatibility route supports only a single "
-                "Linear, Anderson, or Broyden stage."
-            )
-        return FullSCFRoute(
-            "batch_compat",
-            representation,
-            strategy_label,
-            config.strategy,
-            reason="public packed batch FULL compatibility route",
+        raise NotImplementedError(
+            "The functional SCF solver supports single-System SCF only; "
+            "use evaluate_packed_systems or Calculator batch evaluation for batches."
         )
     return FullSCFRoute(
         "functional", representation, strategy_label, config.strategy
@@ -574,24 +562,6 @@ def run_functional_full_eager(
         integrals,
         legacy_engine_overrides,
     )
-    if route.kind == "batch_compat":
-        from dxtb._src.scf.unrolling import SelfConsistentFieldFull
-
-        legacy = SelfConsistentFieldFull(
-            interactions,
-            occupation,
-            n0,
-            *args,
-            numbers=numbers,
-            ihelp=ihelp,
-            cache=cache,
-            integrals=integrals,
-            config=config,
-            nel=nel,
-            **kwargs,
-        )(guess)
-        return EagerFullResult(route, None, legacy)
-
     if route.warning is not None:
         OutputHandler.warn(route.warning)
     result = run_prepared_functional_full(

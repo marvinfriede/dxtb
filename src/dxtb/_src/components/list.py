@@ -31,7 +31,6 @@ from dxtb._src.typing import (
     Any,
     Generic,
     Self,
-    Slicers,
     Tensor,
     TensorLike,
     TypeVar,
@@ -57,23 +56,6 @@ class ComponentListCache(ComponentListCacheABC):
     """
     List of restart data for individual components.
     """
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        """
-        Cull all interaction caches.
-
-        Parameters
-        ----------
-        conv : Tensor
-            Mask of converged systems.
-        """
-        pass
-
-    def restore(self) -> None:
-        """
-        Restore all interaction caches.
-        """
-        pass
 
     def __str__(self) -> str:  # pragma: no cover
         return f"{self.__class__.__name__}({list(self.keys())})"

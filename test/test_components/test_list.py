@@ -31,13 +31,9 @@ from ..conftest import DEVICE
 
 def test_cache() -> None:
     cache = ComponentListCache()
-
-    dummy = torch.tensor([1, 2, 3], device=DEVICE)
     assert len(list(cache.keys())) == 0
-
-    # dummy functions
-    cache.cull(dummy, dummy)  # type: ignore
-    cache.restore()
+    assert not hasattr(cache, "cull")
+    assert not hasattr(cache, "restore")
 
 
 def test_list() -> None:

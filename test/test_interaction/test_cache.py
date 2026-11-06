@@ -61,29 +61,18 @@ def test_fail_overwritten_cache(
     comp_factory, par = comp_factory_par
     comp = comp_factory(numbers, par, device=DEVICE)
     assert comp is not None
+    assert not hasattr(comp, "cache")
+    assert not hasattr(comp, "_cachevars")
+    assert not hasattr(comp, "_cachegrad")
 
-    # create persistent cache for the unmigrated family
-    comp.cache_enable()
     first = comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
-
-    # manually overwrite cache
-    comp.cache = InteractionCache()
-
-    if comp.label in ("ES2", "ES3", "DispersionD4SC"):
-        fresh = comp.get_cache(
-            numbers=numbers, positions=positions, ihelp=ihelp
-        )
-        assert fresh is not first
-        assert isinstance(comp.cache, InteractionCache)
-        if comp.label == "ES2":
-            torch.testing.assert_close(fresh.mat, first.mat)
-        elif comp.label == "ES3":
-            torch.testing.assert_close(fresh.hd, first.hd)
-        else:
-            assert comp.cache is not fresh
-    else:
-        with pytest.raises(TypeError):
-            comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    fresh = comp.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
+    assert fresh is not first
+    assert isinstance(fresh, InteractionCache)
+    if comp.label == "ES2":
+        torch.testing.assert_close(fresh.mat, first.mat)
+    elif comp.label == "ES3":
+        torch.testing.assert_close(fresh.hd, first.hd)
 
 
 def test_field_cache_is_fresh_and_nonpersistent_ef() -> None:
@@ -92,15 +81,13 @@ def test_field_cache_is_fresh_and_nonpersistent_ef() -> None:
     ef = new_efield(torch.tensor([0.0, 0.0, 0.0]), device=DEVICE)
     assert ef is not None
 
-    # Field data is call-local even when the inherited cache flags are enabled.
-    ef.cache_enable()
     first = ef.get_cache(positions=positions)
     second = ef.get_cache(positions=positions)
 
     assert first is not second
-    assert ef.cache is None
-    assert ef._cachevars is None
-    assert ef._cachegrad is None
+    assert not hasattr(ef, "cache")
+    assert not hasattr(ef, "_cachevars")
+    assert not hasattr(ef, "_cachegrad")
 
 
 def test_field_cache_is_fresh_and_nonpersistent_efg() -> None:
@@ -109,15 +96,13 @@ def test_field_cache_is_fresh_and_nonpersistent_efg() -> None:
     efg = new_efield_grad(torch.zeros((3, 3)), device=DEVICE)
     assert efg is not None
 
-    # Field-gradient data is call-local even with inherited cache flags on.
-    efg.cache_enable()
     first = efg.get_cache(positions=positions)
     second = efg.get_cache(positions=positions)
 
     assert first is not second
-    assert efg.cache is None
-    assert efg._cachevars is None
-    assert efg._cachegrad is None
+    assert not hasattr(efg, "cache")
+    assert not hasattr(efg, "_cachevars")
+    assert not hasattr(efg, "_cachegrad")
 
 
 def test_fail_overwritten_cache_solvation() -> None:
@@ -137,14 +122,9 @@ def test_fail_overwritten_cache_solvation() -> None:
 
     solv = new_solvation(numbers, par, device=DEVICE)
     assert solv is not None
+    assert not hasattr(solv, "cache")
 
-    # direct compatibility calls now build fresh nonpersistent data
-    solv.cache_enable()
     first = solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
-
-    # manually overwrite cache
-    solv.cache = InteractionCache()
-
     fresh = solv.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
     assert fresh is not first
-    assert isinstance(solv.cache, InteractionCache)
+    assert isinstance(fresh, InteractionCache)

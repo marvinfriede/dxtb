@@ -50,7 +50,6 @@ from dxtb import IndexHelper
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.ncoord import erf_count
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Slicers
 from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
@@ -458,9 +457,6 @@ class DispersionD4SCCache(InteractionCache, TensorLike):
     class constructor.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     cn: Tensor
     """Coordination number of every atom."""
 
@@ -473,7 +469,7 @@ class DispersionD4SCCache(InteractionCache, TensorLike):
     model: d4.model.D4Model
     """Fresh model instance owned by this one call-data object."""
 
-    __slots__ = ["__store", "cn", "dispmat", "model"]
+    __slots__ = ["cn", "dispmat", "model"]
 
     def __init__(
         self,
@@ -493,49 +489,6 @@ class DispersionD4SCCache(InteractionCache, TensorLike):
 
         # The model is constructed for this call-data object only.
         self.model = model
-
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        cn: Tensor
-        """Coordination number of every atom."""
-
-        dispmat: Tensor
-        """
-        Dispersion matrix. This quantity is almost equal to the dispersion
-        energy, except for multiplication with C6 and C8.
-        """
-
-        def __init__(
-            self, cn: Tensor, dispmat: Tensor, model: d4.model.D4Model
-        ) -> None:
-            self.cn = cn
-            self.dispmat = dispmat
-
-            # Store the call-local numbers view before culling.
-            self.numbers = model.numbers
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(self.cn, self.dispmat, self.model)
-
-        slicer = slicers["atom"]
-        self.cn = self.cn[tuple([~conv, *slicer])]
-        self.dispmat = self.dispmat[tuple([~conv, *slicer, *slicer])]
-
-        self.model.numbers = self.model.numbers[tuple([~conv, *slicer])]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.cn = self.__store.cn
-        self.dispmat = self.__store.dispmat
-        self.model.numbers = self.__store.numbers
 
 
 class DispersionD4SC(Interaction):
@@ -686,7 +639,6 @@ class DispersionD4SC(Interaction):
                 f"Cache in {self.label} is not of type 'DispersionD4SCCache'."
             )
 
-        # `numbers` in model are updated in cache (for culling)
         weights = cache.model.weight_references(cache.cn, qat)
 
         return d4sc_atom_energy(cache.dispmat, weights)

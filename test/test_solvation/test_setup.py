@@ -134,9 +134,9 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     second = component.get_cache(numbers=numbers, positions=positions)
     assert isinstance(first, GeneralizedBornCache)
     assert first is not second
-    assert component.cache is None
-    assert component._cachevars is None
-    assert component._cachegrad is None
+    assert not hasattr(component, "cache")
+    assert not hasattr(component, "_cachevars")
+    assert not hasattr(component, "_cachegrad")
 
     core = core_generalized_born_setup(setup)
     assert isinstance(core, Node)

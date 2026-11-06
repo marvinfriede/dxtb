@@ -68,7 +68,7 @@ def _model(par: ParamModule, *, exclude: tuple[str, ...] = ()) -> Model:
 
 
 def test_old_culling_alias_is_removed() -> None:
-    """Culling local D4SC data never edits the component model."""
+    """Local D4SC data never aliases the component model or exposes cull."""
     numbers1, positions1 = _sample("LiH")
     numbers2, positions2 = _sample("SiH4")
     numbers = pack((numbers1, numbers2))
@@ -86,9 +86,10 @@ def test_old_culling_alias_is_removed() -> None:
     )
     local_positions = positions.clone().requires_grad_(True)
     data = build_d4sc_data(setup, local_positions)
-    local_numbers = data.model.numbers.clone()
 
     assert data.model is not interaction.model
+    assert not hasattr(data, "cull")
+    assert not hasattr(data, "restore")
     assert torch.equal(setup.numbers, persistent_numbers)
     q = torch.zeros(numbers.shape, **DD)
     energy = interaction.get_monopole_atom_energy(data, q).sum()
@@ -96,10 +97,6 @@ def test_old_culling_alias_is_removed() -> None:
     (position_grad,) = torch.autograd.grad(energy, local_positions)
     assert torch.isfinite(potential).all()
     assert torch.isfinite(position_grad).all()
-    data.cull(
-        torch.tensor([True, False], device=DEVICE),
-        {"atom": [slice(0, numbers.shape[-1])]},
-    )
     assert torch.equal(interaction.model.numbers, persistent_numbers)
     assert torch.equal(setup.numbers, persistent_numbers)
     assert torch.equal(setup.model_wf, persistent_wf)
@@ -114,9 +111,6 @@ def test_old_culling_alias_is_removed() -> None:
         else:
             assert value == snapshot
 
-    data.restore()
-    assert torch.equal(data.model.numbers, local_numbers)
-    assert torch.equal(interaction.model.numbers, persistent_numbers)
     assert build_d4sc_data(setup, positions) is not data
 
 
@@ -132,9 +126,9 @@ def test_direct_get_cache_is_fresh_and_nonpersistent() -> None:
     assert first is not second
     assert first.model is not interaction.model
     assert second.model is not interaction.model
-    assert interaction.cache is None
-    assert interaction._cachevars is None
-    assert interaction._cachegrad is None
+    assert not hasattr(interaction, "cache")
+    assert not hasattr(interaction, "_cachevars")
+    assert not hasattr(interaction, "_cachegrad")
 
 
 def test_setup_is_frozen_and_contains_only_static_data() -> None:

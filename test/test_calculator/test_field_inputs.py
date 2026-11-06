@@ -633,7 +633,9 @@ def test_field_get_cache_is_fresh_and_update_reset_are_rejected() -> None:
     first = ef.get_cache(numbers=numbers, positions=positions)
     second = ef.get_cache(numbers=numbers, positions=positions)
     assert first is not second
-    assert ef.cache is None and ef._cachevars is None and ef._cachegrad is None
+    assert not hasattr(ef, "cache")
+    assert not hasattr(ef, "_cachevars")
+    assert not hasattr(ef, "_cachegrad")
     with pytest.raises(RuntimeError, match="per-evaluation"):
         ef.update(field=field)
     with pytest.raises(RuntimeError, match="per-evaluation"):
@@ -648,11 +650,9 @@ def test_field_get_cache_is_fresh_and_update_reset_are_rejected() -> None:
     first_grad = grad.get_cache(numbers=numbers, positions=positions)
     second_grad = grad.get_cache(numbers=numbers, positions=positions)
     assert first_grad is not second_grad
-    assert (
-        grad.cache is None
-        and grad._cachevars is None
-        and grad._cachegrad is None
-    )
+    assert not hasattr(grad, "cache")
+    assert not hasattr(grad, "_cachevars")
+    assert not hasattr(grad, "_cachegrad")
 
 
 def test_duplicate_legacy_field_defaults_are_rejected() -> None:

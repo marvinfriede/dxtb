@@ -26,7 +26,6 @@ from dxtb import IndexHelper
 from dxtb._src.typing import (
     Any,
     Literal,
-    Slicers,
     Tensor,
     TensorOrTensors,
     overload,
@@ -66,25 +65,6 @@ class InteractionListCache(ComponentListCache):
     Restart data for individual interactions, extended by subclasses as
     needed.
     """
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        """
-        Cull all interaction caches.
-
-        Parameters
-        ----------
-        conv : Tensor
-            Mask of converged systems.
-        """
-        for cache in self.values():
-            cache.cull(conv, slicers)
-
-    def restore(self) -> None:
-        """
-        Restore all interaction caches.
-        """
-        for cache in self.values():
-            cache.restore()
 
 
 class InteractionList(ComponentList[Interaction]):

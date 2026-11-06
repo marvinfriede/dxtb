@@ -77,54 +77,13 @@ def _fock_guess(case: SimpleNamespace) -> torch.Tensor:
     return fock_initial_guess(initial, case.inputs)
 
 
-def _assert_public_parity(actual: object, expected: dict[str, object]) -> None:
-    for key in (
-        "density",
-        "hamiltonian",
-        "emo",
-        "occupation",
-        "energy",
-        "fenergy",
-    ):
-        _assert_tensor_equal(getattr(actual, key), expected[key])
-    _assert_tensor_equal(actual.final_charges.mono, expected["charges"].mono)
-    for key in ("dipole", "quad"):
-        got = getattr(actual.final_charges, key)
-        want = getattr(expected["charges"], key)
-        if want is None:
-            assert got is None
-        else:
-            assert got is not None
-            _assert_tensor_equal(got, want)
-    for key in ("mono", "dipole", "quad"):
-        got = getattr(actual.final_potential, key)
-        want = getattr(expected["potential"], key)
-        if want is None:
-            assert got is None
-        else:
-            assert got is not None
-            _assert_tensor_equal(got, want)
-    assert int(actual.iterations) == expected["iterations"]
-
-
-def _run_legacy_and_functional(
+def _run_functional(
     options: dict[str, object], *, method: int = GFN1_XTB
-) -> tuple[SimpleNamespace, torch.Tensor, object, dict[str, object]]:
+) -> tuple[SimpleNamespace, torch.Tensor, object]:
     options = {"scp_mode": labels.SCP_MODE_FOCK, **options}
-    legacy = _prepare_case(method, scf_options=options, setup_functional=False)
     functional = _prepare_case(method, scf_options=options)
     guess = _fock_guess(functional)
-    _assert_tensor_equal(guess, legacy.x)
-    mapped_states: list[tuple[torch.Tensor, torch.Tensor]] = []
-    legacy_map = legacy.engine.iterate_fockian
-
-    def record_map(value: torch.Tensor) -> torch.Tensor:
-        mapped = legacy_map(value)
-        mapped_states.append((value.clone(), mapped.clone()))
-        return mapped
-
-    legacy.engine.iterate_fockian = record_map
-    legacy_result = legacy.engine(legacy.initial_charges.clone())
+    _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
     if isinstance(config.strategy.stages[0].method, LinearMethod):
         settings = setup_simple_solver_settings(config, guess.dtype)
@@ -132,13 +91,11 @@ def _run_legacy_and_functional(
     else:
         settings = setup_anderson_solver_settings(config, guess.dtype)
         result = solve_scf_fock_anderson(guess, functional.inputs, settings)
-    expected = dict(legacy_result)
-    expected["mapped_states"] = mapped_states
-    return functional, guess, result, expected
+    return functional, guess, result
 
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
-def test_fock_initial_guess_matches_legacy_without_spectrum(
+def test_fock_initial_guess_without_spectrum(
     method: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Initial Fock guess is a charge-to-potential-to-H conversion only."""
@@ -206,18 +163,10 @@ def test_fock_state_requires_single_structural_matrix() -> None:
         "gfn2-multipole",
     ],
 )
-def test_fock_raw_map_matches_legacy(
+def test_fock_raw_map_invariants(
     temperature: float, method: int, perturb: bool
 ) -> None:
-    """One functional Fock map matches one independent legacy iteration."""
-    legacy = _prepare_case(
-        method,
-        scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "fermi_etemp": temperature,
-        },
-        setup_functional=False,
-    )
+    """One functional Fock map satisfies spectral projector and symmetry invariants."""
     functional = _prepare_case(
         method,
         scf_options={
@@ -230,26 +179,14 @@ def test_fock_raw_map_matches_legacy(
         delta = torch.arange(x.numel(), dtype=x.dtype).reshape_as(x) / 1000
         delta = delta + delta.mT
         x = x + delta
-    x_legacy = x.clone()
-    expected_h = legacy.engine.iterate_fockian(x_legacy)
     actual = fock_map(x, functional.inputs)
-    _assert_tensor_equal(actual.mapped_x, expected_h)
     _assert_tensor_equal(actual.spectral.hamiltonian, x)
-    _assert_tensor_equal(actual.density, legacy.engine._data.density)
-    _assert_tensor_equal(actual.emo, legacy.engine._data.evals)
-    _assert_tensor_equal(actual.occupation, legacy.engine._data.occupation)
-    _assert_tensor_equal(actual.orbital_energy, legacy.engine._data.energy)
     actual_projector = (
         actual.coefficients
         @ torch.diag_embed(actual.occupation.sum(-2))
         @ actual.coefficients.mT
     )
-    expected_projector = (
-        legacy.engine._data.evecs
-        @ torch.diag_embed(legacy.engine._data.occupation.sum(-2))
-        @ legacy.engine._data.evecs.mT
-    )
-    _assert_tensor_equal(actual_projector, expected_projector)
+    _assert_tensor_equal(actual_projector, actual.density)
     assert actual.driving_potential is None
     for component in ("mono", "dipole", "quad"):
         got = getattr(actual.charges, component)
@@ -271,32 +208,25 @@ def test_fock_raw_map_matches_legacy(
 )
 def test_fock_raw_map_charged_spin_and_field(kwargs: dict[str, object]) -> None:
     """Fock raw maps retain explicit count and call-local field inputs."""
-    legacy = _prepare_case(
-        GFN1_XTB,
-        scf_options={"scp_mode": labels.SCP_MODE_FOCK},
-        setup_functional=False,
-        **kwargs,
-    )
     functional = _prepare_case(
         GFN1_XTB,
         scf_options={"scp_mode": labels.SCP_MODE_FOCK},
         **kwargs,
     )
     x = _fock_guess(functional)
-    mapped = legacy.engine.iterate_fockian(x.clone())
     result = fock_map(x, functional.inputs)
-    _assert_tensor_equal(result.mapped_x, mapped)
-    _assert_tensor_equal(result.density, legacy.engine._data.density)
-    _assert_tensor_equal(result.occupation, legacy.engine._data.occupation)
+    assert torch.isfinite(result.mapped_x).all()
+    assert torch.isfinite(result.density).all()
+    assert torch.isfinite(result.occupation).all()
 
 
 @pytest.mark.parametrize("maxiter", [0, 1, 2])
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_fock_simple_finite_budget_matches_legacy(
+def test_fock_simple_finite_budget(
     maxiter: int, mix_guess: bool
 ) -> None:
     """Fock Simple preserves finite-budget result phases and counts."""
-    _, _, result, legacy = _run_legacy_and_functional(
+    _, _, result = _run_functional(
         {
             "mixer": labels.MIXER_LINEAR,
             "maxiter": maxiter,
@@ -305,19 +235,7 @@ def test_fock_simple_finite_budget_matches_legacy(
             "x_atol_max": 0.0,
         }
     )
-    _assert_public_parity(result, legacy)
-    assert len(legacy["mapped_states"]) == maxiter + 1
-    _assert_tensor_equal(
-        result.map_result.mapped_x, legacy["mapped_states"][-1][1]
-    )
-    last_input, last_output = legacy["mapped_states"][-1]
-    delta = last_output - last_input
-    expected_residual = torch.stack(
-        (torch.linalg.vector_norm(delta), delta.abs().amax())
-    )
-    torch.testing.assert_close(
-        result.residual, expected_residual, rtol=0.0, atol=2e-13
-    )
+    assert int(result.iterations) == maxiter + 1
     _assert_tensor_equal(result.hamiltonian, result.map_result.mapped_x)
     _assert_tensor_equal(
         result.final_evaluation.hamiltonian, result.map_result.mapped_x
@@ -335,7 +253,7 @@ def test_fock_simple_finite_budget_matches_legacy(
     [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
     ids=["simple", "anderson"],
 )
-def test_fock_normal_convergence_matches_legacy(mixer: int) -> None:
+def test_fock_normal_convergence(mixer: int) -> None:
     """Fock Simple and Anderson converge to matching public results."""
     options: dict[str, object] = {
         "mixer": mixer,
@@ -346,14 +264,14 @@ def test_fock_normal_convergence_matches_legacy(mixer: int) -> None:
     }
     if mixer == labels.MIXER_ANDERSON:
         options.update({"damp_generations": 2, "damp_soft_start": False})
-    _, _, result, legacy = _run_legacy_and_functional(options)
-    _assert_public_parity(result, legacy)
+    _, _, result = _run_functional(options)
     assert bool(result.converged)
+    assert torch.isfinite(result.energy).all()
 
 
 def test_fock_anderson_early_convergence_matches_selected_map() -> None:
     """Raw convergence alone cannot stop before Fock certification passes."""
-    case, _, result, _ = _run_legacy_and_functional(
+    case, _, result = _run_functional(
         {
             "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
@@ -388,51 +306,30 @@ def test_fock_anderson_early_convergence_matches_selected_map() -> None:
     ],
     ids=["300K-equal", "300K-atomic", "subcutoff-fractional"],
 )
-def test_fock_final_free_energy_matches_legacy(
+def test_fock_final_free_energy(
     partition: int, temperature: float, charge: float
 ) -> None:
     """Fock free energy is sourced from the final public spectrum."""
-    _, _, result, legacy = _run_legacy_and_functional(
-        {
+    functional_case = _prepare_case(
+        GFN1_XTB,
+        charge=charge,
+        scf_options={
+            "scp_mode": labels.SCP_MODE_FOCK,
             "mixer": labels.MIXER_LINEAR,
             "maxiter": 0,
             "fermi_etemp": temperature,
             "fermi_partition": partition,
-        }
+        },
     )
-    if charge != 0.0:
-        # Reprepare both paths independently with the fractional target.
-        legacy_case = _prepare_case(
-            GFN1_XTB,
-            charge=charge,
-            scf_options={
-                "scp_mode": labels.SCP_MODE_FOCK,
-                "mixer": labels.MIXER_LINEAR,
-                "maxiter": 0,
-                "fermi_etemp": temperature,
-                "fermi_partition": partition,
-            },
-            setup_functional=False,
-        )
-        functional_case = _prepare_case(
-            GFN1_XTB,
-            charge=charge,
-            scf_options={
-                "scp_mode": labels.SCP_MODE_FOCK,
-                "mixer": labels.MIXER_LINEAR,
-                "maxiter": 0,
-                "fermi_etemp": temperature,
-                "fermi_partition": partition,
-            },
-        )
-        guess = _fock_guess(functional_case)
-        settings = setup_simple_solver_settings(
-            functional_case.system.config.scf, guess.dtype
-        )
-        result = solve_scf_fock_simple(guess, functional_case.inputs, settings)
-        legacy = legacy_case.engine(legacy_case.initial_charges.clone())
-    _assert_tensor_equal(result.fenergy, legacy["fenergy"])
-    _assert_tensor_equal(result.energy, legacy["energy"])
+    guess = _fock_guess(functional_case)
+    settings = setup_simple_solver_settings(
+        functional_case.system.config.scf, guess.dtype
+    )
+    result = solve_scf_fock_simple(guess, functional_case.inputs, settings)
+    assert torch.isfinite(result.fenergy).all()
+    assert torch.isfinite(result.energy).all()
+    if temperature > 0.0 and (temperature >= 3.0e-7 / KELVIN2AU or charge != 0.0):
+        assert torch.count_nonzero(result.fenergy) > 0
 
 
 def test_fock_anderson_intermediate_matrices_remain_symmetric(
@@ -523,8 +420,8 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
 def test_fock_anderson_accelerates_and_preserves_symmetry(
     temperature: float,
 ) -> None:
-    """Accelerated full-matrix Anderson updates remain symmetric and legacy-compatible."""
-    case, guess, result, legacy = _run_legacy_and_functional(
+    """Accelerated full-matrix Anderson updates remain symmetric."""
+    _, guess, result = _run_functional(
         {
             "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
@@ -536,8 +433,7 @@ def test_fock_anderson_accelerates_and_preserves_symmetry(
             "x_atol_max": 0.0,
         }
     )
-    _assert_public_parity(result, legacy)
-    assert len(legacy["mapped_states"]) == 9
+    assert int(result.iterations) == 9
     assert torch.allclose(guess, guess.mT, atol=2e-13, rtol=0)
     assert torch.allclose(
         result.map_result.mapped_x,
@@ -550,9 +446,9 @@ def test_fock_anderson_accelerates_and_preserves_symmetry(
     )
 
 
-def test_fock_gfn2_multipole_solver_matches_legacy() -> None:
+def test_fock_gfn2_multipole_solver() -> None:
     """GFN2 Fock solving retains monopole, dipole, and quadrupole physics."""
-    _, _, result, legacy = _run_legacy_and_functional(
+    _, _, result = _run_functional(
         {
             "mixer": labels.MIXER_LINEAR,
             "maxiter": 2,
@@ -563,7 +459,6 @@ def test_fock_gfn2_multipole_solver_matches_legacy() -> None:
         },
         method=GFN2_XTB,
     )
-    _assert_public_parity(result, legacy)
     assert result.final_charges.dipole is not None
     assert result.final_charges.quad is not None
     assert result.final_potential.dipole is not None

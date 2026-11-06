@@ -63,8 +63,8 @@ def test_cache_input_fail() -> None:
         es.get_cache(numbers=numbers, positions=positions, ihelp=None)
 
 
-def test_fail_store() -> None:
-    """Test failure upon non-existent restoring cache."""
+def test_cache_no_cull_restore() -> None:
+    """ES2Cache has no legacy batch culling/restore methods."""
     numbers = torch.tensor([3, 1])
     positions = torch.randn((2, 3))
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
@@ -73,8 +73,8 @@ def test_fail_store() -> None:
     assert es is not None
 
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
-    with pytest.raises(RuntimeError):
-        cache.restore()
+    assert not hasattr(cache, "cull")
+    assert not hasattr(cache, "restore")
 
 
 def test_grad_fail() -> None:

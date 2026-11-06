@@ -106,11 +106,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     second, refocc2, norm2 = build_integral_matrices(
         setup, h0_setup, moved, charge=0.0
     )
-    # Mutating compatibility builders in a different order must not affect
-    # the next pure evaluation from this System setup.
-    calc.integrals.build_quadrupole(moved)
-    calc.integrals.build_overlap(positions)
-    calc.integrals.build_dipole(positions)
+    assert not hasattr(calc, "integrals")
     repeated, refocc3, norm3 = build_integral_matrices(
         setup, h0_setup, positions.clone(), charge=0.0
     )
@@ -316,72 +312,6 @@ def test_pytorch_integral_node_conversion_preserves_pair_plan() -> None:
 
 
 @pytest.mark.parametrize(
-    "driver",
-    [
-        pytest.param(labels.INTDRIVER_PYTORCH, id="pytorch"),
-        pytest.param(
-            labels.INTDRIVER_LIBCINT,
-            id="libcint",
-            marks=pytest.mark.skipif(
-                not has_libcint, reason="libcint not available"
-            ),
-        ),
-    ],
-)
-def test_pure_integral_matrices_match_legacy_adapter(driver: int) -> None:
-    """The legacy adapter agrees with the pure evaluation outputs.
-
-    This is an adapter-consistency check. Independent physics values are
-    covered by the existing end-to-end reference baseline.
-    """
-    sample = samples["H2O"]
-    numbers = sample["numbers"]
-    positions = sample["positions"].to(dtype=torch.float64)
-    calc = Calculator(
-        numbers,
-        GFN2_XTB,
-        dtype=positions.dtype,
-        opts={
-            "verbosity": 0,
-            "int_driver": driver,
-            "int_level": labels.INTLEVEL_QUADRUPOLE,
-        },
-    )
-    setup = calc.system.integral_setup
-    h0_setup = calc.system.h0_setup
-    assert setup is not None and h0_setup is not None
-
-    legacy_overlap = calc.integrals.build_overlap(positions)
-    assert calc.integrals.overlap is not None
-    legacy_norm = calc.integrals.overlap.norm.clone()
-    calc.integrals.build_dipole(positions)
-    legacy_quadrupole = calc.integrals.build_quadrupole(positions)
-    # At quadrupole level the legacy adapter intentionally returns the
-    # origin-centered dipole from build_dipole and shifts its stored value
-    # only while building the quadrupole.
-    assert calc.integrals.dipole is not None
-    legacy_dipole = calc.integrals.dipole.matrix
-    legacy_hcore = calc.integrals.build_hcore(
-        positions, with_overlap=True, charge=0.0
-    )
-    matrices, refocc, overlap_norm = build_integral_matrices(
-        setup, h0_setup, positions, charge=0.0
-    )
-
-    torch.testing.assert_close(matrices.overlap, legacy_overlap)
-    torch.testing.assert_close(overlap_norm, legacy_norm)
-    assert matrices.dipole is not None and calc.integrals.dipole is not None
-    torch.testing.assert_close(matrices.dipole, legacy_dipole)
-    assert (
-        matrices.quadrupole is not None
-        and calc.integrals.quadrupole is not None
-    )
-    torch.testing.assert_close(matrices.quadrupole, legacy_quadrupole)
-    torch.testing.assert_close(matrices.hcore, legacy_hcore)
-    torch.testing.assert_close(refocc, calc.integrals.hcore.refocc)
-
-
-@pytest.mark.parametrize(
     "method,level",
     [
         ("gfn0", labels.INTLEVEL_HCORE),
@@ -408,7 +338,7 @@ def test_pure_integral_matrices_match_legacy_adapter(driver: int) -> None:
 def test_pure_integral_levels_match_legacy(
     method: str, level: int, driver: int
 ) -> None:
-    """Each requested level returns exactly the matrix set it promises."""
+    """Each requested level returns the expected matrix set."""
     methods = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
     numbers = samples["H2"]["numbers"]
     positions = samples["H2"]["positions"].to(dtype=torch.float64)
@@ -426,21 +356,27 @@ def test_pure_integral_levels_match_legacy(
     setup = calc.system.integral_setup
     h0_setup = calc.system.h0_setup
     assert setup is not None and h0_setup is not None
+    assert not hasattr(calc, "integrals")
 
-    legacy_overlap = calc.integrals.build_overlap(positions)
-    legacy_dipole = None
-    legacy_quadrupole = None
-    if level >= labels.INTLEVEL_DIPOLE:
-        legacy_dipole = calc.integrals.build_dipole(positions)
-    if level >= labels.INTLEVEL_QUADRUPOLE:
-        legacy_quadrupole = calc.integrals.build_quadrupole(positions)
-        assert calc.integrals.dipole is not None
-        legacy_dipole = calc.integrals.dipole.matrix
-    legacy_hcore = calc.integrals.build_hcore(
-        positions, with_overlap=True, charge=0.0
+    ref_calc = Calculator(
+        numbers,
+        methods[method],
+        dtype=positions.dtype,
+        opts={
+            "verbosity": 0,
+            "int_driver": driver,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+        },
+        auto_int_level=False,
     )
-    assert calc.integrals.hcore is not None
-    legacy_refocc = calc.integrals.hcore.refocc
+    assert ref_calc.system.integral_setup is not None
+    assert ref_calc.system.h0_setup is not None
+    ref_matrices, ref_refocc, ref_norm = build_integral_matrices(
+        ref_calc.system.integral_setup,
+        ref_calc.system.h0_setup,
+        positions,
+        charge=0.0,
+    )
 
     matrices, refocc, norm = build_integral_matrices(
         setup, h0_setup, positions, charge=0.0
@@ -449,18 +385,19 @@ def test_pure_integral_levels_match_legacy(
     assert matrices.hcore.device == positions.device
     assert refocc.device == positions.device
     assert norm.device == positions.device
-    torch.testing.assert_close(matrices.overlap, legacy_overlap)
-    torch.testing.assert_close(matrices.hcore, legacy_hcore)
-    torch.testing.assert_close(refocc, legacy_refocc)
+    torch.testing.assert_close(matrices.overlap, ref_matrices.overlap)
+    torch.testing.assert_close(matrices.hcore, ref_matrices.hcore)
+    torch.testing.assert_close(refocc, ref_refocc)
+    torch.testing.assert_close(norm, ref_norm)
     if level >= labels.INTLEVEL_DIPOLE:
-        assert matrices.dipole is not None and legacy_dipole is not None
-        torch.testing.assert_close(matrices.dipole, legacy_dipole)
+        assert matrices.dipole is not None and ref_matrices.dipole is not None
+        torch.testing.assert_close(matrices.dipole, ref_matrices.dipole)
     else:
         assert matrices.dipole is None
     if level >= labels.INTLEVEL_QUADRUPOLE:
         assert matrices.quadrupole is not None
-        assert legacy_quadrupole is not None
-        torch.testing.assert_close(matrices.quadrupole, legacy_quadrupole)
+        assert ref_matrices.quadrupole is not None
+        torch.testing.assert_close(matrices.quadrupole, ref_matrices.quadrupole)
     else:
         assert matrices.quadrupole is None
 
@@ -504,15 +441,7 @@ def test_singlepoint_does_not_retain_matrices_on_legacy_adapter(
         assert result.overlap is not None and result.hcore is not None
         assert result.dipole_integrals is not None
         assert result.quadrupole_integrals is not None
-        assert calc.integrals.overlap is not None
-        assert calc.integrals.dipole is not None
-        assert calc.integrals.quadrupole is not None
-        assert calc.integrals.overlap._matrix is None
-        assert calc.integrals.overlap._norm is None
-        assert calc.integrals.dipole._matrix is None
-        assert calc.integrals.quadrupole._matrix is None
-        assert calc.integrals.hcore is not None
-        assert calc.integrals.hcore._matrix is None
+        assert not hasattr(calc, "integrals")
         if call_index == 0:
             first = result
         elif call_index == 1:
@@ -697,7 +626,7 @@ def test_batched_calculator_keeps_legacy_integral_adapter(
         batch_mode=batch_mode,
     )
     assert calc.system.integral_setup is None
-    assert calc.integrals is not None
+    assert not hasattr(calc, "integrals")
 
     charges = torch.tensor([0.0, 1.0], dtype=positions.dtype)
     result = calc.singlepoint(positions, chrg=charges)

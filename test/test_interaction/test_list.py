@@ -78,11 +78,11 @@ def test_reset() -> None:
         numbers=numbers, positions=positions, ihelp=ihelp
     )
 
-    assert d4sc is not None and d4sc.cache is None
-    assert es2 is not None and es2.cache is None
-    assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is None
-    assert efg is not None and efg.cache is None
+    assert d4sc is not None and not hasattr(d4sc, "cache")
+    assert es2 is not None and not hasattr(es2, "cache")
+    assert es3 is not None and not hasattr(es3, "cache")
+    assert ef is not None and not hasattr(ef, "cache")
+    assert efg is not None and not hasattr(efg, "cache")
 
     assert len(call_data["DispersionD4SC"]) == 3
     assert not hasattr(ilist, "reset_d4sc")
@@ -123,11 +123,11 @@ def test_reset_all() -> None:
         numbers=numbers, positions=positions, ihelp=ihelp
     )
 
-    assert d4sc is not None and d4sc.cache is None
-    assert es2 is not None and es2.cache is None
-    assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is None
-    assert efg is not None and efg.cache is None
+    assert d4sc is not None and not hasattr(d4sc, "cache")
+    assert es2 is not None and not hasattr(es2, "cache")
+    assert es3 is not None and not hasattr(es3, "cache")
+    assert ef is not None and not hasattr(ef, "cache")
+    assert efg is not None and not hasattr(efg, "cache")
 
     assert len(call_data["DispersionD4SC"]) == 3
     assert len(call_data["ES2"]) == 2
@@ -136,11 +136,11 @@ def test_reset_all() -> None:
     assert len(call_data["ElectricFieldGrad"]) == 3
 
     ilist.reset_all()
-    assert d4sc.cache is None
-    assert es2.cache is None
-    assert es3.cache is None
-    assert ef.cache is None
-    assert efg.cache is None
+    assert not hasattr(d4sc, "cache")
+    assert not hasattr(es2, "cache")
+    assert not hasattr(es3, "cache")
+    assert not hasattr(ef, "cache")
+    assert not hasattr(efg, "cache")
 
 
 def test_update() -> None:
@@ -159,11 +159,11 @@ def test_update() -> None:
 
     _ = ilist.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
-    assert d4sc is not None and d4sc.cache is None
-    assert es2 is not None and es2.cache is None
-    assert es3 is not None and es3.cache is None
-    assert ef is not None and ef.cache is None
-    assert efg is not None and efg.cache is None
+    assert d4sc is not None and not hasattr(d4sc, "cache")
+    assert es2 is not None and not hasattr(es2, "cache")
+    assert es3 is not None and not hasattr(es3, "cache")
+    assert ef is not None and not hasattr(ef, "cache")
+    assert efg is not None and not hasattr(efg, "cache")
 
     with pytest.raises(RuntimeError, match="setup-derived"):
         ilist.update("DispersionD4SC", r4r2=torch.ones(3, device=DEVICE))

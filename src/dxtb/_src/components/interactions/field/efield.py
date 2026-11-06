@@ -27,7 +27,7 @@ import torch
 from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
-from dxtb._src.typing import Any, Slicers, Tensor, TensorOrTensors, override
+from dxtb._src.typing import Any, Tensor, TensorOrTensors, override
 from dxtb._src.typing.exceptions import DeviceError, DtypeError
 from dxtb._src.utils.tensors import normalize_device
 
@@ -59,9 +59,6 @@ class ElectricFieldCache(InteractionCache):
     Restart data for the electric field interaction.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     vat: Tensor
     """
     Atom-resolved monopolar potental from instantaneous electric field.
@@ -72,7 +69,7 @@ class ElectricFieldCache(InteractionCache):
     Atom-resolved dipolar potential from instantaneous electric field.
     """
 
-    __slots__ = ["__store", "vat", "vdp"]
+    __slots__ = ["vat", "vdp"]
 
     def __init__(
         self,
@@ -87,41 +84,6 @@ class ElectricFieldCache(InteractionCache):
         )
         self.vat = vat
         self.vdp = vdp
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        vat: Tensor
-        """
-        Atom-resolved monopolar potental from instantaneous electric field.
-        """
-
-        vdp: Tensor
-        """
-        Atom-resolved dipolar potential from instantaneous electric field.
-        """
-
-        def __init__(self, vat: Tensor, vdp: Tensor) -> None:
-            self.vat = vat
-            self.vdp = vdp
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(self.vat, self.vdp)
-
-        slicer = slicers["atom"]
-        self.vat = self.vat[tuple([~conv, *slicer])]
-        self.vdp = self.vdp[tuple([~conv, *slicer, ...])]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.vat = self.__store.vat
-        self.vdp = self.__store.vdp
 
 
 class ElectricField(Interaction):

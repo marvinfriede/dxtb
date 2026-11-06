@@ -76,7 +76,6 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     assert pytest.approx(ref.cpu(), abs=tol) == agrad.cpu()
 
     # analytical (automatic)
-    es.cache_invalidate()
     cache = es.get_cache(numbers=numbers, positions=pos, ihelp=ihelp)  # recalc
     egrad = es.get_atom_gradient(charges, pos, cache)
     egrad.detach_()
@@ -128,7 +127,6 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         **dd,
     )
     assert es is not None
-    es.cache_disable()
 
     # analytical (old)
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)

@@ -125,8 +125,8 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     assert type(first) is HalogenSetup
     assert type(second) is HalogenSetup
     assert first is not second
-    assert system.halogen_classical.cache is None
-    assert system.halogen_classical._cachevars is None
+    assert not hasattr(system.halogen_classical, "cache")
+    assert not hasattr(system.halogen_classical, "_cachevars")
 
     assert isinstance(setup, Node)
     leaves, spec = _pytree.tree_flatten(setup)

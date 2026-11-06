@@ -287,13 +287,11 @@ def setup_scf_inputs(
         active_core = getattr(
             core_index_owner, "_active_exact_core", lambda: None
         )()
-        compatibility = getattr(core_index_owner, "_exact_compatibility", None)
         if (
             active_core is None
             or active_core.index is not core_index
             or active_core.numbers is not numbers
-            or compatibility is None
-            or compatibility.index_helper_identity != id(ihelp)
+            or getattr(core_index_owner, "ihelp", None) is not ihelp
         ):
             raise ValueError(
                 "Captured SCF index does not belong to this System setup."

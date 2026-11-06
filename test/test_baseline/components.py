@@ -342,7 +342,6 @@ def _interaction_positions(name: str) -> Target:
         q = 0.1 * torch.randn(ihelp.nao, generator=gen, **DD)
 
         def f(x: Tensor) -> Tensor:
-            comp.cache_invalidate()
             cache = comp.get_cache(numbers=numbers, positions=x, ihelp=ihelp)
             return comp.get_energy(cache, Charges(mono=q), ihelp)
 

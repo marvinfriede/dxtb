@@ -84,7 +84,6 @@ from dxtb._src.scf.functional.solver import (
 )
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
-from dxtb._src.scf.unrolling import SelfConsistentFieldFull
 from dxtb._src.scf.utils import get_density
 from dxtb._src.wavefunction import filling
 
@@ -175,17 +174,6 @@ def _prepare_case(
             dtype=positions.dtype,
         )
     interaction_data = _interaction_data(system, positions, interactions)
-    engine = SelfConsistentFieldFull(
-        interactions,
-        occupation,
-        n0,
-        numbers=numbers,
-        ihelp=system.ihelp,
-        cache=interaction_data,
-        integrals=integrals,
-        config=system.config.scf,
-        nel=nel,
-    )
     guess = get_guess(
         numbers,
         positions,
@@ -193,7 +181,6 @@ def _prepare_case(
         system.ihelp,
         system.config.scf.guess,
     )
-    x = engine._guess(guess)
     inputs = None
     if setup_functional:
         inputs = setup_scf_inputs(
@@ -207,6 +194,31 @@ def _prepare_case(
             system.ihelp,
             system.config.scf,
         )
+    if inputs is not None:
+        initial_charges = SCFCharges(
+            mono=guess,
+            dipole=(
+                None
+                if inputs.charge_layout.dipole_shape is None
+                else guess.new_zeros(inputs.charge_layout.dipole_shape)
+            ),
+            quad=(
+                None
+                if inputs.charge_layout.quadrupole_shape is None
+                else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
+            ),
+        )
+        rep = system.config.scf._legacy_representation_code
+        if rep == labels.SCP_MODE_CHARGE:
+            x = pack_charges(initial_charges, inputs.charge_layout)
+        elif rep == labels.SCP_MODE_POTENTIAL:
+            x, _ = potential_initial_guess(initial_charges, inputs)
+        elif rep == labels.SCP_MODE_FOCK:
+            x = fock_initial_guess(initial_charges, inputs)
+        else:
+            raise ValueError(f"Unknown representation {rep!r}.")
+    else:
+        x = guess.unsqueeze(0)
     return SimpleNamespace(
         method=method,
         sample_name=sample_name,
@@ -225,7 +237,6 @@ def _prepare_case(
         nel=nel,
         interactions=interactions,
         interaction_data=interaction_data,
-        engine=engine,
         x=x,
         initial_charges=guess,
         inputs=inputs,
@@ -442,49 +453,25 @@ def test_charge_layout_round_trip(
                 assert torch.all(packed[row, length:] == defaults.PADNZ)
 
 
-def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
-    """Compare raw maps built from independent mutable preparations."""
-    kwargs: dict[str, object] = {
-        "method": case.method,
-        "sample_name": case.sample_name,
-        "charge": case.charge,
-        "spin": case.spin,
-        "field": case.field,
-        "positions": case.positions.clone(),
-        "par": case.par,
-        "int_level": case.int_level,
-        "scf_options": case.scf_options,
-    }
-    legacy_case = _prepare_case(**kwargs)
-    functional_case = _prepare_case(**kwargs)
-    legacy_x = x.clone()
-    functional_x = x.clone()
-    engine = legacy_case.engine
-    expected_x = engine._fcn(legacy_x)
-    actual = scf_map(functional_x, functional_case.inputs)
-
-    _assert_tensor_equal(actual.mapped_x, expected_x)
-    _assert_tensor_equal(actual.hamiltonian, engine._data.hamiltonian)
-    _assert_tensor_equal(actual.density, engine._data.density)
-    _assert_tensor_equal(actual.emo, engine._data.evals)
-    _assert_tensor_equal(actual.occupation, engine._data.occupation)
-    _assert_tensor_equal(actual.orbital_energy, engine._data.energy)
+def _check_raw_map_invariants(case: SimpleNamespace, x: torch.Tensor) -> None:
+    """Verify spectral projector, Mulliken charges, and potential consistency."""
+    actual = scf_map(x.clone(), case.inputs)
     if actual.fermi_status is not None:
         assert torch.isfinite(actual.fermi_status.residual).all()
         assert bool(actual.fermi_status.converged.all())
         assert bool(actual.fermi_status.electron_count_ok.all())
 
-    expected_charges = engine.converged_to_charges(expected_x)
-    _assert_tensor_equal(actual.charges.mono, expected_charges.mono)
-    if expected_charges.dipole is not None:
+    unpacked = unpack_charges(actual.mapped_x, case.inputs.charge_layout)
+    _assert_tensor_equal(actual.charges.mono, unpacked.mono)
+    if unpacked.dipole is not None:
         assert actual.charges.dipole is not None
-        _assert_tensor_equal(actual.charges.dipole, expected_charges.dipole)
-    if expected_charges.quad is not None:
+        _assert_tensor_equal(actual.charges.dipole, unpacked.dipole)
+    if unpacked.quad is not None:
         assert actual.charges.quad is not None
-        _assert_tensor_equal(actual.charges.quad, expected_charges.quad)
+        _assert_tensor_equal(actual.charges.quad, unpacked.quad)
 
-    input_charges = engine.converged_to_charges(x)
-    expected_potential = engine.charges_to_potential(input_charges)
+    input_charges = unpack_charges(x, case.inputs.charge_layout)
+    expected_potential = potential_from_charges(input_charges, case.inputs)
     _assert_tensor_equal(actual.driving_potential.mono, expected_potential.mono)
     if expected_potential.dipole is not None:
         assert actual.driving_potential.dipole is not None
@@ -497,7 +484,7 @@ def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
             actual.driving_potential.quad, expected_potential.quad
         )
 
-    # Coefficients are compared only through their occupation-weighted
+    # Coefficients are compared through their occupation-weighted
     # projector, which is invariant to eigenvector column signs.
     projector = torch.einsum(
         "ik,k,jk->ij",
@@ -508,28 +495,28 @@ def _compare_raw_map(case: SimpleNamespace, x: torch.Tensor) -> None:
     _assert_tensor_equal(projector, actual.density)
 
 
-def test_gfn1_h2o_raw_map_matches_full_engine_initial_and_perturbed() -> None:
+def test_gfn1_h2o_raw_map_initial_and_perturbed() -> None:
     initial = _prepare_case(GFN1_XTB)
-    _compare_raw_map(initial, initial.x)
+    _check_raw_map_invariants(initial, initial.x)
 
     perturbed = _prepare_case(GFN1_XTB)
     x = perturbed.x.clone()
     x[0, 0] += 0.025
-    _compare_raw_map(perturbed, x)
+    _check_raw_map_invariants(perturbed, x)
 
 
-def test_monopole_only_raw_map_matches_full_engine() -> None:
+def test_monopole_only_raw_map() -> None:
     case = _prepare_case(GFN1_XTB, int_level=labels.INTLEVEL_HCORE)
     assert case.inputs.charge_layout.dipole_shape is None
     assert case.inputs.charge_layout.quadrupole_shape is None
-    _compare_raw_map(case, case.x)
+    _check_raw_map_invariants(case, case.x)
 
 
-def test_gfn2_h2o_multipole_raw_map_matches_full_engine() -> None:
+def test_gfn2_h2o_multipole_raw_map() -> None:
     case = _prepare_case(GFN2_XTB)
     assert case.inputs.charge_layout.dipole_shape is not None
     assert case.inputs.charge_layout.quadrupole_shape is not None
-    _compare_raw_map(case, case.x)
+    _check_raw_map_invariants(case, case.x)
 
 
 @pytest.mark.parametrize(
@@ -547,14 +534,14 @@ def test_gfn2_h2o_multipole_raw_map_matches_full_engine() -> None:
         pytest.param("NO2", GFN2_XTB, 0.0, 1.0, 300.0, id="gfn2-no2-doublet"),
     ],
 )
-def test_finite_temperature_raw_map_matches_full_engine(
+def test_finite_temperature_raw_map_invariants(
     sample_name: str,
     method: int,
     charge: float,
     spin: float,
     temperature: float,
 ) -> None:
-    """Finite-T occupation, density and charge map match legacy physics."""
+    """Finite-T occupation, density and charge map satisfy physical invariants."""
     case = _prepare_case(
         method,
         sample_name=sample_name,
@@ -563,7 +550,7 @@ def test_finite_temperature_raw_map_matches_full_engine(
         scf_options={"fermi_etemp": temperature},
     )
     assert case.inputs.fermi_settings is not None
-    _compare_raw_map(case, case.x)
+    _check_raw_map_invariants(case, case.x)
 
 
 def test_integrated_fermi_evaluation_uses_one_authoritative_search(
@@ -902,89 +889,30 @@ def test_full_finalization_recomputes_potential_from_returned_charges() -> None:
             "x_atol_max": 1.0e5,
         },
     )
-    engine = case.engine
     guess = case.x.clone()
     guess[0, 0] += 0.4
-    initial_charges = engine.converged_to_charges(guess)
-    original_iterate = engine.iterate_charges
-    raw_calls: list[
-        tuple[
-            torch.Tensor,
-            torch.Tensor,
-            SCFPotential,
-            torch.Tensor,
-            torch.Tensor,
-            torch.Tensor,
-        ]
-    ] = []
-
-    def record_raw_call(x: torch.Tensor) -> torch.Tensor:
-        input_charges = engine.converged_to_charges(x)
-        potential = engine.charges_to_potential(input_charges)
-        driving = SCFPotential(
-            potential.mono,
-            dipole=potential.dipole,
-            quad=potential.quad,
-        )
-        mapped = original_iterate(x)
-        raw_calls.append(
-            (
-                x.clone(),
-                mapped.clone(),
-                driving,
-                engine._data.hamiltonian.clone(),
-                engine._data.density.clone(),
-                engine._data.evals.clone(),
+    settings = SCFSolverSettings(
+        maxiter=1,
+        mix_guess=False,
+        damp=0.2,
+        x_atol=1.0e5,
+        x_atol_max=1.0e5,
+    )
+    result = solve_scf_simple(guess, case.inputs, settings)
+    expected_potential = potential_from_charges(
+        result.final_charges, case.inputs
+    )
+    _assert_tensor_equal(result.final_potential.mono, expected_potential.mono)
+    assert result.map_result.driving_potential is not None
+    assert (
+        torch.max(
+            torch.abs(
+                result.final_potential.mono
+                - result.map_result.driving_potential.mono
             )
         )
-        return mapped
-
-    engine.iterate_charges = record_raw_call
-    final = engine(charges=initial_charges)
-    assert len(raw_calls) == 2
-
-    (
-        input_x,
-        last_mapped_x,
-        last_driving_potential,
-        last_hamiltonian,
-        last_density,
-        last_emo,
-    ) = raw_calls[-1]
-    final_x = final["charges"].as_tensor()
-    _assert_tensor_equal(final_x, last_mapped_x)
-
-    # The returned spectral outputs belong to the last raw map evaluation.
-    _assert_tensor_equal(final["hamiltonian"], last_hamiltonian)
-    _assert_tensor_equal(final["density"], last_density)
-    _assert_tensor_equal(final["emo"], last_emo)
-
-    # Finalization deliberately evaluates the potential and interaction
-    # energy from G(x), rather than reusing the V(x) that drove the last map.
-    final_potential = final["potential"]
-    expected_potential = engine.charges_to_potential(final["charges"])
-    _assert_tensor_equal(final_potential.mono, expected_potential.mono)
-    assert final_potential.mono is not None
-    assert last_driving_potential.mono is not None
-    assert (
-        torch.max(torch.abs(final_potential.mono - last_driving_potential.mono))
         > 1.0e-5
     )
-
-    h0_energy = engine._data.ihelp.reduce_orbital_to_atom(engine._data.energy)
-    interaction_energy = engine.interactions.get_energy(
-        final["charges"], engine._data.cache, engine._data.ihelp
-    )
-    _assert_tensor_equal(final["energy"], h0_energy + interaction_energy)
-    input_charges = engine.converged_to_charges(input_x)
-    input_interaction_energy = engine.interactions.get_energy(
-        input_charges, engine._data.cache, engine._data.ihelp
-    )
-    assert (
-        torch.max(torch.abs(interaction_energy - input_interaction_energy))
-        > 1.0e-8
-    )
-    assert input_x.shape == final_x.shape
 
 
 def test_static_scf_configuration_is_validated_at_setup() -> None:
@@ -1059,17 +987,6 @@ def test_static_scf_configuration_is_validated_at_setup() -> None:
     before_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
         iterates
     )
-    # ConfigSCF is frozen, so a changed configuration is a replacement. The
-    # legacy engine's replacement is the mutable authority boundary here;
-    # SCFInputs does not retain that config or the engine.
-    case.engine.config = replace(
-        case.engine.config,
-        fermi=replace(case.engine.config.fermi, etemp=250.0),
-    )
-    after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
-        iterates
-    )
-    _assert_tensor_equal(after_config_change, before_config_change)
     after_config_change = vmap(lambda xx: scf_map(xx, case.inputs).mapped_x)(
         iterates
     )
@@ -1094,26 +1011,6 @@ def _initial_potential_guess(
         ),
     )
     return potential_initial_guess(charges, case.inputs)
-
-
-def _legacy_density_charges(case: SimpleNamespace) -> SCFCharges:
-    density = case.engine._data.density
-    mono = case.n0 - torch.einsum("ik,ki->i", density, case.integrals.overlap)
-    dipole = None
-    if case.integrals.dipole is not None:
-        dipole = case.system.ihelp.reduce_orbital_to_atom(
-            -torch.einsum("ik,mki->im", density, case.integrals.dipole),
-            extra=True,
-            dim=-2,
-        )
-    quad = None
-    if case.integrals.quadrupole is not None:
-        quad = case.system.ihelp.reduce_orbital_to_atom(
-            -torch.einsum("ik,mki->im", density, case.integrals.quadrupole),
-            extra=True,
-            dim=-2,
-        )
-    return SCFCharges(mono=mono, dipole=dipole, quad=quad)
 
 
 @pytest.mark.parametrize(
@@ -1202,123 +1099,30 @@ def test_potential_layout_rejects_incompatible_components() -> None:
         unpack_potential(torch.zeros((1, 4)), mono_layout)
 
 
-def _assert_potential_raw_parity(
-    method: int = GFN1_XTB,
-    *,
-    charge: float = 0.0,
-    spin: float = 0.0,
-    field: torch.Tensor | None = None,
-    temperature: float = 0.0,
-    row: int | None = None,
-) -> None:
+@pytest.mark.parametrize("row", [0, 1, 2], ids=["mono", "dipole", "quad"])
+def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
+    """Each GFN2 potential row affects the next physical map."""
     options = {
         "scp_mode": labels.SCP_MODE_POTENTIAL,
         "mixer": labels.MIXER_LINEAR,
         "maxiter": 0,
-        "fermi_etemp": temperature,
+        "fermi_etemp": 0.0,
     }
-    legacy = _prepare_case(
-        method,
-        charge=charge,
-        spin=spin,
-        field=field,
-        scf_options=options,
-        setup_functional=False,
-    )
-    functional = _prepare_case(
-        method,
-        charge=charge,
-        spin=spin,
-        field=field,
-        scf_options=options,
-    )
+    functional = _prepare_case(GFN2_XTB, scf_options=options)
     guess, layout = _initial_potential_guess(functional)
     _assert_tensor_equal(guess, functional.x)
-    _assert_tensor_equal(guess, legacy.x)
-    if row is not None:
-        perturbed = guess.clone()
-        perturbed[row, 0] += 0.037
-        guess = perturbed
-    legacy_x = guess.clone()
-    mapped_legacy = legacy.engine.iterate_potential(legacy_x)
-    expected = potential_map(guess, functional.inputs, layout)
-    _assert_tensor_equal(expected.mapped_x, mapped_legacy)
-    for row, shape in enumerate(layout.shapes):
+    baseline = potential_map(guess, functional.inputs, layout)
+    perturbed = guess.clone()
+    perturbed[row, 0] += 0.037
+    expected = potential_map(perturbed, functional.inputs, layout)
+    assert not torch.allclose(expected.mapped_x, baseline.mapped_x)
+    for r_idx, shape in enumerate(layout.shapes):
         length = 1
         for size in shape:
             length *= size
-        if length < guess.shape[-1]:
-            assert torch.all(guess[row, length:] == defaults.PADNZ)
-            assert torch.all(mapped_legacy[row, length:] == defaults.PADNZ)
-            assert torch.all(
-                mapped_legacy[row, length:] - guess[row, length:] == 0.0
-            )
-    for attr, value in (
-        ("hamiltonian", legacy.engine._data.hamiltonian),
-        ("density", legacy.engine._data.density),
-        ("emo", legacy.engine._data.evals),
-        ("occupation", legacy.engine._data.occupation),
-        ("orbital_energy", legacy.engine._data.energy),
-    ):
-        _assert_tensor_equal(getattr(expected, attr), value)
-    # Eigenvector columns have an arbitrary sign. The symmetric orthogonalizer
-    # can choose a different sign from the legacy Cholesky factor while
-    # representing the same physical occupied subspace.
-    expected_projector = (
-        expected.coefficients
-        @ torch.diag_embed(expected.occupation.sum(-2))
-        @ expected.coefficients.mT
-    )
-    legacy_projector = (
-        legacy.engine._data.evecs
-        @ torch.diag_embed(legacy.engine._data.occupation.sum(-2))
-        @ legacy.engine._data.evecs.mT
-    )
-    _assert_tensor_equal(expected_projector, legacy_projector)
-    expected_charges = _legacy_density_charges(legacy)
-    _assert_tensor_equal(expected.charges.mono, expected_charges.mono)
-    if expected.charges.dipole is not None:
-        _assert_tensor_equal(expected.charges.dipole, expected_charges.dipole)
-    if expected.charges.quad is not None:
-        _assert_tensor_equal(expected.charges.quad, expected_charges.quad)
-    if temperature >= 300.0:
-        assert expected.fermi_status is not None
-        assert bool(expected.fermi_status.converged.all())
-
-
-@pytest.mark.parametrize(
-    "method,charge,spin,field,temperature",
-    [
-        (GFN1_XTB, 0.0, 0.0, None, 0.0),
-        (GFN1_XTB, 1.0, 1.0, None, 0.0),
-        (
-            GFN1_XTB,
-            0.0,
-            0.0,
-            torch.tensor([0.01, 0.02, -0.01], dtype=torch.float64),
-            0.0,
-        ),
-        (GFN1_XTB, 0.5, 0.0, None, 300.0),
-        (GFN2_XTB, 0.0, 0.0, None, 0.0),
-    ],
-)
-def test_potential_map_matches_legacy_physical_evaluation(
-    method: int,
-    charge: float,
-    spin: float,
-    field: torch.Tensor | None,
-    temperature: float,
-) -> None:
-    """Potential raw map matches an independently prepared legacy map."""
-    _assert_potential_raw_parity(
-        method, charge=charge, spin=spin, field=field, temperature=temperature
-    )
-
-
-@pytest.mark.parametrize("row", [0, 1, 2], ids=["mono", "dipole", "quad"])
-def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
-    """Each GFN2 potential row affects the next physical map."""
-    _assert_potential_raw_parity(GFN2_XTB, row=row)
+        if length < perturbed.shape[-1]:
+            assert torch.all(perturbed[r_idx, length:] == defaults.PADNZ)
+            assert torch.all(expected.mapped_x[r_idx, length:] == defaults.PADNZ)
 
 
 class _MutatingPotentialInteraction(Interaction):
@@ -1364,18 +1168,18 @@ def test_functional_eligibility_rejects_custom_mutable_interactions() -> None:
         )
 
 
-def test_charged_spin_raw_map_matches_full_engine() -> None:
+def test_charged_spin_raw_map() -> None:
     case = _prepare_case(GFN1_XTB, charge=1.0, spin=1.0)
-    _compare_raw_map(case, case.x)
+    _check_raw_map_invariants(case, case.x)
 
 
-def test_explicit_field_raw_map_matches_full_engine() -> None:
+def test_explicit_field_raw_map() -> None:
     sample_positions = samples["H2O"]["positions"].to(
         device="cpu", dtype=torch.float64
     )
     field = torch.tensor([0.002, -0.001, 0.0015], dtype=torch.float64)
     case = _prepare_case(GFN1_XTB, field=field, positions=sample_positions)
-    _compare_raw_map(case, case.x)
+    _check_raw_map_invariants(case, case.x)
 
 
 def test_map_is_history_independent_and_repeated_backward_is_fresh() -> None:
@@ -1525,11 +1329,9 @@ def test_functional_core_has_no_legacy_mutation_owners(
         raise AssertionError("A functional raw map reached a legacy mutator.")
 
     for cls, names in (
-        (IndexHelper, ("cull", "restore")),
         (Component, ("update", "reset")),
         (Interaction, ("update", "reset")),
         (InteractionList, ("update", "reset", "reset_all")),
-        (InteractionListCache, ("cull", "restore")),
     ):
         for name in names:
             monkeypatch.setattr(cls, name, forbidden)
@@ -1623,7 +1425,6 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
                 current_system.integral_setup,
                 current_system.h0_setup,
                 current_system._classical_extension_cache,
-                current_system._packed_classical_cache,
                 current_system.d3_setups,
             )
         )

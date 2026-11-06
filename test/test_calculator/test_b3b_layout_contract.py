@@ -70,7 +70,8 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
 
     single = model.setup(numbers, batch_mode=0)
     assert single.batch_mode == 0
-    assert single._packed_classical_cache is None
+    assert not hasattr(single, "_packed_classical_cache")
+    assert not hasattr(single, "_exact_compatibility")
     assert single.repulsion_setup is not None
     assert type(single.repulsion_setup).__name__ == "RepulsionCoreSetup"
     assert single.classical_cache is not single.classical_cache
@@ -93,9 +94,7 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
     assert not hasattr(single.exact_core, "ihelp")
     assert not hasattr(single.exact_core, "classicals")
     assert not hasattr(single.exact_core, "interactions")
-    compatibility = single._exact_compatibility
-    assert compatibility is not None
-    assert [entry.label for entry in compatibility.classical_setups] == [
+    assert [term.label for term in single.exact_core.classical_terms] == [
         component.label
         for component in single.classicals.components
         if type(component).__name__
@@ -112,11 +111,9 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
         setup = single.classical_setup(component)
         if setup is not None:
             assert any(
-                entry.component_identity == id(component)
-                and entry.setup is setup
-                for entry in compatibility.classical_setups
+                term.setup is setup for term in single.exact_core.classical_terms
             )
-    assert [entry.label for entry in compatibility.interaction_setups] == [
+    assert [term.label for term in single.exact_core.interaction_terms] == [
         component.label
         for component in single.interactions.components
         if single.interaction_setup(component) is not None
@@ -132,8 +129,8 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
         packed = model.setup(packed_numbers, batch_mode=mode)
         assert packed.batch_mode == mode
         assert packed.exact_core is None
-        assert packed._packed_classical_cache is not None
-        assert packed.classical_cache is packed._packed_classical_cache
+        assert not hasattr(packed, "_packed_classical_cache")
+        assert packed.classical_cache is not packed.classical_cache
         assert type(packed.repulsion_setup).__name__ == "RepulsionSetup"
         assert packed.integral_setup is None
 
@@ -173,12 +170,19 @@ def test_classical_descriptors_drive_exact_evaluation(
         term.position for term in core.classical_terms
     )
     assert [term.label for term in core.classical_terms] == [
-        entry.label for entry in system._exact_compatibility.classical_setups
+        component.label
+        for component in system.classicals.components
+        if system.classical_setup(component) is not None
     ]
     assert all(
-        term.setup is entry.setup
-        for term, entry in zip(
-            core.classical_terms, system._exact_compatibility.classical_setups
+        term.setup is system.classical_setup(component)
+        for term, component in zip(
+            core.classical_terms,
+            (
+                c
+                for c in system.classicals.components
+                if system.classical_setup(c) is not None
+            ),
         )
     )
     assert all(not hasattr(term, "component") for term in core.classical_terms)
@@ -237,13 +241,19 @@ def test_interaction_descriptors_feed_functional_preparation(
         term.position for term in core.interaction_terms
     )
     assert [term.label for term in core.interaction_terms] == [
-        entry.label for entry in system._exact_compatibility.interaction_setups
+        component.label
+        for component in system.interactions.components
+        if system.interaction_setup(component) is not None
     ]
     assert all(
-        term.setup is entry.setup
-        for term, entry in zip(
+        term.setup is system.interaction_setup(component)
+        for term, component in zip(
             core.interaction_terms,
-            system._exact_compatibility.interaction_setups,
+            (
+                c
+                for c in system.interactions.components
+                if system.interaction_setup(c) is not None
+            ),
         )
     )
     data = _interaction_data(system, positions)

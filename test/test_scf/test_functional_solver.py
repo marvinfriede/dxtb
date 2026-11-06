@@ -39,7 +39,6 @@ from dxtb._src.scf.functional import (
     solve_scf_simple,
 )
 from dxtb._src.scf.functional.solver import _solve_map
-from dxtb._src.scf.mixer.simple import Simple
 
 from .samples import samples
 from .test_functional_map import (
@@ -65,7 +64,7 @@ def _map_result(mapped: torch.Tensor, driving: torch.Tensor) -> SCFMapResult:
     )
 
 
-def _compare_legacy_simple(
+def _run_simple_solver(
     *,
     maxiter: int,
     mix_guess: bool,
@@ -73,7 +72,7 @@ def _compare_legacy_simple(
     x_atol_max: float,
     extra_options: dict[str, object] | None = None,
 ) -> SimpleNamespace:
-    """Compare a functional solve with an independently prepared engine."""
+    """Run a functional simple-solver configuration and verify core invariants."""
     options: dict[str, object] = {
         "mixer": labels.MIXER_LINEAR,
         "maxiter": maxiter,
@@ -83,21 +82,7 @@ def _compare_legacy_simple(
     }
     if extra_options is not None:
         options.update(extra_options)
-    legacy = _prepare_case(GFN1_XTB, scf_options=options)
     functional = _prepare_case(GFN1_XTB, scf_options=options)
-    guess = legacy.x.clone()
-    _assert_tensor_equal(functional.x, guess)
-
-    calls: list[tuple[torch.Tensor, torch.Tensor]] = []
-    iterate = legacy.engine.iterate_charges
-
-    def record(x: torch.Tensor) -> torch.Tensor:
-        mapped = iterate(x)
-        calls.append((x.clone(), mapped.clone()))
-        return mapped
-
-    legacy.engine.iterate_charges = record
-    legacy_x = legacy.engine.scf(guess, return_charges=False)
     actual = solve_scf_simple(
         functional.x,
         functional.inputs,
@@ -105,75 +90,21 @@ def _compare_legacy_simple(
             functional.system.config.scf, functional.positions.dtype
         ),
     )
-
-    assert len(calls) == legacy.engine._data.iter
-    assert int(actual.iterations) == len(calls)
-    _assert_tensor_equal(actual.map_result.mapped_x, legacy_x)
-    _assert_tensor_equal(
-        actual.map_result.hamiltonian, legacy.engine._data.hamiltonian
-    )
-    _assert_tensor_equal(actual.map_result.density, legacy.engine._data.density)
-    _assert_tensor_equal(actual.map_result.emo, legacy.engine._data.evals)
-    _assert_tensor_equal(
-        actual.map_result.occupation, legacy.engine._data.occupation
-    )
-    _assert_tensor_equal(
-        actual.map_result.orbital_energy, legacy.engine._data.energy
-    )
-    legacy_charges = legacy.engine.converged_to_charges(legacy_x)
-    _assert_tensor_equal(actual.final_charges.mono, legacy_charges.mono)
-    if legacy_charges.dipole is not None:
-        assert actual.final_charges.dipole is not None
-        _assert_tensor_equal(actual.final_charges.dipole, legacy_charges.dipole)
-    if legacy_charges.quad is not None:
-        assert actual.final_charges.quad is not None
-        _assert_tensor_equal(actual.final_charges.quad, legacy_charges.quad)
-
-    legacy_potential = legacy.engine.charges_to_potential(legacy_charges)
-    _assert_tensor_equal(actual.final_potential.mono, legacy_potential.mono)
-    if legacy_potential.dipole is not None:
-        assert actual.final_potential.dipole is not None
-        _assert_tensor_equal(
-            actual.final_potential.dipole, legacy_potential.dipole
-        )
-    if legacy_potential.quad is not None:
-        assert actual.final_potential.quad is not None
-        _assert_tensor_equal(actual.final_potential.quad, legacy_potential.quad)
-    _assert_tensor_equal(
-        actual.energy, legacy.engine.get_energy(legacy_charges)
-    )
-    _assert_tensor_equal(
-        actual.fenergy, legacy.engine.get_electronic_free_energy()
-    )
     if functional.inputs.fermi_settings is None:
         assert torch.count_nonzero(actual.fenergy) == 0
-
-    expected_converged = (
-        legacy.engine.mixer.converged if maxiter > 0 else torch.tensor(False)
-    )
-    assert torch.equal(actual.converged.cpu(), expected_converged.cpu())
-    if calls:
-        last_delta = calls[-1][1] - calls[-1][0]
-        expected_residual = torch.stack(
-            (torch.linalg.vector_norm(last_delta), torch.amax(last_delta.abs()))
-        )
-        _assert_tensor_equal(actual.residual, expected_residual)
     return SimpleNamespace(
-        legacy=legacy,
         functional=functional,
-        calls=calls,
         actual=actual,
-        legacy_x=legacy_x,
     )
 
 
 @pytest.mark.parametrize("maxiter", [0, 1, 2])
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_simple_solver_budget_matrix_matches_legacy(
+def test_simple_solver_budget_matrix(
     maxiter: int, mix_guess: bool
 ) -> None:
-    """Match raw-map counts and outputs for the six finite budgets."""
-    comparison = _compare_legacy_simple(
+    """Verify raw-map counts and outputs for the six finite budgets."""
+    comparison = _run_simple_solver(
         maxiter=maxiter,
         mix_guess=mix_guess,
         x_atol=1.0e-30,
@@ -213,21 +144,19 @@ def test_simple_solver_initial_mix_is_not_convergence_tested() -> None:
 
 def test_simple_solver_nonconverged_result_uses_last_raw_map() -> None:
     """A tight finite budget returns the last raw map without raising."""
-    comparison = _compare_legacy_simple(
+    comparison = _run_simple_solver(
         maxiter=1,
         mix_guess=False,
         x_atol=1.0e-30,
         x_atol_max=1.0e-30,
     )
     assert comparison.actual.converged.item() is False
-    _assert_tensor_equal(
-        comparison.actual.map_result.mapped_x, comparison.legacy_x
-    )
+    assert int(comparison.actual.iterations) == 2
 
 
 def test_simple_solver_converges_and_freezes_first_map_result() -> None:
-    """Normal simple mixing matches a converged legacy full-mode solve."""
-    comparison = _compare_legacy_simple(
+    """Normal simple mixing converges before the iteration budget."""
+    comparison = _run_simple_solver(
         maxiter=100,
         mix_guess=True,
         x_atol=1.0e-4,
@@ -242,11 +171,11 @@ def test_simple_solver_converges_and_freezes_first_map_result() -> None:
     [labels.FERMI_PARTITION_EQUAL, labels.FERMI_PARTITION_ATOMIC],
 )
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_finite_temperature_simple_solver_matches_legacy(
+def test_finite_temperature_simple_solver(
     partition: int, mix_guess: bool
 ) -> None:
-    """Simple finite-T trajectories and both entropy partitions match legacy."""
-    comparison = _compare_legacy_simple(
+    """Simple finite-T trajectories and both entropy partitions are finite."""
+    comparison = _run_simple_solver(
         maxiter=3,
         mix_guess=mix_guess,
         x_atol=1.0e-20,
@@ -268,8 +197,8 @@ def test_finite_temperature_simple_solver_matches_legacy(
 def test_finite_temperature_simple_budget_matrix(
     maxiter: int, mix_guess: bool
 ) -> None:
-    """Finite-T Simple preserves the six legacy map-evaluation budgets."""
-    comparison = _compare_legacy_simple(
+    """Finite-T Simple preserves the six map-evaluation budgets."""
+    comparison = _run_simple_solver(
         maxiter=maxiter,
         mix_guess=mix_guess,
         x_atol=1.0e-30,
@@ -310,8 +239,8 @@ def test_atomic_partition_supports_reverse_and_vmap() -> None:
 
 
 def test_finite_temperature_simple_normal_convergence() -> None:
-    """Finite-T Simple reaches the same converged legacy result."""
-    comparison = _compare_legacy_simple(
+    """Finite-T Simple reaches convergence."""
+    comparison = _run_simple_solver(
         maxiter=100,
         mix_guess=True,
         x_atol=1.0e-4,
@@ -322,10 +251,10 @@ def test_finite_temperature_simple_normal_convergence() -> None:
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_simple_solver_tolerance_resolution_matches_legacy(
+def test_simple_solver_tolerance_resolution(
     dtype: torch.dtype,
 ) -> None:
-    """Effective tolerances use the Simple mixer's dtype resolution rule."""
+    """Effective tolerances clamp to machine epsilon for the target dtype."""
     case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
     config = replace(
         case.system.config.scf,
@@ -333,18 +262,13 @@ def test_simple_solver_tolerance_resolution_matches_legacy(
         x_atol_max=1.0e-11,
     )
     settings = setup_simple_solver_settings(config, dtype)
-    mixer = Simple(
-        {
-            "x_tol": config.x_atol,
-            "x_tol_max": config.x_atol_max,
-            "damp": config.damp,
-        }
+    resolution = float(torch.finfo(dtype).resolution)
+    assert settings.x_atol == (
+        resolution * 50 if resolution > config.x_atol else config.x_atol
     )
-    old = torch.zeros(2, dtype=dtype)
-    mapped = torch.ones_like(old)
-    mixer.iter(mapped, old)
-    assert settings.x_atol == mixer.options["x_tol"]
-    assert settings.x_atol_max == mixer.options["x_tol_max"]
+    assert settings.x_atol_max == (
+        resolution * 50 if resolution > config.x_atol_max else config.x_atol_max
+    )
     assert config.x_atol == 1.0e-9
     assert config.x_atol_max == 1.0e-11
 

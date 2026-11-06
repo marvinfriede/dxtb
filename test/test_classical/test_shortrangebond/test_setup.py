@@ -330,8 +330,8 @@ def test_exact_replacement_and_update_reset_contract() -> None:
     second = replacement.get_cache(numbers, ihelp)
     assert isinstance(first, ShortRangeBondSetup)
     assert first is not second
-    assert replacement.cache is None
-    assert replacement._cachevars is None
+    assert not hasattr(replacement, "cache")
+    assert not hasattr(replacement, "_cachevars")
 
 
 def test_calculator_reset_preserves_srb_setup_and_parameter_graph() -> None:

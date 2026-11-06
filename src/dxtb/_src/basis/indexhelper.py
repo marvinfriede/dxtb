@@ -47,7 +47,7 @@ import torch
 from tad_mctc.batch import pack
 from tad_mctc.math import einsum
 
-from dxtb._src.typing import Slicers, Tensor, TensorLike, override
+from dxtb._src.typing import Tensor, TensorLike, override
 
 from ..param import Param, ParamModule
 from ..param.element import get_elem_angular
@@ -86,38 +86,6 @@ def _expand(index: Tensor, repeat: Tensor) -> Tensor:
         device=index.device,
         dtype=index.dtype,
     )
-
-
-class IndexHelperStore:
-    """
-    Storage container for IndexHelper containing ``__slots__`` before culling.
-    """
-
-    def __init__(
-        self,
-        unique_angular: Tensor,
-        angular: Tensor,
-        atom_to_unique: Tensor,
-        ushells_to_unique: Tensor,
-        shells_to_ushell: Tensor,
-        shells_per_atom: Tensor,
-        shell_index: Tensor,
-        shells_to_atom: Tensor,
-        orbitals_per_shell: Tensor,
-        orbital_index: Tensor,
-        orbitals_to_shell: Tensor,
-    ):
-        self.unique_angular = unique_angular
-        self.angular = angular
-        self.atom_to_unique = atom_to_unique
-        self.ushells_to_unique = ushells_to_unique
-        self.shells_to_ushell = shells_to_ushell
-        self.shells_per_atom = shells_per_atom
-        self.shell_index = shell_index
-        self.shells_to_atom = shells_to_atom
-        self.orbitals_per_shell = orbitals_per_shell
-        self.orbital_index = orbital_index
-        self.orbitals_to_shell = orbitals_to_shell
 
 
 class IndexHelper(TensorLike):
@@ -170,9 +138,6 @@ class IndexHelper(TensorLike):
     - 2: Multiple systems with no padding (conformer ensemble)
     """
 
-    store: IndexHelperStore | None
-    """Storage to restore from after culling."""
-
     __slots__ = [
         "unique_angular",
         "angular",
@@ -187,7 +152,6 @@ class IndexHelper(TensorLike):
         "orbital_index",
         "orbitals_to_shell",
         "batch_mode",
-        "store",
     ]
 
     def __init__(
@@ -207,8 +171,6 @@ class IndexHelper(TensorLike):
         batch_mode: int,
         device: torch.device | None = None,
         dtype: torch.dtype = torch.int64,
-        *,
-        store: IndexHelperStore | None = None,
         **_,
     ):
         super().__init__(device, dtype)
@@ -241,7 +203,6 @@ class IndexHelper(TensorLike):
         self.orbitals_to_shell = orbitals_to_shell
 
         self.batch_mode = batch_mode
-        self.store = store
 
         if any(
             tensor.dtype != self.dtype
@@ -920,54 +881,6 @@ class IndexHelper(TensorLike):
             extra=extra,
         )
 
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.batch_mode == 0:
-            raise RuntimeError("Culling only possible in batch mode.")
-
-        if self.store is None:
-            self.store = IndexHelperStore(
-                unique_angular=self.unique_angular,
-                angular=self.angular,
-                atom_to_unique=self.atom_to_unique,
-                ushells_to_unique=self.ushells_to_unique,
-                shells_to_ushell=self.shells_to_ushell,
-                shells_per_atom=self.shells_per_atom,
-                shell_index=self.shell_index,
-                shells_to_atom=self.shells_to_atom,
-                orbitals_per_shell=self.orbitals_per_shell,
-                orbital_index=self.orbital_index,
-                orbitals_to_shell=self.orbitals_to_shell,
-            )
-
-        at = tuple([~conv, *slicers["atom"]])
-        sh = tuple([~conv, *slicers["shell"]])
-        orb = tuple([~conv, *slicers["orbital"]])
-
-        self.angular = self.angular[sh]
-        self.atom_to_unique = self.atom_to_unique[at]
-        self.shell_index = self.shell_index[at]
-        self.shells_per_atom = self.shells_per_atom[at]
-        self.shells_to_ushell = self.shells_to_ushell[sh]
-        self.shells_to_atom = self.shells_to_atom[sh]
-        self.orbitals_per_shell = self.orbitals_per_shell[sh]
-        self.orbital_index = self.orbital_index[sh]
-        self.orbitals_to_shell = self.orbitals_to_shell[orb]
-
-    def restore(self) -> None:
-        """Restore the original index helper after culling."""
-        if self.store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.angular = self.store.angular
-        self.atom_to_unique = self.store.atom_to_unique
-        self.shells_to_ushell = self.store.shells_to_ushell
-        self.shells_per_atom = self.store.shells_per_atom
-        self.shell_index = self.store.shell_index
-        self.shells_to_atom = self.store.shells_to_atom
-        self.orbitals_per_shell = self.store.orbitals_per_shell
-        self.orbital_index = self.store.orbital_index
-        self.orbitals_to_shell = self.store.orbitals_to_shell
-
     @property
     def orbitals_to_atom(self) -> Tensor:
         return self._orbitals_to_atom()
@@ -1185,7 +1098,6 @@ class IndexHelper(TensorLike):
             f"  orbital_index={self.orbital_index},\n"
             f"  orbitals_to_shell={self.orbitals_to_shell},\n"
             f"  batch_mode={self.batch_mode},\n"
-            f"  store={self.store},\n"
             f"  device={self.device},\n"
             f"  dtype={self.dtype}\n"
             ")"

@@ -127,9 +127,9 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     second = build_aes2_data(setup, positions)
     assert first is not second
     assert first.amat_sd.data_ptr() != second.amat_sd.data_ptr()
-    assert interaction.cache is None
-    assert interaction._cachevars is None
-    assert interaction._cachegrad is None
+    assert not hasattr(interaction, "cache")
+    assert not hasattr(interaction, "_cachevars")
+    assert not hasattr(interaction, "_cachegrad")
     torch.testing.assert_close(first.amat_sd, second.amat_sd)
 
     core = core_aes2_setup(setup)
@@ -295,9 +295,9 @@ def test_exact_aes2_update_reset_and_setup_authority() -> None:
         numbers=numbers, positions=positions, ihelp=ihelp
     )
     assert first is not second
-    assert interaction.cache is None
-    assert interaction._cachevars is None
-    assert interaction._cachegrad is None
+    assert not hasattr(interaction, "cache")
+    assert not hasattr(interaction, "_cachevars")
+    assert not hasattr(interaction, "_cachegrad")
 
     with torch.no_grad():
         interaction.dmp3.fill_(20.0)
@@ -564,31 +564,6 @@ def test_aes2_subclass_remains_a_cache_driven_extension() -> None:
         charges, calc_data, calc.ihelp
     )[extension.label].sum()
     torch.testing.assert_close(calc_energy, one)
-
-
-def test_cull_restore_only_changes_call_local_aes2_data() -> None:
-    """Culling cannot mutate persistent AES2 setup or leak into next call."""
-    numbers, positions, parameters, _, interaction = _inputs()
-    batch_numbers = torch.stack((numbers, numbers))
-    batch_positions = torch.stack((positions, positions + 0.04))
-    ihelp = IndexHelper.from_numbers(batch_numbers, parameters)
-    setup = setup_aes2(interaction, batch_numbers, ihelp)
-    setup_values = {
-        field.name: getattr(setup, field.name).clone()
-        for field in fields(setup)
-        if isinstance(getattr(setup, field.name), Tensor)
-    }
-    first = build_aes2_data(setup, batch_positions)
-    first.cull(
-        torch.tensor([False, True], device=DEVICE),
-        {"atom": (...,)},
-    )
-    first.restore()
-    for name, value in setup_values.items():
-        torch.testing.assert_close(getattr(setup, name), value)
-    second = build_aes2_data(setup, batch_positions)
-    assert first is not second
-    torch.testing.assert_close(first.amat_sd, second.amat_sd)
 
 
 def test_absent_aes2_leaves_system_setup_none() -> None:

@@ -77,7 +77,6 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import (
     DD,
     Any,
-    Slicers,
     Tensor,
     TensorLike,
     TensorOrTensors,
@@ -188,16 +187,13 @@ class ES2Cache(InteractionCache, TensorLike):
     Cache for Coulomb matrix in ES2.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     mat: Tensor
     """Coulomb matrix."""
 
     shell_resolved: bool
     """Electrostatics is shell-resolved (default: ``True``)."""
 
-    __slots__ = ["__store", "mat", "shell_resolved"]
+    __slots__ = ["mat", "shell_resolved"]
 
     def __init__(
         self,
@@ -212,32 +208,6 @@ class ES2Cache(InteractionCache, TensorLike):
         )
         self.mat = mat
         self.shell_resolved = shell_resolved
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        mat: Tensor
-        """Coulomb matrix"""
-
-        def __init__(self, mat: Tensor) -> None:
-            self.mat = mat
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(self.mat)
-
-        _slicer = slicers["shell"] if self.shell_resolved else slicers["atom"]
-        slicer = tuple([~conv, *_slicer, *_slicer])
-        self.mat = self.mat[slicer]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.mat = self.__store.mat
 
 
 class ES2(Interaction):

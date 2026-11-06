@@ -1175,9 +1175,10 @@ def test_batch_backward_response_failure_is_lane_local(monkeypatch) -> None:
     assert int(post_status.final_failure[1].item()) == int(
         BatchRootFailureCode.RESPONSE_FAILURE
     )
-    streamed_fail = stream_batch_value_and_grad(
-        prepared, model, positions, chunk_size=1, strict=False
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        streamed_fail = stream_batch_value_and_grad(
+            prepared, model, positions, chunk_size=1, strict=False
+        )
     assert bool(streamed_fail.converged.all())
     assert int(streamed_fail.final_failure[0].item()) == int(
         BatchRootFailureCode.NONE
@@ -2068,15 +2069,16 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
         )
 
     monkeypatch.setattr(batch_implicit, "bicgstab", _fail_bicgstab_on_lane1)
-    out_resp = stream_batch_value_and_grad(
-        prepared,
-        model,
-        pos4,
-        field=efield.clone().requires_grad_(True),
-        field_grad=efgrad.clone().requires_grad_(True),
-        chunk_size=2,
-        strict=False,
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_resp = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            field_grad=efgrad.clone().requires_grad_(True),
+            chunk_size=2,
+            strict=False,
+        )
     assert out_resp.failure_category == (
         "success",
         "response_failure",
@@ -2216,9 +2218,10 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_pos
     )
-    out_pos_nan = stream_batch_value_and_grad(
-        prepared, model, pos4, chunk_size=2, strict=False
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_pos_nan = stream_batch_value_and_grad(
+            prepared, model, pos4, chunk_size=2, strict=False
+        )
     assert out_pos_nan.response_converged.tolist() == [
         True,
         True,
@@ -2288,14 +2291,15 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     chrg_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    out_chrg_nan = stream_batch_value_and_grad(
-        prepared,
-        model,
-        pos4,
-        chrg=chrg_leaf,
-        chunk_size=2,
-        strict=False,
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_chrg_nan = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            chrg=chrg_leaf,
+            chunk_size=2,
+            strict=False,
+        )
     # Position gradients are all finite, but charge gradient on lane 0 is NaN!
     assert bool(torch.isfinite(out_chrg_nan.position_gradient).all())
     assert out_chrg_nan.charge_gradient is not None
@@ -2365,14 +2369,15 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_field
     )
-    out_field_nan = stream_batch_value_and_grad(
-        prepared,
-        model,
-        pos4,
-        field=efield.clone().requires_grad_(True),
-        chunk_size=2,
-        strict=False,
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_field_nan = stream_batch_value_and_grad(
+            prepared,
+            model,
+            pos4,
+            field=efield.clone().requires_grad_(True),
+            chunk_size=2,
+            strict=False,
+        )
     assert bool(torch.isfinite(out_field_nan.position_gradient).all())
     assert out_field_nan.field_gradient is not None
     assert bool(torch.isnan(out_field_nan.field_gradient).any())
@@ -2433,14 +2438,15 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     spin_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    out_spin_nan = stream_batch_value_and_grad(
-        prep_spin,
-        model,
-        pos4,
-        spin=spin_leaf,
-        chunk_size=2,
-        strict=False,
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_spin_nan = stream_batch_value_and_grad(
+            prep_spin,
+            model,
+            pos4,
+            spin=spin_leaf,
+            chunk_size=2,
+            strict=False,
+        )
     assert bool(torch.isfinite(out_spin_nan.position_gradient).all())
     assert out_spin_nan.spin_gradient is not None
     assert bool(torch.isnan(out_spin_nan.spin_gradient).any())
@@ -2498,9 +2504,10 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_model
     )
-    out_mod_nan = stream_batch_value_and_grad(
-        prepared, model, pos4, chunk_size=2, strict=False
-    )
+    with pytest.warns(SCFConvergenceWarning):
+        out_mod_nan = stream_batch_value_and_grad(
+            prepared, model, pos4, chunk_size=2, strict=False
+        )
     assert bool(torch.isfinite(out_mod_nan.position_gradient).all())
     assert any(
         g is not None and bool(torch.isnan(g).any())

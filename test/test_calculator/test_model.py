@@ -89,7 +89,7 @@ def test_single_system_setup_does_not_use_generic_classical_cache(
     assert len(system.d3_setups) == 1
     assert type(system.d3_setups[0][1]).__name__ == "DispersionD3CoreSetup"
     assert not system._classical_extension_cache
-    assert system._packed_classical_cache is None
+    assert not hasattr(system, "_packed_classical_cache")
     assert set(system.classical_cache) == {
         component.label for component in system.classicals.components
     }

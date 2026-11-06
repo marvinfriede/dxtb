@@ -38,7 +38,6 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import (
     DD,
     Any,
-    Slicers,
     Tensor,
     TensorLike,
     get_default_dtype,
@@ -171,9 +170,6 @@ class AES2Cache(InteractionCache, TensorLike):
     Cache for AES2 interaction.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     mrad: Tensor
     """Multipole damping radii for all atoms."""
 
@@ -202,7 +198,6 @@ class AES2Cache(InteractionCache, TensorLike):
     """
 
     __slots__ = [
-        "__store",
         "mrad",
         "dkernel",
         "qkernel",
@@ -232,80 +227,6 @@ class AES2Cache(InteractionCache, TensorLike):
         self.amat_sd = amat_sd
         self.amat_dd = amat_dd
         self.amat_sq = amat_sq
-
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        mrad: Tensor
-        """Multipole damping radii for all atoms."""
-
-        dkernel: Tensor
-        """Kernel for on-site dipole exchange-correlation."""
-
-        qkernel: Tensor
-        """Kernel for on-site quadrupole exchange-correlation."""
-
-        amat_sd: Tensor
-        """Interation matrix for charges and dipoles."""
-
-        amat_dd: Tensor
-        """Interation matrix for dipoles and dipoles."""
-
-        amat_sq: Tensor
-        """Interation matrix for charges and quadrupoles."""
-
-        def __init__(
-            self,
-            mrad: Tensor,
-            dkernel: Tensor,
-            qkernel: Tensor,
-            amat_sd: Tensor,
-            amat_dd: Tensor,
-            amat_sq: Tensor,
-        ) -> None:
-            self.mrad = mrad
-            self.dkernel = dkernel
-            self.qkernel = qkernel
-            self.amat_sd = amat_sd
-            self.amat_dd = amat_dd
-            self.amat_sq = amat_sq
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(
-                self.mrad,
-                self.dkernel,
-                self.qkernel,
-                self.amat_sd,
-                self.amat_dd,
-                self.amat_sq,
-            )
-
-        _slicer = slicers["atom"]
-        _slicer_one = tuple([~conv, *_slicer])
-        _slicer_two = tuple([~conv, *_slicer, *_slicer])
-
-        self.mrad = self.mrad[_slicer_one]
-        self.dkernel = self.dkernel[_slicer_one]
-        self.qkernel = self.qkernel[_slicer_one]
-        self.amat_sd = self.amat_sd[_slicer_two]
-        self.amat_dd = self.amat_dd[_slicer_two]
-        self.amat_sq = self.amat_sq[_slicer_two]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.mrad = self.__store.mrad
-        self.dkernel = self.__store.dkernel
-        self.qkernel = self.__store.qkernel
-        self.amat_sd = self.__store.amat_sd
-        self.amat_dd = self.__store.amat_dd
-        self.amat_sq = self.__store.amat_sq
 
 
 class AES2(Interaction):

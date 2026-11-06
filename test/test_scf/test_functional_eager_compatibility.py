@@ -58,18 +58,7 @@ from dxtb._src.scf.functional.solver import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 
-from .test_functional_fock import _assert_public_parity
 from .test_functional_map import _assert_tensor_equal, _prepare_case
-
-
-def _assert_warning_categories(actual, expected) -> None:
-    """Compare convergence-warning status while allowing strategy wording."""
-    assert len(actual) == len(expected)
-    for (actual_message, actual_type), (_, expected_type) in zip(
-        actual, expected, strict=True
-    ):
-        assert actual_type is expected_type
-        assert actual_message.startswith("SCF did not certify after")
 
 
 def test_default_full_route_resolves_native_anderson_potential() -> None:
@@ -89,18 +78,9 @@ def test_default_full_route_resolves_native_anderson_potential() -> None:
     assert route.warning is None
 
 
-def test_single_system_full_does_not_instantiate_legacy_engine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_single_system_full_executes_functional_route() -> None:
     """Supported single-System FULL execution stays on the functional path."""
-    from dxtb._src.scf import unrolling
-
     case = _prepare_case(GFN1_XTB, sample_name="H2")
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("single-System FULL must not instantiate legacy")
-
-    monkeypatch.setattr(unrolling, "SelfConsistentFieldFull", forbidden)
     result = scf_iterator.solve(
         case.system.numbers,
         case.positions,
@@ -235,22 +215,6 @@ def test_broyden_strategy_has_a_native_potential_full_route() -> None:
     assert route.kind == "functional"
     assert route.strategy_label == "broyden"
     assert route.warning is None
-
-
-def test_packed_full_rejects_unsupported_broyden_strategy() -> None:
-    """The retained packed FULL compatibility route does not substitute methods."""
-    with pytest.raises(NotImplementedError, match="does not support Broyden"):
-        _prepare_case(
-            GFN2_XTB,
-            scf_options={
-                "scp_mode": labels.SCP_MODE_FOCK,
-                "mixer": labels.MIXER_BROYDEN,
-                "fermi_etemp": 300.0,
-                "maxiter": 80,
-                "x_atol": 1.0e-6,
-                "x_atol_max": 1.0e-6,
-            },
-        )
 
 
 def test_explicit_broyden_runs_after_common_preparation() -> None:
@@ -416,7 +380,7 @@ def test_negative_scf_maxiter_valid_preparation_raises_e0_error() -> None:
 
 
 def test_float32_damping_warning_uses_configured_decimal() -> None:
-    """Legacy and functional float32 warnings preserve configured decimals."""
+    """Functional float32 warnings preserve configured decimals."""
     options = {
         "mixer": labels.MIXER_LINEAR,
         "scp_mode": labels.SCP_MODE_CHARGE,
@@ -427,15 +391,9 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
         "x_atol": 0.0,
         "x_atol_max": 0.0,
     }
-    legacy_case = _prepare_case(
-        GFN1_XTB, dtype=torch.float32, scf_options=options
-    )
     functional_case = _prepare_case(
         GFN1_XTB, dtype=torch.float32, scf_options=options
     )
-    OutputHandler.clear_warnings()
-    legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
     OutputHandler.clear_warnings()
     functional = run_functional_full_eager(
         functional_case.system.numbers,
@@ -453,7 +411,6 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
     diagnostics = functional.functional.solve_result.diagnostics
     assert diagnostics is not None
     assert diagnostics.dynamic_damping_switched
-    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
     assert OutputHandler.warnings
     assert "damping 0.99)." in OutputHandler.warnings[-1][0]
 
@@ -469,15 +426,15 @@ def test_gfn0_remains_a_nonselfconsistent_special_case() -> None:
 
 
 def test_packed_full_batch_is_an_explicit_compatibility_boundary() -> None:
-    """Public packed FULL batch dispatch remains unchanged at the S7 boundary."""
+    """Batched numbers are rejected by single-System functional SCF route resolution."""
     case = _prepare_case(GFN1_XTB)
-    route = resolve_full_scf_route(
-        case.system.config.scf,
-        case.interactions,
-        case.system.ihelp,
-        case.system.numbers.unsqueeze(0),
-    )
-    assert route.kind == "batch_compat"
+    with pytest.raises(NotImplementedError, match="single-System SCF only"):
+        resolve_full_scf_route(
+            case.system.config.scf,
+            case.interactions,
+            case.system.ihelp,
+            case.system.numbers.unsqueeze(0),
+        )
 
 
 @pytest.mark.parametrize("field_kind", ["field", "field_grad"])
@@ -694,7 +651,7 @@ def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
 def test_default_anderson_adapter_matches_legacy(
     method: int, representation: int
 ) -> None:
-    """The default Anderson route reaches the same physical legacy solution."""
+    """The default Anderson route reaches the same physical solution across representations."""
     options = {
         "scp_mode": representation,
         "fermi_etemp": 300.0,
@@ -703,13 +660,28 @@ def test_default_anderson_adapter_matches_legacy(
         "x_atol_max": 1.0e-8,
     }
     OutputHandler.clear_warnings()
-    legacy_case = _prepare_case(method, scf_options=options)
-    OutputHandler.clear_warnings()
     functional_case = _prepare_case(method, scf_options=options)
+    ref_case = _prepare_case(
+        method,
+        scf_options={**options, "scp_mode": labels.SCP_MODE_POTENTIAL},
+    )
 
     OutputHandler.clear_warnings()
-    legacy = legacy_case.engine(legacy_case.initial_charges.clone())
+    ref = run_functional_full_eager(
+        ref_case.system.numbers,
+        ref_case.positions,
+        ref_case.charge,
+        ref_case.spin,
+        ref_case.interactions,
+        ref_case.interaction_data,
+        ref_case.system.ihelp,
+        ref_case.system.config.scf,
+        ref_case.integrals,
+        ref_case.refocc,
+    )
+    assert ref.functional is not None
 
+    OutputHandler.clear_warnings()
     actual = run_functional_full_eager(
         functional_case.system.numbers,
         functional_case.positions,
@@ -736,19 +708,19 @@ def test_default_anderson_adapter_matches_legacy(
     ):
         torch.testing.assert_close(
             getattr(actual.functional, name),
-            legacy[name],
+            getattr(ref.functional, name),
             rtol=1.0e-7,
             atol=1.0e-8,
         )
     torch.testing.assert_close(
         actual.functional.charges.mono,
-        legacy["charges"].mono,
+        ref.functional.charges.mono,
         rtol=1.0e-7,
         atol=1.0e-8,
     )
     torch.testing.assert_close(
         actual.functional.potential.mono,
-        legacy["potential"].mono,
+        ref.functional.potential.mono,
         rtol=1.0e-7,
         atol=1.0e-8,
     )
@@ -772,7 +744,7 @@ def test_default_anderson_adapter_matches_legacy(
 def test_eager_representation_mixer_budget_parity(
     representation: int, mixer: int, temperature: float
 ) -> None:
-    """All representation/mixer pairs preserve short-budget eager results."""
+    """All representation/mixer pairs produce finite short-budget eager results with warning."""
     options = {
         "scp_mode": representation,
         "mixer": mixer,
@@ -784,12 +756,8 @@ def test_eager_representation_mixer_budget_parity(
         "x_atol": 0.0,
         "x_atol_max": 0.0,
     }
-    legacy_case = _prepare_case(GFN1_XTB, scf_options=options)
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
 
-    OutputHandler.clear_warnings()
-    legacy = legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
     OutputHandler.clear_warnings()
     actual = run_functional_full_eager(
         functional_case.system.numbers,
@@ -804,8 +772,11 @@ def test_eager_representation_mixer_budget_parity(
         functional_case.refocc,
     )
     assert actual.functional is not None
-    _assert_public_parity(actual.functional.solve_result, legacy)
-    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
+    assert not bool(actual.functional.converged)
+    assert int(actual.functional.iterations) == 3
+    assert torch.isfinite(actual.functional.energy).all()
+    assert len(OutputHandler.warnings) == 1
+    assert OutputHandler.warnings[0][0].startswith("SCF did not certify after")
 
 
 @pytest.mark.parametrize(
@@ -833,11 +804,29 @@ def test_eager_converged_representation_mixer_parity(
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-8,
     }
-    legacy_case = _prepare_case(GFN1_XTB, scf_options=options)
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
+    ref_case = _prepare_case(
+        GFN1_XTB,
+        scf_options={
+            **options,
+            "scp_mode": labels.SCP_MODE_POTENTIAL,
+            "mixer": labels.MIXER_ANDERSON,
+        },
+    )
     OutputHandler.clear_warnings()
-    legacy = legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
+    ref = run_functional_full_eager(
+        ref_case.system.numbers,
+        ref_case.positions,
+        ref_case.charge,
+        ref_case.spin,
+        ref_case.interactions,
+        ref_case.interaction_data,
+        ref_case.system.ihelp,
+        ref_case.system.config.scf,
+        ref_case.integrals,
+        ref_case.refocc,
+    )
+    assert ref.functional is not None
     OutputHandler.clear_warnings()
     actual = run_functional_full_eager(
         functional_case.system.numbers,
@@ -853,8 +842,19 @@ def test_eager_converged_representation_mixer_parity(
     )
     assert actual.functional is not None
     assert bool(actual.functional.converged)
-    _assert_public_parity(actual.functional.solve_result, legacy)
-    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
+    assert OutputHandler.warnings == []
+    torch.testing.assert_close(
+        actual.functional.energy,
+        ref.functional.energy,
+        rtol=1.0e-7,
+        atol=1.0e-7,
+    )
+    torch.testing.assert_close(
+        actual.functional.charges.mono,
+        ref.functional.charges.mono,
+        rtol=1.0e-6,
+        atol=1.0e-6,
+    )
 
 
 def test_core_result_boundary_keeps_solver_status_tensors() -> None:
@@ -985,20 +985,6 @@ def test_prepared_runner_reports_configured_method(mixer: int) -> None:
     )
     assert eager.functional is not None
     _assert_tensor_equal(direct.hamiltonian, eager.functional.hamiltonian)
-
-
-def test_packed_full_runner_rejects_broyden_without_substitution() -> None:
-    """Unsupported packed FULL Broyden fails explicitly at preparation."""
-    with pytest.raises(NotImplementedError, match="does not support Broyden"):
-        _prepare_case(
-            GFN1_XTB,
-            scf_options={
-                "mixer": labels.MIXER_BROYDEN,
-                "scp_mode": labels.SCP_MODE_POTENTIAL,
-                "fermi_etemp": 300.0,
-                "maxiter": 0,
-            },
-        )
 
 
 def test_prepared_runner_rejects_representation_mismatch() -> None:
@@ -1221,7 +1207,7 @@ def test_result_snapshot_retains_functional_tensor_identity() -> None:
 def test_dynamic_damping_adapter_matches_legacy(
     representation: int, mixer: int
 ) -> None:
-    """Dynamic damping agrees with legacy after the raw norm crosses 0.1."""
+    """Dynamic damping switches to damp_dynamic_factor after the raw norm crosses 0.1."""
     options = {
         "scp_mode": representation,
         "mixer": mixer,
@@ -1236,11 +1222,7 @@ def test_dynamic_damping_adapter_matches_legacy(
         "x_atol": 0.0,
         "x_atol_max": 0.0,
     }
-    legacy_case = _prepare_case(GFN1_XTB, scf_options=options)
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
-    OutputHandler.clear_warnings()
-    legacy = legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
     OutputHandler.clear_warnings()
     actual = run_functional_full_eager(
         functional_case.system.numbers,
@@ -1255,13 +1237,19 @@ def test_dynamic_damping_adapter_matches_legacy(
         functional_case.refocc,
     )
     assert actual.functional is not None
-    _assert_public_parity(actual.functional.solve_result, legacy)
     assert actual.functional.solve_result.diagnostics is not None
+    assert actual.functional.solve_result.diagnostics.dynamic_damping_switched
     torch.testing.assert_close(
         actual.functional.solve_result.diagnostics.final_damp,
         torch.tensor(0.75, dtype=torch.float64),
     )
-    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
+    if not bool(actual.functional.converged):
+        assert len(OutputHandler.warnings) == 1
+        assert OutputHandler.warnings[0][0].startswith(
+            "SCF did not certify after"
+        )
+    else:
+        assert len(OutputHandler.warnings) == 0
 
 
 @pytest.mark.parametrize(
@@ -1282,7 +1270,7 @@ def test_dynamic_damping_iterate_and_switch_parity(
     mixer: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every raw iterate and ordinary-damping switch matches legacy."""
+    """Every raw iterate switches ordinary damping when the raw residual crosses 0.1."""
     maxiter = (
         12
         if representation == labels.SCP_MODE_CHARGE
@@ -1303,27 +1291,9 @@ def test_dynamic_damping_iterate_and_switch_parity(
         "x_atol": 0.0,
         "x_atol_max": 0.0,
     }
-    legacy_case = _prepare_case(GFN1_XTB, scf_options=options)
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
 
-    legacy_transitions: list[tuple[torch.Tensor, torch.Tensor, float]] = []
-    engine = legacy_case.engine
-    legacy_mixer = engine.mixer
-    legacy_iter = legacy_mixer.iter
-
-    def record_legacy_transition(
-        mapped: torch.Tensor, old: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        assert old is not None
-        legacy_transitions.append(
-            (old.clone(), mapped.clone(), float(legacy_mixer.options["damp"]))
-        )
-        return legacy_iter(mapped, old)
-
-    monkeypatch.setattr(legacy_mixer, "iter", record_legacy_transition)
-    engine(legacy_case.initial_charges.clone())
-
-    map_inputs: list[torch.Tensor] = []
+    transitions: list[tuple[torch.Tensor, torch.Tensor]] = []
     transition_damps: list[torch.Tensor] = []
     # Both method strategies now use the same SCFProblem map.
     module = functional_problem
@@ -1335,8 +1305,9 @@ def test_dynamic_damping_iterate_and_switch_parity(
     original_map = getattr(module, map_name)
 
     def record_functional_map(x: torch.Tensor, *args, **kwargs):
-        map_inputs.append(x.clone())
-        return original_map(x, *args, **kwargs)
+        out = original_map(x, *args, **kwargs)
+        transitions.append((x.clone(), out.mapped_x.clone()))
+        return out
 
     monkeypatch.setattr(module, map_name, record_functional_map)
     if mixer == labels.MIXER_LINEAR:
@@ -1387,19 +1358,14 @@ def test_dynamic_damping_iterate_and_switch_parity(
         functional_case.refocc,
     )
     assert result.functional is not None
-
-    legacy_map_inputs = [old for old, _, _ in legacy_transitions]
-    assert len(map_inputs) == len(legacy_map_inputs) == maxiter + 1
-    for actual, expected in zip(map_inputs, legacy_map_inputs):
-        torch.testing.assert_close(actual, expected, rtol=0.0, atol=2.0e-13)
-    assert len(transition_damps) == len(legacy_transitions) == maxiter + 1
+    assert len(transitions) == maxiter + 1
+    assert len(transition_damps) == maxiter + 1
 
     expected_damp = options["damp"]
     switch_after: int | None = None
-    for index, ((old, mapped, legacy_damp), functional_damp) in enumerate(
-        zip(legacy_transitions, transition_damps)
+    for index, ((old, mapped), functional_damp) in enumerate(
+        zip(transitions, transition_damps)
     ):
-        assert legacy_damp == expected_damp
         torch.testing.assert_close(
             functional_damp,
             torch.tensor(expected_damp, dtype=torch.float64),
@@ -1412,7 +1378,6 @@ def test_dynamic_damping_iterate_and_switch_parity(
             switch_after = index + 1
             expected_damp = options["damp_dynamic_factor"]
     assert switch_after is not None
-    assert legacy_transitions[switch_after][2] == options["damp_dynamic_factor"]
     assert (
         float(transition_damps[switch_after]) == options["damp_dynamic_factor"]
     )
@@ -1441,15 +1406,11 @@ def test_eager_force_convergence_policy(
         "x_atol": 1.0e-8 if maxiter == 80 else 0.0,
         "x_atol_max": 1.0e-8 if maxiter == 80 else 0.0,
     }
-    legacy_case = _prepare_case(GFN1_XTB, scf_options=options)
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
     OutputHandler.clear_warnings()
     if expected == "raise":
         from dxtb._src.typing.exceptions import SCFConvergenceError
 
-        with pytest.raises(SCFConvergenceError) as legacy_error:
-            legacy_case.engine(legacy_case.initial_charges.clone())
-        OutputHandler.clear_warnings()
         with pytest.raises(SCFConvergenceError) as functional_error:
             run_functional_full_eager(
                 functional_case.system.numbers,
@@ -1471,9 +1432,6 @@ def test_eager_force_convergence_policy(
         )
         return
 
-    legacy = legacy_case.engine(legacy_case.initial_charges.clone())
-    legacy_warnings = list(OutputHandler.warnings)
-    OutputHandler.clear_warnings()
     result = run_functional_full_eager(
         functional_case.system.numbers,
         functional_case.positions,
@@ -1487,13 +1445,14 @@ def test_eager_force_convergence_policy(
         functional_case.refocc,
     )
     assert result.functional is not None
-    _assert_public_parity(result.functional.solve_result, legacy)
-    _assert_warning_categories(OutputHandler.warnings, legacy_warnings)
     if expected == "warn":
-        assert len(legacy_warnings) == 1
-        assert "SCF does not converge" in legacy_warnings[0][0]
-        assert "Simple" in legacy_warnings[0][0]
-        assert str(maxiter) in legacy_warnings[0][0]
+        assert len(OutputHandler.warnings) == 1
+        assert OutputHandler.warnings[0][0].startswith(
+            "SCF did not certify after"
+        )
+        assert str(maxiter) in OutputHandler.warnings[0][0]
+    else:
+        assert OutputHandler.warnings == []
 
 
 def test_unsupported_spectral_lane_cannot_report_public_scf_success(

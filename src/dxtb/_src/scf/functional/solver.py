@@ -601,13 +601,13 @@ def _switch_decision(
         stationarity_ok = (
             certification is not None
             and float(
-                certification.metrics.stationarity_orthogonalized_l2_per_sqrt_orbital
+                certification.metrics.stationarity_orthogonalized_l2_per_sqrt_orbital.detach()
             )
             <= policy.stationarity
         )
     residual_ok = (
         policy.fixed_point_l2 is None
-        or float(fixed_point_l2) <= policy.fixed_point_l2
+        or float(fixed_point_l2.detach()) <= policy.fixed_point_l2
     )
     if stationarity_ok and residual_ok:
         return True, SCFSwitchReason.PHYSICAL_THRESHOLD

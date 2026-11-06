@@ -391,8 +391,8 @@ def test_all_13_setup_lifecycle_and_grad_mode_transitions() -> None:
         calc_2d = Calculator(
             padded_nums, par, opts={**opts, "batch_mode": 1}, **DD
         )
-    assert calc_1d._integrals is None
-    assert calc_2d._integrals is None
+    assert not hasattr(calc_1d, "integrals")
+    assert not hasattr(calc_2d, "integrals")
 
     e_ref, f_ref, g_ref = fresh_ref(pos_w1, par)
     p1 = pos_w1.clone().requires_grad_(True)
@@ -549,7 +549,7 @@ def test_all_13_setup_lifecycle_and_grad_mode_transitions() -> None:
     )
     calc_1d.reset()
     calc_2d.reset()
-    assert calc_1d._integrals is None and calc_2d._integrals is None
+    assert not hasattr(calc_1d, "integrals") and not hasattr(calc_2d, "integrals")
     p13 = pos_w1.clone().requires_grad_(True)
     pb13 = padded_pos2.clone().requires_grad_(True)
     torch.testing.assert_close(

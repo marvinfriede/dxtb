@@ -58,8 +58,8 @@ def test_fail_cache_input() -> None:
         es.get_cache(numbers=numbers, ihelp=None)
 
 
-def test_fail_store() -> None:
-    """Test failure upon restoring empty cache."""
+def test_cache_no_cull_restore() -> None:
+    """ES3Cache has no legacy batch culling/restore methods."""
     numbers = torch.tensor([3, 1])
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
@@ -67,8 +67,8 @@ def test_fail_store() -> None:
     assert es is not None
 
     cache = es.get_cache(numbers=numbers, ihelp=ihelp)
-    with pytest.raises(RuntimeError):
-        cache.restore()
+    assert not hasattr(cache, "cull")
+    assert not hasattr(cache, "restore")
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])

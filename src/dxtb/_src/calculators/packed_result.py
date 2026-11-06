@@ -36,9 +36,7 @@ from dxtb._src.calculators.canonical_padding import (
     pad_canonical_exact_core,
 )
 from dxtb._src.calculators.legacy_composition import (
-    LegacySCFOptions,
-    LegacySystemRoute,
-    classify_legacy_system,
+    can_pad_system,
     compose_legacy_systems,
 )
 from dxtb._src.calculators.model import Model, System
@@ -962,9 +960,7 @@ def evaluate_packed_systems(
     field: Tensor | Sequence[Tensor | None] | None = None,
     field_grad: Tensor | Sequence[Tensor | None] | None = None,
     *,
-    legacy_options: LegacySCFOptions | None = None,
     legacy_compat: bool = False,
-    strict_e6bcompat: bool = False,
     ignore_unknown_kwargs: bool = False,
     target_atoms: int | None = None,
     atom_masks: Sequence[Tensor] | None = None,
@@ -972,13 +968,11 @@ def evaluate_packed_systems(
 ) -> Result:
     """Evaluate a sequence of Systems and return a single packed Result.
 
-    This function implements the candidate ``E6broute`` batch evaluation path:
-    - Classifies each ``System`` via :func:`classify_legacy_system`.
-    - Buckets all ``MAPPED`` lanes by canonical exact-core structure via
+    - Classifies each ``System`` via :func:`can_pad_system`.
+    - Buckets padded-eligible lanes by canonical exact-core structure via
       :func:`bucket_canonical_exact_cores` and evaluates each bucket with
       :func:`evaluate_padded_systems`.
-    - Evaluates ``LEGACY_COMPOSED`` and ``SEPARATE_ROUTE`` lanes via
-      :func:`compose_legacy_systems`.
+    - Evaluates independent lanes via :func:`compose_legacy_systems`.
     - Reassembles all decoded per-System ``Result`` objects in original source
       order and packs them into a single batched ``Result`` via
       :func:`pack_system_results`.
@@ -989,28 +983,16 @@ def evaluate_packed_systems(
             "evaluate_packed_systems requires at least one System."
         )
 
-    # Stage 1: Public Calculator option validation vs low-level engine options.
+    # Stage 1: Public Calculator option validation.
     reject_removed_store_kwargs(kwargs)
     removed_store = sorted(k for k in kwargs if k.startswith("store_"))
     if removed_store:
         raise TypeError(
             f"Removed store_* keyword arguments are not supported: {removed_store}"
         )
-    if legacy_options is not None and legacy_options.kwargs:
-        reject_removed_store_kwargs(dict(legacy_options.kwargs))
-        removed_legacy_store = sorted(
-            k for k in legacy_options.kwargs if k.startswith("store_")
-        )
-        if removed_legacy_store:
-            raise TypeError(
-                "Removed store_* keyword arguments are not supported: "
-                f"{removed_legacy_store}"
-            )
 
     unknown_public = sorted(set(kwargs) - _KNOWN_PUBLIC_SINGLEPOINT_KWARGS)
-    if unknown_public and (
-        not legacy_compat or strict_e6bcompat or not ignore_unknown_kwargs
-    ):
+    if unknown_public and not (legacy_compat and ignore_unknown_kwargs):
         raise TypeError(
             f"evaluate_packed_systems() got unexpected keyword arguments "
             f"{unknown_public}: unexpected keyword argument {unknown_public[0]!r}"
@@ -1122,20 +1104,7 @@ def evaluate_packed_systems(
                 f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
 
-    # Low-level legacy_options are forwarded unchanged without filtering.
-    routes = [
-        classify_legacy_system(sys, legacy_options=legacy_options)
-        for sys in systems
-    ]
-    rejected = [
-        idx
-        for idx, route in enumerate(routes)
-        if route is LegacySystemRoute.REJECTED
-    ]
-    if rejected:
-        raise ValueError(
-            f"Systems at source indices {rejected} are rejected by E6b routing."
-        )
+    can_pad = [can_pad_system(sys) for sys in systems]
 
     ordered_results: dict[int, Result] = {}
     old_cuda_sync = timer.cuda_sync
@@ -1145,12 +1114,8 @@ def evaluate_packed_systems(
             False if lane_positions[0].device.type == "cpu" else True,
         )
     try:
-        # 1. Evaluate MAPPED lanes via canonical bucketing + evaluate_padded_systems
-        mapped_indices = [
-            idx
-            for idx, route in enumerate(routes)
-            if route is LegacySystemRoute.MAPPED
-        ]
+        # 1. Evaluate padded-eligible lanes via canonical bucketing + evaluate_padded_systems
+        mapped_indices = [idx for idx, ok in enumerate(can_pad) if ok]
         if mapped_indices:
             groups: dict[tuple[object, ...], list[int]] = {}
             for source_id in mapped_indices:
@@ -1246,16 +1211,8 @@ def evaluate_packed_systems(
                         )
                     ordered_results[source_id] = result
 
-        # 2. Evaluate LEGACY_COMPOSED and SEPARATE_ROUTE lanes via compose_legacy_systems
-        retained_indices = [
-            idx
-            for idx, route in enumerate(routes)
-            if route
-            in (
-                LegacySystemRoute.LEGACY_COMPOSED,
-                LegacySystemRoute.SEPARATE_ROUTE,
-            )
-        ]
+        # 2. Evaluate remaining lanes independently via compose_legacy_systems
+        retained_indices = [idx for idx, ok in enumerate(can_pad) if not ok]
         if retained_indices:
             composed = compose_legacy_systems(
                 tuple(systems[idx] for idx in retained_indices),
@@ -1267,11 +1224,8 @@ def evaluate_packed_systems(
                 field_grad=tuple(
                     lane_field_grads[idx] for idx in retained_indices
                 ),
-                legacy_options=legacy_options,
             )
-            for source_id, result in zip(
-                composed.source_ids, composed.results
-            ):
+            for source_id, result in zip(retained_indices, composed):
                 ordered_results[source_id] = result
     finally:
         timer.cuda_sync = old_cuda_sync
@@ -1353,38 +1307,9 @@ def _sync_lane_system_labels(
             interaction_terms=new_i_terms,
         )
 
-    compat = lane_sys._exact_compatibility
-    if compat is not None:
-        new_c_refs = tuple(
-            replace(
-                ref,
-                component_identity=id(
-                    lane_sys.classicals.components[ref.position]
-                ),
-                label=lane_sys.classicals.components[ref.position].label,
-            )
-            for ref in compat.classical_setups
-        )
-        new_i_refs = tuple(
-            replace(
-                ref,
-                component_identity=id(
-                    lane_sys.interactions.components[ref.position]
-                ),
-                label=lane_sys.interactions.components[ref.position].label,
-            )
-            for ref in compat.interaction_setups
-        )
-        compat = replace(
-            compat,
-            classical_setups=new_c_refs,
-            interaction_setups=new_i_refs,
-        )
-
     return replace(
         lane_sys,
         exact_core=exact_core,
-        _exact_compatibility=compat,
     )
 
 
@@ -1506,9 +1431,7 @@ def evaluate_calculator_packed_singlepoint(
     field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     *,
-    strict_e6bcompat: bool = False,
     ignore_unknown_kwargs: bool = True,
-    legacy_options: LegacySCFOptions | None = None,
     **kwargs: Any,
 ) -> Result:
     """Evaluate a batched Calculator through packed functional System routing.
@@ -1553,9 +1476,7 @@ def evaluate_calculator_packed_singlepoint(
         spin=spin,
         field=resolved_field,
         field_grad=resolved_field_grad,
-        legacy_options=legacy_options,
         legacy_compat=True,
-        strict_e6bcompat=strict_e6bcompat,
         ignore_unknown_kwargs=ignore_unknown_kwargs,
         target_atoms=target_atoms,
         atom_masks=atom_masks,

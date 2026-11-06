@@ -78,7 +78,6 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import (
     DD,
     Any,
-    Slicers,
     Tensor,
     TensorLike,
     get_default_dtype,
@@ -131,16 +130,13 @@ class ES3Cache(InteractionCache, TensorLike):
     Restart data for the :class:`.ES3` interaction.
     """
 
-    __store: Store | None
-    """Storage for cache (required for culling)."""
-
     hd: Tensor
     """Spread Hubbard derivatives of all atoms (not only unique)."""
 
     shell_resolved: bool
     """Whether the third-order electrostatics are shell-resolved."""
 
-    __slots__ = ["__store", "hd", "shell_resolved"]
+    __slots__ = ["hd", "shell_resolved"]
 
     def __init__(
         self,
@@ -155,31 +151,6 @@ class ES3Cache(InteractionCache, TensorLike):
         )
         self.hd = hd
         self.shell_resolved = shell_resolved
-        self.__store = None
-
-    class Store:
-        """
-        Storage container for cache containing ``__slots__`` before culling.
-        """
-
-        hd: Tensor
-        """Spread Hubbard derivatives of all atoms (not only unique)."""
-
-        def __init__(self, hd: Tensor) -> None:
-            self.hd = hd
-
-    def cull(self, conv: Tensor, slicers: Slicers) -> None:
-        if self.__store is None:
-            self.__store = self.Store(self.hd)
-
-        slicer = slicers["shell"] if self.shell_resolved else slicers["atom"]
-        self.hd = self.hd[tuple([~conv, *slicer])]
-
-    def restore(self) -> None:
-        if self.__store is None:
-            raise RuntimeError("Nothing to restore. Store is empty.")
-
-        self.hd = self.__store.hd
 
 
 class ES3(Interaction):

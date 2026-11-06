@@ -27,7 +27,6 @@ import torch
 
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.misc import get_all_slots
-from dxtb._src.utils.tensors import GradKey, grad_key_matches
 
 __all__ = ["Component", "ComponentCache"]
 
@@ -56,58 +55,15 @@ class Component(TensorLike):
     label: str
     """Label for the tight-binding component."""
 
-    _cache: ComponentCache | None
-    """Cache for the component."""
-
-    _cachevars: tuple[Tensor, ...] | None
-    """
-    Cache variable for the component.
-    If this variable changes, the cache has to be rebuild.
-    """
-
-    _cachegrad: GradKey | None
-    """
-    Gradient-tracking state of the tensors the cache was built from (see
-    :func:`~dxtb._src.utils.tensors.grad_key`). Only set by caches that hold
-    an autograd graph of the positions or fields.
-    """
-
-    _cache_enabled: bool
-    """Flag to enable or disable the cache."""
-
-    __slots__ = [
-        "label",
-        "_cache",
-        "_cachevars",
-        "_cachegrad",
-        "_cache_enabled",
-    ]
+    __slots__ = ["label"]
 
     def __init__(
         self,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-        *,
-        _cache: ComponentCache | None = None,
-        _cachevars: tuple[Tensor, ...] | None = None,
     ):
         super().__init__(device, dtype)
         self.label = self.__class__.__name__
-        self._cache = _cache
-        self._cachevars = _cachevars
-        self._cachegrad = None
-        self._cache_enabled = True
-
-    ############################################################################
-
-    @property
-    def cache(self) -> ComponentCache | None:
-        """Cache for the interaction."""
-        return self._cache
-
-    @cache.setter
-    def cache(self, value: ComponentCache | None) -> None:
-        self._cache = value
 
     ############################################################################
 
@@ -152,8 +108,6 @@ class Component(TensorLike):
                     f"{', '.join(self.__slots__)}."
                 )
 
-            self.cache_invalidate()
-
     def reset(self) -> None:
         """
         Reset the tensor attributes of the
@@ -188,101 +142,12 @@ class Component(TensorLike):
 
                 setattr(self, slot, reset)
 
-        self.cache_invalidate()
-
     ############################################################################
-
-    def cache_is_latest(
-        self,
-        cvars: tuple[Tensor, ...],
-        tol: float | None = None,
-        grad: tuple[Tensor, ...] = (),
-    ) -> bool:
-        """
-        Check if the cache is set up and updated.
-
-        Parameters
-        ----------
-        cvars : tuple[Tensor, ...]
-            Detached copies of the tensors the cache depends on.
-        tol : float | None, optional
-            Tolerance for the comparison of floating point values.
-        grad : tuple[Tensor, ...], optional
-            The original tensors whose autograd graph the cache holds (e.g.,
-            the positions). The cache is only valid if they have the
-            gradient-tracking state recorded in :attr:`_cachegrad`.
-
-        Returns
-        -------
-        bool
-            Flag for set up status.
-        """
-        if self._cache_enabled is False:
-            return False
-
-        if self.cache is None:
-            return False
-
-        if self._cachevars is None:
-            return False
-
-        # Equal values are not enough for a cache that holds an autograd
-        # graph (stale-graph stopgap, T0.5).
-        if len(grad) > 0 and not grad_key_matches(self._cachegrad, *grad):
-            return False
-
-        for v1, v2 in zip(cvars, self._cachevars):
-            # functorch makes problems here, just disable cache for now
-            if torch._C._functorch.is_gradtrackingtensor(v1):
-                return False
-            if torch._C._functorch.is_gradtrackingtensor(v2):
-                return False
-
-            if v1.dtype != v2.dtype:
-                return False
-
-            if v1.device != v2.device:
-                return False
-
-            if v1.dtype in (torch.int64, torch.int32, torch.long):
-                if torch.equal(v1, v2) is False:
-                    return False
-            else:
-                if tol is None:
-                    tol = torch.finfo(v1.dtype).eps ** 0.75
-
-                if (v2 - v1).abs().sum() > tol:
-                    return False
-
-        return True
-
-    def cache_invalidate(self) -> None:
-        """Invalidate the cache to require renewed setup."""
-        self._cache = None
-        self._cachevars = None
-        self._cachegrad = None
-
-    @property
-    def cache_is_setup(self) -> bool:
-        """Whether the cache has been set up."""
-        return self._cache is not None and self._cachevars is not None
-
-    def cache_enable(self) -> None:
-        """Enable the cache."""
-        self._cache_enabled = True
-
-    def cache_disable(self) -> None:
-        """Disable the cache."""
-        self._cache_enabled = False
 
     @override
     def type(self, dtype: torch.dtype) -> Self:
         new = super().type(dtype)
         new.label = getattr(self, "label", self.__class__.__name__)
-        new._cache = None
-        new._cachevars = None
-        new._cachegrad = None
-        new._cache_enabled = getattr(self, "_cache_enabled", True)
         return new
 
     ############################################################################

@@ -299,10 +299,11 @@ def test_core_conversion_and_energy_preserve_legacy_numbers_contract() -> None:
     expected = component.get_energy(positions, legacy)
     actual = dispersion_d3_energy(core, positions)
     torch.testing.assert_close(actual, expected)
-    torch.testing.assert_close(
-        dispersion_d3_energy(core, positions, chunk_size=1),
-        component.get_energy(positions, legacy, chunk_size=1),
-    )
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        actual_chunked = dispersion_d3_energy(core, positions, chunk_size=1)
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        expected_chunked = component.get_energy(positions, legacy, chunk_size=1)
+    torch.testing.assert_close(actual_chunked, expected_chunked)
 
 
 def test_core_dtype_conversion_and_transform_probe() -> None:
@@ -461,15 +462,21 @@ def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
     assert torch.isfinite(mixed_core)
     torch.testing.assert_close(mixed_core, mixed_legacy)
 
-    for chunk_size in (None, 1):
-        torch.testing.assert_close(
-            component.get_energy(
-                sample["positions"].double(), core, chunk_size=chunk_size
-            ),
-            component.get_energy(
-                sample["positions"].double(), legacy, chunk_size=chunk_size
-            ),
+    torch.testing.assert_close(
+        component.get_energy(sample["positions"].double(), core, chunk_size=None),
+        component.get_energy(
+            sample["positions"].double(), legacy, chunk_size=None
+        ),
+    )
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        core_chunked = component.get_energy(
+            sample["positions"].double(), core, chunk_size=1
         )
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        legacy_chunked = component.get_energy(
+            sample["positions"].double(), legacy, chunk_size=1
+        )
+    torch.testing.assert_close(core_chunked, legacy_chunked)
     with pytest.raises(TypeError, match="DispersionD3Cache"):
         component.get_energy(sample["positions"].double(), object())
 
@@ -593,11 +600,15 @@ def test_classical_list_evaluates_system_owned_d3_core() -> None:
     torch.testing.assert_close(
         contributions[d3_component.label], dispersion_d3_energy(core, positions)
     )
-    for chunk_size in (None, 1):
-        torch.testing.assert_close(
-            d3_component.get_energy(positions, core, chunk_size=chunk_size),
-            dispersion_d3_energy(core, positions, chunk_size=chunk_size),
-        )
+    torch.testing.assert_close(
+        d3_component.get_energy(positions, core, chunk_size=None),
+        dispersion_d3_energy(core, positions, chunk_size=None),
+    )
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        comp_chunked = d3_component.get_energy(positions, core, chunk_size=1)
+    with pytest.warns(DeprecationWarning, match="chunk_size is not applied"):
+        func_chunked = dispersion_d3_energy(core, positions, chunk_size=1)
+    torch.testing.assert_close(comp_chunked, func_chunked)
 
 
 def test_core_cache_snapshot_and_legacy_component_ownership_diverge() -> None:

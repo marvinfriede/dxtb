@@ -35,7 +35,6 @@ import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import IndexHelper, OutputHandler
-from dxtb import integrals as ints
 from dxtb import labels
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.properties.vibration import (
@@ -62,9 +61,8 @@ from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.tensors import normalize_device
-from dxtb._src.xtb.h0 import H0SetupNode, legacy_h0_setup
+from dxtb._src.xtb.h0 import H0SetupNode
 from dxtb.config import Config
-from dxtb.integrals import Integrals
 
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
 
@@ -253,20 +251,6 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         elif inter is system.generalized_born_interaction:
             generalized_born_setup = conv_setup
 
-    compat = system._exact_compatibility
-    if compat is not None:
-        compat = replace(
-            compat,
-            classical_setups=tuple(
-                replace(ref, setup=c_setup_by_pos.get(ref.position, ref.setup))
-                for ref in compat.classical_setups
-            ),
-            interaction_setups=tuple(
-                replace(ref, setup=i_setup_by_pos.get(ref.position, ref.setup))
-                for ref in compat.interaction_setups
-            ),
-        )
-
     from dxtb._src.calculators.packed_result import (
         _BUILTIN_CLASSICAL_TYPES,
         _BUILTIN_INTERACTION_TYPES,
@@ -331,7 +315,6 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         generalized_born_setup=generalized_born_setup,
         dd={**system.dd, "dtype": dtype},
         exact_core=exact_core,
-        _exact_compatibility=compat,
         _classical_extension_cache=ext_cache,
     )
 
@@ -355,9 +338,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
     interactions: InteractionList
     """Interactions to minimize in self-consistent iterations."""
-
-    integrals: Integrals
-    """Integrals for the extended tight-binding model."""
 
     ihelp: IndexHelper
     """Helper class for indexing."""
@@ -594,21 +574,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             self.ihelp = self.system.ihelp
             self.classicals = self.system.classicals
             self.interactions = self.system.interactions
-            self._integrals: Integrals | None = None
 
         self._ncalcs = 0
         timer.stop("Calculator")
-
-    @property
-    def integrals(self) -> Integrals:
-        """Lazily construct Calculator-local mutable integral compatibility objects."""
-        if self._integrals is None:
-            self._integrals = self._create_legacy_integral_adapter()
-        return self._integrals
-
-    @integrals.setter
-    def integrals(self, value: Integrals | None) -> None:
-        self._integrals = value
 
     def _prepare_eval_system(self) -> System:
         """Build a call-local System setup for 1D single-System evaluation."""
@@ -679,47 +647,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             eval_sys = _convert_eval_system_dtype(eval_sys, self.dtype)
         return eval_sys
 
-    def _create_legacy_integral_adapter(self) -> Integrals:
-        """Create Calculator-local mutable integral compatibility objects."""
-        manager = ints.DriverManager(
-            self.opts.ints.driver,
-            algorithm=self.opts.ints.algorithm,
-            **self.dd,
-        )
-        manager.create_driver(self.numbers, self.model.par, self.ihelp)
-        integrals = ints.Integrals(
-            manager, intlevel=self.opts.ints.level, **self.dd
-        )
-
-        if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
-            if self.system.h0_setup is None:
-                raise RuntimeError("Core Hamiltonian setup is missing.")
-            h0_setup = self.system.h0_setup
-            if isinstance(h0_setup, H0SetupNode):
-                h0_setup = legacy_h0_setup(h0_setup, self.ihelp)
-            integrals.hcore = ints.factories.new_hcore(
-                self.numbers,
-                self.model.par,
-                self.ihelp,
-                setup=h0_setup,
-                **self.dd,
-            )
-            integrals.overlap = ints.factories.new_overlap(
-                driver=manager.driver_type, **self.dd
-            )
-
-        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-            integrals.dipole = ints.factories.new_dipint(
-                driver=manager.driver_type, **self.dd
-            )
-
-        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-            integrals.quadrupole = ints.factories.new_quadint(
-                driver=manager.driver_type, **self.dd
-            )
-
-        return integrals
-
     def reset(self) -> None:
         """
         Reset the calculator to its initial state.
@@ -734,8 +661,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         """
         self.classicals.reset_all()
         self.interactions.reset_all()
-        if self._integrals is not None:
-            self._integrals.reset_all()
 
     @abstractmethod
     def calculate(
@@ -908,8 +833,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
-        if self._integrals is not None:
-            self._integrals = self._integrals.type(dtype)
 
         # Keep the system consistent with the converted components where
         # supported. Legacy System classical and ES2/ES3 setup objects are
@@ -937,16 +860,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         num_calculations = self._ncalcs
         num_classicals = len(self.classicals)
         num_interactions = len(self.interactions)
-        if self._integrals is not None:
-            int_labels = self._integrals.labels
-        else:
-            int_labels = []
-            if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
-                int_labels.extend(["hcore", "overlap"])
-            if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
-                int_labels.append("dipole")
-            if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
-                int_labels.append("quadrupole")
+        int_labels = []
+        if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
+            int_labels.extend(["hcore", "overlap"])
+        if self.opts.ints.level >= labels.INTLEVEL_DIPOLE:
+            int_labels.append("dipole")
+        if self.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE:
+            int_labels.append("quadrupole")
         num_integrals = len(int_labels)
 
         return (

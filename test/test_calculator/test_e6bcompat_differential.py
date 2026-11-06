@@ -500,10 +500,7 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     representation: scf.SCFRepresentation,
 ) -> None:
     """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
-    from dxtb._src.calculators.legacy_composition import (
-        LegacySystemRoute,
-        classify_legacy_system,
-    )
+    from dxtb._src.calculators.legacy_composition import classify_legacy_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     strategy = scf.SCFStrategy(
@@ -526,8 +523,8 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     model = Model(par=param, config=config, auto_int_level=False)
     sys_h2 = model.setup(torch.tensor([1, 1], dtype=torch.int64))
     sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
-    assert classify_legacy_system(sys_h2) is LegacySystemRoute.MAPPED
-    assert classify_legacy_system(sys_h2o) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys_h2)
+    assert classify_legacy_system(sys_h2o)
     assert sys_h2.config.scf.strategy.stages[0].representation is representation
 
     pos_h2 = _geometry((1, 1), 0)
@@ -791,11 +788,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
 
 def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
     """evaluate_packed_systems coordinates multi-bucket MAPPED and retained lanes."""
-    from dxtb._src.calculators.legacy_composition import (
-        LegacySCFOptions,
-        LegacySystemRoute,
-        classify_legacy_system,
-    )
+    from dxtb._src.calculators.legacy_composition import classify_legacy_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
@@ -828,9 +821,9 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         par=param_gfn2, config=cfg_gfn2_mapped, auto_int_level=False
     ).setup(torch.tensor([1, 1, 1], dtype=torch.int64))
 
-    assert classify_legacy_system(sys0) is LegacySystemRoute.MAPPED
-    assert classify_legacy_system(sys1) is LegacySystemRoute.LEGACY_COMPOSED
-    assert classify_legacy_system(sys2) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys0)
+    assert not classify_legacy_system(sys1)
+    assert classify_legacy_system(sys2)
 
     systems = (sys0, sys1, sys2)
     positions = (
@@ -865,12 +858,11 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         sys_gfn2_default.config.scf.strategy.stages[0].representation
         is scf.SCFRepresentation.POTENTIAL
     )
-    assert classify_legacy_system(sys_gfn2_default) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(sys_gfn2_default)
     OutputHandler.clear_warnings()
     packed_gfn2_def = evaluate_packed_systems(
         (sys_gfn2_default,),
         (_geometry((1, 1), 0),),
-        strict_e6bcompat=True,
     )
     assert not OutputHandler.warnings
     torch.testing.assert_close(
@@ -879,14 +871,6 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         atol=1e-12,
         rtol=1e-12,
     )
-
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        evaluate_packed_systems(
-            (sys0,),
-            (_geometry((1, 1), 0),),
-            legacy_options=LegacySCFOptions(kwargs={"unknown_flag": True}),
-            strict_e6bcompat=True,
-        )
 
     # Open-shell (odd-electron OH.) with default spin=None and mixed SCF/non-SCF occupation packing
     cfg_gfn1_open = Config.create(
@@ -1106,7 +1090,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
 
 def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
     """Verify unknown kwargs, charge/spin normalization, parity, and capacity rules."""
-    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
     from dxtb._src.scf.status import SCFFailureCode
 
@@ -1126,17 +1109,10 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
     pos_h2 = _geometry((1, 1), 0)
     pos_h3p = _geometry((1, 1, 1), 0)
 
-    # 1. Unknown public kwargs rejected by default; legacy_options rejected with NotImplementedError
+    # 1. Unknown public kwargs rejected by default
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         evaluate_packed_systems(
             (sys_h2,), (pos_h2,), unknown_public_option=True
-        )
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        evaluate_packed_systems(
-            (sys_h2,),
-            (pos_h2,),
-            legacy_options=LegacySCFOptions(kwargs={"unknown_low_level": 1}),
-            strict_e6bcompat=False,
         )
     # Removed store_* always rejected even with ignore_unknown_kwargs=True
     with pytest.raises(TypeError, match="store_"):
@@ -1145,17 +1121,6 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             (pos_h2,),
             ignore_unknown_kwargs=True,
             store_overlap=True,
-        )
-    # Legacy engine options are retired, even when ignore_unknown_kwargs=True
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        evaluate_packed_systems(
-            (sys_h2,),
-            (pos_h2,),
-            legacy_options=LegacySCFOptions(
-                kwargs={"fwd_options": {"damp": 0.25}, "ignored_extra": 123}
-            ),
-            legacy_compat=True,
-            ignore_unknown_kwargs=True,
         )
     # Explicit legacy_compat + ignore_unknown_kwargs ignores unknown PUBLIC kwargs
     res_ignored = evaluate_packed_systems(
@@ -1502,7 +1467,6 @@ def test_option_ownership_and_side_effects_contract(
 ) -> None:
     """Verify public write_*/cuda_sync_in_scf execution vs low-level SCF options."""
     from dxtb._src.calculators import packed_result as pr_mod
-    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
     from dxtb._src.calculators.packed_result import (
         evaluate_calculator_packed_singlepoint,
         evaluate_packed_systems,
@@ -1599,7 +1563,7 @@ def test_option_ownership_and_side_effects_contract(
     finally:
         timer.cuda_sync = old_sync
 
-    # 4. Option separation: unknown public kwargs vs low-level legacy_options
+    # 4. Option separation: unknown public kwargs
     lane_systems = pr_mod.build_calculator_lane_systems(calc)
     # Functional API (legacy_compat=False) always rejects unknown public kwargs
     with pytest.raises(TypeError, match="unexpected keyword argument"):
@@ -1609,25 +1573,6 @@ def test_option_ownership_and_side_effects_contract(
             legacy_compat=False,
             ignore_unknown_kwargs=True,
             unknown_public_kw=1,
-        )
-    # Low-level legacy_options are never filtered by ignore_unknown_kwargs=True and raise NotImplementedError
-    for bad_key in ("unexpected_option", "solver_options", "custom_bad_scf_kw"):
-        with pytest.raises(NotImplementedError, match="overrides are no longer"):
-            evaluate_packed_systems(
-                lane_systems,
-                source_positions,
-                legacy_options=LegacySCFOptions(kwargs={bad_key: 1}),
-                legacy_compat=True,
-                ignore_unknown_kwargs=True,
-            )
-    # Low-level positional args also fail with NotImplementedError
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        evaluate_packed_systems(
-            lane_systems,
-            source_positions,
-            legacy_options=LegacySCFOptions(args=("extra_positional",)),
-            legacy_compat=True,
-            ignore_unknown_kwargs=True,
         )
 
 
@@ -1700,10 +1645,9 @@ def test_classical_display_key_collision_resolution() -> None:
 
 
 def test_failure_precedence_six_stages() -> None:
-    """Verify the 6-stage failure precedence order when multiple errors coexist."""
+    """Verify the failure precedence order when multiple errors coexist."""
     from tad_mctc.exceptions import DtypeError
 
-    from dxtb._src.calculators.legacy_composition import LegacySCFOptions
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
     from dxtb._src.typing.exceptions import SCFConvergenceError
 
@@ -1731,45 +1675,40 @@ def test_failure_precedence_six_stages() -> None:
 
     bad_pos_dtype = pos_h2.to(torch.float32)
     valid_field = torch.tensor([0.01, 0.0, 0.0], dtype=DTYPE)
-    bad_legacy_opts = LegacySCFOptions(kwargs={"unknown_scf_kw": 1})
 
-    # Stage 1 beats Stages 2, 3, 4, 5, 6: removed store_* -> TypeError
+    # Stage 1 beats Stages 2, 3, 4, 6: removed store_* -> TypeError
     with pytest.raises(TypeError, match="store_"):
         evaluate_packed_systems(
             (sys_stage4,),
             (bad_pos_dtype,),
             field=valid_field,
-            legacy_options=bad_legacy_opts,
             legacy_compat=True,
             store_overlap=True,
         )
 
-    # Stage 2 beats Stages 3, 4, 5, 6: wrong position dtype -> DtypeError
+    # Stage 2 beats Stages 3, 4, 6: wrong position dtype -> DtypeError
     with pytest.raises(DtypeError, match="Dtype mismatch"):
         evaluate_packed_systems(
             (sys_stage4,),
             (bad_pos_dtype,),
             field=valid_field,
-            legacy_options=bad_legacy_opts,
             legacy_compat=True,
         )
 
-    # Stage 3 beats Stages 4, 5, 6: field with int_level < INTLEVEL_DIPOLE -> RuntimeError
+    # Stage 3 beats Stages 4, 6: field with int_level < INTLEVEL_DIPOLE -> RuntimeError
     with pytest.raises(RuntimeError, match="dipole integrals"):
         evaluate_packed_systems(
             (sys_stage4,),
             (pos_h2,),
             field=valid_field,
-            legacy_options=bad_legacy_opts,
             legacy_compat=True,
         )
 
-    # Stage 4 beats Stages 5, 6: int_level < INTLEVEL_HCORE -> NotImplementedError
+    # Stage 4 beats Stage 6: int_level < INTLEVEL_HCORE -> NotImplementedError
     with pytest.raises(NotImplementedError, match="Core Hamiltonian missing"):
         evaluate_packed_systems(
             (sys_stage4,),
             (pos_h2,),
-            legacy_options=bad_legacy_opts,
             legacy_compat=True,
         )
 
@@ -1792,16 +1731,7 @@ def test_failure_precedence_six_stages() -> None:
     ).setup(torch.tensor([8, 1, 1], dtype=torch.int64))
     pos_h2o = _geometry((8, 1, 1), 0)
 
-    # Stage 5 beats Stage 6: retired low-level SCF kwarg -> NotImplementedError
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        evaluate_packed_systems(
-            (sys_stage56,),
-            (pos_h2o,),
-            legacy_options=bad_legacy_opts,
-            legacy_compat=True,
-        )
-
-    # Stage 6 fires when Stages 1-5 are valid: SCFConvergenceError
+    # Stage 6 fires when earlier stages are valid: SCFConvergenceError
     with pytest.raises(SCFConvergenceError):
         evaluate_packed_systems(
             (sys_stage56,),

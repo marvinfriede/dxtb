@@ -7,8 +7,6 @@ import torch
 
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.legacy_composition import (
-    LegacySCFOptions,
-    LegacySystemRoute,
     classify_legacy_system,
     compose_legacy_systems,
 )
@@ -121,23 +119,19 @@ def test_libcint_composition_matches_independent_serial_systems() -> None:
     a = _system(na, driver=labels.INTDRIVER_LIBCINT)
     b = _system(nb, driver=labels.INTDRIVER_LIBCINT)
     pa, pb = _positions(na), _positions(nb)
-    assert classify_legacy_system(a) is LegacySystemRoute.LEGACY_COMPOSED
-    assert classify_legacy_system(b) is LegacySystemRoute.LEGACY_COMPOSED
+    assert not classify_legacy_system(a)
+    assert not classify_legacy_system(b)
 
     composed = compose_legacy_systems((a, b), (pa, pb), source_ids=(4, 19))
     reversed_result = compose_legacy_systems(
         (b, a), (pb, pa), source_ids=(19, 4)
     )
-    assert composed.source_ids == (4, 19)
-    assert reversed_result.source_ids == (19, 4)
-    for actual, system, pos in zip(composed.results, (a, b), (pa, pb)):
+    for actual, system, pos in zip(composed, (a, b), (pa, pb)):
         expected = system.singlepoint(pos)
         torch.testing.assert_close(actual.energy, expected.energy)
         torch.testing.assert_close(actual.hcore, expected.hcore)
         torch.testing.assert_close(actual.overlap, expected.overlap)
-    for actual, expected in zip(
-        composed.results, reversed_result.results[::-1]
-    ):
+    for actual, expected in zip(composed, reversed_result[::-1]):
         torch.testing.assert_close(actual.energy, expected.energy)
 
 
@@ -156,15 +150,13 @@ def test_libcint_composition_preserves_shared_fields_and_responses() -> None:
         field_grad=field_grad,
     )
     serial = system.singlepoint(pos_a, field=field, field_grad=field_grad)
-    torch.testing.assert_close(result.results[0].energy, serial.energy)
+    torch.testing.assert_close(result[0].energy, serial.energy)
     (composed_field_grad,) = torch.autograd.grad(
-        result.results[0].energy.sum(), field, retain_graph=True
+        result[0].energy.sum(), field, retain_graph=True
     )
     (serial_field_grad,) = torch.autograd.grad(serial.energy.sum(), field)
     torch.testing.assert_close(composed_field_grad, serial_field_grad)
-    (physical_pos_grad,) = torch.autograd.grad(
-        result.results[0].energy.sum(), pos_a
-    )
+    (physical_pos_grad,) = torch.autograd.grad(result[0].energy.sum(), pos_a)
     assert torch.count_nonzero(physical_pos_grad) > 0
 
 
@@ -178,7 +170,7 @@ def test_libcint_composition_keeps_per_system_charge_and_spin() -> None:
         (a, b), (pa, pb), charges=(1, 0), spins=(1, 0)
     )
     for result, system, pos, charge, spin in zip(
-        composed.results, (a, b), (pa, pb), (1, 0), (1, 0)
+        composed, (a, b), (pa, pb), (1, 0), (1, 0)
     ):
         serial = system.singlepoint(pos, chrg=charge, spin=spin)
         torch.testing.assert_close(result.energy, serial.energy)
@@ -201,7 +193,7 @@ def test_libcint_composition_preserves_model_parameter_gradient() -> None:
     )
     system = Model(par=par, config=config).setup(numbers)
     positions = _positions(numbers.tolist()).requires_grad_()
-    composed = compose_legacy_systems((system,), (positions,)).results[0]
+    composed = compose_legacy_systems((system,), (positions,))[0]
     (composed_grad,) = torch.autograd.grad(
         composed.energy.sum(), kpol, retain_graph=True
     )
@@ -250,10 +242,10 @@ def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     positions = _positions(numbers)
-    assert classify_legacy_system(system) is LegacySystemRoute.LEGACY_COMPOSED
+    assert not classify_legacy_system(system)
     before = component.cache_calls
-    first = compose_legacy_systems((system,), (positions,)).results[0]
-    second = compose_legacy_systems((system,), (positions,)).results[0]
+    first = compose_legacy_systems((system,), (positions,))[0]
+    second = compose_legacy_systems((system,), (positions,))[0]
     assert component.cache_calls >= before + 2
     first_classicals = dict(first.classical)
     second_classicals = dict(second.classical)
@@ -273,7 +265,7 @@ def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
     system = _system(numbers, classical=(component,))
     mapped_pos = _positions(numbers).requires_grad_()
     serial_pos = _positions(numbers).requires_grad_()
-    result = compose_legacy_systems((system,), (mapped_pos,)).results[0]
+    result = compose_legacy_systems((system,), (mapped_pos,))[0]
     serial = system.singlepoint(serial_pos)
     (mapped_grad,) = torch.autograd.grad(result.energy.sum(), mapped_pos)
     (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
@@ -284,7 +276,7 @@ def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
 def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
     numbers = [1, 1]
     system = _system(numbers)
-    assert classify_legacy_system(system) is LegacySystemRoute.MAPPED
+    assert classify_legacy_system(system)
     with pytest.raises(ValueError, match="Mapped-eligible"):
         compose_legacy_systems((system,), (_positions(numbers),))
 
@@ -340,84 +332,11 @@ def test_classical_only_calculation_retains_separate_route() -> None:
     system = Model(
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor(numbers, device=DEVICE))
-    assert classify_legacy_system(system) is LegacySystemRoute.SEPARATE_ROUTE
-    result = compose_legacy_systems((system,), (_positions(numbers),)).results[
-        0
-    ]
+    assert not classify_legacy_system(system)
+    result = compose_legacy_systems((system,), (_positions(numbers),))[0]
     assert result.scf is not None
     assert torch.count_nonzero(result.scf) == 0
     assert result.charges is None
-
-
-def test_legacy_engine_keywords_are_not_filtered() -> None:
-    numbers = [1, 1]
-    system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        compose_legacy_systems(
-            (system,),
-            (_positions(numbers),),
-            legacy_options=LegacySCFOptions(kwargs={"unexpected_option": 1}),
-        )
-
-
-def test_legacy_engine_positional_extras_are_not_filtered() -> None:
-    numbers = [1, 1]
-    system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        compose_legacy_systems(
-            (system,),
-            (_positions(numbers),),
-            legacy_options=LegacySCFOptions(args=(object(),)),
-        )
-
-
-def test_legacy_engine_constructor_options_are_retired() -> None:
-    numbers = [1, 1]
-    system = _system(numbers, classical=(_CacheClassical(),))
-    options = LegacySCFOptions(
-        kwargs={
-            "fwd_options": {"damp": 0.25},
-            "bck_options": {"posdef": False},
-            "eigen_options": {"method": "exacteig"},
-        }
-    )
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        compose_legacy_systems(
-            (system,), (_positions(numbers),), legacy_options=options
-        )
-
-
-def test_legacy_composition_rejects_engine_option_dictionaries() -> None:
-    numbers = [1, 1]
-    system = _system(numbers, classical=(_CacheClassical(),))
-    options = LegacySCFOptions(
-        kwargs={
-            "fwd_options": {"damp": 0.25},
-            "bck_options": {"posdef": False},
-            "eigen_options": {"method": "exacteig"},
-        }
-    )
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        compose_legacy_systems(
-            (system,), (_positions(numbers),), legacy_options=options
-        )
-
-
-@pytest.mark.parametrize(
-    "keyword", ["fwd_options", "bck_options", "eigen_options"]
-)
-def test_legacy_composition_preserves_malformed_option_errors(
-    keyword: str,
-) -> None:
-    """Malformed legacy option mappings fail at the legacy owner."""
-    numbers = [1, 1]
-    system = _system(numbers, classical=(_CacheClassical(),))
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
-        compose_legacy_systems(
-            (system,),
-            (_positions(numbers),),
-            legacy_options=LegacySCFOptions(kwargs={keyword: None}),
-        )
 
 
 def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
@@ -431,7 +350,7 @@ def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
     results = compose_legacy_systems(
         (first_system, second_system),
         (_positions(numbers), _positions(numbers, shift=0.1)),
-    ).results
+    )
 
     assert first_component.label in dict(results[0].classical)
     assert second_component.label not in dict(results[0].classical)
@@ -603,8 +522,8 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model = Model(par=par, config=cfg)
         s_a = model.setup(nums_h2)
         s_b = model.setup(nums_h2o)
-        assert classify_legacy_system(s_a) is LegacySystemRoute.MAPPED
-        assert classify_legacy_system(s_b) is LegacySystemRoute.MAPPED
+        assert classify_legacy_system(s_a)
+        assert classify_legacy_system(s_b)
         packed = evaluate_packed_systems((s_a, s_b), (pos_h2, pos_h2o))
         ref_a = s_a.singlepoint(pos_h2)
         ref_b = s_b.singlepoint(pos_h2o)
@@ -726,10 +645,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model_imp = Model(par=par_gfn1, config=cfg_imp)
         sys_imp_a = model_imp.setup(nums_h2)
         sys_imp_b = model_imp.setup(nums_h2o)
-        assert (
-            classify_legacy_system(sys_imp_a)
-            is LegacySystemRoute.LEGACY_COMPOSED
-        )
+        assert not classify_legacy_system(sys_imp_a)
         p_a = pos_h2.detach().clone().requires_grad_(True)
         p_b = pos_h2o.detach().clone().requires_grad_(True)
         packed_imp = evaluate_packed_systems(

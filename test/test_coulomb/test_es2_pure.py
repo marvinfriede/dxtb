@@ -107,16 +107,10 @@ def test_setup_builder_history_and_named_resolution(
         numbers=numbers, positions=positions, ihelp=ihelp
     )
     assert second_cache is not legacy_cache
-    assert interaction.cache is None
-    assert interaction._cachevars is None
-    assert interaction._cachegrad is None
-    interaction.cache_disable()
-    interaction.cache_invalidate()
-    third_cache = interaction.get_cache(
-        numbers=numbers, positions=positions, ihelp=ihelp
-    )
-    assert third_cache is not second_cache
-    torch.testing.assert_close(third_cache.mat, second_cache.mat)
+    assert not hasattr(interaction, "cache")
+    assert not hasattr(interaction, "_cachevars")
+    assert not hasattr(interaction, "_cachegrad")
+    torch.testing.assert_close(second_cache.mat, legacy_cache.mat)
     torch.testing.assert_close(matrix1, legacy_cache.mat)
 
     # The method name fixes its resolution even when the interaction object's

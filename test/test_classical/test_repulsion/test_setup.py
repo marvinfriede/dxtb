@@ -89,11 +89,8 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
     second = system.repulsion_classical.get_cache(numbers, system.ihelp)
     assert type(first) is RepulsionSetup
     assert first is not second
-    assert system.repulsion_classical.cache is None
-    assert system.repulsion_classical._cachevars is None
-    system.repulsion_classical.cache_disable()
-    third = system.repulsion_classical.get_cache(numbers, system.ihelp)
-    assert third is not second
+    assert not hasattr(system.repulsion_classical, "cache")
+    assert not hasattr(system.repulsion_classical, "_cachevars")
 
 
 def test_core_repulsion_transforms_and_legacy_parity() -> None:
@@ -330,13 +327,11 @@ def test_repulsion_subclass_uses_legacy_path() -> None:
             arep = kwargs.pop("arep", None)
             if arep is not None:
                 self.arep = arep
-                self.cache_invalidate()
             super().update(**kwargs)
 
         def reset(self) -> None:
             self.reset_calls += 1
             self.arep = self.original_arep.clone()
-            self.cache_invalidate()
             super().reset()
 
     numbers = samples["H2O"]["numbers"].to(DEVICE)

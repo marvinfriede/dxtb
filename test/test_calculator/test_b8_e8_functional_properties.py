@@ -190,7 +190,7 @@ def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
 
     monkeypatch.setattr(calc.classicals, "reset_all", forbid_reset)
     monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
-    monkeypatch.setattr(calc.integrals, "reset_all", forbid_reset)
+    assert not hasattr(calc, "integrals")
 
     ir_sys = system.ir(pos, field=field0.detach())
     ir_calc = calc.ir(pos_req, field=field0)
@@ -294,7 +294,7 @@ def test_b8b_e8_third_order_hyperpolarizability_pol_deriv_and_raman(
 
     monkeypatch.setattr(calc.classicals, "reset_all", forbid_reset)
     monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
-    monkeypatch.setattr(calc.integrals, "reset_all", forbid_reset)
+    assert not hasattr(calc, "integrals")
 
     # 1. Hyperpolarizability beta = -d^3E/dF^3
     beta_sys = system.hyperpolarizability(pos, field=field0.detach())

@@ -61,7 +61,6 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     )
     assert es is not None
 
-    es.cache_disable()
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
     # numerical
@@ -128,7 +127,6 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     )
     assert es is not None
 
-    es.cache_disable()
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
 
     # analytical (old)

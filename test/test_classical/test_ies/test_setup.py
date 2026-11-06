@@ -110,8 +110,8 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     assert type(legacy2) is IESSetup
     assert legacy1 is not legacy2
     assert setup.eeq is not legacy1.eeq
-    assert system.ies_classical.cache is None
-    assert system.ies_classical._cachevars is None
+    assert not hasattr(system.ies_classical, "cache")
+    assert not hasattr(system.ies_classical, "_cachevars")
     with pytest.raises(FrozenInstanceError):
         setup.cutoff = torch.tensor(1.0, **DD)  # type: ignore[misc]
 
@@ -303,9 +303,7 @@ def test_ies_model_state_and_setup_survive_calls_and_reset() -> None:
         for name in ("chi", "kcn", "eta", "rad")
     )
     before = _energy(system, positions)
-    system.ies_classical.cache_disable()
     disabled = _energy(system, positions.clone())
-    system.ies_classical.cache_enable()
     torch.testing.assert_close(disabled, before)
 
     pos = positions.clone().requires_grad_(True)

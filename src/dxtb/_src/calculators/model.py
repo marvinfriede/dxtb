@@ -185,16 +185,6 @@ CoreSetup = (
 )
 
 
-@dataclass(frozen=True, eq=False)
-class CoreSetupRef:
-    """Compatibility association for validating one captured setup."""
-
-    component_identity: int
-    label: str
-    position: int
-    setup: CoreSetup
-
-
 class ClassicalTermDescriptor(Node):
     """Ordered exact classical term without a live component reference."""
 
@@ -355,15 +345,6 @@ class ExactSystemCore(Node):
             ),
             None,
         )
-
-
-@dataclass(frozen=True, eq=False)
-class ExactSystemCompatibility:
-    """Identity associations used only at the mutable System boundary."""
-
-    index_helper_identity: int
-    classical_setups: tuple[CoreSetupRef, ...]
-    interaction_setups: tuple[CoreSetupRef, ...]
 
 
 class ModelParameterNode(Node):
@@ -540,9 +521,6 @@ class System:
     _classical_extension_cache: ClassicalListCache = field(repr=False)
     """Setup-time compatibility data for custom classical extensions only."""
 
-    _packed_classical_cache: ClassicalListCache | None = field(repr=False)
-    """Full legacy cache retained only for packed Calculator systems."""
-
     repulsion_setup: RepulsionCoreSetup | RepulsionSetup | None
     """Numbers-only setup associated with the exact migrated Repulsion."""
 
@@ -581,11 +559,6 @@ class System:
 
     exact_core: ExactSystemCore | None = field(default=None, repr=False)
     """Exact unbatched values; None for packed compatibility Systems."""
-
-    _exact_compatibility: ExactSystemCompatibility | None = field(
-        default=None, repr=False
-    )
-    """Identity tokens kept outside the future stackable core value."""
 
     def singlepoint(
         self,
@@ -927,36 +900,41 @@ class System:
         return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
 
     def classical_setup(self, component: Classical) -> CoreSetup | None:
-        """Compatibility lookup isolated from exact numerical dispatch."""
-        return self._compat_setup(
-            (
-                self._exact_compatibility.classical_setups
-                if self._exact_compatibility is not None
-                else ()
-            ),
-            component,
+        """Return the active core classical setup Node for ``component``."""
+        setup = self._builtin_classical_setup(component)
+        return (
+            setup
+            if isinstance(
+                setup,
+                (
+                    RepulsionCoreSetup,
+                    ShortRangeBondCoreSetup,
+                    DispersionD3CoreSetup,
+                    DispersionD4CoreSetup,
+                    IESCoreSetup,
+                    HalogenCoreSetup,
+                ),
+            )
+            else None
         )
 
     def interaction_setup(self, component: Interaction) -> CoreSetup | None:
-        """Compatibility lookup isolated from exact numerical dispatch."""
-        return self._compat_setup(
-            (
-                self._exact_compatibility.interaction_setups
-                if self._exact_compatibility is not None
-                else ()
-            ),
-            component,
+        """Return the active core interaction setup Node for ``component``."""
+        setup = self._builtin_interaction_setup(component)
+        return (
+            setup
+            if isinstance(
+                setup,
+                (
+                    ES2CoreSetup,
+                    ES3CoreSetup,
+                    AES2CoreSetup,
+                    D4SCCoreSetup,
+                    GeneralizedBornCoreSetup,
+                ),
+            )
+            else None
         )
-
-    @staticmethod
-    def _compat_setup(
-        entries: tuple[CoreSetupRef, ...], component: Classical | Interaction
-    ) -> CoreSetup | None:
-        identity = id(component)
-        for entry in entries:
-            if entry.component_identity == identity:
-                return entry.setup
-        return None
 
     def _builtin_classical_setup(self, component: Classical) -> Any:
         if component is self.repulsion_classical:
@@ -990,14 +968,12 @@ class System:
     def _active_exact_core(self) -> ExactSystemCore | None:
         """Return the captured core while its façade setup references agree."""
         core = self.exact_core
-        compatibility = self._exact_compatibility
         if (
-            core is None
-            or compatibility is None
+            self.batch_mode != 0
+            or core is None
             or core.numbers is not self.numbers
             or core.config is not self.config
             or core.h0_setup is not self.h0_setup
-            or compatibility.index_helper_identity != id(self.ihelp)
         ):
             return None
 
@@ -1043,7 +1019,6 @@ class System:
         ):
             return None
 
-        expected_classical: list[tuple[int, int, str, CoreSetup]] = []
         expected_classical_terms: list[
             tuple[str, str, int, CoreSetup, bool, tuple[str, ...]]
         ] = []
@@ -1060,9 +1035,6 @@ class System:
                     HalogenCoreSetup,
                 ),
             ):
-                expected_classical.append(
-                    (position, id(component), component.label, setup)
-                )
                 kind = _classical_term_kind(component, setup)
                 if kind is None:
                     return None
@@ -1077,7 +1049,6 @@ class System:
                     )
                 )
 
-        expected_interactions: list[tuple[int, int, str, CoreSetup]] = []
         expected_interaction_terms: list[
             tuple[str, str, int, CoreSetup, tuple[str, ...]]
         ] = []
@@ -1093,9 +1064,6 @@ class System:
                     GeneralizedBornCoreSetup,
                 ),
             ):
-                expected_interactions.append(
-                    (position, id(interaction), interaction.label, setup)
-                )
                 kind = _interaction_term_kind(interaction, setup)
                 if kind is None:
                     return None
@@ -1109,14 +1077,6 @@ class System:
                     )
                 )
 
-        if not self._setup_refs_match(
-            compatibility.classical_setups, expected_classical
-        ):
-            return None
-        if not self._setup_refs_match(
-            compatibility.interaction_setups, expected_interactions
-        ):
-            return None
         if not _classical_terms_match(
             core.classical_terms, expected_classical_terms
         ):
@@ -1136,31 +1096,11 @@ class System:
             return None
         return core
 
-    @staticmethod
-    def _setup_refs_match(
-        captured: tuple[CoreSetupRef, ...],
-        expected: list[tuple[int, int, str, CoreSetup]],
-    ) -> bool:
-        """Check ordered setup references without tensor equality/sync."""
-        if len(captured) != len(expected):
-            return False
-        return all(
-            entry.position == position
-            and entry.component_identity == component_identity
-            and entry.label == label
-            and entry.setup is setup
-            for entry, (position, component_identity, label, setup) in zip(
-                captured, expected
-            )
-        )
-
     @property
     def classical_cache(self) -> ClassicalListCache:
         """Build a compatibility view over captured setup values on demand."""
         if self.batch_mode != 0:
-            if self._packed_classical_cache is None:
-                return ClassicalListCache()
-            return self._packed_classical_cache
+            return self.classicals.get_cache(self.numbers, self.ihelp)
 
         cache = ClassicalListCache()
         for component in self.classicals.components:
@@ -1632,11 +1572,9 @@ class Model:
                         f"{len(matches)} with distinct labels."
                     )
 
-        # The single-System core captures each exact built-in setup directly.
-        # ClassicalList.get_cache remains the compatibility boundary for
-        # packed systems; custom components retain their legacy setup hooks.
+        # The single-System core captures each exact built-in setup directly;
+        # custom components retain their setup hooks.
         classical_extension_cache = ClassicalListCache()
-        packed_classical_cache = None
         d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
@@ -1661,7 +1599,6 @@ class Model:
         )
         halogen_setup = None
 
-        classical_setup_refs: list[CoreSetupRef] = []
         classical_terms: list[ClassicalTermDescriptor] = []
         if batch_mode == 0:
             for position, component in enumerate(classicals.components):
@@ -1704,11 +1641,6 @@ class Model:
 
                 kind = _classical_term_kind(component, setup)
                 if kind is not None:
-                    classical_setup_refs.append(
-                        CoreSetupRef(
-                            id(component), component.label, position, setup
-                        )
-                    )
                     classical_terms.append(
                         ClassicalTermDescriptor(
                             kind=kind[0],
@@ -1720,19 +1652,16 @@ class Model:
                         )
                     )
         else:
-            packed_classical_cache = classicals.get_cache(numbers, ihelp)
             if repulsion_classical is not None:
-                repulsion_setup = packed_classical_cache[
-                    repulsion_classical.label
-                ]
+                repulsion_setup = repulsion_classical.get_cache(numbers, ihelp)
             if srb_classical is not None:
-                srb_setup = packed_classical_cache[srb_classical.label]
+                srb_setup = srb_classical.get_cache(numbers, ihelp)
             if d4_classical is not None:
-                d4_setup = packed_classical_cache[d4_classical.label]
+                d4_setup = d4_classical.get_cache(numbers, ihelp)
             if ies_classical is not None:
-                ies_setup = packed_classical_cache[ies_classical.label]
+                ies_setup = ies_classical.get_cache(numbers, ihelp)
             if halogen_classical is not None:
-                halogen_setup = packed_classical_cache[halogen_classical.label]
+                halogen_setup = halogen_classical.get_cache(numbers, ihelp)
 
         OutputHandler.write_stdout("done", v=4)
 
@@ -1766,9 +1695,7 @@ class Model:
         OutputHandler.write_stdout("done\n", v=4)
 
         exact_core = None
-        exact_compatibility = None
         if batch_mode == 0:
-            interaction_setup_refs: list[CoreSetupRef] = []
             interaction_terms: list[InteractionTermDescriptor] = []
             for position, interaction in enumerate(interactions.components):
                 if interaction is es2_interaction:
@@ -1784,11 +1711,6 @@ class Model:
                 else:
                     setup = None
                 if setup is not None:
-                    interaction_setup_refs.append(
-                        CoreSetupRef(
-                            id(interaction), interaction.label, position, setup
-                        )
-                    )
                     kind = _interaction_term_kind(interaction, setup)
                     if kind is None:
                         raise RuntimeError(
@@ -1839,11 +1761,6 @@ class Model:
                 classical_terms=tuple(classical_terms),
                 interaction_terms=tuple(interaction_terms),
             )
-            exact_compatibility = ExactSystemCompatibility(
-                index_helper_identity=id(ihelp),
-                classical_setups=tuple(classical_setup_refs),
-                interaction_setups=tuple(interaction_setup_refs),
-            )
 
         return System(
             numbers=numbers,
@@ -1855,7 +1772,6 @@ class Model:
             integral_setup=integral_setup,
             h0_setup=h0_setup,
             _classical_extension_cache=classical_extension_cache,
-            _packed_classical_cache=packed_classical_cache,
             repulsion_setup=repulsion_setup,
             repulsion_classical=repulsion_classical,
             srb_setup=srb_setup,
@@ -1879,7 +1795,6 @@ class Model:
             generalized_born_interaction=generalized_born_interaction,
             dd=dd,
             exact_core=exact_core,
-            _exact_compatibility=exact_compatibility,
         )
 
 

@@ -27,6 +27,7 @@ import pytest
 import torch
 
 from dxtb import Calculator
+from dxtb._src.calculators.singlepoint import singlepoint
 from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
@@ -231,13 +232,13 @@ def run_param_grad_energy(name: str, dtype: torch.dtype = torch.float):
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
 
-    assert calc.integrals.hcore is not None
-    h = calc.integrals.hcore
+    assert calc.system.h0_setup is not None
+    h = calc.system.h0_setup
     h.selfenergy.requires_grad_(True)
     h.kcn.requires_grad_(True)
     h.shpoly.requires_grad_(True)
 
-    result = calc.singlepoint(pos, charges)
+    result = singlepoint(calc.system, pos, charges)
     energy = result.scf.sum(-1)
 
     pgrad = torch.autograd.grad(
@@ -274,14 +275,14 @@ def skip_test_param_grad_force(name: str, dtype: torch.dtype = torch.float):
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
 
-    assert calc.integrals.hcore is not None
-    h = calc.integrals.hcore
+    assert calc.system.h0_setup is not None
+    h = calc.system.h0_setup
 
     h.selfenergy.requires_grad_(True)
     h.kcn.requires_grad_(True)
     h.shpoly.requires_grad_(True)
 
-    result = calc.singlepoint(pos, charges)
+    result = singlepoint(calc.system, pos, charges)
     energy = result.scf.sum(-1)
 
     (gradient,) = torch.autograd.grad(
