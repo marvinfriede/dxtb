@@ -1129,3 +1129,57 @@ def test_exact_core_optional_none_fields_and_stacking_compatibility() -> None:
     assert stacked.numbers.shape == (2, 2)
     with pytest.raises(ValueError, match="different structure"):
         stack((h2, c2))
+
+
+@pytest.mark.parametrize(
+    ("method", "method_label", "kind"),
+    [
+        (GFN1_XTB, labels.GFN1_XTB, "d3"),
+        (GFN2_XTB, labels.GFN2_XTB, "aes2"),
+    ],
+    ids=["d3", "aes2"],
+)
+def test_descriptor_conversion_preserves_metadata_dtypes_and_pytree(
+    method: object,
+    method_label: int,
+    kind: str,
+) -> None:
+    """D3 and AES2 descriptor conversion preserves metadata, structural dtypes, and PyTree structure."""
+    from torch.utils import _pytree
+
+    system = Model(
+        par=ParamModule(method, dtype=torch.float64),
+        config=Config.create(
+            method=method_label,
+            int_driver=labels.INTDRIVER_PYTORCH,
+        ),
+    ).setup(torch.tensor([8, 1, 1]))
+    assert system.exact_core is not None
+    descriptor = next(
+        term
+        for term in (
+            *system.exact_core.classical_terms,
+            *system.exact_core.interaction_terms,
+        )
+        if term.kind == kind
+    )
+    leaves, spec = _pytree.tree_flatten(descriptor)
+
+    converted = descriptor.to(dtype=torch.float32)
+    converted_leaves, converted_spec = _pytree.tree_flatten(converted)
+    rebuilt = _pytree.tree_unflatten(converted_leaves, converted_spec)
+
+    assert converted.position == descriptor.position
+    assert converted.kind == descriptor.kind
+    assert converted.label == descriptor.label
+    assert converted_spec == spec
+    assert type(rebuilt) is type(descriptor)
+    assert type(rebuilt.setup) is type(descriptor.setup)
+    for before, after in zip(leaves, converted_leaves, strict=True):
+        if before.is_floating_point():
+            assert after.dtype == torch.float32
+        elif before.dtype is torch.bool:
+            assert after.dtype is torch.bool
+        else:
+            assert after.dtype == before.dtype
+

@@ -28,6 +28,7 @@ from torch.utils import _pytree
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
+from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
 from dxtb._src.components.classicals import (
     Repulsion,
     RepulsionCoreSetup,
@@ -108,6 +109,16 @@ def test_core_repulsion_transforms_and_legacy_parity() -> None:
     core = system.repulsion_setup
     repulsion = system.repulsion_classical
     assert core is not None and repulsion is not None
+    assert system.exact_core is not None
+    descriptor = next(
+        term
+        for term in system.exact_core.classical_terms
+        if term.kind == "repulsion"
+    )
+    charge = torch.zeros(1, dtype=positions.dtype, device=positions.device)
+    direction = torch.arange(
+        positions.numel(), dtype=positions.dtype, device=positions.device
+    ).reshape_as(positions)
     legacy = repulsion.get_cache(numbers, system.ihelp)
 
     pos_core = positions.clone().requires_grad_(True)
@@ -115,18 +126,40 @@ def test_core_repulsion_transforms_and_legacy_parity() -> None:
     core_pos_grad, core_par_grad = torch.autograd.grad(
         core_energy, (pos_core, parameter), create_graph=True
     )
+    core_mixed = torch.autograd.grad(
+        (core_pos_grad * direction).sum(), parameter, retain_graph=True
+    )[0]
+
+    pos_desc = positions.clone().requires_grad_(True)
+    desc_energy = _evaluate_classical_descriptor(
+        descriptor, pos_desc, charge
+    ).sum()
+    desc_pos_grad, desc_par_grad = torch.autograd.grad(
+        desc_energy, (pos_desc, parameter), create_graph=True
+    )
+    desc_mixed = torch.autograd.grad(
+        (desc_pos_grad * direction).sum(), parameter, retain_graph=True
+    )[0]
+
     pos_legacy = positions.clone().requires_grad_(True)
     legacy_energy = repulsion.get_energy(pos_legacy, legacy).sum()
     legacy_pos_grad, legacy_par_grad = torch.autograd.grad(
         legacy_energy, (pos_legacy, parameter), create_graph=True
     )
-    torch.testing.assert_close(core_energy, legacy_energy)
-    torch.testing.assert_close(core_pos_grad, legacy_pos_grad)
-    torch.testing.assert_close(core_par_grad, legacy_par_grad)
+    legacy_mixed = torch.autograd.grad(
+        (legacy_pos_grad * direction).sum(), parameter
+    )[0]
 
-    direction = torch.arange(
-        positions.numel(), dtype=positions.dtype, device=positions.device
-    ).reshape_as(positions)
+    torch.testing.assert_close(core_energy, legacy_energy)
+    torch.testing.assert_close(desc_energy, legacy_energy)
+    torch.testing.assert_close(core_pos_grad, legacy_pos_grad)
+    torch.testing.assert_close(desc_pos_grad, legacy_pos_grad)
+    torch.testing.assert_close(core_par_grad, legacy_par_grad)
+    torch.testing.assert_close(desc_par_grad, legacy_par_grad)
+    torch.testing.assert_close(core_mixed, legacy_mixed)
+    torch.testing.assert_close(desc_mixed, legacy_mixed)
+    assert torch.count_nonzero(desc_mixed) > 0
+
     _, tangent = jvp(
         lambda pos: repulsion.get_energy(pos, core).sum(),
         (positions,),

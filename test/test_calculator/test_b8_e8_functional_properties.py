@@ -69,11 +69,13 @@ def test_b8a_first_and_second_order_functional_properties(
     pos_req = pos.clone().requires_grad_(True)
 
     # Energy, forces, Hessian, bond orders
+    f_sys = system.forces(pos)
+    h_mat = system.hessian(pos, matrix=True)
     torch.testing.assert_close(
         system.energy(pos), calc.energy(pos_req), atol=1.0e-12, rtol=1.0e-12
     )
     torch.testing.assert_close(
-        system.forces(pos), calc.forces(pos_req), atol=1.0e-11, rtol=1.0e-11
+        f_sys, calc.forces(pos_req), atol=1.0e-11, rtol=1.0e-11
     )
     torch.testing.assert_close(
         system.hessian(pos),
@@ -82,7 +84,7 @@ def test_b8a_first_and_second_order_functional_properties(
         rtol=1.0e-10,
     )
     torch.testing.assert_close(
-        system.hessian(pos, matrix=True),
+        h_mat,
         calc.hessian(pos_req, matrix=True),
         atol=1.0e-10,
         rtol=1.0e-10,
@@ -95,6 +97,8 @@ def test_b8a_first_and_second_order_functional_properties(
     )
 
     # Dipole, quadrupole, polarizability, dipole_deriv
+    alpha_sys = system.polarizability(pos)
+    dmu_dr_sys = system.dipole_deriv(pos)
     torch.testing.assert_close(
         system.dipole(pos),
         calc.dipole(pos_req, field=field0),
@@ -108,14 +112,29 @@ def test_b8a_first_and_second_order_functional_properties(
         rtol=1.0e-11,
     )
     torch.testing.assert_close(
-        system.polarizability(pos),
+        alpha_sys,
         calc.polarizability(pos_req, field=field0),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
     torch.testing.assert_close(
-        system.dipole_deriv(pos),
+        dmu_dr_sys,
         calc.dipole_deriv(pos_req, field=field0),
+        atol=1.0e-10,
+        rtol=1.0e-10,
+    )
+
+    # Symmetry and translational invariance of 1st/2nd-order responses
+    torch.testing.assert_close(h_mat, h_mat.T, atol=1.0e-10, rtol=1.0e-10)
+    torch.testing.assert_close(
+        alpha_sys, alpha_sys.T, atol=1.0e-10, rtol=1.0e-10
+    )
+    torch.testing.assert_close(
+        f_sys.sum(dim=0), torch.zeros(3, **_DD), atol=1.0e-11, rtol=1.0e-11
+    )
+    torch.testing.assert_close(
+        dmu_dr_sys.sum(dim=1),
+        torch.zeros((3, 3), **_DD),
         atol=1.0e-10,
         rtol=1.0e-10,
     )
@@ -141,28 +160,28 @@ def test_b8a_first_and_second_order_functional_properties(
     vmap_dipole = torch.func.vmap(system.dipole)(batch_pos)
     vmap_pol = torch.func.vmap(system.polarizability)(batch_pos)
     torch.testing.assert_close(
-        vmap_forces[0], system.forces(pos), atol=1.0e-12, rtol=1.0e-12
+        vmap_forces[0], f_sys, atol=1.0e-12, rtol=1.0e-12
     )
     torch.testing.assert_close(
         vmap_dipole[0], system.dipole(pos), atol=1.0e-12, rtol=1.0e-12
     )
     torch.testing.assert_close(
-        vmap_pol[0], system.polarizability(pos), atol=1.0e-11, rtol=1.0e-11
+        vmap_pol[0], alpha_sys, atol=1.0e-11, rtol=1.0e-11
     )
 
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
-def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
+def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
     method: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Third-order properties (hyperpolarizability, pol_deriv, Raman, 3rd dir) pass E8."""
+    """Third-order directional derivative, mixed parameter-force Jacobian, and open-shell free energy pass E8."""
     model, numbers, system, calc = _setup_model_and_calculator(method, (1, 1))
     pos = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.44]], **_DD)
     pos_req = pos.clone().requires_grad_(True)
     field0 = torch.tensor([0.002, -0.001, 0.003], **_DD, requires_grad=True)
 
-    # Verify reset_all is NOT called during Calculator.ir or Calculator.raman on single-System exact core
+    # Verify reset_all is NOT called during Calculator.ir on single-System exact core
     reset_calls = 0
 
     def forbid_reset():
@@ -173,33 +192,17 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
     monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
     monkeypatch.setattr(calc.integrals, "reset_all", forbid_reset)
 
-    # 1. Hyperpolarizability beta = -d^3E/dF^3
-    beta_sys = system.hyperpolarizability(pos, field=field0.detach())
-    beta_calc = calc.hyperpolarizability(pos_req, field=field0)
-    assert beta_sys.shape == (3, 3, 3)
-    assert bool(torch.isfinite(beta_sys).all())
-    torch.testing.assert_close(beta_sys, beta_calc, atol=1.0e-9, rtol=1.0e-9)
-
-    # 2. Polarizability derivative d(alpha)/dR and Raman spectrum
-    chi_sys = system.pol_deriv(pos, field=field0.detach())
-    chi_calc = calc.pol_deriv(pos_req, field=field0)
-    assert chi_sys.shape == (3, 3, 2, 3)
-    torch.testing.assert_close(chi_sys, chi_calc, atol=1.0e-9, rtol=1.0e-9)
-
-    raman_sys = system.raman(pos, field=field0.detach())
-    raman_calc = calc.raman(pos_req, field=field0)
+    ir_sys = system.ir(pos, field=field0.detach())
+    ir_calc = calc.ir(pos_req, field=field0)
     torch.testing.assert_close(
-        raman_sys.freqs, raman_calc.freqs, atol=1.0e-8, rtol=1.0e-8
+        ir_sys.freqs, ir_calc.freqs, atol=1.0e-8, rtol=1.0e-8
     )
     torch.testing.assert_close(
-        raman_sys.ints, raman_calc.ints, atol=1.0e-8, rtol=1.0e-8
-    )
-    torch.testing.assert_close(
-        raman_sys.depol, raman_calc.depol, atol=1.0e-8, rtol=1.0e-8
+        ir_sys.ints, ir_calc.ints, atol=1.0e-8, rtol=1.0e-8
     )
     assert reset_calls == 0
 
-    # 3. Third directional derivative vs 4-point central finite difference of 2nd derivative
+    # Third directional derivative vs 4-point central finite difference of 2nd derivative
     direction = torch.tensor([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], **_DD)
     direction = direction / torch.linalg.vector_norm(direction)
     third_sys = system.third_order_directional(pos, direction)
@@ -217,13 +220,13 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
     )
     torch.testing.assert_close(third_sys, fd_third, atol=1.0e-8, rtol=1.0e-8)
 
-    # 4. Mixed parameter-force Jacobian dF(R, theta)/d(theta)
+    # Mixed parameter-force Jacobian dF(R, theta)/d(theta)
     param_key = "parameter_tree.hamiltonian.xtb.shell.ss.param"
     pf_jac = system_parameter_force_jacobian(model, numbers, pos, param_key)
     assert pf_jac.shape == (2, 3)
     assert bool(torch.isfinite(pf_jac).all()) and pf_jac.abs().max() > 0.0
 
-    # 5. Finite-temperature open-shell free-energy parity (no fenergy double-counting)
+    # Finite-temperature open-shell free-energy parity (no fenergy double-counting)
     is_gfn2 = method is GFN2_XTB
     ft_opts = {
         "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
@@ -270,6 +273,56 @@ def test_b8b_e8_third_order_hyperpolarizability_raman_and_param_forces(
     )
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+def test_b8b_e8_third_order_hyperpolarizability_pol_deriv_and_raman(
+    method: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Third-order molecular responses (hyperpolarizability, pol_deriv, Raman) match Calculator."""
+    _, _, system, calc = _setup_model_and_calculator(method, (1, 1))
+    pos = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.44]], **_DD)
+    pos_req = pos.clone().requires_grad_(True)
+    field0 = torch.tensor([0.002, -0.001, 0.003], **_DD, requires_grad=True)
+
+    # Verify reset_all is NOT called during Calculator.raman on single-System exact core
+    reset_calls = 0
+
+    def forbid_reset():
+        nonlocal reset_calls
+        reset_calls += 1
+
+    monkeypatch.setattr(calc.classicals, "reset_all", forbid_reset)
+    monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
+    monkeypatch.setattr(calc.integrals, "reset_all", forbid_reset)
+
+    # 1. Hyperpolarizability beta = -d^3E/dF^3
+    beta_sys = system.hyperpolarizability(pos, field=field0.detach())
+    beta_calc = calc.hyperpolarizability(pos_req, field=field0)
+    assert beta_sys.shape == (3, 3, 3)
+    assert bool(torch.isfinite(beta_sys).all())
+    torch.testing.assert_close(beta_sys, beta_calc, atol=1.0e-9, rtol=1.0e-9)
+
+    # 2. Polarizability derivative d(alpha)/dR and Raman spectrum
+    chi_sys = system.pol_deriv(pos, field=field0.detach())
+    chi_calc = calc.pol_deriv(pos_req, field=field0)
+    assert chi_sys.shape == (3, 3, 2, 3)
+    torch.testing.assert_close(chi_sys, chi_calc, atol=1.0e-9, rtol=1.0e-9)
+
+    raman_sys = system.raman(pos, field=field0.detach())
+    raman_calc = calc.raman(pos_req, field=field0)
+    torch.testing.assert_close(
+        raman_sys.freqs, raman_calc.freqs, atol=1.0e-8, rtol=1.0e-8
+    )
+    torch.testing.assert_close(
+        raman_sys.ints, raman_calc.ints, atol=1.0e-8, rtol=1.0e-8
+    )
+    torch.testing.assert_close(
+        raman_sys.depol, raman_calc.depol, atol=1.0e-8, rtol=1.0e-8
+    )
+    assert reset_calls == 0
+
+
 def _setup_converged_model_and_calculator(
     method: object, numbers: tuple[int, ...]
 ):
@@ -298,10 +351,8 @@ def _setup_converged_model_and_calculator(
     return model, num_tensor, system, calc
 
 
-@pytest.mark.parametrize(
-    "method",
-    [GFN1_XTB, pytest.param(GFN2_XTB, marks=pytest.mark.slow)],
-)
+@pytest.mark.slow
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
 def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
     method: object,
 ) -> None:
@@ -454,10 +505,8 @@ def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
     torch.testing.assert_close(beta_sys, fd_beta, atol=1e-6, rtol=1e-6)
 
 
-@pytest.mark.parametrize(
-    "method",
-    [GFN1_XTB, pytest.param(GFN2_XTB, marks=pytest.mark.slow)],
-)
+@pytest.mark.slow
+@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
 def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
     method: object,
 ) -> None:
@@ -587,7 +636,10 @@ def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
     assert (raman_h2o.depol >= 0.0).all()
 
 
-@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+@pytest.mark.parametrize(
+    "method",
+    [GFN1_XTB, pytest.param(GFN2_XTB, marks=pytest.mark.slow)],
+)
 def test_section5_primal_vs_derivative_fixed_point_convergence(
     method: object,
 ) -> None:

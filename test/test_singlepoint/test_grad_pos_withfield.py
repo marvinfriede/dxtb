@@ -182,7 +182,9 @@ batch_pairs = [
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1, name2", batch_pairs)
-@pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
+@pytest.mark.parametrize(
+    "gfn", ["gfn1", pytest.param("gfn2", marks=pytest.mark.slow)]
+)
 def test_gradcheck_batch(
     dtype: torch.dtype, name1: str, name2: str, gfn: str
 ) -> None:

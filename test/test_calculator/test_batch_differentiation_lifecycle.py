@@ -870,6 +870,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
     )
 
 
+@pytest.mark.slow
 def test_batched_third_order_electric_responses_match_serial() -> None:
     """Batched pol_deriv and hyperpolarizability match serial Systems for shared and per-lane fields."""
     num_l, pos_l = _lih_geometry(0.0)
