@@ -18,9 +18,7 @@
 
 from __future__ import annotations
 
-import ast
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 import torch
@@ -103,7 +101,6 @@ def _root_record(representation: int = labels.SCP_MODE_POTENTIAL):
         representation=representation,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
-        temperature=0.0,
     )
     record = _run_root(
         case,
@@ -287,7 +284,6 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
             representation=labels.SCP_MODE_POTENTIAL,
             mixer=mixer,
             tolerance=1.0e-12,
-            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -399,7 +395,6 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             ),
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
-            temperature=0.0,
             field=field,
             positions_override=positions,
         )
@@ -465,7 +460,6 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
             representation=labels.SCP_MODE_POTENTIAL,
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
-            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -573,7 +567,6 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-10,
             maxiter=300,
-            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -785,7 +778,6 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
             maxiter=300,
-            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -884,7 +876,6 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
         representation=labels.SCP_MODE_POTENTIAL,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
-        temperature=0.0,
         parameter_module=parameter_module,
     )
     config = _implicit_config(
@@ -928,7 +919,6 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
         representation=labels.SCP_MODE_CHARGE,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
-        temperature=0.0,
         field=field,
     )
     config = _implicit_config(
@@ -988,7 +978,6 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
         representation=labels.SCP_MODE_CHARGE,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
-        temperature=0.0,
         field=field,
     )
     # Use a real H2O primal observation and its complete explicit parameter tree.

@@ -1098,3 +1098,34 @@ def test_call_local_interaction_data_is_geometry_history_independent() -> None:
             torch.testing.assert_close(
                 getattr(first[label], name), getattr(last[label], name)
             )
+
+
+def test_exact_core_optional_none_fields_and_stacking_compatibility() -> None:
+    """Optional None setup fields round-trip and stack checks structural compatibility."""
+    from tad_mctc.tree import stack
+    from torch.utils import _pytree
+
+    model = _model()
+    no_int = Model(
+        par=model.par,
+        config=Config.create(
+            method=labels.GFN1_XTB, exclude=("all",), int_level=0
+        ),
+        auto_int_level=False,
+    ).setup(torch.tensor([1, 1]))
+    assert no_int.exact_core is not None
+    assert no_int.exact_core.integral is None
+    assert no_int.exact_core.h0_setup is None
+    leaves, spec = _pytree.tree_flatten(no_int.exact_core)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert rebuilt.integral is None
+    assert rebuilt.h0_setup is None
+
+    c2 = model.setup(torch.tensor([6, 6])).exact_core
+    n2 = model.setup(torch.tensor([7, 7])).exact_core
+    h2 = model.setup(torch.tensor([1, 1])).exact_core
+    assert c2 is not None and n2 is not None and h2 is not None
+    stacked = stack((c2, n2))
+    assert stacked.numbers.shape == (2, 2)
+    with pytest.raises(ValueError, match="different structure"):
+        stack((h2, c2))

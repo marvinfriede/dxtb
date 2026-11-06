@@ -672,6 +672,164 @@ def test_padded_full_fixed_trip_result_matches_serial_systems(
 
 
 @pytest.mark.parametrize(
+    ("mixer", "fermi_etemp"),
+    [
+        (labels.MIXER_ANDERSON, 0.0),
+        (labels.MIXER_LINEAR, 300.0),
+    ],
+    ids=(
+        "h2-water-anderson",
+        "h2-water-finite-temperature",
+    ),
+)
+def test_padded_solver_trace_matches_independent_serial_systems(
+    mixer: int,
+    fermi_etemp: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same fixed-trip solver transitions match independent serial calls."""
+    from dxtb._src.scf.functional import eager as eager_functional
+
+    numbers = ((1, 1), (8, 1, 1))
+    charges = (0.0, 0.0)
+    spins = (0.0, 0.0)
+    _, systems = _systems(
+        numbers, mixer=mixer, maxiter=5, fermi_etemp=fermi_etemp
+    )
+    source_positions = tuple(_positions(item) for item in numbers)
+    charge_values = tuple(torch.tensor(item, dtype=DTYPE) for item in charges)
+    spin_values = tuple(torch.tensor(item, dtype=DTYPE) for item in spins)
+    bucket, padded, positions, _, _ = _prepare(
+        systems,
+        source_positions,
+        torch.stack(charge_values),
+        torch.stack(spin_values),
+    )
+
+    original_solve = eager_functional._solve_representation
+    serial_traces = []
+
+    def traced_serial_solve(*args, **kwargs):
+        solved = original_solve(*args, record_trace=True, **kwargs)
+        serial_traces.append(solved.trace)
+        return solved
+
+    monkeypatch.setattr(
+        eager_functional, "_solve_representation", traced_serial_solve
+    )
+    serial = tuple(
+        system.singlepoint(position, chrg=charge, spin=spin)
+        for system, position, charge, spin in zip(
+            systems, source_positions, charge_values, spin_values
+        )
+    )
+
+    stacked_core = stack(padded)
+    mapped_results, mapped_traces = torch.func.vmap(
+        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
+            core, position, charge, spin, record_trace=True
+        )
+    )(
+        stacked_core,
+        torch.stack(positions),
+        torch.stack(charge_values),
+        torch.stack(spin_values),
+    )
+    assert torch.any(
+        mapped_traces.active_after[0] != mapped_traces.active_after[1]
+    )
+    assert len(serial_traces) == len(systems)
+    assert all(trace is not None for trace in serial_traces)
+    for lane, (serial_result, serial_trace) in enumerate(
+        zip(serial, serial_traces)
+    ):
+        assert serial_trace is not None
+        source_map = dict(bucket.source_maps)[lane]
+        atom_indices = torch.tensor(source_map.atoms, dtype=torch.int64)
+        orbital_indices = torch.tensor(source_map.orbitals, dtype=torch.int64)
+        torch.testing.assert_close(
+            mapped_results.energy[lane].index_select(0, atom_indices),
+            serial_result.energy,
+        )
+
+        def physical_vector(name: str) -> torch.Tensor:
+            mapped_value = getattr(mapped_traces, name)[lane]
+            serial_value = getattr(serial_trace, name)
+            indices = (
+                atom_indices
+                if serial_value.shape[-1] == len(source_map.atoms)
+                else orbital_indices
+            )
+            return mapped_value.index_select(-1, indices)
+
+        for name in (
+            "initial_guess",
+            "map_inputs",
+            "raw_mapped",
+            "iterates",
+            "charges",
+        ):
+            torch.testing.assert_close(
+                physical_vector(name),
+                getattr(serial_trace, name),
+                atol=2.0e-9,
+                rtol=2.0e-9,
+            )
+        for name in ("hamiltonians", "densities"):
+            mapped_value = (
+                getattr(mapped_traces, name)[lane]
+                .index_select(-2, orbital_indices)
+                .index_select(-1, orbital_indices)
+            )
+            torch.testing.assert_close(
+                mapped_value,
+                getattr(serial_trace, name),
+                atol=2.0e-8,
+                rtol=2.0e-8,
+            )
+        for name in (
+            "residuals",
+            "active_before",
+            "active_after",
+            "iterations",
+            "damping",
+        ):
+            torch.testing.assert_close(
+                getattr(mapped_traces, name)[lane],
+                getattr(serial_trace, name),
+                atol=2.0e-10,
+                rtol=2.0e-10,
+            )
+        for name in (
+            "fermi_converged",
+            "fermi_electron_count_ok",
+            "fermi_invalid_temperature",
+            "fermi_too_many_electrons",
+            "fermi_residual",
+        ):
+            mapped_status = getattr(mapped_traces, name)
+            serial_status = getattr(serial_trace, name)
+            assert (mapped_status is None) == (serial_status is None)
+            if mapped_status is not None and serial_status is not None:
+                torch.testing.assert_close(
+                    mapped_status[lane],
+                    serial_status,
+                    atol=2.0e-10,
+                    rtol=2.0e-10,
+                )
+        assert len(mapped_traces.method_state) == len(serial_trace.method_state)
+        for mapped_history, serial_history in zip(
+            mapped_traces.method_state, serial_trace.method_state
+        ):
+            torch.testing.assert_close(
+                mapped_history[lane].index_select(-1, orbital_indices),
+                serial_history,
+                atol=2.0e-9,
+                rtol=2.0e-9,
+            )
+
+
+@pytest.mark.parametrize(
     ("int_level", "has_dipole", "has_quadrupole"),
     [
         (labels.INTLEVEL_DIPOLE, True, False),

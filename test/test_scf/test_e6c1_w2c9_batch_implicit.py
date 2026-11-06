@@ -2068,39 +2068,38 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
         )
 
     monkeypatch.setattr(batch_implicit, "bicgstab", _fail_bicgstab_on_lane1)
-    for cs in (2,):
-        out_resp = stream_batch_value_and_grad(
-            prepared,
-            model,
-            pos4,
-            field=efield.clone().requires_grad_(True),
-            field_grad=efgrad.clone().requires_grad_(True),
-            chunk_size=cs,
-            strict=False,
-        )
-        assert out_resp.failure_category == (
-            "success",
-            "response_failure",
-            "success",
-            "success",
-        )
-        assert out_resp.final_failure.tolist() == [
-            int(BatchRootFailureCode.NONE),
-            int(BatchRootFailureCode.RESPONSE_FAILURE),
-            int(BatchRootFailureCode.NONE),
-            int(BatchRootFailureCode.NONE),
-        ]
-        assert out_resp.response_converged.tolist() == [True, False, True, True]
-        assert out_resp.response_status.tolist() == [
-            int(STATUS_CONVERGED),
-            int(STATUS_NONFINITE),
-            int(STATUS_CONVERGED),
-            int(STATUS_CONVERGED),
-        ]
-        assert bool(torch.isnan(out_resp.position_gradient[1]).all())
-        assert bool(torch.isfinite(out_resp.position_gradient[0]).all())
-        assert bool(torch.isfinite(out_resp.position_gradient[2]).all())
-        assert bool(torch.isfinite(out_resp.position_gradient[3]).all())
+    out_resp = stream_batch_value_and_grad(
+        prepared,
+        model,
+        pos4,
+        field=efield.clone().requires_grad_(True),
+        field_grad=efgrad.clone().requires_grad_(True),
+        chunk_size=2,
+        strict=False,
+    )
+    assert out_resp.failure_category == (
+        "success",
+        "response_failure",
+        "success",
+        "success",
+    )
+    assert out_resp.final_failure.tolist() == [
+        int(BatchRootFailureCode.NONE),
+        int(BatchRootFailureCode.RESPONSE_FAILURE),
+        int(BatchRootFailureCode.NONE),
+        int(BatchRootFailureCode.NONE),
+    ]
+    assert out_resp.response_converged.tolist() == [True, False, True, True]
+    assert out_resp.response_status.tolist() == [
+        int(STATUS_CONVERGED),
+        int(STATUS_NONFINITE),
+        int(STATUS_CONVERGED),
+        int(STATUS_CONVERGED),
+    ]
+    assert bool(torch.isnan(out_resp.position_gradient[1]).all())
+    assert bool(torch.isfinite(out_resp.position_gradient[0]).all())
+    assert bool(torch.isfinite(out_resp.position_gradient[2]).all())
+    assert bool(torch.isfinite(out_resp.position_gradient[3]).all())
 
     with pytest.raises(SCFConvergenceError, match=r"\[Lane 1\]"):
         stream_batch_value_and_grad(
@@ -2217,28 +2216,27 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_pos
     )
-    for cs in (2,):
-        out_pos_nan = stream_batch_value_and_grad(
-            prepared, model, pos4, chunk_size=cs, strict=False
-        )
-        assert out_pos_nan.response_converged.tolist() == [
-            True,
-            True,
-            True,
-            True,
-        ]
-        assert out_pos_nan.failure_category == (
-            "success",
-            "success",
-            "nonfinite_derivative",
-            "success",
-        )
-        assert out_pos_nan.final_failure.tolist() == [
-            int(BatchRootFailureCode.NONE),
-            int(BatchRootFailureCode.NONE),
-            int(BatchRootFailureCode.NONFINITE_DERIVATIVE),
-            int(BatchRootFailureCode.NONE),
-        ]
+    out_pos_nan = stream_batch_value_and_grad(
+        prepared, model, pos4, chunk_size=2, strict=False
+    )
+    assert out_pos_nan.response_converged.tolist() == [
+        True,
+        True,
+        True,
+        True,
+    ]
+    assert out_pos_nan.failure_category == (
+        "success",
+        "success",
+        "nonfinite_derivative",
+        "success",
+    )
+    assert out_pos_nan.final_failure.tolist() == [
+        int(BatchRootFailureCode.NONE),
+        int(BatchRootFailureCode.NONE),
+        int(BatchRootFailureCode.NONFINITE_DERIVATIVE),
+        int(BatchRootFailureCode.NONE),
+    ]
     with pytest.raises(SCFConvergenceError, match=r"\[Lane 2\]"):
         stream_batch_value_and_grad(
             prepared, model, pos4, chunk_size=2, strict=True
@@ -2290,31 +2288,30 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     chrg_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    for cs in (2,):
-        out_chrg_nan = stream_batch_value_and_grad(
-            prepared,
-            model,
-            pos4,
-            chrg=chrg_leaf,
-            chunk_size=cs,
-            strict=False,
-        )
-        # Position gradients are all finite, but charge gradient on lane 0 is NaN!
-        assert bool(torch.isfinite(out_chrg_nan.position_gradient).all())
-        assert out_chrg_nan.charge_gradient is not None
-        assert bool(torch.isnan(out_chrg_nan.charge_gradient).any())
-        assert out_chrg_nan.response_converged.tolist() == [
-            True,
-            True,
-            True,
-            True,
-        ]
-        assert out_chrg_nan.failure_category == (
-            "nonfinite_derivative",
-            "success",
-            "success",
-            "success",
-        )
+    out_chrg_nan = stream_batch_value_and_grad(
+        prepared,
+        model,
+        pos4,
+        chrg=chrg_leaf,
+        chunk_size=2,
+        strict=False,
+    )
+    # Position gradients are all finite, but charge gradient on lane 0 is NaN!
+    assert bool(torch.isfinite(out_chrg_nan.position_gradient).all())
+    assert out_chrg_nan.charge_gradient is not None
+    assert bool(torch.isnan(out_chrg_nan.charge_gradient).any())
+    assert out_chrg_nan.response_converged.tolist() == [
+        True,
+        True,
+        True,
+        True,
+    ]
+    assert out_chrg_nan.failure_category == (
+        "nonfinite_derivative",
+        "success",
+        "success",
+        "success",
+    )
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", orig_eval_classical
     )
@@ -2368,30 +2365,29 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_field
     )
-    for cs in (2,):
-        out_field_nan = stream_batch_value_and_grad(
-            prepared,
-            model,
-            pos4,
-            field=efield.clone().requires_grad_(True),
-            chunk_size=cs,
-            strict=False,
-        )
-        assert bool(torch.isfinite(out_field_nan.position_gradient).all())
-        assert out_field_nan.field_gradient is not None
-        assert bool(torch.isnan(out_field_nan.field_gradient).any())
-        assert out_field_nan.response_converged.tolist() == [
-            True,
-            True,
-            True,
-            True,
-        ]
-        assert out_field_nan.failure_category == (
-            "success",
-            "success",
-            "success",
-            "nonfinite_derivative",
-        )
+    out_field_nan = stream_batch_value_and_grad(
+        prepared,
+        model,
+        pos4,
+        field=efield.clone().requires_grad_(True),
+        chunk_size=2,
+        strict=False,
+    )
+    assert bool(torch.isfinite(out_field_nan.position_gradient).all())
+    assert out_field_nan.field_gradient is not None
+    assert bool(torch.isnan(out_field_nan.field_gradient).any())
+    assert out_field_nan.response_converged.tolist() == [
+        True,
+        True,
+        True,
+        True,
+    ]
+    assert out_field_nan.failure_category == (
+        "success",
+        "success",
+        "success",
+        "nonfinite_derivative",
+    )
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", orig_refresh
     )
@@ -2437,24 +2433,23 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     spin_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    for cs in (2,):
-        out_spin_nan = stream_batch_value_and_grad(
-            prep_spin,
-            model,
-            pos4,
-            spin=spin_leaf,
-            chunk_size=cs,
-            strict=False,
-        )
-        assert bool(torch.isfinite(out_spin_nan.position_gradient).all())
-        assert out_spin_nan.spin_gradient is not None
-        assert bool(torch.isnan(out_spin_nan.spin_gradient).any())
-        assert out_spin_nan.failure_category == (
-            "success",
-            "nonfinite_derivative",
-            "success",
-            "success",
-        )
+    out_spin_nan = stream_batch_value_and_grad(
+        prep_spin,
+        model,
+        pos4,
+        spin=spin_leaf,
+        chunk_size=2,
+        strict=False,
+    )
+    assert bool(torch.isfinite(out_spin_nan.position_gradient).all())
+    assert out_spin_nan.spin_gradient is not None
+    assert bool(torch.isnan(out_spin_nan.spin_gradient).any())
+    assert out_spin_nan.failure_category == (
+        "success",
+        "nonfinite_derivative",
+        "success",
+        "success",
+    )
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", orig_refresh
     )
@@ -2503,27 +2498,26 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_model
     )
-    for cs in (2,):
-        out_mod_nan = stream_batch_value_and_grad(
-            prepared, model, pos4, chunk_size=cs, strict=False
-        )
-        assert bool(torch.isfinite(out_mod_nan.position_gradient).all())
-        assert any(
-            g is not None and bool(torch.isnan(g).any())
-            for g in out_mod_nan.model_parameter_gradients
-        )
-        assert out_mod_nan.response_converged.tolist() == [
-            True,
-            True,
-            True,
-            True,
-        ]
-        assert out_mod_nan.failure_category == (
-            "success",
-            "success",
-            "nonfinite_derivative",
-            "success",
-        )
+    out_mod_nan = stream_batch_value_and_grad(
+        prepared, model, pos4, chunk_size=2, strict=False
+    )
+    assert bool(torch.isfinite(out_mod_nan.position_gradient).all())
+    assert any(
+        g is not None and bool(torch.isnan(g).any())
+        for g in out_mod_nan.model_parameter_gradients
+    )
+    assert out_mod_nan.response_converged.tolist() == [
+        True,
+        True,
+        True,
+        True,
+    ]
+    assert out_mod_nan.failure_category == (
+        "success",
+        "success",
+        "nonfinite_derivative",
+        "success",
+    )
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", orig_eval_classical
     )
@@ -2671,51 +2665,50 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
     # static, adaptive, and spectral primal modes all validate under the static raw map
     # and produce matching streaming energies, free energies, position gradients, and Model gradients.
     numbers_h2o, pos_h2o = _h2o_conformers()
-    for etemp in (300.0,):
-        model_h2o, sys_h2o = _build_system(
-            numbers_h2o, etemp=etemp, trainable_model=True
-        )
-        out_static = stream_batch_value_and_grad(
+    model_h2o, sys_h2o = _build_system(
+        numbers_h2o, etemp=300.0, trainable_model=True
+    )
+    out_static = stream_batch_value_and_grad(
+        sys_h2o,
+        model_h2o,
+        pos_h2o[:2],
+        chunk_size=1,
+        strict=True,
+        eager_primal_fermi=False,
+    )
+    for mode in (True, "spectral"):
+        out_mode = stream_batch_value_and_grad(
             sys_h2o,
             model_h2o,
             pos_h2o[:2],
             chunk_size=1,
             strict=True,
-            eager_primal_fermi=False,
+            eager_primal_fermi=mode,
         )
-        for mode in (True, "spectral"):
-            out_mode = stream_batch_value_and_grad(
-                sys_h2o,
-                model_h2o,
-                pos_h2o[:2],
-                chunk_size=1,
-                strict=True,
-                eager_primal_fermi=mode,
-            )
-            torch.testing.assert_close(
-                out_mode.energy, out_static.energy, atol=1e-11, rtol=1e-11
-            )
-            torch.testing.assert_close(
-                out_mode.free_energy,
-                out_static.free_energy,
-                atol=1e-11,
-                rtol=1e-11,
-            )
-            torch.testing.assert_close(
-                out_mode.position_gradient,
-                out_static.position_gradient,
-                atol=1e-9,
-                rtol=1e-9,
-            )
-            for g_m, g_s in zip(
-                out_mode.model_parameter_gradients,
-                out_static.model_parameter_gradients,
-            ):
-                if g_s is None:
-                    assert g_m is None
-                else:
-                    assert g_m is not None
-                    torch.testing.assert_close(g_m, g_s, atol=1e-9, rtol=1e-8)
+        torch.testing.assert_close(
+            out_mode.energy, out_static.energy, atol=1e-11, rtol=1e-11
+        )
+        torch.testing.assert_close(
+            out_mode.free_energy,
+            out_static.free_energy,
+            atol=1e-11,
+            rtol=1e-11,
+        )
+        torch.testing.assert_close(
+            out_mode.position_gradient,
+            out_static.position_gradient,
+            atol=1e-9,
+            rtol=1e-9,
+        )
+        for g_m, g_s in zip(
+            out_mode.model_parameter_gradients,
+            out_static.model_parameter_gradients,
+        ):
+            if g_s is None:
+                assert g_m is None
+            else:
+                assert g_m is not None
+                torch.testing.assert_close(g_m, g_s, atol=1e-9, rtol=1e-8)
 
     # Open-shell NO2 radical (Z=[7, 8, 8], spin=1.0)
     numbers_no2 = torch.tensor([7, 8, 8], device=DEVICE)

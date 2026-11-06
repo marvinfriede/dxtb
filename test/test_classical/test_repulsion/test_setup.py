@@ -36,7 +36,6 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.classicals.repulsion.base import repulsion_energy
 from dxtb._src.param import Param
-from dxtb._src.typing import Tensor
 from dxtb.config import Config
 
 from ...conftest import DEVICE

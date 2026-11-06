@@ -74,6 +74,9 @@ def _energy_from_disp_params(
     ("method", "scf_mode", "driver"),
     [
         ("gfn1", "full", "pytorch"),
+        ("gfn1", "implicit", "pytorch"),
+        ("gfn2", "full", "pytorch"),
+        ("gfn2", "implicit", "pytorch"),
         ("gfn1", "full", "libcint"),
         ("gfn1", "implicit", "libcint"),
         ("gfn2", "full", "libcint"),
@@ -85,7 +88,7 @@ def test_dftd_forward_jvp_matches_reverse_and_fd(
 ) -> None:
     """Forward-mode jvp over DFT-D parameters matches reverse AD and central FD."""
     if driver == "libcint" and not has_libcint:
-        driver = "pytorch"
+        pytest.skip("libcint not available")
 
     raw_par = GFN1_XTB if method == "gfn1" else GFN2_XTB
     base_par = ParamModule(raw_par, **DD_CPU)

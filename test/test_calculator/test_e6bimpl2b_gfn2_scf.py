@@ -37,7 +37,6 @@ from dxtb._src.scf.functional.interactions import (
 )
 from dxtb._src.scf.functional.padded import (
     _prepare_padded_interactions,
-    evaluate_padded_fixed_trip,
     evaluate_padded_systems,
     setup_padded_scf_inputs,
 )

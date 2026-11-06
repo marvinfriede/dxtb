@@ -589,3 +589,14 @@ def test_cull_restore_only_changes_call_local_aes2_data() -> None:
     second = build_aes2_data(setup, batch_positions)
     assert first is not second
     torch.testing.assert_close(first.amat_sd, second.amat_sd)
+
+
+def test_absent_aes2_leaves_system_setup_none() -> None:
+    """Excluding AES2 leaves System.aes2_setup and System.aes2_interaction as None."""
+    numbers, _, parameters, _, _ = _inputs()
+    system = Model(
+        par=parameters,
+        config=Config.create(exclude=("aes2", "d4sc", "disp")),
+    ).setup(numbers)
+    assert system.aes2_setup is None
+    assert system.aes2_interaction is None

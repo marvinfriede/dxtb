@@ -18,9 +18,7 @@
 
 from __future__ import annotations
 
-import ast
 from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
@@ -45,14 +43,9 @@ from dxtb._src.components.interactions.coulomb.thirdorder import ES3
 from dxtb._src.components.interactions.dispersion.d4sc import DispersionD4SC
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
-from dxtb._src.components.interactions.list import (
-    _FUNCTIONAL_SCF_INTERACTION_TYPES,
-    InteractionListCache,
-)
+from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults
-from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import LibcintIntegralSetupNode
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.functional import (
@@ -79,7 +72,6 @@ from dxtb._src.scf.functional import (
 from dxtb._src.scf.functional.core import (
     CoreIndexData,
     FunctionalInteractionSet,
-    tensor_leaves,
 )
 from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
@@ -1837,3 +1829,26 @@ def test_functional_interaction_aggregates_match_legacy() -> None:
     for interaction in all_interactions.components:
         compare(InteractionList(interaction))
     compare(all_interactions)
+
+
+def test_map_inputs_are_not_mutated_and_values_are_frozen() -> None:
+    """Evaluating scf_map leaves all input tensor leaves untouched and frozen."""
+    case = _prepare_case(GFN2_XTB)
+    assert case.inputs is not None
+    inputs_before = _snapshot_tree(case.inputs)
+    interaction_data_before = _snapshot_tree(case.interaction_data)
+    integrals_before = _snapshot_tree(case.integrals)
+    x_before = case.x.clone()
+
+    out = scf_map(case.x, case.inputs)
+
+    _assert_tensor_equal(case.x, x_before)
+    _assert_snapshot_equal(_snapshot_tree(case.inputs), inputs_before)
+    _assert_snapshot_equal(
+        _snapshot_tree(case.interaction_data), interaction_data_before
+    )
+    _assert_snapshot_equal(_snapshot_tree(case.integrals), integrals_before)
+    with pytest.raises(FrozenInstanceError):
+        case.inputs.n0 = case.inputs.n0  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        out.mapped_x = out.mapped_x  # type: ignore[misc]

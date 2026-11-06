@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 import torch
@@ -644,3 +644,71 @@ def test_subclass_uses_legacy_cache_update_and_reset() -> None:
         calculator.system.ihelp,
     )
     torch.testing.assert_close(calculator_energy_before_reset, reset_energy)
+
+
+def test_core_node_mixed_dtype_device_and_context_edge_cases() -> None:
+    """Core GeneralizedBorn preserves mixed dtypes, scalar device normalization, and static context."""
+    numbers, positions = _geometry()
+    scale = torch.tensor(0.95, device=DEVICE, dtype=torch.float32, requires_grad=True)
+    offset = torch.tensor(0.08, device=DEVICE, dtype=torch.float32, requires_grad=True)
+    descreening = torch.tensor(
+        [0.72, 0.74], device=DEVICE, dtype=torch.float32, requires_grad=True
+    )
+    component = _component(
+        numbers,
+        born_scale=scale,
+        born_offset=offset,
+    )
+    legacy = replace(
+        setup_generalized_born(component, numbers),
+        descreening=descreening,
+    )
+    core = core_generalized_born_setup(legacy)
+    assert core.keps.dtype == torch.float64
+    assert core.born_scale.dtype == torch.float32
+    assert core.born_offset.dtype == torch.float32
+    assert core.descreening.dtype == torch.float32
+    converted = core.to(dtype=torch.float64)
+    assert converted.born_scale.dtype == torch.float64
+    assert converted.born_offset.dtype == torch.float64
+    assert converted.descreening.dtype == torch.float64
+    charges = torch.tensor([0.2, -0.2], **DD)
+    energy = _energy(core, positions, charges)
+    grads = torch.autograd.grad(energy, (scale, offset, descreening))
+    assert all(torch.isfinite(g).all() and (g.abs() > 0).any() for g in grads)
+
+    base_setup = setup_generalized_born(_component(numbers), numbers)
+    meta_fields = {
+        name: getattr(base_setup, name).to(device="meta")
+        for name in ("numbers", "alpbet", "keps", "rvdw", "cutoff", "obc")
+    }
+    meta_setup = replace(
+        base_setup,
+        **meta_fields,
+        born_scale=torch.tensor(0.95, device="cpu", dtype=torch.double),
+        born_offset=torch.tensor(0.08, device="cpu", dtype=torch.double),
+    )
+    meta_core = core_generalized_born_setup(meta_setup)
+    assert meta_core.born_scale.device.type == "meta"
+    assert meta_core.born_offset.device.type == "meta"
+    with pytest.raises(RuntimeError, match="different devices"):
+        core_generalized_born_setup(
+            replace(
+                meta_setup,
+                rvdw=torch.tensor([1.2, 1.2], device="cpu", dtype=torch.double),
+            )
+        )
+
+    still_core = core_generalized_born_setup(
+        setup_generalized_born(_component(numbers, kernel="still"), numbers)
+    )
+    no_alpb_core = core_generalized_born_setup(
+        setup_generalized_born(_component(numbers, alpb=False), numbers)
+    )
+    core_spec = _pytree.tree_flatten(core)[1]
+    assert core_spec != _pytree.tree_flatten(still_core)[1]
+    assert core_spec != _pytree.tree_flatten(no_alpb_core)[1]
+    assert (
+        Model(par=ParamModule(GFN1_XTB, **DD)).setup(numbers).generalized_born_setup
+        is None
+    )

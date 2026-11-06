@@ -138,6 +138,30 @@ def execute(
     assert pytest.approx(num, abs=atol, rel=rtol) == pol2
     assert pytest.approx(pol, abs=1e-4) == pol2
 
+    # 2x jacrev of dipole
+    pol3 = tensor_to_numpy(
+        calc.hyperpolarizability(
+            positions,
+            charge,
+            use_functorch=True,
+            derived_quantity="dipole",
+        )
+    )
+    assert pytest.approx(num, abs=atol, rel=rtol) == pol3
+    assert pytest.approx(pol2, abs=1e-6) == pol3
+
+    # 1x jacrev of polarizability
+    pol4 = tensor_to_numpy(
+        calc.hyperpolarizability(
+            positions,
+            charge,
+            use_functorch=True,
+            derived_quantity="pol",
+        )
+    )
+    assert pytest.approx(num, abs=atol, rel=rtol) == pol4
+    assert pytest.approx(pol3, abs=1e-6) == pol4
+
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])

@@ -45,6 +45,7 @@ pytestmark = pytest.mark.physics_values
 
 SLOW_GROUPS = {"second", "third"}
 SLOW_SYSTEMS = {"LYS_xao-conformers"}
+SLOW_CASES = {("padded4", "pytorch", "forces")}
 
 
 def _cases() -> list:
@@ -57,11 +58,7 @@ def _cases() -> list:
                     if (
                         group in SLOW_GROUPS
                         or name in SLOW_SYSTEMS
-                        or (
-                            name == "padded4"
-                            and driver == "pytorch"
-                            and group == "forces"
-                        )
+                        or (name, driver, group) in SLOW_CASES
                     ):
                         marks.append(pytest.mark.slow)
                     if driver == "libcint":

@@ -218,7 +218,7 @@ def compute_cell(
     wrt = {"pos": pos, "field": field, "param": gexp}
 
     def grad(f, x, **kw):
-        return torch.autograd.grad(f, x, retain_graph=True, **kw)[0]
+        return torch.autograd.grad(f, x, **kw)[0]
 
     if deriv in FIRST:
         return _try(lambda: grad(fq, wrt[deriv]))
@@ -237,16 +237,6 @@ def compute_cell(
 
         return _try(mixed)
     raise ValueError(deriv)
-
-
-def compute(
-    mode: str, system: str
-) -> dict[tuple[str, str], torch.Tensor | Failed]:
-    """Evaluate all cells of one (mode, system) pair."""
-    return {
-        (d, q): compute_cell(mode, system, d, q)
-        for d, q in _cells_for(system)
-    }
 
 
 ##############################################################################
@@ -558,3 +548,39 @@ def test_float32_smoke(mode: str) -> None:
     (g,) = torch.autograd.grad(e, pos)
     assert isinstance(ref_pos_e, torch.Tensor)
     assert (g.double() - ref_pos_e).abs().max().item() < 5e-4
+
+
+def test_cache_is_order_independent_detached_and_matches_uncached() -> None:
+    """Cached cell and reference values retain no graphs and match uncached calls."""
+    keys = [("implicit", "H2O", "field", "E"), ("full", "H2O", "param", "q2")]
+    compute_cell.cache_clear()
+    reference_deriv.cache_clear()
+    miss_cells = [compute_cell(*key) for key in keys]
+    miss_refs = [reference_deriv(key[1], key[2])[key[3]] for key in keys]
+    hit_cells = [compute_cell(*key) for key in keys]
+    hit_refs = [reference_deriv(key[1], key[2])[key[3]] for key in keys]
+
+    compute_cell.cache_clear()
+    reference_deriv.cache_clear()
+    reverse_cells = list(
+        reversed([compute_cell(*key) for key in reversed(keys)])
+    )
+    reverse_refs = list(
+        reversed(
+            [reference_deriv(key[1], key[2])[key[3]] for key in reversed(keys)]
+        )
+    )
+
+    for m_cell, h_cell, r_cell, m_ref, h_ref, r_ref in zip(
+        miss_cells, hit_cells, reverse_cells, miss_refs, hit_refs, reverse_refs
+    ):
+        assert isinstance(m_cell, torch.Tensor) and isinstance(
+            r_cell, torch.Tensor
+        )
+        assert isinstance(h_cell, torch.Tensor)
+        assert m_cell.grad_fn is None and not m_cell.requires_grad
+        assert m_ref.grad_fn is None and not m_ref.requires_grad
+        torch.testing.assert_close(m_cell, h_cell, rtol=0.0, atol=0.0)
+        torch.testing.assert_close(m_cell, r_cell, rtol=0.0, atol=0.0)
+        torch.testing.assert_close(m_ref, h_ref, rtol=0.0, atol=0.0)
+        torch.testing.assert_close(m_ref, r_ref, rtol=0.0, atol=0.0)

@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import replace
 from test.test_scf.test_functional_map import _prepare_case
 from types import SimpleNamespace

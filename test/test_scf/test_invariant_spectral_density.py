@@ -1395,18 +1395,9 @@ def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:
         parameters, high
     )
 
-    occupation = torch.sigmoid(-frontier / kt)
-    product = occupation * (1.0 - occupation)
-    expected_value = occupation.expand_as(high)
-    expected_first = (-product / kt).expand_as(high)
-    expected_second = (
-        product * (1.0 - 2.0 * occupation) / kt.square()
-    ).expand_as(high)
-    expected_third = (
-        -product
-        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
-        / kt.pow(3)
-    ).expand_as(high)
+    expected_value, expected_first, expected_second, expected_third = (
+        _analytic_fermi_derivatives(frontier, kt, high)
+    )
 
     torch.testing.assert_close(
         actual_value, expected_value, atol=5.0e-11, rtol=2.0e-10
@@ -1432,6 +1423,101 @@ def test_fermi_matrix_scaling_thresholds_preserve_nested_derivatives() -> None:
         atol=2.0e-4,
         rtol=2.0e-8,
     )
+
+
+def _analytic_fermi_derivatives(
+    frontier: torch.Tensor, kt: torch.Tensor, template: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return analytic Fermi occupation and 1st-3rd energy derivatives."""
+    occupation = torch.sigmoid(-frontier / kt)
+    product = occupation * (1.0 - occupation)
+    first = -product / kt
+    second = product * (1.0 - 2.0 * occupation) / kt.square()
+    third = (
+        -product
+        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
+        / kt.pow(3)
+    )
+    return (
+        occupation.expand_as(template),
+        first.expand_as(template),
+        second.expand_as(template),
+        third.expand_as(template),
+    )
+
+
+def test_rotated_fermi_matrix_p14_p15_boundary_derivatives() -> None:
+    """A rotated symmetric spectrum retains third derivatives at p14/p15."""
+    kt = torch.tensor(9.5e-4, dtype=torch.float64)
+    frontier = 0.4 * kt
+    rotation = torch.tensor([[0.8, -0.6], [0.6, 0.8]], dtype=torch.float64)
+    frontier_vector = rotation[:, 0]
+    frontier_projector = torch.outer(frontier_vector, frontier_vector)
+
+    # For this rotation and upper > frontier, the largest absolute row sum is
+    # 1.12 * upper - 0.12 * frontier. The boundary selects p14 at equality.
+    threshold = (2.0**16 * kt + 0.12 * frontier) / 1.12
+    upper = torch.stack(
+        (threshold * (1.0 - 1.0e-10), threshold * (1.0 + 1.0e-10))
+    )
+    parameter = torch.zeros_like(upper)
+    hamiltonian = (
+        rotation
+        @ torch.diag_embed(torch.stack((frontier + parameter, upper), dim=-1))
+        @ rotation.mT
+    )
+    bound = (hamiltonian / kt).abs().sum(-1).amax(-1)
+    selected_power = torch.ceil(torch.log2(bound / 4.0)).to(torch.long)
+    torch.testing.assert_close(selected_power, torch.tensor([14, 15]))
+
+    def response(delta: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+        spectrum = torch.stack((frontier + delta, high))
+        matrix = rotation @ torch.diag(spectrum) @ rotation.mT
+        density = _matrix_fermi(matrix, torch.zeros_like(kt), kt, active)
+        return (density * frontier_projector).sum()
+
+    active = torch.ones(2, dtype=torch.bool)
+    first_reverse = torch.func.grad(response, argnums=0)
+    second_reverse = torch.func.grad(first_reverse, argnums=0)
+    third_reverse = torch.func.grad(second_reverse, argnums=0)
+    third_forward = jacfwd(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+    third_reverse_forward = jacrev(
+        jacfwd(jacfwd(response, argnums=0), argnums=0), argnums=0
+    )
+
+    actual_value = torch.func.vmap(response)(parameter, upper)
+    actual_first = torch.func.vmap(first_reverse)(parameter, upper)
+    actual_second = torch.func.vmap(second_reverse)(parameter, upper)
+    actual_third_reverse = torch.func.vmap(third_reverse)(parameter, upper)
+    actual_third_forward = torch.func.vmap(third_forward)(parameter, upper)
+    actual_third_reverse_forward = torch.func.vmap(third_reverse_forward)(
+        parameter, upper
+    )
+
+    expected = _analytic_fermi_derivatives(frontier, kt, upper)
+    checks = (
+        ("occupation", actual_value, expected[0], 5.0e-11),
+        ("first derivative", actual_first, expected[1], 2.0e-9),
+        ("second derivative", actual_second, expected[2], 2.0e-7),
+        ("reverse third derivative", actual_third_reverse, expected[3], 2.0e-4),
+        ("forward third derivative", actual_third_forward, expected[3], 2.0e-4),
+        (
+            "reverse-over-forward third derivative",
+            actual_third_reverse_forward,
+            expected[3],
+            2.0e-4,
+        ),
+    )
+    for label, value, reference, atol in checks:
+        torch.testing.assert_close(
+            value,
+            reference,
+            atol=atol,
+            rtol=2.0e-8,
+            msg=f"{label} disagrees across the rotated p14/p15 boundary",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1483,16 +1569,12 @@ def test_fermi_matrix_high_scale_boundaries(
     if upper_power == 31:
         assert torch.isnan(values[~valid]).all()
 
-    occupation = torch.sigmoid(-frontier / kt)
-    product = occupation * (1.0 - occupation)
-    expected_third = (
-        -product
-        * (1.0 - 6.0 * occupation + 6.0 * occupation.square())
-        / kt.pow(3)
+    expected_occ, _, _, expected_third = _analytic_fermi_derivatives(
+        frontier, kt, values[valid]
     )
     torch.testing.assert_close(
         values[valid],
-        occupation.expand_as(values[valid]),
+        expected_occ,
         atol=5.0e-11,
         rtol=2.0e-10,
     )
@@ -1503,7 +1585,7 @@ def test_fermi_matrix_high_scale_boundaries(
     ):
         torch.testing.assert_close(
             derivatives[valid],
-            expected_third.expand_as(derivatives[valid]),
+            expected_third,
             atol=2.0e-4,
             rtol=2.0e-8,
             msg=f"{label} third derivative disagrees at p{lower_power}/p{upper_power}",

@@ -35,6 +35,7 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.classicals.dispersion.d4 import (
+    core_dispersion_d4_setup,
     dispersion_d4_energy,
 )
 from dxtb._src.param import Param
@@ -662,3 +663,54 @@ def test_d4_subclass_remains_on_legacy_extension_path() -> None:
     )
     calc.reset()
     assert calculator_extension.reset_calls == 1
+
+
+def test_core_node_compatibility_q_model_gradients_and_unsupported_types() -> (
+    None
+):
+    """Core D4 setup preserves compatibility_q, model tensor gradients, and type checks."""
+    numbers, positions = _geometry()
+    dispersion = _system(_parameters(self_consistent=False)).setup(
+        numbers
+    ).d4_classical
+    assert dispersion is not None
+    q = torch.linspace(-0.2, 0.2, numbers.numel(), **DD)
+    legacy_q = dispersion.get_cache(numbers, q=q)
+    with_q = core_dispersion_d4_setup(legacy_q)
+    assert with_q.compatibility_q is legacy_q.compatibility_q
+    torch.testing.assert_close(with_q.compatibility_q, q)
+    assert with_q.to(dtype=torch.float32).compatibility_q.dtype == torch.float32
+    assert with_q.to(device="meta").compatibility_q.device.type == "meta"
+    torch.testing.assert_close(
+        dispersion.get_energy(positions, with_q),
+        dispersion_d4_energy(with_q, positions, 0.0, q=q),
+    )
+
+    wf = torch.tensor(6.0, **DD, requires_grad=True)
+    rc6 = with_q.model_rc6.detach().clone().requires_grad_(True)
+    model = d4.model.D4Model(numbers, wf=wf, rc6=rc6, ref_charges="eeq", **DD)
+    cutoff = d4.Cutoff(disp2=torch.tensor(2.0, **DD), **DD)
+    core = core_dispersion_d4_setup(
+        dispersion.get_cache(numbers, model=model, cutoff=cutoff)
+    )
+    energy = dispersion_d4_energy(core, positions, 0.0).sum()
+    grads = torch.autograd.grad(energy, (wf, rc6))
+    assert all(torch.isfinite(g).all() and (g.abs() > 0).any() for g in grads)
+    cutoff.disp2.fill_(0.0)
+    torch.testing.assert_close(
+        dispersion_d4_energy(core, positions, 0.0).sum(), energy
+    )
+
+    class CustomD4Model(d4.model.D4Model):
+        pass
+
+    with pytest.raises(TypeError, match="built-in D4Model"):
+        core_dispersion_d4_setup(
+            dispersion.get_cache(numbers, model=CustomD4Model(numbers, **DD))
+        )
+    with pytest.raises(TypeError, match="RationalDamping"):
+        core_dispersion_d4_setup(
+            dispersion.get_cache(
+                numbers, damping_function=d4.damping.ZeroDamping()
+            )
+        )

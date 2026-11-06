@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
@@ -71,7 +70,9 @@ from dxtb.scf import (
     LinearMethod,
 )
 
+from ..test_baseline.compute import _calculator
 from ..test_baseline.molecules import SYSTEMS
+from ..test_baseline.tolerances import TBLITE
 from ..utils import get_param_module
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_common as solve_common
@@ -766,6 +767,227 @@ def test_fixed_trip_exhaustion_retains_last_selected_map_input(
     )
 
 
+@pytest.mark.parametrize("maxiter", (1, 0), ids=("one-step", "zero-step"))
+def test_nonconverged_root_reference_is_not_presented_as_a_root(
+    maxiter: int,
+) -> None:
+    """Zero-step and one-step results are rejected as physical-root records."""
+    case = _case("H2O", maxiter=maxiter, tolerance=1.0e-14)
+    record = _run_root(
+        case,
+        case.inputs,
+        tolerance=1.0e-14,
+        maxiter=maxiter,
+        eager=True,
+    )
+    assert not record.converged
+    assert (
+        record.map_count == 1 if maxiter == 0 else 1 <= record.map_count <= 2
+    )
+    with pytest.raises(SCFConvergenceError, match="physical-root derivative"):
+        _require_converged(record)
+
+
+def _require_converged(record: _RootRecord) -> None:
+    if not record.converged:
+        raise SCFConvergenceError("Cannot report a physical-root derivative")
+
+
+def _request_root_derivative(converged: Tensor, derivative_request):
+    """Apply the pre-transform status gate before a derivative request."""
+    if not bool(converged.all()):
+        raise SCFConvergenceError(
+            "Physical-root derivatives require converged roots"
+        )
+    return derivative_request()
+
+
+def test_host_preflight_rejects_nonconverged_root_status() -> None:
+    """The reference host gate rejects invalid status before its callback."""
+    entered_transform = False
+
+    def derivative_request() -> str:
+        nonlocal entered_transform
+        entered_transform = True
+        return "derivative"
+
+    for converged in (
+        torch.tensor(False),
+        torch.tensor([True, False]),
+    ):
+        with pytest.raises(
+            SCFConvergenceError, match="require converged roots"
+        ):
+            _request_root_derivative(converged, derivative_request)
+        assert not entered_transform
+    assert (
+        _request_root_derivative(torch.tensor([True, True]), derivative_request)
+        == "derivative"
+    )
+    assert entered_transform
+
+
+def _no2_trajectory_energy(
+    base_case: SimpleNamespace,
+    field_value: Tensor,
+    displacement: Tensor,
+    *,
+    tolerance: float,
+    maxiter: int = 40,
+) -> Tensor:
+    """Evaluate fixed-trip finalized NO2 energy at one field and displacement."""
+    model_system = base_case.system
+    positions = base_case.positions.clone()
+    positions[0, 1] = positions[0, 1] + displacement
+    matrices, refocc, _ = build_integral_matrices(
+        model_system.integral_setup,
+        model_system.h0_setup,
+        positions,
+        base_case.charge,
+    )
+    n0, occupation, nel = get_refocc(
+        refocc, base_case.charge, base_case.spin, model_system.ihelp
+    )
+    interactions = InteractionList(
+        *model_system.interactions.components,
+        ElectricField(field_value * _FIELD_AXIS),
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    data = _interaction_data(model_system, positions, interactions)
+    inputs = setup_scf_inputs(
+        model_system.numbers,
+        matrices,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        data,
+        model_system.ihelp,
+        model_system.config.scf,
+    )
+    guess = get_guess(
+        model_system.numbers,
+        positions,
+        base_case.charge,
+        model_system.ihelp,
+        model_system.config.scf.guess,
+    )
+    call_case = SimpleNamespace(
+        system=model_system,
+        initial_charges=guess,
+    )
+    return _run_root(
+        call_case,
+        inputs,
+        tolerance=tolerance,
+        maxiter=maxiter,
+        eager=False,
+    ).finalized_energy
+
+
+def _fresh_physical_fd(quantity: str, step: float) -> float:
+    """Evaluate an independent direct-energy FD with a fresh Calculator per point."""
+    system = SYSTEMS["NO2"]
+
+    def energy(positions: Tensor, field: Tensor) -> float:
+        calculator = _calculator(system, "gfn2", "pytorch")
+        value = calculator.energy(
+            positions.clone(),
+            system.charge,
+            system.spin,
+            field=field,
+        )
+        return float(value.sum().detach())
+
+    if quantity == "hyperpolarizability":
+        points = [
+            energy(system.positions, offset * step * _FIELD_AXIS)
+            for offset in (-2.0, -1.0, 1.0, 2.0)
+        ]
+        return -(points[3] - 2.0 * points[2] + 2.0 * points[1] - points[0]) / (
+            2.0 * step**3
+        )
+
+    if quantity == "pol_deriv":
+        alpha = []
+        for sign in (-1.0, 1.0):
+            positions = system.positions.clone()
+            positions[0, 1] += sign * step
+            values = [
+                energy(positions, offset * step * _FIELD_AXIS)
+                for offset in (1.0, 0.0, -1.0)
+            ]
+            alpha.append(-(values[0] - 2.0 * values[1] + values[2]) / step**2)
+        return (alpha[1] - alpha[0]) / (2.0 * step)
+
+    raise ValueError(f"Unknown physical finite-difference quantity: {quantity}")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("quantity", "tblite_ref", "loose_gap"),
+    (
+        ("hyperpolarizability", -3.35277, 1.0),
+        ("pol_deriv", 0.7977, 0.1),
+    ),
+)
+def test_no2_tight_root_third_order_reference(
+    quantity: str,
+    tblite_ref: float,
+    loose_gap: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tight functional roots recover the independent physical 3rd-order FD."""
+    _force_lorentzian(monkeypatch)
+    base_case = _case(
+        "NO2",
+        method=GFN2_XTB,
+        representation=labels.SCP_MODE_POTENTIAL,
+        mixer=labels.MIXER_ANDERSON,
+        tolerance=1.0e-12,
+        maxiter=300,
+        temperature=300.0,
+        field=torch.zeros(3, **_DD),
+    )
+    thirds = []
+    for tolerance in (1.0e-10, 1.0e-12):
+        root = _run_root(
+            base_case,
+            base_case.inputs,
+            tolerance=tolerance,
+            maxiter=300,
+            eager=True,
+        )
+        assert root.converged
+        assert root.map_count < 300
+        assert float(root.residual.abs().max()) < max(10.0 * tolerance, 5.0e-14)
+        field = torch.zeros((), **_DD, requires_grad=True)
+        geometry = torch.zeros(
+            (), **_DD, requires_grad=(quantity == "pol_deriv")
+        )
+        energy = _no2_trajectory_energy(
+            base_case, field, geometry, tolerance=tolerance
+        )
+        first = torch.autograd.grad(energy, field, create_graph=True)[0]
+        second = torch.autograd.grad(first, field, create_graph=True)[0]
+        target = field if quantity == "hyperpolarizability" else geometry
+        third = torch.autograd.grad(-second, target)[0]
+        thirds.append(float(third.detach()))
+    physical_fd = [
+        _fresh_physical_fd(quantity, step) for step in (1.0e-3, 5.0e-4)
+    ]
+    physical_spread = max(physical_fd) - min(physical_fd)
+    physical_target = float(sum(physical_fd) / len(physical_fd))
+    assert physical_spread < (
+        5.0e-4 if quantity == "hyperpolarizability" else 1.0e-3
+    )
+    physical_bound = max(4.0 * physical_spread, 1.0e-3)
+    assert abs(thirds[0] - physical_target) > loose_gap
+    assert abs(thirds[1] - physical_target) < physical_bound
+    assert abs(physical_target - tblite_ref) < TBLITE[quantity].atol
+
+
 @pytest.mark.parametrize(
     ("representation", "expected_map"),
     (
@@ -867,4 +1089,173 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
         derivatives.append(torch.stack((first, second)))
     torch.testing.assert_close(
         derivatives[0], derivatives[1], rtol=1.0e-5, atol=2.0e-7
+    )
+
+
+@pytest.mark.parametrize(
+    ("sample_name", "method", "temperature", "representation"),
+    (
+        pytest.param(
+            "H2",
+            GFN1_XTB,
+            0.0,
+            labels.SCP_MODE_CHARGE,
+            id="h2-charge",
+        ),
+        pytest.param(
+            "H2",
+            GFN1_XTB,
+            0.0,
+            labels.SCP_MODE_POTENTIAL,
+            id="h2-potential",
+        ),
+        pytest.param(
+            "H2",
+            GFN1_XTB,
+            0.0,
+            labels.SCP_MODE_FOCK,
+            id="h2-fock",
+        ),
+        pytest.param(
+            "H2",
+            GFN1_XTB,
+            300.0,
+            labels.SCP_MODE_CHARGE,
+            id="h2-finite-temperature",
+        ),
+        pytest.param(
+            "NO2",
+            GFN2_XTB,
+            300.0,
+            labels.SCP_MODE_POTENTIAL,
+            marks=pytest.mark.slow,
+            id="no2-potential",
+        ),
+    ),
+)
+def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
+    sample_name: str,
+    method: int,
+    temperature: float,
+    representation: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dense IFT response matches unrolled and physical FD by representation."""
+    _force_lorentzian(monkeypatch)
+    tolerance = 1.0e-12
+    case = _case(
+        sample_name,
+        method=method,
+        representation=representation,
+        tolerance=tolerance,
+        temperature=temperature,
+        field=torch.zeros(3, **_DD),
+    )
+    assert "dispersion_d3" not in {
+        item.kind for item in case.inputs.interactions.entries
+    }
+    root_record = _run_root(
+        case,
+        case.inputs,
+        tolerance=tolerance,
+        maxiter=300,
+        eager=True,
+    )
+    assert root_record.converged
+    assert float(root_record.residual.abs().max()) < 2.0e-11
+    root = root_record.root.detach()
+
+    _, layout = _initial_state(case, case.inputs)
+
+    def mapped(state: Tensor, parameter: Tensor) -> Tensor:
+        inputs = _inputs_at_field(case, parameter)
+        return _map_fn(case, inputs, layout)(state).mapped_x
+
+    origin = torch.zeros((), **_DD)
+    state_jacobian = jacrev(lambda state: mapped(state, origin))(root)
+    parameter_tangent = jvp(
+        lambda parameter: mapped(root, parameter),
+        (origin,),
+        (torch.ones_like(origin),),
+    )[1]
+    tangent_matrix = torch.eye(root.numel(), **_DD) - state_jacobian.reshape(
+        root.numel(), root.numel()
+    )
+    tangent = torch.linalg.solve(
+        tangent_matrix,
+        parameter_tangent.reshape(-1),
+    ).reshape_as(root)
+    torch.testing.assert_close(
+        tangent_matrix @ tangent.reshape(-1),
+        parameter_tangent.reshape(-1),
+        rtol=1.0e-10,
+        atol=1.0e-11,
+    )
+
+    def energy_at_state(state: Tensor, parameter: Tensor) -> Tensor:
+        inputs = _inputs_at_field(case, parameter)
+        map_result = _map_fn(case, inputs, layout)(state)
+        zero = state.new_zeros(())
+        yes = torch.ones((), dtype=torch.bool, device=state.device)
+        finalized = _finalize_map_result(
+            case, map_result, inputs, zero, yes, zero, root_x=state
+        )
+        return (finalized.energy + finalized.fenergy).sum()
+
+    state_for_grad = root.detach().requires_grad_(True)
+    parameter_for_grad = origin.detach().requires_grad_(True)
+    energy = energy_at_state(state_for_grad, parameter_for_grad)
+    state_gradient, explicit_gradient = torch.autograd.grad(
+        energy, (state_for_grad, parameter_for_grad)
+    )
+    jacobian_response = explicit_gradient + (state_gradient * tangent).sum()
+
+    def unrolled_energy(parameter: Tensor) -> Tensor:
+        record = _run_root(
+            case,
+            _inputs_at_field(case, parameter),
+            tolerance=tolerance,
+            maxiter=45,
+            eager=False,
+        )
+        assert record.converged
+        return record.finalized_energy
+
+    unrolled_parameter = origin.detach().requires_grad_(True)
+    unrolled_value = unrolled_energy(unrolled_parameter)
+    unrolled_derivative = torch.autograd.grad(
+        unrolled_value, unrolled_parameter
+    )[0]
+    torch.testing.assert_close(
+        jacobian_response, unrolled_derivative, rtol=2.0e-4, atol=2.0e-6
+    )
+
+    step = 5.0e-4
+
+    def root_energy_at(field_step: float) -> float:
+        record = _run_root(
+            case,
+            _inputs_at_field(case, torch.tensor(field_step, **_DD)),
+            tolerance=tolerance,
+            maxiter=300,
+            eager=True,
+        )
+        assert record.converged
+        return float(record.finalized_energy.detach())
+
+    finite_difference = (root_energy_at(step) - root_energy_at(-step)) / (
+        2.0 * step
+    )
+    assert torch.isfinite(jacobian_response)
+    torch.testing.assert_close(
+        jacobian_response.detach(),
+        torch.tensor(finite_difference, **_DD),
+        rtol=5.0e-4,
+        atol=2.0e-5,
+    )
+    torch.testing.assert_close(
+        unrolled_derivative.detach(),
+        torch.tensor(finite_difference, **_DD),
+        rtol=5.0e-4,
+        atol=2.0e-5,
     )

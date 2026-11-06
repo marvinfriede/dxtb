@@ -26,9 +26,11 @@ import pytest
 from tad_mctc.tree import Node, stack
 from torch.utils import _pytree
 
-from dxtb import GFN2_XTB, ParamModule
+from dxtb import GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
+from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
+from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
     D4SCSetup,
@@ -428,3 +430,112 @@ def test_system_owns_core_node_and_core_builder_matches_legacy() -> None:
     after = system.singlepoint(positions)
     torch.testing.assert_close(after.energy, before.energy)
     torch.testing.assert_close(after.charges.mono, before.charges.mono)
+
+
+def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
+    """Implicit SCF uses System D4SC setup and differentiates custom D4Model state."""
+    numbers, base_positions = _sample()
+
+    class ScaledD4Model(d4.model.D4Model):
+        def weight_references(self, *args, **kwargs):
+            weights = super().weight_references(*args, **kwargs)
+            if isinstance(weights, tuple):
+                return tuple(self.scale * value for value in weights)
+            return self.scale * weights
+
+    par = ParamModule(GFN2_XTB, **DD)
+    interaction = new_d4sc(numbers, par, **DD)
+    assert interaction is not None
+    original_model = interaction.model
+    custom_model = ScaledD4Model(
+        numbers,
+        ga=original_model.ga,
+        gc=original_model.gc,
+        wf=original_model.wf,
+        ref_charges=original_model.ref_charges,
+        rc6=original_model.rc6,
+        **DD,
+    )
+    source_scale = torch.tensor(1.07, **DD, requires_grad=True)
+    custom_model.scale = source_scale
+    interaction.model = custom_model
+
+    model = Model(
+        par=par,
+        config=Config.create(
+            exclude=("es2", "es3", "aes2", "d4sc"),
+            scf_mode=labels.SCF_MODE_IMPLICIT,
+            scp_mode=labels.SCP_MODE_CHARGE,
+            mixer=labels.MIXER_LINEAR,
+            maxiter=80,
+            x_atol=1.0e-11,
+            x_atol_max=1.0e-11,
+        ),
+        interaction=(interaction,),
+        auto_int_level=False,
+    )
+    system = model.setup(numbers)
+    custom_model.scale = torch.tensor(3.0, **DD)
+
+    positions = base_positions.clone().requires_grad_(True)
+    result = system.singlepoint(positions)
+    pos_grad, scale_grad = torch.autograd.grad(
+        result.energy.sum(), (positions, source_scale)
+    )
+    assert torch.isfinite(pos_grad).all()
+    assert torch.isfinite(scale_grad)
+    assert scale_grad.abs() > 0
+
+
+def test_independent_systems_and_alternate_or_custom_d4sc_setup_authority() -> (
+    None
+):
+    """Independent systems keep distinct setups and alternate/subclass D4SC uses its own route."""
+    numbers, positions = _sample()
+    model_a = _model()
+    par_b = GFN2_XTB.model_copy(deep=True)
+    par_b.dispersion.d4.s8 = 2.5  # type: ignore[union-attr]
+    model_b = Model(
+        par=ParamModule(par_b, **DD),
+        config=Config.create(exclude=("es2", "es3", "aes2")),
+        auto_int_level=False,
+    )
+    system_a = model_a.setup(numbers)
+    system_b = model_b.setup(numbers)
+    assert system_a.d4sc_setup is not system_b.d4sc_setup
+    assert not torch.allclose(
+        system_a.singlepoint(positions).energy,
+        system_b.singlepoint(positions).energy,
+    )
+
+    alternate = _interaction(numbers)
+    alternate.model.wf = alternate.model.wf + 0.5
+    alt_list = InteractionList(alternate, **DD)
+    alt_data = _interaction_data(system_a, positions, alt_list)
+    assert alt_data.d4sc_setup is None
+    assert torch.allclose(
+        alt_data[alternate.label].model.wf, alternate.model.wf
+    )
+
+    class CustomD4SC(DispersionD4SC):
+        pass
+
+    subclass = CustomD4SC(
+        alternate.param,
+        alternate.model,
+        alternate.rcov,
+        alternate.r4r2,
+        alternate.cutoff,
+        **DD,
+    )
+    sub_system = Model(
+        par=model_a.par,
+        config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
+        interaction=(subclass,),
+        auto_int_level=False,
+    ).setup(numbers)
+    assert sub_system.d4sc_setup is None
+    assert sub_system.d4sc_interaction is None
+    sub_data = _interaction_data(sub_system, positions)
+    assert sub_data.d4sc_setup is None
+    assert sub_data.functional_kinds == {}
