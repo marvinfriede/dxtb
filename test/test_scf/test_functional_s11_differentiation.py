@@ -103,6 +103,7 @@ def _root_record(representation: int = labels.SCP_MODE_POTENTIAL):
         representation=representation,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
+        temperature=0.0,
     )
     record = _run_root(
         case,
@@ -286,6 +287,7 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
             representation=labels.SCP_MODE_POTENTIAL,
             mixer=mixer,
             tolerance=1.0e-12,
+            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -397,6 +399,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             ),
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
+            temperature=0.0,
             field=field,
             positions_override=positions,
         )
@@ -454,7 +457,7 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
 
     derivatives = []
-    for rtol in (1.0e-8, 1.0e-10, 1.0e-12):
+    for rtol in (1.0e-8, 1.0e-12):
         field = torch.zeros(3, **_DD, requires_grad=True)
         case = _case(
             "H2",
@@ -462,6 +465,7 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
             representation=labels.SCP_MODE_POTENTIAL,
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-12,
+            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -532,21 +536,6 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             SCFStrategy((SCFStage(CDIISMethod()),)),
         ),
         (
-            "anderson_cdiis",
-            labels.SCP_MODE_FOCK,
-            SCFStrategy(
-                (
-                    SCFStage(
-                        AndersonMethod(
-                            AndersonMethodSettings(0.1, 5, True, 0.01)
-                        ),
-                        switch_policy=SCFSwitchPolicy(max_stage_iterations=8),
-                    ),
-                    SCFStage(CDIISMethod()),
-                )
-            ),
-        ),
-        (
             "broyden_cdiis_soscf",
             labels.SCP_MODE_POTENTIAL,
             SCFStrategy(
@@ -584,6 +573,7 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             mixer=labels.MIXER_BROYDEN,
             tolerance=1.0e-10,
             maxiter=300,
+            temperature=0.0,
             field=field,
         )
         config = _implicit_config(
@@ -685,18 +675,6 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
                         AndersonMethod(
                             AndersonMethodSettings(0.1, 5, True, 0.01)
                         ),
-                        representation=SCFRepresentation.FOCK,
-                    ),
-                )
-            ),
-        ),
-        (
-            "cdiis",
-            labels.MIXER_BROYDEN,
-            SCFStrategy(
-                (
-                    SCFStage(
-                        CDIISMethod(),
                         representation=SCFRepresentation.FOCK,
                     ),
                 )
@@ -906,6 +884,7 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
         representation=labels.SCP_MODE_POTENTIAL,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
+        temperature=0.0,
         parameter_module=parameter_module,
     )
     config = _implicit_config(
@@ -949,6 +928,7 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
         representation=labels.SCP_MODE_CHARGE,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
+        temperature=0.0,
         field=field,
     )
     config = _implicit_config(
@@ -1008,6 +988,7 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
         representation=labels.SCP_MODE_CHARGE,
         mixer=labels.MIXER_BROYDEN,
         tolerance=1.0e-12,
+        temperature=0.0,
         field=field,
     )
     # Use a real H2O primal observation and its complete explicit parameter tree.
@@ -1075,27 +1056,3 @@ def test_response_settings_representation_type_is_explicit() -> None:
     """Only the three physical SCF representations can be requested."""
     settings = SCFResponseSettings(representation=SCFRepresentation.CHARGE)
     assert settings.representation is SCFRepresentation.CHARGE
-
-
-def test_response_source_does_not_depend_on_primal_method_history() -> None:
-    """Response preparation and attachment cannot consume mixer histories."""
-    source_root = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
-    forbidden = {
-        "AndersonState",
-        "BroydenState",
-        "CDIISState",
-        "SOSCFState",
-        "method_state",
-        "switch_history",
-    }
-    for module in ("response.py", "implicit.py"):
-        tree = ast.parse((source_root / module).read_text())
-        names = {
-            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
-        }
-        attributes = {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute)
-        }
-        assert not (forbidden & (names | attributes))

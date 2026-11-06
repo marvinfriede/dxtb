@@ -23,6 +23,8 @@ from dataclasses import FrozenInstanceError, fields
 import pytest
 import torch
 from tad_mctc.batch import pack
+from tad_mctc.tree import Node, stack
+from torch.utils import _pytree
 
 from dxtb import GFN1_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
@@ -125,6 +127,22 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     assert first is not second
     assert system.halogen_classical.cache is None
     assert system.halogen_classical._cachevars is None
+
+    assert isinstance(setup, Node)
+    leaves, spec = _pytree.tree_flatten(setup)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is HalogenCoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = setup.to(dtype=torch.float32)
+    assert converted.xbond.dtype == torch.float32
+    assert converted.numbers.dtype == numbers.dtype
+    assert converted.halogen_mask.dtype == torch.bool
+    meta = setup.to(device=torch.device("meta"))
+    assert meta.numbers.device.type == "meta"
+    assert meta.halogen_mask.dtype == torch.bool
+    stacked = stack((setup, setup))
+    assert type(stacked) is HalogenCoreSetup
+    assert stacked.xbond.shape[0] == 2
 
 
 def test_no_halogen_no_base_and_cutoff_masks_return_finite_zero() -> None:
@@ -430,10 +448,15 @@ def test_jvp_jacfwd_and_mixed_parameter_derivative() -> None:
 
 
 @pytest.mark.parametrize(
-    "parameter", ["halogen.classical.damping", "halogen.classical.rscale"]
+    "parameter",
+    [
+        "halogen.classical.damping",
+        "halogen.classical.rscale",
+        "element.Br.xbond",
+    ],
 )
 def test_setup_parameters_retain_param_module_gradients(parameter: str) -> None:
-    """Damping and radii scale remain connected to real model leaves."""
+    """Damping, radii scale, and element xbond remain connected to model leaves."""
     numbers, positions = _geometry()
     par = _fresh_parameters()
     leaf = par.get(parameter)
@@ -463,19 +486,6 @@ def test_parameter_gradient_repeats_with_fresh_halogen_setup() -> None:
 
     torch.testing.assert_close(first_energy, second_energy)
     torch.testing.assert_close(first_gradient, second_gradient)
-
-
-def test_xbond_parameter_gradient_reaches_element_leaf() -> None:
-    """Gathered bromine xbond values retain their ParamModule graph."""
-    numbers, positions = _geometry()
-    par = _fresh_parameters()
-    leaf = par.get("element.Br.xbond")
-    leaf.requires_grad_(True)
-    system = _model(par).setup(numbers)
-    energy = _classical_energy(system, positions)
-    (gradient,) = torch.autograd.grad(energy, leaf)
-    assert torch.isfinite(gradient).all()
-    assert torch.count_nonzero(gradient) > 0
 
 
 def test_halogen_history_and_prior_backward_are_independent() -> None:
@@ -647,22 +657,14 @@ def test_duplicate_halogen_labels_are_rejected(with_subclass: bool) -> None:
             config=Config.create(exclude=_EXCLUDE),
             classical=(custom,),
         ).setup(numbers)
-
-
-def test_two_user_halogen_labels_are_rejected() -> None:
-    """Two user terms with the same label cannot overwrite call data."""
-    numbers, _ = _geometry()
-    par = get_param_module("gfn1", **DD)
-    base = new_halogen(torch.unique(numbers), par, **DD)
-    assert base is not None
-    first = Halogen(base.damp, base.rscale, base.bond_strength, **DD)
-    second = Halogen(base.damp, base.rscale, base.bond_strength, **DD)
-    with pytest.raises(ValueError, match="Halogen.*ambiguous"):
-        Model(
-            par=par,
-            config=Config.create(exclude=(*_EXCLUDE, "hal")),
-            classical=(first, second),
-        ).setup(numbers)
+    if not with_subclass:
+        second = Halogen(base.damp, base.rscale, base.bond_strength, **DD)
+        with pytest.raises(ValueError, match="Halogen.*ambiguous"):
+            Model(
+                par=par,
+                config=Config.create(exclude=(*_EXCLUDE, "hal")),
+                classical=(custom, second),
+            ).setup(numbers)
 
 
 def test_exact_halogen_update_and_reset_are_rejected() -> None:

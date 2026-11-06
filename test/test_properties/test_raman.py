@@ -159,6 +159,7 @@ def execute(
     assert pytest.approx(depol1, abs=atol2, rel=rtol2) == depol2
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", slist)

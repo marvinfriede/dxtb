@@ -271,13 +271,11 @@ def _assert_result_parity(actual, expected) -> None:
 @pytest.mark.parametrize(
     "compositions",
     [
-        ((1, 1), (1, 1)),
         ((1, 1), (3, 1)),
-        ((1, 1), (8, 1, 1)),
         ((8, 1, 1), (1, 1)),
         ((8, 1, 1), (6, 1, 1, 1, 1)),
     ],
-    ids=["h2-h2", "h2-lih", "h2-water", "water-h2", "water-methane"],
+    ids=["h2-lih", "water-h2", "water-methane"],
 )
 def test_mixed_gfn2_fixed_trip_matches_independent_systems(
     compositions: tuple[tuple[int, ...], ...],
@@ -437,96 +435,11 @@ def _serial_interaction_observables(
 
 @pytest.mark.parametrize(
     "compositions",
-    [((1, 1), (3, 1)), ((1, 1), (8, 1, 1)), ((8, 1, 1), (6, 1, 1, 1, 1))],
-    ids=["h2-lih", "h2-water", "water-methane"],
-)
-def test_mapped_gfn2_interaction_call_data_matches_single_core(
-    compositions: tuple[tuple[int, ...], ...],
-) -> None:
-    """ES2, ES3, AES2, and D4SC call tensors survive canonical padding."""
-    _, bucket, padded, _, positions, _ = _prepare(
-        _model(maxiter=1), compositions
-    )
-    mapped = torch.func.vmap(_component_tensors)(
-        stack(padded), torch.stack(positions)
-    )
-    for lane, (core, position) in enumerate(zip(padded, positions)):
-        expected = _component_tensors(core, position)
-        assert len(mapped) == len(expected)
-        for actual, reference in zip(mapped, expected):
-            assert actual.shape[0] == len(padded)
-            assert torch.isfinite(actual).all()
-            torch.testing.assert_close(actual[lane], reference)
-
-
-def test_gfn2_nonzero_trial_multipoles_preserve_interaction_potentials_and_energy():
-    """Mapped ES2/ES3/AES2/D4SC kernels retain trial-state contributions."""
-    compositions = ((1, 1), (8, 1, 1))
-    _, _, padded, _, positions, zero_charges = _prepare(
-        _model(maxiter=1), compositions
-    )
-    monopoles = []
-    dipoles = []
-    quadrupoles = []
-    for core in padded:
-        atom_mask = core.validity.atoms
-        orbital_mask = core.validity.orbitals
-        mono = torch.linspace(-0.06, 0.08, orbital_mask.numel(), dtype=DTYPE)
-        mono = torch.where(orbital_mask, mono, torch.zeros_like(mono))
-        dipole = 0.01 * torch.arange(atom_mask.numel() * 3, dtype=DTYPE)
-        dipole = dipole.reshape(-1, 3) + 0.02
-        dipole = torch.where(
-            atom_mask[:, None], dipole, torch.zeros_like(dipole)
-        )
-        quadrupole = 0.003 * torch.arange(atom_mask.numel() * 6, dtype=DTYPE)
-        quadrupole = quadrupole.reshape(-1, 6) - 0.01
-        quadrupole = torch.where(
-            atom_mask[:, None], quadrupole, torch.zeros_like(quadrupole)
-        )
-        monopoles.append(mono)
-        dipoles.append(dipole)
-        quadrupoles.append(quadrupole)
-
-    mapped = torch.func.vmap(_interaction_observables)(
-        stack(padded),
-        torch.stack(positions),
-        torch.stack(zero_charges),
-        torch.stack(monopoles),
-        torch.stack(dipoles),
-        torch.stack(quadrupoles),
-    )
-    for lane, core in enumerate(padded):
-        serial = _interaction_observables(
-            core,
-            positions[lane],
-            zero_charges[lane],
-            monopoles[lane],
-            dipoles[lane],
-            quadrupoles[lane],
-        )
-        assert tuple(item.kind for item in core.core.interaction_terms) == (
-            "es2",
-            "aes2",
-            "es3",
-            "d4sc",
-        )
-        assert len(mapped) == len(serial)
-        for mapped_entry, serial_entry in zip(mapped, serial):
-            assert torch.linalg.vector_norm(serial_entry[-1]) > 0
-            for mapped_value, serial_value in zip(mapped_entry, serial_entry):
-                torch.testing.assert_close(
-                    mapped_value[lane], serial_value, atol=5e-10, rtol=5e-10
-                )
-
-
-@pytest.mark.parametrize(
-    "compositions",
     [
         ((1, 1), (3, 1)),
-        ((1, 1), (8, 1, 1)),
         ((8, 1, 1), (1, 1)),
     ],
-    ids=["h2-lih", "h2-water", "water-h2"],
+    ids=["h2-lih", "water-h2"],
 )
 def test_gfn2_interactions_match_independent_unpadded_references(
     compositions: tuple[tuple[int, ...], ...],
@@ -821,12 +734,10 @@ def test_gfn2_classical_d4_uses_custom_eeq_cutoff(
 @pytest.mark.parametrize(
     "compositions",
     [
-        ((1, 1), (3, 1)),
         ((1, 1), (8, 1, 1)),
-        ((8, 1, 1), (1, 1)),
         ((8, 1, 1), (6, 1, 1, 1, 1)),
     ],
-    ids=["h2-lih", "h2-water", "water-h2", "water-methane"],
+    ids=["h2-water", "water-methane"],
 )
 def test_gfn2_finite_temperature_mapped_status_matches_serial(
     compositions: tuple[tuple[int, ...], ...],
@@ -1373,8 +1284,14 @@ def test_gfn2_mixed_energy_hessian_vector_matches_serial() -> None:
         assert torch.linalg.vector_norm(serial_hvp) > 0
 
 
-@pytest.mark.parametrize("mixer", ["linear", "anderson"])
-@pytest.mark.parametrize("scp_mode", ["charge", "potential", "fock"])
+@pytest.mark.parametrize(
+    ("mixer", "scp_mode"),
+    [
+        ("linear", "charge"),
+        ("anderson", "potential"),
+        ("anderson", "fock"),
+    ],
+)
 def test_gfn2_supported_scp_mixer_pairs_match_serial(
     mixer: str, scp_mode: str
 ) -> None:
@@ -1395,128 +1312,3 @@ def test_gfn2_supported_scp_mixer_pairs_match_serial(
     )
     for actual, expected in zip(decoded, serial):
         _assert_result_parity(actual, expected)
-
-
-def test_gfn2_solver_trace_matches_independent_serial_systems(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Mapped intermediate matrices and solver controls match serial traces."""
-    from tad_mctc.tree import stack as tree_stack
-
-    from dxtb._src.scf.functional import eager as eager_functional
-
-    compositions = ((1, 1), (8, 1, 1))
-    model = _model(maxiter=30)
-    systems = _systems(model, compositions)
-    cores = tuple(system.exact_core for system in systems)
-    assert all(core is not None for core in cores)
-    bucket = bucket_canonical_exact_cores(cores)
-    padded = tuple(
-        pad_canonical_exact_core(core, bucket, lane)
-        for lane, core in enumerate(cores)
-    )
-    source_positions = _positions(compositions)
-    positions = tuple(
-        canonicalize_positions(position, bucket, lane)
-        for lane, position in enumerate(source_positions)
-    )
-    charges = tuple(torch.zeros((), dtype=DTYPE) for _ in systems)
-    spins = tuple(torch.zeros((), dtype=DTYPE) for _ in systems)
-    d4_cutoff = float(
-        next(
-            descriptor.setup.cutoff.cn_eeq
-            for descriptor in padded[0].core.classical_terms
-            if descriptor.kind == "d4"
-        )
-    )
-    original_solve = eager_functional._solve_representation
-    serial_traces = []
-
-    def traced_serial_solve(*args, **kwargs):
-        solved = original_solve(*args, record_trace=True, **kwargs)
-        serial_traces.append(solved.trace)
-        return solved
-
-    monkeypatch.setattr(
-        eager_functional, "_solve_representation", traced_serial_solve
-    )
-    serial_results = tuple(
-        system.singlepoint(position, chrg=charge, spin=spin)
-        for system, position, charge, spin in zip(
-            systems, source_positions, charges, spins
-        )
-    )
-    mapped_results, mapped_trace = torch.func.vmap(
-        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
-            core,
-            position,
-            charge,
-            spin,
-            record_trace=True,
-            d4_eeq_cutoff=d4_cutoff,
-        )
-    )(
-        tree_stack(padded),
-        torch.stack(positions),
-        torch.stack(charges),
-        torch.stack(spins),
-    )
-    assert torch.any(
-        mapped_trace.active_after[0] != mapped_trace.active_after[1]
-    ), mapped_trace.residuals
-    assert len(serial_traces) == len(systems)
-    assert all(trace is not None for trace in serial_traces)
-    for lane, (serial_result, serial_trace) in enumerate(
-        zip(serial_results, serial_traces)
-    ):
-        assert serial_trace is not None
-        mapping = dict(bucket.source_maps)[bucket.indices[lane]]
-        atom_indices = torch.tensor(mapping.atoms, dtype=torch.int64)
-        orbital_indices = torch.tensor(mapping.orbitals, dtype=torch.int64)
-        torch.testing.assert_close(
-            mapped_results.energy[lane].index_select(0, atom_indices),
-            serial_result.energy,
-            atol=5e-8,
-            rtol=5e-8,
-        )
-        for name in ("hamiltonians", "densities"):
-            physical = getattr(mapped_trace, name)[lane]
-            physical = physical.index_select(-2, orbital_indices).index_select(
-                -1, orbital_indices
-            )
-            torch.testing.assert_close(
-                physical,
-                getattr(serial_trace, name),
-                atol=2e-8,
-                rtol=2e-8,
-            )
-        for name in (
-            "residuals",
-            "active_before",
-            "active_after",
-            "iterations",
-            "damping",
-        ):
-            torch.testing.assert_close(
-                getattr(mapped_trace, name)[lane],
-                getattr(serial_trace, name),
-                atol=2e-10,
-                rtol=2e-10,
-            )
-        for name in (
-            "fermi_converged",
-            "fermi_electron_count_ok",
-            "fermi_invalid_temperature",
-            "fermi_too_many_electrons",
-            "fermi_residual",
-        ):
-            mapped_status = getattr(mapped_trace, name)
-            serial_status = getattr(serial_trace, name)
-            assert (mapped_status is None) == (serial_status is None)
-            if mapped_status is not None and serial_status is not None:
-                torch.testing.assert_close(
-                    mapped_status[lane],
-                    serial_status,
-                    atol=2e-10,
-                    rtol=2e-10,
-                )

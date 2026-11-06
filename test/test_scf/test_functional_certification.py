@@ -77,7 +77,6 @@ from dxtb._src.scf.functional.solver import (
 )
 from dxtb._src.typing.exceptions import SCFConvergenceError
 
-from .scf_certification_characterization import characterize_case
 from .test_functional_map import _prepare_case
 
 
@@ -162,29 +161,6 @@ def test_characterization_h2o_helper_proves_resolved_method(
         + free_energy_from_spectral(spectral, case.inputs).sum()
     ).item()
     assert abs(energy - reference) < 1.0e-3
-
-
-def test_characterization_row_contains_verified_model_and_initial_state() -> (
-    None
-):
-    """Structured rows carry checked model and physical input provenance."""
-    row = characterize_case(
-        GFN2_XTB,
-        sample_name="H2",
-        representation=SCFRepresentation.CHARGE,
-        dtype=torch.float64,
-        tolerance=1.0e-6,
-    )
-    assert row["model"] == "GFN2-xTB"
-    assert row["model_config"] == labels.GFN2_XTB
-    assert row["h0_method"] == "gfn2"
-    assert row["parameter_model"] == "GFN2-xTB"
-    assert row["initial_x_sha256"]
-    assert row["occupation"]
-    assert row["nel"]
-    assert row["hcore_norm"] > 0.0
-    assert row["overlap_norm"] > 0.0
-    assert row["converged"]
 
 
 def test_orthogonalized_stationarity_scaling_for_direct_sums() -> None:
@@ -933,20 +909,25 @@ def test_fractional_float32_count_error_stays_below_effective_root_floor() -> (
     None
 ):
     """Material Fermi occupations retain the count check within f32 floor."""
-    row = characterize_case(
+    case, problem, _ = _problem_and_state(
         GFN2_XTB,
         sample_name="NO2",
         spin=1.0,
         temperature=2000.0,
         dtype=torch.float32,
-        tolerance=1.0e-12,
     )
-    assert row["model"] == "GFN2-xTB"
-    assert row["effective_root_tolerance"] == pytest.approx(5.0e-5)
-    assert row["fractional_occupation_count"] > 0
-    assert 1.0e-3 < row["fractional_occupation_min"] < 1.0
-    assert abs(row["electron_count_error"]) < row["effective_root_tolerance"]
-    assert row["fermi_ok"] and row["finite_ok"]
+    effective = _resolve_tolerance(1.0e-12, case.x.dtype)
+    assert effective == pytest.approx(5.0e-5)
+    outcome = _solve_map(
+        case.x,
+        SCFSolverSettings(120, False, 0.2, 1.0e-12, 1.0e-12),
+        problem.map,
+        problem=problem,
+    )
+    state = SCFPhysicalState(outcome.root_x, outcome.map_result)
+    metrics = certification_metrics(problem, state)
+    assert abs(float(metrics.electron_count_error)) < effective
+    assert bool(metrics.fermi_ok) and bool(metrics.finite_ok)
 
 
 def test_padded_residual_entries_do_not_contribute() -> None:

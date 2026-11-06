@@ -50,13 +50,14 @@ tol = 1e-1
 # - SiH4 fails for 0.0 (0.01 check depends on eps)
 # - non-negligible differences between --fast and --slow
 sample_list = ["H2", "H2O"]
-xfields = [0.0, 1.0, -2.0]
+xfields = [0.0, 1.0, pytest.param(-2.0, marks=pytest.mark.slow)]
 
 # The first-order single-sample check covers all fields. Double gradients use
 # the field-free and one finite-field case; batched variants (padding only)
 # use a single finite field.
 xfields_reduced = [0.0, 1.0]
 xfields_batch = [1.0]
+batch_name2_list = ["H2", pytest.param("H2O", marks=pytest.mark.slow)]
 
 
 def gradchecker(
@@ -186,7 +187,7 @@ def gradchecker_batch(
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["H2O"])
-@pytest.mark.parametrize("name2", sample_list)
+@pytest.mark.parametrize("name2", batch_name2_list)
 @pytest.mark.parametrize("xfield", xfields_batch)
 @pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
 @pytest.mark.parametrize("scf_mode", ["full"])
@@ -212,7 +213,7 @@ def test_gradcheck_batch(
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["H2O"])
-@pytest.mark.parametrize("name2", sample_list)
+@pytest.mark.parametrize("name2", batch_name2_list)
 @pytest.mark.parametrize("xfield", xfields_batch)
 @pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
 @pytest.mark.parametrize("scf_mode", ["full"])

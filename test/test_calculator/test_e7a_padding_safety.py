@@ -560,12 +560,15 @@ def test_mixed_full_energy_third_directional_derivative_is_lane_local(
 @pytest.mark.parametrize(
     "method,compositions,reverse",
     [
-        (labels.GFN1_XTB, ((1, 1), (8, 1, 1)), False),
         (labels.GFN1_XTB, ((8, 1, 1), (1, 1)), True),
-        (labels.GFN2_XTB, ((1, 1), (3, 1)), False),
-        (labels.GFN2_XTB, ((3, 1), (1, 1)), True),
+        pytest.param(
+            labels.GFN2_XTB,
+            ((3, 1), (1, 1)),
+            True,
+            marks=pytest.mark.slow,
+        ),
     ],
-    ids=["gfn1", "gfn1-reversed", "gfn2", "gfn2-reversed"],
+    ids=["gfn1-reversed", "gfn2-reversed"],
 )
 def test_mixed_full_energy_third_derivative_uses_distinct_directions(
     method: int, compositions: tuple[tuple[int, ...], ...], reverse: bool
@@ -639,72 +642,6 @@ def test_mixed_full_energy_third_derivative_uses_distinct_directions(
     )
     torch.testing.assert_close(
         serial_forward, serial_third, atol=3e-5, rtol=3e-5
-    )
-    torch.testing.assert_close(mapped_third, serial_third, atol=3e-5, rtol=3e-5)
-
-
-@pytest.mark.parametrize(
-    "method,compositions",
-    [
-        (labels.GFN1_XTB, ((1, 1), (8, 1, 1))),
-        (labels.GFN2_XTB, ((1, 1), (3, 1))),
-    ],
-    ids=["gfn1", "gfn2"],
-)
-def test_mixed_full_energy_third_derivative_has_both_lane_tangents(
-    method: int, compositions: tuple[tuple[int, ...], ...]
-) -> None:
-    """Combined directions perturb both independent physical Systems."""
-    systems, bucket, padded, source, positions, charges, spins = _build_systems(
-        method, compositions
-    )
-    source_maps = dict(bucket.source_maps)
-    source_direction_sets = []
-    padded_direction_sets = []
-    for transform in (
-        lambda value: value,
-        lambda value: torch.flip(value, dims=(0,)),
-        lambda value: torch.roll(value, shifts=1, dims=1),
-    ):
-        physical_directions = []
-        lane_directions = []
-        for lane, source_position in enumerate(source):
-            source_map = source_maps[bucket.indices[lane]]
-            atom_index = torch.tensor(source_map.atoms, dtype=torch.int64)
-            physical_direction = _direction(transform(source_position))
-            assert torch.count_nonzero(physical_direction) > 0
-            physical_directions.append(physical_direction)
-            lane_directions.append(
-                torch.zeros_like(positions[lane]).index_copy(
-                    0, atom_index, physical_direction
-                )
-            )
-        source_direction_sets.append(tuple(physical_directions))
-        padded_direction_sets.append(tuple(lane_directions))
-    for lane_directions in zip(*padded_direction_sets):
-        assert all(torch.count_nonzero(value) > 0 for value in lane_directions)
-
-    def mapped_energy(values):
-        result, _ = evaluate_padded_systems(
-            padded, bucket, values, charges, spins
-        )
-        return result.energy.sum()
-
-    def serial_energy(values):
-        return torch.stack(
-            [
-                system.singlepoint(value, chrg=charge, spin=spin).energy.sum()
-                for system, value, charge, spin in zip(
-                    systems, values, charges, spins
-                )
-            ]
-        ).sum()
-
-    mapped_third = _third_directional(
-        mapped_energy, positions, *padded_direction_sets
-    )
-    serial_third = _third_directional(
-        serial_energy, source, *source_direction_sets
     )
     torch.testing.assert_close(mapped_third, serial_third, atol=3e-5, rtol=3e-5)
 

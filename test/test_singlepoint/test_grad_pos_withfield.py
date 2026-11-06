@@ -50,7 +50,7 @@ opts = {
 
 tol = 1e-4
 
-sample_list = ["H2", "H2O", "SiH4"]
+sample_list = ["H2", "H2O", pytest.param("SiH4", marks=pytest.mark.slow)]
 
 
 def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
@@ -107,7 +107,9 @@ def test_gradcheck(dtype: torch.dtype, name: str, gfn: str) -> None:
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", ["H2O"])
-@pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
+@pytest.mark.parametrize(
+    "gfn", ["gfn1", pytest.param("gfn2", marks=pytest.mark.slow)]
+)
 def test_gradgradcheck(dtype: torch.dtype, name: str, gfn: str) -> None:
     """
     Check a single analytical gradient of parameters against numerical
@@ -170,7 +172,10 @@ def gradchecker_batch(
 # without padding; the single-sample tests above cover the per-molecule
 # physics. The batched second-order check is marked `large` (not run in the
 # default tox tier).
-batch_pairs = [("H2O", "H2"), ("H2", "H2")]
+batch_pairs = [
+    ("H2O", "H2"),
+    pytest.param("H2", "H2", marks=pytest.mark.slow),
+]
 
 
 @pytest.mark.grad

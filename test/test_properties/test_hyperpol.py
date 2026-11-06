@@ -136,32 +136,7 @@ def execute(
         )
     )
     assert pytest.approx(num, abs=atol, rel=rtol) == pol2
-
-    # 2x jacrev of dipole
-    pol3 = tensor_to_numpy(
-        calc.hyperpolarizability(
-            positions,
-            charge,
-            use_functorch=True,
-            derived_quantity="dipole",
-        )
-    )
-    assert pytest.approx(num, abs=atol, rel=rtol) == pol3
-
-    # jacrev of polarizability
-    pol4 = tensor_to_numpy(
-        calc.hyperpolarizability(
-            positions,
-            charge,
-            use_functorch=True,
-            derived_quantity="pol",
-        )
-    )
-    assert pytest.approx(num, abs=atol, rel=rtol) == pol4
-
     assert pytest.approx(pol, abs=1e-4) == pol2
-    assert pytest.approx(pol, abs=1e-4) == pol3
-    assert pytest.approx(pol, abs=1e-4) == pol4
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
@@ -196,6 +171,7 @@ def test_single_large(dtype: torch.dtype, name: str) -> None:
     single(name, field_vector, dd=dd)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", slist)

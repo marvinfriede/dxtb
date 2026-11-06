@@ -200,7 +200,11 @@ def batched(
 
 # Full gradient tracking (from TBMaLT) has no Broyden implementation.
 mixer_scf_modes = [
-    (mixer, scf_mode)
+    pytest.param(
+        mixer,
+        scf_mode,
+        marks=(pytest.mark.slow,) if mixer == "simple" else (),
+    )
     for scf_mode in ["full", "implicit"]
     for mixer in ["anderson", "broyden", "simple"]
     if not (scf_mode == "full" and mixer == "broyden")
@@ -251,7 +255,9 @@ def test_batch_no_padding(
 @pytest.mark.parametrize("name1", ["H2"])
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize(
+    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+)
 @pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
 @pytest.mark.parametrize("scf_mode", ["full"])
 def test_batch_three(

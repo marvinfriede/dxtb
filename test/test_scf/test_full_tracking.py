@@ -256,7 +256,9 @@ def batched(
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH", "SiH4"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize(
+    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+)
 @pytest.mark.parametrize("intdriver", drivers)
 def test_batch_gfn1(
     dtype: torch.dtype, name1: str, name2: str, mixer: str, intdriver: int
@@ -277,7 +279,9 @@ def test_batch_gfn1(
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH", "SiH4"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize(
+    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+)
 def test_batch_gfn2(
     dtype: torch.dtype, name1: str, name2: str, mixer: str
 ) -> None:
@@ -424,7 +428,9 @@ def test_batch_unconverged_fully_simple(
 @pytest.mark.parametrize("name1", ["H2"])
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize(
+    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+)
 def test_batch_three_gfn1(
     dtype: torch.dtype, name1: str, name2: str, name3: str, mixer: str
 ) -> None:
@@ -436,7 +442,9 @@ def test_batch_three_gfn1(
 @pytest.mark.parametrize("name1", ["H2"])
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize(
+    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+)
 def test_batch_three_gfn2(
     dtype: torch.dtype, name1: str, name2: str, name3: str, mixer: str
 ) -> None:

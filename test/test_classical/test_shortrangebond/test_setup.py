@@ -18,12 +18,13 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
 from tad_mctc.batch import pack
+from tad_mctc.tree import Node, stack
+from torch.utils import _pytree
 
 from dxtb import GFN0_XTB, Calculator, IndexHelper, ParamModule
 from dxtb._src.calculators.model import Model
@@ -64,6 +65,7 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     system = model.setup(numbers)
     setup = system.srb_setup
 
+    assert isinstance(setup, Node)
     assert isinstance(setup, ShortRangeBondCoreSetup)
     assert set(field.name for field in fields(setup)) == {
         "numbers",
@@ -88,12 +90,21 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     assert setup.r0.shape == numbers.shape
     assert setup.cnfak.shape == numbers.shape
     assert setup.en.shape == numbers.shape
+    leaves, spec = _pytree.tree_flatten(setup)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is ShortRangeBondCoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = setup.to(dtype=torch.float32)
+    assert converted.r0.dtype == torch.float32
+    assert converted.numbers.dtype == numbers.dtype
+    meta = setup.to(device="meta")
+    assert meta.r0.device.type == "meta"
+    assert meta.numbers.dtype == numbers.dtype
+    stacked = stack((setup, setup))
+    assert type(stacked) is ShortRangeBondCoreSetup
+    assert stacked.r0.shape[0] == 2
     with pytest.raises(FrozenInstanceError):
         setup.prefactor = torch.ones_like(setup.prefactor)  # type: ignore[misc]
-
-    source = inspect.getsource(short_range_bond_energy)
-    assert "self." not in source
-    assert "ShortRangeBondCache" not in source
 
 
 @pytest.mark.parametrize(

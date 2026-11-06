@@ -23,6 +23,8 @@ from typing import Any
 
 import pytest
 import torch
+from tad_mctc.tree import Node, stack
+from torch.utils import _pytree
 
 from dxtb import GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
@@ -123,6 +125,21 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     assert system.d4_classical._cachevars is None
     system.d4_classical.cache_disable()
     assert system.d4_classical.get_cache(numbers) is not second
+
+    assert isinstance(setup, Node)
+    leaves, spec = _pytree.tree_flatten(setup)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is DispersionD4CoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = setup.to(dtype=torch.float32)
+    assert converted.model_wf.dtype == torch.float32
+    assert converted.numbers.dtype == numbers.dtype
+    meta = setup.to(device=torch.device("meta"))
+    assert meta.numbers.device.type == "meta"
+    assert meta.model_wf.device.type == "meta"
+    stacked = stack((setup, setup))
+    assert type(stacked) is DispersionD4CoreSetup
+    assert stacked.model_wf.shape[0] == 2
 
 
 def test_gfn2_d4_classical_list_compatibility_view_parity() -> None:

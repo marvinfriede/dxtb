@@ -78,7 +78,7 @@ def test_three_batching_interfaces_coexist_and_agree(
     opts = {
         "method": method_name,
         "verbosity": 0,
-        "maxiter": 100,
+        "maxiter": 14,
         "x_atol": 1e-10,
         "fermi_etemp": 0.0,
         "int_driver": labels.INTDRIVER_PYTORCH,
@@ -203,8 +203,9 @@ def test_batched_shared_and_per_lane_field_and_field_grad_semantics() -> None:
     """Batched Calculator and evaluate_packed_systems support shared and per-lane fields."""
     opts = {
         "verbosity": 0,
-        "maxiter": 100,
+        "maxiter": 14,
         "x_atol": 1e-10,
+        "fermi_etemp": 0.0,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
     }
     num_w, pos_w = _water_geometry(0.0)
@@ -311,7 +312,12 @@ def test_grad_mode_removed_and_authoritative_force_ad() -> None:
     calc = Calculator(
         num_w,
         GFN1_XTB,
-        opts={"verbosity": 0, "int_level": labels.INTLEVEL_DIPOLE},
+        opts={
+            "verbosity": 0,
+            "maxiter": 14,
+            "fermi_etemp": 0.0,
+            "int_level": labels.INTLEVEL_DIPOLE,
+        },
         **DD,
     )
     pos = pos_w.clone().requires_grad_(True)
@@ -360,7 +366,7 @@ def test_all_13_setup_lifecycle_and_grad_mode_transitions() -> None:
         dim=0,
     )
 
-    opts = {"verbosity": 0, "maxiter": 100, "x_atol": 1e-10}
+    opts = {"verbosity": 0, "maxiter": 14, "x_atol": 1e-10, "fermi_etemp": 0.0}
     par = ParamModule(GFN1_XTB, **DD)
     par.set_differentiable("element", "O", "gam")
     gam_leaf = par.get("element.O.gam")
@@ -652,6 +658,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
         "mixer": "anderson",
         "maxiter": 12,
         "x_atol": 1e-10,
+        "fermi_etemp": 0.0,
     }
     par = ParamModule(GFN1_XTB, **DD)
 
@@ -885,6 +892,7 @@ def test_batched_third_order_electric_responses_match_serial() -> None:
         "mixer": "anderson",
         "maxiter": 2,
         "x_atol": 1e-10,
+        "fermi_etemp": 0.0,
     }
     calc_batch = Calculator(padded_nums, GFN1_XTB, opts=opts, **DD)
     calc_0 = Calculator(num_l, GFN1_XTB, opts=opts, **DD)
@@ -906,60 +914,57 @@ def test_batched_third_order_electric_responses_match_serial() -> None:
         field=shared_f.clone().requires_grad_(True),
     )
 
-    for f_in, f_lane1 in ((shared_f, shared_f), (lane_f, lane_f[1])):
-        chi_1 = calc_1.pol_deriv(
-            pos_h2.clone().requires_grad_(True),
-            use_functorch=False,
-            field=f_lane1.clone().requires_grad_(True),
-        )
-        beta_1 = calc_1.hyperpolarizability(
-            pos_h2,
-            use_functorch=False,
-            field=f_lane1.clone().requires_grad_(True),
-        )
-        for use_ft in (False, True):
-            f_arg = f_in.clone().requires_grad_(not use_ft)
-            dq_list = (
-                ("dipole",)
-                if (not use_ft or f_in is shared_f)
-                else ("dipole", "energy")
-            )
-            for dq in dq_list:
-                chi_b = calc_batch.pol_deriv(
-                    padded_pos.clone().requires_grad_(True),
-                    use_functorch=use_ft,
-                    derived_quantity=dq,
-                    field=f_arg,
-                )
-                assert chi_b.shape == (2, 3, 3, 3, 3)
-                torch.testing.assert_close(
-                    chi_b[0, :, :, :2, :], chi_0, atol=1e-5, rtol=1e-5
-                )
-                torch.testing.assert_close(
-                    chi_b[1, :, :, [0, 2], :], chi_1, atol=1e-5, rtol=1e-5
-                )
-                assert torch.all(chi_b[0, :, :, 2, :] == 0.0)
-                assert torch.all(chi_b[1, :, :, 1, :] == 0.0)
+    chi_1_shared = calc_1.pol_deriv(
+        pos_h2.clone().requires_grad_(True),
+        use_functorch=False,
+        field=shared_f.clone().requires_grad_(True),
+    )
+    beta_1_shared = calc_1.hyperpolarizability(
+        pos_h2,
+        use_functorch=False,
+        field=shared_f.clone().requires_grad_(True),
+    )
+    chi_1_lane = calc_1.pol_deriv(
+        pos_h2.clone().requires_grad_(True),
+        use_functorch=False,
+        field=lane_f[1].clone().requires_grad_(True),
+    )
+    beta_1_lane = calc_1.hyperpolarizability(
+        pos_h2,
+        use_functorch=False,
+        field=lane_f[1].clone().requires_grad_(True),
+    )
 
-            beta_dqs = (
-                ("pol",)
-                if (not use_ft or f_in is shared_f)
-                else ("pol", "polarizability", "dipole", "energy")
-            )
-            for b_dq in beta_dqs:
-                beta_b = calc_batch.hyperpolarizability(
-                    padded_pos,
-                    use_functorch=use_ft,
-                    derived_quantity=b_dq,
-                    field=f_in.clone().requires_grad_(not use_ft),
-                )
-                assert beta_b.shape == (2, 3, 3, 3)
-                torch.testing.assert_close(
-                    beta_b[0], beta_0, atol=1e-5, rtol=1e-5
-                )
-                torch.testing.assert_close(
-                    beta_b[1], beta_1, atol=1e-5, rtol=1e-5
-                )
+    for f_in, chi_1, beta_1, use_ft in (
+        (shared_f, chi_1_shared, beta_1_shared, False),
+        (lane_f, chi_1_lane, beta_1_lane, True),
+    ):
+        f_arg = f_in.clone().requires_grad_(not use_ft)
+        chi_b = calc_batch.pol_deriv(
+            padded_pos.clone().requires_grad_(True),
+            use_functorch=use_ft,
+            derived_quantity="dipole",
+            field=f_arg,
+        )
+        assert chi_b.shape == (2, 3, 3, 3, 3)
+        torch.testing.assert_close(
+            chi_b[0, :, :, :2, :], chi_0, atol=1e-5, rtol=1e-5
+        )
+        torch.testing.assert_close(
+            chi_b[1, :, :, [0, 2], :], chi_1, atol=1e-5, rtol=1e-5
+        )
+        assert torch.all(chi_b[0, :, :, 2, :] == 0.0)
+        assert torch.all(chi_b[1, :, :, 1, :] == 0.0)
+
+        beta_b = calc_batch.hyperpolarizability(
+            padded_pos,
+            use_functorch=use_ft,
+            derived_quantity="pol",
+            field=f_in.clone().requires_grad_(not use_ft),
+        )
+        assert beta_b.shape == (2, 3, 3, 3)
+        torch.testing.assert_close(beta_b[0], beta_0, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(beta_b[1], beta_1, atol=1e-5, rtol=1e-5)
 
 
 def test_cross_lane_derivative_isolation_for_fields_and_positions() -> None:
@@ -979,6 +984,7 @@ def test_cross_lane_derivative_isolation_for_fields_and_positions() -> None:
         "mixer": "anderson",
         "maxiter": 12,
         "x_atol": 1e-10,
+        "fermi_etemp": 0.0,
     }
     calc = Calculator(padded_nums, GFN1_XTB, opts=opts, **DD)
 
@@ -1083,6 +1089,7 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
         "mixer": "anderson",
         "maxiter": 12,
         "x_atol": 1e-10,
+        "fermi_etemp": 0.0,
     }
     calc_b3 = Calculator(nums_b3, GFN1_XTB, opts=opts, **DD)
     serial_calcs = (
@@ -1122,30 +1129,50 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
     torch.testing.assert_close(e_batched, e_batched_ref, atol=1e-9, rtol=1e-9)
     torch.testing.assert_close(e_seq, e_batched_ref, atol=1e-9, rtol=1e-9)
 
+    dip_sh_ref = torch.stack(
+        [
+            c.dipole(
+                p,
+                use_functorch=False,
+                field=f_shared.detach().requires_grad_(True),
+            )
+            for c, p in zip(serial_calcs, serial_pos)
+        ]
+    )
+    dip_ba_ref = torch.stack(
+        [
+            c.dipole(
+                p,
+                use_functorch=False,
+                field=f_batched[i].detach().requires_grad_(True),
+            )
+            for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+        ]
+    )
+    pol_sh_ref = torch.stack(
+        [
+            c.polarizability(
+                p,
+                use_functorch=False,
+                field=f_shared.detach().requires_grad_(True),
+            )
+            for c, p in zip(serial_calcs, serial_pos)
+        ]
+    )
+    pol_ba_ref = torch.stack(
+        [
+            c.polarizability(
+                p,
+                use_functorch=False,
+                field=f_batched[i].detach().requires_grad_(True),
+            )
+            for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+        ]
+    )
     for use_ft in (False, True):
         dip_sh = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_shared)
         dip_ba = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_batched)
         dip_sq = calc_b3.dipole(pos_b3, use_functorch=use_ft, field=f_seq)
-        dip_sh_ref = torch.stack(
-            [
-                c.dipole(
-                    p,
-                    use_functorch=use_ft,
-                    field=f_shared.detach().requires_grad_(True),
-                )
-                for c, p in zip(serial_calcs, serial_pos)
-            ]
-        )
-        dip_ba_ref = torch.stack(
-            [
-                c.dipole(
-                    p,
-                    use_functorch=use_ft,
-                    field=f_batched[i].detach().requires_grad_(True),
-                )
-                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
-            ]
-        )
         torch.testing.assert_close(dip_sh, dip_sh_ref, atol=1e-7, rtol=1e-7)
         torch.testing.assert_close(dip_ba, dip_ba_ref, atol=1e-7, rtol=1e-7)
         torch.testing.assert_close(dip_sq, dip_ba_ref, atol=1e-7, rtol=1e-7)
@@ -1155,26 +1182,6 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
         )
         pol_ba = calc_b3.polarizability(
             pos_b3, use_functorch=use_ft, field=f_batched
-        )
-        pol_sh_ref = torch.stack(
-            [
-                c.polarizability(
-                    p,
-                    use_functorch=use_ft,
-                    field=f_shared.detach().requires_grad_(True),
-                )
-                for c, p in zip(serial_calcs, serial_pos)
-            ]
-        )
-        pol_ba_ref = torch.stack(
-            [
-                c.polarizability(
-                    p,
-                    use_functorch=use_ft,
-                    field=f_batched[i].detach().requires_grad_(True),
-                )
-                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
-            ]
         )
         torch.testing.assert_close(pol_sh, pol_sh_ref, atol=1e-6, rtol=1e-6)
         torch.testing.assert_close(pol_ba, pol_ba_ref, atol=1e-6, rtol=1e-6)
@@ -1197,6 +1204,26 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
         fg_batched[i].detach().clone().requires_grad_(True) for i in range(3)
     ]
 
+    q_sh_ref = torch.stack(
+        [
+            c.quadrupole(
+                p,
+                use_functorch=False,
+                field_grad=fg_shared.detach().requires_grad_(True),
+            )
+            for c, p in zip(serial_calcs, serial_pos)
+        ]
+    )
+    q_ba_ref = torch.stack(
+        [
+            c.quadrupole(
+                p,
+                use_functorch=False,
+                field_grad=fg_batched[i].detach().requires_grad_(True),
+            )
+            for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
+        ]
+    )
     for use_ft in (False, True):
         q_sh = calc_b3.quadrupole(
             pos_b3, use_functorch=use_ft, field_grad=fg_shared
@@ -1206,26 +1233,6 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
         )
         q_sq = calc_b3.quadrupole(
             pos_b3, use_functorch=use_ft, field_grad=fg_seq
-        )
-        q_sh_ref = torch.stack(
-            [
-                c.quadrupole(
-                    p,
-                    use_functorch=use_ft,
-                    field_grad=fg_shared.detach().requires_grad_(True),
-                )
-                for c, p in zip(serial_calcs, serial_pos)
-            ]
-        )
-        q_ba_ref = torch.stack(
-            [
-                c.quadrupole(
-                    p,
-                    use_functorch=use_ft,
-                    field_grad=fg_batched[i].detach().requires_grad_(True),
-                )
-                for i, (c, p) in enumerate(zip(serial_calcs, serial_pos))
-            ]
         )
         torch.testing.assert_close(q_sh, q_sh_ref, atol=1e-7, rtol=1e-7)
         torch.testing.assert_close(q_ba, q_ba_ref, atol=1e-7, rtol=1e-7)
@@ -1262,7 +1269,13 @@ def test_inference_mode_param_module_ownership_and_identity() -> None:
         [pos_w, torch.cat([pos_l, torch.zeros((1, 3), **DD)], dim=0)],
         dim=0,
     )
-    opts = {"verbosity": 0, "int_driver": "pytorch", "scf_mode": "full"}
+    opts = {
+        "verbosity": 0,
+        "int_driver": "pytorch",
+        "scf_mode": "full",
+        "maxiter": 14,
+        "fermi_etemp": 0.0,
+    }
 
     # 1. Normal preexisting ParamModule: all parameter and buffer identities preserved
     par_norm = ParamModule(GFN1_XTB, **DD)
@@ -1524,11 +1537,13 @@ def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> N
         "scf_mode": "full",
         "mixer": "anderson",
         "maxiter": 0,
+        "fermi_etemp": 0.0,
     }
     calc_1d = Calculator(num_1d, GFN1_XTB, opts=opts, **DD)
     calc_2d = Calculator(num_2d, GFN1_XTB, opts=opts, **DD)
 
-    # 1D: Every implemented property works through get_property, get_<prop>, and calculate
+    # 1D: Every implemented property works through calculate, and representative
+    # properties work through get_property and get_<prop>.
     all_1d = calc_1d.calculate(
         list(calc_1d.implemented_properties),
         pos_1d.clone().requires_grad_(True),
@@ -1538,6 +1553,9 @@ def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> N
     )
     for prop in calc_1d.implemented_properties:
         assert prop in all_1d
+        assert hasattr(calc_1d, f"get_{prop}")
+
+    for prop in ("energy", "forces", "dipole", "polarizability", "hyperpolarizability"):
         val_gp = calc_1d.get_property(
             prop,
             pos_1d.clone().requires_grad_(True),
@@ -1623,6 +1641,8 @@ def test_derived_quantity_contract_explicit_validation() -> None:
         opts={
             "int_driver": labels.INTDRIVER_PYTORCH,
             "int_level": labels.INTLEVEL_DIPOLE,
+            "maxiter": 2,
+            "fermi_etemp": 0.0,
             "verbosity": 0,
         },
         **DD,

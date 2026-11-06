@@ -55,7 +55,11 @@ class _MapCloneCounter(TorchDispatchMode):
 
 
 def _model(dtype: torch.dtype = torch.float64) -> Model:
-    config = Config.create(int_driver=labels.INTDRIVER_PYTORCH)
+    config = Config.create(
+        int_driver=labels.INTDRIVER_PYTORCH,
+        maxiter=6,
+        fermi_etemp=0.0,
+    )
     return Model(par=ParamModule(GFN1_XTB, dtype=dtype), config=config)
 
 
@@ -662,15 +666,14 @@ def test_no_setup_dtype_checks_include_device(dtype: torch.dtype) -> None:
 
 
 @pytest.mark.parametrize(
-    "method,method_label",
+    "method,method_label,molecule",
     [
-        (GFN0_XTB, labels.GFN0_XTB),
-        (GFN1_XTB, labels.GFN1_XTB),
-        (GFN2_XTB, labels.GFN2_XTB),
+        (GFN0_XTB, labels.GFN0_XTB, "SiH4"),
+        (GFN1_XTB, labels.GFN1_XTB, "H2"),
+        (GFN2_XTB, labels.GFN2_XTB, "H2O"),
     ],
-    ids=["gfn0", "gfn1", "gfn2"],
+    ids=["gfn0-SiH4", "gfn1-H2", "gfn2-H2O"],
 )
-@pytest.mark.parametrize("molecule", ["H2", "LiH", "H2O", "SiH4"])
 def test_captured_index_maps_match_h0_and_legacy(
     method: str, method_label: int, molecule: str
 ) -> None:

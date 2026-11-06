@@ -186,7 +186,7 @@ def test_forces(name: str, ktemp: float, mode: str) -> None:
 # the full mode is expensive and its Fermi steps are the same as for the forces
 HESSIANS = [
     ("C2", 5000.0, "implicit"),
-    ("BeH2", 25000.0, "implicit"),
+    pytest.param("BeH2", 25000.0, "implicit", marks=pytest.mark.slow),
 ]
 
 

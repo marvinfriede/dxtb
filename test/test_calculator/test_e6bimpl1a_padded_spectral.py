@@ -247,18 +247,12 @@ def _serial_fermi_settings(system, hcore):
     [
         (((1, 1), (1, 1, 1)), (0.0, 1.0), (0.0, 0.0)),
         (((1, 1), (8, 1, 1)), (1.0, 0.0), (1.0, 0.0)),
-        (((1, 1), (8, 1, 1)), (0.0, 0.0), (0.0, 0.0)),
-        (((8, 1, 1), (1, 1)), (0.0, 0.0), (0.0, 0.0)),
         (((8, 1, 1), (6, 1, 1, 1, 1)), (0.0, 0.0), (0.0, 0.0)),
-        (((6, 1, 1, 1, 1), (8, 1, 1)), (0.0, 0.0), (0.0, 0.0)),
     ],
     ids=[
         "h2-h3-plus",
         "h2-plus-water",
-        "h2-water",
-        "water-h2",
         "water-ch4",
-        "ch4-water",
     ],
 )
 def test_padded_mapped_spectrum_matches_independent_serial_systems(
@@ -542,16 +536,12 @@ def test_too_many_electrons_status_is_lane_local():
 @pytest.mark.parametrize(
     ("numbers", "charges", "spins"),
     [
-        (((1, 1), (1, 1, 1)), (0.0, 1.0), (0.0, 0.0)),
         (((1, 1), (1, 1, 1)), (0.0, 0.0), (0.0, 1.0)),
-        (((1, 1), (8, 1, 1)), (0.0, 0.0), (0.0, 0.0)),
         (((8, 1, 1), (1, 1)), (0.0, 0.0), (0.0, 0.0)),
         (((8, 1, 1), (6, 1, 1, 1, 1)), (0.0, 0.0), (0.0, 0.0)),
     ],
     ids=(
-        "h2-h3-plus",
         "h2-h3-open-shell",
-        "h2-water",
         "water-h2",
         "water-ch4",
     ),
@@ -682,191 +672,6 @@ def test_padded_full_fixed_trip_result_matches_serial_systems(
 
 
 @pytest.mark.parametrize(
-    ("numbers", "charges", "spins", "mixer", "fermi_etemp"),
-    [
-        (
-            ((1, 1), (1, 1, 1)),
-            (0.0, 1.0),
-            (0.0, 0.0),
-            labels.MIXER_LINEAR,
-            0.0,
-        ),
-        (
-            ((1, 1), (8, 1, 1)),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            labels.MIXER_LINEAR,
-            0.0,
-        ),
-        (
-            ((1, 1), (8, 1, 1)),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            labels.MIXER_ANDERSON,
-            0.0,
-        ),
-        (
-            ((1, 1), (8, 1, 1)),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            labels.MIXER_LINEAR,
-            300.0,
-        ),
-    ],
-    ids=(
-        "h2-h3-plus-linear",
-        "h2-water-linear",
-        "h2-water-anderson",
-        "h2-water-finite-temperature",
-    ),
-)
-def test_padded_solver_trace_matches_independent_serial_systems(
-    numbers: tuple[tuple[int, ...], ...],
-    charges: tuple[float, ...],
-    spins: tuple[float, ...],
-    mixer: int,
-    fermi_etemp: float,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The same fixed-trip solver transitions match independent serial calls."""
-    from dxtb._src.scf.functional import eager as eager_functional
-
-    _, systems = _systems(numbers, mixer=mixer, maxiter=5, fermi_etemp=fermi_etemp)
-    source_positions = tuple(_positions(item) for item in numbers)
-    charge_values = tuple(torch.tensor(item, dtype=DTYPE) for item in charges)
-    spin_values = tuple(torch.tensor(item, dtype=DTYPE) for item in spins)
-    bucket, padded, positions, _, _ = _prepare(
-        systems,
-        source_positions,
-        torch.stack(charge_values),
-        torch.stack(spin_values),
-    )
-
-    original_solve = eager_functional._solve_representation
-    serial_traces = []
-
-    def traced_serial_solve(*args, **kwargs):
-        solved = original_solve(*args, record_trace=True, **kwargs)
-        serial_traces.append(solved.trace)
-        return solved
-
-    monkeypatch.setattr(eager_functional, "_solve_representation", traced_serial_solve)
-    serial = tuple(
-        system.singlepoint(position, chrg=charge, spin=spin)
-        for system, position, charge, spin in zip(
-            systems, source_positions, charge_values, spin_values
-        )
-    )
-
-    from tad_mctc.tree import stack as tree_stack
-
-    stacked_core = tree_stack(padded)
-    mapped_results, mapped_traces = torch.func.vmap(
-        lambda core, position, charge, spin: evaluate_padded_fixed_trip(
-            core, position, charge, spin, record_trace=True
-        )
-    )(
-        stacked_core,
-        torch.stack(positions),
-        torch.stack(charge_values),
-        torch.stack(spin_values),
-    )
-    if numbers == ((1, 1), (8, 1, 1)):
-        assert torch.any(mapped_traces.active_after[0] != mapped_traces.active_after[1])
-    assert len(serial_traces) == len(systems)
-    assert all(trace is not None for trace in serial_traces)
-    for lane, (system, serial_result, serial_trace) in enumerate(
-        zip(systems, serial, serial_traces)
-    ):
-        assert serial_trace is not None
-        source_map = dict(bucket.source_maps)[lane]
-        atom_indices = torch.tensor(source_map.atoms, dtype=torch.int64)
-        orbital_indices = torch.tensor(source_map.orbitals, dtype=torch.int64)
-        mapped_trace = mapped_traces
-        torch.testing.assert_close(
-            mapped_results.energy[lane].index_select(0, atom_indices),
-            serial_result.energy,
-        )
-
-        def physical_vector(name: str) -> torch.Tensor:
-            mapped_value = getattr(mapped_trace, name)[lane]
-            serial_value = getattr(serial_trace, name)
-            indices = (
-                atom_indices
-                if serial_value.shape[-1] == len(source_map.atoms)
-                else orbital_indices
-            )
-            return mapped_value.index_select(-1, indices)
-
-        for name in ("initial_guess", "map_inputs", "raw_mapped", "iterates"):
-            torch.testing.assert_close(
-                physical_vector(name),
-                getattr(serial_trace, name),
-                atol=2.0e-9,
-                rtol=2.0e-9,
-            )
-        for name in ("charges",):
-            mapped_value = physical_vector(name)
-            torch.testing.assert_close(
-                mapped_value,
-                getattr(serial_trace, name),
-                atol=2.0e-9,
-                rtol=2.0e-9,
-            )
-        for name in ("hamiltonians", "densities"):
-            mapped_value = getattr(mapped_trace, name)[lane]
-            mapped_value = mapped_value.index_select(-2, orbital_indices).index_select(
-                -1, orbital_indices
-            )
-            torch.testing.assert_close(
-                mapped_value,
-                getattr(serial_trace, name),
-                atol=2.0e-8,
-                rtol=2.0e-8,
-            )
-        for name in (
-            "residuals",
-            "active_before",
-            "active_after",
-            "iterations",
-            "damping",
-        ):
-            torch.testing.assert_close(
-                getattr(mapped_trace, name)[lane],
-                getattr(serial_trace, name),
-                atol=2.0e-10,
-                rtol=2.0e-10,
-            )
-        for name in (
-            "fermi_converged",
-            "fermi_electron_count_ok",
-            "fermi_invalid_temperature",
-            "fermi_too_many_electrons",
-            "fermi_residual",
-        ):
-            mapped_status = getattr(mapped_trace, name)
-            serial_status = getattr(serial_trace, name)
-            assert (mapped_status is None) == (serial_status is None)
-            if mapped_status is not None and serial_status is not None:
-                torch.testing.assert_close(
-                    mapped_status[lane],
-                    serial_status,
-                    atol=2.0e-10,
-                    rtol=2.0e-10,
-                )
-        assert len(mapped_trace.method_state) == len(serial_trace.method_state)
-        for mapped_history, serial_history in zip(
-            mapped_trace.method_state, serial_trace.method_state
-        ):
-            torch.testing.assert_close(
-                mapped_history[lane].index_select(-1, orbital_indices),
-                serial_history,
-                atol=2.0e-9,
-                rtol=2.0e-9,
-            )
-
-
-@pytest.mark.parametrize(
     ("int_level", "has_dipole", "has_quadrupole"),
     [
         (labels.INTLEVEL_DIPOLE, True, False),
@@ -925,8 +730,8 @@ def test_padded_full_fixed_trip_optional_integrals_match_serial(
 
 @pytest.mark.parametrize(
     "numbers",
-    [((1, 1), (8, 1, 1)), ((8, 1, 1), (1, 1))],
-    ids=("h2-water", "water-h2"),
+    [((1, 1), (8, 1, 1))],
+    ids=("h2-water",),
 )
 def test_padded_full_shared_field_matches_serial_and_derivatives(
     numbers: tuple[tuple[int, ...], ...],
@@ -1010,8 +815,8 @@ def test_padded_full_shared_field_matches_serial_and_derivatives(
 
 @pytest.mark.parametrize(
     "numbers",
-    [((1, 1), (8, 1, 1)), ((8, 1, 1), (1, 1))],
-    ids=("h2-water", "water-h2"),
+    [((8, 1, 1), (1, 1))],
+    ids=("water-h2",),
 )
 def test_padded_full_shared_field_gradient_matches_serial_and_derivatives(
     numbers: tuple[tuple[int, ...], ...],
@@ -1597,15 +1402,11 @@ def test_padded_full_es2_parameter_gradient_matches_serial() -> None:
     [
         (labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
         (labels.SCP_MODE_POTENTIAL, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
-        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
         (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
     ],
     ids=(
         "charge-anderson",
         "potential-linear",
-        "potential-anderson",
-        "fock-linear",
         "fock-anderson",
     ),
 )

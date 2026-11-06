@@ -32,7 +32,13 @@ from dxtb._src.typing import DD, Tensor
 from ..conftest import DEVICE
 from .samples import samples
 
-slist = ["H", "LiH", "H2O", "CH4", "SiH4"]
+slist = [
+    "H",
+    "LiH",
+    "H2O",
+    pytest.param("CH4", marks=pytest.mark.slow),
+    pytest.param("SiH4", marks=pytest.mark.slow),
+]
 slist_large = ["HHe", "PbH4-BiH3", "MB16_43_01"]  # "LYS_xao"
 
 opts = {

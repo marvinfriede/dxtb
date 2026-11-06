@@ -93,6 +93,7 @@ BIG = ("LYS_xao", "batch_H2O_CH4", "batch_H2_LYS", "slow", "slow_gap")
 # systems that are only run on request (`-m large`), the default run (`-m "not
 # large"`, see tox.ini) covers the remaining systems
 LARGE = ("H2", "LiH", "LYS_xao", "slow", "slow_gap")
+SLOW = ("H2O+", "batch_H2_LYS")
 
 QUANTITIES = ["E", "q", "q2", "dip"]
 FIRST = ["pos", "field", "param"]
@@ -184,13 +185,13 @@ def _cells_for(system: str) -> list[tuple[str, str]]:
 
 
 @functools.lru_cache(maxsize=None)
-def compute(
-    mode: str, system: str
-) -> dict[tuple[str, str], torch.Tensor | Failed]:
+def compute_cell(
+    mode: str, system: str, deriv: str, q: str
+) -> torch.Tensor | Failed:
     """
-    Evaluate all cells of one (mode, system) pair from one forward pass.
+    Evaluate a single (mode, system, deriv, q) cell.
 
-    Only detached numbers are cached, never graphs.
+    Only detached tensors are cached, never graphs.
     """
     numbers, pos0, chrg = build(system)
     nb = 1 if numbers.dim() == 1 else numbers.shape[0]
@@ -208,37 +209,44 @@ def compute(
         numbers, par, opts=opts, interaction=new_efield(field), **DD
     )
 
-    out: dict[tuple[str, str], torch.Tensor | Failed] = {}
     try:
         res = calc.singlepoint(pos, chrg)
-        fs = {q: (quantity(calc, res, pos, q) * w).sum() for q in QUANTITIES}
+        fq = (quantity(calc, res, pos, q) * w).sum()
     except Exception as e:  # pylint: disable=broad-exception-caught
-        fail = Failed(e)
-        return {c: fail for c in _cells_for(system)}
+        return Failed(e)
 
     wrt = {"pos": pos, "field": field, "param": gexp}
 
     def grad(f, x, **kw):
         return torch.autograd.grad(f, x, retain_graph=True, **kw)[0]
 
-    for d, q in _cells_for(system):
-        if d in FIRST:
-            out[(d, q)] = _try(lambda: grad(fs[q], wrt[d]))
-        elif d == "hvp_pos":
+    if deriv in FIRST:
+        return _try(lambda: grad(fq, wrt[deriv]))
+    if deriv == "hvp_pos":
 
-            def hvp(q=q) -> torch.Tensor:
-                g = grad(fs[q], pos, create_graph=True)
-                return grad((g * dpos).sum(), pos)
+        def hvp() -> torch.Tensor:
+            g = grad(fq, pos, create_graph=True)
+            return grad((g * dpos).sum(), pos)
 
-            out[(d, q)] = _try(hvp)
-        elif d == "mixed":
+        return _try(hvp)
+    if deriv == "mixed":
 
-            def mixed(q=q) -> torch.Tensor:
-                g = grad(fs[q], pos, create_graph=True)
-                return grad((g * dpos).sum(), field)
+        def mixed() -> torch.Tensor:
+            g = grad(fq, pos, create_graph=True)
+            return grad((g * dpos).sum(), field)
 
-            out[(d, q)] = _try(mixed)
-    return out
+        return _try(mixed)
+    raise ValueError(deriv)
+
+
+def compute(
+    mode: str, system: str
+) -> dict[tuple[str, str], torch.Tensor | Failed]:
+    """Evaluate all cells of one (mode, system) pair."""
+    return {
+        (d, q): compute_cell(mode, system, d, q)
+        for d, q in _cells_for(system)
+    }
 
 
 ##############################################################################
@@ -291,30 +299,27 @@ def _vec(fn: Callable[[float], dict], h: float, second: bool = False) -> dict:
 
 
 @functools.lru_cache(maxsize=None)
-def reference(system: str) -> dict[tuple[str, str], torch.Tensor]:
+def reference_deriv(system: str, deriv: str) -> dict[str, torch.Tensor]:
     """
-    Finite-difference reference for all cells of a system.
+    Finite-difference reference for one derivative family of a system.
 
-    For small systems ``pos`` holds the full gradient. For ``BIG`` systems it
-    holds the directional derivative ``dpos . grad`` (0-dim), and the mode value
-    is projected the same way. ``hvp_pos`` is the scalar ``dpos . H . dpos`` and
-    ``mixed`` the vector ``d/dF (dpos . grad_pos E)``.
+    Caching per ``(system, deriv)`` avoids computing all 5 derivative stencils
+    on every xdist worker when tests are distributed across processes.
     """
     numbers, pos0, _ = build(system)
     dpos = direction(tuple(pos0.shape), numbers)
     field0 = torch.tensor(FIELD0, **DD)
-    out: dict[tuple[str, str], torch.Tensor] = {}
     cells = _cells_for(system)
     quants = sorted({q for _, q in cells})
 
-    def put(deriv: str, vals: dict) -> None:
-        for q in quants:
-            out[(deriv, q)] = torch.as_tensor(vals[q], **DD)
+    def to_tensor_dict(vals: dict) -> dict[str, torch.Tensor]:
+        return {q: torch.as_tensor(vals[q], **DD) for q in quants if q in vals}
 
-    # pos
-    if system in BIG:
-        put("pos", _vec(lambda t: _scalars(system, pos=pos0 + t * dpos), 1e-3))
-    else:
+    if deriv == "pos":
+        if system in BIG:
+            return to_tensor_dict(
+                _vec(lambda t: _scalars(system, pos=pos0 + t * dpos), 1e-3)
+            )
         g = {q: torch.zeros_like(pos0) for q in QUANTITIES}
         for idx in range(pos0.numel()):
             e = torch.zeros_like(pos0)
@@ -322,34 +327,38 @@ def reference(system: str) -> dict[tuple[str, str], torch.Tensor]:
             v = _vec(lambda t: _scalars(system, pos=pos0 + t * e), 1e-3)
             for q in QUANTITIES:
                 g[q].view(-1)[idx] = v[q]
-        put("pos", g)
+        return to_tensor_dict(g)
 
-    # field (3) and parameter (1)
-    gf = {q: torch.zeros(3, **DD) for q in QUANTITIES}
-    for i in range(3):
-        e = torch.zeros(3, **DD)
-        e[i] = 1.0
-        v = _vec(lambda t: _scalars(system, field=field0 + t * e), 1e-4)
-        for q in QUANTITIES:
-            gf[q][i] = v[q]
-    put("field", gf)
-    g0 = ParamModule(GFN1_XTB, **DD).get("charge", "effective", "gexp").item()
-    put(
-        "param",
-        _vec(lambda t: _scalars(system, gexp=g0 + t), 1e-3),
-    )
+    if deriv == "field":
+        gf = {q: torch.zeros(3, **DD) for q in QUANTITIES}
+        for i in range(3):
+            e = torch.zeros(3, **DD)
+            e[i] = 1.0
+            v = _vec(lambda t: _scalars(system, field=field0 + t * e), 1e-4)
+            for q in QUANTITIES:
+                gf[q][i] = v[q]
+        return to_tensor_dict(gf)
 
-    # second derivatives
-    put(
-        "hvp_pos",
-        _vec(
-            lambda t: _scalars(system, pos=pos0 + t * dpos), 2e-3, second=True
-        ),
-    )
-    if system not in BIG:
-        # E is strongly non-linear in the field: small field step (h scan in
-        # the development notes: 1e-3 -> 1e-7 error, 1e-4 -> 1e-11). Position step 2e-3: larger
-        # steps lose to truncation, smaller ones to SCF noise (hvp h scan, the development notes)
+    if deriv == "param":
+        g0 = (
+            ParamModule(GFN1_XTB, **DD)
+            .get("charge", "effective", "gexp")
+            .item()
+        )
+        return to_tensor_dict(
+            _vec(lambda t: _scalars(system, gexp=g0 + t), 1e-3)
+        )
+
+    if deriv == "hvp_pos":
+        return to_tensor_dict(
+            _vec(
+                lambda t: _scalars(system, pos=pos0 + t * dpos),
+                2e-3,
+                second=True,
+            )
+        )
+
+    if deriv == "mixed":
         hp, hf = 2e-3, 3e-4
         mixed = torch.zeros(3, **DD)
         for i in range(3):
@@ -365,8 +374,9 @@ def reference(system: str) -> dict[tuple[str, str], torch.Tensor]:
                 )
 
             mixed[i] = _stencil1(dt, hf)
-        out[("mixed", "E")] = mixed
-    return out
+        return {"E": mixed}
+
+    raise ValueError(deriv)
 
 
 def _tol(ref: torch.Tensor, first: bool) -> float:
@@ -410,10 +420,6 @@ KNOWN_FAILURES: dict[tuple[str, str, str, str], tuple[str, bool]] = {
     ("full", "LiH", "field", "dip"): (
         "unrolled derivative of a non-variational quantity is inexact (err 8.92e-07)",
         False,
-    ),
-    ("full", "batch_H2O_CH4", "hvp_pos", "q2"): (
-        "unrolled derivative of a non-variational quantity is inexact (err 3.93e-03)",
-        True,
     ),
     ("full", "LYS_xao", "hvp_pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 4.16e-03)",
@@ -490,6 +496,8 @@ def _all_cells() -> list:
                 marks = []
                 if system in LARGE:
                     marks.append(pytest.mark.large)
+                if system in SLOW:
+                    marks.append(pytest.mark.slow)
                 key = (mode, system, d, q)
                 if key in KNOWN_FAILURES:
                     reason, strict = KNOWN_FAILURES[key]
@@ -512,10 +520,9 @@ def _all_cells() -> list:
 @pytest.mark.parametrize("mode,system,deriv,q", _all_cells())
 def test_matrix(mode: str, system: str, deriv: str, q: str) -> None:
     """Derivative of a mode agrees with the finite-difference reference."""
-    cell = (deriv, q)
-    ref = reference(system)[cell]
+    ref = reference_deriv(system, deriv)[q]
 
-    val = compute(mode, system)[cell]
+    val = compute_cell(mode, system, deriv, q)
     assert isinstance(val, torch.Tensor), f"{mode} failed: {val}"
     val = project(system, deriv, val)
 
@@ -533,7 +540,7 @@ def test_float32_smoke(mode: str) -> None:
     """Single precision runs and roughly agrees with the double reference."""
     numbers, pos0, chrg = build("H2O")
     # energy gradients are variational, hence exact in every mode
-    ref = compute("full", "H2O")
+    ref_pos_e = compute_cell("full", "H2O", "pos", "E")
 
     dd32 = {"device": DEVICE, "dtype": torch.float32}
     opts = {"verbosity": 0, "maxiter": 100, "scf_mode": mode}
@@ -549,5 +556,5 @@ def test_float32_smoke(mode: str) -> None:
 
     e = res.total.sum(-1)
     (g,) = torch.autograd.grad(e, pos)
-    assert isinstance(ref[("pos", "E")], torch.Tensor)
-    assert (g.double() - ref[("pos", "E")]).abs().max().item() < 5e-4
+    assert isinstance(ref_pos_e, torch.Tensor)
+    assert (g.double() - ref_pos_e).abs().max().item() < 5e-4

@@ -22,7 +22,9 @@ from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
+from tad_mctc.tree import Node, stack
 from torch.func import jacfwd, jvp, vmap
+from torch.utils import _pytree
 
 from dxtb import GFN2_XTB, Calculator, IndexHelper, ParamModule
 from dxtb._src.calculators.model import Model
@@ -30,8 +32,10 @@ from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.coulomb import (
     AES2,
+    AES2CoreSetup,
     AES2Setup,
     build_aes2_data,
+    core_aes2_setup,
     new_aes2,
     setup_aes2,
 )
@@ -127,6 +131,26 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert interaction._cachevars is None
     assert interaction._cachegrad is None
     torch.testing.assert_close(first.amat_sd, second.amat_sd)
+
+    core = core_aes2_setup(setup)
+    assert isinstance(core, Node)
+    assert type(core) is AES2CoreSetup
+    leaves, spec = _pytree.tree_flatten(core)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is AES2CoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = core.to(dtype=torch.float32)
+    assert converted.dmp3.dtype == torch.float32
+    assert converted.numbers.dtype == core.numbers.dtype
+    assert converted.pair_mask.dtype == torch.bool
+    meta = core.to(device="meta")
+    assert meta.dmp3.device.type == "meta"
+    assert meta.pair_mask.dtype == torch.bool
+    batched = stack((core, core))
+    assert type(batched) is AES2CoreSetup
+    assert batched.dmp3.shape[0] == 2
+    core_data = build_aes2_data(core, positions)
+    torch.testing.assert_close(core_data.amat_sd, first.amat_sd)
 
 
 def test_aes2_positions_supports_reverse_and_forward_transforms() -> None:
@@ -540,25 +564,6 @@ def test_aes2_subclass_remains_a_cache_driven_extension() -> None:
         charges, calc_data, calc.ihelp
     )[extension.label].sum()
     torch.testing.assert_close(calc_energy, one)
-
-
-def test_aes2_setup_builder_is_the_only_matrix_formula() -> None:
-    """Exact compatibility hooks contain no persistent or indexed writes."""
-    import inspect
-
-    from dxtb._src.components.interactions.coulomb.multipole import (
-        _build_atom_coulomb_matrix,
-    )
-
-    cache_source = inspect.getsource(AES2.get_cache)
-    matrix_source = inspect.getsource(_build_atom_coulomb_matrix)
-    assert "cache_is_latest" not in cache_source
-    assert "self.cache" not in cache_source
-    assert "_cachevars" not in cache_source
-    assert "_cachegrad" not in cache_source
-    assert "torch.empty" not in matrix_source
-    assert "sq[" not in matrix_source
-    assert "self." not in matrix_source
 
 
 def test_cull_restore_only_changes_call_local_aes2_data() -> None:

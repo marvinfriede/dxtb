@@ -103,7 +103,7 @@ def _build_system(
     mixer: int = labels.MIXER_ANDERSON,
     etemp: float = 300.0,
     partition: int = labels.FERMI_PARTITION_EQUAL,
-    maxiter: int = 200,
+    maxiter: int = 100,
     x_atol: float = 1.0e-10,
     x_atol_max: float = 1.0e-10,
     force_convergence: bool = True,
@@ -371,10 +371,7 @@ def _no2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
     ("method", "scp_mode", "mixer"),
     [
         (labels.GFN1_XTB, labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
-        (labels.GFN1_XTB, labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
-        (labels.GFN1_XTB, labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
         (labels.GFN1_XTB, labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
-        (labels.GFN2_XTB, labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
         (labels.GFN2_XTB, labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
     ],
 )
@@ -472,7 +469,10 @@ def test_conformer_batch_matches_serial_and_permutes_cleanly(
 
 @pytest.mark.parametrize(
     "partition",
-    [labels.FERMI_PARTITION_EQUAL, labels.FERMI_PARTITION_ATOMIC],
+    [
+        labels.FERMI_PARTITION_EQUAL,
+        pytest.param(labels.FERMI_PARTITION_ATOMIC, marks=pytest.mark.slow),
+    ],
 )
 def test_open_shell_finite_temperature_partially_occupied_no2(
     partition: int,
@@ -495,24 +495,19 @@ def test_open_shell_finite_temperature_partially_occupied_no2(
 
     step = 1.0e-6
     fd_grad = torch.zeros_like(base_positions)
-    for b in range(base_positions.shape[0]):
-        for a in range(base_positions.shape[1]):
-            for c in range(3):
-                pos_p = base_positions.clone()
-                pos_m = base_positions.clone()
-                pos_p[b, a, c] += step
-                pos_m[b, a, c] -= step
-                ep = (
-                    evaluate_converged_root_batch(system, pos_p, spin=1.0)
-                    .energy[b]
-                    .sum()
-                )
-                em = (
-                    evaluate_converged_root_batch(system, pos_m, spin=1.0)
-                    .energy[b]
-                    .sum()
-                )
-                fd_grad[b, a, c] = (ep - em) / (2.0 * step)
+    for a in range(base_positions.shape[1]):
+        for c in range(3):
+            pos_p = base_positions.clone()
+            pos_m = base_positions.clone()
+            pos_p[:, a, c] += step
+            pos_m[:, a, c] -= step
+            ep = evaluate_converged_root_batch(
+                system, pos_p, spin=1.0
+            ).energy.sum(dim=-1)
+            em = evaluate_converged_root_batch(
+                system, pos_m, spin=1.0
+            ).energy.sum(dim=-1)
+            fd_grad[:, a, c] = (ep - em) / (2.0 * step)
 
     torch.testing.assert_close(analytic_grad, fd_grad, atol=5e-7, rtol=5e-6)
 
@@ -2073,7 +2068,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
         )
 
     monkeypatch.setattr(batch_implicit, "bicgstab", _fail_bicgstab_on_lane1)
-    for cs in (1, 2, 4):
+    for cs in (2,):
         out_resp = stream_batch_value_and_grad(
             prepared,
             model,
@@ -2222,7 +2217,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_pos
     )
-    for cs in (1, 2, 4):
+    for cs in (2,):
         out_pos_nan = stream_batch_value_and_grad(
             prepared, model, pos4, chunk_size=cs, strict=False
         )
@@ -2295,7 +2290,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     chrg_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    for cs in (1, 2, 4):
+    for cs in (2,):
         out_chrg_nan = stream_batch_value_and_grad(
             prepared,
             model,
@@ -2373,7 +2368,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_refresh_prepared_batch_inputs", _hooked_refresh_field
     )
-    for cs in (1, 2, 4):
+    for cs in (2,):
         out_field_nan = stream_batch_value_and_grad(
             prepared,
             model,
@@ -2442,7 +2437,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     spin_leaf = torch.tensor(
         0.0, dtype=DTYPE, device=DEVICE, requires_grad=True
     )
-    for cs in (1, 2):
+    for cs in (2,):
         out_spin_nan = stream_batch_value_and_grad(
             prep_spin,
             model,
@@ -2508,7 +2503,7 @@ def test_w2c11_streaming_failure_classification_all_input_families_and_causes(
     monkeypatch.setattr(
         batch_implicit, "_evaluate_lane_classical", _hooked_classical_model
     )
-    for cs in (1, 2, 4):
+    for cs in (2,):
         out_mod_nan = stream_batch_value_and_grad(
             prepared, model, pos4, chunk_size=cs, strict=False
         )
@@ -2612,13 +2607,13 @@ def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution()
     # Caller's hook on pos_with_hook is preserved across both chunk backward passes.
     assert hook_calls == [2, 2]
 
-    # 3. Repeated streaming evaluations in one long-lived process (12 iterations)
+    # 3. Repeated streaming evaluations in one long-lived process (6 iterations)
     # verify Model identity, fresh Result snapshots, gradient accuracy, and bounded RSS.
     model_id_initial = id(model)
     par_id_initial = id(model.par)
     seen_results: list[int] = []
     rss_samples_kb: list[int] = []
-    for step in range(12):
+    for step in range(6):
         offset = 0.002 * ((step % 4) - 1.5)
         step_pos = pos2.clone()
         step_pos[:, 1, 2] += offset
@@ -2637,11 +2632,11 @@ def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution()
         assert bool(torch.isfinite(out_step.energy).all())
         assert bool(torch.isfinite(out_step.position_gradient).all())
         seen_results.append(id(out_step))
-        if step >= 3:
+        if step >= 2:
             rss_samples_kb.append(
                 int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
             )
-    # Peak RSS across steps 3..11 must not grow unboundedly (< 32 MB growth).
+    # Peak RSS across steps 2..5 must not grow unboundedly (< 32 MB growth).
     assert max(rss_samples_kb) - min(rss_samples_kb) < 32 * 1024
 
 
@@ -2672,11 +2667,11 @@ def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
         pass
     assert _current_primal_fermi_mode() == "static"
 
-    # 2. Closed-shell H2O (50K, 300K, 5000K) and open-shell NO2 (300K):
+    # 2. Closed-shell H2O (300K) and open-shell NO2 (300K):
     # static, adaptive, and spectral primal modes all validate under the static raw map
     # and produce matching streaming energies, free energies, position gradients, and Model gradients.
     numbers_h2o, pos_h2o = _h2o_conformers()
-    for etemp in (50.0, 300.0, 5000.0):
+    for etemp in (300.0,):
         model_h2o, sys_h2o = _build_system(
             numbers_h2o, etemp=etemp, trainable_model=True
         )

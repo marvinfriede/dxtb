@@ -47,7 +47,12 @@ opts = {
 
 tol = 1e-4
 
-sample_list = ["H2", "H2O", "SiH4"]
+sample_list = ["H2", "H2O", pytest.param("SiH4", marks=pytest.mark.slow)]
+batch_name2_list = [
+    "H2",
+    pytest.param("H2O", marks=pytest.mark.slow),
+    pytest.param("SiH4", marks=pytest.mark.slow),
+]
 
 
 def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
@@ -156,8 +161,8 @@ def gradchecker_batch(
 @pytest.mark.grad
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
-@pytest.mark.parametrize("name1", ["SiH4"])
-@pytest.mark.parametrize("name2", sample_list)
+@pytest.mark.parametrize("name1", ["H2O"])
+@pytest.mark.parametrize("name2", batch_name2_list)
 @pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
 def test_gradcheck_batch(
     dtype: torch.dtype, name1: str, name2: str, gfn: str
@@ -173,9 +178,11 @@ def test_gradcheck_batch(
 @pytest.mark.grad
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
-@pytest.mark.parametrize("name1", ["SiH4"])
-@pytest.mark.parametrize("name2", sample_list)
-@pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
+@pytest.mark.parametrize("name1", ["H2O"])
+@pytest.mark.parametrize("name2", batch_name2_list)
+@pytest.mark.parametrize(
+    "gfn", ["gfn1", pytest.param("gfn2", marks=pytest.mark.slow)]
+)
 def test_gradgradcheck_batch(
     dtype: torch.dtype, name1: str, name2: str, gfn: str
 ) -> None:

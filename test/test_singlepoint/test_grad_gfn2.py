@@ -96,7 +96,9 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.grad
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("name", ["H2", "H2O", "CH4"])
+@pytest.mark.parametrize(
+    "name", ["H2", "H2O", pytest.param("CH4", marks=pytest.mark.slow)]
+)
 @pytest.mark.parametrize("scf_mode", ["implicit", "full"])
 def test_num(name: str, scf_mode: str) -> None:
     dtype = torch.double

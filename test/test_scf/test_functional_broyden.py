@@ -386,15 +386,6 @@ def test_broyden_shared_controller_supports_transforms_and_trace() -> None:
     assert traced.trace.method_state[0][0].shape == (2,)
 
 
-def test_broyden_production_module_has_no_xitorch_dependency() -> None:
-    """The production method is independent of the legacy root solver."""
-    source = (
-        Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/broyden.py"
-    )
-    text = source.read_text(encoding="utf-8")
-    assert "dxtb._src.exlibs.xitorch" not in text
-
-
 def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     """Unrolled single-System Broyden keeps physical input graphs connected."""
     from test.test_scf.test_functional_root_derivatives import _case

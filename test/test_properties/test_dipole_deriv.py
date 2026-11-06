@@ -166,6 +166,7 @@ def test_single_large(dtype: torch.dtype, name: str) -> None:
     single(name, field_vector, dd=dd)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name", slist)

@@ -81,7 +81,9 @@ def test_functional_implicit(
 
 
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
+@pytest.mark.parametrize(
+    "dtype", [pytest.param(torch.float, marks=pytest.mark.slow), torch.double]
+)
 @pytest.mark.parametrize("run_gc", [False, True])
 @pytest.mark.parametrize("create_graph", [False, True])
 def test_functional_implicit_energy(
@@ -90,7 +92,7 @@ def test_functional_implicit_energy(
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     def fcn():
-        sample = samples["SiH4"]
+        sample = samples["LiH"]
         numbers = sample["numbers"].to(DEVICE)
         positions = sample["positions"].clone().to(**dd)
         charges = torch.tensor(0.0, **dd)

@@ -317,7 +317,14 @@ def test_periodic_threebody_chunking_invariance_and_transforms() -> None:
     )
 
 
-@pytest.mark.parametrize("model_name", ["d4", "d4s", "d4srev"])
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "d4",
+        pytest.param("d4s", marks=pytest.mark.slow),
+        pytest.param("d4srev", marks=pytest.mark.slow),
+    ],
+)
 def test_periodic_d4_family_transforms_and_compile(model_name: str) -> None:
     """
     Verify periodic D4, D4S, and D4Srev under jacrev, jacfwd, vmap, and
@@ -670,6 +677,7 @@ def test_periodic_atm_2d_tile_shape_and_memory_bound(
     assert torch.isfinite(g_lat_empty).all() and torch.all(g_lat_empty == 0.0)
 
 
+@pytest.mark.slow
 def test_inductor_compile_molecular_and_periodic_models() -> None:
     """
     Validate default CPU Inductor backend (`torch.compile(..., backend="inductor", fullgraph=True)`)

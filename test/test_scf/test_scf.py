@@ -141,6 +141,7 @@ def test_single_medium_gfn0(dtype: torch.dtype, name: str) -> None:
 # the simple mixer with the following error message:
 # "torch._C._LinAlgError: linalg.eigh: The algorithm failed to converge because
 # the input matrix is ill-conditioned or has too many repeated eigenvalues"
+@pytest.mark.slow
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["C60"])
 @pytest.mark.parametrize("mixer", ["anderson", "broyden"])
@@ -153,9 +154,23 @@ def test_single_medium_2_gfn1(
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize(
-    "name", ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao", "C60"]
+    "name",
+    [
+        "PbH4-BiH3",
+        "C6H5I-CH3SH",
+        "MB16_43_01",
+        "LYS_xao",
+        pytest.param("C60", marks=pytest.mark.slow),
+    ],
 )
-@pytest.mark.parametrize("mixer", ["anderson", "broyden", "simple"])
+@pytest.mark.parametrize(
+    "mixer",
+    [
+        "anderson",
+        "broyden",
+        pytest.param("simple", marks=pytest.mark.slow),
+    ],
+)
 def test_single_medium_gfn2(dtype: torch.dtype, name: str, mixer: str) -> None:
     single_medium(dtype, name, mixer, "gfn2")
 

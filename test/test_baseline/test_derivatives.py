@@ -65,7 +65,14 @@ def _expected_status(cell: Cell) -> str | None:
 def _is_slow(cell: Cell) -> bool:
     if cell.order >= 3 or cell.input != "single":
         return True
-    if cell.order == 2 and cell.scf != "full":
+    if cell.order == 2 and (cell.scf != "full" or cell.path == "numerical"):
+        return True
+    if cell.path == "numerical" and cell.scf == "implicit":
+        return True
+    if cell.path == "forward" and cell.quantity in (
+        "dE_dparam",
+        "dforces_dparam",
+    ):
         return True
     return STATUS.get(cell.id, {}).get("seconds", 0.0) > 30.0
 

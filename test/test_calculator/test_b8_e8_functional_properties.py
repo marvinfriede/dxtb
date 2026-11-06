@@ -42,6 +42,7 @@ def _setup_model_and_calculator(method: object, numbers: tuple[int, ...]):
             labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
         ),
         "mixer": (labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR),
+        "fermi_etemp": 0.0,
         "maxiter": 3,
         "x_atol": 0.0,
         "x_atol_max": 0.0,
@@ -285,6 +286,7 @@ def _setup_converged_model_and_calculator(
             labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
         ),
         "mixer": labels.MIXER_ANDERSON,
+        "fermi_etemp": 0.0,
         "maxiter": maxiter,
         "x_atol": 1.0e-12,
         "x_atol_max": 1.0e-12,
@@ -298,7 +300,10 @@ def _setup_converged_model_and_calculator(
     return model, num_tensor, system, calc
 
 
-@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+@pytest.mark.parametrize(
+    "method",
+    [GFN1_XTB, pytest.param(GFN2_XTB, marks=pytest.mark.slow)],
+)
 def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
     method: object,
 ) -> None:
@@ -451,7 +456,10 @@ def test_contract_b_converged_water_properties_symmetries_and_mixed_derivatives(
     torch.testing.assert_close(beta_sys, fd_beta, atol=1e-6, rtol=1e-6)
 
 
-@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+@pytest.mark.parametrize(
+    "method",
+    [GFN1_XTB, pytest.param(GFN2_XTB, marks=pytest.mark.slow)],
+)
 def test_contract_b_equilibrium_vibrations_ir_raman_and_third_order(
     method: object,
 ) -> None:
@@ -610,6 +618,7 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
                 labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
             ),
             "mixer": labels.MIXER_ANDERSON,
+            "fermi_etemp": 0.0,
             "maxiter": maxiter,
             "x_atol": x_atol,
             "x_atol_max": x_atol,
@@ -660,6 +669,7 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
         "scf_mode": labels.SCF_MODE_FULL,
         "scp_mode": labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE,
         "mixer": labels.MIXER_ANDERSON,
+        "fermi_etemp": 0.0,
         "x_atol": 1.0e-14,
         "x_atol_max": 1.0e-14,
     }
@@ -727,6 +737,7 @@ def test_batched_calculator_autograd_properties_after_cutover(
         "scf_mode": labels.SCF_MODE_FULL,
         "scp_mode": labels.SCP_MODE_CHARGE,
         "mixer": labels.MIXER_LINEAR,
+        "fermi_etemp": 0.0,
         "maxiter": 3,
         "x_atol": 0.0,
         "x_atol_max": 0.0,

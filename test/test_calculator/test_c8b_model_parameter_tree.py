@@ -53,6 +53,8 @@ def _model(par: ParamModule) -> Model:
         config=Config.create(
             method=labels.GFN1_XTB,
             int_driver=labels.INTDRIVER_PYTORCH,
+            fermi_etemp=0.0,
+            maxiter=6,
         ),
     )
 

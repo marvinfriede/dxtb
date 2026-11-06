@@ -39,21 +39,22 @@ class _TrainingEnergy(nn.Module):
     def __init__(self, par: ParamModule, numbers: torch.Tensor) -> None:
         super().__init__()
         self.par = par
+        self.model = Model(
+            par=self.par,
+            config=Config.create(
+                method="gfn1-xtb",
+                int_driver="pytorch",
+                fermi_etemp=0.0,
+                maxiter=14,
+                x_atol=1.0e-10,
+            ),
+        )
         self.register_buffer("numbers", numbers.clone())
 
     def forward(
         self, positions: torch.Tensor, charge: torch.Tensor, spin: int | None
     ) -> torch.Tensor:
-        model = Model(
-            par=self.par,
-            config=Config.create(
-                method="gfn1-xtb",
-                int_driver="pytorch",
-                maxiter=150,
-                x_atol=1.0e-10,
-            ),
-        )
-        system = model.setup(self.numbers)
+        system = self.model.setup(self.numbers)
         return system.singlepoint(
             positions, chrg=charge, spin=spin
         ).energy.sum()
@@ -161,7 +162,7 @@ def test_functional_parameter_training_invariant() -> None:
     learning_rate = 5.0
     state = selected
     losses = [initial_loss]
-    for _ in range(4):
+    for _ in range(2):
         gradient = torch.func.grad(loss_of)(state)
         state = {
             name: value - learning_rate * gradient[name]

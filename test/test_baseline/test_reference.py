@@ -54,7 +54,15 @@ def _cases() -> list:
             for driver in DRIVERS:
                 for group in groups_for(system):
                     marks = []
-                    if group in SLOW_GROUPS or name in SLOW_SYSTEMS:
+                    if (
+                        group in SLOW_GROUPS
+                        or name in SLOW_SYSTEMS
+                        or (
+                            name == "padded4"
+                            and driver == "pytorch"
+                            and group == "forces"
+                        )
+                    ):
                         marks.append(pytest.mark.slow)
                     if driver == "libcint":
                         marks.append(

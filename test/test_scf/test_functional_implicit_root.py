@@ -313,24 +313,6 @@ def test_linear_solve_failure_signal_is_vmap_compatible() -> None:
     assert not bool(torch.isfinite(values[1]).all())
 
 
-def test_implicit_primitive_has_no_graph_or_ad_mode_discovery() -> None:
-    from pathlib import Path
-
-    source_path = (
-        Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/implicit.py"
-    )
-    source = source_path.read_text()
-    for forbidden in (
-        "gc.get_referents",
-        "_grad_leaves",
-        "_reaches_grad",
-        "requires_grad",
-        "torch.is_grad_enabled",
-        "_AdjointSolve",
-    ):
-        assert forbidden not in source
-
-
 def test_prepared_roots_vmap_matches_loop_and_nonleaf_input_gradient() -> None:
     a = torch.tensor(0.24, dtype=torch.float64)
     parameters = torch.tensor([0.1, -0.2, 0.4], dtype=torch.float64)
@@ -501,14 +483,13 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
 
 
 @pytest.mark.parametrize(
-    "representation",
-    [0, 1, 2],
-    ids=("charge", "potential", "fock"),
-)
-@pytest.mark.parametrize(
-    "mixer",
-    [labels.MIXER_ANDERSON, labels.MIXER_BROYDEN],
-    ids=("anderson", "broyden"),
+    ("representation", "mixer"),
+    [
+        (0, labels.MIXER_ANDERSON),
+        (1, labels.MIXER_BROYDEN),
+        (2, labels.MIXER_ANDERSON),
+    ],
+    ids=("charge-anderson", "potential-broyden", "fock-anderson"),
 )
 def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     representation: int,

@@ -273,7 +273,13 @@ def test_scalar_and_generalized_overlap_matrix_fixed_point_references() -> None:
     torch.testing.assert_close(d3, fd_d3, atol=1.0e-8, rtol=1.0e-8)
 
 
-@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+@pytest.mark.parametrize(
+    "method",
+    [
+        pytest.param(GFN1_XTB, id="gfn1"),
+        pytest.param(GFN2_XTB, id="gfn2", marks=pytest.mark.slow),
+    ],
+)
 def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
     """Charged (OH-) and open-shell (OH radical) systems pass 1st-3rd order and vmap."""
     # 1. Charged closed-shell OH- (chrg = -1.0)
@@ -385,7 +391,13 @@ def test_charged_and_openshell_systems_transform_matrix(method: object) -> None:
     torch.testing.assert_close(d3_open, fd_d3_open, atol=1.0e-8, rtol=1.0e-8)
 
 
-@pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
+@pytest.mark.parametrize(
+    "method",
+    [
+        pytest.param(GFN1_XTB, id="gfn1"),
+        pytest.param(GFN2_XTB, id="gfn2", marks=pytest.mark.slow),
+    ],
+)
 def test_exact_and_near_degenerate_h3_plus_derivatives(method: object) -> None:
     """Equilateral D3h H3+ (exact and 1e-7 near-degenerate) has smooth 1st-3rd derivatives."""
     _, _, system = _build_system(
@@ -603,7 +615,7 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
         (8, 1, 1),
         strategy="anderson",
         representation=SCFRepresentation.CHARGE,
-        maxiter=50,
+        maxiter=16,
         tolerance=1.0e-12,
     )
     pos0 = torch.tensor(

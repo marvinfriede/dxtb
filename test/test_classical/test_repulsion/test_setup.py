@@ -22,6 +22,9 @@ from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
+from tad_mctc.tree import Node, stack
+from torch.func import jacfwd, jvp, vmap
+from torch.utils import _pytree
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
@@ -31,7 +34,9 @@ from dxtb._src.components.classicals import (
     RepulsionSetup,
     new_repulsion,
 )
+from dxtb._src.components.classicals.repulsion.base import repulsion_energy
 from dxtb._src.param import Param
+from dxtb._src.typing import Tensor
 from dxtb.config import Config
 
 from ...conftest import DEVICE
@@ -47,6 +52,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
     ).setup(numbers)
 
     assert system.repulsion_classical is not None
+    assert isinstance(system.repulsion_setup, Node)
     assert type(system.repulsion_setup) is RepulsionCoreSetup
     assert system.classical_cache["Repulsion"] is system.repulsion_setup
     assert {field.name for field in fields(system.repulsion_setup)} == {
@@ -56,6 +62,22 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
         "mask",
         "cutoff",
     }
+    leaves, spec = _pytree.tree_flatten(system.repulsion_setup)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is RepulsionCoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+
+    converted = system.repulsion_setup.to(dtype=torch.float32)
+    assert converted.arep.dtype == torch.float32
+    assert converted.mask.dtype == torch.bool
+    meta = system.repulsion_setup.to(device="meta")
+    assert meta.arep.device.type == "meta"
+    assert meta.mask.dtype == torch.bool
+
+    batched = stack((system.repulsion_setup, system.repulsion_setup))
+    assert type(batched) is RepulsionCoreSetup
+    assert batched.arep.shape[0] == 2
+
     forbidden = (Param, ParamModule, Model, Repulsion)
     assert all(
         not isinstance(getattr(system.repulsion_setup, field.name), forbidden)
@@ -65,12 +87,73 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
         system.repulsion_setup.cutoff = torch.tensor(1.0)  # type: ignore[misc]
     first = system.repulsion_classical.get_cache(numbers, system.ihelp)
     second = system.repulsion_classical.get_cache(numbers, system.ihelp)
+    assert type(first) is RepulsionSetup
     assert first is not second
     assert system.repulsion_classical.cache is None
     assert system.repulsion_classical._cachevars is None
     system.repulsion_classical.cache_disable()
     third = system.repulsion_classical.get_cache(numbers, system.ihelp)
     assert third is not second
+
+
+def test_core_repulsion_transforms_and_legacy_parity() -> None:
+    """RepulsionCoreSetup preserves legacy values, JVP/jacfwd, and vmap."""
+    numbers = samples["H2O"]["numbers"].to(DEVICE)
+    positions = samples["H2O"]["positions"].to(
+        device=DEVICE, dtype=torch.double
+    )
+    par = ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.double)
+    par.set_differentiable("element.H.arep")
+    parameter = par.get("element.H.arep")
+    system = Model(par=par, config=Config.create(exclude="scf")).setup(numbers)
+    core = system.repulsion_setup
+    repulsion = system.repulsion_classical
+    assert core is not None and repulsion is not None
+    legacy = repulsion.get_cache(numbers, system.ihelp)
+
+    pos_core = positions.clone().requires_grad_(True)
+    core_energy = repulsion.get_energy(pos_core, core).sum()
+    core_pos_grad, core_par_grad = torch.autograd.grad(
+        core_energy, (pos_core, parameter), create_graph=True
+    )
+    pos_legacy = positions.clone().requires_grad_(True)
+    legacy_energy = repulsion.get_energy(pos_legacy, legacy).sum()
+    legacy_pos_grad, legacy_par_grad = torch.autograd.grad(
+        legacy_energy, (pos_legacy, parameter), create_graph=True
+    )
+    torch.testing.assert_close(core_energy, legacy_energy)
+    torch.testing.assert_close(core_pos_grad, legacy_pos_grad)
+    torch.testing.assert_close(core_par_grad, legacy_par_grad)
+
+    direction = torch.arange(
+        positions.numel(), dtype=positions.dtype, device=positions.device
+    ).reshape_as(positions)
+    _, tangent = jvp(
+        lambda pos: repulsion.get_energy(pos, core).sum(),
+        (positions,),
+        (direction,),
+    )
+    jacobian = jacfwd(lambda pos: repulsion.get_energy(pos, core).sum())(
+        positions
+    )
+    torch.testing.assert_close(tangent, (core_pos_grad.detach() * direction).sum())
+    torch.testing.assert_close(jacobian, core_pos_grad.detach())
+
+    pos_batch = torch.stack((positions, positions + 0.01))
+    vmapped = vmap(
+        lambda pos: repulsion_energy(
+            pos, core.mask, core.arep, core.kexp, core.zeff, core.cutoff
+        )
+    )(pos_batch)
+    expected = torch.stack(
+        [
+            repulsion_energy(
+                pos, core.mask, core.arep, core.kexp, core.zeff, core.cutoff
+            )
+            for pos in pos_batch
+        ]
+    )
+    torch.testing.assert_close(vmapped, expected)
 
 
 def test_core_repulsion_ignores_legacy_object_parameter_mutation() -> None:

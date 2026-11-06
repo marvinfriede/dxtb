@@ -262,7 +262,10 @@ def test_element_ranges_padding_and_transform_validation_all_models() -> None:
             )
 
 
-@pytest.mark.parametrize("backend", ["eager", "aot_eager", "inductor"])
+@pytest.mark.parametrize(
+    "backend",
+    ["eager", "aot_eager", pytest.param("inductor", marks=pytest.mark.slow)],
+)
 def test_compiled_unsupported_elements_all_models_and_backends(
     backend: str,
 ) -> None:

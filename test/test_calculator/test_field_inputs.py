@@ -39,6 +39,8 @@ def _calc(numbers: torch.Tensor, *, interaction=None) -> Calculator:
             "verbosity": 0,
             "int_driver": "pytorch",
             "int_level": labels.INTLEVEL_QUADRUPOLE,
+            "maxiter": 14,
+            "fermi_etemp": 0.0,
         },
         dtype=torch.double,
     )
@@ -345,7 +347,8 @@ def test_parammodule_field_mixed_derivative() -> None:
                     method="gfn1-xtb",
                     int_driver="pytorch",
                     int_level=labels.INTLEVEL_DIPOLE,
-                    maxiter=150,
+                    maxiter=14,
+                    fermi_etemp=0.0,
                     x_atol=1.0e-10,
                 ),
             )

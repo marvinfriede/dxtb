@@ -421,3 +421,10 @@ def test_system_owns_core_node_and_core_builder_matches_legacy() -> None:
         system.d4sc_interaction.get_monopole_atom_energy(core_data, q),
         system.d4sc_interaction.get_monopole_atom_energy(legacy_data, q),
     )
+
+    before = system.singlepoint(positions)
+    system.d4sc_interaction.model.wf = system.d4sc_interaction.model.wf + 0.4
+    system.d4sc_interaction.model.rc6 = system.d4sc_interaction.model.rc6 + 0.3
+    after = system.singlepoint(positions)
+    torch.testing.assert_close(after.energy, before.energy)
+    torch.testing.assert_close(after.charges.mono, before.charges.mono)

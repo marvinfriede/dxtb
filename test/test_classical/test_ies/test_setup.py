@@ -19,11 +19,13 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields
-from inspect import getsource
 
 import pytest
 import torch
+from tad_mctc import Structure
+from tad_mctc.tree import Node, stack
 from tad_multicharge.model.eeq import EEQModel
+from torch.utils import _pytree
 
 from dxtb import GFN0_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
@@ -34,6 +36,7 @@ from dxtb._src.components.classicals import (
     new_ies,
 )
 from dxtb._src.components.classicals.ies import ies_energy
+from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb.config import Config
 
 from ...conftest import DEVICE
@@ -68,6 +71,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     system = _model(_module()).setup(numbers)
     setup = system.ies_setup
 
+    assert isinstance(setup, Node)
     assert type(setup) is IESCoreSetup
     assert system.ies_classical is not None
     assert system.classical_cache["IES"] is setup
@@ -86,6 +90,20 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
         isinstance(getattr(setup, field.name), (ParamModule, Model, IES))
         for field in fields(setup)
     )
+    leaves, spec = _pytree.tree_flatten(setup)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is IESCoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = setup.to(dtype=torch.float32)
+    assert converted.eeq.chi.dtype == torch.float32
+    assert converted.numbers.dtype == numbers.dtype
+    meta = setup.to(device=torch.device("meta"))
+    assert meta.numbers.device.type == "meta"
+    assert meta.eeq.chi.device.type == "meta"
+    stacked = stack((setup, setup))
+    assert type(stacked) is IESCoreSetup
+    assert stacked.eeq.chi.shape[0] == 2
+
     legacy1 = system.ies_classical.get_cache(numbers)
     legacy2 = system.ies_classical.get_cache(numbers)
     assert type(legacy1) is IESSetup
@@ -98,16 +116,45 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
         setup.cutoff = torch.tensor(1.0, **DD)  # type: ignore[misc]
 
 
-def test_ies_has_no_persistent_cache_or_mutation_authority() -> None:
-    """IES direct compatibility setup never populates Component cache state."""
-    source = getsource(IES)
-    for forbidden in (
-        "cache_is_latest",
-        "self.cache =",
-        "self._cachevars",
-        "self._cachegrad",
-    ):
-        assert forbidden not in source
+def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
+    """Characterize upstream CG modes without changing IES defaults."""
+    numbers, positions = _geometry()
+    positions = positions.clone().requires_grad_(True)
+    system = _model(_module()).setup(numbers)
+    setup = system.ies_setup
+    assert setup is not None
+    charge = torch.tensor(0.23, **DD)
+    cn = coordination_number(
+        numbers,
+        positions,
+        counting_function=erf_count,
+        rcov=setup.rcov,
+        cutoff=setup.cutoff,
+        cn_max=setup.cn_max,
+        kcn=setup.cn_kcn,
+    )
+    structure = Structure(numbers=numbers, positions=positions, charge=charge)
+
+    references = {}
+    for mode in ("schur", "cg", "matrix-free"):
+        charges, energy = setup.eeq.solve(
+            structure, cn, return_energy=True, solve_mode=mode
+        )
+        grad = torch.autograd.grad(energy.sum(), positions, retain_graph=True)[0]
+        references[mode] = (charges, energy, grad)
+
+    expected_charges, expected_energy, expected_grad = references["schur"]
+    for mode in ("cg", "matrix-free"):
+        charges, energy, grad = references[mode]
+        torch.testing.assert_close(
+            charges, expected_charges, atol=1.0e-10, rtol=1.0e-10
+        )
+        torch.testing.assert_close(
+            energy, expected_energy, atol=1.0e-10, rtol=1.0e-10
+        )
+        torch.testing.assert_close(
+            grad, expected_grad, atol=1.0e-9, rtol=1.0e-9
+        )
 
 
 def test_core_ies_does_not_call_legacy_get_cache(monkeypatch) -> None:

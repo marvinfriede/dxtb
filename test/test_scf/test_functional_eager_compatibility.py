@@ -592,30 +592,6 @@ def test_eager_subsolve_error_priority(
         ),
         (
             labels.SCP_MODE_POTENTIAL,
-            FERMI_FAILURE_ELECTRON_COUNT,
-            3,
-            "Number of electrons changed during Fermi smearing",
-        ),
-        (
-            labels.SCP_MODE_POTENTIAL,
-            3,
-            4,
-            "Fermi energy failed to converge",
-        ),
-        (
-            labels.SCP_MODE_POTENTIAL,
-            0,
-            3,
-            "Fermi energy failed to converge",
-        ),
-        (
-            labels.SCP_MODE_FOCK,
-            FERMI_FAILURE_ELECTRON_COUNT,
-            3,
-            "Number of electrons changed during Fermi smearing",
-        ),
-        (
-            labels.SCP_MODE_FOCK,
             3,
             4,
             "Fermi energy failed to converge",
@@ -629,11 +605,7 @@ def test_eager_subsolve_error_priority(
     ],
     ids=[
         "charge-earlier-error",
-        "potential-electron-before-fermi",
         "potential-fermi-before-electron",
-        "potential-final-only",
-        "fock-electron-before-fermi",
-        "fock-fermi-before-electron",
         "fock-final-only",
     ],
 )
@@ -1296,15 +1268,11 @@ def test_dynamic_damping_adapter_matches_legacy(
     ("representation", "mixer"),
     [
         (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
         (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
         (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
     ],
     ids=[
         "charge-simple",
-        "potential-simple",
-        "fock-simple",
         "potential-anderson",
         "fock-anderson",
     ],

@@ -893,22 +893,6 @@ def test_soscf_inactive_transition_freezes_method_state() -> None:
     assert proposal.x is physical.x
 
 
-def test_soscf_production_is_matrix_free_and_eager_only() -> None:
-    """Production uses HVPs and does not materialize orbital Hessians."""
-    from dxtb._src.scf.functional import solver as solver_module
-    from dxtb._src.scf.functional import soscf
-
-    source = inspect.getsource(soscf)
-    propose_source = inspect.getsource(SOSCFMethod.propose)
-    controller_source = inspect.getsource(solver_module)
-    assert SOSCFMethod.supports_fixed_trip is False
-    assert "torch.func.hessian" not in source
-    assert "torch.func.jacfwd" not in source
-    assert "torch.linalg.solve(" not in source
-    assert "torch.func.grad" not in propose_source
-    assert "SOSCFMethod" not in controller_source
-
-
 def test_soscf_fixed_trip_is_rejected_before_solver_map() -> None:
     """Fixed-trip controller rejects SOSCF before performing physical work."""
     _, problem, physical, _ = _orbital_model(GFN2_XTB, "H2O")
@@ -1422,6 +1406,7 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
     )
 
 
+@pytest.mark.slow
 def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     None
 ):

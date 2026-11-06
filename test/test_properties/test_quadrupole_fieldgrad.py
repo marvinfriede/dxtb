@@ -48,7 +48,11 @@ opts = {
 
 DIAG = [0, 2, 5]  # xx, yy, zz of (xx, yx, yy, zx, zy, zz)
 
-sample_list = ["H2O", "SiH4", "MB16_43_01"]
+sample_list = [
+    "H2O",
+    pytest.param("SiH4", marks=pytest.mark.slow),
+    "MB16_43_01",
+]
 
 
 def _calc(
@@ -72,43 +76,21 @@ def test_autograd_vs_numerical(name: str) -> None:
     auto = calc.quadrupole(positions).detach()
     assert auto.shape == (6,)
 
+    via_get = calc.get_quadrupole(positions).detach()
+    via_sys = calc.system.quadrupole(positions).detach()
+    assert pytest.approx(auto.cpu(), abs=1e-8) == via_get.cpu()
+    assert pytest.approx(auto.cpu(), abs=1e-8) == via_sys.cpu()
+
+    calc_ft, _ = _calc(numbers, dd, grad=True)
+    quad_ft = calc_ft.quadrupole(positions, use_functorch=True).detach()
+    assert pytest.approx(auto.cpu(), abs=1e-8) == quad_ft.cpu()
+
     calc, _ = _calc(numbers, dd, grad=False)
     num = calc.quadrupole_numerical(positions, step_size=1e-4)
 
     assert pytest.approx(auto.cpu(), abs=2e-4) == num.cpu()
 
     # traceless
-    assert pytest.approx(auto[DIAG].sum().item(), abs=1e-8) == 0.0
-
-
-@pytest.mark.parametrize("name", sample_list[:2])
-def test_functorch(name: str) -> None:
-    dd: DD = {"dtype": torch.double, "device": DEVICE}
-    numbers = samples[name]["numbers"].to(DEVICE)
-    positions = samples[name]["positions"].to(**dd)
-
-    calc, _ = _calc(numbers, dd, grad=True)
-    ref = calc.quadrupole(positions).detach()
-
-    calc, _ = _calc(numbers, dd, grad=True)
-    quad = calc.quadrupole(positions, use_functorch=True).detach()
-
-    assert pytest.approx(ref.cpu(), abs=1e-8) == quad.cpu()
-
-
-@pytest.mark.parametrize("name", sample_list[:2])
-def test_get_quadrupole_and_system_quadrupole_parity(name: str) -> None:
-    dd: DD = {"dtype": torch.double, "device": DEVICE}
-    numbers = samples[name]["numbers"].to(DEVICE)
-    positions = samples[name]["positions"].to(**dd)
-
-    calc, _ = _calc(numbers, dd, grad=True)
-    auto = calc.quadrupole(positions).detach()
-    via_get = calc.get_quadrupole(positions).detach()
-    via_sys = calc.system.quadrupole(positions).detach()
-
-    assert pytest.approx(auto.cpu(), abs=1e-8) == via_get.cpu()
-    assert pytest.approx(auto.cpu(), abs=1e-8) == via_sys.cpu()
     assert pytest.approx(auto[DIAG].sum().item(), abs=1e-8) == 0.0
 
 

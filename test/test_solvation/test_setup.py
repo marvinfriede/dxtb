@@ -18,11 +18,12 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
+from tad_mctc.tree import Node, stack
+from torch.utils import _pytree
 
 from dxtb import Calculator, GFN1_XTB, ParamModule
 from dxtb._src.calculators.model import Model
@@ -31,8 +32,10 @@ from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
     GeneralizedBornCache,
+    GeneralizedBornCoreSetup,
     GeneralizedBornSetup,
     build_generalized_born_data,
+    core_generalized_born_setup,
     new_solvation,
     setup_generalized_born,
 )
@@ -135,14 +138,26 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert component._cachevars is None
     assert component._cachegrad is None
 
-    builder_source = inspect.getsource(build_generalized_born_data)
-    cache_source = inspect.getsource(GeneralizedBorn.get_cache)
-    assert "self." not in builder_source
-    assert "mat +=" not in builder_source
-    assert "cache_is_latest" not in cache_source
-    assert "_cachevars" not in cache_source
-    assert "_cachegrad" not in cache_source
-    assert "self.cache =" not in cache_source
+    core = core_generalized_born_setup(setup)
+    assert isinstance(core, Node)
+    assert type(core) is GeneralizedBornCoreSetup
+    leaves, spec = _pytree.tree_flatten(core)
+    rebuilt = _pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is GeneralizedBornCoreSetup
+    assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
+    converted = core.to(dtype=torch.float32)
+    assert converted.keps.dtype == torch.float32
+    assert converted.numbers.dtype == core.numbers.dtype
+    meta = core.to(device="meta")
+    assert meta.keps.device.type == "meta"
+    assert meta.numbers.dtype == core.numbers.dtype
+    stacked = stack((core, core))
+    assert type(stacked) is GeneralizedBornCoreSetup
+    assert stacked.keps.shape[0] == 2
+    torch.testing.assert_close(
+        build_generalized_born_data(core, positions).mat,
+        build_generalized_born_data(setup, positions).mat,
+    )
 
 
 def test_position_transforms_rebuild_call_data() -> None:

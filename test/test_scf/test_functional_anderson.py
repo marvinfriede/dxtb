@@ -1002,32 +1002,6 @@ def test_anderson_real_xTB_jvp_jacfwd_characterization() -> None:
     # any real xTB AD-mode difference remains in the E3 spectral primitive.
 
 
-def test_functional_anderson_has_no_legacy_mixer_or_host_control() -> None:
-    """The production-style functional module stays state-value based."""
-    from pathlib import Path
-
-    source = (
-        Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/anderson.py"
-    )
-    text = source.read_text()
-    for forbidden in (
-        "from dxtb._src.scf.mixer",
-        "Mixer(",
-        "Anderson(",
-        "Broyden(",
-        "self._x_hist",
-        "self._f",
-        "iter_step",
-        ".item(",
-        ".tolist(",
-        "bool(",
-        "torch.autograd.Function",
-        ".cull(",
-        ".reset(",
-    ):
-        assert forbidden not in text
-
-
 def test_finite_temperature_anderson_and_free_energy_match_legacy() -> None:
     """Anderson acceleration and entropy agree at finite temperature."""
     comparison = _compare_legacy_anderson(
