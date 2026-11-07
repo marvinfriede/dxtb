@@ -37,6 +37,7 @@ from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
+from dxtb._src.utils.tensors import cn_cutoff_value
 
 from ..base import Classical, ComponentCache
 
@@ -158,7 +159,7 @@ def short_range_bond_energy(
     """Evaluate the atom-partitioned SRB energy from setup and positions."""
     cn_model = CNModel(
         count=partial(setup.counting_function, kcn=setup.cn_kcn),
-        cutoff=float(setup.cn_cutoff.detach()),
+        cutoff=cn_cutoff_value(setup.cn_cutoff),
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )

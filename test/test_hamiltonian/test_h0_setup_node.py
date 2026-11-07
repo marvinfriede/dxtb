@@ -93,8 +93,8 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
         core.cn_kind
         == {
             "gfn0": "erf_count",
-            "gfn1": "cn_d3(exp_count)",
-            "gfn2": "cn_d3(gfn2_count)",
+            "gfn1": "cn_d3",
+            "gfn2": "cn_gfn2",
         }[method]
     )
 

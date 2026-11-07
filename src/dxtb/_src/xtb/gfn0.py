@@ -36,7 +36,7 @@ from dxtb._src.components.interactions import Potential
 from tad_mctc.ncoord import CNModel, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
-from dxtb._src.utils.tensors import structure_charge
+from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
 
 from .base import PAD, BaseHamiltonian
 from .h0 import build_hcore, build_hcore_raw, gather_hscale
@@ -85,7 +85,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
         """Configure the local GFN0 coordination-number model."""
         self.cn = CNModel(
             count=partial(erf_count, kcn=self.cn_kcn),
-            cutoff=float(self.cn_cutoff.detach()),
+            cutoff=cn_cutoff_value(self.cn_cutoff),
             cn_max=self.cn_max,
             rcov=self.cn_radii,
         )

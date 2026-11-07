@@ -38,7 +38,7 @@ from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Tensor, override
-from dxtb._src.utils.tensors import structure_charge
+from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
 
 from ..base import Classical
 
@@ -143,7 +143,7 @@ def ies_energy(
     )
     cn_model = CNModel(
         count=partial(erf_count, kcn=setup.cn_kcn),
-        cutoff=float(setup.cutoff.detach()),
+        cutoff=cn_cutoff_value(setup.cutoff),
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )

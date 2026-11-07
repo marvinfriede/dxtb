@@ -207,7 +207,7 @@ def _assert_h0_mapping(source, padded, mapping, bucket):
     padded_index = padded.integral.backend.index
     assert source_h0 is not None and padded_h0 is not None
     assert source_h0.method == padded_h0.method == "gfn2"
-    assert source_h0.cn_kind == padded_h0.cn_kind == "cn_d3(gfn2_count)"
+    assert source_h0.cn_kind == padded_h0.cn_kind == "cn_gfn2"
     assert source_h0.cn is not None and padded_h0.cn is not None
     _assert_vector_mapping(padded_h0.numbers, source_h0.numbers, mapping.atoms)
     assert padded_index.atom_to_unique.tolist() == [
@@ -291,7 +291,7 @@ def test_gfn2_complete_default_cores_stack_and_evaluate(
     for lane, (system, position) in enumerate(zip(systems, positions)):
         core = system.exact_core
         assert core is not None and core.h0_setup is not None
-        assert core.h0_setup.cn_kind == "cn_d3(gfn2_count)"
+        assert core.h0_setup.cn_kind == "cn_gfn2"
         assert tuple(term.kind for term in core.classical_terms) == (
             "d4",
             "repulsion",

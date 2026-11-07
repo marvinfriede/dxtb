@@ -23,7 +23,8 @@ from dataclasses import replace
 import pytest
 import torch
 from tad_mctc import Structure
-from tad_mctc.ncoord import CNModel, cn_d3, cn_gfn2, exp_count
+from tad_mctc.ncoord import CNModel, cn_d3, cn_d4, cn_gfn2, exp_count
+from tad_mctc.tree import stack
 from torch.func import vmap
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
@@ -52,24 +53,65 @@ _METHODS = {
     "gfn2": GFN2_XTB,
 }
 
+# Non-uniform per-atom displacements so interatomic distances and coordination
+# numbers genuinely differ across batch items.
+_DISP3 = torch.tensor(
+    [[0.05, -0.02, 0.01], [-0.04, 0.06, -0.03], [0.02, -0.05, 0.04]],
+    dtype=torch.float64,
+)
+_DISP2 = torch.tensor(
+    [[0.06, -0.03, 0.02], [-0.05, 0.04, -0.02]],
+    dtype=torch.float64,
+)
 
-def _eval_hcore(core, positions, overlap, *, charge, ihelp):
-    if hasattr(core, "index"):
-        return build_hcore(core, positions, overlap, charge=charge)
-    return build_hcore(core, positions, overlap, charge=charge, ihelp=ihelp)
+# Fixed pre-migration references computed on commit 715b5c82 (legacy ncoord).
+_REF_H0_NORM2 = {
+    "gfn0": torch.tensor(
+        [1.3761281461438764, 1.3763487534358037], dtype=torch.float64
+    ),
+    "gfn1": torch.tensor(
+        [2.3769598897297306, 2.376945034878008], dtype=torch.float64
+    ),
+    "gfn2": torch.tensor(
+        [1.831066274381938, 1.83110921505906], dtype=torch.float64
+    ),
+}
+_REF_H0_GRAD_NORM = {
+    "gfn0": 0.032490761785646784,
+    "gfn1": 0.000745590699428378,
+    "gfn2": 0.0021592104585757242,
+}
+_REF_IES_ENERGY = torch.tensor(
+    [-0.0005678785066277336, -0.0005732900077461897], dtype=torch.float64
+)
+_REF_IES_GRAD_NORM = 0.0003378784542060113
+_REF_SRB_ENERGY = torch.tensor(
+    [-0.025539163380886784, -0.025006652161334155], dtype=torch.float64
+)
+_REF_SRB_GRAD_NORM = 0.015951193124680425
+_REF_D4_ENERGY = torch.tensor(
+    [-0.00028652371795898085, -0.00028814442621400023], dtype=torch.float64
+)
+_REF_D4_GRAD_NORM = 8.747674738819562e-05
+_REF_AES2_MRAD_SUM = torch.tensor(
+    [6.422876577202871, 6.423684392175904], dtype=torch.float64
+)
+_REF_AES2_GRAD_NORM = 0.043517886912258344
+_REF_D4_H2O_ERF = (-0.00013714966072616224, 9.747138173817167e-07)
+_REF_D4_H2O_EXP = (-0.00013714937476920898, 1.0767700288052765e-06)
 
 
 def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
-    """All migrated CN callers use upstream CNModel and support batched geometries."""
+    """All migrated CN callers use upstream CNModel and match pre-migration references."""
     numbers = samples["H2O"]["numbers"].to(device="cpu")
     positions = samples["H2O"]["positions"].to(
         device="cpu", dtype=torch.float64
     )
 
-    for method, expected_cn, cls in (
-        ("gfn0", None, GFN0Hamiltonian),
-        ("gfn1", cn_d3, GFN1Hamiltonian),
-        ("gfn2", cn_gfn2, GFN2Hamiltonian),
+    for method, expected_cn, expected_kind, cls in (
+        ("gfn0", None, "erf_count", GFN0Hamiltonian),
+        ("gfn1", cn_d3, "cn_d3", GFN1Hamiltonian),
+        ("gfn2", cn_gfn2, "cn_gfn2", GFN2Hamiltonian),
     ):
         par = ParamModule(
             _METHODS[method].model_copy(deep=True),
@@ -82,6 +124,7 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
 
         assert legacy.cn is expected_cn
         assert core.cn is expected_cn
+        assert core.cn_kind == expected_kind
         ham = cls(numbers, par, ihelp, dtype=positions.dtype)
         assert isinstance(ham.cn, CNModel)
         if method == "gfn0":
@@ -107,40 +150,67 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
                 core_h0_setup(modified_pw)
 
         batched_pos = torch.stack(
-            (positions, positions + 0.03), dim=0
+            (positions, positions + _DISP3), dim=0
         ).requires_grad_(True)
+        cn_batch = ham.cn(
+            Structure(
+                numbers=numbers.unsqueeze(0).expand(2, -1),
+                positions=batched_pos,
+            )
+        )
+        assert not torch.allclose(cn_batch[0], cn_batch[1])
         if method == "gfn0":
             cn_b = ham.get_coordination_number(batched_pos)
+            torch.testing.assert_close(cn_b, cn_batch, rtol=1e-12, atol=1e-13)
             q_b = ham.get_eeq_charges(
                 batched_pos, torch.zeros(2, dtype=positions.dtype), cn_b
             )
             assert q_b.shape == (2, numbers.shape[-1])
-            assert torch.isfinite(q_b).all()
+            assert not torch.allclose(q_b[0], q_b[1])
 
         overlap = torch.eye(
             ihelp.nao, device=positions.device, dtype=positions.dtype
         )
         charge_scalar = 0.0 if method == "gfn0" else None
         h_batch = vmap(
-            lambda p: _eval_hcore(
+            lambda p: build_hcore(
                 core, p, overlap, charge=charge_scalar, ihelp=ihelp
             )[0]
         )(batched_pos)
-        h0, _ = _eval_hcore(
+        h0, _ = build_hcore(
             core, batched_pos[0], overlap, charge=charge_scalar, ihelp=ihelp
         )
-        h1, _ = _eval_hcore(
+        h1, _ = build_hcore(
             core, batched_pos[1], overlap, charge=charge_scalar, ihelp=ihelp
         )
+        assert not torch.allclose(h0, h1)
         torch.testing.assert_close(
             h_batch, torch.stack((h0, h1), dim=0), rtol=1e-12, atol=1e-13
         )
+        h_norm2 = h_batch.square().sum(dim=(-2, -1))
+        torch.testing.assert_close(
+            h_norm2, _REF_H0_NORM2[method], rtol=1e-12, atol=1e-13
+        )
         (grad_h,) = torch.autograd.grad(
-            h_batch.square().sum(), batched_pos, create_graph=True
+            h_norm2.sum(), batched_pos, create_graph=True
+        )
+        torch.testing.assert_close(
+            grad_h.norm(),
+            torch.tensor(_REF_H0_GRAD_NORM[method], dtype=torch.float64),
+            rtol=1e-11,
+            atol=1e-12,
         )
         (hess_h,) = torch.autograd.grad(grad_h.sum(), batched_pos)
-        assert torch.isfinite(grad_h).all()
         assert torch.isfinite(hess_h).all()
+
+        # Stacked setup vmap and packed batch parity
+        stacked_core = stack((core, core))
+        h_stacked = vmap(
+            lambda s, p: build_hcore(
+                s, p, overlap, charge=charge_scalar, ihelp=ihelp
+            )[0]
+        )(stacked_core, batched_pos)
+        torch.testing.assert_close(h_stacked, h_batch, rtol=1e-12, atol=1e-13)
 
         packed_numbers = numbers.unsqueeze(0).expand(2, -1)
         packed_ihelp = IndexHelper.from_numbers(packed_numbers, par)
@@ -152,16 +222,14 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
         h_packed, _ = build_hcore(
             packed_setup, batched_pos, packed_overlap, charge=packed_charge
         )
-        torch.testing.assert_close(
-            h_packed, h_batch, rtol=1e-12, atol=1e-13
-        )
+        torch.testing.assert_close(h_packed, h_batch, rtol=1e-12, atol=1e-13)
 
-    # Check IES and SRB (GFN0) on NO2 (heteronuclear Z in [5, 9] so SRB is active)
+    # Check IES and SRB (GFN0) on NO2 with non-uniform batched displacement
     no2_num = samples["NO2"]["numbers"].to(device="cpu")
     no2_pos = samples["NO2"]["positions"].to(
         device="cpu", dtype=torch.float64
     )
-    batched_no2 = torch.stack((no2_pos, no2_pos + 0.02)).requires_grad_(True)
+    batched_no2 = torch.stack((no2_pos, no2_pos + _DISP3)).requires_grad_(True)
 
     gfn0_sys = Model(
         par=ParamModule(GFN0_XTB.model_copy(deep=True), dtype=torch.float64),
@@ -172,22 +240,54 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
         gfn0_sys.ies_setup,
         batched_no2,
         torch.zeros(2, dtype=torch.float64),
+    ).sum(-1)
+    e_srb = short_range_bond_energy(gfn0_sys.srb_setup, batched_no2).sum(-1)
+    assert not torch.allclose(e_ies[0], e_ies[1])
+    assert not torch.allclose(e_srb[0], e_srb[1])
+    torch.testing.assert_close(e_ies, _REF_IES_ENERGY, rtol=1e-12, atol=1e-13)
+    torch.testing.assert_close(e_srb, _REF_SRB_ENERGY, rtol=1e-12, atol=1e-13)
+    (g_ies,) = torch.autograd.grad(e_ies.sum(), batched_no2, retain_graph=True)
+    (g_srb,) = torch.autograd.grad(e_srb.sum(), batched_no2)
+    torch.testing.assert_close(
+        g_ies.norm(),
+        torch.tensor(_REF_IES_GRAD_NORM, dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-12,
     )
-    e_srb = short_range_bond_energy(gfn0_sys.srb_setup, batched_no2)
-    assert (e_srb.abs() > 1e-6).all()
-    (g_srb,) = torch.autograd.grad(
-        e_srb.sum(), batched_no2, retain_graph=True
+    torch.testing.assert_close(
+        g_srb.norm(),
+        torch.tensor(_REF_SRB_GRAD_NORM, dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-12,
     )
-    assert (g_srb.abs() > 1e-6).any()
-    (g_gfn0,) = torch.autograd.grad((e_ies + e_srb).sum(), batched_no2)
-    assert torch.isfinite(g_gfn0).all()
 
-    # Check AES2 and D4 (GFN2) with batched positions and custom counting_function
+    # Stacked setup vmap for IES and SRB
+    stacked_ies = stack((gfn0_sys.ies_setup, gfn0_sys.ies_setup))
+    stacked_srb = stack((gfn0_sys.srb_setup, gfn0_sys.srb_setup))
+    e_ies_vmap = vmap(ies_energy)(
+        stacked_ies, batched_no2, torch.zeros(2, dtype=torch.float64)
+    ).sum(-1)
+    e_srb_vmap = vmap(short_range_bond_energy)(stacked_srb, batched_no2).sum(-1)
+    torch.testing.assert_close(e_ies_vmap, e_ies, rtol=1e-12, atol=1e-13)
+    torch.testing.assert_close(e_srb_vmap, e_srb, rtol=1e-12, atol=1e-13)
+
+    mismatched_srb = stack(
+        (
+            gfn0_sys.srb_setup,
+            gfn0_sys.srb_setup.replace(
+                cn_cutoff=gfn0_sys.srb_setup.cn_cutoff + 1.0
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="uniform cutoff"):
+        vmap(short_range_bond_energy)(mismatched_srb, batched_no2)
+
+    # Check AES2 and D4 (GFN2) with non-uniform batched displacement
     lih_num = samples["LiH"]["numbers"].to(device="cpu")
     lih_pos = samples["LiH"]["positions"].to(
         device="cpu", dtype=torch.float64
     )
-    batched_lih = torch.stack((lih_pos, lih_pos + 0.02)).requires_grad_(True)
+    batched_lih = torch.stack((lih_pos, lih_pos + _DISP2)).requires_grad_(True)
 
     gfn2_par = GFN2_XTB.model_copy(deep=True)
     gfn2_par.dispersion.d4.sc = False  # type: ignore[union-attr]
@@ -199,7 +299,7 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
     assert gfn2_sys.d4_setup is not None and gfn2_sys.aes2_setup is not None
     e_d4_vmap = vmap(
         lambda p, q: dispersion_d4_energy(gfn2_sys.d4_setup, p, q)
-    )(batched_lih, torch.zeros(2, dtype=torch.float64))
+    )(batched_lih, torch.zeros(2, dtype=torch.float64)).sum(-1)
     batched_lih_num = lih_num.unsqueeze(0).expand(2, -1)
     disp = new_dispersion(
         batched_lih_num,
@@ -213,23 +313,170 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
         d4_batched_setup,
         batched_lih,
         torch.zeros(2, dtype=torch.float64),
-    )
+    ).sum(-1)
+    assert not torch.allclose(e_d4_packed[0], e_d4_packed[1])
     torch.testing.assert_close(
         e_d4_packed, e_d4_vmap, rtol=1e-12, atol=1e-13
     )
+    torch.testing.assert_close(
+        e_d4_packed, _REF_D4_ENERGY, rtol=1e-12, atol=1e-13
+    )
     aes2_data = build_aes2_data(gfn2_sys.aes2_setup, batched_lih)
-    (g_gfn2,) = torch.autograd.grad(
-        e_d4_packed.sum() + aes2_data.mrad.sum(), batched_lih
+    mrad_sum = aes2_data.mrad.sum(-1)
+    assert not torch.allclose(mrad_sum[0], mrad_sum[1])
+    torch.testing.assert_close(
+        mrad_sum, _REF_AES2_MRAD_SUM, rtol=1e-12, atol=1e-13
     )
-    assert torch.isfinite(g_gfn2).all()
+    (g_d4,) = torch.autograd.grad(
+        e_d4_packed.sum(), batched_lih, retain_graph=True
+    )
+    (g_aes2,) = torch.autograd.grad(mrad_sum.sum(), batched_lih)
+    torch.testing.assert_close(
+        g_d4.norm(),
+        torch.tensor(_REF_D4_GRAD_NORM, dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-12,
+    )
+    torch.testing.assert_close(
+        g_aes2.norm(),
+        torch.tensor(_REF_AES2_GRAD_NORM, dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-12,
+    )
 
-    # Verify custom counting_function on dftd4 works without AttributeError
-    e_d4_exp = d4.dftd4(
-        lih_num,
-        lih_pos,
-        torch.tensor(0.0, dtype=torch.float64),
-        d4_batched_setup.as_param(),
-        q=torch.zeros_like(lih_num, dtype=torch.float64),
-        counting_function=exp_count,
+
+def test_d4_custom_counting_function_changes_cn_and_matches_reference() -> None:
+    """Custom D4 counting_function changes CN/energy and matches independent reference."""
+    h2o_num = samples["H2O"]["numbers"].to(device="cpu")
+    h2o_pos = (
+        samples["H2O"]["positions"]
+        .to(device="cpu", dtype=torch.float64)
+        .clone()
+        .requires_grad_(True)
     )
-    assert torch.isfinite(e_d4_exp).all()
+    gfn2_par = GFN2_XTB.model_copy(deep=True)
+    gfn2_par.dispersion.d4.sc = False  # type: ignore[union-attr]
+    disp = new_dispersion(
+        h2o_num,
+        gfn2_par,
+        charge=torch.tensor(0.0, dtype=torch.float64),
+        dtype=torch.float64,
+    )
+    assert disp is not None
+    setup = disp.get_cache(h2o_num)
+    q = torch.tensor([-0.6, 0.3, 0.3], dtype=torch.float64)
+
+    structure = Structure(numbers=h2o_num, positions=h2o_pos)
+    cn_erf = cn_d4(structure)
+    cn_exp = cn_d4.replace(count=exp_count)(structure)
+    assert not torch.allclose(cn_erf, cn_exp, atol=1e-4)
+
+    e_erf = d4.dftd4(h2o_num, h2o_pos, 0.0, setup.as_param(), q=q).sum()
+    (g_erf,) = torch.autograd.grad(e_erf, h2o_pos, retain_graph=True)
+
+    e_exp = d4.dftd4(
+        h2o_num,
+        h2o_pos,
+        0.0,
+        setup.as_param(),
+        q=q,
+        counting_function=exp_count,
+    ).sum()
+    (g_exp,) = torch.autograd.grad(e_exp, h2o_pos, retain_graph=True)
+
+    # Independent reference via explicit cn_d4.replace(count=exp_count) callable
+    e_exp_independent = d4.dftd4(
+        h2o_num,
+        h2o_pos,
+        0.0,
+        setup.as_param(),
+        q=q,
+        cn_function=lambda num, pos, **_: cn_d4.replace(count=exp_count)(
+            Structure(numbers=num, positions=pos)
+        ),
+    ).sum()
+    (g_exp_independent,) = torch.autograd.grad(e_exp_independent, h2o_pos)
+
+    assert not torch.allclose(e_erf, e_exp, rtol=0.0, atol=1e-10)
+    assert not torch.allclose(g_erf, g_exp, rtol=0.0, atol=1e-8)
+    torch.testing.assert_close(
+        e_exp, e_exp_independent, rtol=1e-14, atol=1e-15
+    )
+    torch.testing.assert_close(
+        g_exp, g_exp_independent, rtol=1e-14, atol=1e-15
+    )
+    torch.testing.assert_close(
+        e_erf,
+        torch.tensor(_REF_D4_H2O_ERF[0], dtype=torch.float64),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+    torch.testing.assert_close(
+        g_erf.norm(),
+        torch.tensor(_REF_D4_H2O_ERF[1], dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-14,
+    )
+    torch.testing.assert_close(
+        e_exp,
+        torch.tensor(_REF_D4_H2O_EXP[0], dtype=torch.float64),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+    torch.testing.assert_close(
+        g_exp.norm(),
+        torch.tensor(_REF_D4_H2O_EXP[1], dtype=torch.float64),
+        rtol=1e-11,
+        atol=1e-14,
+    )
+
+
+def test_cn_model_callers_compile_fullgraph() -> None:
+    """GFN0/1/2 H0, IES, and SRB CNModel constructions compile with fullgraph=True."""
+    torch._dynamo.reset()
+    numbers = samples["NO2"]["numbers"].to(device="cpu")
+    positions = samples["NO2"]["positions"].to(
+        device="cpu", dtype=torch.float64
+    )
+
+    for method in ("gfn0", "gfn1", "gfn2"):
+        par = ParamModule(
+            _METHODS[method].model_copy(deep=True),
+            device=positions.device,
+            dtype=positions.dtype,
+        )
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        core = core_h0_setup(setup_h0(numbers, par, ihelp))
+        overlap = torch.eye(
+            ihelp.nao, device=positions.device, dtype=positions.dtype
+        )
+        chrg = 0.0 if method == "gfn0" else None
+        eager_h, eager_occ = build_hcore(
+            core, positions, overlap, charge=chrg, ihelp=ihelp
+        )
+        compiled_h0 = torch.compile(
+            lambda s, p, o: build_hcore(s, p, o, charge=chrg, ihelp=ihelp),
+            fullgraph=True,
+        )
+        comp_h, comp_occ = compiled_h0(core, positions, overlap)
+        torch.testing.assert_close(comp_h, eager_h, rtol=1e-12, atol=1e-13)
+        torch.testing.assert_close(comp_occ, eager_occ, rtol=1e-12, atol=1e-13)
+
+    gfn0_sys = Model(
+        par=ParamModule(GFN0_XTB.model_copy(deep=True), dtype=torch.float64),
+        config=Config.create(exclude="scf"),
+    ).setup(numbers)
+    assert gfn0_sys.ies_setup is not None and gfn0_sys.srb_setup is not None
+
+    charge_zero = torch.tensor(0.0, dtype=torch.float64)
+    eager_ies = ies_energy(gfn0_sys.ies_setup, positions, charge_zero)
+    comp_ies = torch.compile(ies_energy, fullgraph=True)(
+        gfn0_sys.ies_setup, positions, charge_zero
+    )
+    torch.testing.assert_close(comp_ies, eager_ies, rtol=1e-12, atol=1e-13)
+
+    eager_srb = short_range_bond_energy(gfn0_sys.srb_setup, positions)
+    comp_srb = torch.compile(short_range_bond_energy, fullgraph=True)(
+        gfn0_sys.srb_setup, positions
+    )
+    torch.testing.assert_close(comp_srb, eager_srb, rtol=1e-12, atol=1e-13)

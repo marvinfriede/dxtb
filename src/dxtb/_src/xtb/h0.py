@@ -37,7 +37,7 @@ from tad_mctc.ncoord import (
     gfn2_count,
 )
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.utils.tensors import structure_charge
+from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
 
 PAD = -1
 
@@ -152,9 +152,9 @@ class H0SetupNode(Node):
     @property
     def cn(self) -> CNModel | None:
         """Create the validated stateless built-in CN model locally."""
-        if self.cn_kind == "cn_d3(exp_count)":
+        if self.cn_kind == "cn_d3":
             return cn_d3
-        if self.cn_kind == "cn_d3(gfn2_count)":
+        if self.cn_kind == "cn_gfn2":
             return cn_gfn2
         if self.cn_kind == "erf_count":
             return None
@@ -173,8 +173,8 @@ def _h0_cn_kind(setup: H0Setup) -> str:
         return "erf_count"
 
     expected = {
-        "gfn1": ("cn_d3(exp_count)", cn_d3, exp_count),
-        "gfn2": ("cn_d3(gfn2_count)", cn_gfn2, gfn2_count),
+        "gfn1": ("cn_d3", cn_d3, exp_count),
+        "gfn2": ("cn_gfn2", cn_gfn2, gfn2_count),
     }
     if setup.method not in expected:
         raise TypeError(
@@ -554,7 +554,7 @@ def _build_hcore(
         )
         cn_model = CNModel(
             count=partial(erf_count, kcn=setup.cn_kcn),
-            cutoff=float(setup.cn_cutoff.detach()),
+            cutoff=cn_cutoff_value(setup.cn_cutoff),
             cn_max=setup.cn_max,
             rcov=setup.cn_radii,
         )
