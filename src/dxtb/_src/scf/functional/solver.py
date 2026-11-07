@@ -941,6 +941,41 @@ def _select_map_result(
     )
 
 
+def _select_first_stage(
+    strategy: SCFStrategy | None,
+    problem: SCFProblem | None,
+    *,
+    eager: bool,
+) -> tuple[SCFStrategy, SCFStage]:
+    """Validate a strategy for the selected controller and return stage 0."""
+    selected_strategy = strategy or SCFStrategy((SCFStage(LinearMethod()),))
+    if problem is None:
+        if len(selected_strategy.stages) != 1:
+            raise ValueError("Multi-stage execution requires an SCFProblem.")
+    else:
+        representations = selected_strategy.resolve_representations(
+            problem.representation
+        )
+        if not eager and len(selected_strategy.stages) != 1:
+            raise NotImplementedError(
+                "Dynamic multi-stage SCF is currently eager-only."
+            )
+        if representations[0] is not problem.representation:
+            raise NotImplementedError(
+                "The initial strategy stage must match the supplied problem."
+            )
+
+    first_stage = selected_strategy.stages[0]
+    if not eager and not getattr(
+        first_stage.method, "supports_fixed_trip", True
+    ):
+        raise NotImplementedError(
+            f"{type(first_stage.method).__name__} supports eager execution "
+            "only; fixed-trip execution is not available."
+        )
+    return selected_strategy, first_stage
+
+
 def _solve_map(
     guess: Tensor,
     settings: SCFSolverSettings,
@@ -959,33 +994,9 @@ def _solve_map(
     ),
 ) -> _SolverOutcome:
     """Run one strategy through fixed-trip or eager shared control."""
-    selected_strategy = strategy or SCFStrategy((SCFStage(LinearMethod()),))
-    if problem is None:
-        if len(selected_strategy.stages) != 1:
-            raise ValueError("Multi-stage execution requires an SCFProblem.")
-        stages = selected_strategy.stages
-    else:
-        representations = selected_strategy.resolve_representations(
-            problem.representation
-        )
-        if not eager and len(selected_strategy.stages) != 1:
-            raise NotImplementedError(
-                "Dynamic multi-stage SCF is currently eager-only."
-            )
-        if representations[0] is not problem.representation:
-            raise NotImplementedError(
-                "The initial strategy stage must match the supplied problem."
-            )
-        stages = selected_strategy.stages
-
-    first_stage = stages[0]
-    if not eager and not getattr(
-        first_stage.method, "supports_fixed_trip", True
-    ):
-        raise NotImplementedError(
-            f"{type(first_stage.method).__name__} supports eager execution "
-            "only; fixed-trip execution is not available."
-        )
+    selected_strategy, first_stage = _select_first_stage(
+        strategy, problem, eager=eager
+    )
     common = dict(
         maxiter=settings.maxiter,
         mix_guess=settings.mix_guess,
@@ -1032,65 +1043,36 @@ def _solve_map(
     )
 
 
-def solve_scf_problem(
-    guess: Tensor,
+def _problem_state_projection(
     problem: SCFProblem,
-    settings: SCFSolverSettings,
-    strategy: SCFStrategy,
-    *,
-    eager: bool = False,
-    record_trace: bool = False,
-    record_initial_status: bool | None = None,
-    state_projection: Callable[[Tensor], Tensor] | None = None,
-    residual_projection: Callable[[Tensor], Tensor] | None = None,
-    project_initial_state: bool = False,
-    certification_profile: SCFInternalCertificationProfile = (
-        SCF_CERTIFICATION_STANDARD
-    ),
-) -> SCFSolveResult:
-    """Solve and finalize one representation through the shared controller."""
+    state_projection: Callable[[Tensor], Tensor] | None,
+) -> Callable[[Tensor], Tensor] | None:
+    """Combine a caller projection with the representation's own projection."""
     if problem.representation is SCFRepresentation.CHARGE:
-        charge_projection = lambda value: _project_charge_padding(
+        representation_projection = lambda value: _project_charge_padding(
             value, problem.inputs.charge_layout
         )
-        if state_projection is None:
-            state_projection = charge_projection
-        else:
-            previous_charge_projection = state_projection
-
-            def combined_charge_projection(value: Tensor) -> Tensor:
-                return previous_charge_projection(charge_projection(value))
-
-            state_projection = combined_charge_projection
     elif problem.representation is SCFRepresentation.POTENTIAL:
         assert problem.potential_layout is not None
-        potential_projection = lambda value: _project_potential_padding(
+        representation_projection = lambda value: _project_potential_padding(
             value, problem.potential_layout
         )
-        if state_projection is None:
-            state_projection = potential_projection
-        else:
-            previous_projection = state_projection
+    else:
+        return state_projection
+    if state_projection is None:
+        return representation_projection
+    previous_projection = state_projection
 
-            def combined_projection(value: Tensor) -> Tensor:
-                return previous_projection(potential_projection(value))
+    def combined_projection(value: Tensor) -> Tensor:
+        return previous_projection(representation_projection(value))
 
-            state_projection = combined_projection
+    return combined_projection
 
-    outcome = _solve_map(
-        guess,
-        settings,
-        problem.map,
-        state_projection=state_projection,
-        eager=eager,
-        record_trace=record_trace,
-        record_initial_status=record_initial_status,
-        residual_projection=residual_projection,
-        project_initial_state=project_initial_state,
-        problem=problem,
-        strategy=strategy,
-        certification_profile=certification_profile,
-    )
+
+def _finalize_problem_outcome(
+    outcome: _SolverOutcome, problem: SCFProblem
+) -> SCFSolveResult:
+    """Finalize a controller outcome with its representation's finalizer."""
     final_problem = outcome.final_problem or problem
     common = (
         outcome.map_result,
@@ -1127,6 +1109,314 @@ def solve_scf_problem(
     return finalize_scf_fock(*common, **diagnostics)
 
 
+def solve_scf_problem(
+    guess: Tensor,
+    problem: SCFProblem,
+    settings: SCFSolverSettings,
+    strategy: SCFStrategy,
+    *,
+    eager: bool = False,
+    record_trace: bool = False,
+    record_initial_status: bool | None = None,
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
+) -> SCFSolveResult:
+    """Solve and finalize one representation through the shared controller."""
+    outcome = _solve_map(
+        guess,
+        settings,
+        problem.map,
+        state_projection=_problem_state_projection(problem, state_projection),
+        eager=eager,
+        record_trace=record_trace,
+        record_initial_status=record_initial_status,
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
+        problem=problem,
+        strategy=strategy,
+        certification_profile=certification_profile,
+    )
+    return _finalize_problem_outcome(outcome, problem)
+
+
+@dataclass(frozen=True, eq=False)
+class FixedTripControl:
+    """Resumable form of the transform-compatible fixed-trip controller.
+
+    The controller is split into :meth:`start` (initial map and optional
+    initial mix), :meth:`advance` (map trips ``start <= index < stop``) and
+    :meth:`finish` (final certification and outcome). Advancing through
+    consecutive trip ranges is the same computation as one call over
+    ``range(maxiter)``: every quantity carried between trips lives in
+    :class:`_SolverControlState`, and the method step is derived from the
+    global trip index. Lanes whose ``active`` flag is cleared are frozen by
+    the shared transition, so trips after the last active lane change no
+    selected value.
+
+    Only the configured ``maxiter`` determines the physical schedule; the
+    trip ranges passed to :meth:`advance` are an execution detail.
+    """
+
+    maxiter: int
+    mix_guess: bool
+    x_atol: float
+    x_atol_max: float
+    map_fn: Callable[[Tensor], SCFMapResult]
+    problem: SCFProblem | None
+    method: SCFMethod
+    initial_damp: float
+    damping_settings: DynamicDampingSettings
+    state_projection: Callable[[Tensor], Tensor] | None
+    record_initial_status: bool
+    residual_projection: Callable[[Tensor], Tensor] | None
+    project_initial_state: bool
+    thresholds: SCFCertificationThresholds | None
+
+    def start(self, guess: Tensor) -> _SolverControlState:
+        """Evaluate the initial map and apply the optional initial mix."""
+        return _initialize_solver_control(
+            guess,
+            maxiter=self.maxiter,
+            mix_guess=self.mix_guess,
+            initial_damp=self.initial_damp,
+            map_fn=self.map_fn,
+            problem=self.problem,
+            method=self.method,
+            state_projection=self.state_projection,
+            record_initial_status=self.record_initial_status,
+            residual_projection=self.residual_projection,
+            project_initial_state=self.project_initial_state,
+        )
+
+    def advance(
+        self,
+        state: _SolverControlState,
+        start: int,
+        stop: int,
+        observations: tuple[tuple[object, ...], ...] | None = None,
+    ) -> tuple[_SolverControlState, tuple[tuple[object, ...], ...] | None]:
+        """Run map trips ``start <= index < stop`` of the fixed schedule."""
+        if not 0 <= start <= stop <= self.maxiter:
+            raise ValueError(
+                f"Invalid fixed-trip range [{start}, {stop}) for "
+                f"maxiter={self.maxiter}."
+            )
+        problem = self.problem
+        thresholds = self.thresholds
+        for index in range(start, stop):
+            map_input = state.current_x
+            active_before = state.active
+            candidate = self.map_fn(state.current_x)
+            candidate_certification = None
+            if problem is not None and thresholds is not None:
+                certification_candidate = _select_map_result(
+                    state.active,
+                    candidate,
+                    _finite_map_result(state.map_result),
+                )
+                candidate_x = (
+                    self.state_projection(certification_candidate.mapped_x)
+                    if self.project_initial_state
+                    and self.state_projection is not None
+                    else certification_candidate.mapped_x
+                )
+                candidate_residual = _residual(
+                    candidate_x - state.current_x, self.residual_projection
+                )
+                candidate_certification = certify_scf_core_state(
+                    problem,
+                    SCFPhysicalState(state.current_x, certification_candidate),
+                    thresholds,
+                    fixed_point_residual=candidate_residual,
+                )
+            state = _solver_control_step(
+                state,
+                candidate,
+                method_step=index + (2 if self.mix_guess else 1),
+                problem=problem,
+                method=self.method,
+                x_atol=self.x_atol,
+                x_atol_max=self.x_atol_max,
+                damping_settings=self.damping_settings,
+                state_projection=self.state_projection,
+                residual_projection=self.residual_projection,
+                project_initial_state=self.project_initial_state,
+                certification=candidate_certification,
+            )
+            if observations is not None:
+                observations += (
+                    (
+                        map_input,
+                        candidate,
+                        state.current_x,
+                        state.residual,
+                        active_before,
+                        state.active,
+                        state.iterations,
+                        state.damping_state.value,
+                        state.method_state,
+                    ),
+                )
+        return state, observations
+
+    def finish(
+        self,
+        state: _SolverControlState,
+        guess: Tensor,
+        observations: tuple[tuple[object, ...], ...] | None = None,
+    ) -> _SolverOutcome:
+        """Certify the selected state and materialize the solver outcome."""
+        zero = torch.zeros((), dtype=torch.int64, device=guess.device)
+        trace = (
+            None
+            if observations is None
+            else _materialize_solver_trace(guess, observations)
+        )
+        diagnostics = _strategy_diagnostics(
+            0, zero, [state.iterations], [], like=guess
+        )
+        if self.maxiter == 0:
+            return _solver_outcome(
+                state,
+                converged=torch.zeros_like(state.active),
+                trace=trace,
+                final_problem=self.problem,
+                strategy_diagnostics=diagnostics,
+            )
+
+        if self.problem is not None and self.thresholds is not None:
+            state = replace(
+                state,
+                certification=certify_scf_core_state(
+                    self.problem,
+                    SCFPhysicalState(state.map_input_x, state.map_result),
+                    self.thresholds,
+                    fixed_point_residual=SCFResidual(
+                        state.residual[0], state.residual[1]
+                    ),
+                ),
+            )
+        return _solver_outcome(
+            state,
+            converged=state.certified,
+            trace=trace,
+            final_problem=self.problem,
+            strategy_diagnostics=diagnostics,
+        )
+
+
+def _fixed_trip_control(
+    guess: Tensor,
+    *,
+    maxiter: int,
+    mix_guess: bool,
+    x_atol: float,
+    x_atol_max: float,
+    map_fn: Callable[[Tensor], SCFMapResult],
+    problem: SCFProblem | None = None,
+    method: SCFMethod,
+    initial_damp: float = 0.4,
+    damping_settings: DynamicDampingSettings = DynamicDampingSettings(),
+    state_projection: Callable[[Tensor], Tensor] | None = None,
+    record_initial_status: bool | None = None,
+    residual_projection: Callable[[Tensor], Tensor] | None = None,
+    project_initial_state: bool = False,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
+    requested_x_atol: float | None = None,
+    requested_x_atol_max: float | None = None,
+) -> FixedTripControl:
+    """Resolve the fixed-trip controller configuration once."""
+    return FixedTripControl(
+        maxiter=maxiter,
+        mix_guess=mix_guess,
+        x_atol=x_atol,
+        x_atol_max=x_atol_max,
+        map_fn=map_fn,
+        problem=problem,
+        method=method,
+        initial_damp=initial_damp,
+        damping_settings=damping_settings,
+        state_projection=state_projection,
+        record_initial_status=(
+            maxiter > 0
+            if record_initial_status is None
+            else record_initial_status
+        ),
+        residual_projection=residual_projection,
+        project_initial_state=project_initial_state,
+        thresholds=(
+            None
+            if problem is None or maxiter == 0
+            else resolve_certification_thresholds(
+                problem,
+                x_atol=x_atol,
+                x_atol_max=x_atol_max,
+                dtype=guess.dtype,
+                profile=certification_profile,
+                requested_x_atol=requested_x_atol,
+                requested_x_atol_max=requested_x_atol_max,
+            )
+        ),
+    )
+
+
+def fixed_trip_problem_control(
+    guess: Tensor,
+    problem: SCFProblem,
+    settings: SCFSolverSettings,
+    strategy: SCFStrategy,
+    *,
+    certification_profile: SCFInternalCertificationProfile = (
+        SCF_CERTIFICATION_STANDARD
+    ),
+) -> FixedTripControl:
+    """Return the resumable controller used by :func:`solve_scf_problem`.
+
+    ``start``, ``advance`` over ``range(settings.maxiter)`` and ``finish``
+    followed by :func:`finalize_fixed_trip_problem` reproduce
+    ``solve_scf_problem(..., eager=False)``.
+    """
+    _, first_stage = _select_first_stage(strategy, problem, eager=False)
+    return _fixed_trip_control(
+        guess,
+        maxiter=settings.maxiter,
+        mix_guess=settings.mix_guess,
+        x_atol=settings.x_atol,
+        x_atol_max=settings.x_atol_max,
+        map_fn=problem.map,
+        problem=problem,
+        method=first_stage.method,
+        initial_damp=(
+            settings.damp
+            if first_stage.initial_damp is None
+            else first_stage.initial_damp
+        ),
+        damping_settings=settings.dynamic_damping,
+        state_projection=_problem_state_projection(problem, None),
+        certification_profile=certification_profile,
+        requested_x_atol=settings.requested_x_atol,
+        requested_x_atol_max=settings.requested_x_atol_max,
+    )
+
+
+def finalize_fixed_trip_problem(
+    control: FixedTripControl,
+    state: _SolverControlState,
+    guess: Tensor,
+) -> SCFSolveResult:
+    """Finish a resumable fixed-trip solve and finalize its representation."""
+    assert control.problem is not None
+    return _finalize_problem_outcome(
+        control.finish(state, guess), control.problem
+    )
+
+
 def _solve_map_control(
     guess: Tensor,
     *,
@@ -1150,25 +1440,31 @@ def _solve_map_control(
     requested_x_atol: float | None = None,
     requested_x_atol_max: float | None = None,
 ) -> _SolverOutcome:
-    """Run transform-compatible fixed-trip control around a raw map."""
-    record_initial = (
-        maxiter > 0 if record_initial_status is None else record_initial_status
-    )
-    state = _initialize_solver_control(
+    """Run transform-compatible fixed-trip control around a raw map.
+
+    Equivalent to ``start``, ``advance(0, maxiter)`` and ``finish`` of
+    :class:`FixedTripControl`.
+    """
+    control = _fixed_trip_control(
         guess,
         maxiter=maxiter,
         mix_guess=mix_guess,
-        initial_damp=initial_damp,
+        x_atol=x_atol,
+        x_atol_max=x_atol_max,
         map_fn=map_fn,
         problem=problem,
         method=method,
+        initial_damp=initial_damp,
+        damping_settings=damping_settings,
         state_projection=state_projection,
-        record_initial_status=record_initial,
+        record_initial_status=record_initial_status,
         residual_projection=residual_projection,
         project_initial_state=project_initial_state,
+        certification_profile=certification_profile,
+        requested_x_atol=requested_x_atol,
+        requested_x_atol_max=requested_x_atol_max,
     )
-    zero = torch.zeros((), dtype=torch.int64, device=guess.device)
-
+    state = control.start(guess)
     observations = (
         (
             (
@@ -1184,116 +1480,10 @@ def _solve_map_control(
             ),
         )
         if record_trace
-        else ()
+        else None
     )
-
-    if maxiter == 0:
-        return _solver_outcome(
-            state,
-            converged=torch.zeros_like(state.active),
-            trace=(
-                _materialize_solver_trace(guess, observations)
-                if record_trace
-                else None
-            ),
-            final_problem=problem,
-            strategy_diagnostics=_strategy_diagnostics(
-                0, zero, [state.iterations], [], like=guess
-            ),
-        )
-
-    thresholds = (
-        None
-        if problem is None
-        else resolve_certification_thresholds(
-            problem,
-            x_atol=x_atol,
-            x_atol_max=x_atol_max,
-            dtype=guess.dtype,
-            profile=certification_profile,
-            requested_x_atol=requested_x_atol,
-            requested_x_atol_max=requested_x_atol_max,
-        )
-    )
-
-    for index in range(maxiter):
-        map_input = state.current_x
-        active_before = state.active
-        candidate = map_fn(state.current_x)
-        candidate_certification = None
-        if problem is not None and thresholds is not None:
-            certification_candidate = _select_map_result(
-                state.active, candidate, _finite_map_result(state.map_result)
-            )
-            candidate_x = (
-                state_projection(certification_candidate.mapped_x)
-                if project_initial_state and state_projection is not None
-                else certification_candidate.mapped_x
-            )
-            candidate_residual = _residual(
-                candidate_x - state.current_x, residual_projection
-            )
-            candidate_certification = certify_scf_core_state(
-                problem,
-                SCFPhysicalState(state.current_x, certification_candidate),
-                thresholds,
-                fixed_point_residual=candidate_residual,
-            )
-        state = _solver_control_step(
-            state,
-            candidate,
-            method_step=index + (2 if mix_guess else 1),
-            problem=problem,
-            method=method,
-            x_atol=x_atol,
-            x_atol_max=x_atol_max,
-            damping_settings=damping_settings,
-            state_projection=state_projection,
-            residual_projection=residual_projection,
-            project_initial_state=project_initial_state,
-            certification=candidate_certification,
-        )
-        if record_trace:
-            observations += (
-                (
-                    map_input,
-                    candidate,
-                    state.current_x,
-                    state.residual,
-                    active_before,
-                    state.active,
-                    state.iterations,
-                    state.damping_state.value,
-                    state.method_state,
-                ),
-            )
-
-    if problem is not None and thresholds is not None:
-        state = replace(
-            state,
-            certification=certify_scf_core_state(
-                problem,
-                SCFPhysicalState(state.map_input_x, state.map_result),
-                thresholds,
-                fixed_point_residual=SCFResidual(
-                    state.residual[0], state.residual[1]
-                ),
-            ),
-        )
-
-    return _solver_outcome(
-        state,
-        converged=state.certified,
-        trace=(
-            _materialize_solver_trace(guess, observations)
-            if record_trace
-            else None
-        ),
-        final_problem=problem,
-        strategy_diagnostics=_strategy_diagnostics(
-            0, zero, [state.iterations], [], like=guess
-        ),
-    )
+    state, observations = control.advance(state, 0, maxiter, observations)
+    return control.finish(state, guess, observations)
 
 
 def _solve_map_control_eager(
