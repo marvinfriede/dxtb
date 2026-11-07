@@ -1,5 +1,10 @@
 # E6bimpl.3 — Retained Legacy Composition
 
+> **Historical.** `compose_legacy_systems`/`can_pad_system` are now
+> `evaluate_systems_independently`/`can_vmap_system` in
+> `dxtb._src.calculators.lane_evaluation`, and independent evaluation accepts
+> every valid lane. See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 ## Decision
 
 **E6bimpl.3: COMPLETE. Overall E6bimpl: COMPLETE at the implementation

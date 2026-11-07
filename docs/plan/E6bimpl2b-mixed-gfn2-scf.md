@@ -1,5 +1,10 @@
 # E6bimpl.2b — mixed GFN2 interactions and fixed-trip SCF
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: **partial; E6bimpl remains open**.
 
 Starting SHA: `82d7a84cf405ba0cd1ddf21557272b2b8816e446`.

@@ -1,5 +1,10 @@
 # E6bimpl.1b-F — Mixed GFN1 SCF final acceptance
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: **complete at the private GFN1/PyTorch mixed-System boundary**.
 Overall E6bimpl remains **open** for GFN2 mixed execution and remaining
 component, compatibility, and production-route acceptance.

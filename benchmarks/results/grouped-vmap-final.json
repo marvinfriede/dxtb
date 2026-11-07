@@ -1,0 +1,322 @@
+{
+  "commit": "8da3ed0d2d37a296feb5a4a5bdcfdf2f7d2c19d6",
+  "python": "3.12.10",
+  "torch": "2.14.1+cpu",
+  "device": "cpu",
+  "omp_num_threads": "1",
+  "mem_limit_gib": 12.0,
+  "cases": {
+    "A_conformers/energy": {
+      "lanes": 32,
+      "distinct_systems": 1,
+      "group_sizes": [
+        32
+      ],
+      "real_atoms_max": 3,
+      "real_aos_max": 8,
+      "real_aos_sum": 256,
+      "canonical_extent": null,
+      "case": "A_conformers",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          32
+        ]
+      ],
+      "energy_sum": -184.5056575355493,
+      "force_norm": null,
+      "iterations": 9,
+      "wall_s": [
+        8.590287231996626,
+        8.559661000999768
+      ],
+      "wall_s_min": 8.559661000999768,
+      "peak_rss_mib": 369.46484375,
+      "status": "ok"
+    },
+    "A_conformers/forces": {
+      "lanes": 32,
+      "distinct_systems": 1,
+      "group_sizes": [
+        32
+      ],
+      "real_atoms_max": 3,
+      "real_aos_max": 8,
+      "real_aos_sum": 256,
+      "canonical_extent": null,
+      "case": "A_conformers",
+      "mode": "forces",
+      "composition": [
+        [
+          "H2O",
+          32
+        ]
+      ],
+      "energy_sum": -184.5056575355493,
+      "force_norm": 0.4384086811224171,
+      "iterations": 9,
+      "wall_s": [
+        14.199826972002484,
+        14.525319004998892
+      ],
+      "wall_s_min": 14.199826972002484,
+      "peak_rss_mib": 4075.921875,
+      "status": "ok"
+    },
+    "B_repeated/energy": {
+      "lanes": 20,
+      "distinct_systems": 3,
+      "group_sizes": [
+        8,
+        8,
+        4
+      ],
+      "real_atoms_max": 5,
+      "real_aos_max": 12,
+      "real_aos_sum": 200,
+      "canonical_extent": null,
+      "case": "B_repeated",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          8
+        ],
+        [
+          "CH4",
+          8
+        ],
+        [
+          "NH3",
+          4
+        ]
+      ],
+      "energy_sum": -99.58286578583326,
+      "force_norm": null,
+      "iterations": 10,
+      "wall_s": [
+        23.372247563998826,
+        23.31485025099755
+      ],
+      "wall_s_min": 23.31485025099755,
+      "peak_rss_mib": 373.859375,
+      "status": "ok"
+    },
+    "B_repeated/forces": {
+      "lanes": 20,
+      "distinct_systems": 3,
+      "group_sizes": [
+        8,
+        8,
+        4
+      ],
+      "real_atoms_max": 5,
+      "real_aos_max": 12,
+      "real_aos_sum": 200,
+      "canonical_extent": null,
+      "case": "B_repeated",
+      "mode": "forces",
+      "composition": [
+        [
+          "H2O",
+          8
+        ],
+        [
+          "CH4",
+          8
+        ],
+        [
+          "NH3",
+          4
+        ]
+      ],
+      "energy_sum": -99.58286578583326,
+      "force_norm": 0.37278365557782733,
+      "iterations": 10,
+      "wall_s": [
+        35.86026380900148,
+        37.2885583899988
+      ],
+      "wall_s_min": 35.86026380900148,
+      "peak_rss_mib": 3888.4375,
+      "status": "ok"
+    },
+    "C_heterogeneous/energy": {
+      "lanes": 6,
+      "distinct_systems": 6,
+      "group_sizes": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 94,
+      "canonical_extent": null,
+      "case": "C_heterogeneous",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2",
+          1
+        ],
+        [
+          "H2O",
+          1
+        ],
+        [
+          "NH3",
+          1
+        ],
+        [
+          "CH4",
+          1
+        ],
+        [
+          "SiH4",
+          1
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -40.00485054180643,
+      "force_norm": null,
+      "iterations": 14,
+      "wall_s": [
+        2.4237806890014326,
+        2.4112626100031775
+      ],
+      "wall_s_min": 2.4112626100031775,
+      "peak_rss_mib": 382.69921875,
+      "status": "ok"
+    },
+    "C_heterogeneous/forces": {
+      "lanes": 6,
+      "distinct_systems": 6,
+      "group_sizes": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 94,
+      "canonical_extent": null,
+      "case": "C_heterogeneous",
+      "mode": "forces",
+      "composition": [
+        [
+          "H2",
+          1
+        ],
+        [
+          "H2O",
+          1
+        ],
+        [
+          "NH3",
+          1
+        ],
+        [
+          "CH4",
+          1
+        ],
+        [
+          "SiH4",
+          1
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -40.00485054180643,
+      "force_norm": 0.192476754674263,
+      "iterations": 14,
+      "wall_s": [
+        4.300946390998433,
+        4.445972790999804
+      ],
+      "wall_s_min": 4.300946390998433,
+      "peak_rss_mib": 891.59765625,
+      "status": "ok"
+    },
+    "D_mixed_sizes/energy": {
+      "lanes": 8,
+      "distinct_systems": 2,
+      "group_sizes": [
+        7,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 99,
+      "canonical_extent": null,
+      "case": "D_mixed_sizes",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          7
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -60.461088581105294,
+      "force_norm": null,
+      "iterations": 13,
+      "wall_s": [
+        8.16121471400038,
+        7.92638467299912
+      ],
+      "wall_s_min": 7.92638467299912,
+      "peak_rss_mib": 368.515625,
+      "status": "ok"
+    },
+    "D_mixed_sizes/forces": {
+      "lanes": 8,
+      "distinct_systems": 2,
+      "group_sizes": [
+        7,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 99,
+      "canonical_extent": null,
+      "case": "D_mixed_sizes",
+      "mode": "forces",
+      "composition": [
+        [
+          "H2O",
+          7
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -60.461088581105294,
+      "force_norm": 0.22444470377824283,
+      "iterations": 13,
+      "wall_s": [
+        12.574802893999731,
+        13.029340166998736
+      ],
+      "wall_s_min": 12.574802893999731,
+      "peak_rss_mib": 1816.08203125,
+      "status": "ok"
+    }
+  }
+}

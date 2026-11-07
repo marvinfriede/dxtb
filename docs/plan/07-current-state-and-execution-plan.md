@@ -57,7 +57,7 @@ Current state:
 | E3.1            | complete                        | E3.1a reference gate, dxtb-local invariant spectral density/free energy, and transform-compatible implicit physical-root differentiation are complete. The matrix-free linear-solve relative tolerance floors at ten dtype epsilons while preserving the float64 threshold. |
 | E3             | complete                        | Full E3 end-to-end reference and derivative acceptance (`autograd.grad`, `func.grad`, `jacrev`, `jvp`, `jacfwd`, 2nd-order, 3rd-order directional, mixed forward/reverse, `vmap`) across scalar/2x2 generalized-overlap fixed-point references, GFN1/GFN2 water, charged/open-shell systems, exact/near-degenerate $D_{3h}$ $\text{H}_3^+$, finite-temperature partial occupations, DFT-D3 GFN1, Model parameters, fields/field-gradients, and unrolled vs implicit converged physical roots is complete (`test_e3_end_to_end_acceptance.py`), and all nine inherited functional SCF test discrepancies are resolved with exact commit provenance documented in [`functional-refactoring-closure.md`](functional-refactoring-closure.md) and [`functional-refactoring-hardening.md`](functional-refactoring-hardening.md). |
 | E4             | complete — legacy SCF & mixer classes retired | E4core (E4.0–E4.5b) and S0–S13.1 provide the canonical functional SCF path. E4.6 is complete: `SelfConsistentFieldFull`, `SelfConsistentFieldImplicit`, `SelfConsistentFieldSingleShot`, `BaseSCF`, `src/dxtb/_src/scf/mixer/` (`Anderson`, `Broyden`, `Simple`, `BaseMixer`), `LegacySCFOptions`, `strict_e6bcompat`, and low-level `scf_results` override kwargs are retired and deleted. |
-| E6/E7/E8       | E6a, E6bimpl, E6bcompat, E6broute, E7, E8 complete | E6a.0–E6a.4, E6bimpl, E6bcompat, and E6broute are complete and active on public `Calculator.singlepoint`. Batched `Calculator.singlepoint` (`numbers.ndim > 1`) routes directly through `evaluate_calculator_packed_singlepoint` (`dxtb._src.calculators.packed_result`), verified across all 32 reconciled `E6bcompat` policy rows (`docs/plan/E6bcompat-final-routing-manifest.json`), including native GFN2 `Potential` (S13 default), `Charge`, and `Fock` execution on `MAPPED`, `LEGACY_COMPOSED` routing for `IMPLICIT`/multi-stage/`SOSCF`/custom/libcint configurations, shared and per-lane `field`/`field_grad` perturbations, strict separation of public `write_*`/`cuda_sync_in_scf`/`ignore_unknown_kwargs` options from retired low-level `LegacySCFOptions`, collision-free classical display keys, 6-stage failure precedence, intra-call conformer `Model.setup` deduplication, non-contiguous/trailing zero-padding masks, and stateless call-local setup lifecycle across all 13 grad/no-grad/inference-mode and parameter transitions. Broader E7 padding safety (`test_e7a_padding_safety.py`) and E8 third-order G1 PyTorch transform acceptance (`test_b8_e8_functional_properties.py`) are complete. See [`final-calculator-refactoring.md`](final-calculator-refactoring.md) and [`batching-and-differentiation-final-contract.md`](batching-and-differentiation-final-contract.md). |
+| E6/E7/E8       | E6a, E6bimpl, E6bcompat, E6broute, E7, E8 complete | E6a.0–E6a.4, E6bimpl, E6bcompat, and E6broute are complete and active on public `Calculator.singlepoint`. Batched `Calculator.singlepoint` (`numbers.ndim > 1`) routes directly through `evaluate_calculator_packed_singlepoint` (`dxtb._src.calculators.packed_result`), verified across all 32 reconciled `E6bcompat` policy rows (`docs/plan/E6bcompat-final-routing-manifest.json`), including native GFN2 `Potential` (S13 default), `Charge`, and `Fock` execution on `MAPPED`, `LEGACY_COMPOSED` routing for `IMPLICIT`/multi-stage/`SOSCF`/custom/libcint configurations, shared and per-lane `field`/`field_grad` perturbations, strict separation of public `write_*`/`cuda_sync_in_scf`/`ignore_unknown_kwargs` options from retired low-level `LegacySCFOptions`, collision-free classical display keys, 6-stage failure precedence, intra-call conformer `Model.setup` deduplication, non-contiguous/trailing zero-padding masks, and stateless call-local setup lifecycle across all 13 grad/no-grad/inference-mode and parameter transitions. E8 third-order G1 PyTorch transform acceptance (`test_b8_e8_functional_properties.py`) is complete. **Batch execution was later replaced by grouped vmap** (lanes sharing one System are mapped, all others evaluated independently, no canonical cross-composition padding); `MAPPED`/canonical-bucket wording in this row is historical. See [`grouped-vmap-batching.md`](grouped-vmap-batching.md). See [`final-calculator-refactoring.md`](final-calculator-refactoring.md) and [`batching-and-differentiation-final-contract.md`](batching-and-differentiation-final-contract.md). |
 | E6bimpl        | complete; E6broute active       | E6bimpl.0/1a/1b-F, 2a/2b-F and 2c accept the private mixed GFN1/GFN2 PyTorch numerical paths. E6bimpl.3 adds ordered retained legacy composition for libcint and custom extensions. Public `Calculator.singlepoint` batch dispatch is now cut over to `evaluate_calculator_packed_singlepoint`, and obsolete legacy batch SCF/interaction execution in `EnergyCalculator` (`_call_interactions` and legacy batch `SelfConsistentFieldFull` execution) is removed. See [`E6bimpl3-retained-legacy-composition.md`](E6bimpl3-retained-legacy-composition.md) and [`final-calculator-refactoring.md`](final-calculator-refactoring.md). |
 | Analytical removal & Calculator closure | complete | `AnalyticalCalculator`, `src/dxtb/_src/calculators/types/analytical.py`, `forces_analytical`, `dipole_analytical`, `quadrupole_analytical`, `use_analytical*` flags, public `grad_mode`, and mutable `Calculator.integrals` are completely removed. `Calculator` inherits from `(AutogradCalculator, NumericalCalculator)` only, with one authoritative reverse-mode AD force definition, lane-local higher-order batched electric responses (`polarizability`, `dipole_deriv`, `pol_deriv`, `hyperpolarizability`), explicit `derived_quantity` validation (never silently ignored when `use_functorch=False`), rank-based `B == 3` field/field-grad disambiguation, inference-mode `ParamModule` ownership preservation, stateless call-local setup construction, and redundant `reset_all()` calls removed from `AutogradCalculator.ir`/`raman`. See [`final-calculator-refactoring.md`](final-calculator-refactoring.md), [`batching-and-differentiation-final-contract.md`](batching-and-differentiation-final-contract.md), and [`batched-response-correctness-closure.md`](batched-response-correctness-closure.md). |
 | S0–S13.1       | complete and integrated         | Completed SCF redesign (`e78d3f6ac05a970e7871fa65a358b8f3d028cd9e`) and general functional refactoring (`e694117b87287e6557d1f4256a9f3e9175e3211d`) are semantically integrated on `integration/scf-s13-general-final` and fast-forwarded onto `claude/tender-dijkstra-cda42s`. See [`30-scf-s13-defaults-api-closure.md`](30-scf-s13-defaults-api-closure.md) and [`scf-s13-general-refactor-integration.md`](scf-s13-general-refactor-integration.md). |
@@ -2316,6 +2316,14 @@ the class.
 
 # 17. E6a/E6b: batching
 
+> **Superseded batching architecture (grouped vmap).** Heterogeneous
+> `Calculator` batches no longer use one canonical padded `vmap`. Lanes are
+> ordinary single Systems; lanes sharing one System are mapped with
+> `torch.func.vmap`, all others run independently, and only the final
+> `Result` is padded. The canonical cross-composition padding route, its
+> padded integral/SCF consumers, and the mixed-bucket W3 gate below are
+> historical. See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Separate conformer mapping over one fixed System from heterogeneous mixed-
 System batching. The former does not require `Node.stack`; the latter does.
 
@@ -2555,7 +2563,9 @@ authoritative PyTorch route against their corresponding T0.8 workloads:
 
 - W2 for E6a conformers mapped over one fixed System;
 - W3 for E6b mixed/training-like padded Systems, compared with the recorded
-  legacy mixed-batch baseline.
+  legacy mixed-batch baseline. *(Historical: W3 targeted the canonical padded
+  route, which grouped-vmap batching replaced; see
+  [`grouped-vmap-batching.md`](grouped-vmap-batching.md) for its benchmark.)*
 
 W2 compares conformer throughput with the legacy `batch_mode=2` target. W3
 compares mixed-System forward time, force evaluation where applicable, peak
@@ -2605,6 +2615,10 @@ is explicitly amended. Missing measurements are never clearance.
 ---
 
 # 18. E7: padding-safety audit
+
+> The mixed-bucket parts of this audit (canonical padded cores, invalid
+> pair entries, inactive canonical slots) are historical; grouped-vmap
+> batching never evaluates physics on a padded cross-composition layout.
 
 Do not leave this entirely to the end.
 

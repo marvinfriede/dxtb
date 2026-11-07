@@ -1,5 +1,10 @@
 # C8b.0 — Exact-core Node schema and stacking preflight
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Audit base: `3ae533847b93e09c99b61bf3d5afb796cac60dcb`.
 
 This package establishes a source-backed schema and executable prototype. It

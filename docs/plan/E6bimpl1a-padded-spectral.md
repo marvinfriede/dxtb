@@ -1,5 +1,10 @@
 # E6bimpl.1a — Padded SCF Inputs and Spectral Evaluation
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 **Starting SHA:** `e9f2deef0a8988e4862c7211ae1ad598baf597a0`
 **Scope:** private GFN1/PyTorch mixed-System SCF preparation and spectral
 evaluation. Public Calculator routing remains unchanged.

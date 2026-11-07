@@ -1,5 +1,10 @@
 # E6bimpl.0 — Padded PyTorch integral and H0 foundation
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: implementation slice complete; overall E6bimpl remains open.
 
 Starting commit: `9908721ea248aa7c318a7679090d3629754061d1`.

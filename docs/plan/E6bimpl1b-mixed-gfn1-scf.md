@@ -1,5 +1,10 @@
 # E6bimpl.1b — Mixed GFN1 fixed-trip SCF
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: implementation slice delivered; **E6bimpl.1b remains open**.
 
 Starting commit: `fbf3bf3ce6d78d1254ee226013ba17821494b4b8`.

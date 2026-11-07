@@ -31,7 +31,7 @@ This document defines the final architectural contract for batching, differentia
 | Interface | Input Shapes | Execution Route | Primary Use Case |
 |---|---|---|---|
 | **Single `System`** | `numbers: (N,)`, `positions: (N, 3)` | `System.singlepoint` -> `_singlepoint_functional` (`ExactSystemCore`) or `_singlepoint_eager` | Composable functional workflows, `torch.func` transforms (`grad`, `jacrev`, `jvp`, `jacfwd`, `vmap`), and parameter training |
-| **Batched `Calculator`** (`batch_mode=1` or `batch_mode=2`) | `numbers: (B, Nmax)`, `positions: (B, Nmax, 3)` | `Calculator.singlepoint` -> `evaluate_calculator_packed_singlepoint` (`E6broute`: `MAPPED` canonical padded buckets + `LEGACY_COMPOSED` fallback) | Heterogeneous padded molecule batches (`batch_mode=1`, including trailing and non-contiguous zero padding) and explicit conformer batches (`batch_mode=2`) |
+| **Batched `Calculator`** (`batch_mode=1` or `batch_mode=2`) | `numbers: (B, Nmax)`, `positions: (B, Nmax, 3)` | `Calculator.singlepoint` -> `evaluate_calculator_packed_singlepoint` (grouped `vmap` for lanes sharing one System + independent single-System evaluation; see [`grouped-vmap-batching.md`](grouped-vmap-batching.md)) | Heterogeneous padded molecule batches (`batch_mode=1`, including trailing and non-contiguous zero padding) and explicit conformer batches (`batch_mode=2`) |
 | **Functional `torch.vmap`** | `system = model.setup(numbers)` (`(N,)`), `positions: (B, N, 3)` | `torch.vmap(system.singlepoint)`, `torch.vmap(system.energy)`, `torch.vmap(system.forces)` | Vectorized same-composition conformer evaluation and composed `torch.func` transforms |
 
 Within a single `evaluate_calculator_packed_singlepoint` call, `build_calculator_lane_systems(calc)` deduplicates identical unpadded lane compositions in a call-local dictionary so conformer batches (`batch_mode=2`) and repeated compositions in `batch_mode=1` invoke `Model.setup(..., batch_mode=0)` only once per unique composition per call.
@@ -53,7 +53,7 @@ Both batched `Calculator` methods (`singlepoint`, `energy`, `forces`, `dipole`, 
   - Per-lane `Tensor` of shape `(B, 3, 3)` (rank 3, including `(3, 3, 3)` when `B == 3`): sliced per lane `field_grad[i]`.
   - `Sequence[Tensor | None]` of length `B`: per-lane optional `(3, 3)` tensors.
 
-In `evaluate_packed_systems`, `MAPPED` bucket grouping includes `(lane_fields[i] is not None, lane_field_grads[i] is not None)` in the bucket key and passes either a shared tensor or a stacked `(B_bucket, ...)` tensor to `evaluate_padded_systems`.
+In `evaluate_packed_systems`, `group_lanes` keys mapped groups by System identity and by `(spin, field, field_grad)` presence. Within a group the per-lane tensors are stacked (a shared tensor is stacked as repeated references, so its gradient accumulates over lanes) and mapped over `system_singlepoint`.
 
 ---
 

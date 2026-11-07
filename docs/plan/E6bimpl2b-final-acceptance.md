@@ -1,5 +1,10 @@
 # E6bimpl.2b-F — mixed GFN2 final acceptance
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: **E6bimpl.2b complete at the private GFN2 numerical boundary; overall
 E6bimpl remains open.**
 

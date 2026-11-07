@@ -1,5 +1,10 @@
 # E6bimpl.2c — Final mixed-System numerical acceptance
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 **Status:** private PyTorch numerical implementation **COMPLETE**; overall
 E6bimpl **OPEN** for the policy-assigned compatibility composition listed
 below.

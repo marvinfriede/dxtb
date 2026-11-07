@@ -1,5 +1,10 @@
 # E6bimpl.2a — GFN2 canonical numerical setup
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 Status: **complete at the canonical setup and integral/H0 boundary**. Full
 mixed-GFN2 SCF, interaction evaluation, and public Calculator batching remain
 open and belong to later packages.

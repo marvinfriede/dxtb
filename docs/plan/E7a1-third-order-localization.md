@@ -1,5 +1,10 @@
 # E7a.1 — Third-order derivative localization and correction
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 ## Scope and baseline
 
 - Starting SHA: `6b95898d8efdd8ca0431ee75670f4b683f6097bc`.

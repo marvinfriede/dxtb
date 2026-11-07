@@ -43,6 +43,7 @@ API.
 | `28-scf-s11-differentiation-hardening.md` | Decouples certified-root response coordinates from primal strategy history and validates first-, second-, and third-order implicit response |
 | `29-scf-s12-transform-performance-hardening.md` | Records fixed-trip and vmap support boundaries, state isolation, compilation characterization, and performance evidence |
 | `30-scf-s13-defaults-api-closure.md` | Freezes the benchmark-backed default candidate, public strategy/differentiation vocabulary, convergence profiles, and remaining support boundaries |
+| `grouped-vmap-batching.md` | Current heterogeneous batching architecture: lanes sharing one System are vmapped, all others run independently, only the final Result is padded; replaces canonical cross-composition padding |
 
 The SCF redesign is complete through S13. The final integrated gate and public
 API closure are recorded in `30-scf-s13-defaults-api-closure.md`; later

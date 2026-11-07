@@ -1,5 +1,10 @@
 # E7a — batch-critical padding safety
 
+> **Historical.** This document describes the canonical cross-composition
+> padding route (or its acceptance), which was removed in favor of
+> grouped-vmap batching. Code and tests named here may no longer exist.
+> See [`grouped-vmap-batching.md`](grouped-vmap-batching.md).
+
 **Status: OPEN.** The first-order value, masking, and derivative selection
 passes in all five supported CPU environments. E7a cannot close because the
 new full-energy third-directional derivative comparison disagrees between
