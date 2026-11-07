@@ -190,6 +190,7 @@ def pytest_runtest_setup(item: pytest.Function) -> None:
 LAYER_MARKERS: dict[str, tuple[str, ...]] = {
     "test_a_memory_leak": ("api_calculator", "cache"),
     "test_baseline": ("baseline",),
+    "test_baseline/test_tblite_live.py": ("tblite", "physics_values"),
     "test_basis": ("integrals",),
     "test_calculator": ("api_calculator",),
     "test_calculator/test_cache": ("api_calculator", "cache"),
@@ -201,6 +202,7 @@ LAYER_MARKERS: dict[str, tuple[str, ...]] = {
     "test_external": ("efield",),
     "test_hamiltonian": ("integrals", "physics_values"),
     "test_integrals": ("integrals",),
+    "test_integrals/test_tblite_reference.py": ("integrals", "tblite"),
     "test_interaction": ("physics_values",),
     "test_interaction/test_cache.py": ("cache",),
     "test_io": ("api_calculator",),

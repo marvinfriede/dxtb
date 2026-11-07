@@ -36,6 +36,7 @@ markers = [
   "scf: Exercises the SCF drivers, mixers or electronic solvers.",
   "param: Exercises the parametrization (Param, ParamModule, loaders).",
   "physics_values: Compares computed values against reference numbers.",
+  "tblite: Compares computed values against live tblite reference calculations.",
 ]
 
 
