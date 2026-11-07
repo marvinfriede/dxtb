@@ -192,7 +192,12 @@ single `gc.collect()`; the automatic collector ran 102/9/1 generation
 collections during that call. The test flags unreachable cyclic garbage
 whose collection time depends on process history (here: which test modules
 were imported during collection). It is not retained memory and not a
-regression. Repeated grouped evaluation (H2O conformer group; H2O + CH4 +
+regression. The final hardening broad run (`88e812d6`, same command) no
+longer fails `test_functional_implicit` (the collection set changed) and
+still fails `test_functional_implicit_energy`; replaying its worker history
+(gw0, 372 predecessors) at the final revision shows the same signature:
+two flat repeats, then +14 0-d `bool` tensors that a single `gc.collect()`
+reclaims. Repeated grouped evaluation (H2O conformer group; H2O + CH4 +
 H2O mixed batch; energy, forces, forces with `create_graph=True`) reaches a
 plateau on both revisions; without `gc` the mixed energy case holds a
 constant +112 tensors of uncollected garbage. The new

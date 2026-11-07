@@ -70,7 +70,10 @@ _HOST_CONVERSIONS = ("item", "tolist", "__bool__", "__int__", "__float__")
 def _count_host_conversions() -> Iterator[Counter]:
     """Count Python-level tensor-to-host conversions inside the block."""
     counter: Counter = Counter()
-    originals = {name: getattr(torch.Tensor, name) for name in _HOST_CONVERSIONS}
+    originals = {
+        name: getattr(torch.Tensor, name) for name in _HOST_CONVERSIONS
+    }
+    own = {name for name in _HOST_CONVERSIONS if name in vars(torch.Tensor)}
 
     def _wrap(name: str, original: Callable) -> Callable:
         def wrapper(self, *args, **kwargs):
@@ -85,7 +88,10 @@ def _count_host_conversions() -> Iterator[Counter]:
         yield counter
     finally:
         for name, original in originals.items():
-            setattr(torch.Tensor, name, original)
+            if name in own:
+                setattr(torch.Tensor, name, original)
+            else:
+                delattr(torch.Tensor, name)
 
 
 def _old_dedup_partition(calc) -> list[int]:
@@ -279,7 +285,9 @@ def test_group_electron_validation_reports_first_invalid_source_lane() -> None:
 
     with pytest.raises(ValueError) as reference:
         lane_evaluation._validate_electrons(
-            system, torch.tensor(1.0, dtype=DTYPE), torch.tensor(0.0, dtype=DTYPE)
+            system,
+            torch.tensor(1.0, dtype=DTYPE),
+            torch.tensor(0.0, dtype=DTYPE),
         )
     assert str(excinfo.value) == str(reference.value)
 
@@ -390,7 +398,9 @@ def test_group_status_inspection_is_one_host_decision() -> None:
     assert counts[0].get("tolist", 0) == 1
 
 
-def test_mapped_dispatch_host_conversions_do_not_scale_with_group_size() -> None:
+def test_mapped_dispatch_host_conversions_do_not_scale_with_group_size() -> (
+    None
+):
     """Public conformer batches: structural host decisions are O(1) in B."""
     counts = []
     for batch in (2, 6):
@@ -428,9 +438,7 @@ def test_packing_places_prefix_and_noncontiguous_atoms_with_gradients() -> None:
     results = _lane_results()
     target = 7
     masks = _masks(target)
-    leaves = [
-        r.energy.detach().clone().requires_grad_(True) for r in results
-    ]
+    leaves = [r.energy.detach().clone().requires_grad_(True) for r in results]
     dipoles = [
         torch.randn((r.energy.shape[-1], 3), dtype=DTYPE, requires_grad=True)
         for r in results
