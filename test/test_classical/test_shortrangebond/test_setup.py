@@ -90,19 +90,25 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     assert setup.r0.shape == numbers.shape
     assert setup.cnfak.shape == numbers.shape
     assert setup.en.shape == numbers.shape
+    assert isinstance(setup.cn_cutoff, float)
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
     assert type(rebuilt) is ShortRangeBondCoreSetup
+    assert rebuilt.cn_cutoff == setup.cn_cutoff
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
     assert converted.r0.dtype == torch.float32
     assert converted.numbers.dtype == numbers.dtype
+    assert converted.cn_cutoff == setup.cn_cutoff
     meta = setup.to(device="meta")
     assert meta.r0.device.type == "meta"
     assert meta.numbers.dtype == numbers.dtype
     stacked = stack((setup, setup))
     assert type(stacked) is ShortRangeBondCoreSetup
     assert stacked.r0.shape[0] == 2
+    assert stacked.cn_cutoff == setup.cn_cutoff
+    with pytest.raises(ValueError, match="different structure"):
+        stack((setup, setup.replace(cn_cutoff=setup.cn_cutoff + 1.0)))
     with pytest.raises(FrozenInstanceError):
         setup.prefactor = torch.ones_like(setup.prefactor)  # type: ignore[misc]
 

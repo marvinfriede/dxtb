@@ -37,7 +37,6 @@ from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
-from dxtb._src.utils.tensors import cn_cutoff_value
 
 from ..base import Classical, ComponentCache
 
@@ -54,6 +53,22 @@ __all__ = [
 
 LABEL_SRB = "ShortRangeBond"
 """Label for the :class:`.ShortRangeBond` component."""
+
+
+def _resolve_cn_cutoff(cutoff: Tensor | float | int) -> float:
+    """Resolve an SRB coordination-number cutoff to a static Python float."""
+    if isinstance(cutoff, Tensor):
+        if cutoff.ndim != 0 and cutoff.numel() != 1:
+            raise ValueError(
+                "SRB coordination-number cutoff must be a scalar value."
+            )
+        return float(cutoff.detach())
+    if isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool):
+        return float(cutoff)
+    raise TypeError(
+        "SRB coordination-number cutoff must be a scalar float or Tensor, "
+        f"got {type(cutoff).__name__}."
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -73,7 +88,7 @@ class ShortRangeBondSetup:
     enscale: Tensor
     enpoly: Tensor
     pair_cutoff2: Tensor
-    cn_cutoff: Tensor
+    cn_cutoff: float
     cn_max: Tensor
     cn_kcn: Tensor
 
@@ -88,13 +103,13 @@ class ShortRangeBondCoreSetup(Node):
     pauling: Tensor = child()
     rcov: Tensor = child()
     counting_function: CountingFunction = context()
+    cn_cutoff: float = context()
     shift: Tensor = child()
     prefactor: Tensor = child()
     steepness: Tensor = child()
     enscale: Tensor = child()
     enpoly: Tensor = child()
     pair_cutoff2: Tensor = child()
-    cn_cutoff: Tensor = child()
     cn_max: Tensor = child()
     cn_kcn: Tensor = child()
 
@@ -111,13 +126,13 @@ def core_srb_setup(
         pauling=setup.pauling,
         rcov=setup.rcov,
         counting_function=setup.counting_function,
+        cn_cutoff=_resolve_cn_cutoff(setup.cn_cutoff),
         shift=setup.shift,
         prefactor=setup.prefactor,
         steepness=setup.steepness,
         enscale=setup.enscale,
         enpoly=setup.enpoly,
         pair_cutoff2=setup.pair_cutoff2,
-        cn_cutoff=setup.cn_cutoff,
         cn_max=setup.cn_max,
         cn_kcn=setup.cn_kcn,
     )
@@ -147,7 +162,7 @@ def setup_srb(
         enscale=clone(component.enscale),
         enpoly=clone(component.enpoly),
         pair_cutoff2=clone(component.pair_cutoff2),
-        cn_cutoff=clone(component.cn_cutoff),
+        cn_cutoff=_resolve_cn_cutoff(component.cn_cutoff),
         cn_max=clone(component.cn_max),
         cn_kcn=clone(component.cn_kcn),
     )
@@ -157,9 +172,14 @@ def short_range_bond_energy(
     setup: ShortRangeBondSetup | ShortRangeBondCoreSetup, positions: Tensor
 ) -> Tensor:
     """Evaluate the atom-partitioned SRB energy from setup and positions."""
+    cutoff = (
+        setup.cn_cutoff
+        if isinstance(setup.cn_cutoff, float)
+        else _resolve_cn_cutoff(setup.cn_cutoff)
+    )
     cn_model = CNModel(
         count=partial(setup.counting_function, kcn=setup.cn_kcn),
-        cutoff=cn_cutoff_value(setup.cn_cutoff),
+        cutoff=cutoff,
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )

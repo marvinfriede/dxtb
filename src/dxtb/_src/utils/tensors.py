@@ -27,14 +27,11 @@ import weakref
 from typing import Optional, Tuple
 
 import torch
-from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.autograd.checks import is_gradtracking
-from tad_mctc.tools import is_compiling
 
 from dxtb._src.typing import Tensor
 
 __all__ = [
-    "cn_cutoff_value",
     "is_batched",
     "structure_charge",
     "t2int",
@@ -80,26 +77,6 @@ def structure_charge(charge: Tensor, numbers: Tensor) -> Tensor:
     if charge.ndim >= numbers.ndim:
         return charge.reshape(numbers.shape[:-1])
     return charge
-
-
-def cn_cutoff_value(cutoff: Tensor | float | int) -> float:
-    """
-    Resolve a real-space coordination-number cutoff for ``tad_mctc.ncoord.CNModel``
-    across eager execution, ``torch.func`` transforms, and ``torch.compile``.
-    """
-    if not isinstance(cutoff, Tensor):
-        return float(cutoff)
-    if is_compiling():
-        return cutoff  # type: ignore[return-value]
-    unwrapped = cutoff.detach()
-    while is_functorch_tensor(unwrapped):
-        unwrapped = torch._C._functorch.get_unwrapped(unwrapped)
-    flat = unwrapped.reshape(-1)
-    if flat.numel() > 1 and not bool((flat == flat[0]).all()):
-        raise ValueError(
-            "Batched CNModel evaluation requires a uniform cutoff across batch lanes."
-        )
-    return float(flat[0])
 
 
 def tensor_id(x: Tensor) -> str:

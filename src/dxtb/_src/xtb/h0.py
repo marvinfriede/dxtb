@@ -37,9 +37,27 @@ from tad_mctc.ncoord import (
     gfn2_count,
 )
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
+from dxtb._src.utils.tensors import structure_charge
 
 PAD = -1
+
+
+def _resolve_cn_cutoff(cutoff: Tensor | float | int | None) -> float | None:
+    """Resolve an optional coordination-number cutoff to a static Python float."""
+    if cutoff is None:
+        return None
+    if isinstance(cutoff, Tensor):
+        if cutoff.ndim != 0 and cutoff.numel() != 1:
+            raise ValueError(
+                "H0 coordination-number cutoff must be a scalar value."
+            )
+        return float(cutoff.detach())
+    if isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool):
+        return float(cutoff)
+    raise TypeError(
+        "H0 coordination-number cutoff must be a scalar float or Tensor, "
+        f"got {type(cutoff).__name__}."
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -69,7 +87,7 @@ class H0Setup:
     enscale4: Tensor | None = None
     eeq_model: EEQModel | None = None
     cn_radii: Tensor | None = None
-    cn_cutoff: Tensor | None = None
+    cn_cutoff: float | None = None
     cn_max: Tensor | None = None
     cn_kcn: Tensor | None = None
 
@@ -97,7 +115,6 @@ class H0Setup:
             "enshell",
             "enscale4",
             "cn_radii",
-            "cn_cutoff",
             "cn_max",
             "cn_kcn",
         ):
@@ -105,6 +122,7 @@ class H0Setup:
             values[name] = (
                 None if value is None else value.to(device=device, dtype=dtype)
             )
+        values["cn_cutoff"] = _resolve_cn_cutoff(self.cn_cutoff)
         values["numbers"] = self.numbers.to(device=device)
         values["unique"] = self.unique.to(device=device)
         values["valence"] = self.valence.to(device=device)
@@ -124,6 +142,7 @@ class H0SetupNode(Node):
 
     method: str = context()
     cn_kind: str = context()
+    cn_cutoff: float | None = context(default=None)
 
     numbers: Tensor = child(keep_dtype=True)
     unique: Tensor = child(keep_dtype=True)
@@ -145,7 +164,6 @@ class H0SetupNode(Node):
     enscale4: Tensor | None = child()
     eeq_model: EEQModel | None = child()
     cn_radii: Tensor | None = child()
-    cn_cutoff: Tensor | None = child()
     cn_max: Tensor | None = child()
     cn_kcn: Tensor | None = child()
 
@@ -238,6 +256,7 @@ def core_h0_setup(setup: H0Setup) -> H0SetupNode:
     return H0SetupNode(
         method=setup.method,
         cn_kind=cn_kind,
+        cn_cutoff=_resolve_cn_cutoff(setup.cn_cutoff),
         numbers=setup.numbers.clone(),
         unique=setup.unique.clone(),
         hscale=setup.hscale.clone(),
@@ -258,7 +277,6 @@ def core_h0_setup(setup: H0Setup) -> H0SetupNode:
         enscale4=clone(setup.enscale4),
         eeq_model=eeq_model,
         cn_radii=clone(setup.cn_radii),
-        cn_cutoff=clone(setup.cn_cutoff),
         cn_max=clone(setup.cn_max),
         cn_kcn=clone(setup.cn_kcn),
     )
@@ -471,7 +489,7 @@ def setup_h0(
             "enscale4": par.get("hamiltonian.xtb.enscale4"),
             "eeq_model": eeq,
             "cn_radii": radii.COV_D3(**dd),
-            "cn_cutoff": par.get("eeq.cutoff"),
+            "cn_cutoff": _resolve_cn_cutoff(par.get("eeq.cutoff")),
             "cn_max": par.get("eeq.cn_max"),
             "cn_kcn": par.get("eeq.kcn"),
         }
@@ -552,9 +570,15 @@ def _build_hcore(
             positions=positions,
             charge=structure_charge(total_charge, numbers),
         )
+        cutoff = (
+            setup.cn_cutoff
+            if isinstance(setup.cn_cutoff, float)
+            else _resolve_cn_cutoff(setup.cn_cutoff)
+        )
+        assert cutoff is not None
         cn_model = CNModel(
             count=partial(erf_count, kcn=setup.cn_kcn),
-            cutoff=cn_cutoff_value(setup.cn_cutoff),
+            cutoff=cutoff,
             cn_max=setup.cn_max,
             rcov=setup.cn_radii,
         )

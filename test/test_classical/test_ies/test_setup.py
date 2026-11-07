@@ -85,7 +85,8 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
         "cn_kcn",
     }
     assert type(setup.eeq) is EEQModel
-    for name in ("numbers", "rcov", "cutoff", "cn_max", "cn_kcn"):
+    assert isinstance(setup.cutoff, float)
+    for name in ("numbers", "rcov", "cn_max", "cn_kcn"):
         assert isinstance(getattr(setup, name), torch.Tensor)
     assert not any(
         isinstance(getattr(setup, field.name), (ParamModule, Model, IES))
@@ -94,16 +95,21 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
     assert type(rebuilt) is IESCoreSetup
+    assert rebuilt.cutoff == setup.cutoff
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
     assert converted.eeq.chi.dtype == torch.float32
     assert converted.numbers.dtype == numbers.dtype
+    assert converted.cutoff == setup.cutoff
     meta = setup.to(device=torch.device("meta"))
     assert meta.numbers.device.type == "meta"
     assert meta.eeq.chi.device.type == "meta"
     stacked = stack((setup, setup))
     assert type(stacked) is IESCoreSetup
     assert stacked.eeq.chi.shape[0] == 2
+    assert stacked.cutoff == setup.cutoff
+    with pytest.raises(ValueError, match="different structure"):
+        stack((setup, setup.replace(cutoff=setup.cutoff + 1.0)))
 
     legacy1 = system.ies_classical.get_cache(numbers)
     legacy2 = system.ies_classical.get_cache(numbers)
@@ -114,7 +120,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     assert not hasattr(system.ies_classical, "cache")
     assert not hasattr(system.ies_classical, "_cachevars")
     with pytest.raises(FrozenInstanceError):
-        setup.cutoff = torch.tensor(1.0, **DD)  # type: ignore[misc]
+        setup.cutoff = 1.0  # type: ignore[misc]
 
 
 def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
@@ -128,7 +134,7 @@ def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
     structure = Structure(numbers=numbers, positions=positions, charge=charge)
     cn = CNModel(
         count=partial(erf_count, kcn=setup.cn_kcn),
-        cutoff=float(setup.cutoff),
+        cutoff=setup.cutoff,
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )(structure)
@@ -391,7 +397,8 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
     assert system.ies_classical is custom
     assert type(system.ies_setup) is IESCoreSetup
     assert system.classical_cache["IES"] is system.ies_setup
-    torch.testing.assert_close(system.ies_setup.cutoff, custom.cutoff)
+    assert isinstance(system.ies_setup.cutoff, float)
+    assert system.ies_setup.cutoff == pytest.approx(float(custom.cutoff))
     energy = _energy(system, positions)
     assert not torch.isclose(
         energy,

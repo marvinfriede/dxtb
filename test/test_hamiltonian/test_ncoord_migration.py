@@ -127,11 +127,19 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
         assert core.cn_kind == expected_kind
         ham = cls(numbers, par, ihelp, dtype=positions.dtype)
         assert isinstance(ham.cn, CNModel)
+        assert isinstance(ham.cn.cutoff, float)
         if method == "gfn0":
+            assert isinstance(legacy.cn_cutoff, float)
+            assert isinstance(core.cn_cutoff, float)
+            assert isinstance(ham.cn_cutoff, float)
             cn_val = ham.get_coordination_number(positions)
             cn_ref = ham.cn(Structure(numbers=numbers, positions=positions))
             torch.testing.assert_close(cn_val, cn_ref, rtol=1e-12, atol=1e-13)
+            with pytest.raises(ValueError, match="different structure"):
+                stack((core, core.replace(cn_cutoff=core.cn_cutoff + 1.0)))
         else:
+            assert legacy.cn_cutoff is None
+            assert core.cn_cutoff is None
             equivalent = replace(
                 legacy, cn=expected_cn.replace(cutoff=expected_cn.cutoff)
             )
@@ -262,6 +270,8 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
     )
 
     # Stacked setup vmap for IES and SRB
+    assert isinstance(gfn0_sys.ies_setup.cutoff, float)
+    assert isinstance(gfn0_sys.srb_setup.cn_cutoff, float)
     stacked_ies = stack((gfn0_sys.ies_setup, gfn0_sys.ies_setup))
     stacked_srb = stack((gfn0_sys.srb_setup, gfn0_sys.srb_setup))
     e_ies_vmap = vmap(ies_energy)(
@@ -271,16 +281,24 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
     torch.testing.assert_close(e_ies_vmap, e_ies, rtol=1e-12, atol=1e-13)
     torch.testing.assert_close(e_srb_vmap, e_srb, rtol=1e-12, atol=1e-13)
 
-    mismatched_srb = stack(
-        (
-            gfn0_sys.srb_setup,
-            gfn0_sys.srb_setup.replace(
-                cn_cutoff=gfn0_sys.srb_setup.cn_cutoff + 1.0
-            ),
+    with pytest.raises(ValueError, match="different structure"):
+        stack(
+            (
+                gfn0_sys.ies_setup,
+                gfn0_sys.ies_setup.replace(
+                    cutoff=gfn0_sys.ies_setup.cutoff + 1.0
+                ),
+            )
         )
-    )
-    with pytest.raises(ValueError, match="uniform cutoff"):
-        vmap(short_range_bond_energy)(mismatched_srb, batched_no2)
+    with pytest.raises(ValueError, match="different structure"):
+        stack(
+            (
+                gfn0_sys.srb_setup,
+                gfn0_sys.srb_setup.replace(
+                    cn_cutoff=gfn0_sys.srb_setup.cn_cutoff + 1.0
+                ),
+            )
+        )
 
     # Check AES2 and D4 (GFN2) with non-uniform batched displacement
     lih_num = samples["LiH"]["numbers"].to(device="cpu")
@@ -432,12 +450,15 @@ def test_d4_custom_counting_function_changes_cn_and_matches_reference() -> None:
 
 
 def test_cn_model_callers_compile_fullgraph() -> None:
-    """GFN0/1/2 H0, IES, and SRB CNModel constructions compile with fullgraph=True."""
+    """GFN0/1/2 H0, IES, and SRB CNModel constructions compile and compose with vmap."""
+    from torch.func import grad, jacfwd, jacrev, jvp
+
     torch._dynamo.reset()
     numbers = samples["NO2"]["numbers"].to(device="cpu")
     positions = samples["NO2"]["positions"].to(
         device="cpu", dtype=torch.float64
     )
+    batched_pos = torch.stack((positions, positions + _DISP3), dim=0)
 
     for method in ("gfn0", "gfn1", "gfn2"):
         par = ParamModule(
@@ -462,10 +483,30 @@ def test_cn_model_callers_compile_fullgraph() -> None:
         torch.testing.assert_close(comp_h, eager_h, rtol=1e-12, atol=1e-13)
         torch.testing.assert_close(comp_occ, eager_occ, rtol=1e-12, atol=1e-13)
 
-    gfn0_sys = Model(
+        stacked_core = stack((core, core))
+        eager_vmap_h = vmap(
+            lambda s, p: build_hcore(
+                s, p, overlap, charge=chrg, ihelp=ihelp
+            )[0]
+        )(stacked_core, batched_pos)
+        compiled_vmap_h0 = torch.compile(
+            vmap(
+                lambda s, p: build_hcore(
+                    s, p, overlap, charge=chrg, ihelp=ihelp
+                )[0]
+            ),
+            fullgraph=True,
+        )
+        comp_vmap_h = compiled_vmap_h0(stacked_core, batched_pos)
+        torch.testing.assert_close(
+            comp_vmap_h, eager_vmap_h, rtol=1e-12, atol=1e-13
+        )
+
+    gfn0_model = Model(
         par=ParamModule(GFN0_XTB.model_copy(deep=True), dtype=torch.float64),
         config=Config.create(exclude="scf"),
-    ).setup(numbers)
+    )
+    gfn0_sys = gfn0_model.setup(numbers)
     assert gfn0_sys.ies_setup is not None and gfn0_sys.srb_setup is not None
 
     charge_zero = torch.tensor(0.0, dtype=torch.float64)
@@ -475,8 +516,59 @@ def test_cn_model_callers_compile_fullgraph() -> None:
     )
     torch.testing.assert_close(comp_ies, eager_ies, rtol=1e-12, atol=1e-13)
 
+    stacked_ies = stack((gfn0_sys.ies_setup, gfn0_sys.ies_setup))
+    charges_batch = torch.zeros(2, dtype=torch.float64)
+    eager_vmap_ies = vmap(ies_energy)(stacked_ies, batched_pos, charges_batch)
+    comp_vmap_ies = torch.compile(vmap(ies_energy), fullgraph=True)(
+        stacked_ies, batched_pos, charges_batch
+    )
+    torch.testing.assert_close(
+        comp_vmap_ies, eager_vmap_ies, rtol=1e-12, atol=1e-13
+    )
+
     eager_srb = short_range_bond_energy(gfn0_sys.srb_setup, positions)
     comp_srb = torch.compile(short_range_bond_energy, fullgraph=True)(
         gfn0_sys.srb_setup, positions
     )
     torch.testing.assert_close(comp_srb, eager_srb, rtol=1e-12, atol=1e-13)
+
+    stacked_srb = stack((gfn0_sys.srb_setup, gfn0_sys.srb_setup))
+    eager_vmap_srb = vmap(short_range_bond_energy)(stacked_srb, batched_pos)
+    comp_vmap_srb = torch.compile(
+        vmap(short_range_bond_energy), fullgraph=True
+    )(stacked_srb, batched_pos)
+    torch.testing.assert_close(
+        comp_vmap_srb, eager_vmap_srb, rtol=1e-12, atol=1e-13
+    )
+
+    # Setup creation under differentiation transforms (grad, jvp, jacfwd, jacrev)
+    base_tree = gfn0_model.parameter_tree
+    srb_key = "parameter_tree.short_range.srb.prefactor.param"
+    base_prefactor = base_tree.parameters.params[srb_key]
+
+    def functional_gfn0_classical(prefactor_val: torch.Tensor) -> torch.Tensor:
+        updated = dict(base_tree.parameters.params)
+        updated[srb_key] = prefactor_val
+        tree = base_tree.replace(
+            parameters=base_tree.parameters.replace(params=updated)
+        )
+        sys = gfn0_model.setup_functional(numbers, tree)
+        assert sys.h0_setup is not None
+        assert sys.ies_setup is not None and sys.srb_setup is not None
+        assert isinstance(sys.h0_setup.cn_cutoff, float)
+        assert isinstance(sys.ies_setup.cutoff, float)
+        assert isinstance(sys.srb_setup.cn_cutoff, float)
+        return short_range_bond_energy(sys.srb_setup, positions).sum()
+
+    g_grad = grad(functional_gfn0_classical)(base_prefactor)
+    _, g_jvp = jvp(
+        functional_gfn0_classical,
+        (base_prefactor,),
+        (torch.ones_like(base_prefactor),),
+    )
+    g_jacfwd = jacfwd(functional_gfn0_classical)(base_prefactor)
+    g_jacrev = jacrev(functional_gfn0_classical)(base_prefactor)
+    assert torch.isfinite(g_grad) and g_grad.abs() > 0
+    torch.testing.assert_close(g_grad, g_jvp, rtol=1e-12, atol=1e-13)
+    torch.testing.assert_close(g_grad, g_jacfwd, rtol=1e-12, atol=1e-13)
+    torch.testing.assert_close(g_grad, g_jacrev, rtol=1e-12, atol=1e-13)

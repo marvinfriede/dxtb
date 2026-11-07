@@ -36,10 +36,10 @@ from dxtb._src.components.interactions import Potential
 from tad_mctc.ncoord import CNModel, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
-from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
+from dxtb._src.utils.tensors import structure_charge
 
 from .base import PAD, BaseHamiltonian
-from .h0 import build_hcore, build_hcore_raw, gather_hscale
+from .h0 import _resolve_cn_cutoff, build_hcore, build_hcore_raw, gather_hscale
 
 __all__ = ["GFN0Hamiltonian"]
 
@@ -68,6 +68,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
         assert setup.h0rad is not None and setup.kdiff is not None
         assert setup.enshell is not None and setup.enscale4 is not None
         assert setup.eeq_model is not None and setup.cn_radii is not None
+        assert setup.cn_cutoff is not None
         self.kq = setup.kq
         self.kqat = setup.kqat
         self.h0rad = setup.h0rad
@@ -76,7 +77,9 @@ class GFN0Hamiltonian(BaseHamiltonian):
         self.enscale4 = setup.enscale4
         self.eeq_model = setup.eeq_model
         self.cn_radii = setup.cn_radii
-        self.cn_cutoff = setup.cn_cutoff
+        cutoff = _resolve_cn_cutoff(setup.cn_cutoff)
+        assert cutoff is not None
+        self.cn_cutoff = cutoff
         self.cn_max = setup.cn_max
         self.cn_kcn = setup.cn_kcn
         self._set_cn_callable()
@@ -85,7 +88,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
         """Configure the local GFN0 coordination-number model."""
         self.cn = CNModel(
             count=partial(erf_count, kcn=self.cn_kcn),
-            cutoff=cn_cutoff_value(self.cn_cutoff),
+            cutoff=self.cn_cutoff,
             cn_max=self.cn_max,
             rcov=self.cn_radii,
         )
@@ -121,7 +124,6 @@ class GFN0Hamiltonian(BaseHamiltonian):
             "enshell",
             "enscale4",
             "cn_radii",
-            "cn_cutoff",
             "cn_max",
             "cn_kcn",
         )
@@ -132,6 +134,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
                 name,
                 value.to(device=target_device, dtype=target_dtype),
             )
+        new.cn_cutoff = self.cn_cutoff
 
         model = self.eeq_model
         new.eeq_model = EEQModel(

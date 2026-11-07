@@ -32,13 +32,13 @@ import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.ncoord import CNModel, erf_count
-from tad_mctc.tree import Node, child
+from tad_mctc.tree import Node, child, context
 from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Tensor, override
-from dxtb._src.utils.tensors import cn_cutoff_value, structure_charge
+from dxtb._src.utils.tensors import structure_charge
 
 from ..base import Classical
 
@@ -57,6 +57,22 @@ LABEL_IES = "IES"
 """Label for the :class:`.IES` component, coinciding with the class name."""
 
 
+def _resolve_cutoff(cutoff: Tensor | float | int) -> float:
+    """Resolve an IES coordination-number cutoff to a static Python float."""
+    if isinstance(cutoff, Tensor):
+        if cutoff.ndim != 0 and cutoff.numel() != 1:
+            raise ValueError(
+                "IES coordination-number cutoff must be a scalar value."
+            )
+        return float(cutoff.detach())
+    if isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool):
+        return float(cutoff)
+    raise TypeError(
+        "IES coordination-number cutoff must be a scalar float or Tensor, "
+        f"got {type(cutoff).__name__}."
+    )
+
+
 @dataclass(frozen=True, eq=False)
 class IESSetup:
     """Frozen numbers/parameter data for one IES term.
@@ -70,7 +86,7 @@ class IESSetup:
     numbers: Tensor
     eeq: EEQModel
     rcov: Tensor
-    cutoff: Tensor
+    cutoff: float
     cn_max: Tensor
     cn_kcn: Tensor
 
@@ -81,7 +97,7 @@ class IESCoreSetup(Node):
     numbers: Tensor = child(keep_dtype=True)
     eeq: EEQModel = child()
     rcov: Tensor = child()
-    cutoff: Tensor = child()
+    cutoff: float = context()
     cn_max: Tensor = child()
     cn_kcn: Tensor = child()
 
@@ -92,7 +108,7 @@ def core_ies_setup(setup: IESSetup) -> IESCoreSetup:
         numbers=setup.numbers,
         eeq=setup.eeq,
         rcov=setup.rcov,
-        cutoff=setup.cutoff,
+        cutoff=_resolve_cutoff(setup.cutoff),
         cn_max=setup.cn_max,
         cn_kcn=setup.cn_kcn,
     )
@@ -111,7 +127,7 @@ def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
         numbers=numbers,
         eeq=eeq,
         rcov=ies.rcov.clone(),
-        cutoff=ies.cutoff.clone(),
+        cutoff=_resolve_cutoff(ies.cutoff),
         cn_max=ies.cn_max.clone(),
         cn_kcn=ies.cn_kcn.clone(),
     )
@@ -141,9 +157,14 @@ def ies_energy(
         positions=positions,
         charge=structure_charge(total_charge, numbers),
     )
+    cutoff = (
+        setup.cutoff
+        if isinstance(setup.cutoff, float)
+        else _resolve_cutoff(setup.cutoff)
+    )
     cn_model = CNModel(
         count=partial(erf_count, kcn=setup.cn_kcn),
-        cutoff=cn_cutoff_value(setup.cutoff),
+        cutoff=cutoff,
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )

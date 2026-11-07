@@ -103,6 +103,12 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
     assert type(rebuilt) is H0SetupNode
     assert rebuilt.method == core.method
     assert rebuilt.cn_kind == core.cn_kind
+    assert rebuilt.cn_cutoff == core.cn_cutoff
+    assert core.cn_cutoff == legacy.cn_cutoff
+    if method == "gfn0":
+        assert isinstance(core.cn_cutoff, float)
+    else:
+        assert core.cn_cutoff is None
 
     outer_tensor_fields = (
         "numbers",
@@ -124,7 +130,6 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
         "enshell",
         "enscale4",
         "cn_radii",
-        "cn_cutoff",
         "cn_max",
         "cn_kcn",
     )
@@ -145,6 +150,7 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
     assert converted.refocc.dtype == torch.float32
     assert core.hscale.dtype == torch.float64
     assert converted.cn_kind == core.cn_kind
+    assert converted.cn_cutoff == core.cn_cutoff
     if core.eeq_model is not None:
         assert converted.eeq_model is not core.eeq_model
         assert converted.eeq_model.chi.dtype == torch.float32
