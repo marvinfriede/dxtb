@@ -384,7 +384,7 @@ class GeneralizedBorn(Interaction):
         numbers: Tensor,
         dielectric_constant: Tensor | float | int,
         alpb: bool = DEFAULT_ALPB,
-        kernel: str = DEFAULT_KERNEL,
+        kernel: str | None = None,
         born_scale: float | Tensor = DEFAULT_BORN_SCALE,
         born_offset: float | Tensor = DEFAULT_BORN_OFFSET,
         device: torch.device | None = None,
@@ -401,7 +401,9 @@ class GeneralizedBorn(Interaction):
             else torch.tensor(0.0, **self.dd)
         )
         self.keps = (1 / dielectric_constant - 1) / (1 + self.alpbet)
-        self.kernel = kernel
+        self.kernel = (
+            kernel if kernel is not None else ("p16" if alpb else "still")
+        )
 
         self.born_kwargs = {
             "rvdw": any_to_tensor(
@@ -548,7 +550,11 @@ def new_solvation(
         numbers,
         dielectric_constant=any_to_tensor(dielectric_constant, **dd),
         alpb=par.get("solvation.alpb.alpb"),
-        kernel=par.get("solvation.alpb.kernel"),
+        kernel=(
+            None
+            if par.is_none("solvation.alpb.kernel")
+            else par.get("solvation.alpb.kernel")
+        ),
         born_scale=par.get("solvation.alpb.born_scale"),
         born_offset=par.get("solvation.alpb.born_offset"),
         **dd,

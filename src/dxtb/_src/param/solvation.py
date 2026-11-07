@@ -39,7 +39,7 @@ class PSolvationALPB(BaseModel):
     alpb: bool
     """Use analytical linearized Poisson-Boltzmann model."""
 
-    kernel: str
+    kernel: Optional[str] = None
     """
     Born interaction kernels. Either classical Still kernel or P16 kernel
     by Lange (JCTC 2012, 8, 1999-2011).
