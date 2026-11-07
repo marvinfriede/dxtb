@@ -3546,6 +3546,7 @@ halogen:
     rscale: 1.3
 hamiltonian:
   xtb:
+    sto: gfn1
     cn: exp
     enscale: -0.007
     kpair:

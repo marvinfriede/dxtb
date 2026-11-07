@@ -27,7 +27,7 @@ additional distance dependent function formed from the element parametrization.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -65,6 +65,9 @@ class PHamiltonianXTB(BaseModel):
 
     wexp: float
     """Exponent of the orbital exponent dependent off-site scaling factor"""
+
+    sto: Literal["gfn1", "gfn2"] = "gfn2"
+    """STO-NG expansion set for Slater-type orbitals."""
 
     kpol: float = 2.0
     """Scaling factor for polarization functions"""

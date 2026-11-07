@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from dxtb._src.typing import Tensor
+from dxtb._src.typing import Literal, Tensor
 from dxtb._src.typing.exceptions import (
     CGTOAzimuthalQuantumNumberError,
     CGTOPrimitivesError,
@@ -65,13 +65,93 @@ MAX_PRINCIPAL = 6
 MAX_AZIMUTHAL = 4
 """Maximum azimuthal quantum number."""
 
+# GFN1-xTB 4sp and 5sp expansions with shared primitive exponents (tblite #423)
+# 4sp: W. J. Pietro et al., Inorg. Chem. 19, 2225-2229 (1980). DOI: 10.1021/ic50210a005
+# 5sp: W. J. Pietro et al., Inorg. Chem. 20, 3650-3654 (1981). DOI: 10.1021/ic50225a013
+pAlpha6sp: dict[int, Tensor] = {
+    4: torch.tensor(
+        [
+            1.365346e00,
+            4.393213e-01,
+            1.877069e-01,
+            9.360270e-02,
+            5.052263e-02,
+            2.809354e-02,
+        ],
+        dtype=torch.double,
+    ),
+    5: torch.tensor(
+        [
+            7.701420258e-01,
+            2.756268915e-01,
+            1.301847480e-01,
+            6.953441940e-02,
+            4.002545502e-02,
+            2.348388309e-02,
+        ],
+        dtype=torch.double,
+    ),
+}
+
+pCoeff6sp_s: dict[int, Tensor] = {
+    4: torch.tensor(
+        [
+            3.775056e-03,
+            -5.585965e-02,
+            -3.192946e-01,
+            -2.764780e-02,
+            9.049199e-01,
+            3.406258e-01,
+        ],
+        dtype=torch.double,
+    ),
+    5: torch.tensor(
+        [
+            1.267447151e-02,
+            3.266734789e-03,
+            -4.307553999e-01,
+            -3.231998963e-01,
+            1.104322879e00,
+            4.368498703e-01,
+        ],
+        dtype=torch.double,
+    ),
+}
+
+pCoeff6sp_p: dict[int, Tensor] = {
+    4: torch.tensor(
+        [
+            -7.052075e-03,
+            -5.259505e-02,
+            -3.773450e-02,
+            3.874773e-01,
+            5.791672e-01,
+            1.221817e-01,
+        ],
+        dtype=torch.double,
+    ),
+    5: torch.tensor(
+        [
+            -1.105673292e-3,
+            -6.243132446e-2,
+            -1.628476766e-1,
+            3.210328714e-01,
+            6.964579592e-01,
+            1.493146125e-01,
+        ],
+        dtype=torch.double,
+    ),
+}
+
 
 def slater_to_gauss(
-    ng: Tensor,
-    n: Tensor,
-    l: Tensor,
+    ng: Tensor | int,
+    n: Tensor | int,
+    l: Tensor | int,
     zeta: Tensor,
     norm: bool = True,
+    *,
+    sto: Literal["gfn1", "gfn2"] = "gfn2",
 ) -> tuple[Tensor, Tensor]:
     """
     Expand Slater function in primitive gaussian functions.
@@ -89,6 +169,8 @@ def slater_to_gauss(
     norm : bool, optional
         Include normalization in contraction coefficients.
         Defaults to ``True``.
+    sto : Literal["gfn1", "gfn2"], optional
+        STO-NG expansion set. Defaults to ``"gfn2"``.
 
     Returns
     -------
@@ -96,6 +178,11 @@ def slater_to_gauss(
         Contraction coefficients of primitive gaussians, can contain
         normalization, and exponents of primitive gaussian functions.
     """
+    if sto not in ("gfn1", "gfn2"):
+        raise ValueError(
+            f"Unknown STO-NG expansion '{sto}'. Expected 'gfn1' or 'gfn2'."
+        )
+
     if not 1 <= ng <= 6:
         raise CGTOPrimitivesError()
     if zeta <= 0:
@@ -107,16 +194,26 @@ def slater_to_gauss(
     if n <= l:  # l ∊ [n-1, n-2, ..., 1, 0]
         raise CGTOQuantumNumberError()
 
-    # we have to use a little hack here,
-    # if you pass n and l correctly, everything is fine
-    # ityp: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
-    #    n: 1 2 3 4 5 2 3 4 5  3  4  5  4  5  5  6  6
-    #    l: 0 0 0 0 0 1 1 1 1  2  2  2  3  3  4  0  1
-    itype = n + torch.tensor([0, 4, 7, 9, 10], device=zeta.device)[l] - 1
-    if n == 6 and ng == 6:
-        itype = 15 + l
+    int_ng = int(ng)
+    int_n = int(n)
+    int_l = int(l)
 
-    _coeff, _alpha = sto_ng[ng - 1][:, itype, :]
+    if sto == "gfn1" and int_ng == 6 and int_n in (4, 5) and int_l in (0, 1):
+        _alpha = pAlpha6sp[int_n]
+        _coeff = pCoeff6sp_s[int_n] if int_l == 0 else pCoeff6sp_p[int_n]
+    else:
+        # we have to use a little hack here,
+        # if you pass n and l correctly, everything is fine
+        # ityp: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
+        #    n: 1 2 3 4 5 2 3 4 5  3  4  5  4  5  5  6  6
+        #    l: 0 0 0 0 0 1 1 1 1  2  2  2  3  3  4  0  1
+        itype: Tensor | int = (
+            n + torch.tensor([0, 4, 7, 9, 10], device=zeta.device)[l] - 1
+        )
+        if n == 6 and ng == 6:
+            itype = 15 + l
+
+        _coeff, _alpha = sto_ng[int_ng - 1][:, itype, :]
 
     alpha = _alpha.type(zeta.dtype).to(zeta.device) * zeta.unsqueeze(-1) ** 2
     coeff = _coeff.type(zeta.dtype).to(zeta.device)

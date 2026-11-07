@@ -73,6 +73,9 @@ class Basis(TensorLike):
     valence: Tensor
     """Whether the shell is part of the valence shell."""
 
+    sto: Literal["gfn1", "gfn2"]
+    """STO-NG expansion set for Slater-type orbitals."""
+
     __slots__ = [
         "numbers",
         "unique",
@@ -83,6 +86,7 @@ class Basis(TensorLike):
         "slater",
         "pqn",
         "valence",
+        "sto",
     ]
 
     def __init__(
@@ -101,6 +105,11 @@ class Basis(TensorLike):
 
         if not isinstance(par, ParamModule):
             par = ParamModule(par, **self.dd)
+
+        if par.is_none("hamiltonian.xtb.sto"):
+            self.sto: Literal["gfn1", "gfn2"] = "gfn2"
+        else:
+            self.sto = par.get("hamiltonian.xtb.sto")
 
         # Integer data types for `ngauss` and `pqn`
         self.ngauss = par.get_elem_param(
@@ -154,6 +163,7 @@ class Basis(TensorLike):
                 self.pqn[i],
                 self.ihelp.unique_angular[i],
                 self.slater[i],
+                sto=self.sto,
             )
 
             # NOTE:
@@ -281,6 +291,7 @@ class Basis(TensorLike):
                     self.pqn[s],
                     self.ihelp.angular[s],
                     self.slater[s],
+                    sto=self.sto,
                 )
                 if self.valence[s].item() is False:
                     alpha, coeff = orthogonalize(
@@ -358,6 +369,7 @@ class Basis(TensorLike):
             pqn=self.pqn,
             slater=self.slater,
             valence=self.valence,
+            sto=self.sto,
         )
 
     def create_libcint_cgtos(
@@ -378,6 +390,7 @@ class BasisSetup:
     pqn: Tensor
     slater: Tensor
     valence: Tensor
+    sto: Literal["gfn1", "gfn2"] = "gfn2"
 
     def to(
         self,
@@ -478,6 +491,7 @@ class BasisSetup:
                     self.pqn[shell],
                     self.ihelp.unique_angular[shell],
                     self.slater[shell],
+                    sto=self.sto,
                 )
                 if self.valence[shell].item() is False:
                     alpha, coeff = orthogonalize(

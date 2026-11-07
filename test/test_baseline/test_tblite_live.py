@@ -20,8 +20,9 @@ Live reference validation against ``tblite.interface.Calculator`` (tblite 0.8.0)
 Executes upstream tblite dynamically without reading static reference files.
 Covers:
 - WP0 live reference test matrix (GFN1 H2O, CH4; GFN2 H2O, non-planar and
-  mixed-element molecules; GFN1 Fe(CO)5 is added in WP3 after 4sp/5sp basis
-  restoration).
+  mixed-element molecules).
+- WP3 live reference validation for restored GFN1 4sp (Fe(CO)5) and 5sp (RbH, SrH2)
+  basis expansions.
 - WP1.6 C live tblite comparison for GFN2-xTB on original and rotated
   geometries (total energy, Cartesian gradient, atomic charges, and dipole).
 """
@@ -100,6 +101,86 @@ def test_gfn1_live_reference(name: str) -> None:
         sys.positions,
         charge=sys.charge,
         spin=sys.spin,
+        x_atol=1.0e-10,
+    )
+    assert_tblite_agrees(
+        method="GFN1-xTB",
+        structure=name,
+        live=live,
+        computed=computed,
+        tolerances=TIGHT_LIVE_TOLERANCES,
+    )
+
+
+def test_gfn1_live_4sp_fe_co_5() -> None:
+    """Compare GFN1-xTB Fe(CO)5 (4sp expansion) energy, gradient, charges, and dipole against live tblite."""
+    sys = SYSTEMS["Fe(CO)5"]
+    live = run_tblite_live(
+        "GFN1-xTB",
+        sys.numbers,
+        sys.positions,
+        charge=sys.charge,
+        uhf=sys.spin,
+        accuracy=1.0e-6,
+        max_iter=300,
+    )
+    computed = evaluate_dxtb_reference(
+        "gfn1",
+        sys.numbers,
+        sys.positions,
+        charge=sys.charge,
+        spin=sys.spin,
+        x_atol=1.0e-10,
+    )
+    # Tolerances accommodating the 11-atom transition-metal complex
+    fe_tolerances = {
+        **TIGHT_LIVE_TOLERANCES,
+        "energy": Tolerance(atol=2.0e-6, rtol=1.0e-6),
+        "gradient": Tolerance(atol=2.0e-8, rtol=1.0e-5),
+    }
+    assert_tblite_agrees(
+        method="GFN1-xTB",
+        structure="Fe(CO)5",
+        live=live,
+        computed=computed,
+        tolerances=fe_tolerances,
+    )
+
+
+@pytest.mark.parametrize(
+    "name,numbers,positions",
+    [
+        (
+            "RbH",
+            torch.tensor([37, 1]),
+            torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 4.47]], dtype=torch.float64),
+        ),
+        (
+            "SrH2",
+            torch.tensor([38, 1, 1]),
+            torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [0.0, 0.0, -4.0]], dtype=torch.float64),
+        ),
+    ],
+)
+def test_gfn1_live_5sp_reference(
+    name: str, numbers: torch.Tensor, positions: torch.Tensor
+) -> None:
+    """Compare GFN1-xTB 5sp systems (RbH, SrH2) against live tblite."""
+    live = run_tblite_live(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=0.0,
+        uhf=0,
+        accuracy=1.0e-6,
+        max_iter=300,
+    )
+    computed = evaluate_dxtb_reference(
+        "gfn1",
+        numbers,
+        positions,
+        charge=0.0,
+        spin=0,
         x_atol=1.0e-10,
     )
     assert_tblite_agrees(

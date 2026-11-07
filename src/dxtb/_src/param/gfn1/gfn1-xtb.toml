@@ -6,6 +6,7 @@ format = 1
 [hamiltonian]
 [hamiltonian.xtb]
 wexp = 0.0000000000000000E+00
+sto = "gfn1"
 kpol = 2.8500000000000001E+00
 enscale = -7.0000000000000001E-03
 cn = "exp"

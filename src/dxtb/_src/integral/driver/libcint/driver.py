@@ -36,7 +36,7 @@ from dxtb._src.basis.bas import Basis, BasisSetup
 from dxtb._src.basis.ortho import orthogonalize
 from dxtb._src.basis.slater import slater_to_gauss
 from dxtb._src.param import ParamModule
-from dxtb._src.typing import Any, Tensor
+from dxtb._src.typing import Any, Literal, Tensor
 
 from ...base import IntDriver
 from .base import LibcintImplementation
@@ -82,6 +82,7 @@ class LibcintBasisNode(Node):
     angular: Tensor = child(keep_dtype=True)
     ushells_per_unique: Tensor = child(keep_dtype=True)
     unique_angular: Tensor = child(keep_dtype=True)
+    sto: Literal["gfn1", "gfn2"] = context(default="gfn2")
 
     def create_libcint_cgtos(
         self,
@@ -108,6 +109,7 @@ class LibcintBasisNode(Node):
                     self.pqn[shell],
                     self.unique_angular[shell],
                     self.slater[shell],
+                    sto=self.sto,
                 )
                 if self.valence[shell].item() is False:
                     alpha, coeff = orthogonalize(
@@ -254,6 +256,7 @@ def core_libcint_setup(
                 angular=snapshot(ihelp.angular),
                 ushells_per_unique=snapshot(ihelp.ushells_per_unique),
                 unique_angular=snapshot(ihelp.unique_angular),
+                sto=basis.sto,
             ),
         ),
         index=index,
