@@ -36,7 +36,6 @@ from dxtb._src.basis.bas import Basis, BasisSetup
 from dxtb._src.basis.ortho import orthogonalize
 from dxtb._src.basis.slater import slater_to_gauss
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Any, Tensor
 
 from ...base import IntDriver
@@ -167,7 +166,7 @@ class LibcintIntegralSetupNode(Node):
 
     numbers: Tensor = child(keep_dtype=True)
     basis_setups: tuple[LibcintBasisNode, ...] = child()
-    index: CoreIndexData = child()
+    index: IndexHelper = child()
     force_cpu: bool = context()
 
     def _convert_child(
@@ -184,6 +183,8 @@ class LibcintIntegralSetupNode(Node):
 
 def core_libcint_setup(
     setup: LibcintIntegralSetup,
+    *,
+    copy_index: bool = True,
 ) -> LibcintIntegralSetupNode:
     """Snapshot a single-system legacy setup as structural Node data."""
     if setup.ihelp.batch_mode != 0 or len(setup.basis_setups) != 1:
@@ -218,6 +219,26 @@ def core_libcint_setup(
     def snapshot(value: Tensor) -> Tensor:
         return value.clone()
 
+    index = (
+        IndexHelper(
+            unique_angular=snapshot(ihelp.unique_angular),
+            angular=snapshot(ihelp.angular),
+            atom_to_unique=snapshot(ihelp.atom_to_unique),
+            ushells_to_unique=snapshot(ihelp.ushells_to_unique),
+            ushells_per_unique=snapshot(ihelp.ushells_per_unique),
+            shells_to_ushell=snapshot(ihelp.shells_to_ushell),
+            shells_per_atom=snapshot(ihelp.shells_per_atom),
+            shell_index=snapshot(ihelp.shell_index),
+            shells_to_atom=snapshot(ihelp.shells_to_atom),
+            orbitals_per_shell=snapshot(ihelp.orbitals_per_shell),
+            orbital_index=snapshot(ihelp.orbital_index),
+            orbitals_to_shell=snapshot(ihelp.orbitals_to_shell),
+            batch_mode=0,
+        )
+        if copy_index
+        else ihelp
+    )
+
     return LibcintIntegralSetupNode(
         numbers=snapshot(setup.numbers),
         basis_setups=(
@@ -235,10 +256,7 @@ def core_libcint_setup(
                 unique_angular=snapshot(ihelp.unique_angular),
             ),
         ),
-        index=CoreIndexData(
-            shells_to_atom=snapshot(ihelp.shells_to_atom),
-            orbitals_to_shell=snapshot(ihelp.orbitals_to_shell),
-        ),
+        index=index,
         force_cpu=setup.force_cpu,
     )
 
@@ -266,12 +284,12 @@ class LibcintCallData:
     """Call-local libcint inputs for one or more independent structures."""
 
     inputs: tuple[LibcintInput, ...]
-    ihelp: IndexHelper | CoreIndexData
+    ihelp: IndexHelper
 
     @property
     def batch_mode(self) -> int:
         """Batch mode of the structural index helper."""
-        return getattr(self.ihelp, "batch_mode", 0)
+        return self.ihelp.batch_mode
 
 
 def setup_libcint(

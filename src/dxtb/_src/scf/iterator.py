@@ -48,9 +48,6 @@ from .guess import get_guess
 from .result import SCFResult
 
 if TYPE_CHECKING:
-    from .functional.core import CoreIndexData
-
-if TYPE_CHECKING:
     from .functional.eager import FunctionalCoreResult
 
 __all__ = ["solve"]
@@ -104,7 +101,7 @@ def solve(
     integrals: IntegralMatrices,
     refocc: Tensor,
     *args: Any,
-    core_index: CoreIndexData | None = None,
+    core_index: IndexHelper | None = None,
     **kwargs: Any,
 ) -> SCFResult | FunctionalCoreResult:
     """
@@ -169,7 +166,7 @@ def solve_with_core_index(
     integrals: IntegralMatrices,
     refocc: Tensor,
     *,
-    core_index: CoreIndexData,
+    core_index: IndexHelper,
     core_index_owner: object,
 ) -> SCFResult | FunctionalCoreResult:
     """Run SCF with an internally trusted captured structural map."""
@@ -200,7 +197,7 @@ def _solve_impl(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    core_index: CoreIndexData | None,
+    core_index: IndexHelper | None,
     core_index_owner: object | None,
 ) -> SCFResult | FunctionalCoreResult:
     """Dispatch iterative functional SCF and the retained GFN0 special case."""

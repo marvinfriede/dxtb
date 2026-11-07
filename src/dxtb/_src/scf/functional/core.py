@@ -21,78 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
 
-from tad_mctc.tree import Node, child
-
 from dxtb._src.typing import Tensor
-from dxtb._src.utils import wrap_gather, wrap_scatter_reduce
-
-
-class CoreIndexData(Node):
-    """Minimal immutable mappings needed by a single-System SCF map."""
-
-    shells_to_atom: Tensor = child(keep_dtype=True)
-    orbitals_to_shell: Tensor = child(keep_dtype=True)
-
-    def reduce_orbital_to_shell(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        reduce: str = "sum",
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_scatter_reduce(
-            values, dim, self.orbitals_to_shell, reduce, extra=extra
-        )
-
-    def reduce_shell_to_atom(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        reduce: str = "sum",
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_scatter_reduce(
-            values, dim, self.shells_to_atom, reduce, extra=extra
-        )
-
-    def reduce_orbital_to_atom(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        reduce: str = "sum",
-        extra: bool = False,
-    ) -> Tensor:
-        shell_values = self.reduce_orbital_to_shell(
-            values, dim=dim, reduce=reduce, extra=extra
-        )
-        return self.reduce_shell_to_atom(
-            shell_values, dim=dim, reduce=reduce, extra=extra
-        )
-
-    def spread_atom_to_shell(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(values, dim, self.shells_to_atom, extra=extra)
-
-    def spread_shell_to_orbital(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(values, dim, self.orbitals_to_shell, extra=extra)
-
-    def spread_atom_to_orbital(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        shell_values = self.spread_atom_to_shell(values, dim=dim, extra=extra)
-        return self.spread_shell_to_orbital(shell_values, dim=dim, extra=extra)
 
 
 @dataclass(frozen=True, eq=False)

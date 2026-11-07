@@ -30,7 +30,7 @@ import torch
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Literal, Tensor, TensorLike
+from dxtb._src.typing import Literal, Self, Tensor, TensorLike, override
 from dxtb._src.utils.tensors import GradKey, grad_key_matches
 
 __all__ = ["IntDriver"]
@@ -192,6 +192,17 @@ class IntDriver(TensorLike):
     def is_setup(self) -> bool:
         """Check if the driver is set up."""
         return self._positions is not None
+
+    @override
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        obj = super().to(device=device, dtype=dtype)
+        if device is not None:
+            obj.ihelp = self.ihelp.to(device=obj.device)
+        return obj
 
     @abstractmethod
     def setup(self, positions: Tensor, **kwargs) -> None:

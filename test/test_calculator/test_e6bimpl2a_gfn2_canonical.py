@@ -204,25 +204,26 @@ def _assert_h0_mapping(source, padded, mapping, bucket):
     """Check GFN2 element/shell tables and exact built-in CN metadata."""
     source_h0 = source.h0_setup
     padded_h0 = padded.h0_setup
+    padded_index = padded.integral.backend.index
     assert source_h0 is not None and padded_h0 is not None
     assert source_h0.method == padded_h0.method == "gfn2"
     assert source_h0.cn_kind == padded_h0.cn_kind == "cn_d3(gfn2_count)"
     assert source_h0.cn is not None and padded_h0.cn is not None
     _assert_vector_mapping(padded_h0.numbers, source_h0.numbers, mapping.atoms)
-    assert padded_h0.index.atom_to_unique.tolist() == [
+    assert padded_index.atom_to_unique.tolist() == [
         bucket.elements.index(number) for number in bucket.atom_elements
     ]
-    assert padded_h0.index.unique_angular.tolist() == list(
+    assert padded_index.unique_angular.tolist() == list(
         bucket.shell_type_angular
     )
     assert padded_h0.unique.tolist() == list(bucket.elements)
-    assert padded_h0.index.shells_to_atom.tolist() == list(
+    assert padded_index.shells_to_atom.tolist() == list(
         bucket.shells_to_atom
     )
-    assert padded_h0.index.shells_to_ushell.tolist() == list(
+    assert padded_index.shells_to_ushell.tolist() == list(
         bucket.shells_to_type
     )
-    assert padded_h0.index.orbitals_to_shell.tolist() == list(
+    assert padded_index.orbitals_to_shell.tolist() == list(
         bucket.orbitals_to_shell
     )
     for name in ("kcn", "refocc", "selfenergy", "shpoly", "valence"):

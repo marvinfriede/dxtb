@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import torch
-from tad_mctc.tree import Node, child, context
+from tad_mctc.tree import Node, child
 from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import labels
@@ -55,7 +55,6 @@ from dxtb._src.components.interactions.field.efieldgrad import (
 )
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.functional.core import (
-    CoreIndexData,
     FunctionalInteractionEntry,
     FunctionalInteractionSet,
 )
@@ -75,13 +74,12 @@ from dxtb._src.scf.functional.map import evaluate_hamiltonian
 from dxtb._src.scf.functional.solver import SCFSolverTrace
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import DeviceError, DtypeError
-from dxtb._src.utils import wrap_gather, wrap_scatter_reduce
+from dxtb._src.utils import wrap_gather
 from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import _aufbau_occupation
 
 __all__ = [
     "PADDED_ORBITAL_ENERGY",
-    "PaddedCoreIndexData",
     "PaddedSCFSpectralResult",
     "evaluate_padded_scf_spectrum",
     "evaluate_padded_fixed_trip",
@@ -96,88 +94,6 @@ __all__ = [
 # parameter-independent dummy level. It is only assigned to inactive AO
 # diagonal entries and cannot couple to physical orbitals.
 PADDED_ORBITAL_ENERGY = 1.0e4
-
-
-class PaddedCoreIndexData(CoreIndexData):
-    """Registered index maps with static target extents for padded sums."""
-
-    atom_count: int = context()
-    shell_count: int = context()
-    valid_shells: Tensor = child(keep_dtype=True)
-    valid_orbitals: Tensor = child(keep_dtype=True)
-
-    def spread_atom_to_shell(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        result = super().spread_atom_to_shell(values, dim=dim, extra=extra)
-        mask = self._broadcast_mask(self.valid_shells, result, dim)
-        return torch.where(mask, result, 0.0)
-
-    def spread_shell_to_orbital(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        result = super().spread_shell_to_orbital(values, dim=dim, extra=extra)
-        mask = self._broadcast_mask(self.valid_orbitals, result, dim)
-        return torch.where(mask, result, 0.0)
-
-    @staticmethod
-    def _broadcast_mask(
-        mask: Tensor, values: Tensor, dim: int | tuple[int, int]
-    ) -> Tensor:
-        dims = (dim,) if isinstance(dim, int) else dim
-        result = torch.ones_like(values, dtype=torch.bool)
-        for axis in dims:
-            axis = axis % values.ndim
-            shape = [1] * values.ndim
-            shape[axis] = mask.shape[0]
-            result = result & mask.reshape(shape)
-        return result
-
-    def reduce_orbital_to_shell(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        reduce: str = "sum",
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_scatter_reduce(
-            values,
-            dim,
-            self.orbitals_to_shell,
-            reduce,
-            extra=extra,
-            output_size=(
-                (self.shell_count, self.shell_count)
-                if isinstance(dim, tuple)
-                else self.shell_count
-            ),
-        )
-
-    def reduce_shell_to_atom(
-        self,
-        values: Tensor,
-        dim: int | tuple[int, int] = -1,
-        reduce: str = "sum",
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_scatter_reduce(
-            values,
-            dim,
-            self.shells_to_atom,
-            reduce,
-            extra=extra,
-            output_size=(
-                (self.atom_count, self.atom_count)
-                if isinstance(dim, tuple)
-                else self.atom_count
-            ),
-        )
 
 
 class PaddedSCFSpectralResult(Node):
@@ -221,23 +137,22 @@ def setup_padded_scf_inputs(
     orbital_mask = validity.orbitals
     nao = orbital_mask.shape[-1]
 
-    index = PaddedCoreIndexData(
-        shells_to_atom=backend.index.shells_to_atom,
-        orbitals_to_shell=backend.index.orbitals_to_shell,
-        atom_count=validity.atoms.shape[-1],
-        shell_count=validity.shells.shape[-1],
-        valid_shells=validity.shells,
-        valid_orbitals=validity.orbitals,
+    index = backend.index.replace(
+        shells_to_atom=torch.where(
+            validity.shells, backend.index.shells_to_atom, -999
+        ),
+        orbitals_to_shell=torch.where(
+            validity.orbitals, backend.index.orbitals_to_shell, -999
+        ),
     )
 
-    h0_index = core.h0_setup.index
     shell_refs = wrap_gather(
-        core.h0_setup.refocc, -1, h0_index.shells_to_ushell
+        core.h0_setup.refocc, -1, backend.index.shells_to_ushell
     )
     shell_refs = torch.where(validity.shells, shell_refs, 0.0)
     orbital_refs = wrap_gather(shell_refs, -1, backend.index.orbitals_to_shell)
     shell_angular = wrap_gather(
-        h0_index.unique_angular, -1, h0_index.shells_to_ushell
+        backend.index.unique_angular, -1, backend.index.shells_to_ushell
     )
     shell_width = (2 * shell_angular + 1).to(dtype=hcore.dtype)
     orbital_width = wrap_gather(
@@ -458,8 +373,8 @@ def validate_padded_charge_spin(
     value checks disabled because those checks cannot run inside ``vmap``.
     """
     core = padded_core.core
-    if core.h0_setup is None:
-        raise ValueError("Padded SCF input preparation requires H0 setup.")
+    if core.h0_setup is None or core.integral is None or core.integral.backend is None:
+        raise ValueError("Padded SCF input preparation requires H0 and integral setup.")
     if (
         charge.ndim != 0
         or charge.device != core.numbers.device
@@ -477,7 +392,7 @@ def validate_padded_charge_spin(
             "Padded spin must be a scalar matching core dtype/device."
         )
     shell_refs = wrap_gather(
-        core.h0_setup.refocc, -1, core.h0_setup.index.shells_to_ushell
+        core.h0_setup.refocc, -1, core.integral.backend.index.shells_to_ushell
     )
     shell_refs = torch.where(padded_core.validity.shells, shell_refs, 0.0)
     total_electrons = (shell_refs.sum() - charge).reshape(1)

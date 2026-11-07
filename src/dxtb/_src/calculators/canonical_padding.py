@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import torch
 from torch.utils._pytree import tree_flatten, tree_flatten_with_path
 
+from dxtb import IndexHelper
 from dxtb._src.calculators.model import ExactSystemCore
 from dxtb._src.calculators.padding import (
     _NORMALIZED_CLASSICAL_FIELDS,
@@ -58,9 +59,8 @@ from dxtb._src.integral.driver.pytorch.impls.pairs import (
     PairClassNode,
     PairPlanNode,
 )
-from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
-from dxtb._src.xtb.h0 import H0IndexNode, H0SetupNode
+from dxtb._src.xtb.h0 import H0SetupNode
 
 ShellType = tuple[int, int, int]
 PairClassKey = tuple[int, int, int, int]
@@ -135,25 +135,36 @@ def _source_layout(core: ExactSystemCore) -> _SourceLayout:
 
     elements = _tensor_ints(h0.unique)
     numbers = _tensor_ints(core.numbers)
-    atom_to_unique = _tensor_ints(h0.index.atom_to_unique)
+    atom_to_unique = _tensor_ints(backend.index.atom_to_unique)
+    ushells_to_unique = _tensor_ints(backend.index.ushells_to_unique)
+    ushells_per_unique = _tensor_ints(backend.index.ushells_per_unique)
+    shells_per_atom = _tensor_ints(backend.index.shells_per_atom)
+    shell_index = _tensor_ints(backend.index.shell_index)
+    shell_angular = _tensor_ints(backend.index.angular)
     shell_atoms = _tensor_ints(backend.index.shells_to_atom)
-    shells_to_type = _tensor_ints(h0.index.shells_to_ushell)
+    shells_to_type = _tensor_ints(backend.index.shells_to_ushell)
+    orbitals_per_shell = _tensor_ints(backend.index.orbitals_per_shell)
+    orbital_index = _tensor_ints(backend.index.orbital_index)
     orbital_to_shell = _tensor_ints(backend.index.orbitals_to_shell)
-    angular = _tensor_ints(h0.index.unique_angular)
+    angular = _tensor_ints(backend.index.unique_angular)
     if _tensor_ints(h0.numbers) != numbers:
         raise ValueError(
             "H0 atomic numbers disagree with ExactSystemCore.numbers."
         )
     if len(set(elements)) != len(elements) or set(elements) != set(numbers):
         raise ValueError("H0 unique elements do not match the source atoms.")
-    if len(numbers) != len(atom_to_unique) or len(shell_atoms) != len(
-        shells_to_type
+    if (
+        len(numbers) != len(atom_to_unique)
+        or len(shell_atoms) != len(shells_to_type)
+        or len(elements) != len(ushells_per_unique)
+        or len(angular) != len(ushells_to_unique)
+        or h0.selfenergy.shape != backend.index.unique_angular.shape
+        or h0.shpoly.shape != backend.index.unique_angular.shape
+        or h0.valence.shape != backend.index.unique_angular.shape
+        or h0.refocc.shape != backend.index.unique_angular.shape
+        or h0.kcn.shape != backend.index.unique_angular.shape
     ):
         raise ValueError("H0 and backend structural index lengths disagree.")
-    if _tensor_ints(h0.index.shells_to_atom) != shell_atoms:
-        raise ValueError("H0 and backend shell-to-atom mappings disagree.")
-    if _tensor_ints(h0.index.orbitals_to_shell) != orbital_to_shell:
-        raise ValueError("H0 and backend orbital-to-shell mappings disagree.")
     if tuple(backend.pair_plan.unique_angular) != angular:
         raise ValueError("PairPlan and H0 shell angular classes disagree.")
     if backend.pair_plan.nao != len(orbital_to_shell):
@@ -178,6 +189,36 @@ def _source_layout(core: ExactSystemCore) -> _SourceLayout:
         numbers[i] != elements[atom_to_unique[i]] for i in range(len(numbers))
     ):
         raise ValueError("H0 atom-to-element mapping disagrees with numbers.")
+    expected_ushells_to_unique = tuple(
+        elem_idx
+        for elem_idx, count in enumerate(ushells_per_unique)
+        for _ in range(count)
+    )
+    if ushells_to_unique != expected_ushells_to_unique:
+        raise ValueError("Unique-shell-to-unique mapping is inconsistent.")
+    expected_shells_per_atom = tuple(
+        ushells_per_unique[u] for u in atom_to_unique
+    )
+    if shells_per_atom != expected_shells_per_atom:
+        raise ValueError("Shells-per-atom mapping is inconsistent.")
+    expected_shell_index = tuple(
+        -999 if c == 0 else sum(shells_per_atom[:i])
+        for i, c in enumerate(shells_per_atom)
+    )
+    if shell_index != expected_shell_index:
+        raise ValueError("Shell-index offset mapping is inconsistent.")
+    expected_shell_angular = tuple(angular[t] for t in shells_to_type)
+    if shell_angular != expected_shell_angular:
+        raise ValueError("Shell angular mapping is inconsistent.")
+    expected_orbitals_per_shell = tuple(2 * l + 1 for l in shell_angular)
+    if orbitals_per_shell != expected_orbitals_per_shell:
+        raise ValueError("Orbitals-per-shell mapping is inconsistent.")
+    expected_orbital_index = tuple(
+        -999 if c == 0 else sum(orbitals_per_shell[:i])
+        for i, c in enumerate(orbitals_per_shell)
+    )
+    if orbital_index != expected_orbital_index:
+        raise ValueError("Orbital-index offset mapping is inconsistent.")
 
     shell_types_by_element: dict[int, list[int]] = {}
     shell_type_element: dict[int, int] = {}
@@ -417,14 +458,19 @@ def _is_canonicalized_path(parts: tuple[str | int, ...]) -> bool:
     """Whether canonical padding explicitly remaps a tensor's shape."""
     if parts in {
         ("numbers",),
+        ("integral", "backend", "index", "unique_angular"),
+        ("integral", "backend", "index", "atom_to_unique"),
+        ("integral", "backend", "index", "ushells_to_unique"),
+        ("integral", "backend", "index", "ushells_per_unique"),
+        ("integral", "backend", "index", "shells_per_atom"),
+        ("integral", "backend", "index", "shell_index"),
+        ("integral", "backend", "index", "angular"),
+        ("integral", "backend", "index", "shells_to_ushell"),
         ("integral", "backend", "index", "shells_to_atom"),
+        ("integral", "backend", "index", "orbitals_per_shell"),
+        ("integral", "backend", "index", "orbital_index"),
         ("integral", "backend", "index", "orbitals_to_shell"),
         ("integral", "backend", "pair_plan", "atom"),
-        ("h0_setup", "index", "atom_to_unique"),
-        ("h0_setup", "index", "shells_to_ushell"),
-        ("h0_setup", "index", "unique_angular"),
-        ("h0_setup", "index", "shells_to_atom"),
-        ("h0_setup", "index", "orbitals_to_shell"),
         ("h0_setup", "numbers"),
         ("h0_setup", "unique"),
         ("h0_setup", "hscale"),
@@ -922,40 +968,9 @@ def _remap_h0(
     element_tensor = torch.tensor(
         bucket.elements, dtype=h0.unique.dtype, device=h0.unique.device
     )
-    angular = torch.tensor(
-        bucket.shell_type_angular,
-        dtype=h0.index.unique_angular.dtype,
-        device=h0.index.unique_angular.device,
-    )
-    atom_to_unique = torch.tensor(
-        [bucket.elements.index(z) for z in bucket.atom_elements],
-        dtype=h0.index.atom_to_unique.dtype,
-        device=h0.index.atom_to_unique.device,
-    )
-    shells_to_type = torch.tensor(
-        bucket.shells_to_type,
-        dtype=h0.index.shells_to_ushell.dtype,
-        device=h0.index.shells_to_ushell.device,
-    )
-    h0_index = H0IndexNode(
-        atom_to_unique=atom_to_unique,
-        shells_to_ushell=shells_to_type,
-        unique_angular=angular,
-        shells_to_atom=torch.tensor(
-            bucket.shells_to_atom,
-            dtype=h0.index.shells_to_atom.dtype,
-            device=h0.index.shells_to_atom.device,
-        ),
-        orbitals_to_shell=torch.tensor(
-            bucket.orbitals_to_shell,
-            dtype=h0.index.orbitals_to_shell.dtype,
-            device=h0.index.orbitals_to_shell.device,
-        ),
-    )
     shell_vectors = ("kcn", "refocc", "selfenergy", "shpoly", "valence")
     element_vectors = ("en", "rad")
     updates: dict[str, object] = {
-        "index": h0_index,
         "numbers": _scatter_vector(core.numbers, mapping.atoms, bucket.atoms),
         "unique": element_tensor,
         "hscale": _scatter_square(h0.hscale, shell_types, n_shell_types),
@@ -1250,17 +1265,65 @@ def pad_canonical_exact_core(
             )
         )
 
-    index = CoreIndexData(
-        shells_to_atom=torch.tensor(
-            bucket.shells_to_atom,
-            dtype=backend.index.shells_to_atom.dtype,
-            device=backend.index.shells_to_atom.device,
-        ),
-        orbitals_to_shell=torch.tensor(
-            bucket.orbitals_to_shell,
-            dtype=backend.index.orbitals_to_shell.dtype,
-            device=backend.index.orbitals_to_shell.device,
-        ),
+    idx_dtype = backend.index.shells_to_atom.dtype
+    idx_device = backend.index.shells_to_atom.device
+    unique_angular = torch.tensor(
+        bucket.shell_type_angular, dtype=idx_dtype, device=idx_device
+    )
+    atom_to_unique = torch.tensor(
+        [bucket.elements.index(z) for z in bucket.atom_elements],
+        dtype=idx_dtype,
+        device=idx_device,
+    )
+    ushells_to_unique = torch.tensor(
+        [bucket.elements.index(key[0]) for key in bucket.shell_types],
+        dtype=idx_dtype,
+        device=idx_device,
+    )
+    ushells_per_unique = torch.tensor(
+        [
+            sum(1 for key in bucket.shell_types if key[0] == z)
+            for z in bucket.elements
+        ],
+        dtype=idx_dtype,
+        device=idx_device,
+    )
+    shells_per_atom = ushells_per_unique[atom_to_unique]
+    shell_index = torch.where(
+        shells_per_atom == 0,
+        -999,
+        torch.cumsum(shells_per_atom, -1) - shells_per_atom,
+    )
+    shells_to_ushell = torch.tensor(
+        bucket.shells_to_type, dtype=idx_dtype, device=idx_device
+    )
+    shells_to_atom = torch.tensor(
+        bucket.shells_to_atom, dtype=idx_dtype, device=idx_device
+    )
+    angular = unique_angular[shells_to_ushell]
+    orbitals_per_shell = 2 * angular + 1
+    orbital_index = torch.where(
+        orbitals_per_shell == 0,
+        -999,
+        torch.cumsum(orbitals_per_shell, -1) - orbitals_per_shell,
+    )
+    orbitals_to_shell = torch.tensor(
+        bucket.orbitals_to_shell, dtype=idx_dtype, device=idx_device
+    )
+    index = IndexHelper(
+        unique_angular=unique_angular,
+        atom_to_unique=atom_to_unique,
+        ushells_to_unique=ushells_to_unique,
+        ushells_per_unique=ushells_per_unique,
+        shells_per_atom=shells_per_atom,
+        shell_index=shell_index,
+        angular=angular,
+        shells_to_ushell=shells_to_ushell,
+        shells_to_atom=shells_to_atom,
+        orbitals_per_shell=orbitals_per_shell,
+        orbital_index=orbital_index,
+        orbitals_to_shell=orbitals_to_shell,
+        batch_mode=0,
     )
     pair_plan = PairPlanNode(
         nao=bucket.orbitals,

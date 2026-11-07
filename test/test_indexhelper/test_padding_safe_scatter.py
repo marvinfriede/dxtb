@@ -20,18 +20,25 @@ from __future__ import annotations
 
 import torch
 
-from dxtb._src.scf.functional.padded import PaddedCoreIndexData
+from dxtb import IndexHelper
 from dxtb._src.utils.scattergather import wrap_scatter_reduce
 
 
 def test_sum_excludes_invalid_orbital_to_shell_sources() -> None:
-    index = PaddedCoreIndexData(
+    index = IndexHelper(
+        unique_angular=torch.tensor([0]),
+        atom_to_unique=torch.tensor([0, 0]),
+        ushells_to_unique=torch.tensor([0]),
+        ushells_per_unique=torch.tensor([1]),
+        shells_per_atom=torch.tensor([1, 1]),
+        shell_index=torch.tensor([0, 1]),
+        angular=torch.tensor([0, 0]),
+        shells_to_ushell=torch.tensor([0, 0]),
         shells_to_atom=torch.tensor([0, 1]),
+        orbitals_per_shell=torch.tensor([1, 1]),
+        orbital_index=torch.tensor([0, 2]),
         orbitals_to_shell=torch.tensor([0, -1, 1]),
-        atom_count=2,
-        shell_count=2,
-        valid_shells=torch.tensor([True, True]),
-        valid_orbitals=torch.tensor([True, False, True]),
+        batch_mode=0,
     )
     values = torch.tensor([3.0, 999.0, 4.0])
     torch.testing.assert_close(
@@ -40,13 +47,20 @@ def test_sum_excludes_invalid_orbital_to_shell_sources() -> None:
 
 
 def test_sum_excludes_invalid_shell_to_atom_sources() -> None:
-    index = PaddedCoreIndexData(
+    index = IndexHelper(
+        unique_angular=torch.tensor([0]),
+        atom_to_unique=torch.tensor([0, 0]),
+        ushells_to_unique=torch.tensor([0]),
+        ushells_per_unique=torch.tensor([1]),
+        shells_per_atom=torch.tensor([1, 1]),
+        shell_index=torch.tensor([0, 2]),
+        angular=torch.tensor([0, -1, 0]),
+        shells_to_ushell=torch.tensor([0, -1, 0]),
         shells_to_atom=torch.tensor([0, -1, 1]),
+        orbitals_per_shell=torch.tensor([1, 0, 1]),
+        orbital_index=torch.tensor([0, -1, 2]),
         orbitals_to_shell=torch.tensor([0, 1, 2]),
-        atom_count=2,
-        shell_count=3,
-        valid_shells=torch.tensor([True, False, True]),
-        valid_orbitals=torch.tensor([True, True, True]),
+        batch_mode=0,
     )
     values = torch.tensor([3.0, 999.0, 4.0])
     torch.testing.assert_close(

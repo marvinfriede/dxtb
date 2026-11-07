@@ -22,6 +22,7 @@ import torch
 from tad_dftd.model.d4 import d4sc_atom_energy, d4sc_atom_potential
 from tad_mctc.math import einsum
 
+from dxtb import IndexHelper
 from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
@@ -43,7 +44,6 @@ from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.typing import Tensor
 
 from .core import (
-    CoreIndexData,
     FunctionalInteractionEntry,
     FunctionalInteractionSet,
 )
@@ -167,7 +167,7 @@ def _optional_add(left: Tensor | None, right: Tensor | None) -> Tensor | None:
 def _potential_parts(
     entry: FunctionalInteractionEntry,
     charges: SCFCharges,
-    index: CoreIndexData,
+    index: IndexHelper,
 ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
     """Return shell/atom monopole and optional multipole potentials."""
     mono = charges.mono
@@ -245,7 +245,7 @@ def _potential_parts(
 def potential_from_charges(
     charges: SCFCharges,
     interactions: FunctionalInteractionSet,
-    index: CoreIndexData,
+    index: IndexHelper,
 ) -> SCFPotential:
     """Evaluate total potential by pure addition of immutable contributions."""
     mono = torch.zeros_like(charges.mono)
@@ -347,7 +347,7 @@ def _entry_energy(
 def interaction_energy_from_charges(
     charges: SCFCharges,
     interactions: FunctionalInteractionSet,
-    index: CoreIndexData,
+    index: IndexHelper,
 ) -> Tensor:
     """Evaluate atom-resolved energy using immutable core interaction data."""
     shell_charges = index.reduce_orbital_to_shell(charges.mono)

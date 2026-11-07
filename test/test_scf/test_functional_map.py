@@ -70,7 +70,6 @@ from dxtb._src.scf.functional import (
     validate_functional_scf_interactions,
 )
 from dxtb._src.scf.functional.core import (
-    CoreIndexData,
     FunctionalInteractionSet,
 )
 from dxtb._src.scf.functional.map import (
@@ -1291,14 +1290,14 @@ def test_functional_core_has_no_legacy_mutation_owners(
         scf_options={"fermi_etemp": 300.0},
     )
     inputs = case.inputs
-    assert isinstance(inputs.index, CoreIndexData)
+    assert isinstance(inputs.index, IndexHelper)
     assert isinstance(inputs.interactions, FunctionalInteractionSet)
     assert {field.name for field in fields(type(inputs))}.isdisjoint(
         {"ihelp", "interaction_data"}
     )
     assert all(
         type(value).__name__
-        not in {"IndexHelper", "InteractionList", "InteractionListCache"}
+        not in {"InteractionList", "InteractionListCache"}
         for value in (inputs.index, inputs.interactions)
     )
 
@@ -1306,7 +1305,6 @@ def test_functional_core_has_no_legacy_mutation_owners(
         if isinstance(
             value,
             (
-                IndexHelper,
                 Component,
                 Interaction,
                 InteractionList,

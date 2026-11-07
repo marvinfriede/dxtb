@@ -40,7 +40,6 @@ from dxtb._src.calculators.result import Result
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.functional.core import (
-    CoreIndexData,
     FunctionalInteractionSet,
 )
 from dxtb._src.scf.functional.data import (
@@ -195,10 +194,7 @@ def _serial_h0_spectrum(system, position, charge, spin):
     inverse = storch.inv_cholesky_factor(matrices.overlap, is_posdef=True)
     inputs = SCFInputs(
         numbers=system.numbers,
-        index=CoreIndexData(
-            shells_to_atom=system.ihelp.shells_to_atom.clone(),
-            orbitals_to_shell=system.ihelp.orbitals_to_shell.clone(),
-        ),
+        index=system.ihelp,
         integrals=matrices,
         n0=n0,
         nel=nel,
@@ -1832,15 +1828,22 @@ def test_padded_spectral_jacobian_is_lane_local_and_position_differentiable():
 
 
 def test_two_axis_density_reduction_is_vmap_safe():
-    from dxtb._src.scf.functional.padded import PaddedCoreIndexData
+    from dxtb import IndexHelper
 
-    index = PaddedCoreIndexData(
-        shells_to_atom=torch.tensor([0, -1, 1]),
+    index = IndexHelper(
+        unique_angular=torch.tensor([0]),
+        atom_to_unique=torch.tensor([0, 0]),
+        ushells_to_unique=torch.tensor([0]),
+        ushells_per_unique=torch.tensor([1]),
+        shells_per_atom=torch.tensor([1, 1]),
+        shell_index=torch.tensor([0, 1]),
+        angular=torch.tensor([0, 0]),
+        shells_to_ushell=torch.tensor([0, 0]),
+        shells_to_atom=torch.tensor([0, 1]),
+        orbitals_per_shell=torch.tensor([1, 1]),
+        orbital_index=torch.tensor([0, 2]),
         orbitals_to_shell=torch.tensor([0, -1, 1]),
-        atom_count=2,
-        shell_count=2,
-        valid_shells=torch.tensor([True, False, True]),
-        valid_orbitals=torch.tensor([True, False, True]),
+        batch_mode=0,
     )
     matrices = torch.tensor(
         [

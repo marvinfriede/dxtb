@@ -37,7 +37,6 @@ from tad_mctc.ncoord import (
     gfn2_count,
 )
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.utils import wrap_gather
 from dxtb._src.utils.tensors import structure_charge
 
 PAD = -1
@@ -120,67 +119,12 @@ class H0Setup:
         return replace(self, **values)
 
 
-class H0IndexNode(Node):
-    """Minimal immutable index mappings used by pure H0 evaluation."""
-
-    atom_to_unique: Tensor = child(keep_dtype=True)
-    shells_to_ushell: Tensor = child(keep_dtype=True)
-    unique_angular: Tensor = child(keep_dtype=True)
-    shells_to_atom: Tensor = child(keep_dtype=True)
-    orbitals_to_shell: Tensor = child(keep_dtype=True)
-
-    def spread_uspecies_to_atom(
-        self,
-        x: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(x, dim, self.atom_to_unique, extra=extra)
-
-    def spread_atom_to_shell(
-        self,
-        x: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(x, dim, self.shells_to_atom, extra=extra)
-
-    def spread_uspecies_to_shell(
-        self,
-        x: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return self.spread_atom_to_shell(
-            self.spread_uspecies_to_atom(x, dim=dim, extra=extra),
-            dim=dim,
-            extra=extra,
-        )
-
-    def spread_ushell_to_shell(
-        self,
-        x: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(x, dim, self.shells_to_ushell, extra=extra)
-
-    def spread_shell_to_orbital(
-        self,
-        x: Tensor,
-        dim: int | tuple[int, int] = -1,
-        extra: bool = False,
-    ) -> Tensor:
-        return wrap_gather(x, dim, self.orbitals_to_shell, extra=extra)
-
-
 class H0SetupNode(Node):
     """Captured, differentiable H0 data without a live IndexHelper."""
 
     method: str = context()
     cn_kind: str = context()
 
-    index: H0IndexNode = child()
     numbers: Tensor = child(keep_dtype=True)
     unique: Tensor = child(keep_dtype=True)
     hscale: Tensor = child()
@@ -204,11 +148,6 @@ class H0SetupNode(Node):
     cn_cutoff: Tensor | None = child()
     cn_max: Tensor | None = child()
     cn_kcn: Tensor | None = child()
-
-    @property
-    def ihelp(self) -> H0IndexNode:
-        """Compatibility name for the narrow H0 index mapping."""
-        return self.index
 
     @property
     def cn(self) -> CNModel | None:
@@ -296,17 +235,9 @@ def core_h0_setup(setup: H0Setup) -> H0SetupNode:
             rad=setup.eeq_model.rad.clone(),
         )
 
-    index = H0IndexNode(
-        atom_to_unique=setup.ihelp.atom_to_unique.clone(),
-        shells_to_ushell=setup.ihelp.shells_to_ushell.clone(),
-        unique_angular=setup.ihelp.unique_angular.clone(),
-        shells_to_atom=setup.ihelp.shells_to_atom.clone(),
-        orbitals_to_shell=setup.ihelp.orbitals_to_shell.clone(),
-    )
     return H0SetupNode(
         method=setup.method,
         cn_kind=cn_kind,
-        index=index,
         numbers=setup.numbers.clone(),
         unique=setup.unique.clone(),
         hscale=setup.hscale.clone(),
@@ -571,18 +502,22 @@ def build_hcore(
     positions: Tensor,
     overlap: Tensor,
     charge: Tensor | float | int | None = None,
+    *,
+    ihelp: IndexHelper | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Build the overlap-weighted H0 matrix and return reference occupations."""
-    return _build_hcore(setup, positions, overlap, charge)
+    return _build_hcore(setup, positions, overlap, charge, ihelp=ihelp)
 
 
 def build_hcore_raw(
     setup: H0Setup | H0SetupNode,
     positions: Tensor,
     charge: Tensor | float | int | None = None,
+    *,
+    ihelp: IndexHelper | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Build the pre-overlap H0 terms for legacy analytical use."""
-    return _build_hcore(setup, positions, None, charge)
+    return _build_hcore(setup, positions, None, charge, ihelp=ihelp)
 
 
 def _build_hcore(
@@ -590,9 +525,18 @@ def _build_hcore(
     positions: Tensor,
     overlap: Tensor | None,
     charge: Tensor | float | int | None,
+    *,
+    ihelp: IndexHelper | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Implement the shared H0 formula for true and raw compatibility APIs."""
-    ihelp = setup.index if isinstance(setup, H0SetupNode) else setup.ihelp
+    if ihelp is None:
+        if isinstance(setup, H0Setup):
+            ihelp = setup.ihelp
+        else:
+            raise ValueError(
+                "H0SetupNode evaluation requires an explicit IndexHelper "
+                "passed via `ihelp=`."
+            )
     if setup.method == "gfn0":
         if charge is None:
             raise ValueError("Total molecular charge is required for GFN0 H0.")

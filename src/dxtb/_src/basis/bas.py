@@ -34,7 +34,7 @@ from tad_mctc.data import pse
 
 from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Literal, Tensor, TensorLike
+from dxtb._src.typing import Literal, Self, Tensor, TensorLike, override
 
 from .indexhelper import IndexHelper
 from .ortho import orthogonalize
@@ -121,6 +121,17 @@ class Basis(TensorLike):
         self.slater = self.slater.to(device=self.device)
         self.pqn = self.pqn.to(device=self.device)
         self.valence = self.valence.to(device=self.device)
+
+    @override
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        obj = super().to(device=device, dtype=dtype)
+        if device is not None:
+            obj.ihelp = self.ihelp.to(device=obj.device)
+        return obj
 
     def create_cgtos(self) -> tuple[list[Tensor], list[Tensor]]:
         """

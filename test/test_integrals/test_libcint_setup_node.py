@@ -96,7 +96,7 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     assert len(core.basis_setups) == 1
 
     leaves = _leaves(core)
-    assert len(leaves) == 14
+    assert len(leaves) == 24
     assert all(leaf.device.type == "cpu" for leaf in leaves)
     basis = core.basis_setups[0]
     assert basis.slater.dtype == torch.float64

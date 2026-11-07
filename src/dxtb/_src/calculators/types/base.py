@@ -850,6 +850,17 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         return self
 
+    @override
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        obj = super().to(device=device, dtype=dtype)
+        if device is not None:
+            obj.ihelp = self.ihelp.to(device=obj.device)
+        return obj
+
     def __str__(self) -> str:  # pragma: no cover
         """
         Return a string representation of the instance.

@@ -26,7 +26,7 @@ from tad_mctc.tree import Node, stack
 from torch.func import jacfwd, jacrev, jvp, vmap
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls.kernels.os import compute_1d_os
@@ -49,7 +49,6 @@ from dxtb._src.integral.driver.pytorch.setup import (
 )
 from dxtb._src.integral.evaluation import IntegralSetup, build_integral_matrices
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
 
 from .samples import samples
@@ -93,10 +92,12 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
     assert len(prepare_calls) == 1
     assert system.integral_setup is not None
     setup = system.integral_setup.pytorch
-    legacy = setup_integrals(Basis(numbers, par, system.ihelp))
+    legacy_ihelp = IndexHelper.from_numbers(numbers, par)
+    legacy = setup_integrals(Basis(numbers, par, legacy_ihelp))
     assert type(setup) is PytorchIntegralSetupNode
     assert isinstance(setup, Node)
-    assert type(setup.index) is CoreIndexData
+    assert isinstance(setup.index, IndexHelper)
+    assert setup.index is system.ihelp
     assert type(setup.pair_plan) is PairPlanNode
     assert type(setup.pair_plan.classes) is tuple
     assert not hasattr(setup, "ihelp")

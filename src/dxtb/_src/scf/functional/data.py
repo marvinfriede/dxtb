@@ -37,7 +37,7 @@ from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
-from .core import CoreIndexData, FunctionalInteractionSet
+from .core import FunctionalInteractionSet
 
 __all__ = [
     "ChargeLayout",
@@ -140,13 +140,13 @@ class SCFInputs:
     """Immutable tensor and structural inputs to the single-System core.
 
     Legacy setup/component containers are converted once at the setup
-    boundary. No IndexHelper, mutable interaction list, or cache is retained.
+    boundary. No mutable interaction list or cache is retained.
     Solver and convergence configuration is validated during setup and is not
     retained here.
     """
 
     numbers: Tensor
-    index: CoreIndexData
+    index: IndexHelper
     integrals: IntegralMatrices
     n0: Tensor
     nel: Tensor
@@ -259,7 +259,7 @@ def setup_scf_inputs(
     ihelp: IndexHelper,
     config: ConfigSCF,
     *,
-    core_index: CoreIndexData | None = None,
+    core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> SCFInputs:
     """Build immutable core values from one legacy single-System setup.
@@ -270,7 +270,7 @@ def setup_scf_inputs(
     Its map values are established at setup; this function validates owner,
     IndexHelper provenance, shape, dtype, and device without synchronizing
     tensor values during SCF preparation. Direct and legacy callers should
-    omit both and retain the isolated IndexHelper snapshot.
+    omit both and reuse the frozen ``ihelp`` directly.
     """
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
@@ -281,9 +281,13 @@ def setup_scf_inputs(
         raise ValueError("SCFInputs require an atomic-number axis.")
     if integrals.hcore is None or integrals.overlap is None:
         raise ValueError("SCFInputs require hcore and overlap integrals.")
+    if not isinstance(ihelp, IndexHelper):
+        raise TypeError("SCFInputs requires an IndexHelper.")
     if core_index is not None:
-        if type(core_index) is not CoreIndexData:
-            raise TypeError("Captured SCF index must be CoreIndexData.")
+        if not isinstance(core_index, IndexHelper) or core_index.batch_mode != 0:
+            raise TypeError(
+                "Captured SCF index must be a single-system IndexHelper."
+            )
         active_core = getattr(
             core_index_owner, "_active_exact_core", lambda: None
         )()
@@ -355,16 +359,7 @@ def setup_scf_inputs(
 
     return SCFInputs(
         numbers=numbers,
-        index=(
-            core_index
-            if core_index is not None
-            else CoreIndexData(
-                # Direct and legacy callers own an isolated structural
-                # snapshot so later IndexHelper mutation cannot change it.
-                shells_to_atom=ihelp.shells_to_atom.clone(),
-                orbitals_to_shell=ihelp.orbitals_to_shell.clone(),
-            )
-        ),
+        index=core_index if core_index is not None else ihelp,
         integrals=integrals,
         n0=n0,
         nel=nel,

@@ -45,7 +45,6 @@ from dxtb._src.wavefunction.filling import FermiStatus
 from .anderson import AndersonMethod, setup_anderson_method_settings
 from .broyden import BroydenMethod, setup_broyden_method_settings
 from .certification import SCFInternalCertificationProfile
-from .core import CoreIndexData
 from .data import (
     PotentialLayout,
     SCFCharges,
@@ -594,7 +593,7 @@ def run_prepared_functional_full(
     integrals: IntegralMatrices,
     route: FullSCFRoute,
     *,
-    core_index: CoreIndexData | None = None,
+    core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
     eager: bool = True,
 ) -> SCFSolveResult:
@@ -637,7 +636,7 @@ def run_system_fixed_trip(
     integrals: IntegralMatrices,
     refocc: Tensor,
     *,
-    core_index: CoreIndexData | None = None,
+    core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> FunctionalCoreResult | dict[str, object]:
     """Run fixed trips for supported functional single-System SCF routes."""
@@ -704,7 +703,7 @@ def run_prepared_functional_implicit(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     *,
-    core_index: CoreIndexData | None = None,
+    core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
     response_settings: SCFResponseSettings | None = None,
     strategy_override: SCFStrategy | None = None,

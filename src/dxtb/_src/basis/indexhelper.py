@@ -46,8 +46,9 @@ from __future__ import annotations
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.math import einsum
+from tad_mctc.tree import Node, child, context
 
-from dxtb._src.typing import Tensor, TensorLike, override
+from dxtb._src.typing import Any, Tensor, override
 
 from ..param import Param, ParamModule
 from ..param.element import get_elem_angular
@@ -57,6 +58,26 @@ __all__ = ["IndexHelper"]
 
 
 PAD = -999
+
+_INDEX_TENSOR_FIELDS: tuple[str, ...] = (
+    "unique_angular",
+    "angular",
+    "atom_to_unique",
+    "ushells_to_unique",
+    "ushells_per_unique",
+    "shells_to_ushell",
+    "shells_per_atom",
+    "shell_index",
+    "shells_to_atom",
+    "orbitals_per_shell",
+    "orbital_index",
+    "orbitals_to_shell",
+)
+_ALLOWED_INT_DTYPES: tuple[torch.dtype, ...] = (
+    torch.int16,
+    torch.int32,
+    torch.int64,
+)
 
 
 def _fill(index: Tensor, repeat: Tensor) -> Tensor:
@@ -88,48 +109,54 @@ def _expand(index: Tensor, repeat: Tensor) -> Tensor:
     )
 
 
-class IndexHelper(TensorLike):
+class IndexHelper(Node):
     """
     Index helper for basis set.
+
+    All 12 index tensors are registered as integer pytree children with
+    ``keep_dtype=True``. Under the ``tad_mctc.tree.Node`` contract, integer
+    children preserve their integer dtype across :meth:`to` and :meth:`type`
+    calls, and :attr:`dtype` raises :exc:`AttributeError` because the node
+    contains no floating-point tensor leaves.
     """
 
-    unique_angular: Tensor
+    unique_angular: Tensor = child(keep_dtype=True)
     """Angular momenta of all unique shells"""
 
-    angular: Tensor
+    angular: Tensor = child(keep_dtype=True)
     """Angular momenta for all shells"""
 
-    atom_to_unique: Tensor
+    atom_to_unique: Tensor = child(keep_dtype=True)
     """Mapping of atoms to unique species"""
 
-    ushells_to_unique: Tensor
+    ushells_to_unique: Tensor = child(keep_dtype=True)
     """Mapping of unique shells to unique species"""
 
-    ushells_per_unique: Tensor
+    ushells_per_unique: Tensor = child(keep_dtype=True)
     """Number of unique shells per unqiue atoms."""
 
-    shells_to_ushell: Tensor
+    shells_to_ushell: Tensor = child(keep_dtype=True)
     """Mapping of shells to unique atoms"""
 
-    shells_per_atom: Tensor  # nsh_at
+    shells_per_atom: Tensor = child(keep_dtype=True)  # nsh_at
     """Number of shells for each atom"""
 
-    orbitals_per_shell: Tensor
-    """Number of orbitals for each shell"""
-
-    shell_index: Tensor  # ish_at
+    shell_index: Tensor = child(keep_dtype=True)  # ish_at
     """Offset index for starting the next shell block"""
 
-    orbital_index: Tensor
-    """Offset index for starting the next orbital block"""
-
-    shells_to_atom: Tensor
+    shells_to_atom: Tensor = child(keep_dtype=True)
     """Mapping of shells to atoms"""
 
-    orbitals_to_shell: Tensor
+    orbitals_per_shell: Tensor = child(keep_dtype=True)
+    """Number of orbitals for each shell"""
+
+    orbital_index: Tensor = child(keep_dtype=True)
+    """Offset index for starting the next orbital block"""
+
+    orbitals_to_shell: Tensor = child(keep_dtype=True)
     """Mapping of orbitals to shells"""
 
-    batch_mode: int
+    batch_mode: int = context(default=0)
     """
     Whether multiple systems or a single one are handled:
 
@@ -138,109 +165,124 @@ class IndexHelper(TensorLike):
     - 2: Multiple systems with no padding (conformer ensemble)
     """
 
-    __slots__ = [
-        "unique_angular",
-        "angular",
-        "atom_to_unique",
-        "ushells_to_unique",
-        "ushells_per_unique",
-        "shells_to_ushell",
-        "shells_per_atom",
-        "shell_index",
-        "shells_to_atom",
-        "orbitals_per_shell",
-        "orbital_index",
-        "orbitals_to_shell",
-        "batch_mode",
-    ]
+    def _normalize(self) -> dict[str, Any]:
+        updates: dict[str, Any] = {}
+        if isinstance(self.batch_mode, bool):
+            updates["batch_mode"] = int(self.batch_mode)
+        first_device: torch.device | None = None
+        for name in _INDEX_TENSOR_FIELDS:
+            tensor = getattr(self, name)
+            if not isinstance(tensor, Tensor):
+                raise TypeError(
+                    f"IndexHelper.{name} must be a torch.Tensor, "
+                    f"got {type(tensor).__name__}."
+                )
+            if first_device is None:
+                first_device = tensor.device
+            elif tensor.device != first_device:
+                raise ValueError("All tensors must be on the same device")
+        return updates
 
-    def __init__(
-        self,
-        unique_angular: Tensor,
-        angular: Tensor,
-        atom_to_unique: Tensor,
-        ushells_to_unique: Tensor,
-        ushells_per_unique: Tensor,
-        shells_to_ushell: Tensor,
-        shells_per_atom: Tensor,
-        shell_index: Tensor,
-        shells_to_atom: Tensor,
-        orbitals_per_shell: Tensor,
-        orbital_index: Tensor,
-        orbitals_to_shell: Tensor,
-        batch_mode: int,
-        device: torch.device | None = None,
-        dtype: torch.dtype = torch.int64,
-        **_,
-    ):
-        super().__init__(device, dtype)
-
-        # Dependent memoization causes memory leaks. The tensors will remain in
-        # the cache object and cannot be garbage collected. Only if the clearing
-        # function below is called, the tensors are removed. Note that this
-        # works across different instances of the IndexHelper, as the cache for
-        # memoization is designed in a cross instance fashion.
-        # This might lead to unexpected behavior, which was detected by the
-        # memory leak tests: The cache was still populated from another test
-        # and only after instantiation of the IndexHelper in the memory leak
-        # test, `self.clear_cache()` was called and the tensors where removed.
-        # Hence, before instantiation more tensors are in memory than after,
-        # which is actually the opposite of what the memory leak tests were
-        # designed for.
-        # self.clear_cache()
-
-        self.unique_angular = unique_angular
-        self.angular = angular
-        self.atom_to_unique = atom_to_unique
-        self.ushells_to_unique = ushells_to_unique
-        self.ushells_per_unique = ushells_per_unique
-        self.shells_to_ushell = shells_to_ushell
-        self.shells_per_atom = shells_per_atom
-        self.shell_index = shell_index
-        self.shells_to_atom = shells_to_atom
-        self.orbitals_per_shell = orbitals_per_shell
-        self.orbital_index = orbital_index
-        self.orbitals_to_shell = orbitals_to_shell
-
-        self.batch_mode = batch_mode
-
-        if any(
-            tensor.dtype != self.dtype
-            for tensor in (
-                self.unique_angular,
-                self.angular,
-                self.atom_to_unique,
-                self.ushells_to_unique,
-                self.ushells_per_unique,
-                self.shells_to_ushell,
-                self.shells_per_atom,
-                self.shell_index,
-                self.shells_to_atom,
-                self.orbitals_per_shell,
-                self.orbital_index,
-                self.orbitals_to_shell,
-            )
+    def _validate(self) -> None:
+        if (
+            isinstance(self.batch_mode, bool)
+            or not isinstance(self.batch_mode, int)
+            or self.batch_mode not in (0, 1, 2)
         ):
-            raise ValueError("All tensors must have same dtype")
-
-        if any(
-            tensor.device != self.device
-            for tensor in (
-                self.unique_angular,
-                self.angular,
-                self.atom_to_unique,
-                self.ushells_to_unique,
-                self.ushells_per_unique,
-                self.shells_to_ushell,
-                self.shells_per_atom,
-                self.shell_index,
-                self.shells_to_atom,
-                self.orbitals_per_shell,
-                self.orbital_index,
-                self.orbitals_to_shell,
+            raise ValueError(
+                "IndexHelper.batch_mode must be 0, 1, or 2, "
+                f"got {self.batch_mode!r}."
             )
+
+        expected_dtype = self.unique_angular.dtype
+        expected_device = self.unique_angular.device
+        for name in _INDEX_TENSOR_FIELDS:
+            tensor = getattr(self, name)
+            if not isinstance(tensor, Tensor):
+                raise TypeError(
+                    f"IndexHelper.{name} must be a torch.Tensor, "
+                    f"got {type(tensor).__name__}."
+                )
+            if tensor.dtype not in _ALLOWED_INT_DTYPES:
+                raise ValueError(
+                    f"IndexHelper.{name} must have an integer dtype in "
+                    f"{_ALLOWED_INT_DTYPES}, got {tensor.dtype}."
+                )
+            if tensor.dtype != expected_dtype:
+                raise ValueError("All tensors must have same dtype")
+            if tensor.device != expected_device:
+                raise ValueError("All tensors must be on the same device")
+            if tensor.ndim < 1:
+                raise ValueError(
+                    f"IndexHelper.{name} must be at least 1D, "
+                    f"got shape {tuple(tensor.shape)}."
+                )
+
+        if self.unique_angular.shape != self.ushells_to_unique.shape:
+            raise ValueError(
+                "IndexHelper.unique_angular and ushells_to_unique must "
+                "have the same shape."
+            )
+        if (
+            self.atom_to_unique.shape != self.shells_per_atom.shape
+            or self.atom_to_unique.shape != self.shell_index.shape
         ):
-            raise ValueError("All tensors must be on the same device")
+            raise ValueError(
+                "IndexHelper atom-level tensors (atom_to_unique, "
+                "shells_per_atom, shell_index) must have the same shape."
+            )
+        if (
+            self.angular.shape != self.shells_to_ushell.shape
+            or self.angular.shape != self.shells_to_atom.shape
+            or self.angular.shape != self.orbitals_per_shell.shape
+            or self.angular.shape != self.orbital_index.shape
+        ):
+            raise ValueError(
+                "IndexHelper shell-level tensors (angular, "
+                "shells_to_ushell, shells_to_atom, orbitals_per_shell, "
+                "orbital_index) must have the same shape."
+            )
+
+        if self.batch_mode == 0:
+            batch_shape = self.unique_angular.shape[:-1]
+            for name in _INDEX_TENSOR_FIELDS:
+                tensor = getattr(self, name)
+                if tensor.shape[:-1] != batch_shape:
+                    raise ValueError(
+                        f"IndexHelper.{name} leading dimensions "
+                        f"{tuple(tensor.shape[:-1])} do not match "
+                        f"{tuple(batch_shape)}."
+                    )
+        else:
+            for name in (
+                "unique_angular",
+                "ushells_to_unique",
+                "ushells_per_unique",
+            ):
+                tensor = getattr(self, name)
+                if tensor.ndim != 1:
+                    raise ValueError(
+                        f"IndexHelper.{name} must be 1D for batched mode, "
+                        f"got shape {tuple(tensor.shape)}."
+                    )
+            batch_size = self.atom_to_unique.shape[0]
+            for name in (
+                "angular",
+                "atom_to_unique",
+                "shells_to_ushell",
+                "shells_per_atom",
+                "shell_index",
+                "shells_to_atom",
+                "orbitals_per_shell",
+                "orbital_index",
+                "orbitals_to_shell",
+            ):
+                tensor = getattr(self, name)
+                if tensor.ndim != 2 or tensor.shape[0] != batch_size:
+                    raise ValueError(
+                        f"IndexHelper.{name} must be 2D with leading batch "
+                        f"size {batch_size}, got shape {tuple(tensor.shape)}."
+                    )
 
     @classmethod
     def from_numbers(
@@ -348,7 +390,9 @@ class IndexHelper(TensorLike):
         numbers = numbers.to(cpu)
 
         if batch_mode is None:
-            batch_mode = numbers.ndim > 1
+            batch_mode = int(numbers.ndim > 1)
+        else:
+            batch_mode = int(batch_mode)
 
         unique, atom_to_unique = torch.unique(numbers, return_inverse=True)
 
@@ -449,7 +493,6 @@ class IndexHelper(TensorLike):
             orbital_index=orbital_index.to(device),
             orbitals_to_shell=orbitals_to_shell.to(device),
             batch_mode=batch_mode,
-            device=device,
         )
 
     def reduce_orbital_to_shell(
@@ -480,8 +523,19 @@ class IndexHelper(TensorLike):
             Shell-resolved tensor.
         """
 
+        shell_count = self.shells_to_atom.shape[-1]
+        output_size = (
+            (shell_count, shell_count)
+            if isinstance(dim, tuple)
+            else shell_count
+        )
         return wrap_scatter_reduce(
-            x, dim, self.orbitals_to_shell, reduce, extra=extra
+            x,
+            dim,
+            self.orbitals_to_shell,
+            reduce,
+            extra=extra,
+            output_size=output_size,
         )
 
     def reduce_shell_to_atom(
@@ -512,8 +566,17 @@ class IndexHelper(TensorLike):
             Atom-resolved tensor.
         """
 
+        atom_count = self.atom_to_unique.shape[-1]
+        output_size = (
+            (atom_count, atom_count) if isinstance(dim, tuple) else atom_count
+        )
         return wrap_scatter_reduce(
-            x, dim, self.shells_to_atom, reduce, extra=extra
+            x,
+            dim,
+            self.shells_to_atom,
+            reduce,
+            extra=extra,
+            output_size=output_size,
         )
 
     def reduce_orbital_to_atom(
@@ -885,7 +948,6 @@ class IndexHelper(TensorLike):
     def orbitals_to_atom(self) -> Tensor:
         return self._orbitals_to_atom()
 
-    # @dependent_memoize(lambda self: self.shells_to_atom)
     def _orbitals_to_atom(self) -> Tensor:
         return self.spread_shell_to_orbital(self.shells_to_atom)
 
@@ -893,7 +955,6 @@ class IndexHelper(TensorLike):
     def orbitals_per_shell_cart(self) -> Tensor:
         return self._orbitals_per_shell_cart()
 
-    # @dependent_memoize(lambda self: self.angular)
     def _orbitals_per_shell_cart(self) -> Tensor:
         l = self.angular
         ls = torch.div((l + 1) * (l + 2), 2, rounding_mode="floor")
@@ -903,7 +964,6 @@ class IndexHelper(TensorLike):
     def orbital_index_cart(self) -> Tensor:
         return self._orbital_index_cart()
 
-    # @dependent_memoize(lambda self: self.orbitals_per_shell_cart)
     def _orbital_index_cart(self) -> Tensor:
         orb_per_shell = self.orbitals_per_shell_cart
         return torch.cumsum(orb_per_shell, -1) - orb_per_shell
@@ -912,10 +972,6 @@ class IndexHelper(TensorLike):
     def orbitals_to_shell_cart(self) -> Tensor:
         return self._orbitals_to_shell_cart()
 
-    # @dependent_memoize(
-    #     lambda self: self.orbital_index_cart,
-    #     lambda self: self.orbitals_per_shell_cart,
-    # )
     def _orbitals_to_shell_cart(self) -> Tensor:
         orbital_index = self.orbital_index_cart
         orbitals_per_shell = self.orbitals_per_shell_cart
@@ -938,22 +994,8 @@ class IndexHelper(TensorLike):
     def orbitals_to_atom_cart(self) -> Tensor:
         return self._orbitals_to_atom_cart()
 
-    # @dependent_memoize(lambda self: self.shells_to_atom)
     def _orbitals_to_atom_cart(self) -> Tensor:
         return self.spread_shell_to_orbital_cart(self.shells_to_atom)
-
-    # def clear_cache(self) -> None:
-    #     """Clear the cross-instance caches of all memoized methods."""
-    #     if hasattr(self._orbitals_per_shell_cart, "clear_cache"):
-    #         self._orbitals_per_shell_cart.clear_cache()
-    #     if hasattr(self._orbital_index_cart, "clear_cache"):
-    #         self._orbital_index_cart.clear_cache()
-    #     if hasattr(self._orbitals_to_shell_cart, "clear_cache"):
-    #         self._orbitals_to_shell_cart.clear_cache()
-    #     if hasattr(self._orbitals_to_atom_cart, "clear_cache"):
-    #         self._orbitals_to_atom_cart.clear_cache()
-    #     if hasattr(self._orbitals_to_atom, "clear_cache"):
-    #         self._orbitals_to_atom.clear_cache()
 
     def get_shell_indices(self, atom_idx: int) -> Tensor:
         """
@@ -1070,18 +1112,6 @@ class IndexHelper(TensorLike):
     def nbatch(self) -> int | None:
         return self.atom_to_unique.ndim if self.batch_mode > 0 else None
 
-    @property
-    def allowed_dtypes(self) -> tuple[torch.dtype, ...]:
-        """
-        Specification of dtypes that the TensorLike object can take.
-
-        Returns
-        -------
-        tuple[torch.dtype, ...]
-            Collection of allowed dtypes the TensorLike object can take.
-        """
-        return (torch.int16, torch.int32, torch.int64, torch.long)
-
     def __str__(self) -> str:  # pragma: no cover
         return (
             f"IndexHelper(\n"
@@ -1099,7 +1129,7 @@ class IndexHelper(TensorLike):
             f"  orbitals_to_shell={self.orbitals_to_shell},\n"
             f"  batch_mode={self.batch_mode},\n"
             f"  device={self.device},\n"
-            f"  dtype={self.dtype}\n"
+            f"  dtype={self.unique_angular.dtype}\n"
             ")"
         )
 

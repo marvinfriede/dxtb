@@ -36,6 +36,7 @@ from tad_dftd.model.weights import gaussian_weight
 from tad_mctc.tree import Node, child
 from torch.utils._pytree import tree_flatten, tree_flatten_with_path
 
+from dxtb import IndexHelper
 from dxtb._src.calculators.model import ExactSystemCore
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3CoreSetup,
@@ -57,9 +58,7 @@ from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
 from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlanNode
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
-from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
-from dxtb._src.xtb.h0 import H0IndexNode
 from tad_mctc.ncoord import erf_count, exp_count, gfn2_count
 
 __all__ = [
@@ -295,14 +294,17 @@ def _is_padding_normalized_path(parts: tuple[str | int, ...]) -> bool:
     """Whether the adapter explicitly changes this tensor's shape."""
     if parts in {
         ("numbers",),
+        ("integral", "backend", "index", "atom_to_unique"),
+        ("integral", "backend", "index", "shells_per_atom"),
+        ("integral", "backend", "index", "shell_index"),
+        ("integral", "backend", "index", "angular"),
+        ("integral", "backend", "index", "shells_to_ushell"),
         ("integral", "backend", "index", "shells_to_atom"),
+        ("integral", "backend", "index", "orbitals_per_shell"),
+        ("integral", "backend", "index", "orbital_index"),
         ("integral", "backend", "index", "orbitals_to_shell"),
         ("integral", "backend", "pair_plan", "atom"),
         ("h0_setup", "numbers"),
-        ("h0_setup", "index", "atom_to_unique"),
-        ("h0_setup", "index", "shells_to_ushell"),
-        ("h0_setup", "index", "shells_to_atom"),
-        ("h0_setup", "index", "orbitals_to_shell"),
     }:
         return True
     if (
@@ -365,24 +367,22 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
         raise ValueError("PairPlan AO stride disagrees with backend index.")
     if not torch.equal(plan.atom, backend.index.shells_to_atom):
         raise ValueError("PairPlan atom map disagrees with backend index.")
+    if not torch.equal(
+        backend.index.unique_angular,
+        torch.tensor(
+            plan.unique_angular,
+            dtype=backend.index.unique_angular.dtype,
+            device=backend.index.unique_angular.device,
+        ),
+    ):
+        raise ValueError("PairPlan unique_angular disagrees with backend index.")
     if core.h0_setup is not None and (
         not torch.equal(core.h0_setup.numbers, core.numbers)
-        or not torch.equal(
-            core.h0_setup.index.shells_to_atom,
-            backend.index.shells_to_atom,
-        )
-        or not torch.equal(
-            core.h0_setup.index.orbitals_to_shell,
-            backend.index.orbitals_to_shell,
-        )
-        or not torch.equal(
-            core.h0_setup.index.unique_angular,
-            torch.tensor(
-                plan.unique_angular,
-                dtype=core.h0_setup.index.unique_angular.dtype,
-                device=core.h0_setup.index.unique_angular.device,
-            ),
-        )
+        or core.h0_setup.unique.shape != backend.index.ushells_per_unique.shape
+        or core.h0_setup.selfenergy.shape != backend.index.unique_angular.shape
+        or core.h0_setup.shpoly.shape != backend.index.unique_angular.shape
+        or core.h0_setup.valence.shape != backend.index.unique_angular.shape
+        or core.h0_setup.refocc.shape != backend.index.unique_angular.shape
     ):
         raise ValueError("H0 mappings disagree with the selected backend.")
     if core.config.method != labels.GFN1_XTB:
@@ -436,7 +436,7 @@ def compatibility_signature(core: ExactSystemCore) -> tuple[object, ...]:
                 core.h0_setup.kq is not None,
                 core.h0_setup.eeq_model is not None,
                 core.h0_setup.unique.numel(),
-                core.h0_setup.index.unique_angular.numel(),
+                backend.index.unique_angular.numel(),
             )
         ),
         tuple(
@@ -509,6 +509,56 @@ def _padding_layout_error(
         template_backend.index.orbitals_to_shell[:naos],
     ):
         return "orbital-to-shell mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.atom_to_unique,
+        template_backend.index.atom_to_unique[:nreal],
+    ):
+        return "atom-to-unique mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.shells_per_atom,
+        template_backend.index.shells_per_atom[:nreal],
+    ):
+        return "shells-per-atom mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.shell_index,
+        template_backend.index.shell_index[:nreal],
+    ):
+        return "shell-index mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.angular,
+        template_backend.index.angular[:nshells],
+    ):
+        return "shell angular mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.shells_to_ushell,
+        template_backend.index.shells_to_ushell[:nshells],
+    ):
+        return "shell-to-unique mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.orbitals_per_shell,
+        template_backend.index.orbitals_per_shell[:nshells],
+    ):
+        return "orbitals-per-shell mapping is not a representative prefix"
+    if not torch.equal(
+        source_backend.index.orbital_index,
+        template_backend.index.orbital_index[:nshells],
+    ):
+        return "orbital-index mapping is not a representative prefix"
+    if not (
+        torch.equal(
+            source_backend.index.unique_angular,
+            template_backend.index.unique_angular,
+        )
+        and torch.equal(
+            source_backend.index.ushells_to_unique,
+            template_backend.index.ushells_to_unique,
+        )
+        and torch.equal(
+            source_backend.index.ushells_per_unique,
+            template_backend.index.ushells_per_unique,
+        )
+    ):
+        return "unique angular classes differ"
     if core.h0_setup is None or template.h0_setup is None:
         if core.h0_setup is not template.h0_setup:
             return "optional H0 setup differs"
@@ -517,21 +567,6 @@ def _padding_layout_error(
         template_h0 = template.h0_setup
         if not torch.equal(source_h0.unique, template_h0.unique):
             return "H0 unique-element mapping differs"
-        if not torch.equal(
-            source_h0.index.atom_to_unique,
-            template_h0.index.atom_to_unique[:nreal],
-        ):
-            return "H0 atom-to-unique mapping is not a prefix"
-        if not torch.equal(
-            source_h0.index.shells_to_ushell,
-            template_h0.index.shells_to_ushell[:nshells],
-        ):
-            return "H0 shell-to-unique mapping is not a prefix"
-        if not torch.equal(
-            source_h0.index.unique_angular,
-            template_h0.index.unique_angular,
-        ):
-            return "H0 unique angular classes differ"
 
     source_plan = source_backend.pair_plan
     template_plan = template_backend.pair_plan
@@ -721,10 +756,48 @@ def _pad_core(
     nao = backend.index.orbitals_to_shell.numel()
     ntarget, nshell_target, nao_target, _, _, _ = _capacities(template)
 
-    index = CoreIndexData(
+    index = IndexHelper(
+        unique_angular=backend.index.unique_angular,
+        atom_to_unique=_pad_indices(
+            backend.index.atom_to_unique,
+            template_backend.index.atom_to_unique,
+            nreal,
+        ),
+        ushells_to_unique=backend.index.ushells_to_unique,
+        ushells_per_unique=backend.index.ushells_per_unique,
+        shells_per_atom=_pad_indices(
+            backend.index.shells_per_atom,
+            template_backend.index.shells_per_atom,
+            nreal,
+        ),
+        shell_index=_pad_indices(
+            backend.index.shell_index,
+            template_backend.index.shell_index,
+            nreal,
+        ),
+        angular=_pad_indices(
+            backend.index.angular,
+            template_backend.index.angular,
+            nshell,
+        ),
+        shells_to_ushell=_pad_indices(
+            backend.index.shells_to_ushell,
+            template_backend.index.shells_to_ushell,
+            nshell,
+        ),
         shells_to_atom=_pad_indices(
             backend.index.shells_to_atom,
             template_backend.index.shells_to_atom,
+            nshell,
+        ),
+        orbitals_per_shell=_pad_indices(
+            backend.index.orbitals_per_shell,
+            template_backend.index.orbitals_per_shell,
+            nshell,
+        ),
+        orbital_index=_pad_indices(
+            backend.index.orbital_index,
+            template_backend.index.orbital_index,
             nshell,
         ),
         orbitals_to_shell=_pad_indices(
@@ -732,6 +805,7 @@ def _pad_core(
             template_backend.index.orbitals_to_shell,
             nao,
         ),
+        batch_mode=0,
     )
     pair_masks = _pair_entry_masks(backend.pair_plan, template_backend.pair_plan)
     plan = template_backend.pair_plan.replace(atom=index.shells_to_atom)
@@ -739,26 +813,7 @@ def _pad_core(
 
     h0 = core.h0_setup
     if h0 is not None:
-        template_h0 = template.h0_setup
-        assert template_h0 is not None
-        h0_index = H0IndexNode(
-            atom_to_unique=_pad_vector(
-                h0.index.atom_to_unique,
-                ntarget,
-                fill=0,
-            ),
-            shells_to_ushell=_pad_indices(
-                h0.index.shells_to_ushell,
-                template_h0.index.shells_to_ushell,
-                nshell,
-            ),
-            unique_angular=h0.index.unique_angular,
-            shells_to_atom=index.shells_to_atom,
-            orbitals_to_shell=index.orbitals_to_shell,
-        )
-        h0 = h0.replace(
-            index=h0_index, numbers=_pad_vector(h0.numbers, ntarget)
-        )
+        h0 = h0.replace(numbers=_pad_vector(h0.numbers, ntarget))
 
     classical = []
     for term in core.classical_terms:

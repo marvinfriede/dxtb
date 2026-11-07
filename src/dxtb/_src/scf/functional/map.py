@@ -22,11 +22,10 @@ import torch
 from tad_mctc import storch
 from tad_mctc.math import einsum
 
-from dxtb import labels
+from dxtb import IndexHelper, labels
 from dxtb._src.typing import Tensor
 
 from ...wavefunction import filling
-from .core import CoreIndexData
 from .data import (
     PotentialLayout,
     SCFCharges,
@@ -63,7 +62,7 @@ def potential_to_hamiltonian(
     overlap: Tensor,
     dipole_integrals: Tensor | None,
     quadrupole_integrals: Tensor | None,
-    index: CoreIndexData,
+    index: IndexHelper,
     potential: SCFPotential,
 ) -> Tensor:
     """Return the Hamiltonian assembled from explicit integral values."""

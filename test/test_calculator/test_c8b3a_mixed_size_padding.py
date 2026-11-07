@@ -87,7 +87,7 @@ def _shell_resolved_es3_core(
     assert system.exact_core is not None and system.h0_setup is not None
     gam3 = par.get_elem_param(system.h0_setup.unique, "gam3")
     shell_scale = torch.ones_like(
-        system.h0_setup.index.unique_angular, dtype=gam3.dtype
+        system.ihelp.unique_angular, dtype=gam3.dtype
     )
     resolved = core_es3_setup(
         setup_es3(gam3, system.ihelp, shell_scale=shell_scale)
@@ -181,8 +181,8 @@ def test_h2_h3_complete_cores_pad_and_stack_with_validity() -> None:
         h2.integral.backend.index.orbitals_to_shell,
     )
     torch.testing.assert_close(
-        padded_h2.core.h0_setup.index.atom_to_unique[:2],
-        h2.h0_setup.index.atom_to_unique,
+        padded_h2.core.integral.backend.index.atom_to_unique[:2],
+        h2.integral.backend.index.atom_to_unique,
     )
     assert padded_h2.validity.atoms.tolist() == [True, True, False]
     assert padded_h2.validity.shells.tolist() == [True] * 4 + [False] * 2

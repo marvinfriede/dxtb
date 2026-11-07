@@ -39,7 +39,6 @@ from dxtb import (
 from tad_mctc.ncoord import cn_d3, cn_gfn2, exp_count, gfn2_count
 from dxtb._src.xtb import h0 as h0_module
 from dxtb._src.xtb.h0 import (
-    H0IndexNode,
     H0Setup,
     H0SetupNode,
     build_hcore,
@@ -87,10 +86,9 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
     assert type(core) is H0SetupNode
     assert isinstance(core, Node)
     assert core.method == method
-    assert core.index is not None
     assert not hasattr(core, "param")
-    assert not isinstance(core.index, IndexHelper)
-    assert core.ihelp is core.index
+    assert not hasattr(core, "index")
+    assert not hasattr(core, "ihelp")
     assert (
         core.cn_kind
         == {
@@ -103,7 +101,6 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
     leaves, spec = tree_flatten(core)
     rebuilt = tree_unflatten(leaves, spec)
     assert type(rebuilt) is H0SetupNode
-    assert type(rebuilt.index) is H0IndexNode
     assert rebuilt.method == core.method
     assert rebuilt.cn_kind == core.cn_kind
 
@@ -136,17 +133,6 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
         if tensor is not None:
             assert any(leaf is tensor for leaf in leaves), name
             assert torch.equal(tensor, getattr(legacy, name))
-    for name in (
-        "atom_to_unique",
-        "shells_to_ushell",
-        "unique_angular",
-        "shells_to_atom",
-        "orbitals_to_shell",
-    ):
-        tensor = getattr(core.index, name)
-        assert any(leaf is tensor for leaf in leaves), name
-        assert tensor.dtype in (torch.int32, torch.int64)
-        assert torch.equal(tensor, getattr(legacy.ihelp, name))
 
     assert core.numbers.dtype == legacy.numbers.dtype
     assert core.unique.dtype == legacy.unique.dtype
@@ -155,9 +141,6 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
     assert converted.numbers.dtype == core.numbers.dtype
     assert converted.unique.dtype == core.unique.dtype
     assert converted.valence.dtype == core.valence.dtype
-    assert (
-        converted.index.unique_angular.dtype == core.index.unique_angular.dtype
-    )
     assert converted.hscale.dtype == torch.float32
     assert converted.refocc.dtype == torch.float32
     assert core.hscale.dtype == torch.float64
@@ -180,27 +163,20 @@ def test_h0_core_schema_roundtrip_dtype_device_and_stack(method: str) -> None:
 
     meta = core.to(device="meta")
     assert meta.numbers.device.type == "meta"
-    assert meta.index.atom_to_unique.device.type == "meta"
-    assert meta.index.orbitals_to_shell.device.type == "meta"
-    assert (
-        meta.index.orbitals_to_shell.dtype == core.index.orbitals_to_shell.dtype
-    )
     assert meta.hscale.device.type == "meta"
     if core.eeq_model is not None:
         assert meta.eeq_model.chi.device.type == "meta"
     stacked = stack((core, core))
     assert type(stacked) is H0SetupNode
-    assert type(stacked.index) is H0IndexNode
     assert stacked.numbers.shape[0] == 2
-    assert stacked.index.atom_to_unique.shape[0] == 2
     assert stacked.hscale.shape[0] == 2
 
 
 @pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
 def test_h0_index_spreads_match_index_helper(method: str) -> None:
-    """Narrow H0 gather maps match IndexHelper for vectors and pairs."""
-    numbers, _, _, ihelp, _, core = _setups(method)
-    index = core.index
+    """IndexHelper(Node) gather maps work for vectors, pairs, stacking, and meta."""
+    numbers, _, par, ihelp, _, _ = _setups(method)
+    index = IndexHelper.from_numbers(numbers, par, batch_mode=0)
     pairs = (
         ("spread_uspecies_to_atom", len(torch.unique(numbers))),
         ("spread_uspecies_to_shell", len(torch.unique(numbers))),
@@ -249,7 +225,7 @@ def test_h0_index_spreads_match_index_helper(method: str) -> None:
     _assert_close(actual, expected)
 
     stacked = stack((index, index))
-    assert type(stacked) is H0IndexNode
+    assert type(stacked) is IndexHelper
     assert stacked.unique_angular.shape[0] == 2
     converted = index.to(dtype=torch.float32, device="meta")
     assert converted.atom_to_unique.dtype == index.atom_to_unique.dtype
@@ -273,7 +249,7 @@ def test_h0_raw_weighted_and_reference_occupation_parity(
         legacy, positions, charge=charge_arg
     )
     actual_raw, actual_refocc = build_hcore_raw(
-        core, positions, charge=charge_arg
+        core, positions, charge=charge_arg, ihelp=ihelp
     )
     _assert_close(actual_raw, expected_raw)
     _assert_close(actual_refocc, expected_refocc)
@@ -281,7 +257,7 @@ def test_h0_raw_weighted_and_reference_occupation_parity(
         legacy, positions, overlap, charge=charge_arg
     )
     actual, actual_refocc_node = build_hcore(
-        core, positions, overlap, charge=charge_arg
+        core, positions, overlap, charge=charge_arg, ihelp=ihelp
     )
     _assert_close(actual, expected)
     _assert_close(actual_refocc_node, expected_refocc)
@@ -305,7 +281,9 @@ def test_h0_geometry_parameter_and_transform_parity(method: str) -> None:
     charge_arg = charge if method == "gfn0" else None
 
     def objective(setup, geometry):
-        hcore, refocc = build_hcore(setup, geometry, overlap, charge=charge_arg)
+        hcore, refocc = build_hcore(
+            setup, geometry, overlap, charge=charge_arg, ihelp=ihelp
+        )
         return hcore.square().sum() + refocc.square().sum()
 
     def gradient(setup, geometry):
@@ -352,7 +330,7 @@ def test_h0_geometry_parameter_and_transform_parity(method: str) -> None:
 
     direction = torch.ones_like(positions)
     _, tangent0 = jvp(
-        lambda x: build_hcore(core, x, overlap, charge_arg)[0],
+        lambda x: build_hcore(core, x, overlap, charge_arg, ihelp=ihelp)[0],
         (positions,),
         (direction,),
     )
@@ -362,16 +340,21 @@ def test_h0_geometry_parameter_and_transform_parity(method: str) -> None:
         (direction,),
     )
     _assert_close(tangent0, tangent1)
-    f0 = lambda x: build_hcore(core, x, overlap, charge_arg)[0].reshape(-1)
+    f0 = lambda x: build_hcore(core, x, overlap, charge_arg, ihelp=ihelp)[
+        0
+    ].reshape(-1)
     f1 = lambda x: build_hcore(legacy, x, overlap, charge_arg)[0].reshape(-1)
     _assert_close(jacfwd(f0)(positions), jacfwd(f1)(positions))
     _assert_close(jacrev(f0)(positions), jacrev(f1)(positions))
     geometries = torch.stack((positions, positions + 0.02))
-    mapped = vmap(lambda x: build_hcore(core, x, overlap, charge_arg)[0])(
-        geometries
-    )
+    mapped = vmap(
+        lambda x: build_hcore(core, x, overlap, charge_arg, ihelp=ihelp)[0]
+    )(geometries)
     explicit = torch.stack(
-        [build_hcore(core, x, overlap, charge_arg)[0] for x in geometries]
+        [
+            build_hcore(core, x, overlap, charge_arg, ihelp=ihelp)[0]
+            for x in geometries
+        ]
     )
     _assert_close(mapped, explicit)
     stacked = stack((core, core))
@@ -403,7 +386,11 @@ def test_h0_model_setup_owns_node_and_legacy_calculator_still_works(
     overlap = _eye(calc.ihelp.nao, positions)
     legacy_h0, _ = build_hcore(legacy, positions, overlap, charge=charge)
     pure_h0, _ = build_hcore(
-        calc.system.h0_setup, positions, overlap, charge=charge
+        calc.system.h0_setup,
+        positions,
+        overlap,
+        charge=charge,
+        ihelp=calc.system.ihelp,
     )
     _assert_close(legacy_h0, pure_h0)
     result = calc.system.singlepoint(positions, chrg=0.0)
@@ -496,7 +483,7 @@ def test_h0_legacy_custom_callables_remain_supported_and_conversion_rejects() ->
 
 
 def test_h0_setup_snapshot_isolated_and_history_independent() -> None:
-    """System H0 tensors and index maps resist legacy alias mutation."""
+    """System H0 tensors resist legacy alias mutation."""
     numbers = samples["H2O"]["numbers"]
     positions = samples["H2O"]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN1_XTB.model_copy(deep=True), dtype=positions.dtype)
@@ -504,25 +491,26 @@ def test_h0_setup_snapshot_isolated_and_history_independent() -> None:
     legacy = setup_h0(numbers, par, ihelp)
     core = core_h0_setup(legacy)
     overlap = _eye(ihelp.nao, positions)
-    before, refocc = build_hcore(core, positions, overlap)
+    before, refocc = build_hcore(core, positions, overlap, ihelp=ihelp)
     a = positions.clone().requires_grad_(True)
-    first, _ = build_hcore(core, a, overlap)
+    first, _ = build_hcore(core, a, overlap, ihelp=ihelp)
     grad_first = torch.autograd.grad(first.sum(), a)[0]
     moved = positions + 0.05
-    build_hcore(core, moved, overlap)
-    repeated, repeated_refocc = build_hcore(core, positions.clone(), overlap)
+    build_hcore(core, moved, overlap, ihelp=ihelp)
+    repeated, repeated_refocc = build_hcore(
+        core, positions.clone(), overlap, ihelp=ihelp
+    )
     _assert_close(repeated, before)
     _assert_close(repeated_refocc, refocc)
     b = positions.clone().requires_grad_(True)
     grad_repeat = torch.autograd.grad(
-        build_hcore(core, b, overlap)[0].sum(), b
+        build_hcore(core, b, overlap, ihelp=ihelp)[0].sum(), b
     )[0]
     _assert_close(grad_first, grad_repeat)
 
     snapshots = {
         "hscale": core.hscale.clone(),
         "refocc": core.refocc.clone(),
-        "atom_to_unique": core.index.atom_to_unique.clone(),
         "eeq_chi": (
             None if core.eeq_model is None else core.eeq_model.chi.clone()
         ),
@@ -530,12 +518,10 @@ def test_h0_setup_snapshot_isolated_and_history_independent() -> None:
     with torch.no_grad():
         legacy.hscale.add_(1.0)
         legacy.refocc.add_(1.0)
-        legacy.ihelp.atom_to_unique.add_(1)
         if legacy.eeq_model is not None:
             legacy.eeq_model.chi.add_(1.0)
     _assert_close(core.hscale, snapshots["hscale"])
     _assert_close(core.refocc, snapshots["refocc"])
-    assert torch.equal(core.index.atom_to_unique, snapshots["atom_to_unique"])
     if snapshots["eeq_chi"] is not None:
         _assert_close(core.eeq_model.chi, snapshots["eeq_chi"])
 
@@ -547,5 +533,5 @@ def test_gfn0_missing_charge_keeps_legacy_error() -> None:
     with pytest.raises(ValueError, match="charge is required"):
         build_hcore(legacy, positions, overlap)
     with pytest.raises(ValueError, match="charge is required"):
-        build_hcore(core, positions, overlap)
+        build_hcore(core, positions, overlap, ihelp=ihelp)
 

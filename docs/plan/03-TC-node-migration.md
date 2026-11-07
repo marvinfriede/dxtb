@@ -132,27 +132,37 @@ Delivered as `ModuleNode` in tad-mctc 0.9.1. Unblocks F3.
 
 ## C5 dxtb leaf classes: `IndexHelper` and `Basis`
 
-**Goal.** Migrate the classes at the bottom of dxtb's object tree.
+**Status: `IndexHelper(Node)` consolidation complete.** `IndexHelper`,
+`IndexHelperGFN1`, and `IndexHelperGFN2` inherit directly from
+`tad_mctc.tree.Node` with all 12 integer index tensors registered via
+`child(keep_dtype=True)` and `batch_mode: int = context(default=0)` retained
+only for legacy packed callers (all functional paths use `batch_mode=0`).
+Transitional duplicate indexing classes (`CoreIndexData`,
+`PaddedCoreIndexData`, and `H0IndexNode`) are retired and removed, along with
+obsolete `TensorLike` machinery (`override_ctypes`), `cull()`/`restore()`,
+`_FullData`, and commented-out cross-instance memoization on `IndexHelper`.
+Standard `Node` `.to()` and `.type()` semantics apply: integer index tensors
+preserve their dtype across floating-point `.type()`/`.to(dtype=...)` calls,
+and `IndexHelper.dtype` raises `AttributeError`.
 
-**Preconditions.** B6b-core has established an immutable structural value for
-the functional single-System core; structural values are built in `setup`
-(B3). The legacy batch adapter may still use its existing mutable,
-batch-aware `IndexHelper` until E6broute retires that route; E4.6a then removes
-its cull/restore machinery.
+**Goal.** Migrate the classes at the bottom of dxtb's object tree.
 
 **Steps.**
 
-1. Migrate the surviving immutable core structural value to `Node`; integer
-   index tensors are children; per-molecule counts are tensors, not context
-   (P9).
-2. Remove `allowed_dtypes` (integer handling now comes from the strict conversion rule: integer tensors keep their dtype).
+1. Migrate `IndexHelper` directly to `Node`; all 12 integer index tensors are
+   `child(keep_dtype=True)` leaves; `batch_mode` is a `context(default=0)`
+   field.
+2. Remove `allowed_dtypes`, `override_ctypes`, `cull`/`restore`, `_FullData`,
+   and commented-out memoization (integer handling comes from the strict `Node`
+   conversion rule: integer tensors keep their dtype).
+3. Consolidate `CoreIndexData`, `PaddedCoreIndexData`, and `H0IndexNode` into
+   `IndexHelper(Node)` with one canonical registered `IndexHelper` per
+   `ExactSystemCore` (`core.integral.backend.index`, exposed as `core.index`
+   and shared with `system.ihelp`).
 
-`batch_mode` and cull/restore are not migrated into the core Node. Do not
-remove those methods from the separately isolated legacy `IndexHelper` while
-the production batch fallback still uses it. C5 migrates the core value; it
-does not require deleting the legacy adapter.
-
-**Done when.** Both migrated; conversion moves their tensors with the parent's `.to(device)`; T0.2 reproduced.
+**Done when.** `IndexHelper` is a `Node`; conversion moves its tensors with
+the parent's `.to(device)`; duplicate indexing classes (`CoreIndexData`,
+`PaddedCoreIndexData`, `H0IndexNode`) are removed; T0.2 reproduced.
 
 **Needs.** C1, B3a, B6b-core, E2-core, E4core. **Size.** M.
 
@@ -342,16 +352,16 @@ separate.** The schema inventory, production ownership, matched-base
 numerical outcomes, and transform evidence are recorded in
 [`C7 integral Node schema`](C7.0-integral-node-schema.md). Exact single-System
 PyTorch setup owns registered PairPlan and setup Nodes, and the exact
-single-System H0 setup owns `H0SetupNode` with explicit `H0IndexNode` maps.
+single-System H0 setup owns `H0SetupNode` while sharing the canonical
+`IndexHelper(Node)` owned by the selected integral backend (`core.index` /
+`system.ihelp`) without registering duplicate index leaves on `h0_setup`.
 Exact pure single-System libcint evaluation owns `LibcintIntegralSetupNode`
-and ordered `LibcintBasisNode` values. Its external wrapper is built without a
-live IndexHelper and derives shell/AO maps from the captured shell order;
-`LibcintCallData` carries `CoreIndexData` for dxtb's origin shifts. The full
-System IndexHelper remains outside the Node for SCF and legacy Calculator
-responsibilities. Direct setup dataclasses, Calculator drivers, and packed
-routes retain their existing compatibility paths. The accepted-base GFN2 LiH
-exponent-gradient failure remains unchanged. No production physics,
-references, or tolerances changed.
+and ordered `LibcintBasisNode` values. Its external wrapper is built from
+captured shell-order data, and `LibcintCallData` carries the canonical
+`IndexHelper(Node)` for dxtb's origin shifts. Direct setup dataclasses,
+Calculator drivers, and packed routes retain their existing compatibility
+paths. The accepted-base GFN2 LiH exponent-gradient failure remains unchanged.
+No production physics, references, or tolerances changed.
 
 **Goal.** Migrate the integral description objects, the Hamiltonian and the driver.
 
@@ -438,13 +448,15 @@ descriptor/setup Nodes are ready to be enclosed by a bounded core Node.
 numbers, optional H0 setup, one selected integral backend Node, and ordered
 classical/interaction descriptor Nodes as dynamic children. Effective dtype,
 immutable `Config`, selected driver/integral level, and ordered descriptor
-metadata are static context. The integral index is a derived alias of the
-selected backend's `CoreIndexData`; do not register it again. Family setup
-Nodes are owned by their descriptors; System façade setup fields and identity
-associations remain compatibility adapters. `IndexHelper`, component lists,
-drivers, caches, positions, charge, spin, and fields stay outside the core.
-`IntegralSetup` must be adapted through a registered wrapper with its selected
-backend as a child, not retained as opaque context.
+metadata are static context. The canonical `IndexHelper(Node)` is owned once
+as `core.integral.backend.index`, exposed via the derived property `core.index`,
+and shared with `system.ihelp`; do not register duplicate index leaves on
+`ExactSystemCore` or `H0SetupNode`. Family setup Nodes are owned by their
+descriptors; System façade setup fields and identity associations remain
+compatibility adapters. Component lists, drivers, caches, positions, charge,
+spin, and fields stay outside the core. `IntegralSetup` must be adapted through
+a registered wrapper with its selected backend as a child, not retained as
+opaque context.
 
 **Model parameters.** Keep one Model-level `ParamModule` owner. The production
 `Model.parameter_tree` is a registered `ModelParameterNode` containing one

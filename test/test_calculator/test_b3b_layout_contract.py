@@ -32,8 +32,6 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _interaction_data, singlepoint
 from dxtb._src.integral.driver.pytorch.overlap import build_overlap
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional.core import CoreIndexData
-from dxtb._src.xtb.h0 import H0IndexNode
 from dxtb.config import Config
 
 from ..molecules import mols
@@ -687,7 +685,7 @@ def test_no_setup_dtype_checks_include_device(dtype: torch.dtype) -> None:
 def test_captured_index_maps_match_h0_and_legacy(
     method: str, method_label: int, molecule: str
 ) -> None:
-    """Captured PyTorch and H0 maps preserve legacy index ordering."""
+    """Single canonical IndexHelper is shared across core, integral backend, and System."""
     numbers = mols[molecule]["numbers"].to(device="cpu")
     config = Config.create(
         method=method_label, int_driver=labels.INTDRIVER_PYTORCH
@@ -698,32 +696,17 @@ def test_captured_index_maps_match_h0_and_legacy(
     assert system.integral_setup is not None
     assert system.integral_setup.pytorch is not None
     assert system.h0_setup is not None
+    assert system.exact_core is not None
     pytorch_index = system.integral_setup.pytorch.index
-    h0_index = system.h0_setup.index
-    legacy = system.ihelp
-    for name in ("shells_to_atom", "orbitals_to_shell"):
-        expected = getattr(legacy, name)
-        actual = getattr(pytorch_index, name)
-        h0_actual = getattr(h0_index, name)
-        assert actual.shape == expected.shape == h0_actual.shape
-        assert actual.dtype == expected.dtype == h0_actual.dtype
-        assert actual.device == expected.device == h0_actual.device
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-        torch.testing.assert_close(h0_actual, expected, rtol=0, atol=0)
-        assert actual is not expected
-        assert h0_actual is not expected
-        assert (
-            actual.untyped_storage().data_ptr()
-            != expected.untyped_storage().data_ptr()
-        )
-        assert (
-            h0_actual.untyped_storage().data_ptr()
-            != expected.untyped_storage().data_ptr()
-        )
+    assert isinstance(pytorch_index, IndexHelper)
+    assert pytorch_index is system.ihelp
+    assert system.exact_core.index is pytorch_index
+    assert not hasattr(system.h0_setup, "index")
+    assert not hasattr(system.h0_setup, "ihelp")
 
 
 def test_captured_libcint_index_maps_match_h0_and_legacy() -> None:
-    """Libcint captures equivalent SCF maps on its configured backend."""
+    """Libcint shares the single canonical IndexHelper on its configured backend."""
     pytest.importorskip("tad_libcint")
     numbers = mols["H2O"]["numbers"].to(device="cpu")
     config = Config.create(
@@ -735,31 +718,19 @@ def test_captured_libcint_index_maps_match_h0_and_legacy() -> None:
     assert system.integral_setup is not None
     assert system.integral_setup.libcint is not None
     assert system.h0_setup is not None
+    assert system.exact_core is not None
     libcint_index = system.integral_setup.libcint.index
-    for name in ("shells_to_atom", "orbitals_to_shell"):
-        actual = getattr(libcint_index, name)
-        expected = getattr(system.ihelp, name)
-        h0_actual = getattr(system.h0_setup.index, name)
-        assert actual.shape == expected.shape == h0_actual.shape
-        assert actual.dtype == expected.dtype == h0_actual.dtype
-        assert actual.device == expected.device == h0_actual.device
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-        torch.testing.assert_close(h0_actual, expected, rtol=0, atol=0)
-        assert (
-            actual.untyped_storage().data_ptr()
-            != expected.untyped_storage().data_ptr()
-        )
-        assert (
-            h0_actual.untyped_storage().data_ptr()
-            != expected.untyped_storage().data_ptr()
-        )
+    assert isinstance(libcint_index, IndexHelper)
+    assert libcint_index is system.ihelp
+    assert system.exact_core.index is libcint_index
+    assert not hasattr(system.h0_setup, "index")
+    assert not hasattr(system.h0_setup, "ihelp")
 
 
 def test_functional_singlepoint_reuses_captured_scf_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Eligible System SCF inputs reuse the active backend map Node."""
-    from dxtb._src.scf.functional import data as functional_data
     from dxtb._src.scf.functional import eager
 
     system = _model().setup(torch.tensor([1, 1]))
@@ -767,7 +738,7 @@ def test_functional_singlepoint_reuses_captured_scf_index(
     assert system.integral_setup.pytorch is not None
     expected_index = system.integral_setup.pytorch.index
     original = eager.setup_scf_inputs
-    index_type = functional_data.CoreIndexData
+    index_type = IndexHelper
     constructions = 0
     prepared = []
     original_init = index_type.__init__
@@ -851,7 +822,7 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
 def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Direct functional setup remains independent of captured System maps."""
+    """Direct functional setup reuses the frozen IndexHelper without cloning."""
     from test.test_scf.test_functional_map import _prepare_case
 
     from dxtb._src.scf.functional.data import setup_scf_inputs
@@ -861,9 +832,7 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
         case.system.ihelp.shells_to_atom,
         case.system.ihelp.orbitals_to_shell,
     )
-    from dxtb._src.scf.functional import data as functional_data
-
-    index_type = functional_data.CoreIndexData
+    index_type = IndexHelper
     constructions = 0
     original_init = index_type.__init__
 
@@ -886,17 +855,18 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
             case.system.ihelp,
             case.system.config.scf,
         )
-    assert isinstance(inputs.index, CoreIndexData)
-    assert inputs.index is not case.system.integral_setup.pytorch.index
-    assert inputs.index.shells_to_atom is not legacy_maps[0]
-    assert inputs.index.orbitals_to_shell is not legacy_maps[1]
-    assert clone_counter.count == 2
-    assert constructions == 1
+    assert isinstance(inputs.index, IndexHelper)
+    assert inputs.index is case.system.ihelp
+    assert clone_counter.count == 0
+    assert constructions == 0
 
     assert case.system.exact_core is not None
-    unrelated_index = CoreIndexData(
-        shells_to_atom=legacy_maps[0].clone(),
-        orbitals_to_shell=legacy_maps[1].clone(),
+    unrelated_index = IndexHelper(
+        **{
+            name: getattr(case.system.ihelp, name).clone()
+            for name in case.system.ihelp._child_names
+        },
+        batch_mode=0,
     )
     with pytest.raises(ValueError, match="does not belong to this System"):
         setup_scf_inputs(
@@ -976,20 +946,9 @@ def test_captured_integral_maps_are_not_rebuilt_during_evaluation(
     assert setup is not None and setup.pytorch is not None
     assert type(setup.pytorch).__name__ == "PytorchIntegralSetupNode"
     assert not hasattr(setup.pytorch, "ihelp")
-    assert isinstance(system.h0_setup.ihelp, H0IndexNode)
-    assert not isinstance(system.h0_setup.ihelp, IndexHelper)
-    captured_shell_map = setup.pytorch.index.shells_to_atom
-    legacy_shell_map = system.ihelp.shells_to_atom
-    assert captured_shell_map is not legacy_shell_map
-    captured_snapshot = captured_shell_map.clone()
-    legacy_snapshot = legacy_shell_map.clone()
-    try:
-        with torch.no_grad():
-            legacy_shell_map[0] = legacy_shell_map[0] + 1
-        assert torch.equal(captured_shell_map, captured_snapshot)
-    finally:
-        with torch.no_grad():
-            legacy_shell_map.copy_(legacy_snapshot)
+    assert not hasattr(system.h0_setup, "ihelp")
+    assert isinstance(setup.pytorch.index, IndexHelper)
+    assert setup.pytorch.index is system.ihelp
 
     def fail_rebuild(*args, **kwargs):
         raise AssertionError("IndexHelper construction ran during evaluation")

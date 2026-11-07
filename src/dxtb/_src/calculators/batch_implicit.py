@@ -99,7 +99,6 @@ from dxtb._src.scf.functional.certification import (
     resolve_certification_thresholds,
 )
 from dxtb._src.scf.functional.core import (
-    CoreIndexData,
     replace_tensor_leaves,
     tensor_leaves,
 )

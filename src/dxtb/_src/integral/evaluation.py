@@ -138,7 +138,9 @@ def setup_integral_evaluation(
 
     device = torch.device("cpu") if force_cpu_for_libcint else numbers.device
     backend_numbers = numbers.to(device=device)
-    backend_ihelp = ihelp.to(device=device)
+    backend_ihelp = (
+        ihelp if ihelp.device == device else ihelp.to(device=device)
+    )
     basis_setups = []
 
     if ihelp.batch_mode == 0:
@@ -179,7 +181,7 @@ def setup_integral_evaluation(
         return IntegralSetup(
             driver_type=driver_type,
             intlevel=intlevel,
-            libcint=core_libcint_setup(libcint_setup),
+            libcint=core_libcint_setup(libcint_setup, copy_index=False),
         )
     return IntegralSetup(
         driver_type=driver_type,
@@ -284,7 +286,14 @@ def build_integral_matrices(
     if quadrupole is not None:
         quadrupole = quadrupole.to(device=target_device)
 
-    hcore, refocc = build_hcore(h0_setup, positions, overlap, charge=charge)
+    h0_ihelp = (
+        ihelp
+        if ihelp.device == target_device
+        else ihelp.to(device=target_device)
+    )
+    hcore, refocc = build_hcore(
+        h0_setup, positions, overlap, charge=charge, ihelp=h0_ihelp
+    )
     hcore = hcore.to(device=target_device)
     refocc = refocc.to(device=target_device)
     matrices = IntegralMatrices(

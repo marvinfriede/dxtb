@@ -25,7 +25,6 @@ from torch.func import vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.basis.indexhelper import IndexHelper
-from dxtb._src.scf.functional.core import CoreIndexData
 
 from ..molecules import mols
 from ..utils import get_param_module
@@ -36,8 +35,23 @@ _SYSTEMS = (
     pytest.param(GFN1_XTB, "CH4", id="gfn1-ch4"),
 )
 
+_INDEX_FIELDS = (
+    "unique_angular",
+    "angular",
+    "atom_to_unique",
+    "ushells_to_unique",
+    "ushells_per_unique",
+    "shells_to_ushell",
+    "shells_per_atom",
+    "shell_index",
+    "shells_to_atom",
+    "orbitals_per_shell",
+    "orbital_index",
+    "orbitals_to_shell",
+)
 
-def _indices(method, molecule: str) -> tuple[IndexHelper, CoreIndexData]:
+
+def _indices(method, molecule: str) -> tuple[IndexHelper, IndexHelper]:
     numbers = mols[molecule]["numbers"].to(device="cpu")
     par = get_param_module(
         "gfn1" if method is GFN1_XTB else "gfn2",
@@ -45,9 +59,9 @@ def _indices(method, molecule: str) -> tuple[IndexHelper, CoreIndexData]:
         dtype=torch.float64,
     )
     legacy = IndexHelper.from_numbers(numbers, par, batch_mode=0)
-    core = CoreIndexData(
-        shells_to_atom=legacy.shells_to_atom,
-        orbitals_to_shell=legacy.orbitals_to_shell,
+    core = IndexHelper(
+        **{name: getattr(legacy, name).clone() for name in _INDEX_FIELDS},
+        batch_mode=0,
     )
     return legacy, core
 
@@ -56,16 +70,13 @@ def _indices(method, molecule: str) -> tuple[IndexHelper, CoreIndexData]:
 def test_core_index_node_layout_conversion_and_stack(method, molecule) -> None:
     legacy, index = _indices(method, molecule)
 
-    assert index._child_names == ("shells_to_atom", "orbitals_to_shell")
-    assert index._context_names == ()
-    assert index._keep_dtype_names == {
-        "shells_to_atom",
-        "orbitals_to_shell",
-    }
+    assert index._child_names == _INDEX_FIELDS
+    assert index._context_names == ("batch_mode",)
+    assert index._keep_dtype_names == set(_INDEX_FIELDS)
+    assert index.batch_mode == 0
     assert not any(
         hasattr(index, name)
         for name in (
-            "batch_mode",
             "cull",
             "restore",
             "update",
@@ -75,18 +86,13 @@ def test_core_index_node_layout_conversion_and_stack(method, molecule) -> None:
     )
 
     leaves, spec = torch.utils._pytree.tree_flatten(index)
-    assert len(leaves) == 2
-    assert leaves[0] is index.shells_to_atom
-    assert leaves[1] is index.orbitals_to_shell
-    assert spec.type is CoreIndexData
-    assert spec.context == (
-        ("shells_to_atom", "orbitals_to_shell"),
-        (),
-        (),
-    )
+    assert len(leaves) == 12
+    for leaf, name in zip(leaves, _INDEX_FIELDS):
+        assert leaf is getattr(index, name)
+    assert spec.type is IndexHelper
     rebuilt = torch.utils._pytree.tree_unflatten(leaves, spec)
-    assert isinstance(rebuilt, CoreIndexData)
-    for name in ("shells_to_atom", "orbitals_to_shell"):
+    assert isinstance(rebuilt, IndexHelper)
+    for name in _INDEX_FIELDS:
         actual = getattr(rebuilt, name)
         expected = getattr(index, name)
         assert actual.dtype == expected.dtype == torch.long
@@ -95,19 +101,18 @@ def test_core_index_node_layout_conversion_and_stack(method, molecule) -> None:
 
     converted = index.to(dtype=torch.float32)
     assert converted is index
-    for name in ("shells_to_atom", "orbitals_to_shell"):
+    for name in _INDEX_FIELDS:
         assert getattr(converted, name).dtype == torch.long
     cpu = index.to(device="cpu")
-    assert isinstance(cpu, CoreIndexData)
+    assert isinstance(cpu, IndexHelper)
     assert cpu.shells_to_atom.device.type == "cpu"
     assert cpu.orbitals_to_shell.device.type == "cpu"
 
     stacked = tree_stack((index, rebuilt))
-    assert isinstance(stacked, CoreIndexData)
-    assert stacked.shells_to_atom.shape[0] == 2
-    assert stacked.orbitals_to_shell.shape[0] == 2
-    assert stacked.shells_to_atom.dtype == torch.long
-    assert stacked.orbitals_to_shell.dtype == torch.long
+    assert isinstance(stacked, IndexHelper)
+    for name in _INDEX_FIELDS:
+        assert getattr(stacked, name).shape[0] == 2
+        assert getattr(stacked, name).dtype == torch.long
 
 
 @pytest.mark.parametrize("method,molecule", _SYSTEMS)

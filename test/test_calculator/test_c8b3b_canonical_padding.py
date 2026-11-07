@@ -192,12 +192,12 @@ def test_h2_h2o_canonical_complete_core_stack(numbers) -> None:
         target_h0 = (padded_h2, padded_water)[source_i].core.h0_setup
         assert source_h0 is not None and target_h0 is not None
         assert target_h0.unique.tolist() == [1, 8]
-        assert target_h0.index.atom_to_unique.tolist() == [0, 0, 1]
-        assert target_h0.index.shells_to_ushell.index_select(
+        assert mapped_backend.index.atom_to_unique.tolist() == [0, 0, 1]
+        assert mapped_backend.index.shells_to_ushell.index_select(
             0, torch.tensor(mapping.shells, dtype=torch.int64)
         ).tolist() == [
             mapping.shell_types[index]
-            for index in source_h0.index.shells_to_ushell.tolist()
+            for index in original_backend.index.shells_to_ushell.tolist()
         ]
         torch.testing.assert_close(
             target_h0.hscale.index_select(
@@ -486,20 +486,27 @@ def test_malformed_structural_and_dtype_metadata_is_rejected() -> None:
     with pytest.raises(TypeError, match="different dtypes"):
         backend.replace(alphas=bad_alphas)
 
-    bad_h0_index = core.h0_setup.index.replace(
+    bad_index = backend.index.replace(
         atom_to_unique=torch.tensor([9, 0], dtype=torch.int64)
     )
-    bad_h0 = core.h0_setup.replace(index=bad_h0_index)
-    bad_indices = core.replace(h0_setup=bad_h0)
+    bad_indices = core.replace(
+        integral=core.integral.replace(backend=backend.replace(index=bad_index))
+    )
     with pytest.raises(ValueError, match="invalid index"):
         bucket_canonical_exact_cores((bad_indices,))
 
-    bad_shell_map = core.h0_setup.index.replace(
+    bad_shell_map = backend.index.replace(
         shells_to_atom=torch.tensor([1, 0, 1, 1], dtype=torch.int64)
     )
-    with pytest.raises(ValueError, match="shell-to-atom mappings disagree"):
+    with pytest.raises(ValueError, match="shell-to-atom mapping disagrees"):
         bucket_canonical_exact_cores(
-            (core.replace(h0_setup=core.h0_setup.replace(index=bad_shell_map)),)
+            (
+                core.replace(
+                    integral=core.integral.replace(
+                        backend=backend.replace(index=bad_shell_map)
+                    )
+                ),
+            )
         )
 
     class0 = backend.pair_plan.classes[0]

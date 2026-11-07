@@ -135,7 +135,6 @@ from dxtb.config import Config
 
 if TYPE_CHECKING:
     from dxtb._src.calculators.result import Result
-    from dxtb._src.scf.functional.core import CoreIndexData
 
 __all__ = ["Model", "ModelParameterNode", "System"]
 
@@ -273,7 +272,7 @@ class ExactSystemCore(Node):
         return converted
 
     @property
-    def index(self) -> CoreIndexData | None:
+    def index(self) -> IndexHelper | None:
         """Return the index owned by the selected backend, if present."""
         if self.integral is None or self.integral.backend is None:
             return None
@@ -1002,13 +1001,12 @@ class System:
             return False
         n_orbitals = ihelp.orbitals_to_shell.shape[0]
 
-        h0_index = self.h0_setup.ihelp if self.h0_setup is not None else None
-        if h0_index is not None and (
-            h0_index.atom_to_unique.shape != (nat,)
-            or h0_index.shells_to_ushell.shape != (n_shells,)
-            or h0_index.unique_angular.shape != ihelp.unique_angular.shape
-            or h0_index.shells_to_atom.shape != (n_shells,)
-            or h0_index.orbitals_to_shell.shape != (n_orbitals,)
+        if self.h0_setup is not None and (
+            self.h0_setup.selfenergy.shape != ihelp.unique_angular.shape
+            or self.h0_setup.shpoly.shape != ihelp.unique_angular.shape
+            or self.h0_setup.rad.shape != ihelp.ushells_per_unique.shape
+            or self.h0_setup.valence.shape != ihelp.unique_angular.shape
+            or self.h0_setup.refocc.shape != ihelp.unique_angular.shape
         ):
             return False
 
@@ -1029,7 +1027,10 @@ class System:
             ):
                 backend_index = backend.index
         if backend_index is not None and (
-            backend_index.shells_to_atom.shape != (n_shells,)
+            backend_index.atom_to_unique.shape != (nat,)
+            or backend_index.shells_to_ushell.shape != (n_shells,)
+            or backend_index.unique_angular.shape != ihelp.unique_angular.shape
+            or backend_index.shells_to_atom.shape != (n_shells,)
             or backend_index.orbitals_to_shell.shape != (n_orbitals,)
         ):
             return False
@@ -1054,30 +1055,12 @@ class System:
             return True
 
         if (
-            h0_index is not None
-            and h0_index.shells_to_atom.device == ihelp.device
-            and not (
-                torch.equal(ihelp.atom_to_unique, h0_index.atom_to_unique)
-                and torch.equal(
-                    ihelp.shells_to_ushell, h0_index.shells_to_ushell
-                )
-                and torch.equal(ihelp.unique_angular, h0_index.unique_angular)
-                and torch.equal(ihelp.shells_to_atom, h0_index.shells_to_atom)
-                and torch.equal(
-                    ihelp.orbitals_to_shell, h0_index.orbitals_to_shell
-                )
-            )
-        ):
-            return False
-
-        if (
             backend_index is not None
             and backend_index.shells_to_atom.device == ihelp.device
-            and not (
-                torch.equal(ihelp.shells_to_atom, backend_index.shells_to_atom)
-                and torch.equal(
-                    ihelp.orbitals_to_shell, backend_index.orbitals_to_shell
-                )
+            and backend_index is not ihelp
+            and not all(
+                torch.equal(getattr(ihelp, name), getattr(backend_index, name))
+                for name in ihelp._child_names
             )
         ):
             return False
@@ -1103,7 +1086,7 @@ class System:
             return False
 
         device = ihelp.device
-        dtype = ihelp.dtype
+        dtype = ihelp.unique_angular.dtype
         expected_ushells_to_unique = torch.repeat_interleave(
             torch.arange(unique.shape[0], device=device, dtype=dtype),
             ihelp.ushells_per_unique,

@@ -318,3 +318,29 @@ def test_no_legacy_ncoord_subpackage() -> None:
     assert not offenders, "Legacy ncoord references returned: " + ", ".join(
         offenders
     )
+
+
+def test_indexhelper_is_canonical_node_without_duplicate_index_classes() -> None:
+    """IndexHelper(Node) is canonical; duplicate index classes are removed."""
+    ihelp_src = (SRC / "_src" / "basis" / "indexhelper.py").read_text()
+    assert "class IndexHelper(Node):" in ihelp_src
+    assert "TensorLike" not in ihelp_src
+    assert "dependent_memoize" not in ihelp_src
+
+    forbidden = (
+        "class CoreIndexData",
+        "class PaddedCoreIndexData",
+        "class H0IndexNode",
+        "def core_index_data(",
+        "def padded_core_index_data(",
+    )
+    offenders = [
+        f"{path.relative_to(SRC.parent)}:{token}"
+        for path in SRC.rglob("*.py")
+        for text in (path.read_text(),)
+        for token in forbidden
+        if token in text
+    ]
+    assert not offenders, "Duplicate index classes returned: " + ", ".join(
+        offenders
+    )
