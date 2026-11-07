@@ -93,7 +93,7 @@ class Basis(TensorLike):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
-        super().__init__(device, dtype)
+        super().__init__(numbers.device if device is None else device, dtype)
         self.numbers = numbers
         self.unique: Tensor = torch.unique(numbers)
         self.meta = par.meta

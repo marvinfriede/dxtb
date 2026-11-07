@@ -122,7 +122,13 @@ def setup_integral_evaluation(
         return None
 
     if driver_type == labels.INTDRIVER_PYTORCH:
-        basis = Basis(numbers, par, ihelp)
+        basis = Basis(
+            numbers,
+            par,
+            ihelp,
+            device=numbers.device,
+            dtype=par.dtype,
+        )
         pytorch_setup = setup_integrals_core(
             basis,
             **({} if algorithm is None else {"algorithm": algorithm}),

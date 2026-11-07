@@ -391,6 +391,100 @@ def scatter_reduce(
     return output
 
 
+_SUPPORTED_REDUCTIONS = ("sum", "prod", "mean", "amin", "amax")
+
+
+def _masked_scatter_reduce_1d(
+    x: Tensor,
+    dim: int,
+    idx: Tensor,
+    reduce: str,
+    output_size: int | None = None,
+) -> Tensor:
+    """One-axis scatter reduction that excludes negative index entries."""
+    valid = idx >= 0
+    safe_idx = torch.where(valid, idx, 0)
+    if reduce == "sum":
+        masked_x = torch.where(valid, x, torch.zeros_like(x))
+        return scatter_reduce(
+            masked_x,
+            dim,
+            safe_idx,
+            "sum",
+            fill_value=0,
+            output_size=output_size,
+        )
+    if reduce == "mean":
+        masked_x = torch.where(valid, x, torch.zeros_like(x))
+        total = scatter_reduce(
+            masked_x,
+            dim,
+            safe_idx,
+            "sum",
+            fill_value=0,
+            output_size=output_size,
+        )
+        counts = scatter_reduce(
+            valid.to(dtype=x.dtype),
+            dim,
+            safe_idx,
+            "sum",
+            fill_value=0,
+            output_size=output_size,
+        )
+        return torch.where(
+            counts > 0, total / counts.clamp(min=1), torch.zeros_like(total)
+        )
+    if reduce == "prod":
+        masked_x = torch.where(valid, x, torch.ones_like(x))
+        reduced = scatter_reduce(
+            masked_x,
+            dim,
+            safe_idx,
+            "prod",
+            fill_value=1,
+            output_size=output_size,
+        )
+        counts = scatter_reduce(
+            valid.to(dtype=torch.int64),
+            dim,
+            safe_idx,
+            "sum",
+            fill_value=0,
+            output_size=output_size,
+        )
+        return torch.where(counts > 0, reduced, torch.zeros_like(reduced))
+    if reduce in ("amin", "amax"):
+        info = (
+            torch.finfo(x.dtype)
+            if x.is_floating_point()
+            else torch.iinfo(x.dtype)
+        )
+        identity = info.min if reduce == "amax" else info.max
+        masked_x = torch.where(valid, x, torch.full_like(x, identity))
+        reduced = scatter_reduce(
+            masked_x,
+            dim,
+            safe_idx,
+            reduce,
+            fill_value=identity,
+            output_size=output_size,
+        )
+        counts = scatter_reduce(
+            valid.to(dtype=torch.int64),
+            dim,
+            safe_idx,
+            "sum",
+            fill_value=0,
+            output_size=output_size,
+        )
+        return torch.where(counts > 0, reduced, torch.zeros_like(reduced))
+    raise ValueError(
+        f"Unsupported reduction mode '{reduce}'. Supported modes are: "
+        f"{', '.join(_SUPPORTED_REDUCTIONS)}."
+    )
+
+
 def wrap_scatter_reduce(
     x: Tensor,
     dim: int | tuple[int, int],
@@ -411,7 +505,7 @@ def wrap_scatter_reduce(
     idx : Tensor
         Index to reduce over.
     reduce : str
-        Reduction method, defaults to "sum".
+        Reduction method ("sum", "prod", "mean", "amin", or "amax").
     extra : bool
         If the tensor to reduce contains a extra dimension of arbitrary size
         that is generally different from the size of the indexing tensor
@@ -428,26 +522,18 @@ def wrap_scatter_reduce(
     Tensor
         Reduced tensor.
     """
+    if reduce not in _SUPPORTED_REDUCTIONS:
+        raise ValueError(
+            f"Unsupported reduction mode '{reduce}'. Supported modes are: "
+            f"{', '.join(_SUPPORTED_REDUCTIONS)}."
+        )
     if extra is True:
         idx = adapt_indexer_extra(x, dim, idx)
 
-    # Negative structural indices are redirected to zero for scatter. For
-    # sums, exclude their source values first so padded entries cannot
-    # contaminate physical destination zero. Other reduction modes retain
-    # their established behavior because they need different neutral values
-    # or counting semantics.
-    if reduce == "sum":
-        if isinstance(dim, int):
-            x = torch.where(idx >= 0, x, torch.zeros_like(x))
-        else:
-            valid = (idx >= 0).unsqueeze(-1) & (idx >= 0).unsqueeze(-2)
-            x = torch.where(valid, x, torch.zeros_like(x))
-
-    idx = torch.where(idx >= 0, idx, 0)
     if isinstance(dim, int):
         if output_size is not None and not isinstance(output_size, int):
             raise ValueError("One-axis output_size must be an integer.")
-        return scatter_reduce(
+        return _masked_scatter_reduce_1d(
             x,
             dim,
             idx,
@@ -455,24 +541,25 @@ def wrap_scatter_reduce(
             output_size=output_size,
         )
 
+    sizes: tuple[int | None, int | None]
     if output_size is None:
-        return twice(scatter_reduce, x, *dim, idx, reduce)
-
-    sizes = (
-        (output_size, output_size)
-        if isinstance(output_size, int)
-        else output_size
-    )
-    if len(sizes) != 2:
-        raise ValueError("Two-axis output_size must contain two dimensions.")
+        sizes = (None, None)
+    elif isinstance(output_size, int):
+        sizes = (output_size, output_size)
+    else:
+        if len(output_size) != 2:
+            raise ValueError("Two-axis output_size must contain two dimensions.")
+        sizes = output_size
 
     dim0, dim1 = dim
     shape0 = list(x.shape)
     first_index = idx.unsqueeze(dim0).expand(*shape0)
-    first = scatter_reduce(x, dim1, first_index, reduce, output_size=sizes[1])
+    first = _masked_scatter_reduce_1d(
+        x, dim1, first_index, reduce, output_size=sizes[1]
+    )
 
     shape1 = list(first.shape)
     second_index = idx.unsqueeze(dim1).expand(*shape1)
-    return scatter_reduce(
+    return _masked_scatter_reduce_1d(
         first, dim0, second_index, reduce, output_size=sizes[0]
     )

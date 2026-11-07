@@ -1273,3 +1273,32 @@ def test_system_ihelp_replacement_and_structural_consistency(
             evaluate_packed_systems((bad_system,), (positions,))
 
 
+def test_system_ihelp_in_place_mutation_detected() -> None:
+    """In-place mutation of setup IndexHelper tensors invalidates token and fails validation."""
+    from dxtb._src.calculators.legacy_composition import can_pad_system
+
+    model = _model()
+    numbers = mols["H2O"]["numbers"].to(device="cpu")
+    positions = mols["H2O"]["positions"].to(device="cpu", dtype=torch.float64)
+
+    for attr, bad_val in (
+        ("shells_to_atom", 2),
+        ("orbitals_to_shell", 3),
+        ("unique_angular", 2),
+    ):
+        system = model.setup(numbers.clone())
+        assert system._active_exact_core() is system.exact_core
+        target = getattr(system.ihelp, attr)
+        orig_val = int(target[0].item())
+        target[0] = bad_val
+        assert system._active_exact_core() is None
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            can_pad_system(system)
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            system.singlepoint(positions)
+        # Restoring the original value makes the structural check pass again.
+        target[0] = orig_val
+        assert system._active_exact_core() is system.exact_core
+
+
+

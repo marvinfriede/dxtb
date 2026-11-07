@@ -449,6 +449,70 @@ def _interaction_terms_match(
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
+class _SetupIndexToken:
+    """Setup-time ownership and tensor-version snapshot for ``System.ihelp``."""
+
+    ihelp: IndexHelper
+    backend_index: IndexHelper | None
+    es2_shells_to_atom: Tensor | None
+    tensor_states: tuple[
+        tuple[Tensor, int, torch.Size, torch.dtype, torch.device], ...
+    ]
+    unique_angular_snapshot: Tensor
+    ushells_per_unique_snapshot: Tensor
+
+
+def _build_setup_index_token(
+    numbers: Tensor,
+    ihelp: IndexHelper,
+    integral_setup: IntegralSetup | None,
+    es2_setup: ES2CoreSetup | None,
+) -> _SetupIndexToken:
+    """Capture setup-time identity and version metadata for fast validation."""
+    backend_index: IndexHelper | None = None
+    if integral_setup is not None:
+        backend = (
+            integral_setup.pytorch
+            if integral_setup.driver_type == labels.INTDRIVER_PYTORCH
+            else (
+                integral_setup.libcint
+                if integral_setup.driver_type == labels.INTDRIVER_LIBCINT
+                else None
+            )
+        )
+        if isinstance(
+            backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
+        ):
+            backend_index = backend.index
+
+    es2_shells = (
+        es2_setup.shells_to_atom if es2_setup is not None else None
+    )
+
+    tracked: list[Tensor] = [
+        numbers,
+        *(getattr(ihelp, name) for name in ihelp._child_names),
+    ]
+    if backend_index is not None and backend_index is not ihelp:
+        tracked.extend(
+            getattr(backend_index, name) for name in backend_index._child_names
+        )
+    if es2_shells is not None and es2_shells is not ihelp.shells_to_atom:
+        tracked.append(es2_shells)
+
+    return _SetupIndexToken(
+        ihelp=ihelp,
+        backend_index=backend_index,
+        es2_shells_to_atom=es2_shells,
+        tensor_states=tuple(
+            (t, t._version, t.shape, t.dtype, t.device) for t in tracked
+        ),
+        unique_angular_snapshot=ihelp.unique_angular.detach().clone(),
+        ushells_per_unique_snapshot=ihelp.ushells_per_unique.detach().clone(),
+    )
+
+
+@dataclass(frozen=True, kw_only=True, eq=False)
 class System:
     """
     Everything that depends on the atomic numbers only (see :class:`Model`).
@@ -558,6 +622,11 @@ class System:
 
     exact_core: ExactSystemCore | None = field(default=None, repr=False)
     """Exact unbatched values; None for packed compatibility Systems."""
+
+    _setup_index_token: _SetupIndexToken | None = field(
+        default=None, repr=False
+    )
+    """Setup-time ownership and tensor-version snapshot for fast validation."""
 
     def singlepoint(
         self,
@@ -1053,6 +1122,68 @@ class System:
             or torch._C._functorch.is_functorch_wrapped_tensor(self.numbers)
         ):
             return True
+
+        token = self._setup_index_token
+        es2_shells = (
+            self.es2_setup.shells_to_atom
+            if self.es2_setup is not None
+            else None
+        )
+        token_valid = (
+            token is not None
+            and backend_index is token.backend_index
+            and es2_shells is token.es2_shells_to_atom
+            and all(
+                t._version == ver
+                and t.shape == shape
+                and t.dtype == dtype
+                and t.device == dev
+                for t, ver, shape, dtype, dev in token.tensor_states
+            )
+        )
+        if token_valid:
+            assert token is not None
+            if ihelp is token.ihelp:
+                return True
+            if token.ihelp.device == ihelp.device and all(
+                getattr(ihelp, name).shape == getattr(token.ihelp, name).shape
+                and getattr(ihelp, name).dtype
+                == getattr(token.ihelp, name).dtype
+                for name in ihelp._child_names
+            ):
+                return torch.equal(
+                    torch.cat(
+                        [getattr(ihelp, name) for name in ihelp._child_names]
+                    ),
+                    torch.cat(
+                        [
+                            getattr(token.ihelp, name)
+                            for name in ihelp._child_names
+                        ]
+                    ),
+                )
+
+        if (
+            token is not None
+            and self.numbers is token.tensor_states[0][0]
+            and self.numbers._version == token.tensor_states[0][1]
+            and (
+                not torch.equal(
+                    ihelp.unique_angular,
+                    token.unique_angular_snapshot.to(
+                        device=ihelp.device, dtype=ihelp.unique_angular.dtype
+                    ),
+                )
+                or not torch.equal(
+                    ihelp.ushells_per_unique,
+                    token.ushells_per_unique_snapshot.to(
+                        device=ihelp.device,
+                        dtype=ihelp.ushells_per_unique.dtype,
+                    ),
+                )
+            )
+        ):
+            return False
 
         if (
             backend_index is not None
@@ -1968,6 +2099,14 @@ class Model:
                 interaction_terms=tuple(interaction_terms),
             )
 
+        setup_index_token = (
+            _build_setup_index_token(
+                numbers, ihelp, integral_setup, es2_setup
+            )
+            if batch_mode == 0
+            else None
+        )
+
         return System(
             numbers=numbers,
             config=config,
@@ -2001,6 +2140,7 @@ class Model:
             generalized_born_interaction=generalized_born_interaction,
             dd=dd,
             exact_core=exact_core,
+            _setup_index_token=setup_index_token,
         )
 
 

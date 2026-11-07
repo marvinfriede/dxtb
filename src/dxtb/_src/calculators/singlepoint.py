@@ -515,7 +515,7 @@ def _singlepoint_impl(
             f"'{expected_dtype}', but positions are of type "
             f"'{positions.dtype}'."
         )
-    if not system._ihelp_compatible():
+    if core is None and not system._ihelp_compatible():
         raise ValueError(
             "System IndexHelper is incompatible with the captured System setup."
         )
