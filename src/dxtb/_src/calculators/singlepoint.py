@@ -451,6 +451,42 @@ def system_singlepoint(
 _singlepoint_eager = singlepoint
 
 
+@dataclass(frozen=True, eq=False)
+class _PreparedSinglepoint:
+    """Evaluated non-SCF terms and the inputs of one System's SCF call."""
+
+    positions: Tensor
+    classical: tuple[tuple[str, Tensor], ...]
+    classical_energy: Tensor
+    matrices: Any
+    refocc: Tensor
+    overlap_norm: Tensor | None
+    numbers: Tensor
+    charge: Tensor
+    spin: Tensor | None
+    interactions: Any
+    interaction_data: Any
+    ihelp: Any
+    config: Any
+    core_index: Any
+    core_index_owner: System | None
+
+    def scf_arguments(self) -> tuple[Any, ...]:
+        """Positional arguments shared by every SCF entry point."""
+        return (
+            self.numbers,
+            self.positions,
+            self.charge,
+            self.spin,
+            self.interactions,
+            self.interaction_data,
+            self.ihelp,
+            self.config.scf,
+            self.matrices,
+            self.refocc,
+        )
+
+
 def _singlepoint_impl(
     system: System,
     positions: Tensor,
@@ -464,6 +500,86 @@ def _singlepoint_impl(
     use_captured_extension_cache: bool = False,
 ) -> Result:
     """Share setup, physical kernels, and Result construction by controller."""
+    prepared = _prepare_singlepoint(
+        system,
+        positions,
+        chrg,
+        spin,
+        field,
+        field_grad,
+        refresh_extension_caches=refresh_extension_caches,
+        use_captured_extension_cache=use_captured_extension_cache,
+    )
+    if isinstance(prepared, Result):
+        return prepared
+
+    if fixed_trip and prepared.config.scf.differentiation.value != "implicit":
+        from dxtb._src.scf.functional.eager import run_system_fixed_trip
+
+        scf_results = run_system_fixed_trip(
+            *prepared.scf_arguments(),
+            core_index=prepared.core_index,
+            core_index_owner=prepared.core_index_owner,
+        )
+    elif prepared.core_index is not None:
+        scf_results = scf.solve_with_core_index(
+            *prepared.scf_arguments(),
+            core_index=prepared.core_index,
+            core_index_owner=prepared.core_index_owner,
+        )
+    else:
+        scf_results = scf.solve(*prepared.scf_arguments())
+    return _singlepoint_result(prepared, scf_results)
+
+
+def _singlepoint_result(
+    prepared: _PreparedSinglepoint, scf_results: Any
+) -> Result:
+    """Assemble the public Result from non-SCF terms and SCF outputs."""
+    matrices = prepared.matrices
+    scf_output = _normalize_scf_output(scf_results, prepared.positions)
+    total_energy = (
+        prepared.classical_energy + scf_output.energy + scf_output.fenergy
+    )
+    return Result.snapshot(
+        energy=total_energy,
+        scf=scf_output.energy,
+        classical=prepared.classical,
+        fenergy=scf_output.fenergy,
+        charges=scf_output.charges,
+        density=scf_output.density,
+        coefficients=scf_output.coefficients,
+        emo=scf_output.emo,
+        occupation=scf_output.occupation,
+        potential=scf_output.potential,
+        hamiltonian=scf_output.hamiltonian,
+        overlap=matrices.overlap,
+        hcore=matrices.hcore,
+        dipole_integrals=matrices.dipole,
+        quadrupole_integrals=matrices.quadrupole,
+        overlap_norm=prepared.overlap_norm,
+        iterations=scf_output.iterations,
+        converged=scf_output.converged,
+        residual=scf_output.residual,
+        status=scf_output.status,
+    )
+
+
+def _prepare_singlepoint(
+    system: System,
+    positions: Tensor,
+    chrg: Tensor | float | int,
+    spin: Tensor | float | int | None,
+    field: Tensor | None,
+    field_grad: Tensor | None,
+    *,
+    refresh_extension_caches: bool = False,
+    use_captured_extension_cache: bool = False,
+) -> _PreparedSinglepoint | Result:
+    """Evaluate everything before the SCF and collect the SCF inputs.
+
+    Returns the final Result directly when the SCF is excluded.
+    """
     core = system._active_exact_core()
     numbers = core.numbers if core is not None else system.numbers
     config = core.config if core is not None else system.config
@@ -767,72 +883,22 @@ def _singlepoint_impl(
         else None
     )
 
-    scf_solve = (
-        scf.solve_with_core_index
-        if core is not None and core_index is not None
-        else scf.solve
-    )
-    scf_kwargs = (
-        {
-            "core_index": core_index,
-            "core_index_owner": system,
-        }
-        if core is not None and core_index is not None
-        else {}
-    )
-    if fixed_trip and config.scf.differentiation.value != "implicit":
-        from dxtb._src.scf.functional.eager import run_system_fixed_trip
-
-        scf_results = run_system_fixed_trip(
-            numbers,
-            positions,
-            charge,
-            spin_tensor,
-            call_interactions,
-            interaction_data,
-            system.ihelp,
-            config.scf,
-            matrices,
-            refocc,
-            core_index=core_index,
-            core_index_owner=(system if core_index is not None else None),
-        )
-    else:
-        scf_results = scf_solve(
-            numbers,
-            positions,
-            charge,
-            spin_tensor,
-            call_interactions,
-            interaction_data,
-            system.ihelp,
-            config.scf,
-            matrices,
-            refocc,
-            **scf_kwargs,
-        )
-    scf_output = _normalize_scf_output(scf_results, positions)
-
-    total_energy = classical_energy + scf_output.energy + scf_output.fenergy
-    return Result.snapshot(
-        energy=total_energy,
-        scf=scf_output.energy,
+    return _PreparedSinglepoint(
+        positions=positions,
         classical=tuple(classical),
-        fenergy=scf_output.fenergy,
-        charges=scf_output.charges,
-        density=scf_output.density,
-        coefficients=scf_output.coefficients,
-        emo=scf_output.emo,
-        occupation=scf_output.occupation,
-        potential=scf_output.potential,
-        hamiltonian=scf_output.hamiltonian,
-        overlap=matrices.overlap,
-        hcore=matrices.hcore,
-        dipole_integrals=matrices.dipole,
-        quadrupole_integrals=matrices.quadrupole,
+        classical_energy=classical_energy,
+        matrices=matrices,
+        refocc=refocc,
         overlap_norm=overlap_norm,
-        iterations=scf_output.iterations,
-        converged=scf_output.converged,
-        residual=scf_output.residual,
-        status=scf_output.status,
+        numbers=numbers,
+        charge=charge,
+        spin=spin_tensor,
+        interactions=call_interactions,
+        interaction_data=interaction_data,
+        ihelp=system.ihelp,
+        config=config,
+        core_index=core_index if core is not None else None,
+        core_index_owner=(
+            system if core is not None and core_index is not None else None
+        ),
     )

@@ -70,6 +70,7 @@ from .solver import (
     FERMI_FAILURE_NONCONVERGENCE,
     FERMI_FAILURE_NONE,
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
+    FixedTripControl,
     SCFSolveResult,
     SCFSolverSettings,
     SCFTrajectoryStatus,
@@ -81,6 +82,7 @@ from .solver import (
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
+    fixed_trip_problem_control,
     setup_solver_settings,
     solve_scf_problem,
 )
@@ -94,6 +96,8 @@ __all__ = [
     "apply_functional_full_policy",
     "functional_core_result",
     "run_functional_full_eager",
+    "fixed_trip_control",
+    "prepare_system_fixed_trip",
     "run_prepared_functional_implicit",
     "run_system_fixed_trip",
 ]
@@ -333,43 +337,11 @@ def _certification_profile(
     )
 
 
-def _solve_representation(
-    guess: Tensor,
-    inputs: SCFInputs,
-    config: ConfigSCF,
-    *,
-    eager: bool = True,
-    record_trace: bool = False,
-) -> SCFSolveResult:
-    """Run one representation with eager or transform-fixed control."""
-    settings, strategy = _prepare_solver(config, guess.dtype)
+def _representation_problem(
+    guess: Tensor, inputs: SCFInputs, config: ConfigSCF
+) -> tuple[Tensor, SCFProblem]:
+    """Build the initial state and problem of the configured representation."""
     mode = config._legacy_representation_code
-    if mode == labels.SCP_MODE_CHARGE:
-        x = pack_charges(
-            SCFCharges(
-                mono=guess,
-                dipole=(
-                    None
-                    if inputs.charge_layout.dipole_shape is None
-                    else guess.new_zeros(inputs.charge_layout.dipole_shape)
-                ),
-                quad=(
-                    None
-                    if inputs.charge_layout.quadrupole_shape is None
-                    else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
-                ),
-            ),
-            inputs.charge_layout,
-        )
-        return solve_scf_problem(
-            x,
-            SCFProblem(inputs, SCFRepresentation.CHARGE),
-            settings,
-            strategy,
-            eager=eager,
-            record_trace=record_trace,
-            certification_profile=_certification_profile(config),
-        )
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -383,29 +355,42 @@ def _solve_representation(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
+    if mode == labels.SCP_MODE_CHARGE:
+        return (
+            pack_charges(charges, inputs.charge_layout),
+            SCFProblem(inputs, SCFRepresentation.CHARGE),
+        )
     if mode == labels.SCP_MODE_POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
-        return solve_scf_problem(
-            packed,
-            SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout),
-            settings,
-            strategy,
-            eager=eager,
-            record_trace=record_trace,
-            certification_profile=_certification_profile(config),
-        )
+        return packed, SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout)
     if mode == labels.SCP_MODE_FOCK:
-        fock = fock_initial_guess(charges, inputs)
-        return solve_scf_problem(
-            fock,
+        return (
+            fock_initial_guess(charges, inputs),
             SCFProblem(inputs, SCFRepresentation.FOCK),
-            settings,
-            strategy,
-            eager=eager,
-            record_trace=record_trace,
-            certification_profile=_certification_profile(config),
         )
     raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
+
+
+def _solve_representation(
+    guess: Tensor,
+    inputs: SCFInputs,
+    config: ConfigSCF,
+    *,
+    eager: bool = True,
+    record_trace: bool = False,
+) -> SCFSolveResult:
+    """Run one representation with eager or transform-fixed control."""
+    settings, strategy = _prepare_solver(config, guess.dtype)
+    x, problem = _representation_problem(guess, inputs, config)
+    return solve_scf_problem(
+        x,
+        problem,
+        settings,
+        strategy,
+        eager=eager,
+        record_trace=record_trace,
+        certification_profile=_certification_profile(config),
+    )
 
 
 def run_functional_full_eager(
@@ -483,6 +468,46 @@ def run_functional_full_eager(
     return EagerFullResult(route, functional, None)
 
 
+def _prepared_functional_inputs(
+    numbers: Tensor,
+    n0: Tensor,
+    occupation: Tensor,
+    nel: Tensor,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    route: FullSCFRoute,
+    *,
+    core_index: IndexHelper | None = None,
+    core_index_owner: object | None = None,
+) -> SCFInputs:
+    """Check a functional route and build its immutable SCF inputs."""
+    if route.kind != "functional":
+        raise ValueError(
+            "The prepared functional runner requires a functional route."
+        )
+    if route.representation != config._legacy_representation_code:
+        raise ValueError(
+            "The prepared functional route representation does not match "
+            "the SCF configuration."
+        )
+    return setup_scf_inputs(
+        numbers,
+        integrals,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        core_index=core_index,
+        core_index_owner=core_index_owner,
+    )
+
+
 def run_prepared_functional_full(
     numbers: Tensor,
     guess: Tensor,
@@ -501,30 +526,90 @@ def run_prepared_functional_full(
     eager: bool = True,
 ) -> SCFSolveResult:
     """Run only functional physics after common SCF preparation is complete."""
-    if route.kind != "functional":
-        raise ValueError(
-            "The prepared functional runner requires a functional route."
-        )
-    if route.representation != config._legacy_representation_code:
-        raise ValueError(
-            "The prepared functional route representation does not match "
-            "the SCF configuration."
-        )
-    effective_config = config
-    inputs = setup_scf_inputs(
+    inputs = _prepared_functional_inputs(
         numbers,
-        integrals,
         n0,
         occupation,
         nel,
         interactions,
         cache,
         ihelp,
-        effective_config,
+        config,
+        integrals,
+        route,
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    return _solve_representation(guess, inputs, effective_config, eager=eager)
+    return _solve_representation(guess, inputs, config, eager=eager)
+
+
+def prepare_system_fixed_trip(
+    numbers: Tensor,
+    positions: Tensor,
+    chrg: Tensor,
+    spin: Tensor | None,
+    interactions: InteractionList,
+    cache: InteractionListCache,
+    ihelp: IndexHelper,
+    config: ConfigSCF,
+    integrals: IntegralMatrices,
+    refocc: Tensor,
+    *,
+    core_index: IndexHelper | None = None,
+    core_index_owner: object | None = None,
+) -> tuple[Tensor, SCFProblem]:
+    """Build the initial state and problem of the System fixed-trip route.
+
+    Requires an iterative, unrolled functional single-System SCF.
+    """
+    if config.differentiation.value == "implicit":
+        raise ValueError(
+            "The fixed-trip System route requires differentiation='unrolled'."
+        )
+    route = resolve_full_scf_route(
+        config, interactions, ihelp, numbers, integrals
+    )
+    if route.kind != "functional":
+        raise NotImplementedError(
+            "The fixed-trip System API supports functional single-System "
+            "SCF only."
+        )
+
+    n0, occupation, nel = get_refocc(
+        refocc, chrg, spin, ihelp, validate_spin=False
+    )
+    guess = get_guess(
+        numbers, positions, chrg, ihelp, config.guess, validate=False
+    )
+    inputs = _prepared_functional_inputs(
+        numbers,
+        n0,
+        occupation,
+        nel,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+        route,
+        core_index=core_index,
+        core_index_owner=core_index_owner,
+    )
+    return _representation_problem(guess, inputs, config)
+
+
+def fixed_trip_control(
+    x: Tensor, problem: SCFProblem, config: ConfigSCF
+) -> FixedTripControl:
+    """Return the resumable controller of the System fixed-trip route."""
+    settings, strategy = _prepare_solver(config, x.dtype)
+    return fixed_trip_problem_control(
+        x,
+        problem,
+        settings,
+        strategy,
+        certification_profile=_certification_profile(config),
+    )
 
 
 def run_system_fixed_trip(
@@ -560,36 +645,28 @@ def run_system_fixed_trip(
             occupation,
         )
 
-    route = resolve_full_scf_route(
-        config, interactions, ihelp, numbers, integrals
-    )
-    if route.kind != "functional":
-        raise NotImplementedError(
-            "The fixed-trip System API supports functional single-System "
-            "SCF only."
-        )
-
-    n0, occupation, nel = get_refocc(
-        refocc, chrg, spin, ihelp, validate_spin=False
-    )
-    guess = get_guess(
-        numbers, positions, chrg, ihelp, config.guess, validate=False
-    )
-    result = run_prepared_functional_full(
+    x, problem = prepare_system_fixed_trip(
         numbers,
-        guess,
-        n0,
-        occupation,
-        nel,
+        positions,
+        chrg,
+        spin,
         interactions,
         cache,
         ihelp,
         config,
         integrals,
-        route,
+        refocc,
         core_index=core_index,
         core_index_owner=core_index_owner,
+    )
+    settings, strategy = _prepare_solver(config, x.dtype)
+    result = solve_scf_problem(
+        x,
+        problem,
+        settings,
+        strategy,
         eager=False,
+        certification_profile=_certification_profile(config),
     )
     return functional_core_result(result)
 
