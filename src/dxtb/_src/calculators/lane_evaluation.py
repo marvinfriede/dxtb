@@ -50,7 +50,8 @@ from dxtb._src.calculators.singlepoint import (
     system_singlepoint,
 )
 from dxtb._src.scf.functional.data import functional_scf_interactions_eligible
-from dxtb._src.scf.iterator import get_refocc
+from dxtb._src.scf.iterator import get_refocc, reference_electron_count
+from dxtb._src.wavefunction.filling import spin_electron_violations
 
 __all__ = [
     "LaneGroup",
@@ -182,18 +183,30 @@ def group_lanes(
     fields: Sequence[Tensor | None],
     field_grads: Sequence[Tensor | None],
 ) -> tuple[LaneGroup, ...]:
-    """Partition source lanes into execution groups.
+    """Validate the Systems and partition source lanes into execution groups.
 
     Lanes are grouped only when they reference the very same ``System`` object
     and agree on whether ``spin``, ``field`` and ``field_grad`` are given; the
     tensor values themselves may differ per lane. Groups are returned in the
     order of their first source lane. Every lane belongs to exactly one group.
+
+    Each distinct System is passed to :func:`can_vmap_system` once, so a
+    configuration that is invalid on every route raises here, before any lane
+    is evaluated. The returned groups are therefore prevalidated.
     """
     mapped: dict[tuple[int, bool, bool, bool], list[int]] = {}
     groups: list[tuple[System, list[int], bool]] = []
 
+    # Every distinct System is validated and classified exactly once. All
+    # Systems are alive in ``systems`` for the whole call, so ``id`` is a
+    # stable key here; the cache does not outlive this call.
+    eligible: dict[int, bool] = {}
+    for system in systems:
+        if id(system) not in eligible:
+            eligible[id(system)] = can_vmap_system(system)
+
     for source_id, system in enumerate(systems):
-        if not can_vmap_system(system):
+        if not eligible[id(system)]:
             groups.append((system, [source_id], False))
             continue
 
@@ -262,11 +275,38 @@ def evaluate_systems_independently(
             "Systems and per-lane field gradients must have equal length."
         )
 
-    # The eligibility check doubles as the configuration validation that
-    # is shared with the grouped route.
+    # Configuration validation shared with the grouped route (once per
+    # distinct System); the eligibility verdict itself is not needed here.
+    validated: set[int] = set()
     for system in systems:
-        can_vmap_system(system)
+        if id(system) not in validated:
+            can_vmap_system(system)
+            validated.add(id(system))
 
+    return _evaluate_prevalidated(
+        systems,
+        positions,
+        charges,
+        spins,
+        tuple(_lane_value(field, idx) for idx in range(count)),
+        tuple(_lane_value(field_grad, idx) for idx in range(count)),
+        source_ids,
+    )
+
+
+def _evaluate_prevalidated(
+    systems: Sequence[System],
+    positions: Sequence[Tensor],
+    charges: Sequence[Tensor | float | int],
+    spins: Sequence[Tensor | float | int | None],
+    fields: Sequence[Tensor | None],
+    field_grads: Sequence[Tensor | None],
+    source_ids: Sequence[int],
+) -> tuple[Result, ...]:
+    """Run aligned lanes through the eager single-System route.
+
+    The Systems must already have passed :func:`can_vmap_system`.
+    """
     results: list[Result] = []
     for idx, source_id in enumerate(source_ids):
         try:
@@ -275,8 +315,8 @@ def evaluate_systems_independently(
                 positions[idx],
                 charges[idx],
                 spins[idx],
-                _lane_value(field, idx),
-                _lane_value(field_grad, idx),
+                fields[idx],
+                field_grads[idx],
                 fixed_trip=False,
                 refresh_extension_caches=True,
             )
@@ -297,30 +337,27 @@ def evaluate_lane_group(
 ) -> tuple[Result, ...]:
     """Evaluate one group and return one Result per member lane.
 
-    The per-lane sequences are indexed by source lane. Groups of size one use
-    the independent eager route; larger groups stack their per-lane inputs and
-    map the fixed-trip single-System kernel with ``torch.func.vmap``.
+    The per-lane sequences are indexed by source lane. ``group`` must come
+    from :func:`group_lanes`, which has validated its System. Groups of size
+    one use the independent eager route; larger groups stack their per-lane
+    inputs and map the fixed-trip single-System kernel with
+    ``torch.func.vmap``.
     """
     ids = group.source_ids
     if not group.use_vmap:
-        return evaluate_systems_independently(
+        return _evaluate_prevalidated(
             tuple(group.system for _ in ids),
             tuple(positions[i] for i in ids),
             tuple(charges[i] for i in ids),
             tuple(spins[i] for i in ids),
-            source_ids=ids,
-            field=tuple(fields[i] for i in ids),
-            field_grad=tuple(field_grads[i] for i in ids),
+            tuple(fields[i] for i in ids),
+            tuple(field_grads[i] for i in ids),
+            ids,
         )
 
     # vmap cannot raise data-dependent errors, so electron-count and spin
-    # consistency is checked eagerly for every lane before mapping.
-    for i in ids:
-        try:
-            _validate_electrons(group.system, charges[i], spins[i])
-        except Exception as error:
-            _attach_source_id(error, i)
-            raise
+    # consistency is checked eagerly, once for the whole group.
+    _validate_group_electrons(group, charges, spins)
 
     # Shared tensors (e.g. one field for all lanes) are stacked as repeated
     # references; autograd accumulates their gradients across lanes.
@@ -346,13 +383,64 @@ def evaluate_lane_group(
     return tuple(_select_lane(mapped, lane) for lane in range(len(ids)))
 
 
+def _validate_group_electrons(
+    group: LaneGroup,
+    charges: Sequence[Tensor],
+    spins: Sequence[Tensor | None],
+) -> None:
+    """Apply the eager electron/spin checks to all lanes of a mapped group.
+
+    The rules are those of the single-System route (``get_refocc`` with
+    ``validate_spin=True``), evaluated for the whole group at once so that a
+    valid group needs a single host decision. The first invalid source lane
+    is then re-checked with the single-System route, which raises the exact
+    eager error; the error carries that lane's ``source_id``.
+    """
+    ids = group.source_ids
+    # Without an explicit spin the single-System route performs no value
+    # checks (lanes of one group agree on spin presence).
+    if spins[ids[0]] is None:
+        return
+
+    system = group.system
+    h0_setup = _electron_setup(system)
+    with torch.no_grad():
+        nel = reference_electron_count(h0_setup.refocc, system.ihelp) - (
+            torch.stack([charges[i].detach().reshape(()) for i in ids])
+        )
+        uhf = torch.stack(
+            [spins[i].detach().reshape(()) for i in ids]  # type: ignore[union-attr]
+        ).type(nel.dtype)
+        too_many, parity_mismatch = spin_electron_violations(nel, uhf)
+        invalid = (too_many | parity_mismatch).tolist()
+
+    for source_id, lane_invalid in zip(ids, invalid):
+        if not lane_invalid:
+            continue
+        try:
+            _validate_electrons(system, charges[source_id], spins[source_id])
+        except Exception as error:
+            _attach_source_id(error, source_id)
+            raise
+        raise RuntimeError(
+            "Grouped electron validation disagrees with the single-System "
+            f"check for source lane {source_id}."
+        )
+
+
+def _electron_setup(system: System):
+    """Return the H0 setup that owns the reference occupation."""
+    core = system._active_exact_core()
+    h0_setup = core.h0_setup if core is not None else system.h0_setup
+    assert h0_setup is not None
+    return h0_setup
+
+
 def _validate_electrons(
     system: System, charge: Tensor, spin: Tensor | None
 ) -> None:
     """Run the eager electron/spin checks of the single-System route."""
-    core = system._active_exact_core()
-    h0_setup = core.h0_setup if core is not None else system.h0_setup
-    assert h0_setup is not None
+    h0_setup = _electron_setup(system)
 
     # Match the one-element scalar layout of the single-System route.
     get_refocc(

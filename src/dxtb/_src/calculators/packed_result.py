@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -114,35 +114,63 @@ _KNOWN_PUBLIC_SINGLEPOINT_KWARGS = frozenset(
 )
 
 
-def _is_prefix_mask(mask: Tensor, target_len: int) -> bool:
-    """Return True when ``mask`` selects a contiguous leading prefix."""
-    nat = int(mask.sum().item())
-    return bool(
-        torch.equal(mask, torch.arange(target_len, device=mask.device) < nat)
+@dataclass(frozen=True)
+class _AtomPlacement:
+    """Per-lane positions of real atoms on the packed atom axis.
+
+    ``source[i]`` (shape ``(nat_i,)``) lists the packed slots holding lane
+    ``i``'s atoms. ``gather[i]`` (shape ``(target,)``) maps every packed slot
+    to a lane atom, or to ``nat_i`` for a padding slot; appending one zero to
+    a lane tensor and gathering with it places the lane values for prefix
+    and non-contiguous padding alike.
+    """
+
+    source: tuple[Tensor, ...]
+    gather: tuple[Tensor, ...]
+
+
+def _resolve_atom_placement(
+    atom_masks: Sequence[Tensor], device: torch.device
+) -> _AtomPlacement:
+    """Resolve structural atom masks with one transfer in each direction."""
+    masks = torch.stack([mask.detach() for mask in atom_masks]).cpu()
+    target = int(masks.shape[-1])
+    host = torch.zeros((len(atom_masks), 2 * target), dtype=torch.long)
+    counts: list[int] = []
+    for lane, mask in enumerate(masks):
+        source = torch.nonzero(mask).flatten()
+        nat = int(source.numel())
+        gather = torch.full((target,), nat, dtype=torch.long)
+        gather[source] = torch.arange(nat)
+        host[lane, :nat] = source
+        host[lane, target:] = gather
+        counts.append(nat)
+
+    index = host.to(device)
+    return _AtomPlacement(
+        source=tuple(index[lane, :nat] for lane, nat in enumerate(counts)),
+        gather=tuple(index[lane, target:] for lane in range(len(counts))),
     )
+
+
+def _place_atoms(t: Tensor, gather: Tensor, dim: int) -> Tensor:
+    """Place a lane's atom-resolved tensor on the packed atom axis ``dim``."""
+    pad = [0, 0] * (-dim - 1) + [0, 1]
+    return F.pad(t, pad).index_select(dim, gather)
 
 
 def _pad_last_dim(
     tensors: Sequence[Tensor],
     target_len: int,
     *,
-    atom_masks: Sequence[Tensor] | None = None,
+    atom_gather: Sequence[Tensor] | None = None,
 ) -> Tensor:
     """Right-pad or mask-place each tensor along its last dim and stack."""
-    if atom_masks is not None:
-        placed: list[Tensor] = []
-        for t, mask in zip(tensors, atom_masks):
-            if _is_prefix_mask(mask, target_len):
-                placed.append(
-                    t
-                    if t.shape[-1] == target_len
-                    else F.pad(t, (0, target_len - t.shape[-1]))
-                )
-            else:
-                out = t.new_zeros((*t.shape[:-1], target_len))
-                out[..., mask] = t
-                placed.append(out)
-        return torch.stack(placed, dim=0)
+    if atom_gather is not None:
+        return torch.stack(
+            [_place_atoms(t, idx, -1) for t, idx in zip(tensors, atom_gather)],
+            dim=0,
+        )
 
     return torch.stack(
         [
@@ -161,7 +189,7 @@ def _pad_optional_last_dim(
     *,
     zero_shapes: Sequence[tuple[int, ...]],
     like: Tensor,
-    atom_masks: Sequence[Tensor] | None = None,
+    atom_gather: Sequence[Tensor] | None = None,
 ) -> Tensor | None:
     """Right-pad optional 1D/ND tensors along their last dim when any is present."""
     if all(t is None for t in tensors):
@@ -170,7 +198,7 @@ def _pad_optional_last_dim(
         t if t is not None else like.new_zeros(shape)
         for t, shape in zip(tensors, zero_shapes)
     ]
-    return _pad_last_dim(filled, target_len, atom_masks=atom_masks)
+    return _pad_last_dim(filled, target_len, atom_gather=atom_gather)
 
 
 def _pad_atom_multipole(
@@ -179,7 +207,7 @@ def _pad_atom_multipole(
     components: int,
     *,
     like: Tensor,
-    atom_masks: Sequence[Tensor] | None = None,
+    atom_gather: Sequence[Tensor] | None = None,
 ) -> Tensor | None:
     """Right-pad or mask-place optional (nat_i, components) multipoles."""
     if all(t is None for t in tensors):
@@ -190,12 +218,8 @@ def _pad_atom_multipole(
             padded.append(
                 like.new_zeros((*like.shape[:-1], target_atoms, components))
             )
-        elif atom_masks is not None and not _is_prefix_mask(
-            atom_masks[idx], target_atoms
-        ):
-            out = t.new_zeros((*t.shape[:-2], target_atoms, components))
-            out[..., atom_masks[idx], :] = t
-            padded.append(out)
+        elif atom_gather is not None:
+            padded.append(_place_atoms(t, atom_gather[idx], -2))
         elif t.shape[-2] == target_atoms:
             padded.append(t)
         else:
@@ -298,6 +322,28 @@ def pack_system_results(
     """
     if len(results) == 0:
         raise ValueError("pack_system_results requires at least one Result.")
+    return _pack_lane_results(
+        results,
+        legacy_compat=legacy_compat,
+        target_atoms=target_atoms,
+        atom_gather=(
+            None
+            if atom_masks is None
+            else _resolve_atom_placement(
+                atom_masks, results[0].energy.device
+            ).gather
+        ),
+    )
+
+
+def _pack_lane_results(
+    results: Sequence[Result],
+    *,
+    legacy_compat: bool,
+    target_atoms: int | None,
+    atom_gather: Sequence[Tensor] | None,
+) -> Result:
+    """Pack Results; ``atom_gather`` is the resolved non-contiguous placement."""
 
     ref = results[0].energy
     max_atoms = max(int(r.energy.shape[-1]) for r in results)
@@ -311,21 +357,21 @@ def pack_system_results(
     mo_shapes = [(max_mos,) for _ in results]
 
     energy = _pad_last_dim(
-        [r.energy for r in results], max_atoms, atom_masks=atom_masks
+        [r.energy for r in results], max_atoms, atom_gather=atom_gather
     )
     scf = _pad_optional_last_dim(
         [r.scf for r in results],
         max_atoms,
         zero_shapes=atom_shapes,
         like=ref,
-        atom_masks=atom_masks,
+        atom_gather=atom_gather,
     )
     fenergy = _pad_optional_last_dim(
         [r.fenergy for r in results],
         max_atoms,
         zero_shapes=atom_shapes,
         like=ref,
-        atom_masks=atom_masks,
+        atom_gather=atom_gather,
     )
 
     # Classical contributions in deterministic first-seen occurrence order
@@ -354,7 +400,7 @@ def pack_system_results(
                     for r, rmap in zip(results, classical_maps)
                 ],
                 max_atoms,
-                atom_masks=atom_masks,
+                atom_gather=atom_gather,
             ),
         )
         for label, occ in classical_slots
@@ -376,7 +422,7 @@ def pack_system_results(
             max_atoms,
             3,
             like=ref,
-            atom_masks=atom_masks,
+            atom_gather=atom_gather,
         )
         quadrupole = _pad_atom_multipole(
             [
@@ -386,7 +432,7 @@ def pack_system_results(
             max_atoms,
             6,
             like=ref,
-            atom_masks=atom_masks,
+            atom_gather=atom_gather,
         )
         charges = ChargeResult(mono=mono, dipole=dipole, quadrupole=quadrupole)
 
@@ -411,7 +457,7 @@ def pack_system_results(
             max_atoms,
             3,
             like=ref,
-            atom_masks=atom_masks,
+            atom_gather=atom_gather,
         )
         pquadrupole = _pad_atom_multipole(
             [
@@ -421,7 +467,7 @@ def pack_system_results(
             max_atoms,
             6,
             like=ref,
-            atom_masks=atom_masks,
+            atom_gather=atom_gather,
         )
         potential = PotentialResult(
             mono=pmono, dipole=pdipole, quadrupole=pquadrupole
@@ -662,6 +708,22 @@ def _scalar_to_0d_tensor(
     raise TypeError(f"Unsupported {name} input type {type(value)}.")
 
 
+def _shared_scalar_lanes(
+    value: float, lane_positions: Sequence[Tensor]
+) -> list[Tensor]:
+    """Broadcast a Python scalar call input as one tensor per device/dtype."""
+    created: dict[tuple[torch.device, torch.dtype], Tensor] = {}
+    lanes: list[Tensor] = []
+    for pos in lane_positions:
+        key = (pos.device, pos.dtype)
+        if key not in created:
+            created[key] = torch.tensor(
+                value, device=pos.device, dtype=pos.dtype
+            )
+        lanes.append(created[key])
+    return lanes
+
+
 def _normalize_packed_charges(
     chrg: Tensor | float | int | Sequence[Tensor | float | int],
     lane_positions: Sequence[Tensor],
@@ -676,10 +738,7 @@ def _normalize_packed_charges(
                 "Cannot set charge for batched calculations with a single "
                 "float or integer. Please provide a 1D tensor of charges."
             )
-        return [
-            torch.tensor(float(chrg), device=pos.device, dtype=pos.dtype)
-            for pos in lane_positions
-        ]
+        return _shared_scalar_lanes(float(chrg), lane_positions)
     if isinstance(chrg, Tensor):
         for pos in lane_positions:
             _validate_tensor_call_input_dd(
@@ -753,10 +812,7 @@ def _normalize_packed_spins(
     if spin is None:
         return [None for _ in lane_positions]
     if isinstance(spin, (int, float)) and not isinstance(spin, bool):
-        return [
-            torch.tensor(float(spin), device=pos.device, dtype=pos.dtype)
-            for pos in lane_positions
-        ]
+        return _shared_scalar_lanes(float(spin), lane_positions)
     if isinstance(spin, Tensor):
         for pos in lane_positions:
             _validate_tensor_call_input_dd(
@@ -906,48 +962,80 @@ def _write_packed_integrals(
 
 
 def _enforce_eager_status_policy(
-    result: Result,
+    results: Sequence[Result],
     system: System,
-    source_id: int,
+    source_ids: Sequence[int],
 ) -> None:
-    """Raise eager convergence and Fermi-status diagnostics for a mapped lane."""
-    if (
-        result.energy is not None
-        and torch._C._functorch.is_functorch_wrapped_tensor(result.energy)
+    """Raise eager convergence and Fermi-status diagnostics for a mapped group.
+
+    The status flags of all lanes are moved to the host in one transfer. The
+    lanes are then checked in group order with the eager precedence per lane:
+    trajectory failure, final failure, convergence.
+    """
+    first = results[0]
+    if first.energy is not None and (
+        torch._C._functorch.is_functorch_wrapped_tensor(first.energy)
     ):
         return
-    if result.status is not None:
-        if bool((result.status.trajectory_failure.detach() != 0).any()):
+
+    config = system.config.scf
+    has_status = first.status is not None
+    check_converged = config.maxiter > 0 and first.converged is not None
+    flags: list[Tensor] = []
+    if has_status:
+        flags.append(
+            torch.stack(
+                [
+                    (r.status.trajectory_failure.detach() != 0).any()
+                    for r in results
+                ]
+            )
+        )
+        flags.append(
+            torch.stack(
+                [(r.status.final_failure.detach() != 0).any() for r in results]
+            )
+        )
+    if check_converged:
+        flags.append(
+            torch.stack(
+                [~r.converged.detach().reshape(()).bool() for r in results]
+            )
+        )
+    if not flags:
+        return
+    host = torch.stack(flags).tolist()
+    trajectory_failed = host.pop(0) if has_status else None
+    final_failed = host.pop(0) if has_status else None
+    not_converged = host.pop(0) if check_converged else None
+
+    for lane, (result, source_id) in enumerate(zip(results, source_ids)):
+        if trajectory_failed is not None and trajectory_failed[lane]:
             try:
                 _raise_failure_code(result.status.trajectory_failure.detach())
             except Exception as error:
                 setattr(error, "source_id", source_id)
                 raise
-        if bool((result.status.final_failure.detach() != 0).any()):
+        if final_failed is not None and final_failed[lane]:
             try:
                 _raise_failure_code(result.status.final_failure.detach())
             except Exception as error:
                 setattr(error, "source_id", source_id)
                 raise
-    config = system.config.scf
-    if (
-        config.maxiter > 0
-        and result.converged is not None
-        and not bool(result.converged.detach())
-    ):
-        strategy_label = " -> ".join(
-            type(stage.method).__name__.removesuffix("Method").lower()
-            for stage in config.strategy.stages
-        )
-        message = (
-            f"SCF did not certify after {config.maxiter} iterations using "
-            f"strategy '{strategy_label}'."
-        )
-        if config.force_convergence:
-            error = SCFConvergenceError(message)
-            setattr(error, "source_id", source_id)
-            raise error
-        OutputHandler.warn(message, SCFConvergenceWarning)
+        if not_converged is not None and not_converged[lane]:
+            strategy_label = " -> ".join(
+                type(stage.method).__name__.removesuffix("Method").lower()
+                for stage in config.strategy.stages
+            )
+            message = (
+                f"SCF did not certify after {config.maxiter} iterations using "
+                f"strategy '{strategy_label}'."
+            )
+            if config.force_convergence:
+                error = SCFConvergenceError(message)
+                setattr(error, "source_id", source_id)
+                raise error
+            OutputHandler.warn(message, SCFConvergenceWarning)
 
 
 def evaluate_packed_systems(
@@ -998,6 +1086,15 @@ def evaluate_packed_systems(
         )
 
     # Stage 2: Normalize and validate per-lane positions, charges, spins, fields.
+    # Structural atom masks are resolved once for positions and packing.
+    placement = None
+    if atom_masks is not None:
+        placement = _resolve_atom_placement(
+            atom_masks,
+            (
+                positions if isinstance(positions, Tensor) else positions[0]
+            ).device,
+        )
     effective_target_atoms = target_atoms
     lane_positions: list[Tensor] = []
     if isinstance(positions, Tensor):
@@ -1007,8 +1104,10 @@ def evaluate_packed_systems(
             if effective_target_atoms is None:
                 effective_target_atoms = int(positions.shape[1])
             for idx, sys in enumerate(systems):
-                if atom_masks is not None:
-                    lane_positions.append(positions[idx][atom_masks[idx]])
+                if placement is not None:
+                    lane_positions.append(
+                        positions[idx].index_select(0, placement.source[idx])
+                    )
                 else:
                     nat = int(sys.numbers.numel())
                     lane_positions.append(positions[idx, :nat])
@@ -1125,14 +1224,14 @@ def evaluate_packed_systems(
                 lane_fields,
                 lane_field_grads,
             )
-            for source_id, result in zip(group.source_ids, group_results):
 
-                # The eager route raises its own convergence diagnostics;
-                # mapped lanes report them through tensor status instead.
-                if legacy_compat and group.use_vmap:
-                    _enforce_eager_status_policy(
-                        result, systems[source_id], source_id
-                    )
+            # The eager route raises its own convergence diagnostics; mapped
+            # lanes report them through tensor status instead.
+            if legacy_compat and group.use_vmap:
+                _enforce_eager_status_policy(
+                    group_results, group.system, group.source_ids
+                )
+            for source_id, result in zip(group.source_ids, group_results):
                 ordered_results[source_id] = result
     finally:
         timer.cuda_sync = old_cuda_sync
@@ -1140,11 +1239,11 @@ def evaluate_packed_systems(
     # Stage 5: Restore source order and pad heterogeneous shapes into the
     # public batched Result layout.
     final_results = [ordered_results[idx] for idx in range(count)]
-    packed_result = pack_system_results(
+    packed_result = _pack_lane_results(
         final_results,
         legacy_compat=legacy_compat,
         target_atoms=effective_target_atoms,
-        atom_masks=atom_masks,
+        atom_gather=None if placement is None else placement.gather,
     )
     _write_packed_integrals(packed_result, systems[0], kwargs)
     return packed_result
@@ -1255,21 +1354,29 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
 
+    # Atomic numbers are structural metadata: resolve them on the host with
+    # one transfer per tensor instead of one scalar transfer per atom. The
+    # device tensors are still the ones passed to ``Model.setup``.
+    host_numbers = calc.numbers.detach().cpu().tolist()
+    host_component_numbers = [
+        (id(c), c.numbers.detach().cpu().tolist())
+        for c in model_classicals
+        if getattr(c, "numbers", None) is not None
+        and isinstance(c.numbers, Tensor)
+        and c.numbers.ndim == 2
+    ]
+
     lane_memo: dict[tuple[object, ...], System] = {}
     lane_systems: list[System] = []
     for idx in range(batch_size):
-        row_raw = calc.numbers[idx]
-        real_mask = row_raw > 0
-        row_nums = row_raw[real_mask]
+        host_row = host_numbers[idx]
+        real_slots = [slot for slot, z in enumerate(host_row) if z > 0]
         comp_nums_key = tuple(
-            (id(c), tuple(int(x.item()) for x in c.numbers[idx][real_mask]))
-            for c in model_classicals
-            if getattr(c, "numbers", None) is not None
-            and isinstance(c.numbers, Tensor)
-            and c.numbers.ndim == 2
+            (comp_id, tuple(int(rows[idx][slot]) for slot in real_slots))
+            for comp_id, rows in host_component_numbers
         )
         dedup_key = (
-            tuple(int(x.item()) for x in row_nums),
+            tuple(int(host_row[slot]) for slot in real_slots),
             comp_nums_key,
             calc.opts,
             calc.dtype,
@@ -1279,6 +1386,9 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         )
         lane_sys = lane_memo.get(dedup_key)
         if lane_sys is None:
+            row_raw = calc.numbers[idx]
+            real_mask = row_raw > 0
+            row_nums = row_raw[real_mask]
             lane_classical_list = []
             for c_idx, comp in enumerate(model_classicals):
                 has_2d_nums = (

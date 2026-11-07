@@ -60,6 +60,7 @@ __all__ = [
     "get_fermi_entropy_finite",
     "get_fermi_occupation",
     "get_fermi_occupation_core",
+    "spin_electron_violations",
 ]
 
 
@@ -261,6 +262,31 @@ def _diff_steps(diff_order: int) -> int:
     return int(diff_order).bit_length()
 
 
+def spin_electron_violations(nel: Tensor, uhf: Tensor) -> tuple[Tensor, Tensor]:
+    """
+    Elementwise spin/electron consistency rules of
+    :func:`get_alpha_beta_occupation`.
+
+    Parameters
+    ----------
+    nel : Tensor
+        Total number of electrons.
+    uhf : Tensor
+        Number of unpaired electrons (same shape and dtype as ``nel``).
+
+    Returns
+    -------
+    tuple[Tensor, Tensor]
+        Masks that are ``True`` where the number of unpaired electrons
+        exceeds the (rounded) number of electrons, and where their parities
+        differ.
+    """
+    nel_rounded = torch.floor(nel + 0.5)
+    too_many = uhf > nel_rounded
+    parity_mismatch = torch.remainder(uhf, 2) != torch.remainder(nel_rounded, 2)
+    return too_many, parity_mismatch
+
+
 def get_alpha_beta_occupation(
     nel: Tensor,
     uhf: Tensor | float | int | list[int] | None = None,
@@ -315,17 +341,15 @@ def get_alpha_beta_occupation(
             )
 
         if validate:
-            if (uhf > torch.floor(nel + 0.5)).any():
+            too_many, parity_mismatch = spin_electron_violations(nel, uhf)
+            if too_many.any():
                 raise ValueError(
                     f"Number of unpaired electrons ({uhf}) larger than "
                     f"number of electrons ({nel})."
                 )
 
             # odd/even spin and even/odd number of electrons
-            if (
-                torch.remainder(uhf, 2)
-                != torch.remainder(torch.floor(nel + 0.5), 2)
-            ).any():
+            if parity_mismatch.any():
                 raise ValueError(
                     f"Odd (even) number of unpaired electrons ({uhf}) but "
                     f"even (odd) number of electrons ({nel}) given."

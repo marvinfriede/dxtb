@@ -328,6 +328,30 @@ def _solve_impl(
         )
 
 
+def reference_electron_count(refs: Tensor, ihelp: IndexHelper) -> Tensor:
+    """
+    Number of electrons of the neutral reference occupation.
+
+    Parameters
+    ----------
+    refs : Tensor
+        Occupation from parametrization.
+    ihelp : IndexHelper
+        Helper for indexing.
+
+    Returns
+    -------
+    Tensor
+        Reference number of electrons (shape: [..., 1]).
+    """
+    # sum per shell (exact, as in tblite); padding shells have no orbitals
+    shell_occ = ihelp.spread_ushell_to_shell(refs)
+    shell_occ = torch.where(
+        ihelp.orbitals_per_shell != 0, shell_occ, torch.zeros_like(shell_occ)
+    )
+    return torch.sum(shell_occ, -1, keepdim=True)
+
+
 def get_refocc(
     refs: Tensor,
     chrg: Tensor,
@@ -368,13 +392,7 @@ def get_refocc(
         torch.tensor(0, device=refs.device, dtype=refs.dtype),
     )
 
-    # Obtain the reference occupation and total number of electrons
-    # sum per shell (exact, as in tblite); padding shells have no orbitals
-    shell_occ = ihelp.spread_ushell_to_shell(refs)
-    shell_occ = torch.where(
-        ihelp.orbitals_per_shell != 0, shell_occ, torch.zeros_like(shell_occ)
-    )
-    nel = torch.sum(shell_occ, -1, keepdim=True) - chrg
+    nel = reference_electron_count(refs, ihelp) - chrg
 
     # get alpha and beta electrons and occupation
     nab = filling.get_alpha_beta_occupation(nel, spin, validate=validate_spin)
