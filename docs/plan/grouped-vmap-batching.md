@@ -77,14 +77,55 @@ the globally first failing source lane, so this is kept and pinned by
 failure, forced nonconvergence). Under `legacy_compat`, mapped lanes raise the eager convergence
 diagnostics from their tensor status.
 
-### Fixed-trip behavior inside a group
+### Execution schedule inside a group
 
-Mapped groups use the transform-compatible fixed-trip controller: every lane
-executes `maxiter` map evaluations and converged lanes are frozen by masks.
-With autograd enabled, all trips are recorded on the tape. This is unchanged
-by this package; it is the main remaining cost of large homogeneous groups and
-is left to a separate SCF optimization. Groups of one avoid it by using the
-eager controller, which stops at convergence.
+Mapped groups use the transform-compatible fixed-trip controller
+(`FixedTripControl` in `scf/functional/solver.py`). It is resumable: `start`
+evaluates the initial map (and the optional initial mix), `advance(state,
+start, stop)` runs map trips `start <= index < stop` of the configured
+schedule, and `finish` certifies the selected state. Advancing through
+consecutive ranges is bitwise the same computation as one range over
+`maxiter` (`test_functional_resumable_fixed_trip.py`); the monolithic
+`_solve_map_control` is `start`, `advance(0, maxiter)`, `finish`. There is one
+transition implementation (`_solver_control_step`) for eager, static and
+adaptive execution.
+
+Two schedules use it:
+
+- **Adaptive (default for eager and autograd calls).** The group runs one
+  `vmap` call that prepares every lane (classicals, integrals, SCF inputs and
+  problem) and starts its controller, then one `vmap` call per chunk of
+  `_ADAPTIVE_CHUNK_TRIPS` trips, then one `vmap` call that finishes the
+  controller and assembles the lane Results. After each chunk the host reads
+  "is any lane active?" once for the whole group; the group stops when no
+  lane is active (every lane certified or failed terminally) or when
+  `maxiter` trips have run. Lanes that finish inside a chunk are frozen by the
+  shared masked transition, exactly as in the full schedule, so values,
+  derivatives, iterations, status, warnings and errors equal the full static
+  schedule (`test_grouped_adaptive_control.py`, bitwise for Results and
+  derivatives). Lane-dependent tensors cross the `vmap` calls as leaves of
+  the immutable dataclass trees (prepared non-SCF terms, `SCFProblem`, solver
+  state) via `tensor_leaves`/`replace_tensor_leaves`; lane-independent
+  tensors (structural indices, model-parameter-derived setup) stay in the
+  template unchanged. A guard rejects lane tensors held outside these trees.
+- **Static (inside `torch.func` transforms and `torch.compile`).** When a
+  functorch level is active (`maybe_current_level()`) or `torch.compile` is
+  tracing, the group is part of a traced computation and cannot stop on
+  tensor values; it keeps the single `vmap` over `system_singlepoint` with
+  all `maxiter` trips.
+
+Counts are distinct:
+
+| Quantity | Meaning |
+| --- | --- |
+| configured `maxiter` | user setting; upper bound of the schedule, unchanged |
+| per-lane `iterations` | physical count, 1 (initial map) + trips while the lane was active; identical in both schedules and in eager evaluation |
+| mapped map evaluations | adaptive: 1 + trips run until the chunk in which the last lane finished (at most `chunk - 1` trips beyond it); static: 1 + `maxiter` |
+| chunks | adaptive host checks, `ceil(trips run / chunk)` |
+
+The chunk length is a performance parameter only; it never changes the
+physical schedule or any result (`test_chunk_length_does_not_change_results`).
+Groups of one keep the eager controller, which stops at convergence.
 
 ## Removed machinery
 
@@ -131,8 +172,10 @@ Interpretation:
   groups, which is much faster for heterogeneous batches (C: 6.4×, D: 2.0×).
 - For many tiny molecules split into several groups (B, energy only) the
   grouped route is **2.1× slower**: three 100-trip mapped executions replace
-  one, and per-trip Python overhead dominates at 4–12 AOs. Reducing the
-  fixed-trip cost inside mapped groups is the remaining optimization.
+  one, and the per-trip map cost dominates at 4–12 AOs (the profile below
+  attributes it to the SCF solve, not to integrals or the eigensolver).
+  Reducing the fixed-trip cost inside mapped groups was the remaining
+  optimization; see "Adaptive grouped SCF" below.
 
 GPU throughput was not measured (CPU-only environment; CUDA work skipped).
 
@@ -296,8 +339,9 @@ tape is 2–6× larger than the sum of eager lanes.
 | B (all three) | eager | 7.17 s | 7.03 s | 0.05 s | 0.01 s | < 0.01 s | 0.03 s (416) |
 
 More than 99 % of the time is the SCF solve; integrals, preparation,
-splitting and packing are negligible, and so is the eigensolver itself, so
-the per-trip cost is Python/dispatch overhead of the map. The 2.1× case-B
+splitting and packing are negligible, and so is the eigensolver itself. The
+per-trip cost is the rest of the map evaluation, which this profile does not
+break down further. The 2.1× case-B
 regression is three fixed 100-trip loops (≈ 7.4 s each, independent of
 group size) for lanes that converge physically after 9–10 iterations.
 
@@ -340,3 +384,91 @@ counts grouped vmap is already the faster route. A dispatch threshold
 (option B) would only route around this cost on CPU and cannot be grounded
 for CUDA yet; native homogeneous batching (option C) would keep the same
 fixed-trip schedule.
+
+## Adaptive grouped SCF
+
+The recommendation above was implemented without a second SCF stack: the
+fixed-trip controller became resumable (`FixedTripControl`), and mapped
+groups of eager/autograd calls advance in chunks and stop after their last
+active lane (see "Execution schedule inside a group"). The configured
+`maxiter` and convergence tolerances are unchanged; the public per-lane
+`iterations` remain the physical counts.
+
+### Chunk length
+
+`benchmarks/vmap_vs_eager_groups.py --strategies vmap-adaptive --chunk 1 2 4
+8 16` (H2O, CH4, C4H5NCS; energy and forces; B = 4, 16; raw data
+`benchmarks/results/adaptive-chunk-sweep-cpu.json`). One extra `vmap` call
+and host read costs a few milliseconds, one map trip 50–600 ms, so overshoot
+trips dominate: chunk 1 was fastest or within noise everywhere (e.g. CH4
+forces B = 16: 1.35 / 1.45 / 1.70 / 2.21 / 2.24 s for 1 / 2 / 4 / 8 / 16)
+and records the fewest trips (C4H5NCS forces B = 16: 5.9 GiB at chunk 1,
+6.9 GiB at chunk 4). The internal default is `_ADAPTIVE_CHUNK_TRIPS = 1`.
+GPU was not measured; there a host read per trip is a device
+synchronization, so the default may need re-measurement.
+
+### Static vs adaptive vs eager (CPU)
+
+Same environment as above (GFN1, PyTorch integrals, float64,
+`OMP_NUM_THREADS=1`, default `maxiter = 100`, two repeats, minimum wall time,
+peak RSS of the case process, watchdog 12 GiB; raw data
+`benchmarks/results/adaptive-vs-static-vs-eager-cpu.json`). `static` is the
+full fixed-trip schedule (used inside transforms), `adaptive` the default
+mapped route, `eager` independent eager lanes. Cells: wall time / peak RSS.
+
+| Molecule | Mode | Route | B=2 | B=4 | B=8 | B=16 | B=32 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| H2O (3/8) | energy | static | 7.22 s / 0.4 G | 7.31 s / 0.4 G | 7.51 s / 0.4 G | 8.00 s / 0.4 G | 8.31 s / 0.4 G |
+| H2O (3/8) | energy | adaptive | 0.77 s / 0.4 G | 0.76 s / 0.4 G | 0.78 s / 0.4 G | 0.82 s / 0.4 G | 0.87 s / 0.4 G |
+| H2O (3/8) | energy | eager | 0.70 s / 0.4 G | 1.39 s / 0.4 G | 2.81 s / 0.4 G | 5.59 s / 0.4 G | 11.10 s / 0.4 G |
+| H2O (3/8) | forces | static | 10.74 s / 0.7 G | 10.61 s / 0.8 G | 10.65 s / 1.0 G | 11.39 s / 1.6 G | 12.81 s / 2.8 G |
+| H2O (3/8) | forces | adaptive | 1.03 s / 0.4 G | 1.10 s / 0.4 G | 1.10 s / 0.4 G | 1.21 s / 0.5 G | 1.31 s / 0.6 G |
+| H2O (3/8) | forces | eager | 1.12 s / 0.4 G | 2.38 s / 0.5 G | 4.72 s / 0.6 G | 9.79 s / 0.8 G | 19.64 s / 1.2 G |
+| H2O (3/8) | param | static | 10.62 s / 0.7 G | 10.82 s / 0.8 G | 11.08 s / 1.0 G | 11.73 s / 1.5 G | 12.91 s / 2.7 G |
+| H2O (3/8) | param | adaptive | 1.04 s / 0.4 G | 1.07 s / 0.4 G | 1.09 s / 0.4 G | 1.17 s / 0.5 G | 1.30 s / 0.6 G |
+| H2O (3/8) | param | eager | 1.11 s / 0.4 G | 2.39 s / 0.5 G | 4.57 s / 0.6 G | 9.73 s / 0.8 G | 18.81 s / 1.2 G |
+| CH4 (5/12) | energy | static | 7.31 s / 0.4 G | 7.71 s / 0.4 G | 8.08 s / 0.4 G | 8.23 s / 0.4 G | 8.75 s / 0.4 G |
+| CH4 (5/12) | energy | adaptive | 0.85 s / 0.4 G | 0.85 s / 0.4 G | 0.90 s / 0.4 G | 0.93 s / 0.4 G | 1.04 s / 0.4 G |
+| CH4 (5/12) | energy | eager | 0.75 s / 0.4 G | 1.47 s / 0.4 G | 2.99 s / 0.4 G | 5.71 s / 0.4 G | 12.01 s / 0.4 G |
+| CH4 (5/12) | forces | static | 10.89 s / 0.9 G | 11.17 s / 1.0 G | 11.52 s / 1.7 G | 12.17 s / 3.0 G | 14.34 s / 5.7 G |
+| CH4 (5/12) | forces | adaptive | 1.18 s / 0.4 G | 1.21 s / 0.4 G | 1.29 s / 0.5 G | 1.43 s / 0.7 G | 1.58 s / 1.0 G |
+| CH4 (5/12) | forces | eager | 1.25 s / 0.4 G | 2.61 s / 0.5 G | 5.04 s / 0.6 G | 10.36 s / 0.9 G | 21.11 s / 1.5 G |
+| CH4 (5/12) | param | static | 10.63 s / 0.8 G | 10.88 s / 1.0 G | 11.40 s / 1.7 G | 12.75 s / 3.0 G | 15.19 s / 5.7 G |
+| CH4 (5/12) | param | adaptive | 1.20 s / 0.4 G | 1.24 s / 0.4 G | 1.26 s / 0.5 G | 1.44 s / 0.7 G | 1.74 s / 1.0 G |
+| CH4 (5/12) | param | eager | 1.22 s / 0.4 G | 2.48 s / 0.5 G | 5.20 s / 0.6 G | 9.94 s / 0.9 G | 20.63 s / 1.4 G |
+| SiH4 (5/17) | energy | static | 7.83 s / 0.4 G | 8.07 s / 0.4 G | 8.35 s / 0.4 G | 9.44 s / 0.4 G | 11.36 s / 0.4 G |
+| SiH4 (5/17) | energy | adaptive | 0.87 s / 0.4 G | 0.89 s / 0.4 G | 0.96 s / 0.4 G | 1.08 s / 0.4 G | 1.34 s / 0.4 G |
+| SiH4 (5/17) | energy | eager | 0.80 s / 0.4 G | 1.62 s / 0.4 G | 3.16 s / 0.4 G | 6.71 s / 0.4 G | 13.01 s / 0.4 G |
+| SiH4 (5/17) | forces | static | 11.16 s / 1.0 G | 12.09 s / 1.7 G | 13.14 s / 3.0 G | 15.67 s / 5.7 G | 23.21 s / 11.1 G |
+| SiH4 (5/17) | forces | adaptive | 1.20 s / 0.4 G | 1.43 s / 0.5 G | 1.54 s / 0.7 G | 1.74 s / 1.0 G | 2.60 s / 1.6 G |
+| SiH4 (5/17) | forces | eager | 1.41 s / 0.4 G | 2.90 s / 0.5 G | 5.61 s / 0.7 G | 11.54 s / 1.1 G | 23.21 s / 1.9 G |
+| SiH4 (5/17) | param | static | 11.35 s / 1.0 G | 11.71 s / 1.7 G | 13.27 s / 3.0 G | 16.33 s / 5.7 G | 22.23 s / 11.0 G |
+| SiH4 (5/17) | param | adaptive | 1.26 s / 0.4 G | 1.32 s / 0.5 G | 1.50 s / 0.7 G | 1.89 s / 1.0 G | 2.55 s / 1.6 G |
+| SiH4 (5/17) | param | eager | 1.33 s / 0.4 G | 2.74 s / 0.5 G | 5.43 s / 0.7 G | 11.03 s / 1.1 G | 23.09 s / 1.8 G |
+| C4H5NCS (12/43) | energy | static | 9.13 s / 0.4 G | 10.47 s / 0.4 G | 13.60 s / 0.4 G | 19.74 s / 0.4 G | 31.83 s / 0.4 G |
+| C4H5NCS (12/43) | energy | adaptive | 1.42 s / 0.4 G | 1.65 s / 0.4 G | 2.13 s / 0.4 G | 3.04 s / 0.4 G | 5.02 s / 0.4 G |
+| C4H5NCS (12/43) | energy | eager | 1.30 s / 0.4 G | 2.57 s / 0.4 G | 5.08 s / 0.4 G | 10.06 s / 0.4 G | 20.03 s / 0.4 G |
+| C4H5NCS (12/43) | forces | static | 14.65 s / 3.1 G | 19.21 s / 8.9 G | killed | killed | killed |
+| C4H5NCS (12/43) | forces | adaptive | 2.26 s / 0.8 G | 3.01 s / 1.7 G | 4.29 s / 3.0 G | 8.09 s / 5.7 G | 14.66 s / 11.2 G |
+| C4H5NCS (12/43) | forces | eager | 2.40 s / 1.1 G | 4.98 s / 1.8 G | 10.67 s / 3.2 G | 19.92 s / 5.9 G | 38.54 s / 11.5 G |
+| C4H5NCS (12/43) | param | static | 14.35 s / 3.1 G | 20.49 s / 8.8 G | killed | killed | killed |
+| C4H5NCS (12/43) | param | adaptive | 2.20 s / 0.8 G | 3.27 s / 1.7 G | 4.79 s / 3.0 G | 8.10 s / 5.6 G | 13.60 s / 11.0 G |
+| C4H5NCS (12/43) | param | eager | 2.58 s / 1.1 G | 5.19 s / 1.8 G | 10.25 s / 3.1 G | 20.64 s / 5.9 G | 41.15 s / 11.4 G |
+
+Map evaluations per group (energy, B = 8): static always 101 (1 + `maxiter`);
+adaptive equals the slowest lane's physical count (H2O 9, CH4 10, SiH4 10,
+C4H5NCS 14, with 8 / 9 / 9 / 13 chunks); eager lanes need the sum over lanes
+(72 / 75 / 80 / 111).
+
+- Adaptive is 6–10× faster than the static schedule at every size and its
+  autograd memory drops accordingly (SiH4 forces B = 32: 11.1 → 1.6 GiB;
+  C4H5NCS forces/param, where static exceeded 12 GiB from B = 8, now run up
+  to B = 32 at the memory of the eager lanes).
+- Compared with the hand-lowered 12-trip experiment above, adaptive is
+  faster without changing `maxiter` (H2O energy B = 4: 0.76 s vs 1.01 s;
+  forces B = 16: 1.21 s vs 1.58 s; CH4 forces B = 16: 1.43 s vs 1.71 s),
+  because it stops after 9–10 trips instead of 12.
+- Against eager lanes, adaptive ties at B = 2 (0.89–1.17×) and wins from
+  B = 4 (1.6–2.2×), up to 9–15× at B = 32 for the small molecules and
+  2.6–4× for C4H5NCS. Peak memory is at most that of the eager lanes.
+
