@@ -1,0 +1,447 @@
+{
+  "commit": "3efe160d9aaf417a34ff89ddb93c8be0764005c3",
+  "python": "3.12.10",
+  "torch": "2.14.1+cpu",
+  "device": "cpu",
+  "gpu": null,
+  "cuda": null,
+  "dtype": "torch.float64",
+  "omp_num_threads": "1",
+  "mem_limit_gib": 12.0,
+  "repeats": 2,
+  "maxiter": 25,
+  "cases": [
+    {
+      "molecule": "H2O",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 1,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9
+      ],
+      "converged": [
+        true
+      ],
+      "energy_sum": -5.767675797371658,
+      "wall_s": [
+        1.9196822000012617,
+        1.9196073790008086
+      ],
+      "wall_s_min": 1.9196073790008086,
+      "peak_rss_mib": 360.7421875,
+      "rss_before_run_mib": 330.390625,
+      "status": "ok"
+    },
+    {
+      "molecule": "H2O",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 4,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -23.07136566119829,
+      "wall_s": [
+        1.9357758430051035,
+        1.936132019996876
+      ],
+      "wall_s_min": 1.9357758430051035,
+      "peak_rss_mib": 361.75390625,
+      "rss_before_run_mib": 330.40625,
+      "status": "ok"
+    },
+    {
+      "molecule": "H2O",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 16,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -92.2807116005693,
+      "wall_s": [
+        2.124974241000018,
+        2.1298111639989656
+      ],
+      "wall_s_min": 2.124974241000018,
+      "peak_rss_mib": 360.71875,
+      "rss_before_run_mib": 330.37109375,
+      "status": "ok"
+    },
+    {
+      "molecule": "H2O",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 1,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9
+      ],
+      "converged": [
+        true
+      ],
+      "energy_sum": -5.767675797371658,
+      "wall_s": [
+        2.8419275499982177,
+        2.676410596999631
+      ],
+      "wall_s_min": 2.676410596999631,
+      "peak_rss_mib": 459.89453125,
+      "rss_before_run_mib": 330.515625,
+      "status": "ok"
+    },
+    {
+      "molecule": "H2O",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 4,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -23.07136566119829,
+      "wall_s": [
+        2.935569608998776,
+        2.741335931001231
+      ],
+      "wall_s_min": 2.741335931001231,
+      "peak_rss_mib": 496.4921875,
+      "rss_before_run_mib": 330.390625,
+      "status": "ok"
+    },
+    {
+      "molecule": "H2O",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 16,
+      "nat": 3,
+      "nao": 8,
+      "maxiter": 25,
+      "iterations": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -92.2807116005693,
+      "wall_s": [
+        3.3141596569985268,
+        3.0220296740008052
+      ],
+      "wall_s_min": 3.0220296740008052,
+      "peak_rss_mib": 701.8203125,
+      "rss_before_run_mib": 330.390625,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 1,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10
+      ],
+      "converged": [
+        true
+      ],
+      "energy_sum": -4.272532507318154,
+      "wall_s": [
+        1.923568031998002,
+        1.925446450994059
+      ],
+      "wall_s_min": 1.923568031998002,
+      "peak_rss_mib": 361.015625,
+      "rss_before_run_mib": 330.1953125,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 4,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10,
+        9,
+        10,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -17.091178622739633,
+      "wall_s": [
+        1.956508502997167,
+        1.9502092839975376
+      ],
+      "wall_s_min": 1.9502092839975376,
+      "peak_rss_mib": 362.44140625,
+      "rss_before_run_mib": 330.609375,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "energy",
+      "strategy": "vmap",
+      "group_size": 16,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10,
+        9,
+        10,
+        9,
+        9,
+        10,
+        9,
+        9,
+        9,
+        9,
+        10,
+        9,
+        10,
+        10,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -68.36929975316245,
+      "wall_s": [
+        2.1790599749947432,
+        2.1737162879944663
+      ],
+      "wall_s_min": 2.1737162879944663,
+      "peak_rss_mib": 363.41796875,
+      "rss_before_run_mib": 330.40234375,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 1,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10
+      ],
+      "converged": [
+        true
+      ],
+      "energy_sum": -4.272532507318154,
+      "wall_s": [
+        2.8886192589998245,
+        2.7343508299964014
+      ],
+      "wall_s_min": 2.7343508299964014,
+      "peak_rss_mib": 475.37890625,
+      "rss_before_run_mib": 330.171875,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 4,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10,
+        9,
+        10,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -17.091178622739633,
+      "wall_s": [
+        3.050243648001924,
+        2.811857968001277
+      ],
+      "wall_s_min": 2.811857968001277,
+      "peak_rss_mib": 556.84765625,
+      "rss_before_run_mib": 330.375,
+      "status": "ok"
+    },
+    {
+      "molecule": "CH4",
+      "mode": "forces",
+      "strategy": "vmap",
+      "group_size": 16,
+      "nat": 5,
+      "nao": 12,
+      "maxiter": 25,
+      "iterations": [
+        10,
+        9,
+        10,
+        9,
+        9,
+        10,
+        9,
+        9,
+        9,
+        9,
+        10,
+        9,
+        10,
+        10,
+        9,
+        9
+      ],
+      "converged": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "energy_sum": -68.36929975316245,
+      "wall_s": [
+        3.7074109539971687,
+        3.2493690519986558
+      ],
+      "wall_s_min": 3.2493690519986558,
+      "peak_rss_mib": 1117.8125,
+      "rss_before_run_mib": 330.58984375,
+      "status": "ok"
+    }
+  ]
+}

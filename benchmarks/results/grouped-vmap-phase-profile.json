@@ -1,0 +1,201 @@
+{
+  "commit": "3efe160d9aaf417a34ff89ddb93c8be0764005c3",
+  "python": "3.12.10",
+  "torch": "2.14.1+cpu",
+  "device": "cpu",
+  "omp_num_threads": "1",
+  "cases": [
+    {
+      "case": "H2O",
+      "strategy": "vmap",
+      "lanes": 8,
+      "energy_sum": -46.141488625840296,
+      "total_s": 7.370491464003862,
+      "phases_s": {
+        "integrals": 0.004493314998399001,
+        "scf_prep": 0.0008708650057087652,
+        "eigensolver": 0.029760158897261135,
+        "scf_solve": 7.342554801005463,
+        "split": 0.0004736110058729537,
+        "pack": 0.0004796409994014539,
+        "other": 0.021619230989017524
+      },
+      "calls": {
+        "integrals": 1,
+        "scf_prep": 1,
+        "eigensolver": 204,
+        "scf_solve": 1,
+        "split": 8,
+        "pack": 1
+      },
+      "iterations": 9
+    },
+    {
+      "case": "H2O",
+      "strategy": "eager",
+      "lanes": 8,
+      "energy_sum": -46.141488625840296,
+      "total_s": 2.735259398999915,
+      "phases_s": {
+        "integrals": 0.021769407991087064,
+        "scf_prep": 0.0026860230063903145,
+        "eigensolver": 0.012537887931102887,
+        "scf_solve": 2.6768972480058437,
+        "pack": 0.0004556659987429157,
+        "other": 0.03345105399785098
+      },
+      "calls": {
+        "integrals": 8,
+        "scf_prep": 8,
+        "eigensolver": 160,
+        "scf_solve": 8,
+        "pack": 1
+      },
+      "iterations": 9
+    },
+    {
+      "case": "CH4",
+      "strategy": "vmap",
+      "lanes": 8,
+      "energy_sum": -34.18317686860233,
+      "total_s": 7.635865315998672,
+      "phases_s": {
+        "integrals": 0.0045990860016900115,
+        "scf_prep": 0.0009142159979091957,
+        "eigensolver": 0.037509592963033356,
+        "scf_solve": 7.604551470998558,
+        "split": 0.0005036949951318093,
+        "pack": 0.00045174800470704213,
+        "other": 0.024845100000675302
+      },
+      "calls": {
+        "integrals": 1,
+        "scf_prep": 1,
+        "eigensolver": 204,
+        "scf_solve": 1,
+        "split": 8,
+        "pack": 1
+      },
+      "iterations": 10
+    },
+    {
+      "case": "CH4",
+      "strategy": "eager",
+      "lanes": 8,
+      "energy_sum": -34.183176868602324,
+      "total_s": 2.9129447390005225,
+      "phases_s": {
+        "integrals": 0.022005233011441305,
+        "scf_prep": 0.002817531014443375,
+        "eigensolver": 0.01287690502795158,
+        "scf_solve": 2.854127417980635,
+        "pack": 0.0004726069964817725,
+        "other": 0.033521949997521006
+      },
+      "calls": {
+        "integrals": 8,
+        "scf_prep": 8,
+        "eigensolver": 166,
+        "scf_solve": 8,
+        "pack": 1
+      },
+      "iterations": 10
+    },
+    {
+      "case": "NH3",
+      "strategy": "vmap",
+      "lanes": 4,
+      "energy_sum": -19.314458484140417,
+      "total_s": 7.431492114999855,
+      "phases_s": {
+        "integrals": 0.004650011003832333,
+        "scf_prep": 0.0009825059969443828,
+        "eigensolver": 0.028710787039017305,
+        "scf_solve": 7.404347210002015,
+        "split": 0.00026241700106766075,
+        "pack": 0.0003270820016041398,
+        "other": 0.020922888994391542
+      },
+      "calls": {
+        "integrals": 1,
+        "scf_prep": 1,
+        "eigensolver": 204,
+        "scf_solve": 1,
+        "split": 4,
+        "pack": 1
+      },
+      "iterations": 10
+    },
+    {
+      "case": "NH3",
+      "strategy": "eager",
+      "lanes": 4,
+      "energy_sum": -19.314458484140417,
+      "total_s": 1.4955432010028744,
+      "phases_s": {
+        "integrals": 0.010712374998547602,
+        "scf_prep": 0.0013253759971121326,
+        "eigensolver": 0.006689150010060985,
+        "scf_solve": 1.4639972880031564,
+        "pack": 0.0002753430017037317,
+        "other": 0.019232819002354518
+      },
+      "calls": {
+        "integrals": 4,
+        "scf_prep": 4,
+        "eigensolver": 86,
+        "scf_solve": 4,
+        "pack": 1
+      },
+      "iterations": 10
+    },
+    {
+      "case": "B",
+      "strategy": "vmap",
+      "lanes": 20,
+      "energy_sum": -99.6280407293684,
+      "total_s": 22.41286359100195,
+      "phases_s": {
+        "integrals": 0.013033110997639596,
+        "scf_prep": 0.0024521470040781423,
+        "eigensolver": 0.09463650183897698,
+        "scf_solve": 22.35309957100253,
+        "split": 0.0012176029922557063,
+        "pack": 0.0012443430023267865,
+        "other": 0.04181681600312004
+      },
+      "calls": {
+        "integrals": 3,
+        "scf_prep": 3,
+        "eigensolver": 612,
+        "scf_solve": 3,
+        "split": 20,
+        "pack": 1
+      },
+      "iterations": 10
+    },
+    {
+      "case": "B",
+      "strategy": "eager",
+      "lanes": 20,
+      "energy_sum": -99.6280407293684,
+      "total_s": 7.170098170994606,
+      "phases_s": {
+        "integrals": 0.054322639014571905,
+        "scf_prep": 0.006866025003546383,
+        "eigensolver": 0.03164493692747783,
+        "scf_solve": 7.0298899359986535,
+        "pack": 0.0013070920031168498,
+        "other": 0.07771247897471767
+      },
+      "calls": {
+        "integrals": 20,
+        "scf_prep": 20,
+        "eigensolver": 416,
+        "scf_solve": 20,
+        "pack": 1
+      },
+      "iterations": 10
+    }
+  ]
+}
