@@ -177,6 +177,7 @@ def test_gb_kernel_defaults_and_overrides() -> None:
         assert solv.kernel == expected_kernel
 
 
+@pytest.mark.tblite
 @pytest.mark.parametrize(
     "alpb_flag", [True, False], ids=["alpb_p16", "gb_still"]
 )
@@ -262,7 +263,7 @@ def test_h_o_cs_atom_order_permutation_invariance(alpb_flag: bool) -> None:
     numbers_1 = torch.tensor([1, 8, 55], device=DEVICE)
     positions_1 = torch.tensor(
         [
-            [0.0, 0.0, 1.8],
+            [0.0, 0.0, -1.8],
             [0.0, 0.0, 0.0],
             [0.0, 0.0, 4.2],
         ],
