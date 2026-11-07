@@ -764,7 +764,7 @@ def _fermi_free_energy_setup(
     h = hamiltonian.to(dtype=work_dtype)
     li = None if l_inv is None else l_inv.to(dtype=work_dtype)
     # The explicit mask indexes the AO basis; state.orbital_mask indexes the
-    # energy-sorted spectrum. Canonical AO validity may be noncontiguous.
+    # energy-sorted spectrum. AO validity may be noncontiguous.
     structural_mask = mask
     if structural_mask is None:
         structural_mask = state.orbital_mask

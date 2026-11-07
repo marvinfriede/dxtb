@@ -260,7 +260,9 @@ def test_non_sum_reductions_exclude_negative_indices_and_zero_empty_buckets(
     assert grad[3].item() == 0.0
 
 
-def test_amax_and_amin_preserve_sign_for_all_negative_or_all_positive_buckets() -> None:
+def test_amax_and_amin_preserve_sign_for_all_negative_or_all_positive_buckets() -> (
+    None
+):
     """Initial fill values do not clamp all-negative amax or all-positive amin to zero."""
     idx = torch.tensor([0, -1, 0, 1])
     neg_values = torch.tensor([-5.0, 999.0, -2.0, -8.0])
@@ -487,3 +489,36 @@ def test_indexhelper_node_transforms_vmap_jac_and_compile(
         torch.testing.assert_close(compiled_0, expected_0)
         torch.testing.assert_close(compiled_1, expected_1)
 
+
+def test_two_axis_density_reduction_is_vmap_safe():
+    index = IndexHelper(
+        unique_angular=torch.tensor([0]),
+        atom_to_unique=torch.tensor([0, 0]),
+        ushells_to_unique=torch.tensor([0]),
+        ushells_per_unique=torch.tensor([1]),
+        shells_per_atom=torch.tensor([1, 1]),
+        shell_index=torch.tensor([0, 1]),
+        angular=torch.tensor([0, 0]),
+        shells_to_ushell=torch.tensor([0, 0]),
+        shells_to_atom=torch.tensor([0, 1]),
+        orbitals_per_shell=torch.tensor([1, 1]),
+        orbital_index=torch.tensor([0, 2]),
+        orbitals_to_shell=torch.tensor([0, -1, 1]),
+        batch_mode=0,
+    )
+    matrices = torch.tensor(
+        [
+            [[3.0, 999.0, 5.0], [999.0, 999.0, 999.0], [7.0, 999.0, 11.0]],
+            [[13.0, 999.0, 17.0], [999.0, 999.0, 999.0], [19.0, 999.0, 23.0]],
+        ]
+    )
+    mapped = torch.func.vmap(
+        lambda value: index.reduce_orbital_to_shell(value, dim=(0, 1))
+    )(matrices)
+    expected = torch.tensor(
+        [
+            [[3.0, 5.0], [7.0, 11.0]],
+            [[13.0, 17.0], [19.0, 23.0]],
+        ]
+    )
+    torch.testing.assert_close(mapped, expected)

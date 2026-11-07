@@ -47,8 +47,6 @@ from torch.func import vmap
 
 from dxtb import OutputHandler, labels
 from dxtb._src.calculators.model import System
-from dxtb._src.calculators.padded_integrals import evaluate_padded_integrals
-from dxtb._src.calculators.padding import PaddedExactSystemCore
 from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import (
     _evaluate_classical_descriptor,
@@ -134,10 +132,6 @@ from dxtb._src.scf.functional.map import (
     potential_map,
     scf_map,
     unpack_potential,
-)
-from dxtb._src.scf.functional.padded import (
-    _padded_initial_guess,
-    setup_padded_scf_inputs,
 )
 from dxtb._src.scf.functional.problem import (
     SCFPhysicalState,
@@ -391,9 +385,9 @@ class _TensorValueSnapshot:
 
 @dataclass(frozen=True, eq=False)
 class PreparedConvergedRootBatch:
-    """Validated conformer batch sharing one :class:`System` or padded core owner."""
+    """Validated conformer batch sharing one :class:`System`."""
 
-    system: System | PaddedExactSystemCore
+    system: System
     positions: Tensor
     primal_representation: int
     response_representation: int
@@ -596,7 +590,7 @@ def _collect_object_tensors(
 
 
 def _collect_system_and_model_tensors(
-    system: System | PaddedExactSystemCore,
+    system: System,
     excluded_ids: set[int],
 ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
     """Collect System setup tensors and connected differentiable Model leaf tensors."""
@@ -710,88 +704,12 @@ def _normalize_batch_perturbation(
 
 
 def _validate_system_and_positions(
-    system: System | PaddedExactSystemCore,
+    system: System,
     positions: Tensor,
     field: Tensor | None,
     field_grad: Tensor | None,
 ):
-    """Validate System or PaddedExactSystemCore eligibility and batch positions."""
-    if isinstance(system, PaddedExactSystemCore):
-        core = system.core
-        numbers = core.numbers
-        config = core.config
-        integral_setup = core.integral
-        h0_setup = core.h0_setup
-        if numbers.ndim != 1:
-            raise ValueError(
-                "Converged-root conformer batching requires 1D atomic numbers."
-            )
-        if positions.ndim != 3 or positions.shape[0] < 1:
-            raise ValueError(
-                "Converged-root conformer batching expects positions with shape "
-                f"(B, nat, 3) and B >= 1; got {tuple(positions.shape)}."
-            )
-        if positions.shape[1:] != (numbers.shape[0], 3):
-            raise ValueError(
-                "Converged-root conformer batching expects positions with shape "
-                f"(B, {numbers.shape[0]}, 3); got {tuple(positions.shape)}."
-            )
-        system_device = numbers.device
-        if positions.device != system_device:
-            raise DeviceError(
-                f"Device mismatch: System is on '{system_device}', but positions "
-                f"are on '{positions.device}'."
-            )
-        if positions.dtype != core.effective_dtype:
-            raise DtypeError(
-                "Dtype mismatch: System floating setup is of type "
-                f"'{core.effective_dtype}', but positions are of type "
-                f"'{positions.dtype}'."
-            )
-        if field is not None and config.ints.level < labels.INTLEVEL_DIPOLE:
-            raise RuntimeError(
-                "An electric field requires dipole integrals. Construct the "
-                "System with an integral level of at least "
-                f"{labels.INTLEVEL_DIPOLE}."
-            )
-        if (
-            field_grad is not None
-            and config.ints.level < labels.INTLEVEL_QUADRUPOLE
-        ):
-            raise RuntimeError(
-                "An electric field gradient requires quadrupole integrals. "
-                "Construct the System with an integral level of at least "
-                f"{labels.INTLEVEL_QUADRUPOLE}."
-            )
-        if h0_setup is None:
-            raise NotImplementedError("Core Hamiltonian setup is missing.")
-        if integral_setup is None:
-            raise NotImplementedError(
-                "Single-system integral setup is missing."
-            )
-        if config.ints.level < labels.INTLEVEL_HCORE:
-            raise NotImplementedError(
-                "Core Hamiltonian missing. Please increase the integral level to "
-                "at least 2."
-            )
-        if config.scf.maxiter <= 0:
-            raise SCFConvergenceError(
-                "Implicit physical-root differentiation requires maxiter > 0."
-            )
-        strategy_label = " -> ".join(
-            type(stage.method).__name__.removesuffix("Method").lower()
-            for stage in config.scf.strategy.stages
-        )
-        route = SimpleNamespace(
-            kind="functional",
-            representation=config.scf._legacy_representation_code,
-            strategy_label=strategy_label,
-            strategy=config.scf.strategy,
-            reason=None,
-            warning=None,
-        )
-        return core, numbers, config, integral_setup, h0_setup, route, None
-
+    """Validate System eligibility and batch positions."""
     core = system._active_exact_core()
     numbers = core.numbers if core is not None else system.numbers
     config = core.config if core is not None else system.config
@@ -911,7 +829,7 @@ def _validate_system_and_positions(
 
 
 def _build_lane_inputs(
-    system: System | PaddedExactSystemCore,
+    system: System,
     numbers: Tensor,
     config: Any,
     integral_setup: Any,
@@ -925,34 +843,6 @@ def _build_lane_inputs(
     lane_field_grad: Tensor | None,
 ):
     """Build call-local integrals, interactions, and SCFInputs for one lane."""
-    if isinstance(system, PaddedExactSystemCore):
-        masked_pos = torch.where(
-            system.validity.atoms.unsqueeze(-1), lane_positions, 0.0
-        )
-        chrg_scalar = lane_charge.squeeze(0)
-        spin_scalar = None if lane_spin is None else lane_spin.squeeze(0)
-        padded_ints = evaluate_padded_integrals(system, masked_pos, chrg_scalar)
-        inputs = setup_padded_scf_inputs(
-            system,
-            padded_ints,
-            masked_pos,
-            chrg_scalar,
-            spin_scalar,
-            lane_field,
-            lane_field_grad,
-        )
-        return (
-            inputs.integrals,
-            inputs.n0,
-            padded_ints.overlap_norm,
-            inputs.n0,
-            inputs.occupation,
-            inputs.nel,
-            None,
-            None,
-            inputs,
-        )
-
     matrices, refocc, overlap_norm = build_integral_matrices(
         integral_setup,
         h0_setup,
@@ -1987,8 +1877,6 @@ def _prepare_lane_response_root(
     solve: _LanePrimalSolveOutcome,
     settings: Any,
     response_settings: SCFResponseSettings,
-    *,
-    padded: bool,
 ):
     """Use shared S11 response conversion/certification for one valid lane."""
     source_representation = _scf_representation_from_label(
@@ -2023,16 +1911,6 @@ def _prepare_lane_response_root(
         trajectory_status=solve.trajectory_status,
         damping_state=solve.damping_state,
     )
-    target = (
-        source_representation
-        if response_settings.representation is None
-        else response_settings.representation
-    )
-    if padded and target is not source_representation:
-        raise ValueError(
-            "Padded conformer batches currently require response coordinates "
-            "to match the primal representation."
-        )
     with eager_primal_fermi_scope(False):
         return prepare_response_root(
             primal_outcome, settings, response_settings
@@ -2040,7 +1918,7 @@ def _prepare_lane_response_root(
 
 
 def prepare_converged_root_batch(
-    system: System | PaddedExactSystemCore,
+    system: System,
     positions: Tensor,
     chrg: Tensor | float | int = defaults.CHRG,
     spin: Tensor | float | int | None = defaults.SPIN,
@@ -2054,7 +1932,7 @@ def prepare_converged_root_batch(
 
     Parameters
     ----------
-    system : System | PaddedExactSystemCore
+    system : System
         Single-System owner providing shared atomic numbers, basis/index
         structure, and Model parameters.
     positions : Tensor
@@ -2113,15 +1991,6 @@ def prepare_converged_root_batch(
         if response_settings.representation is None
         else response_settings.representation
     )
-    if (
-        isinstance(system, PaddedExactSystemCore)
-        and requested_response_representation
-        is not primal_response_representation
-    ):
-        raise ValueError(
-            "Padded conformer batches currently require response coordinates "
-            "to match the primal representation."
-        )
     response_representation = {
         SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
         SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
@@ -2204,25 +2073,14 @@ def prepare_converged_root_batch(
         lane_padded = has_padding or bool((~primal_inputs.orbital_mask).any())
 
         with torch.no_grad():
-            if isinstance(system, PaddedExactSystemCore):
-                primal_masked_pos = torch.where(
-                    system.validity.atoms.unsqueeze(-1), primal_pos, 0.0
-                )
-                guess = _padded_initial_guess(
-                    system,
-                    primal_masked_pos,
-                    primal_chrg.squeeze(0),
-                    primal_inputs,
-                )
-            else:
-                guess = get_guess(
-                    numbers,
-                    primal_pos,
-                    primal_chrg,
-                    system.ihelp,
-                    effective_scf_config.guess,
-                    validate=False,
-                )
+            guess = get_guess(
+                numbers,
+                primal_pos,
+                primal_chrg,
+                system.ihelp,
+                effective_scf_config.guess,
+                validate=False,
+            )
             guess_charges = SCFCharges(
                 mono=guess,
                 dipole=(
@@ -2270,7 +2128,6 @@ def prepare_converged_root_batch(
                 solve_outcome,
                 settings,
                 response_settings,
-                padded=isinstance(system, PaddedExactSystemCore),
             )
 
         if not solve_outcome.root_valid:
@@ -2460,26 +2317,11 @@ def prepare_converged_root_batch(
 
 
 def _evaluate_lane_classical(
-    system: System | PaddedExactSystemCore,
+    system: System,
     lane_positions: Tensor,
     lane_charge: Tensor,
 ) -> tuple[tuple[str, Tensor], ...]:
     """Evaluate classical energy components for a single conformer lane."""
-    if isinstance(system, PaddedExactSystemCore):
-        if not system.core.classical_terms:
-            return ()
-        masked_pos = torch.where(
-            system.validity.atoms.unsqueeze(-1), lane_positions, 0.0
-        )
-        chrg_scalar = lane_charge.squeeze(0)
-        return tuple(
-            (
-                term.label,
-                _evaluate_classical_descriptor(term, masked_pos, chrg_scalar),
-            )
-            for term in system.core.classical_terms
-        )
-
     if not system.classicals.components:
         return ()
     core = system._active_exact_core()
@@ -3269,7 +3111,7 @@ def _evaluate_valid_lanes_mapped(
 
 
 def _assemble_batch_result(
-    system: System | PaddedExactSystemCore,
+    system: System,
     lanes: tuple[ConvergedRootLaneRecord, ...],
     eval_positions: Tensor,
     valid_indices: list[int],
@@ -3455,9 +3297,7 @@ def _assemble_batch_result(
 
 
 def evaluate_converged_root_batch(
-    batch_or_system: (
-        PreparedConvergedRootBatch | System | PaddedExactSystemCore
-    ),
+    batch_or_system: PreparedConvergedRootBatch | System,
     positions: Tensor | None = None,
     chrg: Tensor | float | int = _UNSET,
     spin: Tensor | float | int | None = _UNSET,
@@ -3484,11 +3324,7 @@ def evaluate_converged_root_batch(
     if isinstance(batch_or_system, PreparedConvergedRootBatch):
         prepared = batch_or_system
         system = prepared.system
-        sys_cfg = (
-            system.core.config
-            if isinstance(system, PaddedExactSystemCore)
-            else system.config
-        )
+        sys_cfg = system.config
         effective_strict = _resolve_strictness(sys_cfg.scf, strict)
         eval_positions = prepared.positions if positions is None else positions
         with eager_primal_fermi_scope(False):
@@ -3528,7 +3364,7 @@ def evaluate_converged_root_batch(
                 valid_outputs,
                 prepared.model_parameter_refs,
             )
-    elif isinstance(batch_or_system, (System, PaddedExactSystemCore)):
+    elif isinstance(batch_or_system, System):
         if positions is None:
             raise ValueError(
                 "positions must be provided when calling "
@@ -3556,5 +3392,5 @@ def evaluate_converged_root_batch(
         )
     else:
         raise TypeError(
-            "Expected PreparedConvergedRootBatch, System, or PaddedExactSystemCore as first argument."
+            "Expected PreparedConvergedRootBatch or System as first argument."
         )

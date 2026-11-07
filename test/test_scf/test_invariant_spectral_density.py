@@ -32,6 +32,7 @@ from dxtb._src.scf.functional.spectral import (
     _matrix_fermi,
     _prepare_matrix,
     _projector,
+    _solve_positive_definite,
     aufbau_density_matrix,
     fermi_density_matrix,
     fermi_free_energy_matrix,
@@ -991,9 +992,7 @@ def test_fermi_matrix_scaling_matches_spectral_oracle(
     )
 
 
-@pytest.mark.parametrize(
-    ("maximum_energy", "seed"), ((70.1, 61), (100.0, 97))
-)
+@pytest.mark.parametrize(("maximum_energy", "seed"), ((70.1, 61), (100.0, 97)))
 def test_fermi_matrix_cutoff_envelope_is_rotation_independent(
     maximum_energy: float, seed: int
 ) -> None:
@@ -1520,9 +1519,7 @@ def test_rotated_fermi_matrix_p14_p15_boundary_derivatives() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("lower_power", "upper_power"), ((29, 30), (30, 31))
-)
+@pytest.mark.parametrize(("lower_power", "upper_power"), ((29, 30), (30, 31)))
 def test_fermi_matrix_high_scale_boundaries(
     lower_power: int, upper_power: int
 ) -> None:
@@ -2477,7 +2474,9 @@ def test_detached_spectral_fermi_wide_spectra_saturation_s01b_and_nonfinite() ->
 
     # 1. Wide spectrum + large positive/negative chemical potential shifts (saturated 1.0 and 0.0).
     wide_evals = torch.tensor([-25.0, 0.0, 25.0, 0.0], dtype=torch.float64)
-    _, wide_spec, prep_act = _prepare_matrix(torch.diag(wide_evals), None, active)
+    _, wide_spec, prep_act = _prepare_matrix(
+        torch.diag(wide_evals), None, active
+    )
     for shift_val in (-50.0, 0.0, 50.0):
         shift = torch.tensor(shift_val, dtype=torch.float64)
         with torch.no_grad():
@@ -2772,3 +2771,47 @@ def test_daleckii_krein_fermi_jvp_matches_matrix_fermi_and_is_rotation_invariant
     )
     torch.testing.assert_close(dk_val2, dk_val, atol=1.0e-13, rtol=1.0e-13)
     torch.testing.assert_close(dk_tan2, dk_tan, atol=1.0e-12, rtol=1.0e-12)
+
+
+def test_spectral_positive_definite_solve_supports_forward_second_derivatives() -> (
+    None
+):
+    """The Cholesky solve keeps forward and reverse Hessians consistent."""
+    dtype = torch.float64
+    matrix = torch.tensor(
+        [[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]],
+        dtype=dtype,
+    )
+    direction = torch.tensor(
+        [[0.1, 0.2, -0.1], [0.2, -0.15, 0.05], [-0.1, 0.05, 0.08]],
+        dtype=dtype,
+    )
+    rhs = torch.tensor([[1.0], [-0.5], [0.25]], dtype=dtype)
+    weight = torch.tensor([[0.5], [1.25], [-0.75]], dtype=dtype)
+
+    def function(value):
+        solved = _solve_positive_definite(matrix + value * direction, rhs)
+        return (solved * weight).sum()
+
+    zero = torch.zeros((), dtype=dtype)
+    tangent = torch.ones_like(zero)
+    forward_second = torch.func.jvp(
+        lambda value: torch.func.jvp(function, (value,), (tangent,))[1],
+        (zero,),
+        (tangent,),
+    )[1]
+    reverse_second = torch.func.jvp(
+        torch.func.grad(function), (zero,), (tangent,)
+    )[1]
+    step = 1.0e-3
+    finite_difference = (
+        torch.func.grad(function)(zero + step)
+        - torch.func.grad(function)(zero - step)
+    ) / (2.0 * step)
+
+    torch.testing.assert_close(
+        forward_second, reverse_second, atol=1.0e-12, rtol=1.0e-12
+    )
+    torch.testing.assert_close(
+        forward_second, finite_difference, atol=1.0e-6, rtol=1.0e-6
+    )

@@ -342,13 +342,10 @@ def _solve_representation(
     *,
     eager: bool = True,
     record_trace: bool = False,
-    padded: bool = False,
 ) -> SCFSolveResult:
     """Run one representation with eager or transform-fixed control."""
     settings, strategy = _prepare_solver(config, guess.dtype)
     mode = config._legacy_representation_code
-    padded_state: Callable[[Tensor], Tensor] | None = None
-    padded_residual: Callable[[Tensor], Tensor] | None = None
     if mode == labels.SCP_MODE_CHARGE:
         x = pack_charges(
             SCFCharges(
@@ -366,8 +363,6 @@ def _solve_representation(
             ),
             inputs.charge_layout,
         )
-        if padded:
-            padded_state, padded_residual = _padded_charge_projections(inputs)
         return solve_scf_problem(
             x,
             SCFProblem(inputs, SCFRepresentation.CHARGE),
@@ -376,9 +371,6 @@ def _solve_representation(
             eager=eager,
             record_trace=record_trace,
             certification_profile=_certification_profile(config),
-            state_projection=padded_state,
-            residual_projection=padded_residual,
-            project_initial_state=padded,
         )
     charges = SCFCharges(
         mono=guess,
@@ -395,10 +387,6 @@ def _solve_representation(
     )
     if mode == labels.SCP_MODE_POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
-        if padded:
-            padded_state, padded_residual = _padded_potential_projections(
-                inputs, layout
-            )
         return solve_scf_problem(
             packed,
             SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout),
@@ -407,21 +395,9 @@ def _solve_representation(
             eager=eager,
             record_trace=record_trace,
             certification_profile=_certification_profile(config),
-            state_projection=padded_state,
-            residual_projection=padded_residual,
-            project_initial_state=padded,
         )
     if mode == labels.SCP_MODE_FOCK:
         fock = fock_initial_guess(charges, inputs)
-        if padded:
-            matrix_mask = inputs.orbital_mask.unsqueeze(
-                -1
-            ) & inputs.orbital_mask.unsqueeze(-2)
-            padded_state = lambda value: torch.where(
-                matrix_mask, value, inputs.integrals.hcore
-            )
-            problem = SCFProblem(inputs, SCFRepresentation.FOCK)
-            padded_residual = problem.project_residual
         return solve_scf_problem(
             fock,
             SCFProblem(inputs, SCFRepresentation.FOCK),
@@ -430,9 +406,6 @@ def _solve_representation(
             eager=eager,
             record_trace=record_trace,
             certification_profile=_certification_profile(config),
-            state_projection=padded_state,
-            residual_projection=padded_residual,
-            project_initial_state=padded,
         )
     raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
 

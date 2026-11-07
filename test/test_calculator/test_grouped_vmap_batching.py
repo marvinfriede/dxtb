@@ -711,44 +711,17 @@ def test_result_fields_are_all_split_from_a_mapped_group() -> None:
     assert lanes[1].status.final_failure.ndim == 0
 
 
-def test_grouped_route_matches_canonical_padded_route() -> None:
-    """Transitional cross-check against the canonical padded evaluator.
+@pytest.mark.parametrize(
+    "module",
+    [
+        "dxtb._src.calculators.canonical_padding",
+        "dxtb._src.calculators.padding",
+        "dxtb._src.calculators.padded_integrals",
+        "dxtb._src.scf.functional.padded",
+    ],
+)
+def test_cross_composition_padding_modules_are_removed(module: str) -> None:
+    """No canonical cross-composition padding implementation remains."""
+    from importlib.util import find_spec
 
-    Removed together with the canonical-padding implementation.
-    """
-    from dxtb._src.calculators.canonical_padding import (
-        bucket_canonical_exact_cores,
-        canonicalize_positions,
-        pad_canonical_exact_core,
-    )
-    from dxtb._src.scf.functional.padded import evaluate_padded_systems
-
-    model = _model()
-    water, methane = _setup(model, H2O), _setup(model, CH4)
-    systems = (water, methane, water)
-    positions = (_geometry(H2O, 0), _geometry(CH4, 0), _geometry(H2O, 1))
-    zero = torch.tensor(0.0, dtype=DTYPE)
-
-    cores = tuple(system.exact_core for system in systems)
-    bucket = bucket_canonical_exact_cores(cores)
-    padded = tuple(
-        pad_canonical_exact_core(core, bucket, lane)
-        for lane, core in enumerate(cores)
-    )
-    canonical_positions = tuple(
-        canonicalize_positions(position, bucket, lane)
-        for lane, position in enumerate(positions)
-    )
-    _, canonical = evaluate_padded_systems(
-        padded, bucket, canonical_positions, (zero,) * 3, (zero,) * 3
-    )
-
-    grouped = evaluate_packed_systems(systems, positions, spin=0.0)
-    for lane, (system, reference) in enumerate(zip(systems, canonical)):
-        _assert_lane_matches(
-            grouped,
-            lane,
-            reference,
-            nat=positions[lane].shape[0],
-            nao=system.ihelp.nao,
-        )
+    assert find_spec(module) is None

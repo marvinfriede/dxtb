@@ -449,7 +449,6 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
 
     from dxtb import GFN2_XTB
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
-    from dxtb._src.scf.functional.padded import evaluate_padded_fixed_trip
     from dxtb.scf import (
         AndersonMethod,
         AndersonMethodSettings,
@@ -596,20 +595,10 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
             ValueError, match="requires eager/implicit|single-stage fixed-trip"
         ):
             can_vmap_system(mutated_sys)
-
-    # Direct evaluate_padded_fixed_trip also rejects multi-stage or eager-only strategies
-    from types import SimpleNamespace
-
-    dummy_padded = SimpleNamespace(
-        core=SimpleNamespace(config=bypassed_cfg),
-    )
-    with pytest.raises(ValueError, match="single-stage"):
-        evaluate_padded_fixed_trip(
-            dummy_padded,  # type: ignore[arg-type]
-            pos_h2,
-            torch.tensor(0.0, dtype=DTYPE),
-            torch.tensor(0.0, dtype=DTYPE),
-        )
+        with pytest.raises(ValueError, match="requires eager/implicit"):
+            evaluate_packed_systems(
+                (mutated_sys, mutated_sys), (pos_h2, pos_h2)
+            )
 
     with pytest.raises(ValueError, match="active Fermi smearing"):
         Config.create(

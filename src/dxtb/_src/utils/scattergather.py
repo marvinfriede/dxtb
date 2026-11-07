@@ -257,7 +257,7 @@ def gather_remove_negative_index(func: Gather) -> Gather:
         mask = idx >= 0
         # Keep the validity mask in tensor space.  Reducing it to a Python
         # branch is not supported when structural indices are themselves
-        # mapped (for example, stacked canonical System cores under vmap).
+        # mapped (for example, stacked index tensors under vmap).
         return torch.where(
             mask,
             func(x, dim, torch.where(mask, idx, 0), *args),

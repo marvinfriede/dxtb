@@ -1362,5 +1362,18 @@ def test_system_numbers_replacement_and_in_place_mutation_detected() -> None:
     )
 
 
-
-
+def test_meta_device_leaf_mismatch_is_metadata_rejected_only() -> None:
+    """Meta tensors probe structural validation, never numerical device support."""
+    model = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        config=Config.create(
+            method=labels.GFN1_XTB, int_driver=labels.INTDRIVER_PYTORCH
+        ),
+    )
+    core = model.setup(torch.tensor([1, 1])).exact_core
+    assert core is not None
+    assert core.integral is not None and core.integral.backend is not None
+    backend = core.integral.backend
+    meta_alpha = backend.alphas[0].to(device="meta")
+    with pytest.raises(RuntimeError, match="different devices"):
+        backend.replace(alphas=(meta_alpha, *backend.alphas[1:]))

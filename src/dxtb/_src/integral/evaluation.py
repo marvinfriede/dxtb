@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Sequence
 
 import torch
 from tad_mctc.batch import deflate
@@ -201,8 +200,6 @@ def build_integral_matrices(
     h0_setup: H0Setup | H0SetupNode,
     positions: Tensor,
     charge: Tensor | float | int,
-    *,
-    pair_validity: Sequence[Tensor] | None = None,
 ) -> tuple[IntegralMatrices, Tensor, Tensor]:
     """Build all requested matrices from explicit setup and current inputs."""
     if setup.intlevel > labels.INTLEVEL_MAX:
@@ -216,9 +213,7 @@ def build_integral_matrices(
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
         integral_setup = setup.pytorch
-        raw_overlap = build_overlap_pytorch(
-            integral_setup, positions, pair_validity=pair_validity
-        )
+        raw_overlap = build_overlap_pytorch(integral_setup, positions)
         ihelp = (
             integral_setup.index
             if isinstance(integral_setup, PytorchIntegralSetupNode)
@@ -226,10 +221,6 @@ def build_integral_matrices(
         )
         integral_positions = positions
     elif setup.driver_type == labels.INTDRIVER_LIBCINT:
-        if pair_validity is not None:
-            raise ValueError(
-                "Pair-entry validity is supported only by the PyTorch driver."
-            )
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
         call_data = setup_libcint(setup.libcint, positions)
@@ -247,9 +238,7 @@ def build_integral_matrices(
     if setup.intlevel >= labels.INTLEVEL_DIPOLE:
         if setup.driver_type == labels.INTDRIVER_PYTORCH:
             raw_dipole = normalize_integral_matrix(
-                build_dipole_pytorch(
-                    integral_setup, positions, pair_validity=pair_validity
-                ),
+                build_dipole_pytorch(integral_setup, positions),
                 backend_norm,
             )
             orbital_positions = ihelp.spread_atom_to_orbital(
@@ -260,9 +249,7 @@ def build_integral_matrices(
             )
             if setup.intlevel >= labels.INTLEVEL_QUADRUPOLE:
                 raw_quadrupole = normalize_integral_matrix(
-                    build_quadrupole_pytorch(
-                        integral_setup, positions, pair_validity=pair_validity
-                    ),
+                    build_quadrupole_pytorch(integral_setup, positions),
                     backend_norm,
                 )
                 quadrupole = shift_quadrupole_origin(
