@@ -1,0 +1,236 @@
+{
+  "commit": "74d94a1c7873b6cf6a177333fbf292914b6402b5",
+  "python": "3.12.10",
+  "torch": "2.14.1+cpu",
+  "device": "cpu",
+  "omp_num_threads": "1",
+  "mem_limit_gib": 12.0,
+  "cases": {
+    "A_conformers/energy": {
+      "lanes": 32,
+      "distinct_systems": 1,
+      "group_sizes": [
+        32
+      ],
+      "real_atoms_max": 3,
+      "real_aos_max": 8,
+      "real_aos_sum": 256,
+      "canonical_extent": {
+        "atoms": 3,
+        "aos": 8,
+        "padded_aos_sum": 256
+      },
+      "case": "A_conformers",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          32
+        ]
+      ],
+      "energy_sum": -184.5056575355493,
+      "force_norm": null,
+      "iterations": 9,
+      "wall_s": [
+        9.032752936996985,
+        8.959057547002885
+      ],
+      "wall_s_min": 8.959057547002885,
+      "peak_rss_mib": 505.4375,
+      "status": "ok"
+    },
+    "A_conformers/forces": {
+      "lanes": 32,
+      "distinct_systems": 1,
+      "group_sizes": [
+        32
+      ],
+      "real_atoms_max": 3,
+      "real_aos_max": 8,
+      "real_aos_sum": 256,
+      "canonical_extent": {
+        "atoms": 3,
+        "aos": 8,
+        "padded_aos_sum": 256
+      },
+      "case": "A_conformers",
+      "mode": "forces",
+      "composition": [
+        [
+          "H2O",
+          32
+        ]
+      ],
+      "energy_sum": -184.5056575355493,
+      "force_norm": 0.4384086811224169,
+      "iterations": 9,
+      "wall_s": [
+        14.837379759002943,
+        15.06365313599963
+      ],
+      "wall_s_min": 14.837379759002943,
+      "peak_rss_mib": 4203.31640625,
+      "status": "ok"
+    },
+    "B_repeated/energy": {
+      "lanes": 20,
+      "distinct_systems": 3,
+      "group_sizes": [
+        8,
+        8,
+        4
+      ],
+      "real_atoms_max": 5,
+      "real_aos_max": 12,
+      "real_aos_sum": 200,
+      "canonical_extent": {
+        "atoms": 7,
+        "aos": 20,
+        "padded_aos_sum": 400
+      },
+      "case": "B_repeated",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          8
+        ],
+        [
+          "CH4",
+          8
+        ],
+        [
+          "NH3",
+          4
+        ]
+      ],
+      "energy_sum": -99.58286578583326,
+      "force_norm": null,
+      "iterations": 10,
+      "wall_s": [
+        11.180680114997813,
+        11.117945565998525
+      ],
+      "wall_s_min": 11.117945565998525,
+      "peak_rss_mib": 473.97265625,
+      "status": "ok"
+    },
+    "B_repeated/forces": {
+      "case": "B_repeated",
+      "mode": "forces",
+      "status": "failed",
+      "returncode": -9,
+      "error": "killed: resident memory above 12.0 GiB"
+    },
+    "C_heterogeneous/energy": {
+      "lanes": 6,
+      "distinct_systems": 6,
+      "group_sizes": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 94,
+      "canonical_extent": {
+        "atoms": 14,
+        "aos": 56,
+        "padded_aos_sum": 336
+      },
+      "case": "C_heterogeneous",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2",
+          1
+        ],
+        [
+          "H2O",
+          1
+        ],
+        [
+          "NH3",
+          1
+        ],
+        [
+          "CH4",
+          1
+        ],
+        [
+          "SiH4",
+          1
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -40.00485054180643,
+      "force_norm": null,
+      "iterations": 14,
+      "wall_s": [
+        16.143845159000193,
+        15.535914244002925
+      ],
+      "wall_s_min": 15.535914244002925,
+      "peak_rss_mib": 429.28515625,
+      "status": "ok"
+    },
+    "C_heterogeneous/forces": {
+      "case": "C_heterogeneous",
+      "mode": "forces",
+      "status": "failed",
+      "returncode": -9,
+      "error": "killed: resident memory above 12.0 GiB"
+    },
+    "D_mixed_sizes/energy": {
+      "lanes": 8,
+      "distinct_systems": 2,
+      "group_sizes": [
+        7,
+        1
+      ],
+      "real_atoms_max": 12,
+      "real_aos_max": 43,
+      "real_aos_sum": 99,
+      "canonical_extent": {
+        "atoms": 13,
+        "aos": 47,
+        "padded_aos_sum": 376
+      },
+      "case": "D_mixed_sizes",
+      "mode": "energy",
+      "composition": [
+        [
+          "H2O",
+          7
+        ],
+        [
+          "C4H5NCS",
+          1
+        ]
+      ],
+      "energy_sum": -60.46108858110529,
+      "force_norm": null,
+      "iterations": 13,
+      "wall_s": [
+        16.004542829003185,
+        15.785444797998935
+      ],
+      "wall_s_min": 15.785444797998935,
+      "peak_rss_mib": 419.82421875,
+      "status": "ok"
+    },
+    "D_mixed_sizes/forces": {
+      "case": "D_mixed_sizes",
+      "mode": "forces",
+      "status": "failed",
+      "returncode": -9,
+      "error": "killed: resident memory above 12.0 GiB"
+    }
+  }
+}

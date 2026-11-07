@@ -14,7 +14,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Public packed Result adapter and candidate E6broute mixed-System evaluator."""
+"""Packed evaluation of heterogeneous single-System batches.
+
+Batched ``Calculator`` input is split into ordinary single-System lanes. Lanes
+execute through :mod:`dxtb._src.calculators.lane_evaluation` (grouped ``vmap``
+for lanes sharing one System, independent evaluation otherwise), and the
+per-lane Results are then packed into the public batched Result.
+
+Padding happens only in :func:`pack_system_results`, to represent Results of
+different atom/orbital extents in one batched container. The physics of each
+lane is never evaluated on a padded or remapped structure.
+"""
 
 from __future__ import annotations
 
@@ -29,15 +39,9 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 from tad_mctc.io.checks import content_checks, shape_checks
 
 from dxtb import OutputHandler, labels
-from dxtb._src.calculators.canonical_padding import (
-    _base_signature,
-    bucket_canonical_exact_cores,
-    canonicalize_positions,
-    pad_canonical_exact_core,
-)
-from dxtb._src.calculators.legacy_composition import (
-    can_pad_system,
-    compose_legacy_systems,
+from dxtb._src.calculators.lane_evaluation import (
+    evaluate_lane_group,
+    group_lanes,
 )
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
@@ -82,10 +86,6 @@ _BUILTIN_INTERACTION_TYPES = (
 )
 from dxtb._src.constants import defaults
 from dxtb._src.scf.functional.eager import _raise_failure_code
-from dxtb._src.scf.functional.padded import (
-    evaluate_padded_systems,
-    validate_padded_charge_spin,
-)
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import Tensor
@@ -905,12 +905,12 @@ def _write_packed_integrals(
         torch.save(matrix, path)
 
 
-def _enforce_decoded_eager_policy(
+def _enforce_eager_status_policy(
     result: Result,
     system: System,
     source_id: int,
 ) -> None:
-    """Enforce eager convergence and Fermi-status policy on a decoded Result."""
+    """Raise eager convergence and Fermi-status diagnostics for a mapped lane."""
     if (
         result.energy is not None
         and torch._C._functorch.is_functorch_wrapped_tensor(result.energy)
@@ -968,14 +968,13 @@ def evaluate_packed_systems(
 ) -> Result:
     """Evaluate a sequence of Systems and return a single packed Result.
 
-    - Classifies each ``System`` via :func:`can_pad_system`.
-    - Buckets padded-eligible lanes by canonical exact-core structure via
-      :func:`bucket_canonical_exact_cores` and evaluates each bucket with
-      :func:`evaluate_padded_systems`.
-    - Evaluates independent lanes via :func:`compose_legacy_systems`.
-    - Reassembles all decoded per-System ``Result`` objects in original source
-      order and packs them into a single batched ``Result`` via
-      :func:`pack_system_results`.
+    1. Validate options and normalize per-lane positions, charges, spins and
+       fields.
+    2. Group lanes with :func:`group_lanes`: lanes referencing the same
+       ``System`` object (with the same optional inputs) are mapped with
+       ``torch.func.vmap``; every other lane is evaluated independently.
+    3. Restore source order and pack the per-lane Results with
+       :func:`pack_system_results`.
     """
     count = len(systems)
     if count == 0:
@@ -1104,7 +1103,10 @@ def evaluate_packed_systems(
                 f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
 
-    can_pad = [can_pad_system(sys) for sys in systems]
+    # Stage 4: Partition lanes into execution groups. Lanes sharing one
+    # System run together under vmap; all others are evaluated independently.
+    # Different molecules are never padded to a common layout for physics.
+    groups = group_lanes(systems, lane_spins, lane_fields, lane_field_grads)
 
     ordered_results: dict[int, Result] = {}
     old_cuda_sync = timer.cuda_sync
@@ -1114,122 +1116,29 @@ def evaluate_packed_systems(
             False if lane_positions[0].device.type == "cpu" else True,
         )
     try:
-        # 1. Evaluate padded-eligible lanes via canonical bucketing + evaluate_padded_systems
-        mapped_indices = [idx for idx, ok in enumerate(can_pad) if ok]
-        if mapped_indices:
-            groups: dict[tuple[object, ...], list[int]] = {}
-            for source_id in mapped_indices:
-                core = systems[source_id].exact_core
-                assert core is not None
-                d4_cutoffs = tuple(
-                    float(descriptor.setup.cutoff.cn_eeq)
-                    for descriptor in core.classical_terms
-                    if descriptor.kind == "d4"
-                )
-                group_key = (
-                    _base_signature(core),
-                    d4_cutoffs,
-                    lane_fields[source_id] is not None,
-                    lane_field_grads[source_id] is not None,
-                )
-                groups.setdefault(group_key, []).append(source_id)
-
-            for group_source_ids in groups.values():
-                group_cores = tuple(
-                    systems[sid].exact_core
-                    for sid in group_source_ids
-                    if systems[sid].exact_core is not None
-                )
-                bucket = bucket_canonical_exact_cores(group_cores)
-                padded_cores = tuple(
-                    pad_canonical_exact_core(core, bucket, local_idx)
-                    for local_idx, core in enumerate(group_cores)
-                )
-                padded_pos = tuple(
-                    canonicalize_positions(
-                        lane_positions[sid], bucket, local_idx
-                    )
-                    for local_idx, sid in enumerate(group_source_ids)
-                )
-                padded_chrg = tuple(
-                    lane_charges[sid] for sid in group_source_ids
-                )
-                padded_spin_list: list[Tensor] = []
-                for p_core, sid in zip(padded_cores, group_source_ids):
-                    s_opt = lane_spins[sid]
-                    nab = validate_padded_charge_spin(
-                        p_core, lane_charges[sid], s_opt
-                    )
-                    if s_opt is None:
-                        padded_spin_list.append(
-                            (nab[0] - nab[1])
-                            .reshape(())
-                            .to(
-                                device=lane_charges[sid].device,
-                                dtype=lane_charges[sid].dtype,
-                            )
-                        )
-                    else:
-                        padded_spin_list.append(s_opt)
-                padded_spin = tuple(padded_spin_list)
-
-                def _bucket_perturbation(
-                    lane_values: Sequence[Tensor | None],
-                ) -> Tensor | None:
-                    first = lane_values[group_source_ids[0]]
-                    if first is None:
-                        return None
-                    if all(
-                        lane_values[sid] is first for sid in group_source_ids
-                    ):
-                        return first
-                    return torch.stack(
-                        [
-                            lane_values[sid]
-                            for sid in group_source_ids
-                            if lane_values[sid] is not None
-                        ],
-                        dim=0,
-                    )
-
-                bucket_field = _bucket_perturbation(lane_fields)
-                bucket_field_grad = _bucket_perturbation(lane_field_grads)
-
-                _, decoded = evaluate_padded_systems(
-                    padded_cores,
-                    bucket,
-                    padded_pos,
-                    padded_chrg,
-                    padded_spin,
-                    field=bucket_field,
-                    field_grad=bucket_field_grad,
-                )
-                for source_id, result in zip(group_source_ids, decoded):
-                    if legacy_compat:
-                        _enforce_decoded_eager_policy(
-                            result, systems[source_id], source_id
-                        )
-                    ordered_results[source_id] = result
-
-        # 2. Evaluate remaining lanes independently via compose_legacy_systems
-        retained_indices = [idx for idx, ok in enumerate(can_pad) if not ok]
-        if retained_indices:
-            composed = compose_legacy_systems(
-                tuple(systems[idx] for idx in retained_indices),
-                tuple(lane_positions[idx] for idx in retained_indices),
-                tuple(lane_charges[idx] for idx in retained_indices),
-                tuple(lane_spins[idx] for idx in retained_indices),
-                source_ids=tuple(retained_indices),
-                field=tuple(lane_fields[idx] for idx in retained_indices),
-                field_grad=tuple(
-                    lane_field_grads[idx] for idx in retained_indices
-                ),
+        for group in groups:
+            group_results = evaluate_lane_group(
+                group,
+                lane_positions,
+                lane_charges,
+                lane_spins,
+                lane_fields,
+                lane_field_grads,
             )
-            for source_id, result in zip(retained_indices, composed):
+            for source_id, result in zip(group.source_ids, group_results):
+
+                # The eager route raises its own convergence diagnostics;
+                # mapped lanes report them through tensor status instead.
+                if legacy_compat and group.use_vmap:
+                    _enforce_eager_status_policy(
+                        result, systems[source_id], source_id
+                    )
                 ordered_results[source_id] = result
     finally:
         timer.cuda_sync = old_cuda_sync
 
+    # Stage 5: Restore source order and pad heterogeneous shapes into the
+    # public batched Result layout.
     final_results = [ordered_results[idx] for idx in range(count)]
     packed_result = pack_system_results(
         final_results,
@@ -1436,8 +1345,9 @@ def evaluate_calculator_packed_singlepoint(
 ) -> Result:
     """Evaluate a batched Calculator through packed functional System routing.
 
-    Executes the validation, lane-System construction, canonical bucketed
-    evaluation, and packed Result reassembly contract for batched
+    Builds deduplicated lane Systems (repeated compositions share one System
+    and therefore one ``vmap`` group), evaluates them with
+    :func:`evaluate_packed_systems`, and returns the packed Result for batched
     ``Calculator.singlepoint`` calls.
     """
     reject_removed_store_kwargs(kwargs)

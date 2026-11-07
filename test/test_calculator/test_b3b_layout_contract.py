@@ -1157,7 +1157,7 @@ def test_system_ihelp_replacement_and_structural_consistency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Equivalent IndexHelper replacement preserves core reuse; incompatible replacements fail early."""
-    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
     from dxtb._src.scf.functional import eager as scf_eager
 
@@ -1174,8 +1174,8 @@ def test_system_ihelp_replacement_and_structural_consistency(
 
     assert system._active_exact_core() is system.exact_core
     assert equiv_system._active_exact_core() is system.exact_core
-    assert can_pad_system(system) is True
-    assert can_pad_system(equiv_system) is True
+    assert can_vmap_system(system) is True
+    assert can_vmap_system(equiv_system) is True
 
     prepared_inputs = []
     orig_setup_scf_inputs = scf_eager.setup_scf_inputs
@@ -1264,7 +1264,7 @@ def test_system_ihelp_replacement_and_structural_consistency(
         bad_system = replace(system, ihelp=bad_ihelp)
         assert bad_system._active_exact_core() is None
         with pytest.raises(ValueError, match="IndexHelper is incompatible"):
-            can_pad_system(bad_system)
+            can_vmap_system(bad_system)
         with pytest.raises(ValueError, match="IndexHelper is incompatible"):
             bad_system.singlepoint(positions)
         with pytest.raises(ValueError, match="IndexHelper is incompatible"):
@@ -1275,7 +1275,7 @@ def test_system_ihelp_replacement_and_structural_consistency(
 
 def test_system_ihelp_in_place_mutation_detected() -> None:
     """In-place mutation of setup IndexHelper tensors invalidates token and fails validation."""
-    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.lane_evaluation import can_vmap_system
 
     model = _model()
     numbers = mols["H2O"]["numbers"].to(device="cpu")
@@ -1293,7 +1293,7 @@ def test_system_ihelp_in_place_mutation_detected() -> None:
         target[0] = bad_val
         assert system._active_exact_core() is None
         with pytest.raises(ValueError, match="IndexHelper is incompatible"):
-            can_pad_system(system)
+            can_vmap_system(system)
         with pytest.raises(ValueError, match="IndexHelper is incompatible"):
             system.singlepoint(positions)
         # Restoring the original value makes the structural check pass again.
@@ -1303,7 +1303,7 @@ def test_system_ihelp_in_place_mutation_detected() -> None:
 
 def test_system_numbers_replacement_and_in_place_mutation_detected() -> None:
     """Replacing or mutating System.numbers with same-dimension N/O species fails validation."""
-    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     model = Model(
@@ -1334,7 +1334,7 @@ def test_system_numbers_replacement_and_in_place_mutation_detected() -> None:
             assert candidate._active_exact_core() is None
             assert candidate._ihelp_compatible() is False
             with pytest.raises(ValueError, match="IndexHelper is incompatible"):
-                can_pad_system(candidate)
+                can_vmap_system(candidate)
             with pytest.raises(ValueError, match="IndexHelper is incompatible"):
                 candidate.singlepoint(positions)
             with pytest.raises(ValueError, match="IndexHelper is incompatible"):
@@ -1347,7 +1347,7 @@ def test_system_numbers_replacement_and_in_place_mutation_detected() -> None:
     assert system._active_exact_core() is None
     assert system._ihelp_compatible() is False
     with pytest.raises(ValueError, match="IndexHelper is incompatible"):
-        can_pad_system(system)
+        can_vmap_system(system)
     with pytest.raises(ValueError, match="IndexHelper is incompatible"):
         system.singlepoint(positions)
     with pytest.raises(ValueError, match="IndexHelper is incompatible"):

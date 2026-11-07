@@ -1,4 +1,4 @@
-"""Private retained legacy composition acceptance controls."""
+"""Independent single-System lane evaluation and vmap eligibility."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, ParamModule, labels
-from dxtb._src.calculators.legacy_composition import (
-    can_pad_system,
-    compose_legacy_systems,
+from dxtb._src.calculators.lane_evaluation import (
+    can_vmap_system,
+    evaluate_systems_independently,
 )
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.components.classicals.base import Classical
@@ -113,17 +113,21 @@ class _CacheClassical(Classical):
         return atom_scale * positions.square().sum(dim=-1) * 1.0e-4
 
 
-def test_libcint_composition_matches_independent_serial_systems() -> None:
+def test_libcint_independent_evaluation_matches_independent_serial_systems() -> (
+    None
+):
     pytest.importorskip("tad_libcint")
     na, nb = [1, 1], [8, 1, 1]
     a = _system(na, driver=labels.INTDRIVER_LIBCINT)
     b = _system(nb, driver=labels.INTDRIVER_LIBCINT)
     pa, pb = _positions(na), _positions(nb)
-    assert not can_pad_system(a)
-    assert not can_pad_system(b)
+    assert not can_vmap_system(a)
+    assert not can_vmap_system(b)
 
-    composed = compose_legacy_systems((a, b), (pa, pb), source_ids=(4, 19))
-    reversed_result = compose_legacy_systems(
+    composed = evaluate_systems_independently(
+        (a, b), (pa, pb), source_ids=(4, 19)
+    )
+    reversed_result = evaluate_systems_independently(
         (b, a), (pb, pa), source_ids=(19, 4)
     )
     for actual, system, pos in zip(composed, (a, b), (pa, pb)):
@@ -135,7 +139,9 @@ def test_libcint_composition_matches_independent_serial_systems() -> None:
         torch.testing.assert_close(actual.energy, expected.energy)
 
 
-def test_libcint_composition_preserves_shared_fields_and_responses() -> None:
+def test_libcint_independent_evaluation_preserves_shared_fields_and_responses() -> (
+    None
+):
     pytest.importorskip("tad_libcint")
     numbers = [1, 1]
     system = _system(numbers, driver=labels.INTDRIVER_LIBCINT)
@@ -143,7 +149,7 @@ def test_libcint_composition_preserves_shared_fields_and_responses() -> None:
     field_grad = torch.eye(3, dtype=DTYPE) * 0.002
     pos_a = _positions(numbers).requires_grad_()
     pos_b = _positions(numbers).requires_grad_()
-    result = compose_legacy_systems(
+    result = evaluate_systems_independently(
         (system, system),
         (pos_a, pos_b),
         field=field,
@@ -160,13 +166,15 @@ def test_libcint_composition_preserves_shared_fields_and_responses() -> None:
     assert torch.count_nonzero(physical_pos_grad) > 0
 
 
-def test_libcint_composition_keeps_per_system_charge_and_spin() -> None:
+def test_libcint_independent_evaluation_keeps_per_system_charge_and_spin() -> (
+    None
+):
     pytest.importorskip("tad_libcint")
     na, nb = [1, 1], [8, 1, 1]
     a = _system(na, driver=labels.INTDRIVER_LIBCINT)
     b = _system(nb, driver=labels.INTDRIVER_LIBCINT)
     pa, pb = _positions(na), _positions(nb)
-    composed = compose_legacy_systems(
+    composed = evaluate_systems_independently(
         (a, b), (pa, pb), charges=(1, 0), spins=(1, 0)
     )
     for result, system, pos, charge, spin in zip(
@@ -179,7 +187,9 @@ def test_libcint_composition_keeps_per_system_charge_and_spin() -> None:
         torch.testing.assert_close(result.charges.mono, serial.charges.mono)
 
 
-def test_libcint_composition_preserves_model_parameter_gradient() -> None:
+def test_libcint_independent_evaluation_preserves_model_parameter_gradient() -> (
+    None
+):
     pytest.importorskip("tad_libcint")
     par = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
     kpol = par.parameter_tree.hamiltonian.xtb.kpol.param
@@ -193,7 +203,7 @@ def test_libcint_composition_preserves_model_parameter_gradient() -> None:
     )
     system = Model(par=par, config=config).setup(numbers)
     positions = _positions(numbers.tolist()).requires_grad_()
-    composed = compose_legacy_systems((system,), (positions,))[0]
+    composed = evaluate_systems_independently((system,), (positions,))[0]
     (composed_grad,) = torch.autograd.grad(
         composed.energy.sum(), kpol, retain_graph=True
     )
@@ -207,7 +217,7 @@ def test_libcint_composition_preserves_model_parameter_gradient() -> None:
     assert par.parameter_tree.hamiltonian.xtb.kpol.param is kpol
 
 
-def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
+def test_field_label_conflict_is_not_silently_replaced() -> None:
     pytest.importorskip("tad_libcint")
     custom = _NonzeroInteraction()
     custom.label = LABEL_EFIELD
@@ -218,7 +228,7 @@ def test_legacy_field_label_conflict_is_not_silently_replaced() -> None:
         interaction=(custom,),
     )
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        compose_legacy_systems(
+        evaluate_systems_independently(
             (system,),
             (_positions(numbers),),
             field=torch.ones(3, dtype=DTYPE),
@@ -232,20 +242,20 @@ def test_custom_interaction_is_explicitly_unsupported() -> None:
     b = _system(nb, interaction=(interaction,))
     pa, pb = _positions(na), _positions(nb)
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        can_pad_system(a)
+        can_vmap_system(a)
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        compose_legacy_systems((a, b), (pa, pb))
+        evaluate_systems_independently((a, b), (pa, pb))
 
 
-def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
+def test_custom_classical_cache_is_refreshed_per_independent_call() -> None:
     component = _CacheClassical()
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     positions = _positions(numbers)
-    assert not can_pad_system(system)
+    assert not can_vmap_system(system)
     before = component.cache_calls
-    first = compose_legacy_systems((system,), (positions,))[0]
-    second = compose_legacy_systems((system,), (positions,))[0]
+    first = evaluate_systems_independently((system,), (positions,))[0]
+    second = evaluate_systems_independently((system,), (positions,))[0]
     assert component.cache_calls >= before + 2
     first_classicals = dict(first.classical)
     second_classicals = dict(second.classical)
@@ -257,7 +267,7 @@ def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
     torch.testing.assert_close(first.energy, second.energy)
 
 
-def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
+def test_independent_evaluation_preserves_custom_classical_position_gradient() -> (
     None
 ):
     component = _CacheClassical()
@@ -265,7 +275,7 @@ def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
     system = _system(numbers, classical=(component,))
     mapped_pos = _positions(numbers).requires_grad_()
     serial_pos = _positions(numbers).requires_grad_()
-    result = compose_legacy_systems((system,), (mapped_pos,))[0]
+    result = evaluate_systems_independently((system,), (mapped_pos,))[0]
     serial = system.singlepoint(serial_pos)
     (mapped_grad,) = torch.autograd.grad(result.energy.sum(), mapped_pos)
     (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
@@ -273,12 +283,18 @@ def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
     assert torch.count_nonzero(mapped_grad) > 0
 
 
-def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
+def test_vmap_eligible_system_is_accepted_by_independent_evaluation() -> None:
+    """Independent evaluation does not care whether a lane could be mapped."""
     numbers = [1, 1]
     system = _system(numbers)
-    assert can_pad_system(system)
-    with pytest.raises(ValueError, match="Mapped-eligible"):
-        compose_legacy_systems((system,), (_positions(numbers),))
+    positions = _positions(numbers)
+    assert can_vmap_system(system)
+
+    result = evaluate_systems_independently((system,), (positions,))[0]
+
+    torch.testing.assert_close(
+        result.energy, system.singlepoint(positions).energy
+    )
 
 
 @pytest.mark.parametrize(
@@ -304,7 +320,7 @@ def test_invalid_fermi_edges_are_rejected(
     with pytest.raises(
         ValueError, match="Electronic Temperature|Fermi maxiter"
     ):
-        can_pad_system(system)
+        can_vmap_system(system)
 
 
 def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
@@ -318,7 +334,7 @@ def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor([1, 1], device=DEVICE))
     with pytest.raises(ValueError, match="maxiter >= 0"):
-        can_pad_system(system)
+        can_vmap_system(system)
 
 
 def test_classical_only_calculation_retains_separate_route() -> None:
@@ -332,8 +348,10 @@ def test_classical_only_calculation_retains_separate_route() -> None:
     system = Model(
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor(numbers, device=DEVICE))
-    assert not can_pad_system(system)
-    result = compose_legacy_systems((system,), (_positions(numbers),))[0]
+    assert not can_vmap_system(system)
+    result = evaluate_systems_independently((system,), (_positions(numbers),))[
+        0
+    ]
     assert result.scf is not None
     assert torch.count_nonzero(result.scf) == 0
     assert result.charges is None
@@ -347,7 +365,7 @@ def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
     second_component.label = "E6bOtherCacheClassical"
     first_system = _system(numbers, classical=(first_component,))
     second_system = _system(numbers, classical=(second_component,))
-    results = compose_legacy_systems(
+    results = evaluate_systems_independently(
         (first_system, second_system),
         (_positions(numbers), _positions(numbers, shift=0.1)),
     )
@@ -367,11 +385,11 @@ def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
     assert common_0 == common_1
 
 
-def test_legacy_composition_preserves_original_exception_and_source_id(
+def test_independent_evaluation_preserves_original_exception_and_source_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Retained evaluation re-raises the original exception with lane context."""
-    from dxtb._src.calculators import legacy_composition
+    from dxtb._src.calculators import lane_evaluation
 
     system = _system([1, 1], driver=labels.INTDRIVER_LIBCINT)
     original_error = ValueError("invalid geometry")
@@ -379,9 +397,9 @@ def test_legacy_composition_preserves_original_exception_and_source_id(
     def fail(*args, **kwargs):
         raise original_error
 
-    monkeypatch.setattr(legacy_composition, "_singlepoint_impl", fail)
+    monkeypatch.setattr(lane_evaluation, "_singlepoint_impl", fail)
     with pytest.raises(ValueError, match="invalid geometry") as err:
-        compose_legacy_systems(
+        evaluate_systems_independently(
             (system,), (_positions([1, 1]),), source_ids=(91,)
         )
 
@@ -398,16 +416,16 @@ def test_invalid_geometry_error_matches_independent_serial_call() -> None:
     with pytest.raises(Exception) as serial_error:
         system.singlepoint(invalid_positions)
     with pytest.raises(type(serial_error.value)) as composed_error:
-        compose_legacy_systems((system,), (invalid_positions,))
+        evaluate_systems_independently((system,), (invalid_positions,))
 
     assert str(composed_error.value) == str(serial_error.value)
     assert composed_error.value.source_id == 0
 
 
-def test_legacy_composer_propagates_numerical_failures(
+def test_independent_evaluation_propagates_numerical_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dxtb._src.calculators import legacy_composition
+    from dxtb._src.calculators import lane_evaluation
 
     numbers = [1, 1]
     system = _system(numbers, driver=labels.INTDRIVER_LIBCINT)
@@ -415,11 +433,11 @@ def test_legacy_composer_propagates_numerical_failures(
     def fail(*args, **kwargs):
         raise RuntimeError("injected evaluation failure")
 
-    monkeypatch.setattr(legacy_composition, "_singlepoint_impl", fail)
+    monkeypatch.setattr(lane_evaluation, "_singlepoint_impl", fail)
     with pytest.raises(
         RuntimeError, match="injected evaluation failure"
     ) as err:
-        compose_legacy_systems(
+        evaluate_systems_independently(
             (system,), (_positions(numbers),), source_ids=(37,)
         )
     assert err.value.source_id == 37
@@ -522,8 +540,8 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model = Model(par=par, config=cfg)
         s_a = model.setup(nums_h2)
         s_b = model.setup(nums_h2o)
-        assert can_pad_system(s_a)
-        assert can_pad_system(s_b)
+        assert can_vmap_system(s_a)
+        assert can_vmap_system(s_b)
         packed = evaluate_packed_systems((s_a, s_b), (pos_h2, pos_h2o))
         ref_a = s_a.singlepoint(pos_h2)
         ref_b = s_b.singlepoint(pos_h2o)
@@ -534,8 +552,15 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
             packed.energy[1, :3], ref_b.energy, atol=1e-11, rtol=1e-11
         )
 
+        # Two lanes sharing one System run as a grouped vmap.
+        grouped = evaluate_packed_systems((s_b, s_b), (pos_h2o, pos_h2o))
+        for lane in range(2):
+            torch.testing.assert_close(
+                grouped.energy[lane], ref_b.energy, atol=1e-11, rtol=1e-11
+            )
+
     # 2. Multi-stage and SOSCF strategies:
-    #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and can_pad_system
+    #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and can_vmap_system
     #    - SOSCF rejected with active Fermi smearing (fermi_etemp > 0)
     #    - routed to LEGACY_COMPOSED under IMPLICIT differentiation (with etemp=0 for SOSCF)
     soscf_strat = SCFStrategy(
@@ -570,7 +595,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         with pytest.raises(
             ValueError, match="requires eager/implicit|single-stage fixed-trip"
         ):
-            can_pad_system(mutated_sys)
+            can_vmap_system(mutated_sys)
 
     # Direct evaluate_padded_fixed_trip also rejects multi-stage or eager-only strategies
     from types import SimpleNamespace
@@ -613,7 +638,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
     with pytest.raises(
         ValueError, match="active Fermi smearing|fixed-occupation"
     ):
-        can_pad_system(sys_soscf_smear)
+        can_vmap_system(sys_soscf_smear)
 
     # Multi-stage and SOSCF (at etemp=0) + alternate response coordinates under IMPLICIT -> LEGACY_COMPOSED
     implicit_cases = [
@@ -645,15 +670,11 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model_imp = Model(par=par_gfn1, config=cfg_imp)
         sys_imp_a = model_imp.setup(nums_h2)
         sys_imp_b = model_imp.setup(nums_h2o)
-        assert not can_pad_system(sys_imp_a)
+        assert not can_vmap_system(sys_imp_a)
         p_a = pos_h2.detach().clone().requires_grad_(True)
         p_b = pos_h2o.detach().clone().requires_grad_(True)
-        packed_imp = evaluate_packed_systems(
-            (sys_imp_a, sys_imp_b), (p_a, p_b)
-        )
-        (g_a, g_b) = torch.autograd.grad(
-            packed_imp.energy.sum(), (p_a, p_b)
-        )
+        packed_imp = evaluate_packed_systems((sys_imp_a, sys_imp_b), (p_a, p_b))
+        g_a, g_b = torch.autograd.grad(packed_imp.energy.sum(), (p_a, p_b))
         p_b_ref = pos_h2o.detach().clone().requires_grad_(True)
         ref_b = sys_imp_b.singlepoint(p_b_ref)
         (g_b_ref,) = torch.autograd.grad(ref_b.energy.sum(), p_b_ref)

@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Differential controls for public packed and private mixed-System paths."""
+"""Differential controls for public packed batches against serial Systems."""
 
 from __future__ import annotations
 
@@ -36,13 +36,7 @@ from dxtb import (
     labels,
     scf,
 )
-from dxtb._src.calculators.canonical_padding import (
-    bucket_canonical_exact_cores,
-    canonicalize_positions,
-    pad_canonical_exact_core,
-)
 from dxtb._src.calculators.model import Model
-from dxtb._src.scf.functional.padded import evaluate_padded_systems
 from dxtb.config import Config
 
 DTYPE = torch.float64
@@ -112,7 +106,7 @@ def _pad_public_inputs(
     return numbers, positions
 
 
-def _private_mapped(
+def _serial_references(
     method: int,
     compositions: Sequence[tuple[int, ...]],
     positions: Sequence[torch.Tensor],
@@ -123,6 +117,7 @@ def _private_mapped(
     field_grad: torch.Tensor | None = None,
     settings: dict | None = None,
 ):
+    """Build independent Systems and their serial single-System Results."""
     param = ParamModule(
         GFN1_XTB if method == labels.GFN1_XTB else GFN2_XTB,
         device=DEVICE,
@@ -134,43 +129,19 @@ def _private_mapped(
         model.setup(torch.tensor(composition, dtype=torch.int64))
         for composition in compositions
     )
-    cores = tuple(system.exact_core for system in systems)
-    assert all(core is not None for core in cores)
-    bucket = bucket_canonical_exact_cores(cores)
-    padded = tuple(
-        pad_canonical_exact_core(core, bucket, lane)
-        for lane, core in enumerate(cores)
-    )
-    canonical_positions = tuple(
-        canonicalize_positions(position, bucket, lane)
-        for lane, position in enumerate(positions)
-    )
-    charge_tensors = tuple(
-        torch.tensor(value, dtype=DTYPE) for value in charges
-    )
-    spin_tensors = tuple(torch.tensor(value, dtype=DTYPE) for value in spins)
-    mapped, decoded = evaluate_padded_systems(
-        padded,
-        bucket,
-        canonical_positions,
-        charge_tensors,
-        spin_tensors,
-        field=field,
-        field_grad=field_grad,
-    )
     serial = tuple(
         system.singlepoint(
             position,
-            charge,
-            spin,
+            torch.tensor(charge, dtype=DTYPE),
+            torch.tensor(spin, dtype=DTYPE),
             field=field,
             field_grad=field_grad,
         )
         for system, position, charge, spin in zip(
-            systems, positions, charge_tensors, spin_tensors
+            systems, positions, charges, spins
         )
     )
-    return param, systems, bucket, mapped, decoded, serial
+    return param, systems, serial
 
 
 def _assert_vector_row(
@@ -204,22 +175,22 @@ def _assert_matrix_row(
     )
 
 
-def _assert_packed_decoded_parity(
-    public, decoded, systems, compositions: Sequence[tuple[int, ...]]
+def _assert_packed_serial_parity(
+    public, serial, systems, compositions: Sequence[tuple[int, ...]]
 ) -> None:
     count = len(compositions)
     max_atoms = max(map(len, compositions))
     assert public.energy.shape == (count, max_atoms)
     assert public.scf.shape == (count, max_atoms)
     assert tuple(name for name, _ in public.classical) == tuple(
-        name for name, _ in decoded[0].classical
+        name for name, _ in serial[0].classical
     )
     assert public.status is None  # Legacy packed status is not SCFStatus.
     assert public.converged is None and public.residual is None
     public_iterations = torch.as_tensor(public.iterations)
     assert public_iterations.ndim == 0
     for lane, (physical, system, composition) in enumerate(
-        zip(decoded, systems, compositions)
+        zip(serial, systems, compositions)
     ):
         atoms = len(composition)
         orbitals = system.ihelp.nao
@@ -285,14 +256,14 @@ def _assert_packed_decoded_parity(
     ],
     ids=["h2-h3plus", "water-ch4"],
 )
-def test_public_gfn1_mode1_matches_serial_and_private_mapped(
+def test_public_gfn1_mode1_matches_serial_and_serial_references(
     compositions: tuple[tuple[int, ...], tuple[int, ...]],
 ) -> None:
     """Compare packed mode 1 with independent serial and mapped Results."""
     source_positions = tuple(_geometry(numbers) for numbers in compositions)
     charges = (0.0, 1.0) if compositions[1] == (1, 1, 1) else (0.0, 0.0)
     spins = (0.0, 0.0) if charges[1] == 1.0 else (0.0, 0.0)
-    param, systems, _, _, decoded, serial = _private_mapped(
+    param, systems, serial = _serial_references(
         labels.GFN1_XTB,
         compositions,
         source_positions,
@@ -316,12 +287,7 @@ def test_public_gfn1_mode1_matches_serial_and_private_mapped(
         torch.tensor(charges, dtype=DTYPE),
         torch.tensor(spins, dtype=DTYPE),
     )
-    _assert_packed_decoded_parity(public, decoded, systems, compositions)
-    for actual, reference in zip(decoded, serial):
-        torch.testing.assert_close(
-            actual.energy, reference.energy, atol=2.0e-9, rtol=2.0e-9
-        )
-        torch.testing.assert_close(actual.scf, reference.scf)
+    _assert_packed_serial_parity(public, serial, systems, compositions)
 
     batch_charge = torch.tensor(charges, dtype=DTYPE)
     batch_spin = torch.tensor(spins, dtype=DTYPE)
@@ -335,7 +301,7 @@ def test_public_gfn1_mode1_matches_serial_and_private_mapped(
     torch.testing.assert_close(energy_keepdim[:, 0], energy)
 
 
-def test_public_gfn1_mode2_matches_serial_and_private_mapped() -> None:
+def test_public_gfn1_mode2_matches_serial_and_serial_references() -> None:
     """Compare same-composition packed conformers and force derivatives."""
     compositions = ((1, 1), (1, 1))
     source_positions = (
@@ -344,7 +310,7 @@ def test_public_gfn1_mode2_matches_serial_and_private_mapped() -> None:
     )
     charges = (0.0, 0.0)
     spins = (0.0, 0.0)
-    param, systems, _, _, decoded, serial = _private_mapped(
+    param, systems, serial = _serial_references(
         labels.GFN1_XTB,
         compositions,
         source_positions,
@@ -369,13 +335,13 @@ def test_public_gfn1_mode2_matches_serial_and_private_mapped() -> None:
         torch.tensor(charges, dtype=DTYPE),
         torch.tensor(spins, dtype=DTYPE),
     )
-    _assert_packed_decoded_parity(public, decoded, systems, compositions)
+    _assert_packed_serial_parity(public, serial, systems, compositions)
     public_total = public.energy.sum(dim=-1)
     (public_gradient,) = torch.autograd.grad(
         public_total.sum(), public_positions
     )
     mapped_gradients = torch.autograd.grad(
-        torch.stack(tuple(result.energy.sum() for result in decoded)).sum(),
+        torch.stack(tuple(result.energy.sum() for result in serial)).sum(),
         tuple(source_positions),
     )
     torch.testing.assert_close(
@@ -385,16 +351,14 @@ def test_public_gfn1_mode2_matches_serial_and_private_mapped() -> None:
         rtol=2.0e-8,
     )
     assert torch.count_nonzero(public_gradient) > 0
-    for actual, reference in zip(decoded, serial):
-        torch.testing.assert_close(actual.energy, reference.energy)
 
 
-def test_public_gfn2_packed_fock_matches_private_and_serial() -> None:
+def test_public_gfn2_packed_fock_matches_serial() -> None:
     """The legacy GFN2 Fock policy preserves physical packed values."""
     compositions = ((1, 1), (8, 1, 1))
     source_positions = tuple(_geometry(numbers) for numbers in compositions)
     settings = _SETTINGS | {"strategy": _gfn2_fock_anderson()}
-    param, systems, _, _, decoded, serial = _private_mapped(
+    param, systems, serial = _serial_references(
         labels.GFN2_XTB,
         compositions,
         source_positions,
@@ -425,19 +389,14 @@ def test_public_gfn2_packed_fock_matches_private_and_serial() -> None:
         torch.zeros(2, dtype=DTYPE),
         torch.zeros(2, dtype=DTYPE),
     )
-    _assert_packed_decoded_parity(public, decoded, systems, compositions)
+    _assert_packed_serial_parity(public, serial, systems, compositions)
     assert not any(
         "Changing to Fock matrix automatically" in message
         for message, _ in OutputHandler.warnings
     )
-    for actual, reference in zip(decoded, serial):
-        torch.testing.assert_close(
-            actual.energy, reference.energy, atol=5.0e-8, rtol=5.0e-8
-        )
-        torch.testing.assert_close(actual.density, reference.density)
 
 
-def test_public_shared_fields_match_serial_and_private_mode2() -> None:
+def test_public_shared_fields_match_serial_mode2() -> None:
     """Shared field perturbations preserve values and response gradients."""
     compositions = ((1, 1), (1, 1))
     source_positions = (_geometry((1, 1), 0), _geometry((1, 1), 1))
@@ -448,7 +407,7 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
     charges = (0.0, 0.0)
     spins = (0.0, 0.0)
     settings = _SETTINGS | {"maxiter": 100, "convergence": "tight"}
-    param, systems, _, _, decoded, serial = _private_mapped(
+    param, systems, serial = _serial_references(
         labels.GFN1_XTB,
         compositions,
         source_positions,
@@ -475,14 +434,12 @@ def test_public_shared_fields_match_serial_and_private_mode2() -> None:
         field=field,
         field_grad=field_grad,
     )
-    _assert_packed_decoded_parity(public, decoded, systems, compositions)
-    for actual, reference in zip(decoded, serial):
-        torch.testing.assert_close(actual.energy, reference.energy)
+    _assert_packed_serial_parity(public, serial, systems, compositions)
     public_field_grad = torch.autograd.grad(
         public.energy.sum(), (field, field_grad), retain_graph=True
     )
     mapped_field_grad = torch.autograd.grad(
-        torch.stack(tuple(result.energy.sum() for result in decoded)).sum(),
+        torch.stack(tuple(result.energy.sum() for result in serial)).sum(),
         (field, field_grad),
         retain_graph=True,
     )
@@ -500,7 +457,7 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     representation: scf.SCFRepresentation,
 ) -> None:
     """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
-    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     strategy = scf.SCFStrategy(
@@ -523,8 +480,8 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     model = Model(par=param, config=config, auto_int_level=False)
     sys_h2 = model.setup(torch.tensor([1, 1], dtype=torch.int64))
     sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
-    assert can_pad_system(sys_h2)
-    assert can_pad_system(sys_h2o)
+    assert can_vmap_system(sys_h2)
+    assert can_vmap_system(sys_h2o)
     assert sys_h2.config.scf.strategy.stages[0].representation is representation
 
     pos_h2 = _geometry((1, 1), 0)
@@ -686,7 +643,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
     extra_settings = {"maxiter": 100, "convergence": "tight"}
     if method == labels.GFN2_XTB:
         extra_settings["strategy"] = _gfn2_fock_anderson()
-    param, systems, _, _, decoded, serial = _private_mapped(
+    param, systems, serial = _serial_references(
         method,
         compositions,
         source_positions,
@@ -725,7 +682,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
         field_grad=field_grad,
         legacy_compat=True,
     )
-    _assert_packed_decoded_parity(packed_compat, decoded, systems, compositions)
+    _assert_packed_serial_parity(packed_compat, serial, systems, compositions)
     torch.testing.assert_close(
         packed_compat.energy, public.energy, atol=2.0e-9, rtol=2.0e-9
     )
@@ -786,9 +743,9 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
         torch.testing.assert_close(actual, expected, atol=2.0e-8, rtol=2.0e-8)
 
 
-def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
-    """evaluate_packed_systems coordinates multi-bucket MAPPED and retained lanes."""
-    from dxtb._src.calculators.legacy_composition import can_pad_system
+def test_evaluate_packed_systems_mixed_methods_and_independent_routes() -> None:
+    """evaluate_packed_systems combines GFN1/GFN2 and independent lanes."""
+    from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
@@ -821,9 +778,9 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         par=param_gfn2, config=cfg_gfn2_mapped, auto_int_level=False
     ).setup(torch.tensor([1, 1, 1], dtype=torch.int64))
 
-    assert can_pad_system(sys0)
-    assert not can_pad_system(sys1)
-    assert can_pad_system(sys2)
+    assert can_vmap_system(sys0)
+    assert not can_vmap_system(sys1)
+    assert can_vmap_system(sys2)
 
     systems = (sys0, sys1, sys2)
     positions = (
@@ -858,7 +815,7 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         sys_gfn2_default.config.scf.strategy.stages[0].representation
         is scf.SCFRepresentation.POTENTIAL
     )
-    assert can_pad_system(sys_gfn2_default)
+    assert can_vmap_system(sys_gfn2_default)
     OutputHandler.clear_warnings()
     packed_gfn2_def = evaluate_packed_systems(
         (sys_gfn2_default,),
@@ -1545,20 +1502,20 @@ def test_option_ownership_and_side_effects_contract(
 
     # 3. cuda_sync_in_scf sets timer.cuda_sync during SCF and restores it in finally
     observed_sync: list[bool] = []
-    orig_eval_padded = pr_mod.evaluate_padded_systems
+    orig_evaluate_lane_group = pr_mod.evaluate_lane_group
 
-    def spy_eval_padded(*args, **kwargs):
+    def spy_evaluate_lane_group(*args, **kwargs):
         observed_sync.append(bool(timer.cuda_sync))
-        return orig_eval_padded(*args, **kwargs)
+        return orig_evaluate_lane_group(*args, **kwargs)
 
-    monkeypatch.setattr(pr_mod, "evaluate_padded_systems", spy_eval_padded)
+    monkeypatch.setattr(pr_mod, "evaluate_lane_group", spy_evaluate_lane_group)
     old_sync = timer.cuda_sync
     timer.cuda_sync = False
     try:
         evaluate_calculator_packed_singlepoint(
             calc, public_positions, cuda_sync_in_scf=True
         )
-        assert observed_sync == [True]
+        assert observed_sync and all(observed_sync)
         assert timer.cuda_sync is False
     finally:
         timer.cuda_sync = old_sync
