@@ -22,6 +22,7 @@ from __future__ import annotations
 import torch
 from tad_mctc.tools import is_compiling
 from tad_mctc.typing import Tensor
+from tad_multicharge.model.base import SolveMode
 
 from ..data.table import guard_numbers
 from .eeq import EEQModel, get_eeq_charges
@@ -47,6 +48,8 @@ def get_charges(
     lattice: Tensor | None = None,
     periodic: Tensor | None = None,
     cutoff: Tensor | float | None = None,
+    *,
+    solve_mode: SolveMode = "schur",
 ) -> Tensor:
     """
     Evaluate atomic partial charges for a given charge model ``qmod``.
@@ -67,6 +70,8 @@ def get_charges(
         Periodic boundary condition flags of shape ``(..., 3)`` or ``(3,)``.
     cutoff : Tensor | float | None, optional
         Real-space coordination-number cutoff in Bohr for the charge model.
+    solve_mode : SolveMode, optional
+        Linear solver backend for the EEQ solve. Defaults to ``"schur"``.
 
     Returns
     -------
@@ -101,4 +106,5 @@ def get_charges(
         lattice=lattice,
         periodic=periodic,
         cutoff=cutoff,
+        solve_mode=solve_mode,
     )

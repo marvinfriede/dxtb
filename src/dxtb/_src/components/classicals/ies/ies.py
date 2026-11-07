@@ -31,6 +31,7 @@ import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.tree import Node, child
+from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
@@ -119,6 +120,8 @@ def ies_energy(
     setup: IESSetup | IESCoreSetup,
     positions: Tensor,
     charge: Tensor | float | int,
+    *,
+    solve_mode: SolveMode = "schur",
 ) -> Tensor:
     """Evaluate IES from frozen setup and explicit geometry/total charge."""
     if positions.device != setup.numbers.device:
@@ -145,7 +148,9 @@ def ies_energy(
         positions=positions,
         charge=structure_charge(total_charge, setup.numbers),
     )
-    _charges, energy = setup.eeq.solve(structure, cn, return_energy=True)
+    _charges, energy = setup.eeq.solve(
+        structure, cn, return_energy=True, solve_mode=solve_mode
+    )
     return energy
 
 
@@ -239,6 +244,8 @@ class IES(Classical):
         positions: Tensor,
         cache: IESSetup | IESCoreSetup,
         charge: Tensor | float | int | None = None,
+        *,
+        solve_mode: SolveMode = "schur",
         **_: Any,
     ) -> Tensor:
         """
@@ -252,6 +259,8 @@ class IES(Classical):
             Frozen coordinate-independent data for the EEQ solve.
         charge : Tensor | float | int | None
             Total molecular charge. If None, the energy is not computed.
+        solve_mode : SolveMode, optional
+            Linear solver backend for the EEQ solve. Defaults to ``"schur"``.
 
         Returns
         -------
@@ -265,7 +274,7 @@ class IES(Classical):
             )
         if charge is None:
             raise ValueError("Total molecular charge is required for IES.")
-        return ies_energy(cache, positions, charge)
+        return ies_energy(cache, positions, charge, solve_mode=solve_mode)
 
     def update(self, **kwargs: Any) -> None:
         """Reject setup-authority changes for exact migrated IES."""

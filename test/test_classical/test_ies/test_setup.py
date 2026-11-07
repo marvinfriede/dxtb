@@ -157,6 +157,36 @@ def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
         )
 
 
+def test_dxtb_and_tad_dftd_wrappers_thread_solve_mode() -> None:
+    """IES and tad_dftd charge wrappers forward solve_mode to EEQModel."""
+    from tad_dftd.charge import get_charges, get_eeq_charges
+
+    numbers, positions = _geometry()
+    system = _model(_module()).setup(numbers)
+    setup = system.ies_setup
+    ies_comp = system.ies_classical
+    assert setup is not None and ies_comp is not None
+    charge = torch.tensor(0.23, **DD)
+
+    e_schur = ies_energy(setup, positions, charge, solve_mode="schur")
+    q_dftd_schur = get_charges(numbers, positions, charge, solve_mode="schur")
+    for mode in ("cg", "matrix-free"):
+        e_mode = ies_energy(setup, positions, charge, solve_mode=mode)
+        e_comp = ies_comp.get_energy(
+            positions, setup, charge=charge, solve_mode=mode
+        )
+        q_dftd = get_charges(numbers, positions, charge, solve_mode=mode)
+        q_eeq = get_eeq_charges(numbers, positions, charge, solve_mode=mode)
+        torch.testing.assert_close(e_mode, e_schur, atol=1.0e-10, rtol=1.0e-10)
+        torch.testing.assert_close(e_comp, e_schur, atol=1.0e-10, rtol=1.0e-10)
+        torch.testing.assert_close(
+            q_dftd, q_dftd_schur, atol=1.0e-10, rtol=1.0e-10
+        )
+        torch.testing.assert_close(
+            q_eeq, q_dftd_schur, atol=1.0e-10, rtol=1.0e-10
+        )
+
+
 def test_core_ies_does_not_call_legacy_get_cache(monkeypatch) -> None:
     """Single-system IES construction uses System setup directly."""
     numbers, positions = _geometry()

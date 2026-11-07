@@ -2628,3 +2628,147 @@ def test_detached_spectral_fermi_wide_spectra_saturation_s01b_and_nonfinite() ->
         torch.testing.assert_close(
             d_spec_f32, d_stat_f32, atol=5.0e-6, rtol=5.0e-5
         )
+
+
+def test_cold_gap_newton_step_is_bounded_against_roundoff_division() -> None:
+    """Roundoff-level slope in a cold ungapped channel cannot cause a bogus step."""
+    # Construct a rotated 4-orbital spectrum with a ~80 kT gap where
+    # filling._get_fermi_occupation_core_state still marks state.gap = False
+    # (tail exp(-40) ~ 4.2e-18 > diff_floor 3.16e-73), while in matrix space
+    # 1.0 - 4.2e-18 rounds to 1.0 so Tr(D - D^2) is pure float64 roundoff.
+    kt = torch.tensor(300.0 * KELVIN2AU, dtype=torch.float64)
+    gap = 80.0 * kt
+    evals = torch.stack(
+        (
+            -1.2 * gap,
+            -0.5 * gap,
+            0.5 * gap,
+            1.3 * gap,
+        )
+    )
+    gen = torch.Generator().manual_seed(19)
+    q_rot, _ = torch.linalg.qr(
+        torch.randn((4, 4), generator=gen, dtype=torch.float64)
+    )
+    h_rot = q_rot @ torch.diag(evals) @ q_rot.mT
+    h_rot = 0.5 * (h_rot + h_rot.mT)
+    electrons = torch.tensor([2.0, 2.0], dtype=torch.float64)
+    state = filling._get_fermi_occupation_core_state(
+        electrons,
+        evals.expand(2, -1),
+        kt,
+        thr=1.0e-14,
+        maxiter=300,
+        diff_order=3,
+    )
+    assert not bool(state.gap.any())
+    # Perturb the chemical potential offset by a tiny roundoff-scale amount
+    # (5e-15) to mimic rotated matrix roundoff in target - count.
+    perturbed_state = replace(
+        state,
+        chemical_potential_offset=state.chemical_potential_offset + 5.0e-15,
+    )
+    setup_static = spectral_module._fermi_free_energy_setup(
+        h_rot,
+        electrons,
+        kt,
+        perturbed_state,
+        None,
+        None,
+        diff_steps=2,
+        eager_primal="static",
+    )
+    with torch.no_grad():
+        setup_spectral = spectral_module._fermi_free_energy_setup(
+            h_rot,
+            electrons,
+            kt,
+            perturbed_state,
+            None,
+            None,
+            diff_steps=2,
+            eager_primal="spectral",
+        )
+    assert bool(torch.isfinite(setup_static.shift).all())
+    assert bool(torch.isfinite(setup_spectral.shift).all())
+    assert float(setup_static.shift.abs().max()) <= float(3.0 * kt)
+    assert float(setup_spectral.shift.abs().max()) <= float(3.0 * kt)
+
+    density = fermi_density_matrix(
+        h_rot, electrons, kt, perturbed_state, diff_steps=2
+    )
+    assert bool(torch.isfinite(density).all())
+    torch.testing.assert_close(
+        density.trace(),
+        electrons.sum(),
+        atol=1.0e-12,
+        rtol=0.0,
+    )
+
+
+def test_daleckii_krein_fermi_jvp_matches_matrix_fermi_and_is_rotation_invariant() -> (
+    None
+):
+    """Daleckii-Krein JVP matches _matrix_fermi across exact and near degeneracies."""
+    kt = torch.tensor(300.0 * KELVIN2AU, dtype=torch.float64)
+    shift = torch.tensor([0.01, -0.02], dtype=torch.float64)
+    tangent_shift = torch.tensor([0.05, -0.03], dtype=torch.float64)
+    tangent_kt = torch.tensor(1.5e-4, dtype=torch.float64)
+    active = torch.tensor([True, True, True, True, False], dtype=torch.bool)
+
+    evals = torch.tensor(
+        [-0.25, 0.01, 0.01 + 1.0e-9, 0.01, 10.0], dtype=torch.float64
+    )
+    gen = torch.Generator().manual_seed(31)
+    q_act, _ = torch.linalg.qr(
+        torch.randn((4, 4), generator=gen, dtype=torch.float64)
+    )
+    u = torch.eye(5, dtype=torch.float64)
+    u[:4, :4] = q_act
+    h0 = u @ torch.diag(evals) @ u.mT
+    h0 = 0.5 * (h0 + h0.mT)
+    dh0 = torch.randn((5, 5), generator=gen, dtype=torch.float64)
+    dh0 = 0.5 * (dh0 + dh0.mT)
+
+    h_batch = h0.unsqueeze(0).expand(2, -1, -1)
+    dh_batch = dh0.unsqueeze(0).expand(2, -1, -1)
+    active_batch = active.unsqueeze(0).expand(2, -1)
+
+    dk_val, dk_tan = spectral_module._fermi_daleckii_krein_jvp(
+        h_batch,
+        dh_batch,
+        shift,
+        tangent_shift,
+        kt.expand(2),
+        tangent_kt.expand(2),
+        active_batch,
+    )
+    mf_val, mf_tan = jvp(
+        lambda m, s, t: _matrix_fermi(m, s, t, active_batch),
+        (h_batch, shift, kt.expand(2)),
+        (dh_batch, tangent_shift, tangent_kt.expand(2)),
+    )
+    torch.testing.assert_close(dk_val, mf_val, atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(dk_tan, mf_tan, atol=1.0e-9, rtol=1.0e-9)
+
+    # Orthogonal rotation within the exact 2-fold degenerate subspace (indices 1 and 3)
+    angle = torch.tensor(0.93, dtype=torch.float64)
+    c, s = torch.cos(angle), torch.sin(angle)
+    rot_deg = torch.eye(5, dtype=torch.float64)
+    rot_deg[1, 1] = c
+    rot_deg[1, 3] = -s
+    rot_deg[3, 1] = s
+    rot_deg[3, 3] = c
+    u2 = u @ rot_deg
+    h0_rot = u2 @ torch.diag(evals) @ u2.mT
+    dk_val2, dk_tan2 = spectral_module._fermi_daleckii_krein_jvp(
+        h0_rot.unsqueeze(0).expand(2, -1, -1),
+        dh_batch,
+        shift,
+        tangent_shift,
+        kt.expand(2),
+        tangent_kt.expand(2),
+        active_batch,
+    )
+    torch.testing.assert_close(dk_val2, dk_val, atol=1.0e-13, rtol=1.0e-13)
+    torch.testing.assert_close(dk_tan2, dk_tan, atol=1.0e-12, rtol=1.0e-12)

@@ -6,7 +6,13 @@ Simple check for the availability of external libraries.
 """
 
 try:
-    from tad_libcint import __version__  # type: ignore
+    from tad_libcint import (  # type: ignore
+        Basis,
+        Shell,
+        __version__,
+        int1e,
+        overlap,
+    )
 
     has_libcint = True
 except ImportError:

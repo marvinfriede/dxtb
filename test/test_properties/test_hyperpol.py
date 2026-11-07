@@ -173,6 +173,28 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     single(name, field_vector, dd=dd)
 
 
+@pytest.mark.parametrize("dtype", [torch.double])
+def test_single_pytorch_driver(dtype: torch.dtype) -> None:
+    """Numerical and analytical hyperpolarizability agree with the PyTorch driver."""
+    dd: DD = {"dtype": dtype, "device": DEVICE}
+    numbers = samples["LiH"]["numbers"].to(DEVICE)
+    positions = samples["LiH"]["positions"].to(**dd)
+    charge = torch.tensor(0.0, **dd)
+    field_vector = torch.tensor([0.0, 0.0, 0.0], **dd)
+    efield = new_efield(field_vector)
+    pt_opts = dict(opts, int_driver="pytorch")
+    calc = Calculator(
+        numbers, GFN1_XTB, interaction=[efield], opts=pt_opts, **dd
+    )
+    num_hypol = calc.hyperpolarizability_numerical(positions, charge)
+    assert num_hypol.grad_fn is None
+    field_vector.requires_grad_(True)
+    ana_hypol = calc.hyperpolarizability(positions, charge, use_functorch=False)
+    assert pytest.approx(
+        tensor_to_numpy(num_hypol), abs=1e-2, rel=1e-2
+    ) == tensor_to_numpy(ana_hypol)
+
+
 @pytest.mark.large
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.double])

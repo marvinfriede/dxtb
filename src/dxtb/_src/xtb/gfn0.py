@@ -28,6 +28,7 @@ from functools import partial
 import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
+from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
@@ -164,7 +165,12 @@ class GFN0Hamiltonian(BaseHamiltonian):
         return self.cn(self.numbers, positions)
 
     def get_eeq_charges(
-        self, positions: Tensor, charge: Tensor | float | int, cn: Tensor
+        self,
+        positions: Tensor,
+        charge: Tensor | float | int,
+        cn: Tensor,
+        *,
+        solve_mode: SolveMode = "schur",
     ) -> Tensor:
         """Solve the coordinate-local main GFN0 EEQ model."""
         total_charge = any_to_tensor(charge, **self.dd)
@@ -173,7 +179,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
             positions=positions,
             charge=structure_charge(total_charge, self.numbers),
         )
-        charges = self.eeq_model.solve(structure, cn)
+        charges = self.eeq_model.solve(structure, cn, solve_mode=solve_mode)
         assert isinstance(charges, Tensor)
         return charges
 

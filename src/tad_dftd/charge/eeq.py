@@ -22,6 +22,7 @@ from __future__ import annotations
 import torch
 from tad_mctc.io.structure import Structure
 from tad_mctc.typing import Tensor
+from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 __all__ = ["EEQModel", "get_eeq_charges"]
@@ -34,6 +35,8 @@ def get_eeq_charges(
     lattice: Tensor | None = None,
     periodic: Tensor | None = None,
     cutoff: Tensor | float | None = None,
+    *,
+    solve_mode: SolveMode = "schur",
 ) -> Tensor:
     """
     Calculate atomic partial charges using the EEQ (2019) charge model.
@@ -57,4 +60,4 @@ def get_eeq_charges(
     model = EEQModel.param2019(device=positions.device, dtype=positions.dtype)
     if cutoff is not None:
         model = model.replace(cn=model.cn.replace(cutoff=cutoff))
-    return model(struct, return_energy=False)
+    return model(struct, return_energy=False, solve_mode=solve_mode)

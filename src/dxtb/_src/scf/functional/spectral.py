@@ -48,6 +48,8 @@ _GL_WEIGHTS_NP = 0.5 * _GL_WEIGHTS_NP
 
 _FERMI_MAX_SCALE_POWER = 30
 _FERMI_MAX_SCALED_NORM = 4.0
+_MAX_DIFF_STEP_KT = 3.0
+_DALECKII_KREIN_TAYLOR_CUTOFF = 1.0e-4
 
 _EAGER_PRIMAL_STATE = threading.local()
 
@@ -129,8 +131,10 @@ def _active_mask(matrix: Tensor, mask: Tensor | None) -> Tensor:
 def _solve_positive_definite(matrix: Tensor, rhs: Tensor) -> Tensor:
     """Use Cholesky solves for transform-consistent higher derivatives."""
     matrix = 0.5 * (matrix + matrix.transpose(-2, -1))
-    factor = torch.linalg.cholesky(matrix)
-    return torch.cholesky_solve(rhs, factor)
+    if is_compiling():
+        factor = torch.linalg.cholesky(matrix)
+        return torch.cholesky_solve(rhs, factor)
+    return dense_solve(matrix, rhs, method="cholesky")
 
 
 def _prepare_matrix(
@@ -214,6 +218,87 @@ def _matrix_fermi_spectral(
         spectral=True,
         precomputed_eigh=precomputed_eigh,
     )
+
+
+def _fermi_daleckii_krein_jvp(
+    matrix: Tensor,
+    tangent_matrix: Tensor,
+    shift: Tensor,
+    tangent_shift: Tensor,
+    kt: Tensor,
+    tangent_kt: Tensor,
+    active: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Evaluate the spectral Fermi matrix and its Daleckii-Krein JVP.
+
+    Uses the removable-singularity divided-difference kernel on the active
+    orthogonalized spectrum so exact and near-degenerate subspaces remain
+    smooth and rotation-invariant.
+    """
+    eye = torch.eye(matrix.shape[-1], dtype=matrix.dtype, device=matrix.device)
+    eye = eye.expand(matrix.shape)
+    active_pair = active.unsqueeze(-1) & active.unsqueeze(-2)
+    sym_matrix = 0.5 * (matrix + matrix.transpose(-2, -1))
+    sym_matrix = torch.where(active_pair, sym_matrix, torch.zeros_like(matrix))
+    sym_tangent = 0.5 * (tangent_matrix + tangent_matrix.transpose(-2, -1))
+    sym_tangent = torch.where(
+        active_pair, sym_tangent, torch.zeros_like(tangent_matrix)
+    )
+
+    count = active.sum(-1).clamp_min(1).to(matrix.dtype)
+    center = sym_matrix.diagonal(dim1=-2, dim2=-1).sum(-1) / count
+    centered = sym_matrix - center[..., None, None] * eye
+    bound = torch.where(active, centered.abs().sum(-1), 0.0).amax(-1)
+    sentinel = (center + bound + 1.0).unsqueeze(-1)
+    eig_input = sym_matrix + torch.diag_embed(
+        torch.where(active, torch.zeros_like(sentinel), sentinel)
+    )
+    evals, evecs = torch.linalg.eigh(eig_input)
+    active_evecs = torch.where(
+        active.unsqueeze(-1), evecs, torch.zeros_like(evecs)
+    )
+
+    x_eig = (evals - shift.unsqueeze(-1)) / kt.unsqueeze(-1)
+    occ = 0.5 * (1.0 - torch.tanh(0.5 * x_eig))
+    density = (active_evecs * occ.unsqueeze(-2)) @ active_evecs.transpose(
+        -2, -1
+    )
+    density = 0.5 * (density + density.transpose(-2, -1))
+    density = torch.where(active_pair, density, torch.zeros_like(density))
+
+    dx = x_eig.unsqueeze(-1) - x_eig.unsqueeze(-2)
+    x_mid = 0.5 * (x_eig.unsqueeze(-1) + x_eig.unsqueeze(-2))
+    f_mid = 0.5 * (1.0 - torch.tanh(0.5 * x_mid))
+    p_mid = f_mid * (1.0 - f_mid)
+    d1_mid = -p_mid
+    d3_mid = -p_mid * (1.0 - 6.0 * p_mid)
+    d5_mid = -p_mid * (1.0 - 30.0 * p_mid + 120.0 * p_mid * p_mid)
+    dx2 = dx * dx
+    taylor_kernel = d1_mid + (dx2 / 24.0) * d3_mid + (dx2 * dx2 / 1920.0) * d5_mid
+    far = dx.abs() > _DALECKII_KREIN_TAYLOR_CUTOFF
+    safe_dx = torch.where(far, dx, torch.ones_like(dx))
+    diff_kernel = (occ.unsqueeze(-1) - occ.unsqueeze(-2)) / safe_dx
+    divided_diff = torch.where(far, diff_kernel, taylor_kernel)
+
+    dh_eigen = active_evecs.transpose(-2, -1) @ sym_tangent @ active_evecs
+    diag_idx = torch.arange(matrix.shape[-1], device=matrix.device)
+    dh_eigen = dh_eigen.clone()
+    dh_eigen[..., diag_idx, diag_idx] = (
+        dh_eigen[..., diag_idx, diag_idx]
+        - tangent_shift.unsqueeze(-1)
+        - x_eig * tangent_kt.unsqueeze(-1)
+    )
+    dx_eigen = dh_eigen / kt[..., None, None]
+    tangent_density = (
+        active_evecs @ (divided_diff * dx_eigen) @ active_evecs.transpose(-2, -1)
+    )
+    tangent_density = 0.5 * (
+        tangent_density + tangent_density.transpose(-2, -1)
+    )
+    tangent_density = torch.where(
+        active_pair, tangent_density, torch.zeros_like(tangent_density)
+    )
+    return density, tangent_density
 
 
 def _matrix_fermi_impl(
@@ -717,6 +802,8 @@ def _fermi_free_energy_setup(
 
     diff_mask = active_channel & ~gap_mask & ~empty & ~full & ~too_many
     shift = torch.zeros_like(target)
+    active_count = active.sum(-1).clamp_min(1).to(work_dtype)
+    slope_floor_numer = 4.0 * active_count * torch.finfo(work_dtype).eps
     primal_mode = _current_primal_fermi_mode(eager_primal)
     if primal_mode == "spectral":
         _require_detached_eager_primal(
@@ -865,13 +952,19 @@ def _fermi_free_energy_setup(
             slope = torch.where(
                 step_in_range, slope, torch.full_like(slope, float("nan"))
             )
-            safe_slope = torch.where(
-                slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
+            nonfinite_step = ~torch.isfinite(count) | ~torch.isfinite(slope)
+            slope_ok = slope > (slope_floor_numer / s_kt)
+            safe_slope = torch.where(slope_ok, slope, 1.0)
+            raw_correction = (target - count) / safe_slope
+            step_ok = slope_ok & (
+                raw_correction.abs() <= _MAX_DIFF_STEP_KT * s_kt
             )
             correction = torch.where(
-                diff_mask, (target - count) / safe_slope, 0.0
+                nonfinite_step,
+                torch.full_like(raw_correction, float("nan")),
+                torch.where(step_ok, raw_correction, 0.0),
             )
-            shift = shift + correction
+            shift = shift + torch.where(diff_mask, correction, 0.0)
 
         occupation = _matrix_fermi_spectral(
             relative, shift, safe_kt, active, precomputed_eigh=precomputed_eigh
@@ -880,6 +973,8 @@ def _fermi_free_energy_setup(
         matrix_fermi: Callable[[Tensor, Tensor, Tensor, Tensor], Tensor] = (
             _matrix_fermi_eager if primal_mode == "adaptive" else _matrix_fermi
         )
+        slope_floor = slope_floor_numer / safe_kt
+        step_bound = _MAX_DIFF_STEP_KT * safe_kt
         for _ in range(diff_steps):
             density = matrix_fermi(relative, shift, safe_kt, active)
             diag_density = density.diagonal(dim1=-2, dim2=-1)
@@ -887,13 +982,17 @@ def _fermi_free_energy_setup(
             slope = (diag_density - (density * density).sum(dim=-1)).sum(
                 -1
             ) / safe_kt
-            safe_slope = torch.where(
-                slope.abs() > torch.finfo(work_dtype).tiny, slope, 1.0
-            )
+            nonfinite_step = ~torch.isfinite(count) | ~torch.isfinite(slope)
+            slope_ok = slope > slope_floor
+            safe_slope = torch.where(slope_ok, slope, 1.0)
+            raw_correction = (target - count) / safe_slope
+            step_ok = slope_ok & (raw_correction.abs() <= step_bound)
             correction = torch.where(
-                diff_mask, (target - count) / safe_slope, 0.0
+                nonfinite_step,
+                torch.full_like(raw_correction, float("nan")),
+                torch.where(step_ok, raw_correction, 0.0),
             )
-            shift = shift + correction
+            shift = shift + torch.where(diff_mask, correction, 0.0)
         occupation = matrix_fermi(relative, shift, safe_kt, active)
 
     x = (relative - shift[..., None, None] * eye) / safe_kt
