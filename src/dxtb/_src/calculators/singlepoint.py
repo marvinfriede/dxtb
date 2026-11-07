@@ -515,6 +515,10 @@ def _singlepoint_impl(
             f"'{expected_dtype}', but positions are of type "
             f"'{positions.dtype}'."
         )
+    if not system._ihelp_compatible():
+        raise ValueError(
+            "System IndexHelper is incompatible with the captured System setup."
+        )
 
     charge = _call_scalar("charge", chrg, positions)
     spin_tensor = (

@@ -965,6 +965,225 @@ class System:
             return self.generalized_born_setup
         return None
 
+    def _ihelp_compatible(self) -> bool:
+        """Return whether ``ihelp`` matches this System's structural setup."""
+        ihelp = self.ihelp
+        if (
+            not isinstance(ihelp, IndexHelper)
+            or ihelp.batch_mode != self.batch_mode
+            or ihelp.device != self.numbers.device
+        ):
+            return False
+        if self.batch_mode != 0:
+            return ihelp.atom_to_unique.shape == self.numbers.shape
+
+        if self.numbers.ndim != 1:
+            return False
+        nat = self.numbers.shape[0]
+        if (
+            ihelp.atom_to_unique.shape != (nat,)
+            or ihelp.shells_per_atom.shape != (nat,)
+            or ihelp.shell_index.shape != (nat,)
+            or ihelp.unique_angular.ndim != 1
+            or ihelp.ushells_to_unique.shape != ihelp.unique_angular.shape
+            or ihelp.ushells_per_unique.ndim != 1
+            or ihelp.shells_to_atom.ndim != 1
+        ):
+            return False
+
+        n_shells = ihelp.shells_to_atom.shape[0]
+        if (
+            ihelp.angular.shape != (n_shells,)
+            or ihelp.shells_to_ushell.shape != (n_shells,)
+            or ihelp.orbitals_per_shell.shape != (n_shells,)
+            or ihelp.orbital_index.shape != (n_shells,)
+            or ihelp.orbitals_to_shell.ndim != 1
+        ):
+            return False
+        n_orbitals = ihelp.orbitals_to_shell.shape[0]
+
+        h0_index = self.h0_setup.ihelp if self.h0_setup is not None else None
+        if h0_index is not None and (
+            h0_index.atom_to_unique.shape != (nat,)
+            or h0_index.shells_to_ushell.shape != (n_shells,)
+            or h0_index.unique_angular.shape != ihelp.unique_angular.shape
+            or h0_index.shells_to_atom.shape != (n_shells,)
+            or h0_index.orbitals_to_shell.shape != (n_orbitals,)
+        ):
+            return False
+
+        backend_index = None
+        if self.integral_setup is not None:
+            backend = (
+                self.integral_setup.pytorch
+                if self.integral_setup.driver_type == labels.INTDRIVER_PYTORCH
+                else (
+                    self.integral_setup.libcint
+                    if self.integral_setup.driver_type
+                    == labels.INTDRIVER_LIBCINT
+                    else None
+                )
+            )
+            if isinstance(
+                backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
+            ):
+                backend_index = backend.index
+        if backend_index is not None and (
+            backend_index.shells_to_atom.shape != (n_shells,)
+            or backend_index.orbitals_to_shell.shape != (n_orbitals,)
+        ):
+            return False
+
+        if (
+            self.es2_setup is not None
+            and self.es2_setup.shells_to_atom is not None
+            and self.es2_setup.shells_to_atom.shape != (n_shells,)
+        ):
+            return False
+        if self.es3_setup is not None and (
+            self.es3_setup.hubbard_derivs.shape[-1]
+            != (n_shells if self.es3_setup.shell_resolved else nat)
+        ):
+            return False
+
+        if (
+            self.numbers.device.type == "meta"
+            or torch.compiler.is_compiling()
+            or torch._C._functorch.is_functorch_wrapped_tensor(self.numbers)
+        ):
+            return True
+
+        if (
+            h0_index is not None
+            and h0_index.shells_to_atom.device == ihelp.device
+            and not (
+                torch.equal(ihelp.atom_to_unique, h0_index.atom_to_unique)
+                and torch.equal(
+                    ihelp.shells_to_ushell, h0_index.shells_to_ushell
+                )
+                and torch.equal(ihelp.unique_angular, h0_index.unique_angular)
+                and torch.equal(ihelp.shells_to_atom, h0_index.shells_to_atom)
+                and torch.equal(
+                    ihelp.orbitals_to_shell, h0_index.orbitals_to_shell
+                )
+            )
+        ):
+            return False
+
+        if (
+            backend_index is not None
+            and backend_index.shells_to_atom.device == ihelp.device
+            and not (
+                torch.equal(ihelp.shells_to_atom, backend_index.shells_to_atom)
+                and torch.equal(
+                    ihelp.orbitals_to_shell, backend_index.orbitals_to_shell
+                )
+            )
+        ):
+            return False
+
+        if (
+            self.es2_setup is not None
+            and self.es2_setup.shells_to_atom is not None
+            and self.es2_setup.shells_to_atom.device == ihelp.device
+            and not torch.equal(
+                ihelp.shells_to_atom, self.es2_setup.shells_to_atom
+            )
+        ):
+            return False
+
+        unique, expected_atom_to_unique = torch.unique(
+            self.numbers, return_inverse=True
+        )
+        if (
+            ihelp.ushells_per_unique.shape != unique.shape
+            or not torch.equal(ihelp.atom_to_unique, expected_atom_to_unique)
+            or bool((ihelp.ushells_per_unique < 0).any())
+        ):
+            return False
+
+        device = ihelp.device
+        dtype = ihelp.dtype
+        expected_ushells_to_unique = torch.repeat_interleave(
+            torch.arange(unique.shape[0], device=device, dtype=dtype),
+            ihelp.ushells_per_unique,
+        )
+        if not torch.equal(ihelp.ushells_to_unique, expected_ushells_to_unique):
+            return False
+
+        expected_shells_per_atom = ihelp.ushells_per_unique[
+            ihelp.atom_to_unique
+        ]
+        if not torch.equal(ihelp.shells_per_atom, expected_shells_per_atom):
+            return False
+
+        expected_shell_index = (
+            torch.cumsum(ihelp.shells_per_atom, -1) - ihelp.shells_per_atom
+        )
+        expected_shell_index = torch.where(
+            ihelp.shells_per_atom == 0, -999, expected_shell_index
+        )
+        if not torch.equal(ihelp.shell_index, expected_shell_index):
+            return False
+
+        expected_shells_to_atom = torch.repeat_interleave(
+            torch.arange(nat, device=device, dtype=dtype),
+            ihelp.shells_per_atom,
+        )
+        if not torch.equal(ihelp.shells_to_atom, expected_shells_to_atom):
+            return False
+
+        ushell_offset = (
+            torch.cumsum(ihelp.ushells_per_unique, -1)
+            - ihelp.ushells_per_unique
+        )
+        expected_shells_to_ushell = (
+            ushell_offset[ihelp.atom_to_unique[ihelp.shells_to_atom]]
+            + torch.arange(n_shells, device=device, dtype=dtype)
+            - ihelp.shell_index[ihelp.shells_to_atom]
+        )
+        if not torch.equal(ihelp.shells_to_ushell, expected_shells_to_ushell):
+            return False
+
+        if bool(
+            (ihelp.shells_to_ushell >= ihelp.unique_angular.shape[0]).any()
+        ):
+            return False
+        expected_angular = torch.where(
+            ihelp.shells_to_ushell >= 0,
+            ihelp.unique_angular[ihelp.shells_to_ushell.clamp(min=0)],
+            -999,
+        )
+        if not torch.equal(ihelp.angular, expected_angular):
+            return False
+
+        expected_orbitals_per_shell = torch.where(
+            ihelp.angular >= 0, 2 * ihelp.angular + 1, 0
+        )
+        if not torch.equal(
+            ihelp.orbitals_per_shell, expected_orbitals_per_shell
+        ):
+            return False
+
+        expected_orbital_index = (
+            torch.cumsum(ihelp.orbitals_per_shell, -1)
+            - ihelp.orbitals_per_shell
+        )
+        expected_orbital_index = torch.where(
+            ihelp.orbitals_per_shell == 0, -999, expected_orbital_index
+        )
+        if not torch.equal(ihelp.orbital_index, expected_orbital_index):
+            return False
+
+        expected_orbitals_to_shell = torch.repeat_interleave(
+            torch.arange(n_shells, device=device, dtype=dtype),
+            ihelp.orbitals_per_shell,
+        )
+        if not torch.equal(ihelp.orbitals_to_shell, expected_orbitals_to_shell):
+            return False
+
+        return True
+
     def _active_exact_core(self) -> ExactSystemCore | None:
         """Return the captured core while its façade setup references agree."""
         core = self.exact_core
@@ -974,6 +1193,7 @@ class System:
             or core.numbers is not self.numbers
             or core.config is not self.config
             or core.h0_setup is not self.h0_setup
+            or not self._ihelp_compatible()
         ):
             return None
 
@@ -1099,9 +1319,6 @@ class System:
     @property
     def classical_cache(self) -> ClassicalListCache:
         """Build a compatibility view over captured setup values on demand."""
-        if self.batch_mode != 0:
-            return self.classicals.get_cache(self.numbers, self.ihelp)
-
         cache = ClassicalListCache()
         for component in self.classicals.components:
             setup = self._builtin_classical_setup(component)
@@ -1652,16 +1869,22 @@ class Model:
                         )
                     )
         else:
-            if repulsion_classical is not None:
-                repulsion_setup = repulsion_classical.get_cache(numbers, ihelp)
-            if srb_classical is not None:
-                srb_setup = srb_classical.get_cache(numbers, ihelp)
-            if d4_classical is not None:
-                d4_setup = d4_classical.get_cache(numbers, ihelp)
-            if ies_classical is not None:
-                ies_setup = ies_classical.get_cache(numbers, ihelp)
-            if halogen_classical is not None:
-                halogen_setup = halogen_classical.get_cache(numbers, ihelp)
+            for component in classicals.components:
+                timer.start(component.label, parent_uid="Classicals")
+                setup = component.get_cache(numbers, ihelp)
+                if component is repulsion_classical:
+                    repulsion_setup = setup
+                elif component is srb_classical:
+                    srb_setup = setup
+                elif component is d4_classical:
+                    d4_setup = setup
+                elif component is ies_classical:
+                    ies_setup = setup
+                elif component is halogen_classical:
+                    halogen_setup = setup
+                else:
+                    classical_extension_cache[component.label] = setup
+                timer.stop(component.label)
 
         OutputHandler.write_stdout("done", v=4)
 

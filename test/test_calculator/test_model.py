@@ -828,3 +828,69 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
     eb2 = calc_2d.energy(pos_2d).sum()
     (gb_2,) = torch.autograd.grad(eb2, gam_param)
     torch.testing.assert_close(gb_1, gb_2)
+
+
+@pytest.mark.parametrize("batch_mode", [1, 2])
+def test_packed_system_setup_captures_classical_cache_once(
+    batch_mode: int,
+) -> None:
+    """Packed Model.setup captures classical setups once and exposes an on-demand view."""
+
+    class CountingClassical(Classical):
+        __slots__ = ["scale", "cache_calls"]
+
+        def __init__(self) -> None:
+            super().__init__(device=DEVICE, dtype=torch.double)
+            self.scale = torch.tensor(0.25, device=DEVICE, dtype=torch.double)
+            self.cache_calls = 0
+            self.label = "CountingClassical"
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            self.cache_calls += 1
+            return self.scale.clone()
+
+        def get_energy(self, positions, cache, **kwargs):
+            return torch.ones(positions.shape[:-1], **DD) * cache
+
+    numbers_2d = (
+        torch.tensor([[8, 1, 1], [1, 1, 0]], device=DEVICE)
+        if batch_mode == 1
+        else torch.tensor([[8, 1, 1], [8, 1, 1]], device=DEVICE)
+    )
+    extension = CountingClassical()
+    par = ParamModule(GFN1_XTB, **DD)
+    arep = dict(par.named_parameters())["parameter_tree.element.H.arep.param"]
+    arep.requires_grad_(True)
+
+    packed = Model(
+        par=par,
+        config=Config.create(exclude="scf"),
+        classical=(extension,),
+    ).setup(numbers_2d, batch_mode=batch_mode)
+
+    assert extension.cache_calls == 1
+    first_view = packed.classical_cache
+    second_view = packed.classical_cache
+    assert extension.cache_calls == 1
+    assert first_view is not second_view
+    assert set(first_view) == {
+        component.label for component in packed.classicals.components
+    }
+    assert first_view["Repulsion"] is packed.repulsion_setup
+    torch.testing.assert_close(
+        first_view[extension.label],
+        torch.tensor(0.25, device=DEVICE, dtype=torch.double),
+    )
+
+    extension.scale = torch.tensor(9.0, device=DEVICE, dtype=torch.double)
+    torch.testing.assert_close(
+        packed.classical_cache[extension.label],
+        torch.tensor(0.25, device=DEVICE, dtype=torch.double),
+    )
+    assert extension.cache_calls == 1
+
+    (grad_arep,) = torch.autograd.grad(
+        packed.classical_cache["Repulsion"].arep.sum(), arep
+    )
+    assert torch.isfinite(grad_arep).all() and grad_arep.abs().sum() > 0
+

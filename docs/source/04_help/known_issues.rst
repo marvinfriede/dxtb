@@ -44,14 +44,14 @@ Implicit SCF uses a prepared physical-root boundary
 ``differentiation="implicit"`` uses the functional physical-root derivative. Root
 acquisition and physical validation happen eagerly; the prepared-root response
 supports ordinary ``torch.autograd`` and its documented ``torch.func``
-transforms. FULL and IMPLICIT iterative routes use the functional SCF
-controller. The public packed FULL batch route retains its established
-unrolled compatibility implementation. Unsupported interaction extensions
-and legacy solver overrides fail explicitly instead of selecting another
-engine. The experimental single-shot mode is retired because its derivatives
-were not exact. An implicit route rejects a nonconverged primal with
-``SCFConvergenceError`` for an uncertified primal root. The removed global
-``strict`` configuration flag does not alter single-System SCF policy.
+transforms. Both single-System and batched iterative routes use the functional
+SCF controller (canonical padded ``vmap`` for eligible PyTorch single-stage
+strategies and independent functional evaluation otherwise). Unsupported
+interaction extensions and retired solver overrides fail explicitly instead of
+selecting another engine. The experimental single-shot mode is retired because
+its derivatives were not exact. An implicit route rejects a nonconverged primal
+with ``SCFConvergenceError`` for an uncertified primal root. The removed global
+``strict`` configuration flag does not alter SCF policy.
 
 In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
 modes, and ``scf_mode="nonpure"`` existed; that mode was removed.
@@ -83,9 +83,45 @@ Cached results after a call without gradient tracking (fixed)
 
 Up to dxtb 0.4.0, forces could silently miss contributions (errors up to
 0.1 Eh/bohr) if the same calculator was used before with positions that did
-not require gradients, or with another tensor of the same values. The
-component caches and the integral driver now also check the gradient
-tracking state of the positions.
+not require gradients, or with another tensor of the same values. Persistent
+per-evaluation component caches and mutable ``Calculator.integrals`` have been
+retired; integral matrices, classical setups, and SCF iterations are evaluated
+purely without cross-call state.
+
+
+Retired legacy APIs and migration guide
+---------------------------------------
+
+The functional ``Model`` / ``System`` / ``Result`` and ``S13`` SCF architecture
+intentionally retired the following stateful legacy APIs:
+
+- ``Calculator.integrals``: integral matrices produced during a calculation are
+  returned on ``Result`` (``result.overlap``, ``result.hcore``,
+  ``result.dipole_integrals``, ``result.quadrupole_integrals``). Standalone
+  integral objects and shortcut functions remain available through the public
+  :mod:`dxtb.integrals` package (:class:`dxtb.integrals.Integrals`,
+  :mod:`dxtb.integrals.wrappers`, :mod:`dxtb.integrals.types`).
+- Stateful SCF and mixer classes (``SelfConsistentField``,
+  ``SelfConsistentFieldFull``, ``SelfConsistentFieldSingleShot``, ``BaseSCF``,
+  ``Anderson``, ``Broyden``, ``Simple``, ``BaseMixer``): use functional SCF
+  strategies in :mod:`dxtb.scf` (:class:`~dxtb.scf.SCFStrategy`,
+  :class:`~dxtb.scf.SCFStage`, :class:`~dxtb.scf.LinearMethod`,
+  :class:`~dxtb.scf.AndersonMethod`, :class:`~dxtb.scf.BroydenMethod`,
+  :class:`~dxtb.scf.CDIISMethod`, :class:`~dxtb.scf.SOSCFMethod`) via
+  :class:`~dxtb.config.ConfigSCF`.
+- Component cache-control and batch-culling methods (``cache_disable``,
+  ``cache_enable``, ``cache_invalidate``, ``cache_is_setup``,
+  ``cache_is_latest``, ``IndexHelper.cull`` / ``restore``, and cache ``cull`` /
+  ``restore``): ``Model.setup`` captures immutable setup data on ``System``, and
+  batched evaluations use canonical fixed-shape padding without dynamic batch
+  culling.
+- Legacy SCF option and composition wrappers (``LegacySCFOptions``,
+  ``strict_e6bcompat``, low-level ``scf_results`` override kwargs,
+  ``LegacyCompositionResult``, ``LegacySystemRoute``, ``classify_legacy_system``):
+  configure SCF via :class:`~dxtb.config.Config` / :class:`~dxtb.config.ConfigSCF`,
+  and use :func:`dxtb._src.calculators.packed_result.evaluate_packed_systems`
+  and :func:`dxtb._src.calculators.legacy_composition.can_pad_system` for
+  internal multi-System routing.
 
 
 Batched calculations hang with several CPU threads (fixed)

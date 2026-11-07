@@ -500,7 +500,7 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     representation: scf.SCFRepresentation,
 ) -> None:
     """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
-    from dxtb._src.calculators.legacy_composition import classify_legacy_system
+    from dxtb._src.calculators.legacy_composition import can_pad_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     strategy = scf.SCFStrategy(
@@ -523,8 +523,8 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     model = Model(par=param, config=config, auto_int_level=False)
     sys_h2 = model.setup(torch.tensor([1, 1], dtype=torch.int64))
     sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
-    assert classify_legacy_system(sys_h2)
-    assert classify_legacy_system(sys_h2o)
+    assert can_pad_system(sys_h2)
+    assert can_pad_system(sys_h2o)
     assert sys_h2.config.scf.strategy.stages[0].representation is representation
 
     pos_h2 = _geometry((1, 1), 0)
@@ -788,7 +788,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
 
 def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
     """evaluate_packed_systems coordinates multi-bucket MAPPED and retained lanes."""
-    from dxtb._src.calculators.legacy_composition import classify_legacy_system
+    from dxtb._src.calculators.legacy_composition import can_pad_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     param_gfn1 = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
@@ -821,9 +821,9 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         par=param_gfn2, config=cfg_gfn2_mapped, auto_int_level=False
     ).setup(torch.tensor([1, 1, 1], dtype=torch.int64))
 
-    assert classify_legacy_system(sys0)
-    assert not classify_legacy_system(sys1)
-    assert classify_legacy_system(sys2)
+    assert can_pad_system(sys0)
+    assert not can_pad_system(sys1)
+    assert can_pad_system(sys2)
 
     systems = (sys0, sys1, sys2)
     positions = (
@@ -858,7 +858,7 @@ def test_evaluate_packed_systems_mixed_buckets_and_retained_routes() -> None:
         sys_gfn2_default.config.scf.strategy.stages[0].representation
         is scf.SCFRepresentation.POTENTIAL
     )
-    assert classify_legacy_system(sys_gfn2_default)
+    assert can_pad_system(sys_gfn2_default)
     OutputHandler.clear_warnings()
     packed_gfn2_def = evaluate_packed_systems(
         (sys_gfn2_default,),

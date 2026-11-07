@@ -804,6 +804,10 @@ def _validate_system_and_positions(
             "Converged-root conformer batching requires a single-System "
             "owner (numbers.ndim == 1 and batch_mode == 0)."
         )
+    if not system._ihelp_compatible():
+        raise ValueError(
+            "System IndexHelper is incompatible with the captured System setup."
+        )
     if positions.ndim != 3 or positions.shape[0] < 1:
         raise ValueError(
             "Converged-root conformer batching expects positions with shape "

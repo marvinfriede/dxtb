@@ -28,7 +28,6 @@ from dxtb._src.scf.functional.data import functional_scf_interactions_eligible
 
 __all__ = [
     "can_pad_system",
-    "classify_legacy_system",
     "compose_legacy_systems",
 ]
 
@@ -44,6 +43,10 @@ def can_pad_system(system: System) -> bool:
         raise ValueError(
             "Independent System evaluation requires single-System "
             "(batch_mode=0) instances."
+        )
+    if not system._ihelp_compatible():
+        raise ValueError(
+            "System IndexHelper is incompatible with the captured System setup."
         )
 
     config = system.config
@@ -118,9 +121,6 @@ def can_pad_system(system: System) -> bool:
         return False
 
     return True
-
-
-classify_legacy_system = can_pad_system
 
 
 def compose_legacy_systems(

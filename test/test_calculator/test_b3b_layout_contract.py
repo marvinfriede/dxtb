@@ -1193,3 +1193,124 @@ def test_descriptor_conversion_preserves_metadata_dtypes_and_pytree(
         else:
             assert after.dtype == before.dtype
 
+
+def test_system_ihelp_replacement_and_structural_consistency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Equivalent IndexHelper replacement preserves core reuse; incompatible replacements fail early."""
+    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+    from dxtb._src.scf.functional import eager as scf_eager
+
+    model = _model()
+    numbers = mols["H2O"]["numbers"].to(device="cpu")
+    positions = mols["H2O"]["positions"].to(device="cpu", dtype=torch.float64)
+    system = model.setup(numbers)
+    assert system.exact_core is not None
+
+    # 1. Original IndexHelper & 2. Equivalent separately constructed IndexHelper
+    equiv_ihelp = IndexHelper.from_numbers(numbers, model.par)
+    assert equiv_ihelp is not system.ihelp
+    equiv_system = replace(system, ihelp=equiv_ihelp)
+
+    assert system._active_exact_core() is system.exact_core
+    assert equiv_system._active_exact_core() is system.exact_core
+    assert can_pad_system(system) is True
+    assert can_pad_system(equiv_system) is True
+
+    prepared_inputs = []
+    orig_setup_scf_inputs = scf_eager.setup_scf_inputs
+
+    def record_scf_inputs(*args, **kwargs):
+        res = orig_setup_scf_inputs(*args, **kwargs)
+        prepared_inputs.append(res)
+        return res
+
+    monkeypatch.setattr(scf_eager, "setup_scf_inputs", record_scf_inputs)
+
+    pos_orig = positions.clone().requires_grad_(True)
+    pos_equiv = positions.clone().requires_grad_(True)
+    res_orig = system.singlepoint(pos_orig)
+    res_equiv = equiv_system.singlepoint(pos_equiv)
+    (grad_orig,) = torch.autograd.grad(res_orig.energy.sum(), pos_orig)
+    (grad_equiv,) = torch.autograd.grad(res_equiv.energy.sum(), pos_equiv)
+
+    torch.testing.assert_close(res_equiv.energy, res_orig.energy)
+    assert res_equiv.charges is not None and res_orig.charges is not None
+    torch.testing.assert_close(res_equiv.charges.mono, res_orig.charges.mono)
+    torch.testing.assert_close(grad_equiv, grad_orig)
+
+    assert len(prepared_inputs) == 2
+    assert prepared_inputs[0].index is system.exact_core.index
+    assert prepared_inputs[1].index is system.exact_core.index
+    torch.testing.assert_close(
+        prepared_inputs[1].orbital_mask, prepared_inputs[0].orbital_mask
+    )
+    torch.testing.assert_close(prepared_inputs[1].n0, prepared_inputs[0].n0)
+
+    packed = evaluate_packed_systems(
+        (system, equiv_system), (positions, positions)
+    )
+    torch.testing.assert_close(packed.energy[0], res_orig.energy)
+    torch.testing.assert_close(packed.energy[1], res_orig.energy)
+
+    # 3. IndexHelper with incompatible shell/orbital mappings (same shapes)
+    bad_shells = equiv_ihelp.shells_to_atom.clone()
+    bad_shells[0], bad_shells[-1] = bad_shells[-1].clone(), bad_shells[0].clone()
+    incompat_shell_ihelp = IndexHelper(
+        unique_angular=equiv_ihelp.unique_angular.clone(),
+        angular=equiv_ihelp.angular.clone(),
+        atom_to_unique=equiv_ihelp.atom_to_unique.clone(),
+        ushells_to_unique=equiv_ihelp.ushells_to_unique.clone(),
+        ushells_per_unique=equiv_ihelp.ushells_per_unique.clone(),
+        shells_to_ushell=equiv_ihelp.shells_to_ushell.clone(),
+        shells_per_atom=equiv_ihelp.shells_per_atom.clone(),
+        shell_index=equiv_ihelp.shell_index.clone(),
+        shells_to_atom=bad_shells,
+        orbitals_per_shell=equiv_ihelp.orbitals_per_shell.clone(),
+        orbital_index=equiv_ihelp.orbital_index.clone(),
+        orbitals_to_shell=equiv_ihelp.orbitals_to_shell.clone(),
+        batch_mode=0,
+    )
+    bad_orbs = equiv_ihelp.orbitals_to_shell.clone()
+    bad_orbs[0] = bad_orbs[-1]
+    incompat_orb_ihelp = IndexHelper(
+        unique_angular=equiv_ihelp.unique_angular.clone(),
+        angular=equiv_ihelp.angular.clone(),
+        atom_to_unique=equiv_ihelp.atom_to_unique.clone(),
+        ushells_to_unique=equiv_ihelp.ushells_to_unique.clone(),
+        ushells_per_unique=equiv_ihelp.ushells_per_unique.clone(),
+        shells_to_ushell=equiv_ihelp.shells_to_ushell.clone(),
+        shells_per_atom=equiv_ihelp.shells_per_atom.clone(),
+        shell_index=equiv_ihelp.shell_index.clone(),
+        shells_to_atom=equiv_ihelp.shells_to_atom.clone(),
+        orbitals_per_shell=equiv_ihelp.orbitals_per_shell.clone(),
+        orbital_index=equiv_ihelp.orbital_index.clone(),
+        orbitals_to_shell=bad_orbs,
+        batch_mode=0,
+    )
+
+    # 4. IndexHelper from a different chemical composition on the same device
+    h2_ihelp = IndexHelper.from_numbers(torch.tensor([1, 1]), model.par)
+    permuted_h2o_ihelp = IndexHelper.from_numbers(
+        torch.tensor([1, 8, 1]), model.par
+    )
+
+    for bad_ihelp in (
+        incompat_shell_ihelp,
+        incompat_orb_ihelp,
+        h2_ihelp,
+        permuted_h2o_ihelp,
+    ):
+        bad_system = replace(system, ihelp=bad_ihelp)
+        assert bad_system._active_exact_core() is None
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            can_pad_system(bad_system)
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            bad_system.singlepoint(positions)
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            bad_system.energy(positions)
+        with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+            evaluate_packed_systems((bad_system,), (positions,))
+
+

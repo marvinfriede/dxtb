@@ -7,7 +7,7 @@ import torch
 
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.legacy_composition import (
-    classify_legacy_system,
+    can_pad_system,
     compose_legacy_systems,
 )
 from dxtb._src.calculators.model import Model, System
@@ -119,8 +119,8 @@ def test_libcint_composition_matches_independent_serial_systems() -> None:
     a = _system(na, driver=labels.INTDRIVER_LIBCINT)
     b = _system(nb, driver=labels.INTDRIVER_LIBCINT)
     pa, pb = _positions(na), _positions(nb)
-    assert not classify_legacy_system(a)
-    assert not classify_legacy_system(b)
+    assert not can_pad_system(a)
+    assert not can_pad_system(b)
 
     composed = compose_legacy_systems((a, b), (pa, pb), source_ids=(4, 19))
     reversed_result = compose_legacy_systems(
@@ -232,7 +232,7 @@ def test_custom_interaction_is_explicitly_unsupported() -> None:
     b = _system(nb, interaction=(interaction,))
     pa, pb = _positions(na), _positions(nb)
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        classify_legacy_system(a)
+        can_pad_system(a)
     with pytest.raises(NotImplementedError, match="interaction extension"):
         compose_legacy_systems((a, b), (pa, pb))
 
@@ -242,7 +242,7 @@ def test_custom_classical_cache_is_refreshed_per_composition_call() -> None:
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     positions = _positions(numbers)
-    assert not classify_legacy_system(system)
+    assert not can_pad_system(system)
     before = component.cache_calls
     first = compose_legacy_systems((system,), (positions,))[0]
     second = compose_legacy_systems((system,), (positions,))[0]
@@ -276,7 +276,7 @@ def test_legacy_composition_preserves_custom_classical_position_gradient() -> (
 def test_mapped_eligible_system_is_not_accepted_by_legacy_composer() -> None:
     numbers = [1, 1]
     system = _system(numbers)
-    assert classify_legacy_system(system)
+    assert can_pad_system(system)
     with pytest.raises(ValueError, match="Mapped-eligible"):
         compose_legacy_systems((system,), (_positions(numbers),))
 
@@ -304,7 +304,7 @@ def test_invalid_fermi_edges_are_rejected(
     with pytest.raises(
         ValueError, match="Electronic Temperature|Fermi maxiter"
     ):
-        classify_legacy_system(system)
+        can_pad_system(system)
 
 
 def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
@@ -318,7 +318,7 @@ def test_negative_outer_maxiter_keeps_functional_error_policy() -> None:
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor([1, 1], device=DEVICE))
     with pytest.raises(ValueError, match="maxiter >= 0"):
-        classify_legacy_system(system)
+        can_pad_system(system)
 
 
 def test_classical_only_calculation_retains_separate_route() -> None:
@@ -332,7 +332,7 @@ def test_classical_only_calculation_retains_separate_route() -> None:
     system = Model(
         par=ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE), config=config
     ).setup(torch.tensor(numbers, device=DEVICE))
-    assert not classify_legacy_system(system)
+    assert not can_pad_system(system)
     result = compose_legacy_systems((system,), (_positions(numbers),))[0]
     assert result.scf is not None
     assert torch.count_nonzero(result.scf) == 0
@@ -522,8 +522,8 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model = Model(par=par, config=cfg)
         s_a = model.setup(nums_h2)
         s_b = model.setup(nums_h2o)
-        assert classify_legacy_system(s_a)
-        assert classify_legacy_system(s_b)
+        assert can_pad_system(s_a)
+        assert can_pad_system(s_b)
         packed = evaluate_packed_systems((s_a, s_b), (pos_h2, pos_h2o))
         ref_a = s_a.singlepoint(pos_h2)
         ref_b = s_b.singlepoint(pos_h2o)
@@ -535,7 +535,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         )
 
     # 2. Multi-stage and SOSCF strategies:
-    #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and classify_legacy_system
+    #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and can_pad_system
     #    - SOSCF rejected with active Fermi smearing (fermi_etemp > 0)
     #    - routed to LEGACY_COMPOSED under IMPLICIT differentiation (with etemp=0 for SOSCF)
     soscf_strat = SCFStrategy(
@@ -570,7 +570,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         with pytest.raises(
             ValueError, match="requires eager/implicit|single-stage fixed-trip"
         ):
-            classify_legacy_system(mutated_sys)
+            can_pad_system(mutated_sys)
 
     # Direct evaluate_padded_fixed_trip also rejects multi-stage or eager-only strategies
     from types import SimpleNamespace
@@ -613,7 +613,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
     with pytest.raises(
         ValueError, match="active Fermi smearing|fixed-occupation"
     ):
-        classify_legacy_system(sys_soscf_smear)
+        can_pad_system(sys_soscf_smear)
 
     # Multi-stage and SOSCF (at etemp=0) + alternate response coordinates under IMPLICIT -> LEGACY_COMPOSED
     implicit_cases = [
@@ -645,7 +645,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         model_imp = Model(par=par_gfn1, config=cfg_imp)
         sys_imp_a = model_imp.setup(nums_h2)
         sys_imp_b = model_imp.setup(nums_h2o)
-        assert not classify_legacy_system(sys_imp_a)
+        assert not can_pad_system(sys_imp_a)
         p_a = pos_h2.detach().clone().requires_grad_(True)
         p_b = pos_h2o.detach().clone().requires_grad_(True)
         packed_imp = evaluate_packed_systems(

@@ -14,6 +14,18 @@ Integrals
 .. automodule:: dxtb.integrals
    :no-index:
 
+.. note::
+
+   :class:`~dxtb.Calculator` and :class:`~dxtb._src.calculators.model.System`
+   evaluate integrals purely during :meth:`~dxtb.Calculator.singlepoint` and
+   return the resulting matrices on :class:`~dxtb._src.calculators.result.Result`
+   (``result.overlap``, ``result.hcore``, ``result.dipole_integrals``,
+   ``result.quadrupole_integrals``); ``Calculator.integrals`` has been retired.
+   To construct standalone integral containers, types, or shortcut functions
+   outside a calculator evaluation, use the public :mod:`dxtb.integrals`
+   package (:class:`dxtb.integrals.Integrals`, :mod:`dxtb.integrals.wrappers`,
+   and :mod:`dxtb.integrals.types`).
+
 For all available keywords and settings, see
 :ref:`here <indepth_calculators_config_labels>`.
 
