@@ -1301,4 +1301,66 @@ def test_system_ihelp_in_place_mutation_detected() -> None:
         assert system._active_exact_core() is system.exact_core
 
 
+def test_system_numbers_replacement_and_in_place_mutation_detected() -> None:
+    """Replacing or mutating System.numbers with same-dimension N/O species fails validation."""
+    from dxtb._src.calculators.legacy_composition import can_pad_system
+    from dxtb._src.calculators.packed_result import evaluate_packed_systems
+
+    model = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        config=Config.create(int_driver=labels.INTDRIVER_PYTORCH, maxiter=6),
+    )
+    n2_numbers = torch.tensor([7, 7])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 2.1]], dtype=torch.float64
+    )
+    system = model.setup(n2_numbers.clone())
+    assert system._active_exact_core() is system.exact_core
+    baseline = system.singlepoint(positions)
+
+    # 1. Fresh tensor with identical composition [7, 7] remains structurally compatible
+    same_comp = replace(system, numbers=torch.tensor([7, 7]))
+    assert same_comp._ihelp_compatible() is True
+    torch.testing.assert_close(
+        same_comp.singlepoint(positions).energy, baseline.energy
+    )
+
+    # 2. Replacing System.numbers with [8, 8] or [7, 8] (same atom/shell/orbital counts in GFN1)
+    for bad_numbers in (torch.tensor([8, 8]), torch.tensor([7, 8])):
+        for candidate in (
+            replace(system, numbers=bad_numbers),
+            replace(system, numbers=bad_numbers, _setup_index_token=None),
+        ):
+            assert candidate._active_exact_core() is None
+            assert candidate._ihelp_compatible() is False
+            with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+                can_pad_system(candidate)
+            with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+                candidate.singlepoint(positions)
+            with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+                candidate.energy(positions)
+            with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+                evaluate_packed_systems((candidate,), (positions,))
+
+    # 3. In-place mutation of System.numbers (N -> O preserves GFN1 basis dimensions)
+    system.numbers[0] = 8
+    assert system._active_exact_core() is None
+    assert system._ihelp_compatible() is False
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        can_pad_system(system)
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        system.singlepoint(positions)
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        system.energy(positions)
+
+    # Restoring the original atomic number restores exact-core eligibility
+    system.numbers[0] = 7
+    assert system._active_exact_core() is system.exact_core
+    assert system._ihelp_compatible() is True
+    torch.testing.assert_close(
+        system.singlepoint(positions).energy, baseline.energy
+    )
+
+
+
 

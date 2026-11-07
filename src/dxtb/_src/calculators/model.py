@@ -452,6 +452,8 @@ def _interaction_terms_match(
 class _SetupIndexToken:
     """Setup-time ownership and tensor-version snapshot for ``System.ihelp``."""
 
+    numbers: Tensor
+    numbers_snapshot: Tensor
     ihelp: IndexHelper
     backend_index: IndexHelper | None
     es2_shells_to_atom: Tensor | None
@@ -501,6 +503,8 @@ def _build_setup_index_token(
         tracked.append(es2_shells)
 
     return _SetupIndexToken(
+        numbers=numbers,
+        numbers_snapshot=numbers.detach().clone(),
         ihelp=ihelp,
         backend_index=backend_index,
         es2_shells_to_atom=es2_shells,
@@ -1071,7 +1075,8 @@ class System:
         n_orbitals = ihelp.orbitals_to_shell.shape[0]
 
         if self.h0_setup is not None and (
-            self.h0_setup.selfenergy.shape != ihelp.unique_angular.shape
+            self.h0_setup.numbers.shape != (nat,)
+            or self.h0_setup.selfenergy.shape != ihelp.unique_angular.shape
             or self.h0_setup.shpoly.shape != ihelp.unique_angular.shape
             or self.h0_setup.rad.shape != ihelp.ushells_per_unique.shape
             or self.h0_setup.valence.shape != ihelp.unique_angular.shape
@@ -1131,6 +1136,7 @@ class System:
         )
         token_valid = (
             token is not None
+            and self.numbers is token.numbers
             and backend_index is token.backend_index
             and es2_shells is token.es2_shells_to_atom
             and all(
@@ -1163,24 +1169,35 @@ class System:
                     ),
                 )
 
+        if token is not None and (
+            not torch.equal(
+                self.numbers,
+                token.numbers_snapshot.to(
+                    device=self.numbers.device, dtype=self.numbers.dtype
+                ),
+            )
+            or not torch.equal(
+                ihelp.unique_angular,
+                token.unique_angular_snapshot.to(
+                    device=ihelp.device, dtype=ihelp.unique_angular.dtype
+                ),
+            )
+            or not torch.equal(
+                ihelp.ushells_per_unique,
+                token.ushells_per_unique_snapshot.to(
+                    device=ihelp.device,
+                    dtype=ihelp.ushells_per_unique.dtype,
+                ),
+            )
+        ):
+            return False
+
         if (
-            token is not None
-            and self.numbers is token.tensor_states[0][0]
-            and self.numbers._version == token.tensor_states[0][1]
-            and (
-                not torch.equal(
-                    ihelp.unique_angular,
-                    token.unique_angular_snapshot.to(
-                        device=ihelp.device, dtype=ihelp.unique_angular.dtype
-                    ),
-                )
-                or not torch.equal(
-                    ihelp.ushells_per_unique,
-                    token.ushells_per_unique_snapshot.to(
-                        device=ihelp.device,
-                        dtype=ihelp.ushells_per_unique.dtype,
-                    ),
-                )
+            self.h0_setup is not None
+            and self.h0_setup.numbers.device == self.numbers.device
+            and not torch.equal(
+                self.numbers,
+                self.h0_setup.numbers.to(dtype=self.numbers.dtype),
             )
         ):
             return False

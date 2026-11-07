@@ -455,12 +455,13 @@ def _masked_scatter_reduce_1d(
         )
         return torch.where(counts > 0, reduced, torch.zeros_like(reduced))
     if reduce in ("amin", "amax"):
-        info = (
-            torch.finfo(x.dtype)
-            if x.is_floating_point()
-            else torch.iinfo(x.dtype)
-        )
-        identity = info.min if reduce == "amax" else info.max
+        if x.is_floating_point():
+            identity: float | int = (
+                -torch.inf if reduce == "amax" else torch.inf
+            )
+        else:
+            info = torch.iinfo(x.dtype)
+            identity = info.min if reduce == "amax" else info.max
         masked_x = torch.where(valid, x, torch.full_like(x, identity))
         reduced = scatter_reduce(
             masked_x,

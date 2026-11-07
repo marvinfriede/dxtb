@@ -276,6 +276,38 @@ def test_amax_and_amin_preserve_sign_for_all_negative_or_all_positive_buckets() 
     )
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_amax_and_amin_preserve_floating_infinities_and_integer_limits(
+    dtype: torch.dtype,
+) -> None:
+    """Floating-point amax/amin preserve -inf/+inf valid values while excluding padded entries."""
+    idx = torch.tensor([0, -1, -999, 1])
+    amax_vals = torch.tensor([-torch.inf, 999.0, 888.0, -4.0], dtype=dtype)
+    amin_vals = torch.tensor([torch.inf, -999.0, -888.0, 4.0], dtype=dtype)
+
+    amax_out = wrap_scatter_reduce(amax_vals, 0, idx, "amax", output_size=3)
+    amin_out = wrap_scatter_reduce(amin_vals, 0, idx, "amin", output_size=3)
+    assert torch.equal(
+        amax_out, torch.tensor([-torch.inf, -4.0, 0.0], dtype=dtype)
+    )
+    assert torch.equal(
+        amin_out, torch.tensor([torch.inf, 4.0, 0.0], dtype=dtype)
+    )
+
+    for int_dtype in (torch.int32, torch.int64):
+        int_neg = torch.tensor([-5, 999, -2, -8], dtype=int_dtype)
+        int_pos = torch.tensor([5, -999, 2, 8], dtype=int_dtype)
+        idx_int = torch.tensor([0, -1, 0, 1])
+        assert torch.equal(
+            wrap_scatter_reduce(int_neg, 0, idx_int, "amax", output_size=3),
+            torch.tensor([-2, -8, 0], dtype=int_dtype),
+        )
+        assert torch.equal(
+            wrap_scatter_reduce(int_pos, 0, idx_int, "amin", output_size=3),
+            torch.tensor([2, 8, 0], dtype=int_dtype),
+        )
+
+
 @pytest.mark.parametrize(
     ("reduce", "expected"),
     [
@@ -445,10 +477,13 @@ def test_indexhelper_node_transforms_vmap_jac_and_compile(
     torch.testing.assert_close(vmap_j_rev, vmap_j_fwd)
     torch.testing.assert_close(vmap_j_rev[1], j_rev_1)
 
-    # 3. torch.compile over unified IndexHelper(Node)
-    compiled_kernel = torch.compile(kernel, backend="aot_eager")
-    compiled_0 = compiled_kernel(ihelp_h2o, orb_batch[0])
-    compiled_1 = compiled_kernel(ihelp_h2, orb_batch[1])
-    torch.testing.assert_close(compiled_0, expected_0)
-    torch.testing.assert_close(compiled_1, expected_1)
+    # 3. torch.compile over unified IndexHelper(Node) (both aot_eager and default Inductor)
+    for compiled_kernel in (
+        torch.compile(kernel, backend="aot_eager"),
+        torch.compile(kernel),
+    ):
+        compiled_0 = compiled_kernel(ihelp_h2o, orb_batch[0])
+        compiled_1 = compiled_kernel(ihelp_h2, orb_batch[1])
+        torch.testing.assert_close(compiled_0, expected_0)
+        torch.testing.assert_close(compiled_1, expected_1)
 
