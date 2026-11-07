@@ -29,15 +29,18 @@ Covers:
 from __future__ import annotations
 
 import math
+from unittest.mock import patch
 
 import pytest
+import tblite.interface
 import torch
 
 from .molecules import SYSTEMS
 from .refdata import Tolerance
 from .tblite_live import (
-    DEFAULT_LIVE_TOLERANCES,
+    DEFAULT_CONVERGENCE_LIVE_TOLERANCES,
     EXPECTED_TBLITE_VERSION,
+    TIGHT_LIVE_TOLERANCES,
     assert_tblite_agrees,
     evaluate_dxtb_reference,
     get_tblite_version,
@@ -104,7 +107,7 @@ def test_gfn1_live_reference(name: str) -> None:
         structure=name,
         live=live,
         computed=computed,
-        tolerances=DEFAULT_LIVE_TOLERANCES,
+        tolerances=TIGHT_LIVE_TOLERANCES,
     )
 
 
@@ -122,7 +125,7 @@ def test_gfn1_live_reference(name: str) -> None:
     ],
 )
 def test_gfn2_live_reference(name: str) -> None:
-    """Compare GFN2-xTB energy, gradient, charges, and dipole against live tblite."""
+    """Compare GFN2-xTB energy, gradient, charges, and dipole against live tblite (tight SCF)."""
     sys = SYSTEMS[name]
     live = run_tblite_live(
         "GFN2-xTB",
@@ -146,7 +149,40 @@ def test_gfn2_live_reference(name: str) -> None:
         structure=name,
         live=live,
         computed=computed,
-        tolerances=DEFAULT_LIVE_TOLERANCES,
+        tolerances=TIGHT_LIVE_TOLERANCES,
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["H2O", "CH4", "glycine", "PbH4-BiH3"],
+)
+def test_gfn2_live_default_convergence(name: str) -> None:
+    """Compare GFN2-xTB at default SCF tolerance (x_atol=1e-4) against live tblite (accuracy=1.0)."""
+    sys = SYSTEMS[name]
+    live = run_tblite_live(
+        "GFN2-xTB",
+        sys.numbers,
+        sys.positions,
+        charge=sys.charge,
+        uhf=sys.spin,
+        accuracy=1.0,
+        max_iter=300,
+    )
+    computed = evaluate_dxtb_reference(
+        "gfn2",
+        sys.numbers,
+        sys.positions,
+        charge=sys.charge,
+        spin=sys.spin,
+        x_atol=1.0e-4,
+    )
+    assert_tblite_agrees(
+        method="GFN2-xTB[default_scf]",
+        structure=name,
+        live=live,
+        computed=computed,
+        tolerances=DEFAULT_CONVERGENCE_LIVE_TOLERANCES,
     )
 
 
@@ -215,14 +251,14 @@ def test_gfn2_live_rotational_invariance_and_agreement(
         structure=f"{name}-orig",
         live=live_orig,
         computed=dxtb_orig,
-        tolerances=DEFAULT_LIVE_TOLERANCES,
+        tolerances=TIGHT_LIVE_TOLERANCES,
     )
     assert_tblite_agrees(
         method=f"GFN2-xTB[{scp_mode}]",
         structure=f"{name}-rotated",
         live=live_rot,
         computed=dxtb_rot,
-        tolerances=DEFAULT_LIVE_TOLERANCES,
+        tolerances=TIGHT_LIVE_TOLERANCES,
     )
 
     # Verify dxtb rotational invariance between original and rotated frames.
@@ -276,3 +312,22 @@ def test_tblite_live_failure_reporting() -> None:
     assert "tblite[energy]" in msg
     assert "max_abs=" in msg
     assert "max_rel=" in msg
+
+
+def test_tblite_live_executes_singlepoint_dynamically() -> None:
+    """Confirm each live call invokes tblite.interface.Calculator.singlepoint() dynamically."""
+    sys = SYSTEMS["H2O"]
+    orig_singlepoint = tblite.interface.Calculator.singlepoint
+    with patch.object(
+        tblite.interface.Calculator,
+        "singlepoint",
+        autospec=True,
+        side_effect=orig_singlepoint,
+    ) as spy_singlepoint:
+        res_eq = run_tblite_live("GFN2-xTB", sys.numbers, sys.positions)
+        stretched_pos = sys.positions.clone()
+        stretched_pos[1, 0] += 0.15
+        res_stretched = run_tblite_live("GFN2-xTB", sys.numbers, stretched_pos)
+
+    assert spy_singlepoint.call_count == 2
+    assert abs(res_stretched.energy - res_eq.energy) > 1.0e-4

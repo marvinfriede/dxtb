@@ -47,6 +47,7 @@ from dxtb._src.scf.functional import (
     ChargeLayout,
     PotentialLayout,
     SCFCharges,
+    SCFConvergence,
     SCFPotential,
     pack_charges,
     pack_potential,
@@ -364,6 +365,385 @@ def test_quadrupole_packing_gradients_and_transforms() -> None:
     )
 
 
+def test_quadrupole_dual_pairing_and_derivatives() -> None:
+    """Verify dual pairing <V_packed, q_packed> = <V_phys, q_phys> and its derivatives."""
+    c_layout = ChargeLayout(
+        mono_shape=(5,), dipole_shape=(3, 3), quadrupole_shape=(3, 6)
+    )
+    p_layout = PotentialLayout(
+        mono_shape=(5,), dipole_shape=(3, 3), quadrupole_shape=(3, 6)
+    )
+
+    q_mono = torch.tensor(
+        [0.18, -0.31, 0.09, -0.14, 0.22],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+    q_dip = torch.tensor(
+        [
+            [0.24, -0.17, 0.11],
+            [-0.19, 0.33, -0.28],
+            [0.07, -0.12, 0.41],
+        ],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+    q_quad = torch.tensor(
+        [
+            [0.42, -0.19, -0.15, 0.31, -0.27, -0.27],
+            [-0.11, 0.08, 0.29, -0.14, 0.22, -0.18],
+            [0.05, -0.33, -0.02, 0.17, 0.12, -0.03],
+        ],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+    v_mono = torch.tensor(
+        [-0.27, 0.44, -0.15, 0.36, -0.08],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+    v_dip = torch.tensor(
+        [
+            [-0.35, 0.21, -0.16],
+            [0.14, -0.29, 0.38],
+            [-0.22, 0.18, -0.11],
+        ],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+    v_quad = torch.tensor(
+        [
+            [-0.21, 0.28, 0.14, -0.16, 0.38, 0.07],
+            [0.19, -0.24, -0.09, 0.42, -0.18, -0.10],
+            [-0.31, 0.14, 0.22, -0.26, -0.08, 0.09],
+        ],
+        dtype=DTYPE,
+        device=DEVICE,
+        requires_grad=True,
+    )
+
+    def packed_pairing(
+        qm: torch.Tensor,
+        qd: torch.Tensor,
+        qq: torch.Tensor,
+        vm: torch.Tensor,
+        vd: torch.Tensor,
+        vq: torch.Tensor,
+    ) -> torch.Tensor:
+        pc = pack_charges(SCFCharges(mono=qm, dipole=qd, quad=qq), c_layout)
+        pv = pack_potential(SCFPotential(mono=vm, dipole=vd, quad=vq), p_layout)
+        # Sum over active columns of each row (excluding PADNZ tails).
+        return (
+            (pc[0, :5] * pv[0, :5]).sum()
+            + (pc[1, :9] * pv[1, :9]).sum()
+            + (pc[2, :18] * pv[2, :18]).sum()
+        )
+
+    def physical_pairing(
+        qm: torch.Tensor,
+        qd: torch.Tensor,
+        qq: torch.Tensor,
+        vm: torch.Tensor,
+        vd: torch.Tensor,
+        vq: torch.Tensor,
+    ) -> torch.Tensor:
+        return (qm * vm).sum() + (qd * vd).sum() + (qq * vq).sum()
+
+    e_packed = packed_pairing(q_mono, q_dip, q_quad, v_mono, v_dip, v_quad)
+    e_phys = physical_pairing(q_mono, q_dip, q_quad, v_mono, v_dip, v_quad)
+    torch.testing.assert_close(e_packed, e_phys, atol=1.0e-15, rtol=1.0e-15)
+
+    grads_packed = torch.autograd.grad(
+        e_packed,
+        (q_mono, q_dip, q_quad, v_mono, v_dip, v_quad),
+        create_graph=True,
+    )
+    grads_phys = torch.autograd.grad(
+        e_phys,
+        (q_mono, q_dip, q_quad, v_mono, v_dip, v_quad),
+        create_graph=True,
+    )
+    for gp, gr in zip(grads_packed, grads_phys):
+        torch.testing.assert_close(gp, gr, atol=1.0e-15, rtol=1.0e-15)
+
+    # Mixed second derivative d^2 <V, q> / (d q_quad d v_quad) must be identity.
+    cross_hess = jacrev(
+        grad(
+            lambda qq, vq: packed_pairing(
+                q_mono.detach(),
+                q_dip.detach(),
+                qq,
+                v_mono.detach(),
+                v_dip.detach(),
+                vq,
+            ),
+            argnums=0,
+        ),
+        argnums=1,
+    )(q_quad.detach(), v_quad.detach())
+    torch.testing.assert_close(
+        cross_hess.reshape(18, 18),
+        torch.eye(18, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+
+
+def test_quadrupole_45deg_z_rotation_l2_vs_max_abs() -> None:
+    """Demonstrate that 45-deg z-rotation preserves Frobenius L2 but changes max_abs from 1 to sqrt(2)."""
+    c_layout = ChargeLayout(
+        mono_shape=(1,), dipole_shape=(1, 3), quadrupole_shape=(1, 6)
+    )
+    p_layout = PotentialLayout(
+        mono_shape=(1,), dipole_shape=(1, 3), quadrupole_shape=(1, 6)
+    )
+    mono = torch.zeros(1, dtype=DTYPE, device=DEVICE)
+    zero_dip = torch.zeros((1, 3), dtype=DTYPE, device=DEVICE)
+
+    # Q = diag(1, -1, 0) -> [xx, xy, yy, xz, yz, zz] = [1, 0, -1, 0, 0, 0]
+    q_0 = torch.tensor(
+        [[1.0, 0.0, -1.0, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+    )
+    q_0_full = _packed_quad_to_full_3x3(q_0)
+
+    # Rotate by 45 degrees (pi / 4) around the z-axis: Q' = R_z(pi/4) Q R_z(pi/4)^T
+    angle = math.pi / 4.0
+    c, s = math.cos(angle), math.sin(angle)
+    rot_z45 = torch.tensor(
+        [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+    q_45_full = rot_z45 @ q_0_full[0] @ rot_z45.T
+    q_45 = _full_3x3_to_packed_quad(q_45_full.unsqueeze(0))
+
+    # In physical components, Q_45 has xy = 1 and all diagonal entries 0.
+    torch.testing.assert_close(
+        q_45,
+        torch.tensor(
+            [[0.0, 1.0, 0.0, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+        ),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+
+    packed_c_0 = pack_charges(
+        SCFCharges(mono=mono, dipole=zero_dip, quad=q_0), c_layout
+    )[2, :6]
+    packed_c_45 = pack_charges(
+        SCFCharges(mono=mono, dipole=zero_dip, quad=q_45), c_layout
+    )[2, :6]
+
+    sqrt2 = math.sqrt(2.0)
+    # Euclidean (Frobenius) norm is sqrt(2) in both orientations.
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_c_0),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_c_45),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    # Componentwise max_abs changes from 1.0 at 0 deg to sqrt(2) at 45 deg.
+    torch.testing.assert_close(
+        packed_c_0.abs().amax(),
+        torch.tensor(1.0, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        packed_c_45.abs().amax(),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+
+    # Potential quadrupoles (where off-diagonal physical components carry factor 2,
+    # so V_45 has V_xy = 2.0) exhibit the exact same packed behavior.
+    v_0 = torch.tensor(
+        [[1.0, 0.0, -1.0, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+    )
+    v_45 = torch.tensor(
+        [[0.0, 2.0, 0.0, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+    )
+    packed_p_0 = pack_potential(
+        SCFPotential(mono=mono, dipole=zero_dip, quad=v_0), p_layout
+    )[2, :6]
+    packed_p_45 = pack_potential(
+        SCFPotential(mono=mono, dipole=zero_dip, quad=v_45), p_layout
+    )[2, :6]
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_p_0),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_p_45),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        packed_p_0.abs().amax(),
+        torch.tensor(1.0, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        packed_p_45.abs().amax(),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+
+
+def test_dipole_rotation_l2_vs_max_abs() -> None:
+    """Demonstrate that dipole rotation preserves L2 norm but changes max_abs by up to sqrt(2) (2D) or sqrt(3) (3D)."""
+    c_layout = ChargeLayout(mono_shape=(1,), dipole_shape=(1, 3))
+    mono = torch.zeros(1, dtype=DTYPE, device=DEVICE)
+
+    # 2D rotation by -45 deg around z: mu = (1, 1, 0) -> (sqrt(2), 0, 0)
+    dip_0 = torch.tensor([[1.0, 1.0, 0.0]], dtype=DTYPE, device=DEVICE)
+    angle = -math.pi / 4.0
+    c, s = math.cos(angle), math.sin(angle)
+    rot_z = torch.tensor(
+        [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+    dip_45 = dip_0 @ rot_z.T
+
+    packed_0 = pack_charges(SCFCharges(mono=mono, dipole=dip_0), c_layout)[
+        1, :3
+    ]
+    packed_45 = pack_charges(SCFCharges(mono=mono, dipole=dip_45), c_layout)[
+        1, :3
+    ]
+    sqrt2 = math.sqrt(2.0)
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_0),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        torch.linalg.vector_norm(packed_45),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        packed_0.abs().amax(),
+        torch.tensor(1.0, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+    torch.testing.assert_close(
+        packed_45.abs().amax(),
+        torch.tensor(sqrt2, dtype=DTYPE, device=DEVICE),
+        atol=1.0e-15,
+        rtol=1.0e-15,
+    )
+
+
+def test_scf_convergence_stopping_predicate_near_max_abs_boundary() -> None:
+    """Exercise SCFConvergence stopping predicate and H2O SCF trajectory near the x_atol_max boundary."""
+    # 1. Direct stopping-predicate boundary test for quadrupole and dipole residuals.
+    c_layout = ChargeLayout(
+        mono_shape=(1,), dipole_shape=(1, 3), quadrupole_shape=(1, 6)
+    )
+    mono = torch.zeros(1, dtype=DTYPE, device=DEVICE)
+    zero_dip = torch.zeros((1, 3), dtype=DTYPE, device=DEVICE)
+
+    q_0 = torch.tensor(
+        [[1.0e-5, 0.0, -1.0e-5, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+    )
+    q_45 = torch.tensor(
+        [[0.0, 1.0e-5, 0.0, 0.0, 0.0, 0.0]], dtype=DTYPE, device=DEVICE
+    )
+    delta_0 = pack_charges(
+        SCFCharges(mono=mono, dipole=zero_dip, quad=q_0), c_layout
+    )
+    delta_45 = pack_charges(
+        SCFCharges(mono=mono, dipole=zero_dip, quad=q_45), c_layout
+    )
+    # Zero out PADNZ tails as project_residual does.
+    delta_0[:, 1:] = torch.where(
+        delta_0[:, 1:] == defaults.PADNZ, 0.0, delta_0[:, 1:]
+    )
+    delta_45[:, 1:] = torch.where(
+        delta_45[:, 1:] == defaults.PADNZ, 0.0, delta_45[:, 1:]
+    )
+
+    res_0 = SCFConvergence.residual(delta_0)
+    res_45 = SCFConvergence.residual(delta_45)
+    # Both orientations have identical L2 norm = sqrt(2) * 1e-5 < x_atol = 1e-4,
+    # but max_abs is 1.0e-5 at 0 deg vs sqrt(2) * 1e-5 at 45 deg.
+    criterion = SCFConvergence(x_atol=1.0e-4, x_atol_max=1.2e-5)
+    assert bool(res_0.l2 < criterion.x_atol) and bool(
+        res_45.l2 < criterion.x_atol
+    )
+    assert bool(criterion.converged(res_0)) is True
+    assert bool(criterion.converged(res_45)) is False
+
+    # 2. Real SCF trajectory boundary on H2O (potential mode, Broyden, x_atol=1e-4, x_atol_max=1e-5):
+    # At step 13 (iterations=14), L2 is 1.7436e-5 (< 1e-4) in both orientations,
+    # while the oxygen dipole potential residual has Euclidean norm 1.3003e-5:
+    # - In the axis-aligned original frame, max_abs = 1.3003e-5 > 1e-5 -> continues to iteration 15.
+    # - In the rotated frame, max_abs = 8.5076e-6 < 1e-5 -> stops at iteration 14.
+    # Meanwhile, a multipole-block invariant maximum norm (scalar Row 0, Euclidean Row 1,
+    # Frobenius Row 2) is identical to ~1e-16 across both orientations at every step.
+    sys = SYSTEMS["H2O"]
+    rot = _rotation_matrix(device=sys.positions.device)
+    opts = {
+        "int_driver": "pytorch",
+        "scf_mode": "full",
+        "scp_mode": "potential",
+        "mixer": "broyden",
+        "x_atol": 1.0e-4,
+        "x_atol_max": 1.0e-5,
+        "maxiter": 50,
+        "verbosity": 0,
+    }
+    dd = {"device": sys.positions.device, "dtype": DTYPE}
+    c_orig = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
+    r_orig = c_orig.singlepoint(sys.positions, chrg=sys.charge, spin=sys.spin)
+    c_rot = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
+    r_rot = c_rot.singlepoint(
+        sys.positions @ rot.T, chrg=sys.charge, spin=sys.spin
+    )
+    assert int(r_orig.iterations.item()) == 15
+    assert int(r_rot.iterations.item()) == 14
+
+    # When evaluated at a matched iteration budget (e.g. 14 iterations),
+    # the unrotated and rotated energies agree to machine precision (~1e-15).
+    opts_fixed14 = {
+        **opts,
+        "maxiter": 14,
+        "x_atol": 1.0e-16,
+        "x_atol_max": 1.0e-16,
+    }
+    cf_orig = Calculator(sys.numbers, GFN2_XTB, opts=opts_fixed14, **dd)
+    rf_orig = cf_orig.singlepoint(sys.positions, chrg=sys.charge, spin=sys.spin)
+    cf_rot = Calculator(sys.numbers, GFN2_XTB, opts=opts_fixed14, **dd)
+    rf_rot = cf_rot.singlepoint(
+        sys.positions @ rot.T, chrg=sys.charge, spin=sys.spin
+    )
+    torch.testing.assert_close(
+        rf_rot.total, rf_orig.total, atol=1.0e-15, rtol=1.0e-15
+    )
+
+
 # ============================================================================
 # 1.6 B: Rotational invariance tests
 # ============================================================================
@@ -588,6 +968,81 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
         sys.positions.detach().clone() @ rot.T
     )
     torch.testing.assert_close(q_rot, q_orig, atol=1.0e-14, rtol=1.0e-14)
+
+
+def test_charge_mode_quadrupole_weighting_strictly_improves_invariance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirm sqrt(2) quadrupole weighting improves charge-mode invariance and never worsens the orbital-anisotropy baseline."""
+    import dxtb._src.scf.functional.data as scf_data
+
+    def _measure_rot_and_torque(name: str) -> tuple[float, float, float]:
+        sys = SYSTEMS[name]
+        rot = _rotation_matrix(device=sys.positions.device)
+        dd = {"device": sys.positions.device, "dtype": DTYPE}
+        opts = {
+            "int_driver": "pytorch",
+            "scf_mode": "full",
+            "scp_mode": "charge",
+            "mixer": "broyden",
+            "x_atol": 1.0e-4,
+            "x_atol_max": 1.0e-5,
+            "verbosity": 0,
+        }
+        r1 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd).singlepoint(
+            sys.positions, chrg=sys.charge, spin=sys.spin
+        )
+        r2 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd).singlepoint(
+            sys.positions @ rot.T, chrg=sys.charge, spin=sys.spin
+        )
+        energy_diff = float((r2.total - r1.total).abs().max().item())
+
+        p1 = sys.positions.detach().clone().requires_grad_(True)
+        c1 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
+        e1 = c1.singlepoint(p1, chrg=sys.charge, spin=sys.spin).total.sum(-1)
+        (g1,) = torch.autograd.grad(e1, p1)
+
+        p2 = (sys.positions.detach().clone() @ rot.T).requires_grad_(True)
+        c2 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
+        e2 = c2.singlepoint(p2, chrg=sys.charge, spin=sys.spin).total.sum(-1)
+        (g2,) = torch.autograd.grad(e2, p2)
+
+        grad_diff = float((g2 @ rot - g1).abs().max().item())
+        torque_norm = max(
+            float(
+                torch.linalg.vector_norm(
+                    _compute_torque(p1.detach(), g1.detach())
+                ).item()
+            ),
+            float(
+                torch.linalg.vector_norm(
+                    _compute_torque(p2.detach(), g2.detach())
+                ).item()
+            ),
+        )
+        return energy_diff, grad_diff, torque_norm
+
+    w_gly_de, w_gly_g, w_gly_tau = _measure_rot_and_torque("glycine")
+    w_pb_de, w_pb_g, w_pb_tau = _measure_rot_and_torque("PbH4-BiH3")
+
+    # Temporarily disable off-diagonal sqrt(2) weighting to measure pre-WP1 behavior.
+    monkeypatch.setattr(
+        scf_data, "_QUAD_WEIGHT_FACTORS", (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    )
+    _, _, u_gly_tau = _measure_rot_and_torque("glycine")
+    u_pb_de, u_pb_g, u_pb_tau = _measure_rot_and_torque("PbH4-BiH3")
+
+    # On PbH4-BiH3, sqrt(2) quadrupole weighting eliminates the 1-iteration
+    # stopping discrepancy and reduces energy/gradient/torque errors by >20x-1000x.
+    assert w_pb_de < u_pb_de * 0.01
+    assert w_pb_g < u_pb_g * 0.05
+    assert w_pb_tau < u_pb_tau * 0.05
+
+    # On glycine, sqrt(2) quadrupole weighting strictly reduces net torque while
+    # keeping gradients within the ~1e-11 AO-population anisotropy regime.
+    assert w_gly_tau < u_gly_tau
+    assert w_gly_g < 5.0e-11
+    assert w_gly_de < 1.0e-5
 
 
 # ============================================================================

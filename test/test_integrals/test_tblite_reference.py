@@ -29,6 +29,7 @@ tested in ``test_pytorch_gfn2.py``.
 from __future__ import annotations
 
 import pytest
+import tblite.interface as tblite
 import torch
 
 import dxtb
@@ -36,8 +37,6 @@ from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
 from .samples import samples
-
-tblite = pytest.importorskip("tblite.interface")
 
 ALGOS = ["md", "os"]
 
@@ -156,4 +155,4 @@ def test_quadrupole_matches_tblite(
         expected[offdiag] - quad[offdiag], 1.5 * off, atol=1e-7, rtol=0.0
     )
     # traceless
-    assert abs(float(quad[0] + quad[2] + quad[5])) < 1e-10
+    assert abs(float((quad[0] + quad[2] + quad[5]).detach().item())) < 1e-10

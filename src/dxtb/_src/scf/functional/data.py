@@ -480,7 +480,17 @@ def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:
 
 
 def pack_charges(charges: SCFCharges, layout: ChargeLayout) -> Tensor:
-    """Pack fixed-shape charges using the legacy PADNZ row convention."""
+    """Pack fixed-shape charges using the legacy PADNZ row convention.
+
+    Off-diagonal quadrupole components ``[1, 3, 4]`` (``xy``, ``xz``, ``yz``)
+    are weighted by ``sqrt(2)`` so the packed quadrupole row carries the
+    :math:`\\mathrm{SO}(3)`-invariant Frobenius metric. Row 0 stores the
+    orbital-resolved Mulliken populations ``charges.mono`` without shell
+    averaging so the physical charge-mode fixed-point problem is unchanged
+    (note that individual :math:`p`/:math:`d` orbital populations are not
+    rotational scalars, unlike the shell-isotropic monopole potential in
+    :func:`pack_potential`).
+    """
     values: list[Tensor] = [charges.mono.reshape(-1)]
     if layout.dipole_shape is not None:
         if charges.dipole is None:

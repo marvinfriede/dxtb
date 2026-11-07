@@ -42,7 +42,28 @@ class SCFResidual:
 
 @dataclass(frozen=True, eq=False)
 class SCFConvergence:
-    """Existing two-norm stopping predicate, exposed as an S1 boundary."""
+    """Existing two-norm stopping predicate, exposed as an S1 boundary.
+
+    Notes
+    -----
+    In ``scp_mode="potential"`` with ``sqrt(2)`` off-diagonal quadrupole
+    weighting, ``residual.l2`` is strictly invariant under :math:`\\mathrm{SO}(3)`
+    rotations because shell monopole potentials are rotational scalars,
+    Cartesian dipoles carry the Euclidean norm, and weighted packed quadrupoles
+    carry the Frobenius norm.
+
+    By contrast, ``residual.max_abs`` (``delta.abs().amax()``) is a
+    coordinate-axis-dependent :math:`\\ell_\\infty` component norm: rotating a
+    3D dipole residual can change its largest Cartesian component by up to a
+    factor of :math:`\\sqrt{3}`, and rotating a traceless quadrupole residual
+    in a 2D plane can change its largest orthonormal component by up to a
+    factor of :math:`\\sqrt{2}` (:math:`\\sqrt{6}` in 3D). Consequently, while
+    every fixed-iteration state and mixer step in potential mode is
+    rotationally equivariant to machine precision, ``x_atol_max`` can cause two
+    orientations to stop one iteration apart when ``l2 < x_atol`` is already
+    satisfied and the dominant multipole residual lies within that geometric
+    factor of ``x_atol_max``.
+    """
 
     x_atol: float
     x_atol_max: float
