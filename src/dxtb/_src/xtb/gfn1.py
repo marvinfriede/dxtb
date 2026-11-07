@@ -24,7 +24,6 @@ The GFN1-xTB Hamiltonian.
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 
 import torch
 from tad_mctc import storch
@@ -70,9 +69,9 @@ class GFN1Hamiltonian(BaseHamiltonian):
         # coordination number function
         if self.cn is None and not (has_custom_cn and cn is None):
             # pylint: disable=import-outside-toplevel
-            from dxtb._src.ncoord import cn_d3, exp_count
+            from tad_mctc.ncoord import cn_d3
 
-            self.cn = partial(cn_d3, counting_function=exp_count)
+            self.cn = cn_d3
 
     def _get_hscale(self, par: ParamModule) -> Tensor:
         if par.is_none("hamiltonian"):

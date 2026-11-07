@@ -27,6 +27,7 @@ import pytest
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data import radii
+from tad_mctc.ncoord import cn_d4
 
 from dxtb._src.components.classicals.dispersion import (
     DispersionD4,
@@ -34,7 +35,6 @@ from dxtb._src.components.classicals.dispersion import (
     new_dispersion,
 )
 from dxtb._src.param.gfn2 import GFN2_XTB
-from dxtb._src.ncoord import cn_d4
 from dxtb._src.scf.guess import get_eeq_guess
 from dxtb._src.typing import DD, Tensor
 

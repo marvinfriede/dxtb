@@ -29,12 +29,11 @@ from typing import Any
 import torch
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import radii
-from tad_mctc.ncoord import erf_count
+from tad_mctc.ncoord import cn_d4, erf_count
 from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import CountingFunction, Tensor, override
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import cn_d4
 from dxtb._src.scf.guess import get_eeq_guess
 
 from ..base import ClassicalCache

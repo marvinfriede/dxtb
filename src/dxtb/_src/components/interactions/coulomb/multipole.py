@@ -141,9 +141,15 @@ def build_aes2_data(
     if positions.dtype != setup.dmp3.dtype:
         raise RuntimeError("AES2 setup and positions must share a dtype.")
 
-    from dxtb._src.ncoord import cn_d3, gfn2_count
+    from tad_mctc import Structure
+    from tad_mctc.ncoord import cn_gfn2
 
-    cn = cn_d3(setup.numbers, positions, counting_function=gfn2_count)
+    cn = cn_gfn2(
+        Structure(
+            numbers=setup.numbers.expand(positions.shape[:-1]),
+            positions=positions,
+        )
+    )
     t1 = torch.exp(-setup.kexp * (cn - setup.vcn - setup.shift))
     t2 = (setup.rmax - setup.rad) / (1.0 + t1)
     mrad = setup.rad + t2

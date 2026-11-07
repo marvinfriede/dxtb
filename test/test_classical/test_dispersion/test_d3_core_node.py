@@ -7,6 +7,7 @@ import warnings
 import pytest
 import tad_dftd as d3
 import torch
+from tad_mctc.ncoord import exp_count
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
@@ -24,7 +25,6 @@ from dxtb._src.components.classicals.dispersion import (
     new_dispersion,
 )
 from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
-from dxtb._src.ncoord import exp_count
 from dxtb._src.param import ParamModule
 
 from .samples import samples

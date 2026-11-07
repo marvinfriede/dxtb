@@ -36,7 +36,7 @@ from dxtb import (
     ParamModule,
     labels,
 )
-from dxtb._src.ncoord import cn_d3, exp_count, gfn2_count
+from tad_mctc.ncoord import cn_d3, cn_gfn2, exp_count, gfn2_count
 from dxtb._src.xtb import h0 as h0_module
 from dxtb._src.xtb.h0 import (
     H0IndexNode,
@@ -482,14 +482,14 @@ def test_h0_legacy_custom_callables_remain_supported_and_conversion_rejects() ->
 
     wrong_count = replace(
         legacy,
-        cn=partial(cn_d3, counting_function=gfn2_count),
+        cn=cn_gfn2,
     )
     with pytest.raises(TypeError, match="built-in GFN1 CN strategy"):
         core_h0_setup(wrong_count)
 
     extra_argument = replace(
         legacy,
-        cn=partial(cn_d3, positions, counting_function=exp_count),
+        cn=cn_d3.replace(cutoff=10.0),
     )
     with pytest.raises(TypeError, match="built-in GFN1 CN strategy"):
         core_h0_setup(extra_argument)
@@ -548,3 +548,4 @@ def test_gfn0_missing_charge_keeps_legacy_error() -> None:
         build_hcore(legacy, positions, overlap)
     with pytest.raises(ValueError, match="charge is required"):
         build_hcore(core, positions, overlap)
+

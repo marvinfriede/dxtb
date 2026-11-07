@@ -28,9 +28,10 @@ from tad_mctc.units import EV2AU
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import (
+from tad_mctc.ncoord import (
+    CNModel,
     cn_d3,
-    coordination_number,
+    cn_gfn2,
     erf_count,
     exp_count,
     gfn2_count,
@@ -60,7 +61,7 @@ class H0Setup:
     en: Tensor
     enscale: Tensor
     rad: Tensor
-    cn: Callable[[Tensor, Tensor], Tensor] | None = None
+    cn: CNModel | Callable[[Tensor, Tensor], Tensor] | None = None
     kq: Tensor | None = None
     kqat: Tensor | None = None
     h0rad: Tensor | None = None
@@ -210,12 +211,12 @@ class H0SetupNode(Node):
         return self.index
 
     @property
-    def cn(self) -> Callable[[Tensor, Tensor], Tensor] | None:
-        """Create the validated stateless built-in CN callable locally."""
+    def cn(self) -> CNModel | None:
+        """Create the validated stateless built-in CN model locally."""
         if self.cn_kind == "cn_d3(exp_count)":
-            return partial(cn_d3, counting_function=exp_count)
+            return cn_d3
         if self.cn_kind == "cn_d3(gfn2_count)":
-            return partial(cn_d3, counting_function=gfn2_count)
+            return cn_gfn2
         if self.cn_kind == "erf_count":
             return None
         raise RuntimeError(
@@ -233,29 +234,50 @@ def _h0_cn_kind(setup: H0Setup) -> str:
         return "erf_count"
 
     expected = {
-        "gfn1": ("cn_d3(exp_count)", exp_count),
-        "gfn2": ("cn_d3(gfn2_count)", gfn2_count),
+        "gfn1": ("cn_d3(exp_count)", cn_d3, exp_count),
+        "gfn2": ("cn_d3(gfn2_count)", cn_gfn2, gfn2_count),
     }
     if setup.method not in expected:
         raise TypeError(
             f"Unsupported H0 method '{setup.method}' for Node conversion."
         )
 
-    kind, counting_function = expected[setup.method]
+    kind, expected_model, counting_function = expected[setup.method]
     function = setup.cn
-    if not isinstance(function, partial):
-        raise TypeError(
-            f"H0 Node conversion does not support custom {setup.method.upper()} CN callables."
+    if function is expected_model:
+        return kind
+    if isinstance(function, CNModel):
+        count_func = (
+            function.count.func
+            if isinstance(function.count, partial)
+            else function.count
         )
-    if (
-        function.func is not cn_d3
-        or function.args
-        or function.keywords != {"counting_function": counting_function}
-    ):
+        count_keywords = (
+            function.count.keywords
+            if isinstance(function.count, partial)
+            else {}
+        )
+        expected_keywords = (
+            expected_model.count.keywords
+            if isinstance(expected_model.count, partial)
+            else {}
+        )
+        if (
+            count_func is counting_function
+            and count_keywords == expected_keywords
+            and function.cutoff == expected_model.cutoff
+            and function.cn_max == expected_model.cn_max
+            and function.rcov is expected_model.rcov
+            and function.en is expected_model.en
+            and function.pair_weight is expected_model.pair_weight
+        ):
+            return kind
         raise TypeError(
             f"H0 Node conversion requires the built-in {setup.method.upper()} CN strategy."
         )
-    return kind
+    raise TypeError(
+        f"H0 Node conversion does not support custom {setup.method.upper()} CN callables."
+    )
 
 
 def core_h0_setup(setup: H0Setup) -> H0SetupNode:
@@ -433,7 +455,7 @@ def setup_h0(
     *,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
-    cn: Callable[[Tensor, Tensor], Tensor] | None = None,
+    cn: CNModel | Callable[[Tensor, Tensor], Tensor] | None = None,
 ) -> H0Setup:
     """Gather all composition-dependent data needed to build H0."""
     if device is not None and (
@@ -484,9 +506,9 @@ def setup_h0(
 
     cn_function = cn
     if name == "gfn1" and cn_function is None:
-        cn_function = partial(cn_d3, counting_function=exp_count)
+        cn_function = cn_d3
     if name == "gfn2" and cn_function is None:
-        cn_function = partial(cn_d3, counting_function=gfn2_count)
+        cn_function = cn_gfn2
 
     extras: dict[str, object] = {}
     if name == "gfn0":
@@ -517,7 +539,7 @@ def setup_h0(
             "enshell": par.get("hamiltonian.xtb.enshell"),
             "enscale4": par.get("hamiltonian.xtb.enscale4"),
             "eeq_model": eeq,
-            "cn_radii": radii.COV_D3(**dd)[numbers],
+            "cn_radii": radii.COV_D3(**dd),
             "cn_cutoff": par.get("eeq.cutoff"),
             "cn_max": par.get("eeq.cn_max"),
             "cn_kcn": par.get("eeq.kcn"),
@@ -577,23 +599,22 @@ def _build_hcore(
         assert setup.cn_radii is not None and setup.cn_cutoff is not None
         assert setup.cn_max is not None and setup.cn_kcn is not None
         assert setup.eeq_model is not None
-        cn = coordination_number(
-            setup.numbers,
-            positions,
-            counting_function=erf_count,
-            rcov=setup.cn_radii,
-            cutoff=setup.cn_cutoff,
-            cn_max=setup.cn_max,
-            kcn=setup.cn_kcn,
-        )
         total_charge = any_to_tensor(
             charge, device=positions.device, dtype=positions.dtype
         )
+        numbers = setup.numbers.expand(positions.shape[:-1])
         structure = Structure(
-            numbers=setup.numbers,
+            numbers=numbers,
             positions=positions,
-            charge=structure_charge(total_charge, setup.numbers),
+            charge=structure_charge(total_charge, numbers),
         )
+        cn_model = CNModel(
+            count=partial(erf_count, kcn=setup.cn_kcn),
+            cutoff=float(setup.cn_cutoff.detach()),
+            cn_max=setup.cn_max,
+            rcov=setup.cn_radii,
+        )
+        cn = cn_model(structure)
         charges = setup.eeq_model.solve(structure, cn)
         assert isinstance(charges, Tensor)
         eps0 = ihelp.spread_ushell_to_shell(setup.selfenergy)
@@ -653,6 +674,13 @@ def _build_hcore(
     if setup.cn is None:
         cn = torch.zeros_like(
             setup.numbers, device=positions.device, dtype=positions.dtype
+        )
+    elif isinstance(setup.cn, CNModel):
+        cn = setup.cn(
+            Structure(
+                numbers=setup.numbers.expand(positions.shape[:-1]),
+                positions=positions,
+            )
         )
     else:
         cn = setup.cn(setup.numbers, positions)

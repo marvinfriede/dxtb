@@ -57,10 +57,10 @@ from dxtb._src.components.interactions.dispersion.d4sc import D4SCCoreSetup
 from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlanNode
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
-from dxtb._src.ncoord import erf_count, exp_count, gfn2_count
 from dxtb._src.scf.functional.core import CoreIndexData
 from dxtb._src.typing import Tensor
 from dxtb._src.xtb.h0 import H0IndexNode
+from tad_mctc.ncoord import erf_count, exp_count, gfn2_count
 
 __all__ = [
     "CoreBucket",

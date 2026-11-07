@@ -295,3 +295,26 @@ def test_es2_es3_do_not_retain_persistent_call_data() -> None:
     )
     found = [token for token in removed_apis if token in interaction_list]
     assert not found, "ES2/ES3 mutation API returned: " + ", ".join(found)
+
+
+def test_no_legacy_ncoord_subpackage() -> None:
+    """The legacy dxtb._src.ncoord compatibility layer is completely removed."""
+    ncoord_dir = SRC / "_src" / "ncoord"
+    assert not ncoord_dir.exists(), f"{ncoord_dir} must not exist"
+
+    forbidden = (
+        "dxtb._src.ncoord",
+        "cn_d3_gradient",
+        "coordination_number_grad",
+        "def get_dcn(",
+    )
+    offenders = [
+        f"{path.relative_to(SRC.parent)}:{token}"
+        for path in SRC.rglob("*.py")
+        for text in (path.read_text(),)
+        for token in forbidden
+        if token in text
+    ]
+    assert not offenders, "Legacy ncoord references returned: " + ", ".join(
+        offenders
+    )

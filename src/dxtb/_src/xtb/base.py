@@ -23,13 +23,16 @@ Base class for xTB Hamiltonians.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
+from tad_mctc.ncoord import CNModel
 from tad_mctc.typing import PathLike, Tensor, TensorLike
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import CNFunc
+from dxtb._src.typing import Callable, Self, override
 from dxtb._src.xtb.h0 import (
     H0Setup,
     build_hcore,
@@ -87,8 +90,8 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
     rad: Tensor
     """Van-der-Waals radius of each species."""
 
-    cn: CNFunc | None
-    """Coordination number function."""
+    cn: CNModel | Callable[[Tensor, Tensor], Tensor] | None
+    """Coordination number model or callable."""
 
     __slots__ = [
         "numbers",
@@ -293,3 +296,16 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
             h0, _ = build_hcore(self.setup, positions, overlap, charge)
         self.matrix = h0
         return h0
+
+    @override
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        obj = super().to(device=device, dtype=dtype)
+        if device is not None:
+            obj.ihelp = self.ihelp.to(device=obj.device)
+            if obj.setup is not None:
+                obj.setup = replace(obj.setup, ihelp=obj.ihelp)
+        return obj

@@ -36,6 +36,7 @@ from tad_dftd.model.d4 import (
 from tad_dftd.ncoord import coordination_number
 from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
+from tad_mctc.ncoord import erf_count
 from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import (
     DD,
@@ -48,7 +49,6 @@ from tad_mctc.typing import (
 
 from dxtb import IndexHelper
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
-from dxtb._src.ncoord import erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.utils.tensors import normalize_device
 

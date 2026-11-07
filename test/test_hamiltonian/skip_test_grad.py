@@ -24,12 +24,13 @@ from math import sqrt
 import numpy as np
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.batch import pack
+from tad_mctc.ncoord import cn_d3
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch import IntDriverPytorch
-from dxtb._src.ncoord import cn_d3, cn_d3_gradient, get_dcn
 from dxtb._src.scf import get_density
 from dxtb._src.typing import DD, Tensor
 
@@ -97,7 +98,8 @@ def no_overlap_single(dtype: torch.dtype, name: str) -> None:
     # set derivative of overlap to zero
     doverlap = torch.zeros((*o.matrix.shape, 3), **dd)
 
-    cn = cn_d3(numbers, positions)
+    pos_cn = positions.detach().clone().requires_grad_(True)
+    cn = cn_d3(Structure(numbers=numbers, positions=pos_cn))
     wmat = get_density(
         result.coefficients,
         result.occupation.sum(-2),
@@ -111,15 +113,14 @@ def no_overlap_single(dtype: torch.dtype, name: str) -> None:
         result.density,
         wmat,
         result.potential,
-        cn,
+        cn.detach(),
     )
 
     assert pytest.approx(dedcn, abs=tol) == ref_dedcn
     assert pytest.approx(dedr, abs=tol) == ref_dedr
 
-    # full CN gradient
-    dcndr = cn_d3_gradient(numbers, positions)
-    dcn = get_dcn(dcndr, dedcn)
+    # full CN gradient via differentiable CNModel
+    (dcn,) = torch.autograd.grad(cn, pos_cn, grad_outputs=dedcn)
 
     ref_dcn = load_from_npz(ref_grad_no_overlap, f"{name}_dcn", dtype)
     assert pytest.approx(dcn, abs=tol) == ref_dcn
@@ -199,7 +200,8 @@ def no_overlap_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     # set derivative of overlap to zero
     doverlap = torch.zeros((*o.matrix.shape, 3), **dd)
 
-    cn = cn_d3(numbers, positions)
+    pos_cn = positions.detach().clone().requires_grad_(True)
+    cn = cn_d3(Structure(numbers=numbers, positions=pos_cn))
     wmat = get_density(
         result.coefficients,
         result.occupation.sum(-2),
@@ -213,15 +215,14 @@ def no_overlap_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         result.density,
         wmat,
         result.potential,
-        cn,
+        cn.detach(),
     )
 
     assert pytest.approx(dedcn, abs=tol) == ref_dedcn
     assert pytest.approx(dedr, abs=tol) == ref_dedr
 
     # full CN
-    dcndr = cn_d3_gradient(numbers, positions)
-    dcn = get_dcn(dcndr, dedcn)
+    (dcn,) = torch.autograd.grad(cn, pos_cn, grad_outputs=dedcn)
 
     ref_dcn = pack(
         (
@@ -282,7 +283,7 @@ def hamiltonian_grad_single(dtype: torch.dtype, name: str) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 5
     assert pytest.approx(overlap2, abs=tol, rel=tol) == overlap
 
-    cn = cn_d3(numbers, pos)
+    cn = cn_d3(Structure(numbers=numbers, positions=pos))
     wmat = get_density(
         result.coefficients,
         result.occupation.sum(-2),
@@ -401,7 +402,8 @@ def hamiltonian_grad_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     driver.setup(positions)
     doverlap = s.integral.get_gradient(driver)  # type: ignore
 
-    cn = cn_d3(numbers, positions)
+    pos_cn = positions.detach().clone().requires_grad_(True)
+    cn = cn_d3(Structure(numbers=numbers, positions=pos_cn))
     wmat = get_density(
         result.coefficients,
         result.occupation.sum(-2),
@@ -415,15 +417,14 @@ def hamiltonian_grad_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         result.density,
         wmat,
         result.potential,
-        cn,
+        cn.detach(),
     )
 
     assert pytest.approx(ref_dedcn, abs=atol) == dedcn.detach()
     assert pytest.approx(ref_dedr, abs=atol) == dedr.detach()
 
     # full CN
-    dcndr = cn_d3_gradient(numbers, positions)
-    dcn = get_dcn(dcndr, dedcn)
+    (dcn,) = torch.autograd.grad(cn, pos_cn, grad_outputs=dedcn)
 
     ref_dcn = pack(
         (

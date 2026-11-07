@@ -28,10 +28,10 @@ import warnings
 import tad_dftd as d3
 import torch
 from tad_mctc.data import radii
+from tad_mctc.ncoord import exp_count
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import exp_count
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import ClassicalCache, ComponentCache

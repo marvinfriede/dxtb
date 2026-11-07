@@ -26,16 +26,17 @@ This module implements the isotropic electrostatics class. The
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
+from tad_mctc.ncoord import CNModel, erf_count
 from tad_mctc.tree import Node, child
 from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb._src.typing import Any, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
 
@@ -109,7 +110,7 @@ def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
     return IESSetup(
         numbers=numbers,
         eeq=eeq,
-        rcov=ies.rcov[numbers].clone(),
+        rcov=ies.rcov.clone(),
         cutoff=ies.cutoff.clone(),
         cn_max=ies.cn_max.clone(),
         cn_kcn=ies.cn_kcn.clone(),
@@ -134,20 +135,19 @@ def ies_energy(
     total_charge = any_to_tensor(
         charge, device=positions.device, dtype=positions.dtype
     )
-    cn = coordination_number(
-        setup.numbers,
-        positions,
-        counting_function=erf_count,
-        rcov=setup.rcov,
-        cutoff=setup.cutoff,
-        cn_max=setup.cn_max,
-        kcn=setup.cn_kcn,
-    )
+    numbers = setup.numbers.expand(positions.shape[:-1])
     structure = Structure(
-        numbers=setup.numbers,
+        numbers=numbers,
         positions=positions,
-        charge=structure_charge(total_charge, setup.numbers),
+        charge=structure_charge(total_charge, numbers),
     )
+    cn_model = CNModel(
+        count=partial(erf_count, kcn=setup.cn_kcn),
+        cutoff=float(setup.cutoff.detach()),
+        cn_max=setup.cn_max,
+        rcov=setup.rcov,
+    )
+    cn = cn_model(structure)
     _charges, energy = setup.eeq.solve(
         structure, cn, return_energy=True, solve_mode=solve_mode
     )

@@ -54,6 +54,7 @@ from tad_mctc.autograd import is_functorch_tensor
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import VDW_PAIRWISE
 from tad_mctc.math import einsum
+from tad_mctc.ncoord import CNModel, cn_d4, erf_count
 from tad_mctc.typing import (
     DD,
     CountingFunction,
@@ -61,8 +62,6 @@ from tad_mctc.typing import (
     TensorLike,
 )
 from tad_multicharge import get_eeq_charges
-
-from dxtb._src.ncoord import cn_d4, erf_count
 
 
 class Param(TypedDict, total=False):
@@ -690,11 +689,22 @@ def dftd4(
             f"consistent with atomic numbers ({numbers.shape})."
         )
 
-    cn = cn_function(
-        numbers,
-        positions,
-        counting_function=counting_function,
-    )
+    if isinstance(cn_function, CNModel):
+        cn_model = cn_function
+        if counting_function is not erf_count:
+            cn_model = cn_model.replace(count=counting_function)
+        cn = cn_model(
+            Structure(
+                numbers=numbers.expand(positions.shape[:-1]),
+                positions=positions,
+            )
+        )
+    else:
+        cn = cn_function(
+            numbers,
+            positions,
+            counting_function=counting_function,
+        )
 
     if q is None:
         q = get_eeq_charges(numbers, positions, charge_t, cutoff=cutoff.cn_eeq)

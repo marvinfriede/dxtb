@@ -33,7 +33,7 @@ from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import Potential
-from dxtb._src.ncoord import coordination_number, erf_count
+from tad_mctc.ncoord import CNModel, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
@@ -82,14 +82,12 @@ class GFN0Hamiltonian(BaseHamiltonian):
         self._set_cn_callable()
 
     def _set_cn_callable(self) -> None:
-        """Configure the local GFN0 coordination-number callable."""
-        self.cn = partial(
-            coordination_number,
-            counting_function=erf_count,
-            rcov=self.cn_radii,
-            cutoff=self.cn_cutoff,
+        """Configure the local GFN0 coordination-number model."""
+        self.cn = CNModel(
+            count=partial(erf_count, kcn=self.cn_kcn),
+            cutoff=float(self.cn_cutoff.detach()),
             cn_max=self.cn_max,
-            kcn=self.cn_kcn,
+            rcov=self.cn_radii,
         )
 
     @override
@@ -162,6 +160,13 @@ class GFN0Hamiltonian(BaseHamiltonian):
         """Evaluate capped GFN0 coordination numbers."""
         if self.cn is None:  # pragma: no cover - initialized above
             raise RuntimeError("GFN0 coordination-number function is missing.")
+        if isinstance(self.cn, CNModel):
+            return self.cn(
+                Structure(
+                    numbers=self.numbers.expand(positions.shape[:-1]),
+                    positions=positions,
+                )
+            )
         return self.cn(self.numbers, positions)
 
     def get_eeq_charges(
@@ -174,10 +179,11 @@ class GFN0Hamiltonian(BaseHamiltonian):
     ) -> Tensor:
         """Solve the coordinate-local main GFN0 EEQ model."""
         total_charge = any_to_tensor(charge, **self.dd)
+        numbers = self.numbers.expand(positions.shape[:-1])
         structure = Structure(
-            numbers=self.numbers,
+            numbers=numbers,
             positions=positions,
-            charge=structure_charge(total_charge, self.numbers),
+            charge=structure_charge(total_charge, numbers),
         )
         charges = self.eeq_model.solve(structure, cn, solve_mode=solve_mode)
         assert isinstance(charges, Tensor)

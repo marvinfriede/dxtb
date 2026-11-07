@@ -25,16 +25,17 @@ evaluation for the short-range bond correction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import torch
-from tad_mctc import storch
+from tad_mctc import Structure, storch
 from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import en as element_en
+from tad_mctc.ncoord import CNModel
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.ncoord import coordination_number
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import Classical, ComponentCache
@@ -137,7 +138,7 @@ def setup_srb(
         cnfak=clone(ihelp.spread_uspecies_to_atom(component.cnfak)),
         en=clone(ihelp.spread_uspecies_to_atom(component.en)),
         pauling=clone(element_en.PAULING(**component.dd)[numbers]),
-        rcov=clone(component.rcov[numbers]),
+        rcov=clone(component.rcov),
         counting_function=component.counting_function,
         shift=clone(component.shift),
         prefactor=clone(component.prefactor),
@@ -155,14 +156,17 @@ def short_range_bond_energy(
     setup: ShortRangeBondSetup | ShortRangeBondCoreSetup, positions: Tensor
 ) -> Tensor:
     """Evaluate the atom-partitioned SRB energy from setup and positions."""
-    cn = coordination_number(
-        setup.numbers,
-        positions,
-        counting_function=setup.counting_function,
-        rcov=setup.rcov,
-        cutoff=setup.cn_cutoff,
+    cn_model = CNModel(
+        count=partial(setup.counting_function, kcn=setup.cn_kcn),
+        cutoff=float(setup.cn_cutoff.detach()),
         cn_max=setup.cn_max,
-        kcn=setup.cn_kcn,
+        rcov=setup.rcov,
+    )
+    cn = cn_model(
+        Structure(
+            numbers=setup.numbers.expand(positions.shape[:-1]),
+            positions=positions,
+        )
     )
 
     eligible = (setup.numbers >= 5) & (setup.numbers <= 9)

@@ -19,10 +19,12 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields
+from functools import partial
 
 import pytest
 import torch
 from tad_mctc import Structure
+from tad_mctc.ncoord import CNModel, erf_count
 from tad_mctc.tree import Node, stack
 from tad_multicharge.model.eeq import EEQModel
 from torch.utils import _pytree
@@ -36,7 +38,6 @@ from dxtb._src.components.classicals import (
     new_ies,
 )
 from dxtb._src.components.classicals.ies import ies_energy
-from dxtb._src.ncoord import coordination_number, erf_count
 from dxtb.config import Config
 
 from ...conftest import DEVICE
@@ -124,16 +125,13 @@ def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
     setup = system.ies_setup
     assert setup is not None
     charge = torch.tensor(0.23, **DD)
-    cn = coordination_number(
-        numbers,
-        positions,
-        counting_function=erf_count,
-        rcov=setup.rcov,
-        cutoff=setup.cutoff,
-        cn_max=setup.cn_max,
-        kcn=setup.cn_kcn,
-    )
     structure = Structure(numbers=numbers, positions=positions, charge=charge)
+    cn = CNModel(
+        count=partial(erf_count, kcn=setup.cn_kcn),
+        cutoff=float(setup.cutoff),
+        cn_max=setup.cn_max,
+        rcov=setup.rcov,
+    )(structure)
 
     references = {}
     for mode in ("schur", "cg", "matrix-free"):
