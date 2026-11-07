@@ -411,8 +411,14 @@ def evaluate_lane_group(
 # state); everything else in those trees is lane-independent and is reused
 # as is.
 
-_ADAPTIVE_CHUNK_TRIPS = 4
-"""Map trips per ``vmap`` call of an adaptive group (performance only)."""
+_ADAPTIVE_CHUNK_TRIPS = 1
+"""Map trips per ``vmap`` call of an adaptive group (performance only).
+
+Measured on CPU (``benchmarks/results/adaptive-chunk-sweep-cpu.json``,
+chunk lengths 1-16): one extra ``vmap`` call and host read costs a few
+milliseconds, far less than one map trip, so the shortest chunk avoids all
+overshoot trips and was fastest or tied in every case. Not measured on GPU.
+"""
 
 
 def _requires_static_schedule() -> bool:

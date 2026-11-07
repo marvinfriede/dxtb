@@ -424,3 +424,29 @@ def test_carry_rejects_lane_tensors_outside_the_dataclass_tree() -> None:
 
     with pytest.raises(RuntimeError, match="outside the carried"):
         torch.func.vmap(stage)(torch.ones(2, 3))
+
+
+def test_forward_mode_dual_tensors_match_static_schedule(monkeypatch) -> None:
+    """Eager forward-mode AD (not a functorch level) runs adaptively."""
+    import torch.autograd.forward_ad as fwAD
+
+    system = _setup(_model(), H2O)
+    positions = [_geometry(H2O, seed) for seed in range(2)]
+    generator = torch.Generator().manual_seed(3)
+    tangents = [
+        torch.randn(p.shape, generator=generator, dtype=DTYPE)
+        for p in positions
+    ]
+    calls = _spy_adaptive(monkeypatch)
+    tangent_out = {}
+    for static in (True, False):
+        _route(monkeypatch, static)
+        with fwAD.dual_level():
+            dual = tuple(
+                fwAD.make_dual(p, t) for p, t in zip(positions, tangents)
+            )
+            energy = evaluate_packed_systems((system,) * 2, dual).energy
+            tangent_out[static] = fwAD.unpack_dual(energy).tangent.clone()
+    assert calls == [1]
+    assert float(tangent_out[False].abs().max()) > 0.0
+    torch.testing.assert_close(tangent_out[True], tangent_out[False], **EXACT)
