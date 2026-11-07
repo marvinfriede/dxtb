@@ -33,6 +33,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from torch.overrides import TorchFunctionMode
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler, ParamModule, labels
 from dxtb._src.calculators import lane_evaluation
@@ -179,6 +180,50 @@ def test_dedup_noncontiguous_padding_matches_previous_key() -> None:
     assert _identity_partition(systems) == _old_dedup_partition(calc)
     assert _identity_partition(systems) == [0, 0, 2]
     assert systems[2].numbers.tolist() == list(CH4)
+
+
+class _BoolMaskIndexCounter(TorchFunctionMode):
+    """Count dynamic-shape Boolean-mask indexing (``t[mask]``)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        if func is torch.Tensor.__getitem__:
+            index = args[1]
+            indices = index if isinstance(index, tuple) else (index,)
+            if any(
+                isinstance(item, torch.Tensor) and item.dtype == torch.bool
+                for item in indices
+            ):
+                self.count += 1
+        return func(*args, **(kwargs or {}))
+
+
+def test_lane_numbers_use_host_slots_without_boolean_masks() -> None:
+    """Lane and component numbers keep the slot order of the former mask."""
+    numbers = torch.zeros((3, 6), dtype=torch.int64)
+    numbers[0, :3] = torch.tensor(H2O)
+    numbers[1, [0, 2, 5]] = torch.tensor(H2O)
+    numbers[2, [0, 1, 3, 4, 5]] = torch.tensor(CH4)
+    calc, d3 = _calculator_with_component_numbers(numbers)
+
+    with _BoolMaskIndexCounter() as counter:
+        systems = build_calculator_lane_systems(calc)
+    assert counter.count == 0
+
+    for lane, system in enumerate(systems):
+        real = numbers[lane] > 0
+        assert torch.equal(system.numbers, numbers[lane][real])
+        lane_d3 = [
+            c
+            for c in system.classicals.components
+            if isinstance(getattr(c, "numbers", None), torch.Tensor)
+            and c.label == d3.label
+        ]
+        assert len(lane_d3) == 1
+        assert torch.equal(lane_d3[0].numbers, d3.numbers[lane][real])
 
 
 def test_dedup_host_conversions_do_not_scale_with_batch_or_atoms() -> None:
@@ -365,6 +410,84 @@ def test_mapped_failure_status_raises_with_source_id() -> None:
             legacy_compat=True,
         )
     assert str(excinfo.value) == str(reference.value)
+    assert getattr(excinfo.value, "source_id", None) == 1
+
+
+# Failure ordering across interleaved groups
+#
+# Execution groups run in order of their first source lane; within a group,
+# validation and status inspection follow source order. A failure in an
+# earlier-starting group is therefore raised before a failure at a smaller
+# source id of a later group. This matches the canonical bucketed route and
+# is the documented contract; global first-failing-source order is not
+# promised.
+
+
+def test_interleaved_electron_failure_follows_group_order() -> None:
+    """A0 ok, B1 invalid, A2 invalid: group A runs first and reports 2."""
+    system_a = _setup(_model(), H2O)
+    system_b = _setup(_model(), NH3)
+    systems = (system_a, system_b, system_a, system_b)
+    positions = tuple(
+        _geometry(H2O if s is system_a else NH3, lane)
+        for lane, s in enumerate(systems)
+    )
+    spins = (0.0, 0.0, 0.0, 0.0)
+
+    with pytest.raises(ValueError) as excinfo:
+        evaluate_packed_systems(
+            systems, positions, chrg=(0.0, 1.0, 1.0, 0.0), spin=spins
+        )
+    assert getattr(excinfo.value, "source_id", None) == 2
+
+    # Only the later group is invalid: its first invalid lane is reported.
+    with pytest.raises(ValueError) as excinfo:
+        evaluate_packed_systems(
+            systems, positions, chrg=(0.0, 1.0, 0.0, 1.0), spin=spins
+        )
+    assert getattr(excinfo.value, "source_id", None) == 1
+
+
+def test_interleaved_fermi_failure_follows_group_order() -> None:
+    """Mapped Fermi failures are raised in execution-group order."""
+    system_a = _setup(_model(), H2)
+    system_b = _setup(_model(), H2O)
+    systems = (system_a, system_b, system_a, system_b)
+    positions = tuple(
+        _geometry(H2 if s is system_a else H2O, lane)
+        for lane, s in enumerate(systems)
+    )
+    with pytest.raises(ValueError) as excinfo:
+        evaluate_packed_systems(
+            systems,
+            positions,
+            chrg=(0.0, -8.5, -6.5, 0.0),
+            legacy_compat=True,
+        )
+    assert getattr(excinfo.value, "source_id", None) == 2
+
+    # Lane 1 fails on its own as well; group order alone decides.
+    with pytest.raises(ValueError) as excinfo:
+        evaluate_packed_systems(
+            systems,
+            positions,
+            chrg=(0.0, -8.5, 0.0, 0.0),
+            legacy_compat=True,
+        )
+    assert getattr(excinfo.value, "source_id", None) == 1
+
+
+def test_interleaved_forced_nonconvergence_follows_group_order() -> None:
+    """Group A converges; the first unconverged lane of group B raises."""
+    system_a = _setup(_model(force_convergence=True), H2O)
+    system_b = _setup(_model(maxiter=1, force_convergence=True), NH3)
+    systems = (system_a, system_b, system_a, system_b)
+    positions = tuple(
+        _geometry(H2O if s is system_a else NH3, lane)
+        for lane, s in enumerate(systems)
+    )
+    with pytest.raises(SCFConvergenceError) as excinfo:
+        evaluate_packed_systems(systems, positions, legacy_compat=True)
     assert getattr(excinfo.value, "source_id", None) == 1
 
 

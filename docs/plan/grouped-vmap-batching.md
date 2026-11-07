@@ -52,9 +52,29 @@ controller and raises for configurations that are invalid on every route
 limits, SOSCF with active smearing, eager-only strategies under unrolled
 differentiation, unknown integral drivers). All lanes are classified before
 any lane is evaluated. Because `vmap` cannot raise data-dependent errors,
-electron-count and spin consistency is validated eagerly for every mapped lane
-with the single-System `get_refocc` check; errors carry the lane's
-`source_id`. Under `legacy_compat`, mapped lanes raise the eager convergence
+electron-count and spin consistency of a mapped group is validated eagerly
+before the group runs:
+
+1. one vectorized evaluation of the single-System rules for all lanes of the
+   group (`reference_electron_count`, `spin_electron_violations`, shared with
+   `get_refocc`);
+2. one host read of the per-lane verdicts;
+3. only if a lane is invalid, the first invalid lane is re-run through the
+   authoritative single-System `get_refocc` check, solely to raise its exact
+   exception and message; the error carries that lane's `source_id`.
+
+Without an explicit spin no value check is needed.
+
+**Failure ordering.** Execution groups run in the order of their first source
+lane. Within a group, electron validation, mapped status inspection
+(`legacy_compat`) and warnings follow source order. A failure in a group that
+starts earlier is therefore raised before a failure at a smaller source id in
+a later group: for interleaved lanes `A0, B1, A2, B3` with invalid `B1` and
+`A2`, the error carries `source_id == 2`. The canonical bucketed route
+(`74d94a1c`) had the same per-bucket ordering, and no public contract promises
+the globally first failing source lane, so this is kept and pinned by
+`test_interleaved_*_follows_group_order` (electron/spin input, mapped Fermi
+failure, forced nonconvergence). Under `legacy_compat`, mapped lanes raise the eager convergence
 diagnostics from their tensor status.
 
 ### Fixed-trip behavior inside a group

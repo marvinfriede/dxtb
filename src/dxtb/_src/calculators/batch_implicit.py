@@ -189,8 +189,10 @@ RESPONSE_NOT_RUN: int = -1
 class BatchRootFailureCode(IntEnum):
     """Failure categories for converged-root batch validation and response.
 
-    Codes ``1`` through ``8`` represent primal root-preparation failures and
-    are recorded in ``Result.status``. Code ``9`` (``RESPONSE_FAILURE``)
+    Codes ``1`` through ``7`` represent primal root-preparation failures and
+    are recorded in ``Result.status``. Code ``8`` (formerly
+    ``INVALID_PADDING``) is retired and not reused, so the remaining values
+    keep their meaning. Code ``9`` (``RESPONSE_FAILURE``)
     identifies a confirmed implicit linear-response failure during
     differentiation, whereas code ``10`` (``NONFINITE_DERIVATIVE``) identifies
     a nonfinite derivative whose origin is outside or not attributable to a

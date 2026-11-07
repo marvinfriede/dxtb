@@ -1386,9 +1386,12 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         )
         lane_sys = lane_memo.get(dedup_key)
         if lane_sys is None:
-            row_raw = calc.numbers[idx]
-            real_mask = row_raw > 0
-            row_nums = row_raw[real_mask]
+            # The real atom slots are known on the host; select them with an
+            # index tensor instead of a dynamic Boolean mask.
+            slots = torch.tensor(
+                real_slots, dtype=torch.long, device=calc.numbers.device
+            )
+            row_nums = calc.numbers[idx].index_select(0, slots)
             lane_classical_list = []
             for c_idx, comp in enumerate(model_classicals):
                 has_2d_nums = (
@@ -1403,7 +1406,9 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 )
                 c_copy = copy.copy(comp) if needs_copy else comp
                 if has_2d_nums:
-                    c_copy.numbers = comp.numbers[idx][real_mask]
+                    c_copy.numbers = comp.numbers[idx].index_select(
+                        0, slots.to(comp.numbers.device)
+                    )
                 if has_label_collision:
                     c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
                 lane_classical_list.append(c_copy)

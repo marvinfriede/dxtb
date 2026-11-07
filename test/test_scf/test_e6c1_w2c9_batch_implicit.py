@@ -30,6 +30,7 @@ from dxtb._src.calculators.batch_implicit import (
     BatchRootFailureCode,
     ResponseDiagnosticCollector,
     _classify_fermi_code,
+    classify_batch_failure_category,
     _resolve_strictness,
     classify_response_failure_status,
     evaluate_converged_root_batch,
@@ -768,6 +769,31 @@ def test_strictness_precedence_and_fermi_failure_classification() -> None:
         assert classified == int(batch_code)
     with pytest.raises(ValueError, match="Unknown nonzero Fermi failure code"):
         _classify_fermi_code(987654)
+
+
+def test_batch_failure_code_values_are_stable() -> None:
+    """Private diagnostics keep their numeric codes; code 8 stays retired."""
+    assert {code.name: int(code) for code in BatchRootFailureCode} == {
+        "NONE": 0,
+        "INVALID_TEMPERATURE": 1,
+        "TOO_MANY_ELECTRONS": 2,
+        "FERMI_NONCONVERGENCE": 3,
+        "ELECTRON_COUNT": 4,
+        "MAXITER_EXCEEDED": 5,
+        "RESIDUAL_TOLERANCE": 6,
+        "NONFINITE_STATE": 7,
+        "RESPONSE_FAILURE": 9,
+        "NONFINITE_DERIVATIVE": 10,
+    }
+    assert classify_batch_failure_category(torch.tensor([0, 3, 7, 9, 10])) == (
+        "success",
+        "fermi_failure",
+        "primal_scf_failure",
+        "response_failure",
+        "nonfinite_derivative",
+    )
+    with pytest.raises(ValueError, match="Unknown BatchRootFailureCode: 8"):
+        classify_batch_failure_category(torch.tensor([8]))
 
 
 def test_prepared_root_rejects_mutated_inputs_and_model_parameters() -> None:
