@@ -28,7 +28,7 @@ from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.constants import labels
+from dxtb._src.constants import defaults, labels
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
@@ -73,6 +73,7 @@ from .solver import (
     SCFSolveResult,
     SCFSolverSettings,
     SCFTrajectoryStatus,
+    _project_charge_padding,
     _project_potential_padding,
     _solve_map,
     fermi_failure_code,
@@ -671,15 +672,23 @@ def run_prepared_functional_implicit(
             f"'{initial_representation}'."
         )
 
+    if initial_representation == labels.SCP_MODE_CHARGE:
+        state_projection: Callable[[Tensor], Tensor] | None = (
+            lambda value: _project_charge_padding(value, inputs.charge_layout)
+        )
+    elif initial_representation == labels.SCP_MODE_POTENTIAL:
+        assert initial_layout is not None
+        state_projection = lambda value: _project_potential_padding(
+            value, initial_layout
+        )
+    else:
+        state_projection = None
+
     outcome = _solve_map(
         state,
         settings,
         problem.map,
-        state_projection=(
-            None
-            if initial_layout is None
-            else lambda value: _project_potential_padding(value, initial_layout)
-        ),
+        state_projection=state_projection,
         eager=True,
         problem=problem,
         strategy=strategy,

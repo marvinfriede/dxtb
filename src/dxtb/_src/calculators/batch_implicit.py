@@ -148,6 +148,7 @@ from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
     DampingState,
     SCFTrajectoryStatus,
+    _project_charge_padding,
     _project_potential_padding,
     _solve_map,
     fermi_failure_code,
@@ -1317,6 +1318,9 @@ def _make_representation_projections(
     if representation == labels.SCP_MODE_CHARGE:
         initial_state = pack_charges(guess_charges, primal_inputs.charge_layout)
         layout = None
+        state_projection = lambda val, _lay=primal_inputs.charge_layout: (
+            _project_charge_padding(val, _lay)
+        )
         map_fn = lambda x, _inp=primal_inputs: scf_map(x, _inp)
     elif representation == labels.SCP_MODE_POTENTIAL:
         initial_state, layout = potential_initial_guess(

@@ -28,7 +28,7 @@ from tad_mctc.math import einsum
 from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
-from dxtb._src.constants import labels
+from dxtb._src.constants import defaults, labels
 from dxtb._src.scf.status import SCFFailureCode
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling
@@ -50,13 +50,13 @@ from .certification import (
 )
 from .convergence import SCFConvergence, SCFResidual
 from .data import (
+    ChargeLayout,
     PotentialLayout,
     SCFCharges,
     SCFInputs,
     SCFMapResult,
     SCFPotential,
     SCFSpectralResult,
-    pack_potential,
     unpack_potential,
 )
 from .energy import free_energy_from_spectral, interaction_energy_from_charges
@@ -721,16 +721,57 @@ def _select_core_certification(
     return cast(SCFCertificationCoreResult, select_value(new, old))
 
 
+def _restore_layout_padding(
+    value: Tensor, shapes: tuple[tuple[int, ...], ...], kind: str
+) -> Tensor:
+    """Restore structural PADNZ tails without rescaling active elements."""
+    lengths: list[int] = []
+    for shape in shapes:
+        size = 1
+        for dim in shape:
+            size *= dim
+        lengths.append(size)
+    expected_width = max(lengths)
+    if value.ndim != 2 or value.shape[0] != len(shapes):
+        if kind == "charge":
+            raise ValueError(
+                "Packed charge iterate does not match the configured charge layout."
+            )
+        raise ValueError(
+            "Packed potential iterate does not match the configured layout."
+        )
+    if value.shape[-1] != expected_width:
+        raise ValueError(
+            f"Packed {kind} width {value.shape[-1]} does not match "
+            f"{expected_width}."
+        )
+    rows = [
+        torch.cat(
+            (
+                value[index, :length],
+                value.new_full((expected_width - length,), defaults.PADNZ),
+            )
+        )
+        for index, length in enumerate(lengths)
+    ]
+    return torch.stack(rows)
+
+
+def _project_charge_padding(value: Tensor, layout: ChargeLayout) -> Tensor:
+    """Restore structural PADNZ tails after affine method arithmetic."""
+    return _restore_layout_padding(value, layout.shapes, "charge")
+
+
 def _project_potential_padding(
     value: Tensor, layout: PotentialLayout
 ) -> Tensor:
     """Restore structural PADNZ tails after affine method arithmetic.
 
     Affine combinations can introduce roundoff into rows whose entries are all
-    the same PADNZ sentinel. Packing the structural components again preserves
-    those tails exactly without changing physical values.
+    the same PADNZ sentinel. Restoring the structural tail columns preserves
+    those sentinels exactly without modifying active values.
     """
-    return pack_potential(unpack_potential(value, layout), layout)
+    return _restore_layout_padding(value, layout.shapes, "potential")
 
 
 def _select_map_result(
@@ -1008,7 +1049,20 @@ def solve_scf_problem(
     ),
 ) -> SCFSolveResult:
     """Solve and finalize one representation through the shared controller."""
-    if problem.representation is SCFRepresentation.POTENTIAL:
+    if problem.representation is SCFRepresentation.CHARGE:
+        charge_projection = lambda value: _project_charge_padding(
+            value, problem.inputs.charge_layout
+        )
+        if state_projection is None:
+            state_projection = charge_projection
+        else:
+            previous_charge_projection = state_projection
+
+            def combined_charge_projection(value: Tensor) -> Tensor:
+                return previous_charge_projection(charge_projection(value))
+
+            state_projection = combined_charge_projection
+    elif problem.representation is SCFRepresentation.POTENTIAL:
         assert problem.potential_layout is not None
         potential_projection = lambda value: _project_potential_padding(
             value, problem.potential_layout

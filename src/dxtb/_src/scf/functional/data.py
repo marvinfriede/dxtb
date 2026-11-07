@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -284,7 +285,10 @@ def setup_scf_inputs(
     if not isinstance(ihelp, IndexHelper):
         raise TypeError("SCFInputs requires an IndexHelper.")
     if core_index is not None:
-        if not isinstance(core_index, IndexHelper) or core_index.batch_mode != 0:
+        if (
+            not isinstance(core_index, IndexHelper)
+            or core_index.batch_mode != 0
+        ):
             raise TypeError(
                 "Captured SCF index must be a single-system IndexHelper."
             )
@@ -431,6 +435,21 @@ def functional_scf_interactions_eligible(
     return not unsupported, names
 
 
+_SQRT2 = math.sqrt(2.0)
+_QUAD_WEIGHT_FACTORS = (1.0, _SQRT2, 1.0, _SQRT2, _SQRT2, 1.0)
+
+
+def _quadrupole_weights(quad: Tensor) -> Tensor:
+    """Return off-diagonal ``sqrt(2)`` weights for 6-component quadrupoles.
+
+    In dxtb's ``[xx, xy, yy, xz, yz, zz]`` ordering, off-diagonal indices are
+    ``[1, 3, 4]``. Scaling charge quadrupoles by ``sqrt(2)`` and potential
+    quadrupoles by ``1 / sqrt(2)`` makes the packed Euclidean norm match the
+    rotationally invariant Frobenius norm of the full symmetric 3x3 tensor.
+    """
+    return quad.new_tensor(_QUAD_WEIGHT_FACTORS)
+
+
 def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:
     """Unpack fixed-shape single-System charge rows without deflation."""
     shapes = layout.shapes
@@ -449,10 +468,14 @@ def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:
         x[index, :length].reshape(shape)
         for index, (length, shape) in enumerate(zip(lengths, shapes))
     ]
+    quad = None
+    if layout.quadrupole_shape is not None:
+        raw_quad = values[-1]
+        quad = raw_quad / _quadrupole_weights(raw_quad)
     return SCFCharges(
         mono=values[0],
         dipole=(values[1] if layout.dipole_shape is not None else None),
-        quad=(values[-1] if layout.quadrupole_shape is not None else None),
+        quad=quad,
     )
 
 
@@ -466,7 +489,8 @@ def pack_charges(charges: SCFCharges, layout: ChargeLayout) -> Tensor:
     if layout.quadrupole_shape is not None:
         if charges.quad is None:
             raise ValueError("Quadrupole charge is required by this layout.")
-        values.append(charges.quad.reshape(-1))
+        weighted_quad = charges.quad * _quadrupole_weights(charges.quad)
+        values.append(weighted_quad.reshape(-1))
 
     width = max(value.shape[-1] for value in values)
     rows = [
@@ -515,10 +539,14 @@ def unpack_potential(x: Tensor, layout: PotentialLayout) -> SCFPotential:
         x[index, :length].reshape(shape)
         for index, (length, shape) in enumerate(zip(lengths, shapes))
     ]
+    quad = None
+    if layout.quadrupole_shape is not None:
+        raw_quad = values[-1]
+        quad = raw_quad * _quadrupole_weights(raw_quad)
     return SCFPotential(
         mono=values[0],
         dipole=(values[1] if layout.dipole_shape is not None else None),
-        quad=(values[-1] if layout.quadrupole_shape is not None else None),
+        quad=quad,
     )
 
 
@@ -553,6 +581,8 @@ def _validated_components(
                 f"{name.capitalize()} potential shape {tuple(value.shape)} "
                 f"does not match {shape}."
             )
+        if name == "quad":
+            value = value / _quadrupole_weights(value)
         values.append(value.reshape(-1))
     return values
 

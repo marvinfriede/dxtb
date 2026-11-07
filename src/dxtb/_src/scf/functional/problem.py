@@ -25,16 +25,7 @@ import torch
 
 from dxtb._src.typing import Tensor
 
-from .data import (
-    PotentialLayout,
-    SCFCharges,
-    SCFInputs,
-    SCFMapResult,
-    pack_charges,
-    pack_potential,
-    unpack_charges,
-    unpack_potential,
-)
+from .data import PotentialLayout, SCFCharges, SCFInputs, SCFMapResult
 from .map import (
     fock_map,
     potential_from_charges,
@@ -129,39 +120,25 @@ class SCFProblem:
             pair_mask = orbital_mask[..., :, None] & orbital_mask[..., None, :]
             return torch.where(pair_mask, delta, 0.0)
 
-        def mask_atoms(value: Tensor | None) -> Tensor | None:
-            if value is None:
-                return None
-            shape = (*atom_mask.shape, *((1,) * (value.ndim - atom_mask.ndim)))
-            return torch.where(atom_mask.reshape(shape), value, 0.0)
-
         if self.representation is SCFRepresentation.CHARGE:
-            charges = unpack_charges(delta, inputs.charge_layout)
-            packed = pack_charges(
-                SCFCharges(
-                    mono=torch.where(orbital_mask, charges.mono, 0.0),
-                    dipole=mask_atoms(charges.dipole),
-                    quad=mask_atoms(charges.quad),
-                ),
-                inputs.charge_layout,
+            return _mask_packed_rows(
+                delta,
+                inputs.charge_layout.shapes,
+                orbital_mask=orbital_mask,
+                atom_mask=atom_mask,
+                kind="charge",
+                pad_value=0.0,
             )
-            return _zero_row_padding(packed, inputs.charge_layout.shapes)
 
         assert self.potential_layout is not None
-        potential = unpack_potential(delta, self.potential_layout)
-        packed = pack_potential(
-            type(potential)(
-                mono=(
-                    torch.where(orbital_mask, potential.mono, 0.0)
-                    if potential.mono is not None
-                    else None
-                ),
-                dipole=mask_atoms(potential.dipole),
-                quad=mask_atoms(potential.quad),
-            ),
-            self.potential_layout,
+        return _mask_packed_rows(
+            delta,
+            self.potential_layout.shapes,
+            orbital_mask=orbital_mask,
+            atom_mask=atom_mask,
+            kind="potential",
+            pad_value=0.0,
         )
-        return _zero_row_padding(packed, self.potential_layout.shapes)
 
 
 def convert_physical_state_to_fock(
@@ -195,14 +172,51 @@ def convert_physical_state_to_fock(
     return fock_problem, SCFPhysicalState(paired_input, fock_result)
 
 
-def _zero_row_padding(
-    value: Tensor, shapes: tuple[tuple[int, ...], ...]
+def _mask_packed_rows(
+    value: Tensor,
+    shapes: tuple[tuple[int, ...], ...],
+    *,
+    orbital_mask: Tensor,
+    atom_mask: Tensor,
+    kind: str,
+    pad_value: float,
 ) -> Tensor:
+    """Mask inactive orbitals/atoms and row tails without rescaling multipoles."""
     lengths = tuple(_shape_numel(shape) for shape in shapes)
-    row_lengths = torch.as_tensor(lengths, device=value.device)
-    columns = torch.arange(value.shape[-1], device=value.device)
-    valid = columns.unsqueeze(0) < row_lengths.unsqueeze(-1)
-    return torch.where(valid, value, 0.0)
+    expected_width = max(lengths)
+    if value.ndim != 2 or value.shape[0] != len(shapes):
+        if kind == "charge":
+            raise ValueError(
+                "Packed charge iterate does not match the configured charge layout."
+            )
+        raise ValueError(
+            "Packed potential iterate does not match the configured layout."
+        )
+    if value.shape[-1] != expected_width:
+        raise ValueError(
+            f"Packed {kind} width {value.shape[-1]} does not match "
+            f"{expected_width}."
+        )
+    rows: list[Tensor] = []
+    for index, (length, shape) in enumerate(zip(lengths, shapes)):
+        active = value[index, :length].reshape(shape)
+        if index == 0:
+            masked = torch.where(orbital_mask, active, 0.0)
+        else:
+            mask_shape = (
+                *atom_mask.shape,
+                *((1,) * (active.ndim - atom_mask.ndim)),
+            )
+            masked = torch.where(atom_mask.reshape(mask_shape), active, 0.0)
+        rows.append(
+            torch.cat(
+                (
+                    masked.reshape(-1),
+                    value.new_full((expected_width - length,), pad_value),
+                )
+            )
+        )
+    return torch.stack(rows)
 
 
 def _shape_numel(shape: tuple[int, ...]) -> int:
