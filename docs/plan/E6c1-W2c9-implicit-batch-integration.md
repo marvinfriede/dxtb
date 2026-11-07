@@ -60,7 +60,7 @@ Every conformer lane is independently validated against an explicit eight-point 
 2. **Fermi solver convergence**: Requires all spin channels of `fermi_status.converged` to be `True` (`BatchRootFailureCode.FERMI_NONCONVERGENCE`).
 3. **Electron-count conservation**: Requires $\max_s |\mathrm{Tr}(P_s S) - N_{\mathrm{el},s}| \le 10^{-6}$ (`BatchRootFailureCode.ELECTRON_COUNT`).
 4. **Finite state and density**: Requires `root_x`, `mapped_x`, and `spectral.density` to be finite (`BatchRootFailureCode.NONFINITE_STATE`).
-5. **Canonical padding zero-invariance**: For padded systems, requires inactive atom/shell/orbital entries of `root_x`, `mapped_x`, and `spectral.density` to be identically zero (`BatchRootFailureCode.INVALID_PADDING`).
+5. **Canonical padding zero-invariance**: For padded systems, requires inactive atom/shell/orbital entries of `root_x`, `mapped_x`, and `spectral.density` to be identically zero (`BatchRootFailureCode.INVALID_PADDING`). *Historical: canonical padding was removed and code 8 retired; converged-root lanes are ordinary single Systems without padded slots (see `grouped-vmap-batching.md`).*
 6. **Independent raw-map residual check**: Recomputes $r(x^\star) = G(x^\star) - x^\star$ from a fresh map evaluation and requires both $\|r(x^\star)\|_2 \le \max(\text{x\_atol}, 10\epsilon)$ and $\|r(x^\star)\|_\infty \le \max(\text{x\_atol\_max}, 10\epsilon)$.
 7. **Iteration budget vs. residual classification**: Distinguishes `BatchRootFailureCode.MAXITER_EXCEEDED` (when iterations reach `maxiter` without meeting tolerances) from `BatchRootFailureCode.RESIDUAL_TOLERANCE`.
 8. **Transform-time consistency**: Outside `torch.func` transforms, `evaluate_converged_root_batch` re-verifies that the live parameters and positions still satisfy the root residual tolerance at `lane.root_x`, preventing silent attachment of a stale root to perturbed geometries or parameters.
@@ -81,7 +81,7 @@ Every conformer lane is independently validated against an explicit eight-point 
 | `5` | `MAXITER_EXCEEDED` | Primal SCF solver exhausted `maxiter` without meeting `x_atol` / `x_atol_max` |
 | `6` | `RESIDUAL_TOLERANCE` | Independent raw-map residual check failed `x_atol` or `x_atol_max` |
 | `7` | `NONFINITE_STATE` | Nonfinite values in `root_x`, `mapped_x`, or `spectral.density` |
-| `8` | `INVALID_PADDING` | Nonzero values in inactive padded atom/shell/orbital slots |
+| `8` | `INVALID_PADDING` | *Retired by the grouped-vmap hardening package; see `grouped-vmap-batching.md`.* Nonzero values in inactive padded atom/shell/orbital slots |
 | `9` | `RESPONSE_FAILURE` | Implicit response failure category during differentiation; surfaced as lane-local nonfinite (`NaN`) derivatives when selected and `0.0` when masked, never written retroactively into immutable primal `Result.status` |
 
 - **Strictness precedence**:

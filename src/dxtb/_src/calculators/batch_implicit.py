@@ -109,8 +109,6 @@ from dxtb._src.scf.functional.data import (
     setup_scf_inputs,
 )
 from dxtb._src.scf.functional.eager import (
-    _padded_charge_projections,
-    _padded_potential_projections,
     _prepare_solver,
     public_scf_status,
     resolve_full_scf_route,
@@ -210,7 +208,8 @@ class BatchRootFailureCode(IntEnum):
     MAXITER_EXCEEDED = 5
     RESIDUAL_TOLERANCE = 6
     NONFINITE_STATE = 7
-    INVALID_PADDING = 8
+    # 8 (INVALID_PADDING) is retired: lanes are ordinary single Systems
+    # without padded atom/orbital slots.
     RESPONSE_FAILURE = 9
     NONFINITE_DERIVATIVE = 10
 
@@ -233,7 +232,6 @@ def classify_batch_failure_category(final_failure: Tensor) -> tuple[str, ...]:
             int(BatchRootFailureCode.MAXITER_EXCEEDED),
             int(BatchRootFailureCode.RESIDUAL_TOLERANCE),
             int(BatchRootFailureCode.NONFINITE_STATE),
-            int(BatchRootFailureCode.INVALID_PADDING),
         ):
             categories.append("primal_scf_failure")
         elif code == int(BatchRootFailureCode.RESPONSE_FAILURE):
@@ -344,7 +342,6 @@ class ConvergedRootLaneRecord:
     raw_residual_max: Tensor
     electron_count_error: Tensor
     density_finite: bool
-    padding_valid: bool
     trajectory_status: SCFTrajectoryStatus | None
     fermi_status: FermiStatus | None
     damping_state: DampingState
@@ -1309,78 +1306,38 @@ def _make_representation_projections(
     primal_inputs: SCFInputs,
     representation: int,
     guess_charges: SCFCharges,
-    lane_padded: bool,
 ) -> tuple[
     Tensor,
     PotentialLayout | None,
     Callable[[Tensor], Tensor] | None,
-    Callable[[Tensor], Tensor] | None,
     Callable[[Tensor], Any],
 ]:
-    """Construct initial state, layout, padding projections, and raw map."""
+    """Construct initial state, layout, structural projection, and raw map."""
     state_projection: Callable[[Tensor], Tensor] | None = None
-    residual_projection: Callable[[Tensor], Tensor] | None = None
     if representation == labels.SCP_MODE_CHARGE:
         initial_state = pack_charges(guess_charges, primal_inputs.charge_layout)
         layout = None
-        if lane_padded:
-            state_projection, residual_projection = _padded_charge_projections(
-                primal_inputs
-            )
         map_fn = lambda x, _inp=primal_inputs: scf_map(x, _inp)
     elif representation == labels.SCP_MODE_POTENTIAL:
         initial_state, layout = potential_initial_guess(
             guess_charges, primal_inputs
         )
-        base_proj = lambda val, _lay=layout: _project_potential_padding(
+        state_projection = lambda val, _lay=layout: _project_potential_padding(
             val, _lay
         )
-        if lane_padded:
-            pad_state, residual_projection = _padded_potential_projections(
-                primal_inputs, layout
-            )
-            state_projection = lambda val, _ps=pad_state, _bp=base_proj: _ps(
-                _bp(val)
-            )
-
-            def _potential_map_padded(
-                x: Tensor,
-                _inp: SCFInputs = primal_inputs,
-                _lay: PotentialLayout = layout,
-                _sp: Callable[[Tensor], Tensor] = state_projection,
-            ):
-                res = potential_map(x, _inp, _lay)
-                return replace(res, mapped_x=_sp(res.mapped_x))
-
-            map_fn = _potential_map_padded
-        else:
-            state_projection = base_proj
-            map_fn = lambda x, _inp=primal_inputs, _lay=layout: potential_map(
-                x, _inp, _lay
-            )
+        map_fn = lambda x, _inp=primal_inputs, _lay=layout: potential_map(
+            x, _inp, _lay
+        )
     elif representation == labels.SCP_MODE_FOCK:
         initial_state = fock_initial_guess(guess_charges, primal_inputs)
         layout = None
-        if lane_padded:
-            matrix_mask = primal_inputs.orbital_mask.unsqueeze(
-                -1
-            ) & primal_inputs.orbital_mask.unsqueeze(-2)
-            state_projection = lambda val, _mm=matrix_mask, _hc=primal_inputs.integrals.hcore: torch.where(
-                _mm, val, _hc
-            )
-            residual_projection = lambda val, _mm=matrix_mask: torch.where(
-                _mm, val, 0.0
-            )
         map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
     else:
         raise ValueError(
             f"Unknown convergence target (SCP mode) '{representation}'."
         )
 
-    if lane_padded and state_projection is not None:
-        initial_state = state_projection(initial_state)
-
-    return initial_state, layout, state_projection, residual_projection, map_fn
+    return initial_state, layout, state_projection, map_fn
 
 
 @torch._dynamo.disable
@@ -1593,7 +1550,6 @@ class _LanePrimalSolveOutcome:
     raw_residual_max: Tensor
     electron_count_error: Tensor
     density_finite: bool
-    padding_valid: bool
     trajectory_status: SCFTrajectoryStatus | None
     fermi_status: FermiStatus | None
     damping_state: DampingState
@@ -1610,7 +1566,6 @@ def _solve_and_validate_lane_primal(
     representation: int,
     settings: Any,
     strategy: SCFStrategy,
-    lane_padded: bool,
     strategy_label: str,
     maxiter: int,
     damp_default: float,
@@ -1624,14 +1579,10 @@ def _solve_and_validate_lane_primal(
 ]:
     """Solve one lane's detached fixed-point problem and validate with static Fermi."""
     with torch.no_grad():
-        (
-            initial_state,
-            layout,
-            state_projection,
-            residual_projection,
-            map_fn,
-        ) = _make_representation_projections(
-            primal_inputs, representation, guess_charges, lane_padded
+        initial_state, layout, state_projection, map_fn = (
+            _make_representation_projections(
+                primal_inputs, representation, guess_charges
+            )
         )
         solver_problem = None
         if (
@@ -1659,19 +1610,10 @@ def _solve_and_validate_lane_primal(
                 primal_inputs, representation, layout
             )
             primal_params = tuple(p.clone() for p in primal_params)
-            independent_map = adapter.evaluate(outcome.root_x, *primal_params)
-            independent_mapped_x = (
-                state_projection(independent_map.mapped_x)
-                if (
-                    representation == labels.SCP_MODE_POTENTIAL
-                    and lane_padded
-                    and state_projection is not None
-                )
-                else independent_map.mapped_x
+            certified_map_result = adapter.evaluate(
+                outcome.root_x, *primal_params
             )
-            certified_map_result = replace(
-                independent_map, mapped_x=independent_mapped_x
-            )
+            independent_mapped_x = certified_map_result.mapped_x
 
             if representation == labels.SCP_MODE_CHARGE:
                 final_spectral = certified_map_result.spectral
@@ -1686,8 +1628,6 @@ def _solve_and_validate_lane_primal(
 
         final_fermi_status = final_spectral.fermi_status
         raw_diff = independent_mapped_x - outcome.root_x
-        if residual_projection is not None:
-            raw_diff = residual_projection(raw_diff)
         raw_residual_l2 = torch.linalg.vector_norm(raw_diff)
         raw_residual_max = raw_diff.abs().amax()
 
@@ -1724,33 +1664,6 @@ def _solve_and_validate_lane_primal(
         residual_finite = bool(torch.isfinite(raw_diff).all())
         density_finite = bool(torch.isfinite(final_spectral.density).all())
 
-        has_real_atoms = bool((numbers != 0).any())
-        has_active_orbitals = bool(primal_inputs.orbital_mask.any())
-        padding_valid = has_real_atoms and has_active_orbitals
-        if padding_valid and lane_padded and state_projection is not None:
-            projected_root = state_projection(outcome.root_x)
-            projected_mapped = state_projection(independent_mapped_x)
-            ao_matrix_mask = active_orb.unsqueeze(-1) & active_orb.unsqueeze(-2)
-            inactive_density_max = (
-                final_spectral.density.masked_fill(ao_matrix_mask, 0.0)
-                .abs()
-                .amax()
-            )
-            padding_valid = bool(
-                torch.isfinite(projected_root).all()
-                and torch.isfinite(projected_mapped).all()
-                and torch.allclose(
-                    projected_root, outcome.root_x, atol=1.0e-12, rtol=0.0
-                )
-                and torch.allclose(
-                    projected_mapped,
-                    independent_mapped_x,
-                    atol=1.0e-12,
-                    rtol=0.0,
-                )
-                and bool(inactive_density_max <= 1.0e-12)
-            )
-
         traj_code = (
             0
             if outcome.trajectory_status is None
@@ -1765,12 +1678,7 @@ def _solve_and_validate_lane_primal(
         failure_code = int(BatchRootFailureCode.NONE)
         failure_reason: str | None = None
 
-        if not padding_valid:
-            failure_code = int(BatchRootFailureCode.INVALID_PADDING)
-            failure_reason = (
-                "Invalid padding state or empty active orbital/atom mask."
-            )
-        elif traj_code != FERMI_FAILURE_NONE:
+        if traj_code != FERMI_FAILURE_NONE:
             failure_code, failure_reason = _classify_fermi_code(traj_code)
         elif final_code != FERMI_FAILURE_NONE:
             failure_code, failure_reason = _classify_fermi_code(final_code)
@@ -1849,7 +1757,6 @@ def _solve_and_validate_lane_primal(
                 raw_residual_max=raw_residual_max.detach(),
                 electron_count_error=electron_count_error.detach(),
                 density_finite=density_finite,
-                padding_valid=padding_valid,
                 trajectory_status=outcome.trajectory_status,
                 fermi_status=final_fermi_status,
                 damping_state=outcome.damping_state,
@@ -1997,7 +1904,6 @@ def prepare_converged_root_batch(
         SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
     }[requested_response_representation]
     settings, strategy = _prepare_solver(effective_scf_config, positions.dtype)
-    has_padding = bool((numbers == 0).any())
 
     external_input_ids = {
         id(value)
@@ -2070,7 +1976,6 @@ def prepare_converged_root_batch(
         primal_inputs = _detach_scf_inputs(raw_inputs)
         primal_refocc = _unwrap_primal_tensor(refocc)
         primal_overlap_norm = _unwrap_primal_tensor(overlap_norm)
-        lane_padded = has_padding or bool((~primal_inputs.orbital_mask).any())
 
         with torch.no_grad():
             guess = get_guess(
@@ -2107,7 +2012,6 @@ def prepare_converged_root_batch(
                 representation,
                 settings,
                 strategy,
-                lane_padded,
                 route.strategy_label,
                 effective_scf_config.maxiter,
                 effective_scf_config.damp,
@@ -2212,7 +2116,6 @@ def prepare_converged_root_batch(
                 raw_residual_max=solve_outcome.raw_residual_max,
                 electron_count_error=solve_outcome.electron_count_error,
                 density_finite=solve_outcome.density_finite,
-                padding_valid=solve_outcome.padding_valid,
                 trajectory_status=solve_outcome.trajectory_status,
                 fermi_status=solve_outcome.fermi_status,
                 damping_state=solve_outcome.damping_state,
@@ -2841,21 +2744,7 @@ def _evaluate_valid_lanes_mapped(
         else valid_lanes[0].response_potential_layout
     )
     param_count = len(adapter.parameter_paths)
-    pot_state_proj: Callable[[Tensor], Tensor] | None = None
-    if representation == labels.SCP_MODE_POTENTIAL and (
-        bool((adapter.template.numbers == 0).any())
-        or bool((~adapter.template.orbital_mask).any())
-    ):
-        assert layout is not None
-        pad_state, _ = _padded_potential_projections(adapter.template, layout)
-        pot_state_proj = lambda val, _ps=pad_state, _lay=layout: _ps(
-            _project_potential_padding(val, _lay)
-        )
-    raw_map: Callable[..., Tensor] = (
-        (lambda x, *p, _sp=pot_state_proj: _sp(adapter(x, *p)))
-        if pot_state_proj is not None
-        else adapter
-    )
+    raw_map: Callable[..., Tensor] = adapter
 
     roots = torch.stack(
         [
@@ -2963,10 +2852,6 @@ def _evaluate_valid_lanes_mapped(
     ):
         lane_inputs, _ = adapter._rebuild(params)
         mapped_result = adapter.evaluate(attached, *params)
-        if pot_state_proj is not None:
-            mapped_result = replace(
-                mapped_result, mapped_x=pot_state_proj(mapped_result.mapped_x)
-            )
         traj_status = (
             SCFTrajectoryStatus(t_fconv, t_ecount, t_itemp, t_tmany, t_ffail)
             if has_traj

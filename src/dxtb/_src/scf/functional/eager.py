@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import torch
@@ -52,9 +51,7 @@ from .data import (
     SCFPotential,
     functional_scf_interactions_eligible,
     pack_charges,
-    pack_potential,
     setup_scf_inputs,
-    unpack_charges,
 )
 from .implicit import _prepare_scf_root, _SCFMapTensorTree
 from .map import (
@@ -408,74 +405,6 @@ def _solve_representation(
             certification_profile=_certification_profile(config),
         )
     raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
-
-
-def _padded_potential_projections(
-    inputs: SCFInputs, layout: PotentialLayout
-) -> tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]:
-    """Mask fictitious orbital/atom potential entries and PADNZ residuals."""
-    orbital_mask = inputs.orbital_mask
-    atom_mask = inputs.numbers != 0
-
-    def project_state(value: Tensor) -> Tensor:
-        potential = unpack_potential(value, layout)
-        return pack_potential(
-            SCFPotential(
-                mono=torch.where(orbital_mask, potential.mono, 0.0),
-                dipole=(
-                    None
-                    if potential.dipole is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), potential.dipole, 0.0
-                    )
-                ),
-                quad=(
-                    None
-                    if potential.quad is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), potential.quad, 0.0
-                    )
-                ),
-            ),
-            layout,
-        )
-
-    problem = SCFProblem(
-        inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
-    )
-    return project_state, problem.project_residual
-
-
-def _padded_charge_projections(
-    inputs: SCFInputs,
-) -> tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]:
-    """Mask inactive orbital and atom multipoles in charge-SCP state."""
-    orbital_mask = inputs.orbital_mask
-    atom_mask = inputs.numbers != 0
-
-    def project_state(value: Tensor) -> Tensor:
-        charges = unpack_charges(value, inputs.charge_layout)
-        return pack_charges(
-            SCFCharges(
-                mono=torch.where(orbital_mask, charges.mono, 0.0),
-                dipole=(
-                    None
-                    if charges.dipole is None
-                    else torch.where(
-                        atom_mask.unsqueeze(-1), charges.dipole, 0.0
-                    )
-                ),
-                quad=(
-                    None
-                    if charges.quad is None
-                    else torch.where(atom_mask.unsqueeze(-1), charges.quad, 0.0)
-                ),
-            ),
-            inputs.charge_layout,
-        )
-
-    problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
-    return project_state, problem.project_residual
 
 
 def run_functional_full_eager(

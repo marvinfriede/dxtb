@@ -43,7 +43,7 @@ W2c11 completes the failure-classification contract:
 1. **Failure Codes (`BatchRootFailureCode` in `src/dxtb/_src/calculators/batch_implicit.py`)**:
    - `NONE = 0` $\to$ category `"success"`
    - `INVALID_TEMPERATURE = 1`, `TOO_MANY_ELECTRONS = 2`, `FERMI_NONCONVERGENCE = 3`, `ELECTRON_COUNT = 4` $\to$ category `"fermi_failure"`
-   - `MAXITER_EXCEEDED = 5`, `RESIDUAL_TOLERANCE = 6`, `NONFINITE_STATE = 7`, `INVALID_PADDING = 8` $\to$ category `"primal_scf_failure"`
+   - `MAXITER_EXCEEDED = 5`, `RESIDUAL_TOLERANCE = 6`, `NONFINITE_STATE = 7`, `INVALID_PADDING = 8` (retired later; see `grouped-vmap-batching.md`) $\to$ category `"primal_scf_failure"`
    - `RESPONSE_FAILURE = 9` $\to$ category `"response_failure"` (reserved strictly for lanes where the implicit linear-response solver ran and reported `status != 0` or a nonfinite response vector/residual)
    - `NONFINITE_DERIVATIVE = 10` $\to$ category `"nonfinite_derivative"` (emitted when primal SCF and the linear-response solver succeeded or were bypassed, yet a requested derivative with respect to `positions`, `chrg`, `spin`, `field`, `field_grad`, or shared `Model` parameters is nonfinite)
    - `RESPONSE_NOT_RUN = -1` (sentinel used in `response_status` for unselected zero-weight lanes, primal-failed lanes, or calls that do not invoke the linear-response VJP)
