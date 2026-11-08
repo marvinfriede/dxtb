@@ -26,6 +26,7 @@ identical finalized result, bit for bit.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import fields, replace
 
 import pytest
 import torch
@@ -33,8 +34,13 @@ import torch
 from dxtb import labels
 from dxtb._src.calculators.singlepoint import system_singlepoint
 from dxtb._src.scf.functional import eager as eager_mod
+from dxtb._src.scf.functional import solver as solver_mod
 from dxtb._src.scf.functional.core import tensor_leaves
+from dxtb._src.scf.functional.problem import SCFRepresentation
 from dxtb._src.scf.functional.solver import (
+    SCFSolverTrace,
+    _finalize_problem_outcome,
+    _problem_state_projection,
     finalize_fixed_trip_problem,
     fixed_trip_problem_control,
     solve_scf_problem,
@@ -209,3 +215,263 @@ def test_advance_rejects_ranges_outside_the_schedule(monkeypatch) -> None:
     for start, stop in ((0, 5), (3, 2), (-1, 1)):
         with pytest.raises(ValueError, match="Invalid fixed-trip range"):
             control.advance(state, start, stop)
+
+
+# Solver trace
+
+
+def _initial_observations(state) -> tuple[tuple[object, ...], ...]:
+    """Initial trace row, as recorded by ``_solve_map_control``."""
+    return (
+        (
+            state.map_input_x,
+            state.map_result,
+            state.current_x,
+            state.residual,
+            state.active,
+            state.active,
+            state.iterations,
+            state.damping_state.value,
+            state.method_state,
+        ),
+    )
+
+
+def _traced(control, guess, chunks):
+    """Chunked solve that carries trace observations between chunks."""
+    state = control.start(guess)
+    observations = _initial_observations(state)
+    trip = 0
+    for chunk in chunks:
+        state, observations = control.advance(
+            state, trip, trip + chunk, observations
+        )
+        trip += chunk
+    assert trip == control.maxiter
+    return _finalize_problem_outcome(
+        control.finish(state, guess, observations), control.problem
+    )
+
+
+def _assert_same_trace(left: SCFSolverTrace, right: SCFSolverTrace) -> None:
+    for item in fields(SCFSolverTrace):
+        a, b = getattr(left, item.name), getattr(right, item.name)
+        assert (a is None) == (b is None), item.name
+        if isinstance(a, tuple):
+            assert len(a) == len(b), item.name
+            pairs = list(zip(a, b))
+        else:
+            pairs = [] if a is None else [(a, b)]
+        for x, y in pairs:
+            assert x.dtype == y.dtype and x.shape == y.shape, item.name
+            torch.testing.assert_close(
+                x, y, rtol=0.0, atol=0.0, equal_nan=True, msg=item.name
+            )
+
+
+_TRACE_CONFIGS = (
+    "gfn1-potential-default",
+    "gfn1-charge-anderson",
+    "gfn1-potential-broyden",
+    "gfn2-fock-cdiis",
+)
+_TRACE_PARTITIONS = ((12,), (4, 8), (3, 3, 6), (1,) * 12)
+
+
+@pytest.mark.parametrize("physics", ["closed-shell-300K", "fermi-failure"])
+@pytest.mark.parametrize("config", _TRACE_CONFIGS)
+def test_chunked_trace_matches_monolithic_trace(
+    monkeypatch, config: str, physics: str
+) -> None:
+    """``record_trace=True``: observations carried between chunks."""
+    method, method_settings = _CONFIGS[config]
+    numbers, charge, spin, physics_settings = _PHYSICS[physics]
+    guess, problem, settings, strategy, kwargs = _capture_problem(
+        monkeypatch,
+        method,
+        numbers,
+        charge,
+        spin,
+        {**method_settings, **physics_settings, "maxiter": 12},
+    )
+    profile = kwargs["certification_profile"]
+    reference = solve_scf_problem(
+        guess,
+        problem,
+        settings,
+        strategy,
+        eager=False,
+        record_trace=True,
+        certification_profile=profile,
+    )
+    trace = reference.trace
+    assert trace is not None
+    assert trace.map_inputs.shape[0] == 1 + 12
+    if config != "gfn1-potential-default":
+        assert trace.method_state, "stateful method records no history"
+
+    control = fixed_trip_problem_control(
+        guess, problem, settings, strategy, certification_profile=profile
+    )
+    for chunks in _TRACE_PARTITIONS:
+        chunked = _traced(control, guess, chunks)
+        assert chunked.trace is not None
+        _assert_same_trace(chunked.trace, trace)
+        _assert_identical(chunked, reference)
+
+
+# Initial status and the maxiter = 0 / 1 boundaries
+
+# (physics, maxiter, record_initial_status) -> pinned outcome:
+# (trajectory status recorded, iterations, converged, terminal failure)
+_BOUNDARY_OUTCOMES = {
+    ("closed-shell-300K", 0, None): (False, 1, False, False),
+    ("closed-shell-300K", 0, True): (True, 1, False, False),
+    ("closed-shell-300K", 0, False): (False, 1, False, False),
+    ("closed-shell-300K", 1, None): (True, 2, False, False),
+    ("closed-shell-300K", 1, True): (True, 2, False, False),
+    ("closed-shell-300K", 1, False): (True, 2, False, False),
+    ("fermi-failure", 0, None): (False, 1, False, True),
+    ("fermi-failure", 0, True): (True, 1, False, True),
+    ("fermi-failure", 0, False): (False, 1, False, True),
+    ("fermi-failure", 1, None): (True, 1, False, True),
+    ("fermi-failure", 1, True): (True, 1, False, True),
+    ("fermi-failure", 1, False): (True, 1, False, True),
+}
+
+
+@pytest.mark.parametrize(
+    "physics, maxiter, record", sorted(_BOUNDARY_OUTCOMES, key=str)
+)
+def test_initial_status_and_short_schedules(
+    monkeypatch, physics: str, maxiter: int, record: bool | None
+) -> None:
+    numbers, charge, spin, physics_settings = _PHYSICS[physics]
+    guess, problem, settings, strategy, kwargs = _capture_problem(
+        monkeypatch,
+        labels.GFN1_XTB,
+        numbers,
+        charge,
+        spin,
+        {**physics_settings, "maxiter": maxiter},
+    )
+    profile = kwargs["certification_profile"]
+    reference = solve_scf_problem(
+        guess,
+        problem,
+        settings,
+        strategy,
+        eager=False,
+        record_initial_status=record,
+        certification_profile=profile,
+    )
+
+    control = fixed_trip_problem_control(
+        guess, problem, settings, strategy, certification_profile=profile
+    )
+    # ``None`` resolves to recording the initial status iff trips follow.
+    assert control.record_initial_status is (maxiter > 0)
+    if record is not None:
+        control = replace(control, record_initial_status=record)
+    for chunks in ((maxiter,), (0, maxiter), (maxiter, 0)):
+        state = _chunked(control, guess, chunks)
+        _assert_identical(
+            finalize_fixed_trip_problem(control, state, guess), reference
+        )
+
+    recorded, iterations, converged, terminal = _BOUNDARY_OUTCOMES[
+        (physics, maxiter, record)
+    ]
+    assert (reference.trajectory_status is not None) is recorded
+    assert int(reference.iterations) == iterations
+    assert bool(reference.converged) is converged
+    assert bool(state.terminal_failed) is terminal
+    assert bool(state.active) is (not terminal and not converged)
+
+
+# Representation-owned state projection (rebase contract)
+
+_REPRESENTATION_CONFIGS = {
+    SCFRepresentation.CHARGE: "gfn1-charge-anderson",
+    SCFRepresentation.POTENTIAL: "gfn1-potential-default",
+    SCFRepresentation.FOCK: "gfn2-fock-cdiis",
+}
+
+
+def _spy_projections(monkeypatch, events: list[str]) -> None:
+    for name, label in (
+        ("_project_charge_padding", "charge"),
+        ("_project_potential_padding", "potential"),
+    ):
+        original = getattr(solver_mod, name)
+
+        def spy(value, layout, original=original, label=label):
+            events.append(label)
+            return original(value, layout)
+
+        monkeypatch.setattr(solver_mod, name, spy)
+
+
+@pytest.mark.parametrize(
+    "representation", list(_REPRESENTATION_CONFIGS), ids=lambda r: r.name
+)
+def test_problem_state_projection_contract(
+    monkeypatch, representation: SCFRepresentation
+) -> None:
+    method, settings = _CONFIGS[_REPRESENTATION_CONFIGS[representation]]
+    guess, problem, solver_settings, strategy, kwargs = _capture_problem(
+        monkeypatch, method, H2O, 0.0, None, {**settings, "maxiter": 3}
+    )
+    assert problem.representation is representation
+    expected = {
+        SCFRepresentation.CHARGE: "charge",
+        SCFRepresentation.POTENTIAL: "potential",
+        SCFRepresentation.FOCK: None,
+    }[representation]
+
+    events: list[str] = []
+    _spy_projections(monkeypatch, events)
+
+    def caller(value):
+        events.append("caller")
+        return value
+
+    if expected is None:
+        assert _problem_state_projection(problem, None) is None
+        assert _problem_state_projection(problem, caller) is caller
+    else:
+        projection = _problem_state_projection(problem, None)
+        assert projection is not None
+        projection(guess)
+        assert events == [expected]
+        events.clear()
+        combined = _problem_state_projection(problem, caller)
+        assert combined is not None
+        combined(guess)
+        assert events == [expected, "caller"]
+        events.clear()
+
+    # Through the monolithic and the resumable fixed-trip controllers.
+    profile = kwargs["certification_profile"]
+    reference = solve_scf_problem(
+        guess,
+        problem,
+        solver_settings,
+        strategy,
+        eager=False,
+        certification_profile=profile,
+    )
+    monolithic = list(events)
+    events.clear()
+    control = fixed_trip_problem_control(
+        guess, problem, solver_settings, strategy, certification_profile=profile
+    )
+    state = _chunked(control, guess, (1, 2))
+    _assert_identical(
+        finalize_fixed_trip_problem(control, state, guess), reference
+    )
+    assert events == monolithic
+    if expected is None:
+        assert monolithic == []
+    else:
+        assert monolithic and set(monolithic) == {expected}

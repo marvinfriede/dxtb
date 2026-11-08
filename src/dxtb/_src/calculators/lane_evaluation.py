@@ -417,7 +417,9 @@ _ADAPTIVE_CHUNK_TRIPS = 1
 Measured on CPU (``benchmarks/results/adaptive-chunk-sweep-cpu.json``,
 chunk lengths 1-16): one extra ``vmap`` call and host read costs a few
 milliseconds, far less than one map trip, so the shortest chunk avoids all
-overshoot trips and was fastest or tied in every case. Not measured on GPU.
+overshoot trips and was fastest or tied in every case. Chunk length 1 is
+the measured CPU optimum; the CUDA optimum is unknown (every chunk boundary
+is a device-to-host read there) and must be measured separately.
 """
 
 

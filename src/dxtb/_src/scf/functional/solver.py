@@ -1376,11 +1376,19 @@ def fixed_trip_problem_control(
         SCF_CERTIFICATION_STANDARD
     ),
 ) -> FixedTripControl:
-    """Return the resumable controller used by :func:`solve_scf_problem`.
+    """Return the resumable form of the standard fixed-trip problem solve.
 
     ``start``, ``advance`` over ``range(settings.maxiter)`` and ``finish``
     followed by :func:`finalize_fixed_trip_problem` reproduce
-    ``solve_scf_problem(..., eager=False)``.
+    ``solve_scf_problem(guess, problem, settings, strategy, eager=False,
+    certification_profile=...)`` with its defaults: only the
+    representation-owned structural projection
+    (:func:`_problem_state_projection` without a caller projection), no
+    residual projection, no initial-state projection and the default
+    initial-status recording. ``solve_scf_problem`` options beyond these
+    (caller ``state_projection``, ``residual_projection``,
+    ``project_initial_state``, ``record_initial_status``, ``record_trace``)
+    are not exposed here.
     """
     _, first_stage = _select_first_stage(strategy, problem, eager=False)
     return _fixed_trip_control(

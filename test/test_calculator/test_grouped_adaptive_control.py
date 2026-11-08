@@ -450,3 +450,97 @@ def test_forward_mode_dual_tensors_match_static_schedule(monkeypatch) -> None:
     assert calls == [1]
     assert float(tangent_out[False].abs().max()) > 0.0
     torch.testing.assert_close(tangent_out[True], tangent_out[False], **EXACT)
+
+
+# Higher-order ordinary autograd
+
+
+def test_second_order_autograd_matches_static_schedule(monkeypatch) -> None:
+    """Double backward through the adaptive route (no ``torch.func``)."""
+    par = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
+    par.set_differentiable("element", "O", "gam")
+    (gam,) = (p for p in par.parameters() if p.requires_grad)
+    system = _setup(_model(labels.GFN1_XTB, par=par, maxiter=30), H2O)
+    generator = torch.Generator().manual_seed(11)
+    directions = tuple(
+        torch.randn((3, 3), generator=generator, dtype=DTYPE) for _ in range(2)
+    )
+
+    outputs = {}
+    for static in (True, False):
+        _route(monkeypatch, static)
+        positions = tuple(
+            _geometry(H2O, seed).requires_grad_(True) for seed in range(2)
+        )
+        result = evaluate_packed_systems((system,) * 2, positions)
+        assert bool(result.converged.all())
+        gradient = torch.autograd.grad(
+            result.energy.sum(), positions, create_graph=True
+        )
+        directional = sum((g * v).sum() for g, v in zip(gradient, directions))
+        # Hessian-vector product and d2E / d(gam) d(positions) . v
+        # The parameter-dependent setup graph is shared by both routes.
+        second = torch.autograd.grad(
+            directional, (*positions, gam), retain_graph=True
+        )
+        outputs[static] = tuple(g.detach() for g in (*gradient, *second))
+
+    for a, b in zip(outputs[True], outputs[False]):
+        assert float(a.abs().max()) > 0.0
+        torch.testing.assert_close(a, b, **EXACT)
+
+
+# Lanes finishing at different iterations
+
+
+def test_unequal_lane_iterations_match_and_freeze(monkeypatch) -> None:
+    """Earlier-certified lanes stay frozen while later lanes continue."""
+    system = _setup(_model(maxiter=40), H2O)
+    charges = (0.0, 0.4, -0.3)
+
+    def call():
+        positions = tuple(
+            _geometry(H2O, seed).requires_grad_(True) for seed in range(3)
+        )
+        result = evaluate_packed_systems((system,) * 3, positions, chrg=charges)
+        gradient = torch.autograd.grad(result.energy.sum(), positions)
+        return result, tuple(g.detach() for g in gradient)
+
+    _route(monkeypatch, True)
+    static, static_gradient = call()
+
+    _route(monkeypatch, False)
+    snapshots: list[tuple[torch.Tensor, ...]] = []
+    original = lane_evaluation._group_active
+
+    def recording(capture, state):
+        snapshots.append(tuple(leaf.detach().clone() for leaf in state))
+        return original(capture, state)
+
+    monkeypatch.setattr(lane_evaluation, "_group_active", recording)
+    adaptive, adaptive_gradient = call()
+
+    iterations = adaptive.iterations.tolist()
+    assert bool(adaptive.converged.all())
+    assert len(set(iterations)) > 1, iterations
+    _assert_same_leaves(static, adaptive)
+    for a, b in zip(static_gradient, adaptive_gradient):
+        torch.testing.assert_close(a, b, **EXACT)
+    assert static.iterations.tolist() == iterations
+    assert static.converged.tolist() == adaptive.converged.tolist()
+
+    # Snapshot k is the carried state after k trips; a lane certified after
+    # ``iterations - 1`` active trips. No carried leaf of a finished lane
+    # changes in the trips that later lanes still run.
+    assert len(snapshots) == max(iterations)
+    for lane, count in enumerate(iterations):
+        done = count - 1
+        for later in snapshots[done + 1 :]:
+            for frozen, leaf in zip(snapshots[done], later):
+                torch.testing.assert_close(leaf[lane], frozen[lane], **EXACT)
+    first, last = min(iterations) - 1, max(iterations) - 1
+    late = iterations.index(max(iterations))
+    assert any(
+        not torch.equal(a[late], b[late])
+        for a, b in zip(snapshots[first], snapshots[last])
+    )
