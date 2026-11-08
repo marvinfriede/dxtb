@@ -41,24 +41,24 @@ import torch
 
 from dxtb import GFN2_XTB  # noqa: E402
 from dxtb._src.scf.functional import unpack_charges  # noqa: E402
-from dxtb._src.scf.functional.cdiis import CDIISMethod  # noqa: E402
+from dxtb._src.scf.functional.cdiis import CDIISConverger  # noqa: E402
 from dxtb._src.scf.functional.map import fock_initial_guess  # noqa: E402
 from dxtb._src.scf.functional.method import (  # noqa: E402
-    SCFMethodContext,
-    SCFMethodProposal,
+    SCFConvergerContext,
+    SCFConvergerProposal,
 )
 from dxtb._src.scf.functional.problem import (  # noqa: E402
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.solver import (  # noqa: E402
     SCFSolverSettings,
     solve_scf_problem,
 )
 from dxtb._src.scf.functional.soscf import (  # noqa: E402
-    SOSCFMethod,
-    SOSCFMethodSettings,
+    SOSCFConverger,
+    SOSCFConvergerSettings,
     SOSCFState,
     _occupation_sector_spectra,
 )
@@ -74,9 +74,9 @@ class _RecordingSOSCF:
     """Benchmark-only adapter that records method-local diagnostics."""
 
     events: list[dict[str, float | int | bool]]
-    settings: SOSCFMethodSettings = SOSCFMethodSettings()
-    required_representation: ClassVar[SCFRepresentation] = (
-        SCFRepresentation.FOCK
+    settings: SOSCFConvergerSettings = SOSCFConvergerSettings()
+    required_variable: ClassVar[SCFVariable] = (
+        SCFVariable.FOCK
     )
     supports_fixed_trip: ClassVar[bool] = False
 
@@ -84,11 +84,11 @@ class _RecordingSOSCF:
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
-        proposal = SOSCFMethod(self.settings).propose(
-            problem, physical_state, method_state, context
+        converger_state,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
+        proposal = SOSCFConverger(self.settings).propose(
+            problem, physical_state, converger_state, context
         )
         state = proposal.state
         assert isinstance(state, SOSCFState)
@@ -132,7 +132,7 @@ def main() -> None:
         spin=args.spin,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     guess = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -140,7 +140,7 @@ def main() -> None:
     strategy = SCFStrategy(
         (
             SCFStage(
-                CDIISMethod(),
+                CDIISConverger(),
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2,
                     stationarity=args.switch_stationarity,

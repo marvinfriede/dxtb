@@ -174,7 +174,7 @@ def setup_repulsion(
 
 class BaseRepulsion(Classical):
     """
-    Representation of the classical repulsion.
+    Variable of the classical repulsion.
     """
 
     arep: Tensor

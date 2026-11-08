@@ -953,7 +953,7 @@ def _enforce_eager_status_policy(
                 raise
         if not_converged is not None and not_converged[lane]:
             strategy_label = " -> ".join(
-                type(stage.method).__name__.removesuffix("Method").lower()
+                type(stage.converger).__name__.removesuffix("Converger").lower()
                 for stage in config.strategy.stages
             )
             message = (

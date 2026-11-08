@@ -56,7 +56,7 @@ from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb._src.calculators.result import Result  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import (  # noqa: E402
-    SCFRepresentation,
+    SCFVariable,
     SCFStrategy,
     strategy_preset,
 )
@@ -107,7 +107,7 @@ def build_system(maxiter: int) -> tuple[Any, torch.Tensor, int]:
             (
                 replace(
                     strategy_preset("anderson").stages[0],
-                    representation=SCFRepresentation.CHARGE,
+                    variable=SCFVariable.CHARGE,
                 ),
             )
         ),
@@ -370,8 +370,8 @@ def main() -> None:
         seconds=time.perf_counter() - setup_started,
         rss_mb=current_rss_mb(),
         maxiter=system.config.scf.maxiter,
-        variable=system.config.scf.initial_representation.value,
-        converger=type(system.config.scf.strategy.stages[0].method).__name__,
+        variable=system.config.scf.initial_variable.value,
+        converger=type(system.config.scf.strategy.stages[0].converger).__name__,
         x_atol=system.config.scf.x_atol,
         x_atol_max=system.config.scf.x_atol_max,
         smear=system.config.scf.fermi.etemp > 0,

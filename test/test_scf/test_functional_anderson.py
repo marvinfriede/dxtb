@@ -35,8 +35,8 @@ from dxtb._src.scf.functional import (
 )
 from dxtb._src.scf.functional import anderson as anderson_module
 from dxtb._src.scf.functional import anderson_mix
-from dxtb._src.scf.functional.anderson import AndersonMethodSettings
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.anderson import AndersonConvergerSettings
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 
 from ..utils import scf_strategy
 from ._anderson_helpers import (
@@ -198,7 +198,7 @@ def test_anderson_initial_map_history_semantics(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonMethodSettings,
+        current_settings: AndersonConvergerSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
@@ -260,7 +260,7 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonMethodSettings,
+        current_settings: AndersonConvergerSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
@@ -335,7 +335,7 @@ def test_anderson_inactive_initial_transition_keeps_initialized_state(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonMethodSettings,
+        current_settings: AndersonConvergerSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
@@ -401,7 +401,7 @@ def test_anderson_history_freezes_after_two_active_transitions(
         old: torch.Tensor,
         mapped: torch.Tensor,
         state: AndersonState | None,
-        current_settings: AndersonMethodSettings,
+        current_settings: AndersonConvergerSettings,
         step: int,
         transition_active: torch.Tensor | None = None,
         damp: torch.Tensor | None = None,
@@ -528,7 +528,7 @@ def _solve_loose_anderson_with_certification(maxiter: int):
         case.system.config.scf, case.positions.dtype
     )
     result = solve_scf_anderson(case.x, case.inputs, settings)
-    expected = SCFProblem(case.inputs, SCFRepresentation.CHARGE).evaluate(
+    expected = SCFProblem(case.inputs, SCFVariable.CHARGE).evaluate(
         result.root_x
     )
     _assert_tensor_equal(
@@ -581,7 +581,7 @@ def test_anderson_gfn2_multipole_solver() -> None:
 
 def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
     """Anderson setup rejects Broyden and freezes dynamic settings."""
-    from dxtb.scf import AndersonMethod, SCFStrategy, strategy_preset
+    from dxtb.scf import AndersonConverger, SCFStrategy, strategy_preset
 
     case = _prepare_case(
         GFN1_XTB,
@@ -604,9 +604,9 @@ def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
                     (
                         replace(
                             config.strategy.stages[0],
-                            method=AndersonMethod(
+                            converger=AndersonConverger(
                                 replace(
-                                    config.strategy.stages[0].method.settings,
+                                    config.strategy.stages[0].converger.settings,
                                     generations=0,
                                 )
                             ),

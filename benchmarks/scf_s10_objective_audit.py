@@ -33,7 +33,7 @@ from scipy.optimize import minimize
 from benchmarks.prototypes.scf_energy_diis import exact_energy_value_gradient
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.core import FunctionalInteractionSet
 from dxtb._src.scf.functional.data import SCFInputs
 from dxtb._src.scf.functional.energy import electronic_energy_from_density
@@ -41,7 +41,7 @@ from dxtb._src.scf.functional.map import (
     density_to_charges_and_core_energy,
     fock_initial_guess,
 )
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
 from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
@@ -370,7 +370,7 @@ def main() -> None:
         spin=args.spin,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     guess = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -379,7 +379,7 @@ def main() -> None:
         SCFSolverSettings(args.history - 1, False, 0.5, 0.0, 0.0),
         problem.map,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+        strategy=SCFStrategy((SCFStage(CDIISConverger()),)),
         record_trace=True,
     )
     history = tuple(trajectory.trace.densities[: args.history])

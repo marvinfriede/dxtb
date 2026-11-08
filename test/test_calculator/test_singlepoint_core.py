@@ -248,12 +248,12 @@ def test_default_full_singlepoint_uses_functional_route(
     system = Model(par=ParamModule(GFN1_XTB, dtype=positions.dtype)).setup(
         torch.tensor([1, 1])
     )
-    from dxtb.scf import AndersonMethod, SCFDifferentiation, SCFRepresentation
+    from dxtb.scf import AndersonConverger, SCFDifferentiation, SCFVariable
 
     scf_config = system.config.scf
     assert scf_config.differentiation is SCFDifferentiation.UNROLLED
-    assert scf_config.initial_representation is SCFRepresentation.POTENTIAL
-    assert isinstance(scf_config.strategy.stages[0].method, AndersonMethod)
+    assert scf_config.initial_variable is SCFVariable.POTENTIAL
+    assert isinstance(scf_config.strategy.stages[0].converger, AndersonConverger)
     assert system.config.scf.fermi.etemp == 300.0
 
     core_module = importlib.import_module("dxtb._src.calculators.singlepoint")
@@ -532,7 +532,7 @@ def test_production_singlepoint_matches_legacy_full(
 def test_production_maxiter_zero_is_valid_one_shot(
     variable: str, converger: str, force_convergence: bool
 ) -> None:
-    """The production boundary preserves maxiter=0 for every representation."""
+    """The production boundary preserves maxiter=0 for every variable."""
     from test.test_scf.test_functional_map import _prepare_case
 
     from dxtb import SCFFailureCode

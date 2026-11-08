@@ -23,7 +23,7 @@ methods.
 
 The dataclass can represent a complete parametrization file produced by the
 `tblite`_ library, however it only stores the raw data rather than the full
-representation, i.e., the transformation to the corresponding atom-resolved
+variable, i.e., the transformation to the corresponding atom-resolved
 quantities must be carried out separately.
 
 .. _tblite: https://tblite.readthedocs.io

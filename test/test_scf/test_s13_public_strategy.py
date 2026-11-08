@@ -32,30 +32,30 @@ def test_default_strategy_is_public_anderson_potential() -> None:
     """Default Config and Config.create resolve the same public preset."""
     for config in (ConfigSCF(), Config.create().scf):
         stage = config.strategy.stages[0]
-        assert isinstance(stage.method, scf.AndersonMethod)
-        assert stage.representation is scf.SCFRepresentation.POTENTIAL
-        assert stage.method.settings.generations == 5
-        assert stage.method.settings.diagonal_offset == 0.01
+        assert isinstance(stage.converger, scf.AndersonConverger)
+        assert stage.variable is scf.SCFVariable.POTENTIAL
+        assert stage.converger.settings.generations == 5
+        assert stage.converger.settings.diagonal_offset == 0.01
         assert config.differentiation is scf.SCFDifferentiation.UNROLLED
-        assert config.response.representation is scf.SCFRepresentation.POTENTIAL
-        assert config.response.rtol == 1.0e-10
-        assert config.response.atol == 1.0e-12
-        assert config.response.maxiter is None
+        assert config.cpscf.variable is scf.SCFVariable.POTENTIAL
+        assert config.cpscf.rtol == 1.0e-10
+        assert config.cpscf.atol == 1.0e-12
+        assert config.cpscf.maxiter is None
 
 
-def test_named_presets_have_stable_method_and_representation() -> None:
+def test_named_presets_have_stable_method_and_variable() -> None:
     """Named presets expose methods and coordinate choices without labels."""
     expected = {
-        "linear": (scf.LinearMethod, scf.SCFRepresentation.POTENTIAL),
-        "anderson": (scf.AndersonMethod, scf.SCFRepresentation.POTENTIAL),
-        "broyden": (scf.BroydenMethod, scf.SCFRepresentation.POTENTIAL),
-        "cdiis": (scf.CDIISMethod, scf.SCFRepresentation.FOCK),
+        "linear": (scf.LinearConverger, scf.SCFVariable.POTENTIAL),
+        "anderson": (scf.AndersonConverger, scf.SCFVariable.POTENTIAL),
+        "broyden": (scf.BroydenConverger, scf.SCFVariable.POTENTIAL),
+        "cdiis": (scf.CDIISConverger, scf.SCFVariable.FOCK),
     }
-    for name, (method_type, representation) in expected.items():
+    for name, (method_type, variable) in expected.items():
         config = ConfigSCF.create(strategy=name)
         stage = config.strategy.stages[0]
-        assert isinstance(stage.method, method_type)
-        assert stage.representation is representation
+        assert isinstance(stage.converger, method_type)
+        assert stage.variable is variable
         assert name in str(config.info()).casefold()
 
 
@@ -75,11 +75,11 @@ def test_removed_scf_options_are_rejected() -> None:
 
 def test_soscf_internal_safety_settings_are_not_public() -> None:
     """SOSCF exposes its validated method, not epsilon-scale guard knobs."""
-    assert "SOSCFMethod" in scf.__all__
-    assert "SOSCFMethodSettings" not in scf.__all__
+    assert "SOSCFConverger" in scf.__all__
+    assert "SOSCFConvergerSettings" not in scf.__all__
     assert isinstance(
-        scf.strategy_preset("cdiis-soscf").stages[-1].method,
-        scf.SOSCFMethod,
+        scf.strategy_preset("cdiis-soscf").stages[-1].converger,
+        scf.SOSCFConverger,
     )
 
 
@@ -95,7 +95,7 @@ def test_dynamic_and_soscf_presets_require_implicit_eager_policy() -> None:
         differentiation="implicit",
         fermi_etemp=0.0,
     )
-    assert isinstance(strategy.strategy.stages[-1].method, scf.SOSCFMethod)
+    assert isinstance(strategy.strategy.stages[-1].converger, scf.SOSCFConverger)
 
 
 def test_soscf_preset_rejects_active_fermi_smearing() -> None:

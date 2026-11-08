@@ -30,20 +30,20 @@ import torch
 from torch.func import jvp
 
 from dxtb._src.scf.functional.method import (
-    SCFMethodContext,
-    SCFMethodProposal,
-    SCFMethodState,
+    SCFConvergerContext,
+    SCFConvergerProposal,
+    SCFConvergerState,
 )
 from dxtb._src.scf.functional.problem import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
 from dxtb._src.typing import Tensor
 
 __all__ = [
-    "NewtonKrylovMethod",
+    "NewtonKrylovConverger",
     "NewtonKrylovSettings",
     "NewtonKrylovState",
     "fixed_point_jvp",
@@ -113,7 +113,7 @@ class _KrylovResult:
 def _project_direction(problem: SCFProblem, value: Tensor) -> Tensor:
     """Apply structural projection and the symmetric Fock tangent constraint."""
     projected = problem.project_residual(value)
-    if problem.representation is SCFRepresentation.FOCK:
+    if problem.variable is SCFVariable.FOCK:
         projected = 0.5 * (projected + projected.transpose(-2, -1))
         projected = problem.project_residual(projected)
     return projected
@@ -280,8 +280,8 @@ def _initial_state(x: Tensor) -> NewtonKrylovState:
 
 
 @dataclass(frozen=True, eq=False)
-class NewtonKrylovMethod:
-    """Eager, active-smearing Newton refinement in any SCF representation."""
+class NewtonKrylovConverger:
+    """Eager, active-smearing Newton refinement in any SCF variable."""
 
     supports_fixed_trip: ClassVar[bool] = False
     settings: NewtonKrylovSettings = NewtonKrylovSettings()
@@ -290,20 +290,20 @@ class NewtonKrylovMethod:
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Take a bounded Newton step or an explicitly diagnosed fixed-point step."""
         fermi = problem.inputs.fermi_settings
         if fermi is None or not fermi.smear:
             raise NotImplementedError(
-                "NewtonKrylovMethod currently requires Fermi smearing at nonzero "
+                "NewtonKrylovConverger currently requires Fermi smearing at nonzero "
                 "electronic temperature."
             )
         if not bool(context.transition_active):
-            return SCFMethodProposal(physical_state.x, method_state)
+            return SCFConvergerProposal(physical_state.x, converger_state)
 
-        previous = cast(NewtonKrylovState | None, method_state)
+        previous = cast(NewtonKrylovState | None, converger_state)
         old = _initial_state(physical_state.x) if previous is None else previous
         x = physical_state.x
         residual = _project_direction(problem, context.proposal_x - x)
@@ -361,4 +361,4 @@ class NewtonKrylovMethod:
             ),
             fallback_count=fallback_count,
         )
-        return SCFMethodProposal(proposed_x, new_state)
+        return SCFConvergerProposal(proposed_x, new_state)

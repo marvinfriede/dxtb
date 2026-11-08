@@ -32,7 +32,7 @@ __all__ = ["PSecondOrderEffective", "PSecondOrder"]
 
 class PSecondOrderEffective(BaseModel):
     """
-    Representation of the isotropic second-order charge interactions for a
+    Variable of the isotropic second-order charge interactions for a
     parametrization.
     """
 

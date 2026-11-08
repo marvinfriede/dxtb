@@ -41,14 +41,14 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.energy import electronic_energy_from_spectral
-from dxtb._src.scf.functional.method import SCFMethodContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.method import SCFConvergerContext
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import _solve_map, setup_solver_settings
 from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
@@ -147,20 +147,20 @@ def _case_specifications() -> list[dict[str, object]]:
 
 def _build_method(name: str, config):
     if name == "Anderson":
-        configured = config.strategy.stages[0].method
-        if isinstance(configured, AndersonMethod):
-            return AndersonMethod(configured.settings)
-        return AndersonMethod(AndersonMethodSettings())
+        configured = config.strategy.stages[0].converger
+        if isinstance(configured, AndersonConverger):
+            return AndersonConverger(configured.settings)
+        return AndersonConverger(AndersonConvergerSettings())
     if name == "Broyden":
-        return BroydenMethod()
+        return BroydenConverger()
     if name == "CDIIS":
-        return CDIISMethod()
+        return CDIISConverger()
     raise ValueError(f"Unknown method {name!r}.")
 
 
 def _state_bytes(method, problem, guess: torch.Tensor) -> int:
     physical = problem.evaluate(guess)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.ones((), dtype=torch.bool, device=guess.device),
         damp=guess.new_tensor(0.5),
@@ -178,17 +178,17 @@ def _state_bytes(method, problem, guess: torch.Tensor) -> int:
 
 
 def _run(spec: dict[str, object], method_name: str, maxiter: int) -> dict:
-    representation = (
-        SCFRepresentation.FOCK
+    variable = (
+        SCFVariable.FOCK
         if method_name == "CDIIS"
-        else SCFRepresentation.POTENTIAL
+        else SCFVariable.POTENTIAL
     )
     case = reference._case(
         str(spec["name"]),
         method=spec["method"],
-        representation=representation,
+        variable=variable,
         converger=(
-            AndersonMethod if method_name == "Anderson" else BroydenMethod
+            AndersonConverger if method_name == "Anderson" else BroydenConverger
         ),
         tolerance=1.0e-5,
         maxiter=maxiter,
@@ -204,23 +204,23 @@ def _run(spec: dict[str, object], method_name: str, maxiter: int) -> dict:
     )
     guess, layout = reference._initial_state(case, case.inputs)
     rep = (
-        SCFRepresentation.FOCK
+        SCFVariable.FOCK
         if method_name == "CDIIS"
-        else SCFRepresentation.POTENTIAL
+        else SCFVariable.POTENTIAL
     )
     problem = SCFProblem(case.inputs, rep, potential_layout=layout)
     initial_variant = str(spec.get("initial", "physical"))
     if initial_variant == "zero":
-        if rep is SCFRepresentation.FOCK:
+        if rep is SCFVariable.FOCK:
             guess = torch.diag(
                 torch.linspace(-0.5, 0.5, guess.shape[-1], dtype=guess.dtype)
             )
         else:
             guess = torch.zeros_like(guess)
     elif initial_variant == "scaled":
-        guess = 1.5 * guess if rep is SCFRepresentation.FOCK else 4.0 * guess
+        guess = 1.5 * guess if rep is SCFVariable.FOCK else 4.0 * guess
     elif initial_variant == "perturbed":
-        if rep is SCFRepresentation.FOCK:
+        if rep is SCFVariable.FOCK:
             perturbation = torch.diag(
                 torch.linspace(-0.25, 0.25, guess.shape[-1], dtype=guess.dtype)
             )
@@ -257,7 +257,7 @@ def _run(spec: dict[str, object], method_name: str, maxiter: int) -> dict:
         "tight_binding_method": (
             "GFN1_XTB" if spec["method"] is GFN1_XTB else "GFN2_XTB"
         ),
-        "representation": rep.value,
+        "variable": rep.value,
         "temperature_kelvin": float(spec["temperature"]),
         "maxiter": maxiter,
         "x_atol": config.x_atol,

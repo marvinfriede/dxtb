@@ -36,7 +36,7 @@ from dxtb._src.calculators.singlepoint import system_singlepoint
 from dxtb._src.scf.functional import eager as eager_mod
 from dxtb._src.scf.functional import solver as solver_mod
 from dxtb._src.scf.functional.core import tensor_leaves
-from dxtb._src.scf.functional.problem import SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFVariable
 from dxtb._src.scf.functional.solver import (
     SCFSolverTrace,
     _finalize_problem_outcome,
@@ -234,7 +234,7 @@ def _initial_observations(state) -> tuple[tuple[object, ...], ...]:
             state.active,
             state.iterations,
             state.damping_state.value,
-            state.method_state,
+            state.converger_state,
         ),
     )
 
@@ -310,7 +310,7 @@ def test_chunked_trace_matches_monolithic_trace(
     assert trace is not None
     assert trace.map_inputs.shape[0] == 1 + 12
     if config != "gfn1-potential-default":
-        assert trace.method_state, "stateful method records no history"
+        assert trace.converger_state, "stateful method records no history"
 
     control = fixed_trip_problem_control(
         guess, problem, settings, strategy, certification_profile=profile
@@ -391,12 +391,12 @@ def test_initial_status_and_short_schedules(
     assert bool(state.active) is (not terminal and not converged)
 
 
-# Representation-owned state projection (rebase contract)
+# Variable-owned state projection (rebase contract)
 
 _REPRESENTATION_CONFIGS = {
-    SCFRepresentation.CHARGE: "gfn1-charge-anderson",
-    SCFRepresentation.POTENTIAL: "gfn1-potential-default",
-    SCFRepresentation.FOCK: "gfn2-fock-cdiis",
+    SCFVariable.CHARGE: "gfn1-charge-anderson",
+    SCFVariable.POTENTIAL: "gfn1-potential-default",
+    SCFVariable.FOCK: "gfn2-fock-cdiis",
 }
 
 
@@ -415,21 +415,21 @@ def _spy_projections(monkeypatch, events: list[str]) -> None:
 
 
 @pytest.mark.parametrize(
-    "representation", list(_REPRESENTATION_CONFIGS), ids=lambda r: r.name
+    "variable", list(_REPRESENTATION_CONFIGS), ids=lambda r: r.name
 )
 def test_problem_state_projection_contract(
-    monkeypatch, representation: SCFRepresentation
+    monkeypatch, variable: SCFVariable
 ) -> None:
-    method, settings = _CONFIGS[_REPRESENTATION_CONFIGS[representation]]
+    method, settings = _CONFIGS[_REPRESENTATION_CONFIGS[variable]]
     guess, problem, solver_settings, strategy, kwargs = _capture_problem(
         monkeypatch, method, H2O, 0.0, None, {**settings, "maxiter": 3}
     )
-    assert problem.representation is representation
+    assert problem.variable is variable
     expected = {
-        SCFRepresentation.CHARGE: "charge",
-        SCFRepresentation.POTENTIAL: "potential",
-        SCFRepresentation.FOCK: None,
-    }[representation]
+        SCFVariable.CHARGE: "charge",
+        SCFVariable.POTENTIAL: "potential",
+        SCFVariable.FOCK: None,
+    }[variable]
 
     events: list[str] = []
     _spy_projections(monkeypatch, events)

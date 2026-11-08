@@ -8,9 +8,9 @@ import torch
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
-    setup_anderson_method_settings,
+    AndersonConverger,
+    AndersonConvergerSettings,
+    setup_anderson_converger_settings,
 )
 from dxtb._src.scf.functional.data import SCFMapResult
 from dxtb._src.scf.functional.problem import SCFProblem
@@ -40,7 +40,7 @@ class AndersonTestSettings:
     x_atol_max: float = 0.0
     dtype: torch.dtype = torch.float64
     solver_settings: SCFSolverSettings | None = None
-    method_settings: AndersonMethodSettings | None = None
+    method_settings: AndersonConvergerSettings | None = None
     dynamic_damping: DynamicDampingSettings = DynamicDampingSettings()
 
     def solver(self) -> SCFSolverSettings:
@@ -65,8 +65,8 @@ class AndersonTestSettings:
             dynamic_damping=self.dynamic_damping,
         )
 
-    def method(self) -> AndersonMethodSettings:
-        return AndersonMethodSettings(
+    def method(self) -> AndersonConvergerSettings:
+        return AndersonConvergerSettings(
             self.damp_init,
             self.generations,
             self.soft_start,
@@ -81,7 +81,7 @@ def _effective(value: float, dtype: torch.dtype) -> float:
 
 def from_config(config: ConfigSCF, dtype: torch.dtype) -> AndersonTestSettings:
     solver = setup_solver_settings(config, dtype)
-    method = setup_anderson_method_settings(config)
+    method = setup_anderson_converger_settings(config)
     return AndersonTestSettings(
         maxiter=solver.maxiter,
         mix_guess=solver.mix_guess,
@@ -114,7 +114,7 @@ def solve_common(
         settings.solver(),
         map_fn,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(AndersonMethod(settings.method())),)),
+        strategy=SCFStrategy((SCFStage(AndersonConverger(settings.method())),)),
         eager=eager,
         **kwargs,
     )
@@ -125,48 +125,48 @@ def solve_physical(
     inputs,
     settings: AndersonTestSettings,
     *,
-    representation=None,
+    variable=None,
     layout=None,
     eager: bool = False,
 ) -> SCFSolveResult:
-    """Run a physical Anderson case through the common representation API."""
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+    """Run a physical Anderson case through the common variable API."""
+    from dxtb._src.scf.functional.problem import SCFVariable
     from dxtb._src.scf.functional.solver import solve_scf_problem
 
-    selected = SCFRepresentation.CHARGE if representation is None else representation
+    selected = SCFVariable.CHARGE if variable is None else variable
     problem = SCFProblem(inputs, selected, layout)
     return solve_scf_problem(
         guess,
         problem,
         settings.solver(),
-        SCFStrategy((SCFStage(AndersonMethod(settings.method())),)),
+        SCFStrategy((SCFStage(AndersonConverger(settings.method())),)),
         eager=eager,
     )
 
 
 def solve_potential(guess, inputs, layout, settings, *, eager=False):
-    """Run a potential-representation Anderson test case."""
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+    """Run a potential-variable Anderson test case."""
+    from dxtb._src.scf.functional.problem import SCFVariable
     from dxtb._src.scf.functional.solver import solve_scf_problem
 
     return solve_scf_problem(
         guess,
-        SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout),
+        SCFProblem(inputs, SCFVariable.POTENTIAL, layout),
         settings.solver(),
-        SCFStrategy((SCFStage(AndersonMethod(settings.method())),)),
+        SCFStrategy((SCFStage(AndersonConverger(settings.method())),)),
         eager=eager,
     )
 
 
 def solve_fock(guess, inputs, settings, *, eager=False):
-    """Run a Fock-representation Anderson test case."""
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+    """Run a Fock-variable Anderson test case."""
+    from dxtb._src.scf.functional.problem import SCFVariable
     from dxtb._src.scf.functional.solver import solve_scf_problem
 
     return solve_scf_problem(
         guess,
-        SCFProblem(inputs, SCFRepresentation.FOCK),
+        SCFProblem(inputs, SCFVariable.FOCK),
         settings.solver(),
-        SCFStrategy((SCFStage(AndersonMethod(settings.method())),)),
+        SCFStrategy((SCFStage(AndersonConverger(settings.method())),)),
         eager=eager,
     )

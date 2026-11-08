@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional potential-representation solver parity and transforms."""
+"""Functional potential-variable solver parity and transforms."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from dxtb._src.scf.functional import (
     solve_scf_potential_simple,
 )
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
-from dxtb.scf import LinearMethod
+from dxtb.scf import LinearConverger
 
 from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
@@ -93,7 +93,7 @@ def _run_functional(
     guess, layout = _initial_guess(functional)
     _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
-    if isinstance(config.strategy.stages[0].method, LinearMethod):
+    if isinstance(config.strategy.stages[0].converger, LinearConverger):
         settings = setup_solver_settings(config, guess.dtype)
         result = solve_scf_potential_simple(
             guess, functional.inputs, layout, settings
@@ -127,7 +127,7 @@ def test_potential_simple_finite_budget(
 
 
 def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
-    """The final representation conversion is one spectrum, not an SCF step."""
+    """The final variable conversion is one spectrum, not an SCF step."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
@@ -174,7 +174,7 @@ def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
 def test_potential_initial_guess_has_no_spectral_evaluation(
     monkeypatch,
 ) -> None:
-    """Initial representation conversion only evaluates interaction data."""
+    """Initial variable conversion only evaluates interaction data."""
     case = _prepare_case(
         GFN2_XTB,
         scf_options={"strategy": scf_strategy("anderson", "potential")},

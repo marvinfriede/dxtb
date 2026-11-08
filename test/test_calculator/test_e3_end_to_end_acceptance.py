@@ -34,7 +34,7 @@ from dxtb._src.scf.iterator import get_refocc
 from dxtb.config import Config
 from dxtb.scf import (
     SCFDifferentiation,
-    SCFRepresentation,
+    SCFVariable,
     SCFStage,
     SCFStrategy,
     strategy_preset,
@@ -48,7 +48,7 @@ def _build_system(
     numbers: tuple[int, ...],
     *,
     strategy: str | None = None,
-    representation: SCFRepresentation | None = None,
+    variable: SCFVariable | None = None,
     maxiter: int = 3,
     temperature: float = 0.0,
     int_level: int = labels.INTLEVEL_QUADRUPOLE,
@@ -59,14 +59,14 @@ def _build_system(
     selected_strategy = strategy_preset(
         strategy or ("anderson" if is_gfn2 else "linear")
     )
-    selected_representation = representation or (
-        SCFRepresentation.FOCK if is_gfn2 else SCFRepresentation.CHARGE
+    selected_variable = variable or (
+        SCFVariable.FOCK if is_gfn2 else SCFVariable.CHARGE
     )
     selected_strategy = SCFStrategy(
         (
             SCFStage(
-                selected_strategy.stages[0].method,
-                representation=selected_representation,
+                selected_strategy.stages[0].converger,
+                variable=selected_variable,
             ),
         )
     )
@@ -606,7 +606,7 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
         GFN1_XTB,
         (8, 1, 1),
         strategy="linear",
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         maxiter=1,
         tolerance=0.0,
     )
@@ -614,7 +614,7 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
         GFN1_XTB,
         (8, 1, 1),
         strategy="anderson",
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         maxiter=16,
         tolerance=1.0e-12,
     )

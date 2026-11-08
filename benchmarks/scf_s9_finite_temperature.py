@@ -35,17 +35,17 @@ from test.test_scf.test_functional_map import _prepare_case  # noqa: E402
 import torch
 
 from benchmarks.prototypes.scf_newton_krylov import (  # noqa: E402
-    NewtonKrylovMethod,
+    NewtonKrylovConverger,
     NewtonKrylovSettings,
     NewtonKrylovState,
 )
 from dxtb import GFN1_XTB, GFN2_XTB  # noqa: E402
 from dxtb._src.scf.functional.anderson import (  # noqa: E402
-    AndersonMethod,
-    setup_anderson_method_settings,
+    AndersonConverger,
+    setup_anderson_converger_settings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod  # noqa: E402
-from dxtb._src.scf.functional.cdiis import CDIISMethod  # noqa: E402
+from dxtb._src.scf.functional.broyden import BroydenConverger  # noqa: E402
+from dxtb._src.scf.functional.cdiis import CDIISConverger  # noqa: E402
 from dxtb._src.scf.functional.data import unpack_charges  # noqa: E402
 from dxtb._src.scf.functional.energy import (  # noqa: E402
     electronic_energy_from_spectral,
@@ -56,13 +56,13 @@ from dxtb._src.scf.functional.map import (  # noqa: E402
     potential_initial_guess,
 )
 from dxtb._src.scf.functional.method import (  # noqa: E402
-    SCFMethodContext,
-    SCFMethodProposal,
+    SCFConvergerContext,
+    SCFConvergerProposal,
 )
 from dxtb._src.scf.functional.problem import (  # noqa: E402
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.solver import (  # noqa: E402
     SCFSolverSettings,
@@ -95,11 +95,11 @@ class _RecordingNewton:
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
-        proposal = NewtonKrylovMethod(self.settings).propose(
-            problem, physical_state, method_state, context
+        converger_state,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
+        proposal = NewtonKrylovConverger(self.settings).propose(
+            problem, physical_state, converger_state, context
         )
         state = proposal.state
         assert isinstance(state, NewtonKrylovState)
@@ -118,7 +118,7 @@ class _RecordingNewton:
         return proposal
 
 
-def _case_problem(case_name: str, representation: SCFRepresentation):
+def _case_problem(case_name: str, variable: SCFVariable):
     method, sample_name, charge, spin, temperature = CASES[case_name]
     case = _prepare_case(
         method,
@@ -130,28 +130,28 @@ def _case_problem(case_name: str, representation: SCFRepresentation):
     )
     assert case.inputs.fermi_settings is not None
     charges = unpack_charges(case.x, case.inputs.charge_layout)
-    if representation in (SCFRepresentation.CHARGE, SCFRepresentation.FOCK):
-        problem = SCFProblem(case.inputs, representation)
+    if variable in (SCFVariable.CHARGE, SCFVariable.FOCK):
+        problem = SCFProblem(case.inputs, variable)
         guess = (
             case.x
-            if representation is SCFRepresentation.CHARGE
+            if variable is SCFVariable.CHARGE
             else fock_initial_guess(charges, case.inputs)
         )
     else:
         guess, layout = potential_initial_guess(charges, case.inputs)
-        problem = SCFProblem(case.inputs, representation, layout)
+        problem = SCFProblem(case.inputs, variable, layout)
     return case, problem, guess
 
 
 def condition_case(case_name: str) -> dict[str, object]:
     """Solve and measure dense small-system fixed-point conditioning."""
     records = []
-    for representation in (
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+    for variable in (
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ):
-        case, problem, guess = _case_problem(case_name, representation)
+        case, problem, guess = _case_problem(case_name, variable)
         settings = SCFSolverSettings(120, False, 0.5, 1.0e-9, 1.0e-9)
         outcome = _solve_map(
             guess,
@@ -159,7 +159,7 @@ def condition_case(case_name: str) -> dict[str, object]:
             problem.map,
             problem=problem,
             strategy=SCFStrategy(
-                (SCFStage(BroydenMethod(), representation=representation),)
+                (SCFStage(BroydenConverger(), variable=variable),)
             ),
             eager=True,
         )
@@ -177,7 +177,7 @@ def condition_case(case_name: str) -> dict[str, object]:
         singular_values = torch.linalg.svdvals(operator)
         records.append(
             {
-                "representation": representation.value,
+                "variable": variable.value,
                 "dimension": int(root.numel()),
                 "certified": bool(outcome.converged),
                 "root_residual_l2": float(outcome.residual[0]),
@@ -193,10 +193,10 @@ def condition_case(case_name: str) -> dict[str, object]:
 
 def _method(case, name: str):
     if name == "broyden":
-        return BroydenMethod()
+        return BroydenConverger()
     if name == "anderson":
-        return AndersonMethod(
-            setup_anderson_method_settings(
+        return AndersonConverger(
+            setup_anderson_converger_settings(
                 replace(
                     case.system.config.scf,
                     strategy=strategy_preset("anderson"),
@@ -204,7 +204,7 @@ def _method(case, name: str):
             )
         )
     if name == "cdiis":
-        return CDIISMethod()
+        return CDIISConverger()
     raise ValueError(f"Unknown method {name!r}.")
 
 
@@ -213,12 +213,12 @@ def run_case(
     strategy_name: str,
     switch_threshold: float = 1.0e-2,
 ) -> dict[str, object]:
-    representation = (
-        SCFRepresentation.FOCK
+    variable = (
+        SCFVariable.FOCK
         if strategy_name.startswith("cdiis")
-        else SCFRepresentation.POTENTIAL
+        else SCFVariable.POTENTIAL
     )
-    case, problem, guess = _case_problem(case_name, representation)
+    case, problem, guess = _case_problem(case_name, variable)
     method_name = strategy_name.split("-")[0]
     first_method = _method(case, method_name)
     events: list[dict[str, float | int | bool]] = []
@@ -227,7 +227,7 @@ def run_case(
         stages = (
             SCFStage(
                 first_method,
-                representation=representation,
+                variable=variable,
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2,
                     fixed_point_l2=switch_threshold,
@@ -235,12 +235,12 @@ def run_case(
             ),
             SCFStage(
                 final_method,
-                representation=representation,
+                variable=variable,
                 initial_damp=1.0,
             ),
         )
     else:
-        stages = (SCFStage(first_method, representation=representation),)
+        stages = (SCFStage(first_method, variable=variable),)
     strategy = SCFStrategy(stages)
     settings = SCFSolverSettings(120, False, 0.5, 1.0e-7, 1.0e-7)
     start = time.perf_counter()
@@ -267,7 +267,7 @@ def run_case(
         "switch_threshold": (
             switch_threshold if strategy_name.endswith("-newton") else None
         ),
-        "representation": representation.value,
+        "variable": variable.value,
         "nao": case.inputs.integrals.hcore.shape[-1],
         "state_dimension": guess.numel(),
         "kt": float(case.inputs.fermi_settings.kt),

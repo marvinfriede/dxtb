@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Eager fixed-occupation second-order SCF in Fock representation."""
+"""Eager fixed-occupation second-order SCF in Fock variable."""
 
 from __future__ import annotations
 
@@ -26,15 +26,15 @@ import torch
 
 from dxtb._src.typing import Tensor
 
-from .method import SCFMethodContext, SCFMethodProposal, SCFMethodState
+from .method import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
 from .orbital import SOSCFOrbitalModel, build_orbital_model
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .problem import SCFPhysicalState, SCFProblem, SCFVariable
 
-__all__ = ["SOSCFMethod", "SOSCFMethodSettings", "SOSCFState"]
+__all__ = ["SOSCFConverger", "SOSCFConvergerSettings", "SOSCFState"]
 
 
 @dataclass(frozen=True, eq=False)
-class SOSCFMethodSettings:
+class SOSCFConvergerSettings:
     """Provisional internal controls for eager fixed-occupation SOSCF."""
 
     max_microiterations: int = 40
@@ -150,7 +150,7 @@ class _SOSCFHessianOperator:
 
 
 def _initial_state(
-    reference: Tensor, settings: SOSCFMethodSettings
+    reference: Tensor, settings: SOSCFConvergerSettings
 ) -> SOSCFState:
     """Create tensor diagnostics on the working device."""
     scalar = reference.new_zeros(())
@@ -177,7 +177,7 @@ def _initial_state(
 
 
 def _positive_preconditioner(
-    model: SOSCFOrbitalModel, fresh_fock: Tensor, settings: SOSCFMethodSettings
+    model: SOSCFOrbitalModel, fresh_fock: Tensor, settings: SOSCFConvergerSettings
 ) -> tuple[Tensor, Tensor]:
     """Estimate positive orbital gaps from the fresh physical Fock."""
     fock_mo = model.coefficients.mT @ fresh_fock @ model.coefficients
@@ -198,7 +198,7 @@ def _positive_preconditioner(
 
 
 def _stationary_gradient_floor(
-    fresh_fock: Tensor, nrot: int, settings: SOSCFMethodSettings
+    fresh_fock: Tensor, nrot: int, settings: SOSCFConvergerSettings
 ) -> Tensor:
     """Return an eps-scale floor for the numerical-zero stationary shortcut."""
     scale = fresh_fock.detach().abs().amax().clamp_min(1.0)
@@ -260,7 +260,7 @@ def _pcg_newton_step(
     gradient: Tensor,
     preconditioner: Tensor,
     initial_shift: Tensor,
-    settings: SOSCFMethodSettings,
+    settings: SOSCFConvergerSettings,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool]:
     """Solve the shifted Newton system with restarted preconditioned CG."""
     eps = torch.finfo(gradient.dtype).eps
@@ -399,7 +399,7 @@ def _backtracking_step(
     gap_floor: Tensor,
     initial_alpha: Tensor,
     linear_predicted_reduction: Tensor,
-    settings: SOSCFMethodSettings,
+    settings: SOSCFConvergerSettings,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, int]:
     """Accept the first Armijo step with separated occupation spectra."""
     eps = torch.finfo(step.dtype).eps
@@ -435,32 +435,32 @@ def _backtracking_step(
 
 
 @dataclass(frozen=True, eq=False)
-class SOSCFMethod:
+class SOSCFConverger:
     """Eager fixed-occupation orbital Newton method in Fock space."""
 
-    required_representation: ClassVar[SCFRepresentation] = (
-        SCFRepresentation.FOCK
+    required_variable: ClassVar[SCFVariable] = (
+        SCFVariable.FOCK
     )
     supports_fixed_trip: ClassVar[bool] = False
-    settings: SOSCFMethodSettings = SOSCFMethodSettings()
+    settings: SOSCFConvergerSettings = SOSCFConvergerSettings()
 
     def propose(
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Compute one damped, energy-accepted orbital Newton proposal."""
-        if problem.representation is not SCFRepresentation.FOCK:
-            raise ValueError("SOSCF requires a Fock working representation.")
+        if problem.variable is not SCFVariable.FOCK:
+            raise ValueError("SOSCF requires a Fock working variable.")
         if not bool(context.transition_active):
-            return SCFMethodProposal(
+            return SCFConvergerProposal(
                 physical_state.x,
                 (
                     None
-                    if method_state is None
-                    else cast(SOSCFState, method_state)
+                    if converger_state is None
+                    else cast(SOSCFState, converger_state)
                 ),
             )
 
@@ -485,8 +485,8 @@ class SOSCFMethod:
 
         previous = (
             _initial_state(physical_state.x, self.settings)
-            if method_state is None
-            else cast(SOSCFState, method_state)
+            if converger_state is None
+            else cast(SOSCFState, converger_state)
         )
         preconditioner, gap_floor = _positive_preconditioner(
             model, fresh_fock, self.settings
@@ -538,7 +538,7 @@ class SOSCFMethod:
                 last_step_accepted=torch.ones_like(previous.last_step_accepted),
                 fallback_count=previous.fallback_count,
             )
-            return SCFMethodProposal(seed, next_state)
+            return SCFConvergerProposal(seed, next_state)
 
         shift = previous.level_shift
         if not bool(shift > 0.0):
@@ -632,4 +632,4 @@ class SOSCFMethod:
             fallback_count=previous.fallback_count
             + torch.tensor(fallback, dtype=torch.int64, device=seed.device),
         )
-        return SCFMethodProposal(seed, next_state)
+        return SCFConvergerProposal(seed, next_state)

@@ -161,9 +161,9 @@ class SCFInputs:
 
 @dataclass(frozen=True, eq=False)
 class SCFMapResult:
-    """Physical outputs from one raw representation-map evaluation.
+    """Physical outputs from one raw variable-map evaluation.
 
-    ``mapped_x`` is the raw output in the selected solver representation.
+    ``mapped_x`` is the raw output in the selected solver variable.
     ``driving_potential`` is the potential supplied to a charge- or
     potential-driven spectral evaluation. It is structurally absent for a
     Fock-driven evaluation. ``spectral`` owns the Hamiltonian, density,

@@ -29,19 +29,19 @@ from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
-from .method import SCFMethodContext, SCFMethodProposal, SCFMethodState
+from .method import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
 from .problem import SCFPhysicalState, SCFProblem
 
 __all__ = [
-    "BroydenMethod",
-    "BroydenMethodSettings",
+    "BroydenConverger",
+    "BroydenConvergerSettings",
     "BroydenState",
-    "setup_broyden_method_settings",
+    "setup_broyden_converger_settings",
 ]
 
 
 @dataclass(frozen=True, eq=False)
-class BroydenMethodSettings:
+class BroydenConvergerSettings:
     """Static numerical policy owned specifically by Broyden's first method."""
 
     initial_inverse_scale: float = 0.5
@@ -79,20 +79,20 @@ class BroydenState(Node):
 
 
 @dataclass(frozen=True, eq=False)
-class BroydenMethod:
+class BroydenConverger:
     """Broyden's first inverse update with bounded low-rank history."""
 
     supports_fixed_trip: ClassVar[bool] = True
 
-    settings: BroydenMethodSettings = BroydenMethodSettings()
+    settings: BroydenConvergerSettings = BroydenConvergerSettings()
 
     def propose(
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Propose a damped step using the controller-projected map value."""
         del problem
         x = physical_state.x
@@ -102,7 +102,7 @@ class BroydenMethod:
         # The controller residual is r=G(x)-x, while a Broyden rootfinder
         # solves F=x-G(x) and applies -H F. Thus the undamped proposal is H r.
         residual_f = flat_x - flat_proposal
-        old = cast(BroydenState | None, method_state)
+        old = cast(BroydenState | None, converger_state)
         if old is None:
             state = _empty_state(flat_x, self.settings.max_rank)
             state = _store_observation(state, flat_x, residual_f)
@@ -124,14 +124,14 @@ class BroydenMethod:
 
         if old is not None:
             state = _select_state(context.transition_active, state, old)
-        return SCFMethodProposal(x=output, state=state)
+        return SCFConvergerProposal(x=output, state=state)
 
 
-def setup_broyden_method_settings(config: ConfigSCF) -> BroydenMethodSettings:
+def setup_broyden_converger_settings(config: ConfigSCF) -> BroydenConvergerSettings:
     """Resolve settings from the configured native Broyden stage."""
-    if not isinstance(config.strategy.stages[0].method, BroydenMethod):
+    if not isinstance(config.strategy.stages[0].converger, BroydenConverger):
         raise NotImplementedError("Broyden settings require a Broyden stage.")
-    return config.strategy.stages[0].method.settings
+    return config.strategy.stages[0].converger.settings
 
 
 def _empty_state(vector: Tensor, max_rank: int) -> BroydenState:
@@ -231,7 +231,7 @@ def _update_inverse(
     state: BroydenState,
     current_x: Tensor,
     current_f: Tensor,
-    settings: BroydenMethodSettings,
+    settings: BroydenConvergerSettings,
 ) -> BroydenState:
     """Apply Broyden's first inverse update or restart safely at H0."""
     full = state.history_count >= settings.max_rank

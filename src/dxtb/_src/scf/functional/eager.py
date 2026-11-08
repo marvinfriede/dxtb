@@ -40,8 +40,8 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 
-from .anderson import AndersonMethod, setup_anderson_method_settings
-from .broyden import BroydenMethod, setup_broyden_method_settings
+from .anderson import AndersonConverger, setup_anderson_converger_settings
+from .broyden import BroydenConverger, setup_broyden_converger_settings
 from .certification import SCFInternalCertificationProfile
 from .data import (
     PotentialLayout,
@@ -60,9 +60,9 @@ from .map import (
     potential_initial_guess,
     unpack_potential,
 )
-from .method import LinearMethod
-from .problem import SCFProblem, SCFRepresentation
-from .response import SCFResponseSettings, prepare_response_root
+from .method import LinearConverger
+from .problem import SCFProblem, SCFVariable
+from .response import CPSCFSettings, prepare_response_root
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
@@ -111,7 +111,7 @@ class SCFPlan:
     """
 
     kind: str
-    representation: SCFRepresentation
+    variable: SCFVariable
     strategy_label: str
     strategy: SCFStrategy | None = None
     warning: str | None = None
@@ -183,9 +183,9 @@ def resolve_scf_plan(
             f"{names}."
         )
 
-    representation = config.initial_representation
+    variable = config.initial_variable
     strategy_label = " -> ".join(
-        type(item.method).__name__.removesuffix("Method").lower()
+        type(item.converger).__name__.removesuffix("Converger").lower()
         for item in config.strategy.stages
     )
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
@@ -194,7 +194,7 @@ def resolve_scf_plan(
             "use evaluate_packed_systems or Calculator batch evaluation for batches."
         )
     return SCFPlan(
-        "scf", representation, strategy_label, config.strategy
+        "scf", variable, strategy_label, config.strategy
     )
 
 
@@ -273,7 +273,7 @@ def _nonconvergence_message(
     """Format the non-convergence warning from configured Python values."""
     damp = config.damp_dynamic_factor if switched else config.damp
     strategy = " -> ".join(
-        type(stage.method).__name__.removesuffix("Method").lower()
+        type(stage.converger).__name__.removesuffix("Converger").lower()
         for stage in config.strategy.stages
     )
     return (
@@ -333,11 +333,11 @@ def _certification_profile(
     )
 
 
-def _representation_problem(
+def _variable_problem(
     guess: Tensor, inputs: SCFInputs, config: ConfigSCF
 ) -> tuple[Tensor, SCFProblem]:
-    """Build the initial state and problem of the configured representation."""
-    mode = config.initial_representation
+    """Build the initial state and problem of the configured variable."""
+    mode = config.initial_variable
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -351,23 +351,23 @@ def _representation_problem(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
-    if mode == SCFRepresentation.CHARGE:
+    if mode == SCFVariable.CHARGE:
         return (
             pack_charges(charges, inputs.charge_layout),
-            SCFProblem(inputs, SCFRepresentation.CHARGE),
+            SCFProblem(inputs, SCFVariable.CHARGE),
         )
-    if mode == SCFRepresentation.POTENTIAL:
+    if mode == SCFVariable.POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
-        return packed, SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout)
-    if mode == SCFRepresentation.FOCK:
+        return packed, SCFProblem(inputs, SCFVariable.POTENTIAL, layout)
+    if mode == SCFVariable.FOCK:
         return (
             fock_initial_guess(charges, inputs),
-            SCFProblem(inputs, SCFRepresentation.FOCK),
+            SCFProblem(inputs, SCFVariable.FOCK),
         )
     raise ValueError(f"Unknown SCF variable '{mode}'.")
 
 
-def _solve_representation(
+def _solve_variable(
     guess: Tensor,
     inputs: SCFInputs,
     config: ConfigSCF,
@@ -375,9 +375,9 @@ def _solve_representation(
     eager: bool = True,
     record_trace: bool = False,
 ) -> SCFSolveResult:
-    """Run one representation with eager or transform-fixed control."""
+    """Run one variable with eager or transform-fixed control."""
     settings, strategy = _prepare_solver(config, guess.dtype)
-    x, problem = _representation_problem(guess, inputs, config)
+    x, problem = _variable_problem(guess, inputs, config)
     return solve_scf_problem(
         x,
         problem,
@@ -410,7 +410,7 @@ def run_functional_full_eager(
     if not config.requires_iterations:
         route = SCFPlan(
             "non_scf",
-            config.initial_representation,
+            config.initial_variable,
             "none",
             config.strategy,
             reason="non-SCF method",
@@ -474,7 +474,7 @@ def _prepared_functional_inputs(
         raise ValueError(
             "The prepared SCF runner requires an iterative SCF plan."
         )
-    if route.representation != config.initial_representation:
+    if route.variable != config.initial_variable:
         raise ValueError(
             "The SCF variable of the prepared SCF plan does not match "
             "the SCF configuration."
@@ -526,7 +526,7 @@ def run_prepared_functional_full(
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    return _solve_representation(guess, inputs, config, eager=eager)
+    return _solve_variable(guess, inputs, config, eager=eager)
 
 
 def prepare_system_fixed_trip(
@@ -581,7 +581,7 @@ def prepare_system_fixed_trip(
         core_index=core_index,
         core_index_owner=core_index_owner,
     )
-    return _representation_problem(guess, inputs, config)
+    return _variable_problem(guess, inputs, config)
 
 
 def fixed_trip_control(
@@ -671,7 +671,7 @@ def run_prepared_functional_implicit(
     *,
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
-    response_settings: SCFResponseSettings | None = None,
+    response_settings: CPSCFSettings | None = None,
     strategy_override: SCFStrategy | None = None,
 ) -> SCFSolveResult:
     """Acquire a functional primal root, attach its raw-map IFT, then finalize.
@@ -713,30 +713,30 @@ def run_prepared_functional_implicit(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
-    initial_representation = config.initial_representation
-    if initial_representation == SCFRepresentation.CHARGE:
+    initial_variable = config.initial_variable
+    if initial_variable == SCFVariable.CHARGE:
         state = pack_charges(charges, inputs.charge_layout)
         initial_layout = None
-        problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
-    elif initial_representation == SCFRepresentation.POTENTIAL:
+        problem = SCFProblem(inputs, SCFVariable.CHARGE)
+    elif initial_variable == SCFVariable.POTENTIAL:
         state, initial_layout = potential_initial_guess(charges, inputs)
         problem = SCFProblem(
             inputs,
-            SCFRepresentation.POTENTIAL,
+            SCFVariable.POTENTIAL,
             potential_layout=initial_layout,
         )
-    elif initial_representation == SCFRepresentation.FOCK:
+    elif initial_variable == SCFVariable.FOCK:
         state = fock_initial_guess(charges, inputs)
         initial_layout = None
-        problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+        problem = SCFProblem(inputs, SCFVariable.FOCK)
     else:
-        raise ValueError(f"Unknown SCF variable '{initial_representation}'.")
+        raise ValueError(f"Unknown SCF variable '{initial_variable}'.")
 
-    if initial_representation == SCFRepresentation.CHARGE:
+    if initial_variable == SCFVariable.CHARGE:
         state_projection: Callable[[Tensor], Tensor] | None = (
             lambda value: _project_charge_padding(value, inputs.charge_layout)
         )
-    elif initial_representation == SCFRepresentation.POTENTIAL:
+    elif initial_variable == SCFVariable.POTENTIAL:
         assert initial_layout is not None
         state_projection = lambda value: _project_potential_padding(
             value, initial_layout
@@ -755,21 +755,21 @@ def run_prepared_functional_implicit(
         certification_profile=_certification_profile(config),
     )
 
-    # The strategy may change representation. The selected physical problem is
+    # The strategy may change variable. The selected physical problem is
     # the owner of the final response map and potential layout.
     final_problem = outcome.final_problem
     if final_problem is None:
         raise RuntimeError("The SCF strategy did not return its final problem.")
-    final_representation = final_problem.representation
+    final_variable = final_problem.variable
     final_inputs = final_problem.inputs
     final_layout = final_problem.potential_layout
 
-    # Check the selected raw result and the representation's final spectrum
+    # Check the selected raw result and the variable's final spectrum
     # before any transform sees this root. The accepted solver input remains
     # outcome.root_x; the paired map result is not promoted to the root.
-    if final_representation is SCFRepresentation.CHARGE:
+    if final_variable is SCFVariable.CHARGE:
         final_status = outcome.map_result.fermi_status
-    elif final_representation is SCFRepresentation.POTENTIAL:
+    elif final_variable is SCFVariable.POTENTIAL:
         assert final_layout is not None
         final_state = unpack_potential(
             outcome.map_result.mapped_x, final_layout
@@ -795,11 +795,11 @@ def run_prepared_functional_implicit(
         )
 
     response_settings = (
-        config.response if response_settings is None else response_settings
+        config.cpscf if response_settings is None else response_settings
     )
     response_root = prepare_response_root(outcome, settings, response_settings)
     final_problem = response_root.problem
-    final_representation = final_problem.representation
+    final_variable = final_problem.variable
     final_inputs = final_problem.inputs
     final_layout = final_problem.potential_layout
     adapter = response_root.adapter
@@ -825,7 +825,7 @@ def run_prepared_functional_implicit(
     attached_root = prepared.attach()
     attached_map_result = adapter.evaluate(attached_root, *parameters)
 
-    if final_representation is SCFRepresentation.CHARGE:
+    if final_variable is SCFVariable.CHARGE:
         finalized = finalize_scf(
             attached_map_result,
             final_inputs,
@@ -839,7 +839,7 @@ def run_prepared_functional_implicit(
             strategy_diagnostics=outcome.strategy_diagnostics,
             terminal_failed=torch.zeros_like(prepared.converged),
         )
-    elif final_representation is SCFRepresentation.POTENTIAL:
+    elif final_variable is SCFVariable.POTENTIAL:
         assert final_layout is not None
         finalized = finalize_scf_potential(
             attached_map_result,

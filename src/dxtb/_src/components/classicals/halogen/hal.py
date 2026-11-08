@@ -179,7 +179,7 @@ def halogen_energy(
 
 
 class Halogen(Classical):
-    """Representation of the halogen bond correction."""
+    """Variable of the halogen bond correction."""
 
     halogens: list[int]
     bases: list[int]

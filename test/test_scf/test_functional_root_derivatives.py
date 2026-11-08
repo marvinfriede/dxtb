@@ -32,12 +32,12 @@ from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.functional import (
-    BroydenMethod,
-    BroydenMethodSettings,
+    BroydenConverger,
+    BroydenConvergerSettings,
     SCFCharges,
     SCFMapResult,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     SCFStage,
     SCFStrategy,
     fock_initial_guess,
@@ -64,9 +64,9 @@ from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
 from dxtb.scf import (
-    AndersonMethod,
-    AndersonMethodSettings,
-    LinearMethod,
+    AndersonConverger,
+    AndersonConvergerSettings,
+    LinearConverger,
 )
 
 from ..test_baseline.compute import _calculator
@@ -116,9 +116,9 @@ def _force_lorentzian(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 _CONVERGERS = {
-    "linear": LinearMethod,
-    "anderson": AndersonMethod,
-    "broyden": BroydenMethod,
+    "linear": LinearConverger,
+    "anderson": AndersonConverger,
+    "broyden": BroydenConverger,
 }
 
 
@@ -127,9 +127,9 @@ def _method(converger: type | str) -> object:
     if isinstance(converger, str):
         converger = _CONVERGERS[converger]
     return {
-        LinearMethod: LinearMethod(),
-        AndersonMethod: AndersonMethod(AndersonMethodSettings()),
-        BroydenMethod: BroydenMethod(BroydenMethodSettings()),
+        LinearConverger: LinearConverger(),
+        AndersonConverger: AndersonConverger(AndersonConvergerSettings()),
+        BroydenConverger: BroydenConverger(BroydenConvergerSettings()),
     }[converger]
 
 
@@ -137,8 +137,8 @@ def _case(
     sample_name: str,
     *,
     method: int = GFN1_XTB,
-    representation: SCFRepresentation | str = SCFRepresentation.POTENTIAL,
-    converger: type | str = AndersonMethod,
+    variable: SCFVariable | str = SCFVariable.POTENTIAL,
+    converger: type | str = AndersonConverger,
     tolerance: float = 1.0e-12,
     maxiter: int = 300,
     temperature: float = 0.0,
@@ -171,7 +171,7 @@ def _case(
         (
             SCFStage(
                 _method(converger),
-                representation=SCFRepresentation(representation),
+                variable=SCFVariable(variable),
             ),
         )
     )
@@ -297,26 +297,26 @@ def _initial_state(case, inputs) -> tuple[Tensor, object | None]:
             else case.initial_charges.new_zeros(layout.quadrupole_shape)
         ),
     )
-    representation = case.system.config.scf.initial_representation
-    if representation is SCFRepresentation.CHARGE:
+    variable = case.system.config.scf.initial_variable
+    if variable is SCFVariable.CHARGE:
         return pack_charges(initial, layout), None
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         return potential_initial_guess(initial, inputs)
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         return fock_initial_guess(initial, inputs), None
-    raise ValueError(f"Unknown SCF representation: {representation}")
+    raise ValueError(f"Unknown SCF variable: {variable}")
 
 
 def _map_fn(case, inputs, layout):
-    representation = case.system.config.scf.initial_representation
-    if representation is SCFRepresentation.CHARGE:
+    variable = case.system.config.scf.initial_variable
+    if variable is SCFVariable.CHARGE:
         return lambda x: scf_map(x, inputs)
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         assert layout is not None
         return lambda x: potential_map(x, inputs, layout)
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         return lambda x: fock_map(x, inputs)
-    raise ValueError(f"Unknown SCF representation: {representation}")
+    raise ValueError(f"Unknown SCF variable: {variable}")
 
 
 def _finalize_map_result(
@@ -331,9 +331,9 @@ def _finalize_map_result(
     *,
     root_x: Tensor,
 ):
-    """Apply the configured representation's ordinary finalization."""
-    representation = case.system.config.scf.initial_representation
-    if representation is SCFRepresentation.CHARGE:
+    """Apply the configured variable's ordinary finalization."""
+    variable = case.system.config.scf.initial_variable
+    if variable is SCFVariable.CHARGE:
         return finalize_scf(
             map_result,
             inputs,
@@ -344,7 +344,7 @@ def _finalize_map_result(
             damping_state,
             root_x=root_x,
         )
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         _, layout = _initial_state(case, inputs)
         assert layout is not None
         return finalize_scf_potential(
@@ -358,7 +358,7 @@ def _finalize_map_result(
             damping_state,
             root_x=root_x,
         )
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         return finalize_scf_fock(
             map_result,
             inputs,
@@ -369,7 +369,7 @@ def _finalize_map_result(
             damping_state,
             root_x=root_x,
         )
-    raise ValueError(f"Unknown SCF representation: {representation}")
+    raise ValueError(f"Unknown SCF variable: {variable}")
 
 
 def _run_root(
@@ -382,14 +382,14 @@ def _run_root(
     converger: type | str | None = None,
 ) -> _RootRecord:
     if converger is None:
-        converger = type(case.system.config.scf.strategy.stages[0].method)
+        converger = type(case.system.config.scf.strategy.stages[0].converger)
     config = replace(
         case.system.config.scf,
         strategy=SCFStrategy(
             (
                 replace(
                     case.system.config.scf.strategy.stages[0],
-                    method=_method(converger),
+                    converger=_method(converger),
                 ),
             )
         ),
@@ -408,13 +408,13 @@ def _run_root(
 
     projection = (
         (lambda value: _project_potential_padding(value, layout))
-        if config.initial_representation is SCFRepresentation.POTENTIAL
+        if config.initial_variable is SCFVariable.POTENTIAL
         else None
     )
-    representation = case.system.config.scf.initial_representation
-    problem = SCFProblem(inputs, representation, layout)
-    method_type = type(config.strategy.stages[0].method)
-    if method_type is AndersonMethod:
+    variable = case.system.config.scf.initial_variable
+    problem = SCFProblem(inputs, variable, layout)
+    method_type = type(config.strategy.stages[0].converger)
+    if method_type is AndersonConverger:
         settings = setup_anderson_solver_settings(config, initial.dtype)
         outcome = solve_common(
             initial,
@@ -424,7 +424,7 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif method_type is LinearMethod:
+    elif method_type is LinearConverger:
         settings = setup_solver_settings(config, initial.dtype)
         outcome = _solve_map(
             initial,
@@ -434,10 +434,10 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif method_type is BroydenMethod:
+    elif method_type is BroydenConverger:
         settings = setup_solver_settings(config, initial.dtype)
         strategy = SCFStrategy(
-            (SCFStage(BroydenMethod(BroydenMethodSettings())),)
+            (SCFStage(BroydenConverger(BroydenConvergerSettings())),)
         )
         outcome = _solve_map(
             initial,
@@ -482,14 +482,14 @@ def _run_root(
     )
 
 
-def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
+def test_raw_fixed_point_residual_uses_only_each_variable_map() -> None:
     """Charge, potential and Fock residuals are their raw physical maps."""
-    for representation in (
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+    for variable in (
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ):
-        case = _case("H2", representation=representation)
+        case = _case("H2", variable=variable)
         initial, layout = _initial_state(case, case.inputs)
         mapped = _map_fn(case, case.inputs, layout)(initial)
         residual = mapped.mapped_x - initial
@@ -500,15 +500,15 @@ def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
             "spectral",
             "driving_potential",
         }
-        assert not hasattr(mapped, "method_state")
+        assert not hasattr(mapped, "converger_state")
         assert not hasattr(mapped, "iterations")
 
 
 @pytest.mark.parametrize(
     "converger",
     (
-        pytest.param(LinearMethod, id="linear"),
-        pytest.param(AndersonMethod, id="anderson"),
+        pytest.param(LinearConverger, id="linear"),
+        pytest.param(AndersonConverger, id="anderson"),
     ),
 )
 def test_solver_outcome_retains_the_convergence_tested_input(
@@ -579,25 +579,25 @@ def test_solver_outcome_retains_the_convergence_tested_input(
 @pytest.mark.parametrize(
     "converger",
     (
-        pytest.param(LinearMethod, id="linear"),
-        pytest.param(AndersonMethod, id="anderson"),
+        pytest.param(LinearConverger, id="linear"),
+        pytest.param(AndersonConverger, id="anderson"),
     ),
 )
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     (
-        pytest.param(SCFRepresentation.CHARGE, id="charge"),
-        pytest.param(SCFRepresentation.POTENTIAL, id="potential"),
+        pytest.param(SCFVariable.CHARGE, id="charge"),
+        pytest.param(SCFVariable.POTENTIAL, id="potential"),
     ),
 )
 def test_fixed_trip_outcome_retains_accepted_map_input(
-    converger: type, representation: SCFRepresentation
+    converger: type, variable: SCFVariable
 ) -> None:
     """Masked fixed-trip maps cannot replace the accepted root/result pair."""
     tolerance = 1.0e-10
     case = _case(
         "H2",
-        representation=representation,
+        variable=variable,
         converger=converger,
         tolerance=tolerance,
         maxiter=45,
@@ -695,25 +695,25 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
 @pytest.mark.parametrize(
     "converger",
     (
-        pytest.param(LinearMethod, id="linear"),
-        pytest.param(AndersonMethod, id="anderson"),
+        pytest.param(LinearConverger, id="linear"),
+        pytest.param(AndersonConverger, id="anderson"),
     ),
 )
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     (
-        pytest.param(SCFRepresentation.CHARGE, id="charge"),
-        pytest.param(SCFRepresentation.POTENTIAL, id="potential"),
+        pytest.param(SCFVariable.CHARGE, id="charge"),
+        pytest.param(SCFVariable.POTENTIAL, id="potential"),
     ),
 )
 def test_fixed_trip_exhaustion_retains_last_selected_map_input(
-    converger: type, representation: SCFRepresentation
+    converger: type, variable: SCFVariable
 ) -> None:
     """An exhausted fixed-trip solve reports its last selected map pair."""
     tolerance = 1.0e-14
     case = _case(
         "H2O",
-        representation=representation,
+        variable=variable,
         converger=converger,
         tolerance=tolerance,
         maxiter=1,
@@ -939,8 +939,8 @@ def test_no2_tight_root_third_order_reference(
     base_case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=AndersonMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=AndersonConverger,
         tolerance=1.0e-12,
         maxiter=300,
         temperature=300.0,
@@ -985,18 +985,18 @@ def test_no2_tight_root_third_order_reference(
 
 
 @pytest.mark.parametrize(
-    ("representation", "expected_map"),
+    ("variable", "expected_map"),
     (
-        (SCFRepresentation.CHARGE, "charge"),
-        (SCFRepresentation.POTENTIAL, "potential"),
-        (SCFRepresentation.FOCK, "fock"),
+        (SCFVariable.CHARGE, "charge"),
+        (SCFVariable.POTENTIAL, "potential"),
+        (SCFVariable.FOCK, "fock"),
     ),
 )
-def test_fixed_point_map_representation_contract(
-    representation: SCFRepresentation, expected_map: str
+def test_fixed_point_map_variable_contract(
+    variable: SCFVariable, expected_map: str
 ) -> None:
     """The configured root variable chooses its existing raw map."""
-    case = _case("H2", representation=representation)
+    case = _case("H2", variable=variable)
     initial, layout = _initial_state(case, case.inputs)
     map_fn = _map_fn(case, case.inputs, layout)
     expected = {
@@ -1004,7 +1004,7 @@ def test_fixed_point_map_representation_contract(
         "potential": potential_map,
         "fock": fock_map,
     }[expected_map]
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         expected_result = expected(initial, case.inputs, layout)
     else:
         expected_result = expected(initial, case.inputs)
@@ -1022,7 +1022,7 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
     _force_lorentzian(monkeypatch)
     tolerance = 1.0e-12
     records = {}
-    for converger in (LinearMethod, AndersonMethod):
+    for converger in (LinearConverger, AndersonConverger):
         case = _case(
             "H2", converger=converger, tolerance=tolerance, maxiter=300
         )
@@ -1039,24 +1039,24 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
         assert float(record.residual.abs().max()) < 1.0e-10
         records[converger] = record
     torch.testing.assert_close(
-        records[LinearMethod].root,
-        records[AndersonMethod].root,
+        records[LinearConverger].root,
+        records[AndersonConverger].root,
         rtol=0.0,
         atol=2.0e-9,
     )
     torch.testing.assert_close(
-        records[LinearMethod].finalized_energy,
-        records[AndersonMethod].finalized_energy,
+        records[LinearConverger].finalized_energy,
+        records[AndersonConverger].finalized_energy,
         rtol=0.0,
         atol=2.0e-11,
     )
     for name in ("density", "occupation", "emo"):
         torch.testing.assert_close(
             getattr(
-                records[LinearMethod].outcome.map_result.spectral, name
+                records[LinearConverger].outcome.map_result.spectral, name
             ),
             getattr(
-                records[AndersonMethod].outcome.map_result.spectral,
+                records[AndersonConverger].outcome.map_result.spectral,
                 name,
             ),
             rtol=0.0,
@@ -1064,7 +1064,7 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
         )
 
     derivatives = []
-    for converger in (LinearMethod, AndersonMethod):
+    for converger in (LinearConverger, AndersonConverger):
         case = _case(
             "H2", converger=converger, tolerance=tolerance, maxiter=300
         )
@@ -1093,41 +1093,41 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
 
 
 @pytest.mark.parametrize(
-    ("sample_name", "method", "temperature", "representation"),
+    ("sample_name", "method", "temperature", "variable"),
     (
         pytest.param(
             "H2",
             GFN1_XTB,
             0.0,
-            SCFRepresentation.CHARGE,
+            SCFVariable.CHARGE,
             id="h2-charge",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             0.0,
-            SCFRepresentation.POTENTIAL,
+            SCFVariable.POTENTIAL,
             id="h2-potential",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             0.0,
-            SCFRepresentation.FOCK,
+            SCFVariable.FOCK,
             id="h2-fock",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             300.0,
-            SCFRepresentation.CHARGE,
+            SCFVariable.CHARGE,
             id="h2-finite-temperature",
         ),
         pytest.param(
             "NO2",
             GFN2_XTB,
             300.0,
-            SCFRepresentation.POTENTIAL,
+            SCFVariable.POTENTIAL,
             marks=pytest.mark.slow,
             id="no2-potential",
         ),
@@ -1137,16 +1137,16 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
     sample_name: str,
     method: int,
     temperature: float,
-    representation: SCFRepresentation,
+    variable: SCFVariable,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Dense IFT response matches unrolled and physical FD by representation."""
+    """Dense IFT response matches unrolled and physical FD by variable."""
     _force_lorentzian(monkeypatch)
     tolerance = 1.0e-12
     case = _case(
         sample_name,
         method=method,
-        representation=representation,
+        variable=variable,
         tolerance=tolerance,
         temperature=temperature,
         field=torch.zeros(3, **_DD),

@@ -31,7 +31,7 @@ __all__ = ["PHalogenClassical", "PHalogen"]
 
 class PHalogenClassical(BaseModel):
     """
-    Representation of the classical geometry dependent halogen-bond (XB)
+    Variable of the classical geometry dependent halogen-bond (XB)
     correction for a parametrization.
     """
 

@@ -18,7 +18,7 @@
 
 A packed batch is a sequence of ordinary single ``System`` lanes. This module
 decides how those lanes execute; it never changes a System's structural
-representation:
+variable:
 
 - Lanes that share one ``System`` object (and the same optional call inputs)
   form a group that runs through ``torch.func.vmap`` over the authoritative
@@ -133,7 +133,7 @@ def can_vmap_system(system: System) -> bool:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
 
     if any(
-        type(stage.method).__name__ == "SOSCFMethod"
+        type(stage.converger).__name__ == "SOSCFConverger"
         for stage in scf_config.strategy.stages
     ):
         kt = float(scf_config.fermi.etemp) * 3.166811563e-6
@@ -144,7 +144,7 @@ def can_vmap_system(system: System) -> bool:
             )
 
     eager_only = len(scf_config.strategy.stages) != 1 or any(
-        not getattr(stage.method, "supports_fixed_trip", True)
+        not getattr(stage.converger, "supports_fixed_trip", True)
         for stage in scf_config.strategy.stages
     )
     if scf_config.differentiation.value == "unrolled" and eager_only:

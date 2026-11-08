@@ -24,15 +24,15 @@ import pytest
 import torch
 
 from benchmarks.prototypes.scf_energy_diis import (
-    ResearchDIISMethod,
+    ResearchDIISConverger,
     _minimize_coefficients,
     adiis_model_matrices,
     exact_energy_value_gradient,
 )
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.core import FunctionalInteractionSet
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_density,
@@ -42,8 +42,8 @@ from dxtb._src.scf.functional.map import (
     density_to_charges_and_core_energy,
     fock_initial_guess,
 )
-from dxtb._src.scf.functional.method import SCFMethodContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.method import SCFConvergerContext
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
 from dxtb._src.scf.functional.strategy import (
     SCFStage,
@@ -74,7 +74,7 @@ def test_density_energy_jvp_matches_rebuilt_fock(
         field=field,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -125,7 +125,7 @@ def test_rebuilt_fock_is_nonlinear_in_density_interpolation(
 ) -> None:
     """Nonlinear xTB interactions forbid interpolating stored Focks."""
     case = _prepare_case(method, sample_name="H2O", dtype=torch.float64)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -243,7 +243,7 @@ def test_adiis_reference_coefficients_match_pyscf_arh_formula() -> None:
 def test_exact_ediis_coefficient_gradient_matches_autograd_and_fd() -> None:
     """The coefficient gradient is the contraction with the exact Fock."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O", dtype=torch.float64)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -283,7 +283,7 @@ def test_exact_ediis_simplex_optimizer_matches_dense_two_state_grid(
 ) -> None:
     """The reference optimizer is feasible and no worse than a dense grid."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O", dtype=torch.float64)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -349,8 +349,8 @@ def test_energy_diis_prototype_rejects_active_smearing() -> None:
         dtype=torch.float64,
         scf_options={"fermi_etemp": 300.0},
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
-    method = ResearchDIISMethod()
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
+    method = ResearchDIISConverger()
     assert method.supports_fixed_trip is False
     with pytest.raises(NotImplementedError, match="active smearing"):
         method.propose(problem, None, None, None)
@@ -359,9 +359,9 @@ def test_energy_diis_prototype_rejects_active_smearing() -> None:
 def test_energy_diis_prototype_is_rejected_before_fixed_trip_map() -> None:
     """Eager-only energy DIIS cannot enter the fixed-trip physical map."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O", dtype=torch.float64)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
-    method = ResearchDIISMethod()
-    strategy = SCFStrategy((SCFStage(method, SCFRepresentation.FOCK),))
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
+    method = ResearchDIISConverger()
+    strategy = SCFStrategy((SCFStage(method, SCFVariable.FOCK),))
 
     def unexpected_map(value: torch.Tensor) -> object:
         del value
@@ -396,7 +396,7 @@ def test_subcutoff_fixed_occupation_entropy_is_constant_in_density_history(
     )
     settings = case.inputs.fermi_settings
     assert settings is not None and not settings.smear
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -440,7 +440,7 @@ def test_exact_ediis_hybrid_reaches_first_order_reference_root(
         dtype=torch.float64,
     )
     inputs = case.inputs
-    problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, inputs.charge_layout), inputs
     )
@@ -465,24 +465,24 @@ def test_exact_ediis_hybrid_reaches_first_order_reference_root(
         SCFStrategy(
             (
                 SCFStage(
-                    ResearchDIISMethod(mode="exact", capacity=6),
-                    SCFRepresentation.FOCK,
+                    ResearchDIISConverger(mode="exact", capacity=6),
+                    SCFVariable.FOCK,
                     switch,
                     initial_damp=1.0,
                 ),
                 SCFStage(
-                    CDIISMethod(),
-                    SCFRepresentation.FOCK,
+                    CDIISConverger(),
+                    SCFVariable.FOCK,
                     initial_damp=1.0,
                 ),
             )
         )
     )
     broyden = solve(
-        SCFStrategy((SCFStage(BroydenMethod(), SCFRepresentation.FOCK),))
+        SCFStrategy((SCFStage(BroydenConverger(), SCFVariable.FOCK),))
     )
     cdiis = solve(
-        SCFStrategy((SCFStage(CDIISMethod(), SCFRepresentation.FOCK),))
+        SCFStrategy((SCFStage(CDIISConverger(), SCFVariable.FOCK),))
     )
 
     assert candidate.converged and broyden.converged and cdiis.converged

@@ -415,7 +415,7 @@ def scf_strategy(
         SCF variable of the Stage (``"charge"``, ``"potential"`` or
         ``"fock"``). ``None`` keeps the preset's variable.
     **anderson : Any
-        Overrides of :class:`dxtb.scf.AndersonMethodSettings` fields
+        Overrides of :class:`dxtb.scf.AndersonConvergerSettings` fields
         (only for the Anderson converger).
 
     Returns
@@ -426,20 +426,22 @@ def scf_strategy(
     from dataclasses import replace
 
     from dxtb.scf import (
-        AndersonMethod,
-        SCFRepresentation,
+        AndersonConverger,
+        SCFVariable,
         SCFStrategy,
         strategy_preset,
     )
 
     stage = strategy_preset(converger).stages[0]
     if variable is not None:
-        stage = replace(stage, representation=SCFRepresentation(variable))
+        stage = replace(stage, variable=SCFVariable(variable))
     if anderson:
-        if not isinstance(stage.method, AndersonMethod):
+        if not isinstance(stage.converger, AndersonConverger):
             raise ValueError("Anderson settings need the Anderson converger.")
         stage = replace(
             stage,
-            method=AndersonMethod(replace(stage.method.settings, **anderson)),
+            converger=AndersonConverger(
+                replace(stage.converger.settings, **anderson)
+            ),
         )
     return SCFStrategy((stage,))

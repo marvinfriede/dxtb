@@ -27,7 +27,7 @@ from dxtb._src.typing import Tensor
 from .data import SCFSpectralResult
 from .energy import electronic_energy_from_density
 from .map import density_to_charges_and_core_energy
-from .problem import SCFProblem, SCFRepresentation
+from .problem import SCFProblem, SCFVariable
 
 __all__ = ["SOSCFOrbitalModel", "build_orbital_model"]
 
@@ -134,8 +134,8 @@ def build_orbital_model(
     occupation_tolerance: float = 1.0e-10,
 ) -> SOSCFOrbitalModel:
     """Validate S8 occupation scope and build the local orbital model."""
-    if problem.representation is not SCFRepresentation.FOCK:
-        raise ValueError("SOSCF requires a Fock working representation.")
+    if problem.variable is not SCFVariable.FOCK:
+        raise ValueError("SOSCF requires a Fock working variable.")
     settings = problem.inputs.fermi_settings
     if settings is not None and settings.smear:
         raise NotImplementedError(

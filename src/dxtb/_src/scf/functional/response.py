@@ -38,31 +38,31 @@ from .data import (
 )
 from .implicit import _SCFMapTensorTree
 from .map import potential_from_charges
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .problem import SCFPhysicalState, SCFProblem, SCFVariable
 from .solver import SCFSolverSettings
 
 __all__ = [
-    "SCFResponseSettings",
+    "CPSCFSettings",
     "SCFResponseRoot",
     "prepare_response_root",
 ]
 
 
 @dataclass(frozen=True)
-class SCFResponseSettings:
+class CPSCFSettings:
     """Response coordinates and matrix-free linear-solve controls."""
 
-    representation: SCFRepresentation | None = None
+    variable: SCFVariable | None = None
     rtol: float = 1.0e-10
     atol: float = 1.0e-12
     maxiter: int | None = None
 
     def __post_init__(self) -> None:
-        if self.representation is not None and not isinstance(
-            self.representation, SCFRepresentation
+        if self.variable is not None and not isinstance(
+            self.variable, SCFVariable
         ):
             raise TypeError(
-                "Response representation must be an SCFRepresentation."
+                "Response variable must be an SCFVariable."
             )
         if (
             not isfinite(self.rtol)
@@ -103,45 +103,45 @@ class SCFResponseRoot:
     parameters: tuple[Tensor, ...]
     independent_map_result: object | None
     outcome: SCFResponseOutcome
-    settings: SCFResponseSettings
-    source_representation: SCFRepresentation
+    settings: CPSCFSettings
+    source_variable: SCFVariable
 
 
 def _response_candidate(
     outcome: object,
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> tuple[SCFProblem, Tensor]:
     source_problem = outcome.final_problem
     inputs = source_problem.inputs
     spectral = outcome.map_result.spectral
     problem: SCFProblem
 
-    if representation is SCFRepresentation.CHARGE:
-        problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
+    if variable is SCFVariable.CHARGE:
+        problem = SCFProblem(inputs, SCFVariable.CHARGE)
         root_x = pack_charges(spectral.charges, inputs.charge_layout)
         return problem, root_x
 
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         potential = potential_from_charges(spectral.charges, inputs)
         layout = potential_layout(potential)
         problem = SCFProblem(
-            inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+            inputs, SCFVariable.POTENTIAL, potential_layout=layout
         )
         return problem, pack_potential(potential, layout)
 
-    if representation is SCFRepresentation.FOCK:
-        problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+    if variable is SCFVariable.FOCK:
+        problem = SCFProblem(inputs, SCFVariable.FOCK)
         return problem, problem.rebuild_hamiltonian(spectral.charges)
 
     raise ValueError(
-        f"Unsupported SCF response representation {representation!r}."
+        f"Unsupported SCF response variable {variable!r}."
     )
 
 
 def prepare_response_root(
     outcome: object,
     solver_settings: SCFSolverSettings,
-    response_settings: SCFResponseSettings | None = None,
+    response_settings: CPSCFSettings | None = None,
 ) -> SCFResponseRoot:
     """Prepare and validate one response-coordinate root without iteration."""
     if outcome.final_problem is None or outcome.certification is None:
@@ -156,19 +156,19 @@ def prepare_response_root(
         )
 
     settings = (
-        SCFResponseSettings()
+        CPSCFSettings()
         if response_settings is None
         else response_settings
     )
     source_problem = outcome.final_problem
     target = (
-        source_problem.representation
-        if settings.representation is None
-        else settings.representation
+        source_problem.variable
+        if settings.variable is None
+        else settings.variable
     )
 
     independent_map_result = None
-    if target is source_problem.representation:
+    if target is source_problem.variable:
         problem = source_problem
         root_x = outcome.root_x
         map_result = outcome.map_result
@@ -182,7 +182,7 @@ def prepare_response_root(
         problem.potential_layout,
     )
 
-    if target is not source_problem.representation:
+    if target is not source_problem.variable:
         # Alternate response coordinates receive exactly one physical map.
         # There is intentionally no response-root refinement loop.
         with torch.no_grad():
@@ -199,7 +199,7 @@ def prepare_response_root(
         )
         certification = certify_scf_core_state(problem, state, thresholds)
         if not bool(certification.certified.all()):
-            source = source_problem.representation.value
+            source = source_problem.variable.value
             target_name = target.value
             raise SCFConvergenceError(
                 "Converted implicit response root failed independent S2 "
@@ -213,7 +213,7 @@ def prepare_response_root(
         iterations=outcome.iterations,
         converged=(
             outcome.converged
-            if target is source_problem.representation
+            if target is source_problem.variable
             else certification.certified
         ),
         residual=outcome.residual,
@@ -232,5 +232,5 @@ def prepare_response_root(
         independent_map_result=independent_map_result,
         outcome=response_outcome,
         settings=settings,
-        source_representation=source_problem.representation,
+        source_variable=source_problem.variable,
     )

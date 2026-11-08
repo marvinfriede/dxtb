@@ -88,7 +88,7 @@ from dxtb._src.scf.guess import get_guess  # noqa: E402
 from dxtb._src.scf.iterator import get_refocc  # noqa: E402
 from dxtb._src.typing.exceptions import SCFConvergenceError  # noqa: E402
 from dxtb.config import Config  # noqa: E402
-from dxtb.scf import SCFRepresentation  # noqa: E402
+from dxtb.scf import SCFVariable  # noqa: E402
 
 DTYPE = torch.float64
 STARTED = time.perf_counter()
@@ -437,7 +437,7 @@ def validate_physical_root(
 ) -> tuple[Any, tuple[torch.Tensor, ...], torch.Tensor, Any]:
     """Check solver status and raw residual at the exact attachment inputs."""
     adapter, parameters = _SCFMapTensorTree.prepare(
-        prepared.inputs, SCFRepresentation.CHARGE
+        prepared.inputs, SCFVariable.CHARGE
     )
     with torch.no_grad():
         independent_map = adapter.evaluate(outcome.root_x, *parameters)
@@ -1391,7 +1391,7 @@ def run_diagnostic(args: argparse.Namespace) -> None:
             "maxiter": args.maxiter,
             "x_atol": args.x_atol,
             "x_atol_max": args.x_atol_max,
-            "variable": SCFRepresentation.CHARGE.value,
+            "variable": SCFVariable.CHARGE.value,
             "differentiation": "unrolled",
             "gradient_mode": args.gradient_mode,
         },
@@ -1443,7 +1443,7 @@ def run_diagnostic(args: argparse.Namespace) -> None:
         classical_labels=[x.label for x in system.classicals.components],
         interaction_labels=[x.label for x in system.interactions.components],
         scf_config={
-            "variable": system.config.scf.initial_representation.value,
+            "variable": system.config.scf.initial_variable.value,
             "differentiation": system.config.scf.differentiation.value,
             "maxiter": system.config.scf.maxiter,
             "x_atol": system.config.scf.x_atol,

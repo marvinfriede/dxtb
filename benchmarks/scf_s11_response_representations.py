@@ -30,15 +30,15 @@ from test.test_scf import test_functional_root_derivatives as root_reference
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional.broyden import BroydenMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_spectral,
     free_energy_from_spectral,
 )
 from dxtb._src.scf.functional.implicit import solve_linear
-from dxtb._src.scf.functional.problem import SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFVariable
 from dxtb._src.scf.functional.response import (
-    SCFResponseSettings,
+    CPSCFSettings,
     prepare_response_root,
 )
 from dxtb._src.scf.functional.solver import setup_solver_settings
@@ -62,8 +62,8 @@ def _case_record(name: str, method: int, temperature: float):
     case = root_reference._case(
         name,
         method=method,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=BroydenMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=BroydenConverger,
         tolerance=1.0e-12,
         maxiter=300,
         temperature=temperature,
@@ -74,7 +74,7 @@ def _case_record(name: str, method: int, temperature: float):
         tolerance=1.0e-13,
         maxiter=300,
         eager=True,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
     )
     if not record.converged:
         raise RuntimeError(f"{name} failed to certify at {temperature:g} K.")
@@ -84,7 +84,7 @@ def _case_record(name: str, method: int, temperature: float):
 def _measure_response(
     case,
     record,
-    representation: SCFRepresentation,
+    variable: SCFVariable,
     *,
     dense_reference: bool,
     response_rtol: float,
@@ -94,8 +94,8 @@ def _measure_response(
     prepared = prepare_response_root(
         record.outcome,
         settings,
-        SCFResponseSettings(
-            representation=representation,
+        CPSCFSettings(
+            variable=variable,
             rtol=response_rtol,
             atol=response_rtol * 1.0e-2,
         ),
@@ -187,7 +187,7 @@ def _measure_response(
     )
 
     result: dict[str, object] = {
-        "representation": representation.value,
+        "variable": variable.value,
         "dimension": int(root.numel()),
         "linear_rtol": response_rtol,
         "linear_atol": response_rtol * 1.0e-2,
@@ -282,20 +282,20 @@ def main() -> None:
     electron_count = torch.einsum(
         "ij,ji->", spectral.density, case.inputs.integrals.overlap
     )
-    representations = (
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+    variables = (
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     )
     measurements = [
         _measure_response(
             case,
             record,
-            representation,
+            variable,
             dense_reference=(args.case in ("H2", "H2O")),
             response_rtol=args.response_rtol,
         )
-        for representation in representations
+        for variable in variables
     ]
     document = {
         "source_sha": _git_value("rev-parse", "HEAD"),

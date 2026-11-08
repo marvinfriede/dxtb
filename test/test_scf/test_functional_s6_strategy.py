@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""S6 stage policy, paired representation conversion, and budget tests."""
+"""S6 stage policy, paired variable conversion, and budget tests."""
 
 from __future__ import annotations
 
@@ -27,21 +27,21 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.data import unpack_charges
 from dxtb._src.scf.functional.map import (
     fock_initial_guess,
     fock_map,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import LinearMethod, SCFMethod
+from dxtb._src.scf.functional.method import LinearConverger, SCFConverger
 from dxtb._src.scf.functional.problem import (
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     convert_physical_state_to_fock,
 )
 from dxtb._src.scf.functional.solver import (
@@ -49,7 +49,7 @@ from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     SCFSolverSettings,
     SCFSwitchReason,
-    _method_state_tensors,
+    _converger_state_tensors,
     _solve_map,
 )
 from dxtb._src.scf.functional.strategy import (
@@ -62,25 +62,25 @@ from .test_functional_map import _prepare_case
 
 
 @pytest.mark.parametrize(
-    "representation",
-    [SCFRepresentation.CHARGE, SCFRepresentation.POTENTIAL],
+    "variable",
+    [SCFVariable.CHARGE, SCFVariable.POTENTIAL],
 )
 def test_compact_observation_converts_to_exact_fock_pair(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """Conversion pairs the generating Hamiltonian with its fresh Fock map."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     charges = unpack_charges(case.x, case.inputs.charge_layout)
-    if representation is SCFRepresentation.CHARGE:
+    if variable is SCFVariable.CHARGE:
         guess, layout = case.x, None
     else:
         guess, layout = potential_initial_guess(charges, case.inputs)
 
-    problem = SCFProblem(case.inputs, representation, layout)
+    problem = SCFProblem(case.inputs, variable, layout)
     physical = problem.evaluate(guess)
     fock_problem, converted = convert_physical_state_to_fock(problem, physical)
 
-    assert fock_problem.representation is SCFRepresentation.FOCK
+    assert fock_problem.variable is SCFVariable.FOCK
     torch.testing.assert_close(
         converted.x, physical.map_result.spectral.hamiltonian
     )
@@ -135,7 +135,7 @@ def test_fock_observation_conversion_is_identity() -> None:
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     guess = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     physical = problem.evaluate(guess)
     converted_problem, converted = convert_physical_state_to_fock(
         problem, physical
@@ -148,25 +148,25 @@ def test_fock_observation_conversion_is_identity() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        BroydenMethod(),
-        AndersonMethod(AndersonMethodSettings(0.1, 5, True, 0.01)),
+        BroydenConverger(),
+        AndersonConverger(AndersonConvergerSettings(0.1, 5, True, 0.01)),
     ],
     ids=["broyden", "anderson"],
 )
 def test_charge_strategy_switches_to_fock_without_an_extra_map(
-    method: SCFMethod,
+    method: SCFConverger,
 ) -> None:
     """Charge stages seed CDIIS from the same map observation at the switch."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     strategy = SCFStrategy(
         (
             SCFStage(
                 method,
-                representation=SCFRepresentation.CHARGE,
+                variable=SCFVariable.CHARGE,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
             ),
-            SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),
+            SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),
         )
     )
     settings = SCFSolverSettings(1, False, 0.5, 0.0, 0.0)
@@ -182,7 +182,7 @@ def test_charge_strategy_switches_to_fock_without_an_extra_map(
 
     assert int(outcome.strategy_diagnostics.switch_count) == 1
     assert int(outcome.iterations) == 2
-    assert outcome.final_problem.representation is SCFRepresentation.FOCK
+    assert outcome.final_problem.variable is SCFVariable.FOCK
     torch.testing.assert_close(
         outcome.root_x, outcome.map_result.spectral.hamiltonian
     )
@@ -197,8 +197,8 @@ def test_charge_strategy_switches_to_fock_without_an_extra_map(
 @pytest.mark.parametrize(
     "first_method",
     [
-        BroydenMethod(),
-        AndersonMethod(AndersonMethodSettings(0.1, 5, True, 0.01)),
+        BroydenConverger(),
+        AndersonConverger(AndersonConvergerSettings(0.1, 5, True, 0.01)),
     ],
 )
 @pytest.mark.parametrize(
@@ -207,7 +207,7 @@ def test_charge_strategy_switches_to_fock_without_an_extra_map(
     ids=["switch-at-budget-boundary", "one-map-after-switch"],
 )
 def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
-    first_method: SCFMethod,
+    first_method: SCFConverger,
     maxiter: int,
     stage_counts: tuple[int, int],
     monkeypatch: pytest.MonkeyPatch,
@@ -216,18 +216,18 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     guess, layout = potential_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.POTENTIAL, layout)
+    problem = SCFProblem(case.inputs, SCFVariable.POTENTIAL, layout)
     strategy = SCFStrategy(
         (
             SCFStage(
                 first_method,
-                representation=SCFRepresentation.POTENTIAL,
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
                 initial_damp=0.5,
             ),
             SCFStage(
-                CDIISMethod(),
-                representation=SCFRepresentation.FOCK,
+                CDIISConverger(),
+                variable=SCFVariable.FOCK,
                 initial_damp=1.0,
             ),
         )
@@ -244,7 +244,7 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
     from dxtb._src.scf.functional import problem as problem_module
     from dxtb._src.scf.functional import solver as solver_module
 
-    original_transition = solver_module._method_transition
+    original_transition = solver_module._converger_transition
     original_update_damping = solver_module._update_damping
     original_potential_map = problem_module.potential_map
     original_fock_map = problem_module.fock_map
@@ -255,7 +255,7 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
 
     def record_transition(*args, **kwargs):
         method = args[1]
-        if isinstance(method, CDIISMethod):
+        if isinstance(method, CDIISConverger):
             cdiis_entries.append(
                 (args[2].clone(), args[3], args[5], args[6], args[8].clone())
             )
@@ -280,7 +280,7 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
         map_calls += 1
         return original_fock_map(x, inputs)
 
-    monkeypatch.setattr(solver_module, "_method_transition", record_transition)
+    monkeypatch.setattr(solver_module, "_converger_transition", record_transition)
     monkeypatch.setattr(solver_module, "_update_damping", mark_dynamic_switch)
     monkeypatch.setattr(problem_module, "potential_map", record_potential_map)
     monkeypatch.setattr(problem_module, "fock_map", record_fock_map)
@@ -309,7 +309,7 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
     # The initial map and the global candidate budget include no switch map.
     assert int(outcome.iterations) == maxiter + 1
     assert map_calls == maxiter + 1
-    assert outcome.final_problem.representation is SCFRepresentation.FOCK
+    assert outcome.final_problem.variable is SCFVariable.FOCK
     fock_input, fock_observation, state, step, damp = cdiis_entries[0]
     assert state is None
     assert step == 1
@@ -342,17 +342,17 @@ def test_broyden_to_cdiis_metric_switch_records_reason() -> None:
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     guess, layout = potential_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.POTENTIAL, layout)
+    problem = SCFProblem(case.inputs, SCFVariable.POTENTIAL, layout)
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                BroydenConverger(),
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=1, fixed_point_l2=1.0e20
                 ),
             ),
-            SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),
+            SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),
         )
     )
     settings = SCFSolverSettings(2, False, 0.5, 0.0, 0.0)
@@ -376,22 +376,22 @@ def test_broyden_to_cdiis_metric_switch_records_reason() -> None:
     assert torch.isfinite(switch_metrics.stationarity)
 
 
-def test_broyden_to_cdiis_same_fock_representation_switches_method_only() -> (
+def test_broyden_to_cdiis_same_fock_variable_switches_method_only() -> (
     None
 ):
-    """A same-representation switch resets method state without conversion."""
+    """A same-variable switch resets method state without conversion."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     guess = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.FOCK,
+                BroydenConverger(),
+                variable=SCFVariable.FOCK,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
             ),
-            SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),
+            SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),
         )
     )
     settings = SCFSolverSettings(2, False, 0.5, 0.0, 0.0)
@@ -434,9 +434,9 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     potential, layout = potential_initial_guess(charges, case.inputs)
     fock = fock_initial_guess(charges, case.inputs)
     compact_problem = SCFProblem(
-        case.inputs, SCFRepresentation.POTENTIAL, layout
+        case.inputs, SCFVariable.POTENTIAL, layout
     )
-    fock_problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    fock_problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     root_tolerance = 1.0e-12 if sample_name == "NO2" else 1.0e-7
     settings = SCFSolverSettings(
         100, False, 0.5, root_tolerance, root_tolerance
@@ -444,8 +444,8 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     switched_strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                BroydenConverger(),
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=3,
                     fixed_point_l2=1.0e-2,
@@ -454,8 +454,8 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
                 ),
             ),
             SCFStage(
-                CDIISMethod(),
-                representation=SCFRepresentation.FOCK,
+                CDIISConverger(),
+                variable=SCFVariable.FOCK,
                 initial_damp=1.0,
             ),
         )
@@ -474,7 +474,7 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
         fock_problem.map,
         problem=fock_problem,
         strategy=SCFStrategy(
-            (SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),)
+            (SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),)
         ),
         eager=True,
     )
@@ -486,7 +486,7 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     assert switched.final_problem is not None
 
     adapter, flat_parameters = _SCFMapTensorTree.prepare(
-        case.inputs, SCFRepresentation.FOCK
+        case.inputs, SCFVariable.FOCK
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     mutable_parameters = list(flat_parameters)
@@ -506,7 +506,7 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
 
     prepared_switched = prepare(switched)
     prepared_standalone = prepare(standalone)
-    assert not hasattr(prepared_switched, "method_state")
+    assert not hasattr(prepared_switched, "converger_state")
     switched_attached = prepared_switched.attach()
     standalone_attached = prepared_standalone.attach()
     torch.testing.assert_close(switched_attached, switched.root_x)
@@ -547,15 +547,15 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
 def test_dynamic_multistage_is_explicitly_fixed_trip_unsupported() -> None:
     """Static transforms cannot silently execute only the first stage."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.CHARGE,
+                BroydenConverger(),
+                variable=SCFVariable.CHARGE,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
             ),
-            SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),
+            SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),
         )
     )
     settings = SCFSolverSettings(2, False, 0.5, 0.0, 0.0)
@@ -574,15 +574,15 @@ def test_dynamic_multistage_is_explicitly_fixed_trip_unsupported() -> None:
 def test_zero_budget_does_not_enter_a_later_stage() -> None:
     """The compatibility one-shot map cannot trigger a strategy switch."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.CHARGE,
+                BroydenConverger(),
+                variable=SCFVariable.CHARGE,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
             ),
-            SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),
+            SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),
         )
     )
     settings = SCFSolverSettings(0, False, 0.5, 0.0, 0.0)
@@ -609,9 +609,9 @@ def test_strategy_rejects_missing_exit_policy_and_invalid_final_policy() -> (
     None
 ):
     """Executable strategies validate every stage transition in advance."""
-    method = BroydenMethod()
+    method = BroydenConverger()
     with pytest.raises(ValueError, match="exit switch policy"):
-        SCFStrategy((SCFStage(method), SCFStage(CDIISMethod())))
+        SCFStrategy((SCFStage(method), SCFStage(CDIISConverger())))
 
     with pytest.raises(ValueError, match="final SCF stage"):
         SCFStrategy(
@@ -621,7 +621,7 @@ def test_strategy_rejects_missing_exit_policy_and_invalid_final_policy() -> (
                     switch_policy=SCFSwitchPolicy(max_stage_iterations=2),
                 ),
                 SCFStage(
-                    CDIISMethod(),
+                    CDIISConverger(),
                     switch_policy=SCFSwitchPolicy(max_stage_iterations=2),
                 ),
             )
@@ -629,30 +629,30 @@ def test_strategy_rejects_missing_exit_policy_and_invalid_final_policy() -> (
 
 
 def test_strategy_rejects_unsupported_fock_to_compact_transition() -> None:
-    """The S6 conversion boundary rejects reverse representation changes."""
+    """The S6 conversion boundary rejects reverse variable changes."""
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.FOCK,
+                BroydenConverger(),
+                variable=SCFVariable.FOCK,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=2),
             ),
             SCFStage(
-                BroydenMethod(), representation=SCFRepresentation.POTENTIAL
+                BroydenConverger(), variable=SCFVariable.POTENTIAL
             ),
         )
     )
 
     with pytest.raises(NotImplementedError, match="compact-to-Fock"):
-        strategy.resolve_representations(SCFRepresentation.FOCK)
+        strategy.resolve_variables(SCFVariable.FOCK)
 
 
 def test_methods_do_not_own_stage_selection_or_controller_lifecycle() -> None:
-    """The strategy controller depends only on the SCFMethod interface."""
+    """The strategy controller depends only on the SCFConverger interface."""
     from dxtb._src.scf.functional import anderson, broyden, cdiis, solver
 
     controller_source = getsource(solver)
-    for concrete_name in ("AndersonMethod", "BroydenMethod", "CDIISMethod"):
+    for concrete_name in ("AndersonConverger", "BroydenConverger", "CDIISConverger"):
         assert concrete_name not in controller_source
 
     for module in (anderson, broyden, cdiis):
@@ -663,29 +663,29 @@ def test_methods_do_not_own_stage_selection_or_controller_lifecycle() -> None:
 
 
 @pytest.mark.parametrize(
-    "method,representation",
+    "method,variable",
     [
-        (LinearMethod(), SCFRepresentation.CHARGE),
-        (BroydenMethod(), SCFRepresentation.CHARGE),
+        (LinearConverger(), SCFVariable.CHARGE),
+        (BroydenConverger(), SCFVariable.CHARGE),
         (
-            AndersonMethod(AndersonMethodSettings(0.1, 4, True, 0.01)),
-            SCFRepresentation.CHARGE,
+            AndersonConverger(AndersonConvergerSettings(0.1, 4, True, 0.01)),
+            SCFVariable.CHARGE,
         ),
-        (CDIISMethod(), SCFRepresentation.FOCK),
+        (CDIISConverger(), SCFVariable.FOCK),
     ],
     ids=["linear", "broyden", "anderson", "cdiis"],
 )
 def test_terminal_dummy_trips_keep_method_state_finite_under_derivatives(
-    method: SCFMethod, representation: SCFRepresentation
+    method: SCFConverger, variable: SCFVariable
 ) -> None:
     """Post-terminal dummy maps do not feed NaNs into method algebra."""
     case = _prepare_case(GFN1_XTB, sample_name="H2")
-    if representation is SCFRepresentation.CHARGE:
+    if variable is SCFVariable.CHARGE:
         guess = case.x
     else:
         charges = unpack_charges(case.x, case.inputs.charge_layout)
         guess = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, representation)
+    problem = SCFProblem(case.inputs, variable)
     base = guess.detach().clone()
     nan = torch.full_like(guess, torch.nan)
 
@@ -719,7 +719,7 @@ def test_terminal_dummy_trips_keep_method_state_finite_under_derivatives(
     assert torch.isfinite(outcome.root_x).all()
     assert not torch.isfinite(outcome.map_result.spectral.density).all()
     assert outcome.trace is not None
-    for state_tensor in _method_state_tensors(outcome.trace.method_state):
+    for state_tensor in _converger_state_tensors(outcome.trace.converger_state):
         assert torch.isfinite(state_tensor).all()
 
     def solve_root(value: torch.Tensor) -> torch.Tensor:

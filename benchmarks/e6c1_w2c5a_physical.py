@@ -55,7 +55,7 @@ from dxtb._src.scf.functional import solver as solver_module  # noqa: E402
 from dxtb._src.scf.functional import spectral as spectral_module  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import (  # noqa: E402
-    SCFRepresentation,
+    SCFVariable,
     SCFStrategy,
     strategy_preset,
 )
@@ -190,7 +190,7 @@ def _model_and_case(
         method, method_label, variable, temperature = (
             GFN1_XTB,
             labels.GFN1_XTB,
-            SCFRepresentation.CHARGE,
+            SCFVariable.CHARGE,
             300.0,
         )
         system_id = f"tmpda-conformer-{index}-frozen-W2"
@@ -206,7 +206,7 @@ def _model_and_case(
         method = GFN2_XTB if gfn2_case else GFN1_XTB
         method_label = labels.GFN2_XTB if gfn2_case else labels.GFN1_XTB
         variable = (
-            SCFRepresentation.FOCK if gfn2_case else SCFRepresentation.CHARGE
+            SCFVariable.FOCK if gfn2_case else SCFVariable.CHARGE
         )
         temperature = 10_000.0 if high_temperature else 300.0
         system_id = case_id
@@ -221,7 +221,7 @@ def _model_and_case(
             (
                 replace(
                     strategy_preset("anderson").stages[0],
-                    representation=variable,
+                    variable=variable,
                 ),
             )
         ),
@@ -636,7 +636,7 @@ def run_case(
         atoms=int(numbers.numel()),
         temperature_kelvin=system.config.scf.fermi.etemp,
         method=system.config.method,
-        variable=system.config.scf.initial_representation.value,
+        variable=system.config.scf.initial_variable.value,
         maxiter=system.config.scf.maxiter,
         x_atol=system.config.scf.x_atol,
         x_atol_max=system.config.scf.x_atol_max,

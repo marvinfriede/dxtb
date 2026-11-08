@@ -43,7 +43,7 @@ The following examples select supported policies explicitly:
        fermi_etemp=2000.0,
    )
 
-A custom staged strategy can select each method's representation and switch
+A custom staged strategy can select each SCF converger's SCF variable and switch
 criterion directly:
 
 .. code-block:: python
@@ -54,15 +54,15 @@ criterion directly:
    robust = scf.SCFStrategy(
        (
            scf.SCFStage(
-               scf.BroydenMethod(
-                   scf.BroydenMethodSettings(max_rank=8)
+               scf.BroydenConverger(
+                   scf.BroydenConvergerSettings(max_rank=8)
                ),
-               representation=scf.SCFRepresentation.POTENTIAL,
+               variable=scf.SCFVariable.POTENTIAL,
                switch_policy=scf.SCFSwitchPolicy(fixed_point_l2=1.0e-2),
            ),
            scf.SCFStage(
-               scf.CDIISMethod(scf.CDIISMethodSettings(max_history=8)),
-               representation=scf.SCFRepresentation.FOCK,
+               scf.CDIISConverger(scf.CDIISConvergerSettings(max_history=8)),
+               variable=scf.SCFVariable.FOCK,
            ),
        )
    )
@@ -89,7 +89,7 @@ Same-shape fixed-trip ``vmap`` is supported for Linear, Anderson, Broyden, and
 Fock CDIIS. Dynamic multi-stage strategies and SOSCF require eager primal
 execution and are normally paired with ``differentiation="implicit"``.
 Implicit differentiation attaches to a certified physical root and excludes
-solver history. The implicit response uses potential coordinates by default.
+solver history. The CPSCF solve uses the potential SCF variable by default.
 
 Automatic ``torch.compile`` is not enabled. Current tests retain graph breaks
 in raw maps and full solvers; an optimized-backend speedup has not been
@@ -97,7 +97,7 @@ established. Small same-shape ``vmap`` batches are supported, while streaming
 is the memory-bounded option for large derivative batches.
 
 The result's convergence flag and residual describe primal S2 physical
-certification and controller progress. A later implicit response failure is
+certification and controller progress. A later CPSCF failure is
 a derivative failure and does not change the primal convergence result.
 
 Removed options
@@ -110,7 +110,7 @@ The older flat SCF options were removed, not converted. ``Config.create``,
 them raises a ``TypeError``. The integer label families ``SCF_MODE_*``,
 ``SCP_MODE_*`` and ``MIXER_*`` were removed from :mod:`dxtb.labels` as well.
 A strategy whose Stages own their SCF converger and SCF variable replaces the
-global converger and representation options, and ``differentiation`` replaces
+global converger and SCF variable options, and ``differentiation`` replaces
 the SCF mode. SCF convergence uses physical fixed-point and stationarity
 checks; there is no residual-norm (``f_atol``) or ``strict`` switch.
 
@@ -126,11 +126,11 @@ Rewrite old configurations as follows:
    * - ``mixer="anderson"`` / ``mixer="broyden"``
      - ``strategy="anderson"`` / ``strategy="broyden"``
    * - ``scp_mode="charge"`` / ``"potential"`` / ``"fock"``
-     - Set ``SCFStage.representation`` to ``SCFRepresentation.CHARGE`` /
+     - Set ``SCFStage.variable`` to ``SCFVariable.CHARGE`` /
        ``POTENTIAL`` / ``FOCK`` (see below)
    * - ``damp_init``, ``damp_generations``, ``damp_soft_start``,
        ``damp_diagonal_offset``
-     - ``AndersonMethodSettings(damp_init=..., generations=...,
+     - ``AndersonConvergerSettings(damp_init=..., generations=...,
        soft_start=..., diagonal_offset=...)`` on an Anderson Stage
    * - ``scf_mode="full"`` / ``scf_mode="implicit"``
      - ``differentiation="unrolled"`` / ``differentiation="implicit"``
@@ -139,7 +139,7 @@ Rewrite old configurations as follows:
 
 A named preset keeps its own SCF variable (potential coordinates for
 ``linear``, ``anderson`` and ``broyden``). To run a preset converger on
-another SCF variable, replace the representation of its Stage, for example
+another SCF variable, replace the SCF variable of its Stage, for example
 the old ``mixer="anderson", scp_mode="charge", scf_mode="full"``:
 
 .. code-block:: python
@@ -151,15 +151,15 @@ the old ``mixer="anderson", scp_mode="charge", scf_mode="full"``:
 
    stage = replace(
        scf.strategy_preset("anderson").stages[0],
-       representation=scf.SCFRepresentation.CHARGE,
+       variable=scf.SCFVariable.CHARGE,
    )
    config = Config.create(
        strategy=scf.SCFStrategy((stage,)),
        differentiation="unrolled",
    )
 
-The functional configuration stores no converger or global representation
-field: read them from the strategy (``config.scf.initial_representation`` and
-``config.scf.strategy.stages[0].method``) and the derivative policy from
+The functional configuration stores no converger or global SCF variable
+field: read them from the strategy (``config.scf.initial_variable`` and
+``config.scf.strategy.stages[0].converger``) and the derivative policy from
 ``config.scf.differentiation``. Experimental single-shot SCF and legacy SCF
 engine overrides no longer exist.

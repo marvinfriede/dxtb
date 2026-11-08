@@ -20,24 +20,24 @@ from dxtb._src.scf.functional import (
     SCFStrategy,
 )
 from dxtb._src.scf.functional.broyden import (
-    BroydenMethod,
-    BroydenMethodSettings,
+    BroydenConverger,
+    BroydenConvergerSettings,
     BroydenState,
     _apply_inverse,
     _update_inverse,
 )
-from dxtb._src.scf.functional.method import SCFMethodContext
+from dxtb._src.scf.functional.method import SCFConvergerContext
 from dxtb._src.scf.functional.problem import (
     SCFMapResult,
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.solver import _solve_map
 
 
 def _propose(
-    method: BroydenMethod,
+    method: BroydenConverger,
     x: torch.Tensor,
     mapped: torch.Tensor,
     state: BroydenState | None,
@@ -48,7 +48,7 @@ def _propose(
     raw_mapped: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, BroydenState]:
     active_tensor = torch.tensor(active, device=x.device)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=step,
         transition_active=active_tensor,
         damp=x.new_tensor(damp),
@@ -72,7 +72,7 @@ def _propose(
 
 def test_broyden_first_proposal_has_expected_sign_and_scale() -> None:
     """The initial step is damp times one half of G(x)-x."""
-    method = BroydenMethod()
+    method = BroydenConverger()
     x = torch.tensor([1.25, -0.75], dtype=torch.float64)
     delta = torch.tensor([-0.4, 0.2], dtype=x.dtype)
     proposal, state = _propose(method, x, x + delta, None, step=1)
@@ -101,7 +101,7 @@ def test_broyden_preserves_common_budget_and_initial_guess_semantics(
 
 def test_broyden_uses_controller_projected_proposal() -> None:
     """The method uses the projected proposal supplied by the controller."""
-    method = BroydenMethod()
+    method = BroydenConverger()
     x = torch.tensor([0.5, -0.3], dtype=torch.float64)
     projected_delta = torch.tensor([0.2, -0.1], dtype=x.dtype)
     unprojected_map = torch.tensor([20.0, -30.0], dtype=x.dtype)
@@ -118,7 +118,7 @@ def test_broyden_uses_controller_projected_proposal() -> None:
 
 def test_broyden_low_rank_update_matches_dense_first_method_reference() -> None:
     """Native low-rank updates match a test-local dense Broyden-first formula."""
-    method = BroydenMethod(BroydenMethodSettings(max_rank=8))
+    method = BroydenConverger(BroydenConvergerSettings(max_rank=8))
     x = torch.tensor([0.4, -0.2, 0.6], dtype=torch.float64)
     inverse = 0.5 * torch.eye(3, dtype=x.dtype)
     matrix = torch.tensor(
@@ -187,7 +187,7 @@ def test_broyden_low_rank_update_matches_dense_first_method_reference() -> None:
 
 def test_broyden_capacity_restarts_and_inserts_current_secant() -> None:
     """A full correction buffer restarts at H0 before adding the latest pair."""
-    method = BroydenMethod(BroydenMethodSettings(max_rank=2))
+    method = BroydenConverger(BroydenConvergerSettings(max_rank=2))
     x = torch.tensor([0.2, -0.3], dtype=torch.float64)
     state = None
     for step in range(1, 5):
@@ -204,7 +204,7 @@ def test_broyden_capacity_restarts_and_inserts_current_secant() -> None:
 
 def test_broyden_rejects_degenerate_secant_without_nan_history() -> None:
     """A zero secant denominator restarts instead of storing NaN corrections."""
-    method = BroydenMethod(BroydenMethodSettings(secant_quality_tolerance=0.0))
+    method = BroydenConverger(BroydenConvergerSettings(secant_quality_tolerance=0.0))
     x0 = torch.tensor([0.0, 1.0], dtype=torch.float64)
     mapped0 = torch.tensor([0.4, 0.7], dtype=x0.dtype)
     x1, state = _propose(method, x0, mapped0, None, step=1)
@@ -226,7 +226,7 @@ def test_broyden_rejects_nonfinite_secant_without_nan_corrections() -> None:
     """Non-finite secants clear corrections and never enter the low-rank state."""
     x0 = torch.tensor([0.0, 1.0], dtype=torch.float64)
     _, state = _propose(
-        BroydenMethod(),
+        BroydenConverger(),
         x0,
         torch.tensor([0.3, 0.6], dtype=x0.dtype),
         None,
@@ -246,7 +246,7 @@ def test_broyden_rejects_nonfinite_secant_without_nan_corrections() -> None:
         state,
         x0 + torch.tensor([0.1, -0.2], dtype=x0.dtype),
         torch.tensor([-0.5, 0.3], dtype=x0.dtype),
-        BroydenMethodSettings(),
+        BroydenConvergerSettings(),
     )
     assert int(state.history_count) == 0
     assert int(state.restart_count) == 1
@@ -257,7 +257,7 @@ def test_broyden_rejects_nonfinite_secant_without_nan_corrections() -> None:
 
 def test_broyden_inactive_transition_freezes_all_history() -> None:
     """Inactive lanes keep every Broyden state tensor unchanged."""
-    method = BroydenMethod()
+    method = BroydenConverger()
     x0 = torch.tensor([0.5, -0.1], dtype=torch.float64)
     _, state = _propose(method, x0, 0.8 * x0, None, step=1)
     x1 = state.previous_x + 0.1
@@ -270,7 +270,7 @@ def test_broyden_inactive_transition_freezes_all_history() -> None:
 @pytest.mark.parametrize("rank", [1, 4, 8])
 def test_broyden_history_has_fixed_bounded_shapes(rank: int) -> None:
     """History allocation scales as rank times vector size, never n squared."""
-    method = BroydenMethod(BroydenMethodSettings(max_rank=rank))
+    method = BroydenConverger(BroydenConvergerSettings(max_rank=rank))
     x = torch.linspace(-0.2, 0.2, 11, dtype=torch.float64)
     _, state = _propose(method, x, 0.9 * x + 0.01, None, step=1)
     assert state.c_history.shape == (rank, x.numel())
@@ -311,7 +311,7 @@ def _affine_outcome(
         x_atol=tolerance,
         x_atol_max=tolerance,
     )
-    method = BroydenMethod(BroydenMethodSettings(max_rank=3))
+    method = BroydenConverger(BroydenConvergerSettings(max_rank=3))
 
     def map_fn(x: torch.Tensor) -> SCFMapResult:
         return _synthetic_map(slope * x + 0.7)
@@ -377,13 +377,13 @@ def test_broyden_shared_controller_supports_transforms_and_trace() -> None:
 
     traced = _affine_outcome(initial, slope, mix_guess=False, record_trace=True)
     assert traced.trace is not None
-    assert len(traced.trace.method_state) == 8
-    assert traced.trace.method_state[0].shape[0] == 6
+    assert len(traced.trace.converger_state) == 8
+    assert traced.trace.converger_state[0].shape[0] == 6
     assert torch.equal(
-        traced.trace.method_state[0][0],
-        torch.zeros_like(traced.trace.method_state[0][0]),
+        traced.trace.converger_state[0][0],
+        torch.zeros_like(traced.trace.converger_state[0][0]),
     )
-    assert traced.trace.method_state[0][0].shape == (2,)
+    assert traced.trace.converger_state[0][0].shape == (2,)
 
 
 def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
@@ -409,8 +409,8 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=BroydenMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=BroydenConverger,
         tolerance=0.0,
         maxiter=3,
         field=field,
@@ -509,8 +509,8 @@ def test_broyden_full_physical_case_matrix(
     case = _case(
         molecule,
         method=method,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=BroydenMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=BroydenConverger,
         tolerance=1.0e-8,
         maxiter=150,
         temperature=temperature,

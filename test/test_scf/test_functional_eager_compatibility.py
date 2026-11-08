@@ -49,7 +49,7 @@ from dxtb._src.scf.functional import spectral as functional_spectral
 from dxtb._src.scf.functional.data import setup_scf_inputs
 from dxtb._src.scf.functional.eager import (
     _check_subsolve_status,
-    _solve_representation,
+    _solve_variable,
 )
 from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
@@ -530,7 +530,7 @@ def test_eager_subsolve_error_priority(
 
 
 @pytest.mark.parametrize(
-    ("representation", "first_code", "final_code", "message"),
+    ("variable", "first_code", "final_code", "message"),
     [
         (
             "charge",
@@ -558,13 +558,13 @@ def test_eager_subsolve_error_priority(
     ],
 )
 def test_eager_failure_order_is_chronological(
-    representation: str, first_code: int, final_code: int, message: str
+    variable: str, first_code: int, final_code: int, message: str
 ) -> None:
     """Trajectory failures precede later final-spectrum failures."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "strategy": _strategy("linear", representation),
+            "strategy": _strategy("linear", variable),
             "fermi_etemp": 300.0,
             "maxiter": 0,
         },
@@ -634,16 +634,16 @@ def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     ["charge", "potential"],
     ids=["charge", "potential"],
 )
 def test_default_anderson_adapter_matches_legacy(
-    method: int, representation: str
+    method: int, variable: str
 ) -> None:
-    """The default Anderson route reaches the same physical solution across representations."""
+    """The default Anderson route reaches the same physical solution across variables."""
     options = {
-        "strategy": _strategy("anderson", representation),
+        "strategy": _strategy("anderson", variable),
         "fermi_etemp": 300.0,
         "maxiter": 100,
         "x_atol": 1.0e-8,
@@ -724,7 +724,7 @@ def test_default_anderson_adapter_matches_legacy(
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     ["charge", "potential", "fock"],
     ids=["charge", "potential", "fock"],
 )
@@ -734,13 +734,13 @@ def test_default_anderson_adapter_matches_legacy(
     ids=["simple", "anderson"],
 )
 @pytest.mark.parametrize("temperature", [0.0, 300.0], ids=["zero-k", "300-k"])
-def test_eager_representation_mixer_budget_parity(
-    representation: str, converger: str, temperature: float
+def test_eager_variable_mixer_budget_parity(
+    variable: str, converger: str, temperature: float
 ) -> None:
-    """All representation/mixer pairs produce finite short-budget eager results with warning."""
+    """All variable/mixer pairs produce finite short-budget eager results with warning."""
     options = {
         "strategy": _strategy(
-            converger, representation, generations=1, soft_start=False
+            converger, variable, generations=1, soft_start=False
         ),
         "fermi_etemp": temperature,
         "maxiter": 2,
@@ -772,7 +772,7 @@ def test_eager_representation_mixer_budget_parity(
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     ["charge", "potential", "fock"],
     ids=["charge", "potential", "fock"],
 )
@@ -781,13 +781,13 @@ def test_eager_representation_mixer_budget_parity(
     ["linear", "anderson"],
     ids=["simple", "anderson"],
 )
-def test_eager_converged_representation_mixer_parity(
-    representation: str, converger: str
+def test_eager_converged_variable_mixer_parity(
+    variable: str, converger: str
 ) -> None:
-    """Converged eager results agree across all representations and mixers."""
+    """Converged eager results agree across all variables and mixers."""
     options = {
         "strategy": _strategy(
-            converger, representation, generations=2, soft_start=False
+            converger, variable, generations=2, soft_start=False
         ),
         "fermi_etemp": 0.0,
         "maxiter": 100,
@@ -973,23 +973,23 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
     _assert_tensor_equal(direct.hamiltonian, eager.functional.hamiltonian)
 
 
-def test_prepared_runner_rejects_representation_mismatch() -> None:
-    """A route cannot be reused with another convergence representation."""
+def test_prepared_runner_rejects_variable_mismatch() -> None:
+    """A route cannot be reused with another convergence variable."""
     case = _prepare_case(GFN1_XTB)
     route = resolve_scf_plan(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
-    from dxtb.scf import SCFRepresentation, SCFStrategy
+    from dxtb.scf import SCFVariable, SCFStrategy
 
     stage = replace(
         case.system.config.scf.strategy.stages[0],
-        representation=SCFRepresentation.FOCK,
+        variable=SCFVariable.FOCK,
     )
     mismatched = replace(
         case.system.config.scf,
         strategy=SCFStrategy((stage,)),
     )
-    with pytest.raises(ValueError, match="representation does not match"):
+    with pytest.raises(ValueError, match="SCF variable of the prepared SCF plan does not match"):
         run_prepared_functional_full(
             case.system.numbers,
             case.initial_charges,
@@ -1006,7 +1006,7 @@ def test_prepared_runner_rejects_representation_mismatch() -> None:
 
 
 @pytest.mark.parametrize(
-    ("representation", "converger"),
+    ("variable", "converger"),
     [
         ("charge", "linear"),
         ("charge", "anderson"),
@@ -1025,12 +1025,12 @@ def test_prepared_runner_rejects_representation_mismatch() -> None:
     ],
 )
 def test_eager_and_fixed_trip_controllers_match(
-    representation: str, converger: str
+    variable: str, converger: str
 ) -> None:
     """Shared transitions keep eager and transform-fixed physical results equal."""
     options = {
         "strategy": _strategy(
-            converger, representation, generations=2, soft_start=False
+            converger, variable, generations=2, soft_start=False
         ),
         "fermi_etemp": 300.0,
         "maxiter": 24,
@@ -1061,10 +1061,10 @@ def test_eager_and_fixed_trip_controllers_match(
         case.system.ihelp,
         config,
     )
-    eager = _solve_representation(
+    eager = _solve_variable(
         case.initial_charges, inputs, config, eager=True
     )
-    fixed = _solve_representation(
+    fixed = _solve_variable(
         case.initial_charges, inputs, config, eager=False
     )
     assert eager.converged.item() and fixed.converged.item()
@@ -1179,7 +1179,7 @@ def test_result_snapshot_retains_functional_tensor_identity() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     ["charge", "potential", "fock"],
     ids=["charge", "potential", "fock"],
 )
@@ -1189,13 +1189,13 @@ def test_result_snapshot_retains_functional_tensor_identity() -> None:
     ids=["simple", "anderson"],
 )
 def test_dynamic_damping_adapter_matches_legacy(
-    representation: str, converger: str
+    variable: str, converger: str
 ) -> None:
     """Dynamic damping switches to damp_dynamic_factor after the raw norm crosses 0.1."""
     options = {
         "strategy": _strategy(
             converger,
-            representation,
+            variable,
             damp_init=0.05,
             generations=2,
             soft_start=True,
@@ -1239,7 +1239,7 @@ def test_dynamic_damping_adapter_matches_legacy(
 
 
 @pytest.mark.parametrize(
-    ("representation", "converger"),
+    ("variable", "converger"),
     [
         ("charge", "linear"),
         ("potential", "anderson"),
@@ -1252,16 +1252,16 @@ def test_dynamic_damping_adapter_matches_legacy(
     ],
 )
 def test_dynamic_damping_iterate_and_switch_parity(
-    representation: str,
+    variable: str,
     converger: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every raw iterate switches ordinary damping when the raw residual crosses 0.1."""
-    maxiter = 12 if representation == "charge" and converger == "linear" else 8
+    maxiter = 12 if variable == "charge" and converger == "linear" else 8
     options = {
         "strategy": _strategy(
             converger,
-            representation,
+            variable,
             damp_init=0.05,
             generations=2,
             soft_start=True,
@@ -1284,7 +1284,7 @@ def test_dynamic_damping_iterate_and_switch_parity(
         "charge": "scf_map",
         "potential": "potential_map",
         "fock": "fock_map",
-    }[representation]
+    }[variable]
     original_map = getattr(module, map_name)
 
     def record_functional_map(x: torch.Tensor, *args, **kwargs):

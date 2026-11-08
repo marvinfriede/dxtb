@@ -438,8 +438,8 @@ def test_mixed_gfn1_gfn2_groups_are_separate() -> None:
     gfn2_strategy = scf.SCFStrategy(
         (
             scf.SCFStage(
-                scf.AndersonMethod(scf.AndersonMethodSettings()),
-                representation=scf.SCFRepresentation.FOCK,
+                scf.AndersonConverger(scf.AndersonConvergerSettings()),
+                variable=scf.SCFVariable.FOCK,
             ),
         )
     )

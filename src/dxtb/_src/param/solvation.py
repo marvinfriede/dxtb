@@ -32,7 +32,7 @@ __all__ = ["PSolvationALPB", "PSolvation"]
 
 class PSolvationALPB(BaseModel):
     """
-    Representation of the analytical linearized Poisson-Boltzmann solvation
+    Variable of the analytical linearized Poisson-Boltzmann solvation
     model (10.1021/acs.jctc.1c00471).
     """
 
@@ -54,7 +54,7 @@ class PSolvationALPB(BaseModel):
 
 class PSolvation(BaseModel):
     """
-    Representation of the solvation models.
+    Variable of the solvation models.
     """
 
     alpb: Optional[PSolvationALPB] = None

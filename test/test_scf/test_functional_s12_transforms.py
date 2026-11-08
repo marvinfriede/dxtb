@@ -28,11 +28,11 @@ from torch.utils import _pytree
 
 from dxtb import GFN1_XTB
 from dxtb._src.scf.functional.anderson import AndersonState
-from dxtb._src.scf.functional.broyden import BroydenMethod, BroydenState
+from dxtb._src.scf.functional.broyden import BroydenConverger, BroydenState
 from dxtb._src.scf.functional.cdiis import CDIISState
-from dxtb._src.scf.functional.method import LinearMethod
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
-from dxtb._src.scf.functional.soscf import SOSCFMethod
+from dxtb._src.scf.functional.method import LinearConverger
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.functional.soscf import SOSCFConverger
 from dxtb.scf import SCFDifferentiation
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
@@ -93,16 +93,16 @@ def test_method_state_pytree_round_trip(state: object) -> None:
 
 def test_fixed_trip_capability_matrix() -> None:
     """Only eager-only SOSCF is outside the established fixed-trip contract."""
-    from dxtb._src.scf.functional.anderson import AndersonMethod
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.anderson import AndersonConverger
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
 
-    assert LinearMethod.supports_fixed_trip is True
-    assert AndersonMethod.supports_fixed_trip is True
-    assert BroydenMethod.supports_fixed_trip is True
-    assert CDIISMethod.supports_fixed_trip is True
-    assert CDIISMethod.required_representation is SCFRepresentation.FOCK
-    assert SOSCFMethod.supports_fixed_trip is False
+    assert LinearConverger.supports_fixed_trip is True
+    assert AndersonConverger.supports_fixed_trip is True
+    assert BroydenConverger.supports_fixed_trip is True
+    assert CDIISConverger.supports_fixed_trip is True
+    assert CDIISConverger.required_variable is SCFVariable.FOCK
+    assert SOSCFConverger.supports_fixed_trip is False
 
 
 def test_transform_methods_have_no_tensor_to_host_extraction() -> None:
@@ -133,15 +133,15 @@ def test_compile_uses_static_fermi_path(
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.FOCK,
-        converger=LinearMethod,
+        variable=SCFVariable.FOCK,
+        converger=LinearConverger,
         temperature=2000.0,
         maxiter=4,
     )
     assert case.inputs.fermi_settings is not None
     assert case.inputs.fermi_settings.smear
     guess, _ = _initial_state(case, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
 
     def reject_adaptive(*args: object, **kwargs: object) -> torch.Tensor:
         del args, kwargs
@@ -200,15 +200,15 @@ def test_broyden_vmap_lane_permutation_duplicate_and_isolation() -> None:
 def test_alternate_response_keeps_primal_residual_semantics() -> None:
     """An alternate IFT coordinate does not replace primal solve diagnostics."""
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.response import SCFResponseSettings
+    from dxtb._src.scf.functional.response import CPSCFSettings
 
     from .test_functional_root_derivatives import _case, _run_root
 
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=BroydenMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=BroydenConverger,
         tolerance=1.0e-11,
     )
     primal = _run_root(
@@ -217,7 +217,7 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
         tolerance=1.0e-11,
         maxiter=120,
         eager=True,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
     )
     config = replace(
         case.system.config.scf,
@@ -237,8 +237,8 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
         case.system.ihelp,
         config,
         case.integrals,
-        response_settings=SCFResponseSettings(
-            representation=SCFRepresentation.FOCK
+        response_settings=CPSCFSettings(
+            variable=SCFVariable.FOCK
         ),
     )
 
@@ -252,40 +252,40 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
 def test_float32_fixed_trip_vmap_and_jvp_are_finite(name: str) -> None:
     """Float32 method histories remain finite under fixed-trip transforms."""
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
     from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
     from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
     from .test_functional_root_derivatives import _case, _initial_state
 
     mode = (
-        SCFRepresentation.POTENTIAL
+        SCFVariable.POTENTIAL
         if name == "Broyden"
-        else SCFRepresentation.FOCK
+        else SCFVariable.FOCK
     )
-    converger = BroydenMethod if name == "Broyden" else LinearMethod
+    converger = BroydenConverger if name == "Broyden" else LinearConverger
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=mode,
+        variable=mode,
         converger=converger,
         maxiter=1,
         tolerance=1.0e-4,
         dtype=torch.float32,
     )
     guess, layout = _initial_state(case, case.inputs)
-    representation = (
-        SCFRepresentation.POTENTIAL
+    variable = (
+        SCFVariable.POTENTIAL
         if name == "Broyden"
-        else SCFRepresentation.FOCK
+        else SCFVariable.FOCK
     )
     problem = SCFProblem(
         case.inputs,
-        representation,
+        variable,
         potential_layout=layout,
     )
-    method = BroydenMethod() if name == "Broyden" else CDIISMethod()
+    method = BroydenConverger() if name == "Broyden" else CDIISConverger()
     strategy = SCFStrategy((SCFStage(method),))
     settings = SCFSolverSettings(
         maxiter=1,

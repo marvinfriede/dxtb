@@ -73,7 +73,7 @@ def _implicit_differentiation_supported(
     strategy = config.strategy
     if is_batch and (
         len(strategy.stages) != 1
-        or not getattr(strategy.stages[0].method, "supports_fixed_trip", True)
+        or not getattr(strategy.stages[0].converger, "supports_fixed_trip", True)
     ):
         return False
     return (
@@ -250,7 +250,7 @@ def _solve_impl(
                 )
             raise ValueError(
                 f"Unsupported {route_name} strategy "
-                f"'{type(config.strategy.stages[0].method).__name__}'."
+                f"'{type(config.strategy.stages[0].converger).__name__}'."
             )
 
         from .functional.eager import (

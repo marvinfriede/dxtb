@@ -38,12 +38,12 @@ __all__ = [
     "convert_physical_state_to_fock",
     "SCFPhysicalState",
     "SCFProblem",
-    "SCFRepresentation",
+    "SCFVariable",
 ]
 
 
-class SCFRepresentation(Enum):
-    """Working representation used by an existing physical SCF map."""
+class SCFVariable(Enum):
+    """Working variable used by an existing physical SCF map."""
 
     CHARGE = "charge"
     POTENTIAL = "potential"
@@ -65,32 +65,32 @@ class SCFPhysicalState:
 
 @dataclass(frozen=True, eq=False)
 class SCFProblem:
-    """Fixed physical inputs and representation-specific map structure."""
+    """Fixed physical inputs and variable-specific map structure."""
 
     inputs: SCFInputs
-    representation: SCFRepresentation
+    variable: SCFVariable
     potential_layout: PotentialLayout | None = None
 
     def __post_init__(self) -> None:
-        if self.representation is SCFRepresentation.POTENTIAL:
+        if self.variable is SCFVariable.POTENTIAL:
             if self.potential_layout is None:
                 raise ValueError("Potential SCF requires a PotentialLayout.")
         elif self.potential_layout is not None:
             raise ValueError(
-                "PotentialLayout is only valid for potential representation."
+                "PotentialLayout is only valid for potential variable."
             )
 
     def map(self, x: Tensor) -> SCFMapResult:
-        """Evaluate the authoritative raw map for this representation."""
-        if self.representation is SCFRepresentation.CHARGE:
+        """Evaluate the authoritative raw map for this variable."""
+        if self.variable is SCFVariable.CHARGE:
             return scf_map(x, self.inputs)
-        if self.representation is SCFRepresentation.POTENTIAL:
+        if self.variable is SCFVariable.POTENTIAL:
             assert self.potential_layout is not None
             return potential_map(x, self.inputs, self.potential_layout)
-        if self.representation is SCFRepresentation.FOCK:
+        if self.variable is SCFVariable.FOCK:
             return fock_map(x, self.inputs)
         raise ValueError(
-            f"Unsupported SCF representation {self.representation!r}."
+            f"Unsupported SCF variable {self.variable!r}."
         )
 
     def evaluate(self, x: Tensor) -> SCFPhysicalState:
@@ -111,16 +111,16 @@ class SCFProblem:
         )
 
     def project_residual(self, delta: Tensor) -> Tensor:
-        """Remove structural padding from a representation residual."""
+        """Remove structural padding from a variable residual."""
         inputs = self.inputs
         orbital_mask = inputs.orbital_mask
         atom_mask = inputs.numbers != 0
 
-        if self.representation is SCFRepresentation.FOCK:
+        if self.variable is SCFVariable.FOCK:
             pair_mask = orbital_mask[..., :, None] & orbital_mask[..., None, :]
             return torch.where(pair_mask, delta, 0.0)
 
-        if self.representation is SCFRepresentation.CHARGE:
+        if self.variable is SCFVariable.CHARGE:
             return _mask_packed_rows(
                 delta,
                 inputs.charge_layout.shapes,
@@ -150,17 +150,17 @@ def convert_physical_state_to_fock(
     density. Its mapped output is rebuilt from that density's charges. The
     conversion performs no spectrum evaluation or physical map.
     """
-    if problem.representation is SCFRepresentation.FOCK:
+    if problem.variable is SCFVariable.FOCK:
         return problem, state
-    if problem.representation not in (
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
+    if problem.variable not in (
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
     ):
         raise NotImplementedError(
-            f"Cannot convert {problem.representation.value} to Fock."
+            f"Cannot convert {problem.variable.value} to Fock."
         )
 
-    fock_problem = SCFProblem(problem.inputs, SCFRepresentation.FOCK)
+    fock_problem = SCFProblem(problem.inputs, SCFVariable.FOCK)
     spectral = state.map_result.spectral
     paired_input = spectral.hamiltonian
     fresh_fock = fock_problem.rebuild_hamiltonian(spectral.charges)

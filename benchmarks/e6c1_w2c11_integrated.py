@@ -52,7 +52,7 @@ from dxtb._src.calculators.batch_streaming import (  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import (  # noqa: E402
-    SCFRepresentation,
+    SCFVariable,
     SCFStrategy,
     strategy_preset,
 )
@@ -166,7 +166,7 @@ def _anderson_strategy(variable: str) -> SCFStrategy:
     """Return the Anderson preset Stage on the given SCF variable."""
     stage = strategy_preset("anderson").stages[0]
     return SCFStrategy(
-        (replace(stage, representation=SCFRepresentation(variable)),)
+        (replace(stage, variable=SCFVariable(variable)),)
     )
 
 

@@ -12,14 +12,14 @@
 """Public SCF strategies and numerical method settings.
 
 Strategies are immutable ordered method stages. Each stage selects its own
-representation, and the controller applies common physical-root
+variable, and the controller applies common physical-root
 certification independently of the method.
 
 Example
 -------
 >>> from dxtb.config import Config
 >>> config = Config.create(strategy="anderson", differentiation="implicit")
->>> config.scf.strategy.stages[0].representation.value
+>>> config.scf.strategy.stages[0].variable.value
 'potential'
 
 Raises
@@ -36,18 +36,18 @@ from dxtb._src.calculators.config.public_scf import (
     SCFDifferentiation,
 )
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
 from dxtb._src.scf.functional.broyden import (
-    BroydenMethod,
-    BroydenMethodSettings,
+    BroydenConverger,
+    BroydenConvergerSettings,
 )
-from dxtb._src.scf.functional.cdiis import CDIISMethod, CDIISMethodSettings
-from dxtb._src.scf.functional.method import LinearMethod
-from dxtb._src.scf.functional.problem import SCFRepresentation
-from dxtb._src.scf.functional.response import SCFResponseSettings
-from dxtb._src.scf.functional.soscf import SOSCFMethod
+from dxtb._src.scf.functional.cdiis import CDIISConverger, CDIISConvergerSettings
+from dxtb._src.scf.functional.method import LinearConverger
+from dxtb._src.scf.functional.problem import SCFVariable
+from dxtb._src.scf.functional.response import CPSCFSettings
+from dxtb._src.scf.functional.soscf import SOSCFConverger
 from dxtb._src.scf.functional.strategy import (
     SCFStage,
     SCFStrategy,
@@ -55,21 +55,21 @@ from dxtb._src.scf.functional.strategy import (
 )
 
 __all__ = [
-    "AndersonMethod",
-    "AndersonMethodSettings",
-    "BroydenMethod",
-    "BroydenMethodSettings",
-    "CDIISMethod",
-    "CDIISMethodSettings",
-    "LinearMethod",
+    "AndersonConverger",
+    "AndersonConvergerSettings",
+    "BroydenConverger",
+    "BroydenConvergerSettings",
+    "CDIISConverger",
+    "CDIISConvergerSettings",
+    "CPSCFSettings",
+    "LinearConverger",
     "SCFConvergenceProfile",
     "SCFDifferentiation",
-    "SCFRepresentation",
-    "SCFResponseSettings",
     "SCFStage",
     "SCFStrategy",
     "SCFSwitchPolicy",
-    "SOSCFMethod",
+    "SCFVariable",
+    "SOSCFConverger",
     "strategy_preset",
 ]
 
@@ -77,76 +77,76 @@ __all__ = [
 def strategy_preset(name: str) -> SCFStrategy:
     """Construct one of the stable named SCF strategy presets.
 
-    Presets contain explicit methods and representations. They never choose a
+    Presets contain explicit methods and variables. They never choose a
     solver based on tensor values, temperature, or autodiff state.
     """
     key = name.casefold().replace("_", "-")
-    anderson = AndersonMethod(
-        AndersonMethodSettings(
+    anderson = AndersonConverger(
+        AndersonConvergerSettings(
             damp_init=0.1,
             generations=5,
             soft_start=True,
             diagonal_offset=0.01,
         )
     )
-    broyden = BroydenMethod(BroydenMethodSettings(max_rank=8))
-    cdiis = CDIISMethod(CDIISMethodSettings(max_history=8))
-    soscf = SOSCFMethod()
-    potential = SCFRepresentation.POTENTIAL
-    fock = SCFRepresentation.FOCK
+    broyden = BroydenConverger(BroydenConvergerSettings(max_rank=8))
+    cdiis = CDIISConverger(CDIISConvergerSettings(max_history=8))
+    soscf = SOSCFConverger()
+    potential = SCFVariable.POTENTIAL
+    fock = SCFVariable.FOCK
 
     presets = {
         "linear": SCFStrategy(
-            (SCFStage(LinearMethod(), representation=potential),)
+            (SCFStage(LinearConverger(), variable=potential),)
         ),
         "anderson": SCFStrategy(
-            (SCFStage(anderson, representation=potential),)
+            (SCFStage(anderson, variable=potential),)
         ),
-        "broyden": SCFStrategy((SCFStage(broyden, representation=potential),)),
-        "cdiis": SCFStrategy((SCFStage(cdiis, representation=fock),)),
+        "broyden": SCFStrategy((SCFStage(broyden, variable=potential),)),
+        "cdiis": SCFStrategy((SCFStage(cdiis, variable=fock),)),
         "broyden-cdiis": SCFStrategy(
             (
                 SCFStage(
                     broyden,
-                    representation=potential,
+                    variable=potential,
                     switch_policy=SCFSwitchPolicy(fixed_point_l2=1.0e-2),
                 ),
-                SCFStage(cdiis, representation=fock),
+                SCFStage(cdiis, variable=fock),
             )
         ),
         "anderson-cdiis": SCFStrategy(
             (
                 SCFStage(
                     anderson,
-                    representation=potential,
+                    variable=potential,
                     switch_policy=SCFSwitchPolicy(fixed_point_l2=1.0e-2),
                 ),
-                SCFStage(cdiis, representation=fock),
+                SCFStage(cdiis, variable=fock),
             )
         ),
         "cdiis-soscf": SCFStrategy(
             (
                 SCFStage(
                     cdiis,
-                    representation=fock,
+                    variable=fock,
                     switch_policy=SCFSwitchPolicy(stationarity=1.0e-3),
                 ),
-                SCFStage(soscf, representation=fock),
+                SCFStage(soscf, variable=fock),
             )
         ),
         "broyden-cdiis-soscf": SCFStrategy(
             (
                 SCFStage(
                     broyden,
-                    representation=potential,
+                    variable=potential,
                     switch_policy=SCFSwitchPolicy(fixed_point_l2=1.0e-2),
                 ),
                 SCFStage(
                     cdiis,
-                    representation=fock,
+                    variable=fock,
                     switch_policy=SCFSwitchPolicy(stationarity=1.0e-3),
                 ),
-                SCFStage(soscf, representation=fock),
+                SCFStage(soscf, variable=fock),
             )
         ),
     }

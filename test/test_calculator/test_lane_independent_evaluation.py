@@ -377,25 +377,25 @@ def test_independent_evaluation_propagates_numerical_failures(
 
 
 def test_s13_strategy_method_and_differentiation_eligibility() -> None:
-    """Verify Section 7/8 strategy, method, representation, and response routing."""
+    """Verify Section 7/8 strategy, method, variable, and response routing."""
     from dataclasses import replace
 
     from dxtb import GFN2_XTB
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
     from dxtb.scf import (
-        AndersonMethod,
-        AndersonMethodSettings,
-        BroydenMethod,
-        BroydenMethodSettings,
-        CDIISMethod,
-        CDIISMethodSettings,
-        LinearMethod,
+        AndersonConverger,
+        AndersonConvergerSettings,
+        BroydenConverger,
+        BroydenConvergerSettings,
+        CDIISConverger,
+        CDIISConvergerSettings,
+        LinearConverger,
         SCFDifferentiation,
-        SCFRepresentation,
-        SCFResponseSettings,
+        SCFVariable,
+        CPSCFSettings,
         SCFStage,
         SCFStrategy,
-        SOSCFMethod,
+        SOSCFConverger,
         strategy_preset,
     )
 
@@ -406,57 +406,57 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
     pos_h2 = _positions([1, 1])
     pos_h2o = _positions([8, 1, 1])
 
-    anderson = AndersonMethod(AndersonMethodSettings())
-    broyden = BroydenMethod(BroydenMethodSettings())
-    cdiis = CDIISMethod(CDIISMethodSettings())
-    linear = LinearMethod()
+    anderson = AndersonConverger(AndersonConvergerSettings())
+    broyden = BroydenConverger(BroydenConvergerSettings())
+    cdiis = CDIISConverger(CDIISConvergerSettings())
+    linear = LinearConverger()
 
     # 1. Single-stage fixed-trip methods in unrolled mode -> MAPPED
     mapped_strategies = [
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(linear, SCFRepresentation.CHARGE),)),
+            SCFStrategy((SCFStage(linear, SCFVariable.CHARGE),)),
         ),
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(linear, SCFRepresentation.POTENTIAL),)),
+            SCFStrategy((SCFStage(linear, SCFVariable.POTENTIAL),)),
         ),
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
+            SCFStrategy((SCFStage(anderson, SCFVariable.POTENTIAL),)),
         ),
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(anderson, SCFRepresentation.CHARGE),)),
+            SCFStrategy((SCFStage(anderson, SCFVariable.CHARGE),)),
         ),
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(broyden, SCFRepresentation.POTENTIAL),)),
+            SCFStrategy((SCFStage(broyden, SCFVariable.POTENTIAL),)),
         ),
         (
             par_gfn1,
             "GFN1-xTB",
-            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
+            SCFStrategy((SCFStage(cdiis, SCFVariable.FOCK),)),
         ),
         (
             par_gfn2,
             "GFN2-xTB",
-            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
+            SCFStrategy((SCFStage(anderson, SCFVariable.POTENTIAL),)),
         ),
         (
             par_gfn2,
             "GFN2-xTB",
-            SCFStrategy((SCFStage(anderson, SCFRepresentation.CHARGE),)),
+            SCFStrategy((SCFStage(anderson, SCFVariable.CHARGE),)),
         ),
         (
             par_gfn2,
             "GFN2-xTB",
-            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
+            SCFStrategy((SCFStage(cdiis, SCFVariable.FOCK),)),
         ),
     ]
     for par, method_name, strat in mapped_strategies:
@@ -496,7 +496,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
     #    - SOSCF rejected with active Fermi smearing (fermi_etemp > 0)
     #    - routed to LEGACY_COMPOSED under IMPLICIT differentiation (with etemp=0 for SOSCF)
     soscf_strat = SCFStrategy(
-        (SCFStage(SOSCFMethod(), SCFRepresentation.FOCK),)
+        (SCFStage(SOSCFConverger(), SCFVariable.FOCK),)
     )
     base_cfg = Config.create(
         method="GFN1-xTB",
@@ -564,18 +564,18 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
 
     # Multi-stage and SOSCF (at etemp=0) + alternate response coordinates under IMPLICIT -> LEGACY_COMPOSED
     implicit_cases = [
-        ("broyden-cdiis", SCFResponseSettings(representation=None)),
+        ("broyden-cdiis", CPSCFSettings(variable=None)),
         (
             "cdiis-soscf",
-            SCFResponseSettings(representation=SCFRepresentation.POTENTIAL),
+            CPSCFSettings(variable=SCFVariable.POTENTIAL),
         ),
         (
-            SCFStrategy((SCFStage(cdiis, SCFRepresentation.FOCK),)),
-            SCFResponseSettings(representation=SCFRepresentation.POTENTIAL),
+            SCFStrategy((SCFStage(cdiis, SCFVariable.FOCK),)),
+            CPSCFSettings(variable=SCFVariable.POTENTIAL),
         ),
         (
-            SCFStrategy((SCFStage(anderson, SCFRepresentation.POTENTIAL),)),
-            SCFResponseSettings(representation=SCFRepresentation.CHARGE),
+            SCFStrategy((SCFStage(anderson, SCFVariable.POTENTIAL),)),
+            CPSCFSettings(variable=SCFVariable.CHARGE),
         ),
     ]
     for strat, resp_settings in implicit_cases:
@@ -585,7 +585,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
             int_level=labels.INTLEVEL_QUADRUPOLE,
             strategy=strat,
             differentiation=SCFDifferentiation.IMPLICIT,
-            response=resp_settings,
+            cpscf=resp_settings,
             fermi_etemp=0.0,
             convergence="tight",
         )

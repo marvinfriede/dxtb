@@ -28,21 +28,21 @@ from test.test_scf.test_functional_map import _prepare_case
 
 import torch
 
-from benchmarks.prototypes.scf_energy_diis import ResearchDIISMethod
+from benchmarks.prototypes.scf_energy_diis import ResearchDIISConverger
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional import unpack_charges
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.energy import electronic_energy_from_spectral
 from dxtb._src.scf.functional.map import fock_initial_guess
-from dxtb._src.scf.functional.method import LinearMethod
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.method import LinearConverger
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
-from dxtb._src.scf.functional.soscf import SOSCFMethod
+from dxtb._src.scf.functional.soscf import SOSCFConverger
 from dxtb._src.scf.functional.strategy import (
     SCFStage,
     SCFStrategy,
@@ -50,12 +50,12 @@ from dxtb._src.scf.functional.strategy import (
 )
 
 
-def _config_anderson_settings(config: object) -> AndersonMethodSettings:
+def _config_anderson_settings(config: object) -> AndersonConvergerSettings:
     """Return the Anderson settings of the configured first Stage."""
-    method = config.strategy.stages[0].method
-    if isinstance(method, AndersonMethod):
+    method = config.strategy.stages[0].converger
+    if isinstance(method, AndersonConverger):
         return method.settings
-    return AndersonMethodSettings()
+    return AndersonConvergerSettings()
 
 
 def main() -> None:
@@ -127,7 +127,7 @@ def main() -> None:
         raise ValueError(
             "This fixed-occupation benchmark requires no active smearing."
         )
-    problem = SCFProblem(inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(inputs, SCFVariable.FOCK)
     guess = fock_initial_guess(
         unpack_charges(case.x, inputs.charge_layout), inputs
     )
@@ -145,55 +145,55 @@ def main() -> None:
 
     research_instance = None
     if args.method == "linear":
-        stages = (SCFStage(LinearMethod(), SCFRepresentation.FOCK),)
+        stages = (SCFStage(LinearConverger(), SCFVariable.FOCK),)
     elif args.method == "anderson":
-        method_instance = AndersonMethod(
+        method_instance = AndersonConverger(
             _config_anderson_settings(case.system.config.scf)
         )
-        stages = (SCFStage(method_instance, SCFRepresentation.FOCK),)
+        stages = (SCFStage(method_instance, SCFVariable.FOCK),)
     elif args.method == "broyden":
-        stages = (SCFStage(BroydenMethod(), SCFRepresentation.FOCK),)
+        stages = (SCFStage(BroydenConverger(), SCFVariable.FOCK),)
     elif args.method == "cdiis":
-        stages = (SCFStage(CDIISMethod(), SCFRepresentation.FOCK),)
+        stages = (SCFStage(CDIISConverger(), SCFVariable.FOCK),)
     elif args.method == "broyden-cdiis":
         stages = (
             SCFStage(
-                BroydenMethod(),
-                SCFRepresentation.FOCK,
+                BroydenConverger(),
+                SCFVariable.FOCK,
                 SCFSwitchPolicy(
                     min_stage_iterations=3,
                     fixed_point_l2=args.switch,
                     max_stage_iterations=30,
                 ),
             ),
-            SCFStage(CDIISMethod(), SCFRepresentation.FOCK, initial_damp=1.0),
+            SCFStage(CDIISConverger(), SCFVariable.FOCK, initial_damp=1.0),
         )
     elif args.method == "anderson-cdiis":
-        method_instance = AndersonMethod(
+        method_instance = AndersonConverger(
             _config_anderson_settings(case.system.config.scf)
         )
         stages = (
             SCFStage(
                 method_instance,
-                SCFRepresentation.FOCK,
+                SCFVariable.FOCK,
                 SCFSwitchPolicy(
                     min_stage_iterations=3,
                     fixed_point_l2=args.switch,
                     max_stage_iterations=30,
                 ),
             ),
-            SCFStage(CDIISMethod(), SCFRepresentation.FOCK, initial_damp=1.0),
+            SCFStage(CDIISConverger(), SCFVariable.FOCK, initial_damp=1.0),
         )
     else:
         use_soscf = args.method == "exact-cdiis-soscf"
         mode = "exact" if use_soscf else args.method.removesuffix("-cdiis")
-        research_instance = ResearchDIISMethod(
+        research_instance = ResearchDIISConverger(
             mode=mode, capacity=args.capacity
         )
         stages = (
             SCFStage(
                 research_instance,
-                SCFRepresentation.FOCK,
+                SCFVariable.FOCK,
                 SCFSwitchPolicy(
                     min_stage_iterations=3,
                     fixed_point_l2=args.switch,
@@ -202,8 +202,8 @@ def main() -> None:
                 initial_damp=1.0,
             ),
             SCFStage(
-                CDIISMethod(),
-                SCFRepresentation.FOCK,
+                CDIISConverger(),
+                SCFVariable.FOCK,
                 switch_policy=(
                     SCFSwitchPolicy(
                         min_stage_iterations=3,
@@ -220,8 +220,8 @@ def main() -> None:
         if use_soscf:
             stages += (
                 SCFStage(
-                    SOSCFMethod(),
-                    SCFRepresentation.FOCK,
+                    SOSCFConverger(),
+                    SCFVariable.FOCK,
                     initial_damp=1.0,
                 ),
             )

@@ -31,7 +31,7 @@ Note that there are several peculiarities for the multipole integrals:
   (rj), the latter being the default in ``dxtb``.
 - An overlap calculation is executed for the normalization of the multipole
   integral every time :func:`.dipole` or :func:`.quadrupole` are called.
-- The quadrupole integral is **not** in its traceless representation.
+- The quadrupole integral is **not** in its traceless variable.
 
 Example
 -------

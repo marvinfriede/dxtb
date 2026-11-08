@@ -43,7 +43,7 @@ class IntDriver(TensorLike):
     """Atomic numbers of the atoms in the Structure."""
 
     par: ParamModule
-    """Representation of parametrization of xTB method."""
+    """Variable of parametrization of xTB method."""
 
     ihelp: IndexHelper
     """Helper class for indexing."""

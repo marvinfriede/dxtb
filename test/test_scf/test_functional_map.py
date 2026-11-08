@@ -76,7 +76,7 @@ from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
     evaluate_hamiltonian,
 )
-from dxtb._src.scf.functional.problem import SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFVariable
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
     free_energy_from_spectral,
@@ -208,15 +208,15 @@ def _prepare_case(
                 else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
             ),
         )
-        rep = system.config.scf.initial_representation
-        if rep == SCFRepresentation.CHARGE:
+        rep = system.config.scf.initial_variable
+        if rep == SCFVariable.CHARGE:
             x = pack_charges(initial_charges, inputs.charge_layout)
-        elif rep == SCFRepresentation.POTENTIAL:
+        elif rep == SCFVariable.POTENTIAL:
             x, _ = potential_initial_guess(initial_charges, inputs)
-        elif rep == SCFRepresentation.FOCK:
+        elif rep == SCFVariable.FOCK:
             x = fock_initial_guess(initial_charges, inputs)
         else:
-            raise ValueError(f"Unknown representation {rep!r}.")
+            raise ValueError(f"Unknown variable {rep!r}.")
     else:
         x = guess.unsqueeze(0)
     return SimpleNamespace(
@@ -1283,7 +1283,7 @@ def test_map_parameter_graph_reaches_param_module() -> None:
 def test_functional_core_has_no_legacy_mutation_owners(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """All raw representations run without receiving legacy containers."""
+    """All raw variables run without receiving legacy containers."""
     case = _prepare_case(
         GFN2_XTB,
         field=torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64),

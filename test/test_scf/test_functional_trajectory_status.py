@@ -33,7 +33,7 @@ from dxtb._src.scf.functional import (
     functional_return_valid,
     functional_subsolves_ok,
 )
-from dxtb._src.scf.functional.method import LinearMethod
+from dxtb._src.scf.functional.method import LinearConverger
 from dxtb._src.scf.functional.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
@@ -107,7 +107,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
         x_atol=settings.x_atol,
         x_atol_max=settings.x_atol_max,
         map_fn=map_fn,
-        method=LinearMethod(),
+        method=LinearConverger(),
         initial_damp=1.0,
     )
     spectral = outcome.map_result.spectral
@@ -169,7 +169,7 @@ def test_newly_converged_candidate_contributes_first_failure() -> None:
         x_atol=0.1,
         x_atol_max=0.1,
         map_fn=map_fn,
-        method=LinearMethod(),
+        method=LinearConverger(),
         initial_damp=1.0,
     )
     assert outcome.converged.item()
@@ -374,7 +374,7 @@ def test_trajectory_status_vmap_matches_python_loop() -> None:
             x_atol=0.1,
             x_atol_max=0.1,
             map_fn=map_fn,
-            method=LinearMethod(),
+            method=LinearConverger(),
             initial_damp=0.5,
         )
         status = outcome.trajectory_status

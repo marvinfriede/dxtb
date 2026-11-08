@@ -18,7 +18,7 @@
 Parametrization: Module Types
 =============================
 
-Types for the differentiable representation of the extended tight-binding
+Types for the differentiable variable of the extended tight-binding
 parametrization using PyTorch.
 """
 

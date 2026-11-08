@@ -17,19 +17,19 @@
 """Internal functional SCF problem, method, map, and solver contracts."""
 
 from .anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
     AndersonState,
     anderson_mix,
-    setup_anderson_method_settings,
+    setup_anderson_converger_settings,
 )
 from .broyden import (
-    BroydenMethod,
-    BroydenMethodSettings,
+    BroydenConverger,
+    BroydenConvergerSettings,
     BroydenState,
-    setup_broyden_method_settings,
+    setup_broyden_converger_settings,
 )
-from .cdiis import CDIISMethod, CDIISMethodSettings, CDIISState
+from .cdiis import CDIISConverger, CDIISConvergerSettings, CDIISState
 from .certification import (
     SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
     SCF_CERTIFICATION_STANDARD,
@@ -94,16 +94,16 @@ from .map import (
     validate_fock_state,
 )
 from .method import (
-    LinearMethod,
-    SCFMethod,
-    SCFMethodContext,
-    SCFMethodProposal,
-    SCFMethodState,
+    LinearConverger,
+    SCFConverger,
+    SCFConvergerContext,
+    SCFConvergerProposal,
+    SCFConvergerState,
 )
 from .problem import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     convert_physical_state_to_fock,
 )
 from .solver import (
@@ -137,17 +137,17 @@ from .solver import (
     solve_scf_simple,
     trajectory_status_from_map,
 )
-from .soscf import SOSCFMethod, SOSCFMethodSettings, SOSCFState
+from .soscf import SOSCFConverger, SOSCFConvergerSettings, SOSCFState
 from .strategy import SCFStage, SCFStrategy, SCFSwitchPolicy
 
 __all__ = [
-    "AndersonMethod",
-    "AndersonMethodSettings",
-    "BroydenMethod",
-    "BroydenMethodSettings",
+    "AndersonConverger",
+    "AndersonConvergerSettings",
+    "BroydenConverger",
+    "BroydenConvergerSettings",
     "BroydenState",
-    "CDIISMethod",
-    "CDIISMethodSettings",
+    "CDIISConverger",
+    "CDIISConvergerSettings",
     "CDIISState",
     "EagerSCFResult",
     "SCFPlan",
@@ -166,15 +166,15 @@ __all__ = [
     "SCFCharges",
     "SCFConvergence",
     "SCFInputs",
-    "SCFMethod",
-    "SCFMethodContext",
-    "SCFMethodProposal",
-    "SCFMethodState",
+    "SCFConverger",
+    "SCFConvergerContext",
+    "SCFConvergerProposal",
+    "SCFConvergerState",
     "SCFMapResult",
     "SCFPhysicalState",
     "SCFProgressMetrics",
     "SCFProblem",
-    "SCFRepresentation",
+    "SCFVariable",
     "convert_physical_state_to_fock",
     "SCFResidual",
     "SCFStrategyDiagnostics",
@@ -183,8 +183,8 @@ __all__ = [
     "SCFSwitchMetrics",
     "SCFSwitchPolicy",
     "SCFStrategy",
-    "SOSCFMethod",
-    "SOSCFMethodSettings",
+    "SOSCFConverger",
+    "SOSCFConvergerSettings",
     "SOSCFState",
     "SCFSolveResult",
     "SCFTrajectoryStatus",
@@ -197,7 +197,7 @@ __all__ = [
     "SCF_CERTIFICATION_TIGHT",
     "SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE",
     "SCFPotential",
-    "LinearMethod",
+    "LinearConverger",
     "SCFSpectralResult",
     "pack_charges",
     "pack_potential",
@@ -225,8 +225,8 @@ __all__ = [
     "potential_to_hamiltonian",
     "scf_map",
     "setup_scf_inputs",
-    "setup_anderson_method_settings",
-    "setup_broyden_method_settings",
+    "setup_anderson_converger_settings",
+    "setup_broyden_converger_settings",
     "setup_solver_settings",
     "solve_scf_problem",
     "simple_mix",

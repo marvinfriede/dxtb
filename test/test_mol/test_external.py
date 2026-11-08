@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Test external molecular representations.
+Test external molecular variables.
 """
 
 from __future__ import annotations

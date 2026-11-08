@@ -42,7 +42,7 @@ Implicit SCF uses a prepared physical-root boundary
 --------------------------------------------------
 
 ``differentiation="implicit"`` uses the functional physical-root derivative. Root
-acquisition and physical validation happen eagerly; the prepared-root response
+acquisition and physical validation happen eagerly; the prepared-root CPSCF solve
 supports ordinary ``torch.autograd`` and its documented ``torch.func``
 transforms. Both single-System and batched iterative routes use the functional
 SCF controller (canonical padded ``vmap`` for eligible PyTorch single-stage
@@ -109,9 +109,9 @@ intentionally retired the following stateful legacy APIs:
   ``SelfConsistentFieldFull``, ``SelfConsistentFieldSingleShot``, ``BaseSCF``,
   ``Anderson``, ``Broyden``, ``Simple``, ``BaseMixer``): use functional SCF
   strategies in :mod:`dxtb.scf` (:class:`~dxtb.scf.SCFStrategy`,
-  :class:`~dxtb.scf.SCFStage`, :class:`~dxtb.scf.LinearMethod`,
-  :class:`~dxtb.scf.AndersonMethod`, :class:`~dxtb.scf.BroydenMethod`,
-  :class:`~dxtb.scf.CDIISMethod`, :class:`~dxtb.scf.SOSCFMethod`) via
+  :class:`~dxtb.scf.SCFStage`, :class:`~dxtb.scf.LinearConverger`,
+  :class:`~dxtb.scf.AndersonConverger`, :class:`~dxtb.scf.BroydenConverger`,
+  :class:`~dxtb.scf.CDIISConverger`, :class:`~dxtb.scf.SOSCFConverger`) via
   :class:`~dxtb.config.ConfigSCF`.
 - Component cache-control and batch-culling methods (``cache_disable``,
   ``cache_enable``, ``cache_invalidate``, ``cache_is_setup``,

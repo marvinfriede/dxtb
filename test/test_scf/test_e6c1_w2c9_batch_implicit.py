@@ -53,7 +53,7 @@ from dxtb._src.typing.exceptions import (
 )
 from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb.config import Config
-from dxtb.scf import SCFRepresentation, SCFResponseSettings
+from dxtb.scf import SCFVariable, CPSCFSettings
 
 from ..utils import scf_strategy
 
@@ -115,8 +115,8 @@ def _build_system(
         int_driver=labels.INTDRIVER_PYTORCH,
         differentiation="unrolled",
         strategy=scf_strategy(converger, variable),
-        response=SCFResponseSettings(
-            representation=SCFRepresentation(variable)
+        cpscf=CPSCFSettings(
+            variable=SCFVariable(variable)
         ),
         maxiter=maxiter,
         x_atol=x_atol,
@@ -172,25 +172,25 @@ def _h2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
 
 
 @pytest.mark.parametrize(
-    "response_representation",
+    "response_variable",
     [
         "default",
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.FOCK,
+        SCFVariable.POTENTIAL,
+        SCFVariable.CHARGE,
+        SCFVariable.FOCK,
         None,
     ],
 )
 def test_cdiis_fock_batch_uses_configured_response_coordinates(
-    response_representation: SCFRepresentation | None | str,
+    response_variable: SCFVariable | None | str,
 ) -> None:
     """Batch IFT coordinates and derivatives match serial implicit SCF."""
     numbers, positions = _h2_conformers()
     positions = positions.requires_grad_(True)
     response = (
         None
-        if response_representation == "default"
-        else SCFResponseSettings(representation=response_representation)
+        if response_variable == "default"
+        else CPSCFSettings(variable=response_variable)
     )
     config = Config.create(
         method=labels.GFN1_XTB,
@@ -199,7 +199,7 @@ def test_cdiis_fock_batch_uses_configured_response_coordinates(
         strategy="cdiis",
         differentiation="implicit",
         convergence="tight",
-        response=response,
+        cpscf=response,
         fermi_etemp=0.0,
         force_convergence=True,
     )
@@ -211,16 +211,16 @@ def test_cdiis_fock_batch_uses_configured_response_coordinates(
 
     prepared = prepare_converged_root_batch(system, positions)
     expected_response = (
-        SCFRepresentation.POTENTIAL
-        if response_representation == "default"
+        SCFVariable.POTENTIAL
+        if response_variable == "default"
         else (
-            SCFRepresentation.FOCK
-            if response_representation is None
-            else response_representation
+            SCFVariable.FOCK
+            if response_variable is None
+            else response_variable
         )
     )
-    assert prepared.primal_representation == SCFRepresentation.FOCK
-    assert prepared.response_representation == expected_response
+    assert prepared.primal_variable == SCFVariable.FOCK
+    assert prepared.response_variable == expected_response
     assert prepared.all_roots_valid
 
     batch_result = evaluate_converged_root_batch(prepared)
@@ -250,8 +250,8 @@ def test_batch_response_maxiter_is_shared_by_attachment_and_diagnostics(
     """Configured response maxiter controls the mapped IFT and its monitor."""
     numbers, positions = _h2o_conformers()
     positions = positions[:1].clone().requires_grad_(True)
-    response = SCFResponseSettings(
-        representation=SCFRepresentation.POTENTIAL,
+    response = CPSCFSettings(
+        variable=SCFVariable.POTENTIAL,
         rtol=0.0,
         atol=0.0,
         maxiter=1,
@@ -263,7 +263,7 @@ def test_batch_response_maxiter_is_shared_by_attachment_and_diagnostics(
         strategy="cdiis",
         differentiation="implicit",
         convergence="tight",
-        response=response,
+        cpscf=response,
         fermi_etemp=0.0,
         force_convergence=True,
     )

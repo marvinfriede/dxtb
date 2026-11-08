@@ -83,8 +83,8 @@ def _gfn2_fock_anderson() -> scf.SCFStrategy:
     return scf.SCFStrategy(
         (
             scf.SCFStage(
-                scf.AndersonMethod(scf.AndersonMethodSettings()),
-                representation=scf.SCFRepresentation.FOCK,
+                scf.AndersonConverger(scf.AndersonConvergerSettings()),
+                variable=scf.SCFVariable.FOCK,
             ),
         )
     )
@@ -454,22 +454,22 @@ def test_public_shared_fields_match_serial_mode2() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
-    [scf.SCFRepresentation.CHARGE, scf.SCFRepresentation.POTENTIAL],
+    "variable",
+    [scf.SCFVariable.CHARGE, scf.SCFVariable.POTENTIAL],
     ids=["charge", "potential"],
 )
 def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
-    representation: scf.SCFRepresentation,
+    variable: scf.SCFVariable,
 ) -> None:
-    """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all representations on MAPPED."""
+    """Legacy Calculator batch FULL rejects non-Fock GFN2 without substitution, while evaluate_packed_systems supports all variables on MAPPED."""
     from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
 
     strategy = scf.SCFStrategy(
         (
             scf.SCFStage(
-                scf.AndersonMethod(scf.AndersonMethodSettings()),
-                representation=representation,
+                scf.AndersonConverger(scf.AndersonConvergerSettings()),
+                variable=variable,
             ),
         )
     )
@@ -487,7 +487,7 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     sys_h2o = model.setup(torch.tensor([8, 1, 1], dtype=torch.int64))
     assert can_vmap_system(sys_h2)
     assert can_vmap_system(sys_h2o)
-    assert sys_h2.config.scf.strategy.stages[0].representation is representation
+    assert sys_h2.config.scf.strategy.stages[0].variable is variable
 
     pos_h2 = _geometry((1, 1), 0)
     pos_h2o = _geometry((8, 1, 1), 0)
@@ -815,8 +815,8 @@ def test_evaluate_packed_systems_mixed_methods_and_independent_routes() -> None:
         par=param_gfn2, config=cfg_gfn2_default, auto_int_level=False
     ).setup(torch.tensor([1, 1], dtype=torch.int64))
     assert (
-        sys_gfn2_default.config.scf.strategy.stages[0].representation
-        is scf.SCFRepresentation.POTENTIAL
+        sys_gfn2_default.config.scf.strategy.stages[0].variable
+        is scf.SCFVariable.POTENTIAL
     )
     assert can_vmap_system(sys_gfn2_default)
     OutputHandler.clear_warnings()

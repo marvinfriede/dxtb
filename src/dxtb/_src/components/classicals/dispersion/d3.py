@@ -289,7 +289,7 @@ def dispersion_d3_energy(
 
 class DispersionD3(Dispersion):
     """
-    Representation of the DFT-D3(BJ) dispersion correction
+    Variable of the DFT-D3(BJ) dispersion correction
     (:class:`.DispersionD3`).
     """
 

@@ -26,7 +26,7 @@ from tad_mctc import read
 from tad_mctc.batch import pack
 
 import dxtb
-from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
+from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
 
 torch.set_printoptions(precision=10)
 
@@ -39,7 +39,7 @@ opts = {
         (
             replace(
                 strategy_preset("anderson").stages[0],
-                representation=SCFRepresentation.CHARGE,
+                variable=SCFVariable.CHARGE,
             ),
         )
     ),

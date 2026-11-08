@@ -25,7 +25,7 @@ import torch
 from torch.func import jacfwd, jvp
 
 from benchmarks.prototypes.scf_newton_krylov import (
-    NewtonKrylovMethod,
+    NewtonKrylovConverger,
     NewtonKrylovState,
     fixed_point_jvp,
 )
@@ -33,15 +33,15 @@ from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
 from dxtb._src.scf.functional.data import unpack_charges
 from dxtb._src.scf.functional.map import (
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import SCFMethodContext
+from dxtb._src.scf.functional.method import SCFConvergerContext
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
     _solve_map,
@@ -61,11 +61,11 @@ from .test_functional_map import _prepare_case
 
 
 def _small_active_case(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
     *,
     dtype: torch.dtype = torch.float64,
 ) -> tuple[SCFProblem, torch.Tensor]:
-    """Build a fractional-charge active-smearing H2 map in one representation."""
+    """Build a fractional-charge active-smearing H2 map in one variable."""
     case = _prepare_case(
         GFN1_XTB,
         sample_name="H2",
@@ -76,13 +76,13 @@ def _small_active_case(
     assert case.inputs.fermi_settings is not None
     assert case.inputs.fermi_settings.smear
     charges = unpack_charges(case.x, case.inputs.charge_layout)
-    if representation is SCFRepresentation.CHARGE:
-        return SCFProblem(case.inputs, representation), case.x
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.CHARGE:
+        return SCFProblem(case.inputs, variable), case.x
+    if variable is SCFVariable.POTENTIAL:
         guess, layout = potential_initial_guess(charges, case.inputs)
-        return SCFProblem(case.inputs, representation, layout), guess
+        return SCFProblem(case.inputs, variable, layout), guess
     guess = fock_initial_guess(charges, case.inputs)
-    return SCFProblem(case.inputs, representation), guess
+    return SCFProblem(case.inputs, variable), guess
 
 
 def test_orbital_commutator_misses_diagonal_thermal_response() -> None:
@@ -125,7 +125,7 @@ def test_orbital_commutator_misses_diagonal_thermal_response() -> None:
 
 def test_active_smearing_map_jvp_preserves_electron_count() -> None:
     """The full physical map includes thermal response at fixed electron number."""
-    problem, x = _small_active_case(SCFRepresentation.FOCK)
+    problem, x = _small_active_case(SCFVariable.FOCK)
     overlap = problem.inputs.integrals.overlap
     direction = torch.diag(
         torch.linspace(-0.5, 0.75, x.shape[-1], dtype=x.dtype)
@@ -153,21 +153,21 @@ def test_active_smearing_map_jvp_preserves_electron_count() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
 def test_fixed_point_jvp_matches_reduced_dense_jacobian(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """The projected matrix-free operator matches a tiny dense reference."""
-    problem, x = _small_active_case(representation)
+    problem, x = _small_active_case(variable)
     dimension = 3
     basis = torch.zeros((dimension, *x.shape), dtype=x.dtype, device=x.device)
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         basis[0, 0, 0] = 1.0
         basis[1, 1, 1] = 1.0
         basis[2, 0, 1] = 2.0**-0.5
@@ -190,7 +190,7 @@ def test_fixed_point_jvp_matches_reduced_dense_jacobian(
     matrix_free = fixed_point_jvp(problem, x, physical_direction)
     reduced_matrix_free = torch.einsum("ijk,jk->i", basis, matrix_free)
 
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         torch.testing.assert_close(
             matrix_free, matrix_free.transpose(-2, -1), atol=1.0e-12, rtol=0.0
         )
@@ -219,18 +219,18 @@ def test_fixed_point_jvp_matches_reduced_dense_jacobian(
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
 def test_fixed_point_jvp_matches_full_small_dense_jacobian(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """The complete tiny-map operator agrees with a dense test reference."""
-    problem, x = _small_active_case(representation)
+    problem, x = _small_active_case(variable)
     shape = x.shape
 
     def flat_map(flat: torch.Tensor) -> torch.Tensor:
@@ -239,7 +239,7 @@ def test_fixed_point_jvp_matches_full_small_dense_jacobian(
 
     def project(value: torch.Tensor) -> torch.Tensor:
         projected = problem.project_residual(value)
-        if representation is SCFRepresentation.FOCK:
+        if variable is SCFVariable.FOCK:
             projected = 0.5 * (projected + projected.transpose(-2, -1))
             projected = problem.project_residual(projected)
         return projected
@@ -267,7 +267,7 @@ def test_fixed_point_jvp_uses_static_fermi_schedule_inside_eager_scope(
     """Newton JVP bypasses W2c10's detached eager adaptive schedule."""
     import dxtb._src.scf.functional.spectral as spectral
 
-    problem, x = _small_active_case(SCFRepresentation.CHARGE)
+    problem, x = _small_active_case(SCFVariable.CHARGE)
     calls = 0
     matrix_fermi = spectral._matrix_fermi
 
@@ -291,7 +291,7 @@ def test_fixed_point_jvp_uses_static_fermi_schedule_inside_eager_scope(
 
 def test_detached_primal_may_use_adaptive_fermi_schedule() -> None:
     """The W2c10 adaptive schedule remains available to detached primal maps."""
-    problem, x = _small_active_case(SCFRepresentation.CHARGE)
+    problem, x = _small_active_case(SCFVariable.CHARGE)
     with torch.no_grad(), eager_primal_fermi_scope(True):
         result = problem.map(x)
 
@@ -307,10 +307,10 @@ def test_newton_krylov_requires_active_smearing() -> None:
         dtype=torch.float64,
         scf_options={"fermi_etemp": 0.0},
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     physical = problem.evaluate(case.x)
-    method = NewtonKrylovMethod()
-    context = SCFMethodContext(
+    method = NewtonKrylovConverger()
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=case.x.new_tensor(1.0),
@@ -323,11 +323,11 @@ def test_newton_krylov_requires_active_smearing() -> None:
 
 def test_newton_krylov_rejected_before_fixed_trip_map() -> None:
     """The eager-only method is rejected before a fixed-trip physical map."""
-    from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovMethod
+    from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovConverger
     from dxtb._src.scf.functional.solver import _solve_map
     from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
-    problem, guess = _small_active_case(SCFRepresentation.CHARGE)
+    problem, guess = _small_active_case(SCFVariable.CHARGE)
     calls = 0
 
     def counted_map(value: torch.Tensor):
@@ -341,7 +341,7 @@ def test_newton_krylov_rejected_before_fixed_trip_map() -> None:
             SCFSolverSettings(10, False, 0.5, 1.0e-6, 1.0e-6),
             counted_map,
             problem=problem,
-            strategy=SCFStrategy((SCFStage(NewtonKrylovMethod()),)),
+            strategy=SCFStrategy((SCFStage(NewtonKrylovConverger()),)),
             eager=False,
         )
 
@@ -350,10 +350,10 @@ def test_newton_krylov_rejected_before_fixed_trip_map() -> None:
 
 def test_newton_krylov_state_freezes_on_inactive_transition() -> None:
     """Inactive method transitions preserve their input and immutable state."""
-    problem, x = _small_active_case(SCFRepresentation.CHARGE)
+    problem, x = _small_active_case(SCFVariable.CHARGE)
     physical = problem.evaluate(x)
-    method = NewtonKrylovMethod()
-    context = SCFMethodContext(
+    method = NewtonKrylovConverger()
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(False),
         damp=x.new_tensor(1.0),
@@ -371,11 +371,11 @@ def test_failed_krylov_uses_explicit_fixed_point_fallback(
     """A singular linearized operator takes a diagnosed finite fallback."""
     import benchmarks.prototypes.scf_newton_krylov as newton
 
-    problem, x = _small_active_case(SCFRepresentation.CHARGE)
+    problem, x = _small_active_case(SCFVariable.CHARGE)
     physical = problem.evaluate(x)
     mapped = physical.map_result.mapped_x
-    method = NewtonKrylovMethod()
-    context = SCFMethodContext(
+    method = NewtonKrylovConverger()
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=x.new_tensor(0.5),
@@ -398,16 +398,16 @@ def test_failed_krylov_uses_explicit_fixed_point_fallback(
 def test_newton_krylov_float32_step_and_operator_are_finite() -> None:
     """The float32 active-smearing path keeps finite JVP and step diagnostics."""
     problem, x = _small_active_case(
-        SCFRepresentation.POTENTIAL, dtype=torch.float32
+        SCFVariable.POTENTIAL, dtype=torch.float32
     )
     physical = problem.evaluate(x)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=x.new_tensor(0.5),
         proposal_x=physical.map_result.mapped_x,
     )
-    proposal = NewtonKrylovMethod().propose(problem, physical, None, context)
+    proposal = NewtonKrylovConverger().propose(problem, physical, None, context)
 
     assert torch.isfinite(fixed_point_jvp(problem, x, torch.ones_like(x))).all()
     assert torch.isfinite(proposal.x).all()
@@ -476,19 +476,19 @@ def test_no2_active_smearing_broyden_to_newton_is_certified() -> None:
     # Use the open-shell case's own physical inputs for this strategy.
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     guess, layout = potential_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.POTENTIAL, layout)
+    problem = SCFProblem(case.inputs, SCFVariable.POTENTIAL, layout)
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                BroydenConverger(),
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2, fixed_point_l2=1.0e-2
                 ),
             ),
             SCFStage(
-                NewtonKrylovMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                NewtonKrylovConverger(),
+                variable=SCFVariable.POTENTIAL,
             ),
         )
     )

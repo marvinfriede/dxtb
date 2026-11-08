@@ -25,18 +25,18 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule
 from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.response import (
-    SCFResponseSettings,
+    CPSCFSettings,
     prepare_response_root,
 )
 from dxtb._src.scf.functional.solver import setup_solver_settings
 from dxtb.scf import (
-    AndersonMethod,
-    AndersonMethodSettings,
-    BroydenMethod,
-    BroydenMethodSettings,
-    LinearMethod,
+    AndersonConverger,
+    AndersonConvergerSettings,
+    BroydenConverger,
+    BroydenConvergerSettings,
+    LinearConverger,
     SCFDifferentiation,
     SCFStage,
     SCFStrategy,
@@ -51,36 +51,36 @@ def _implicit_config(
     config,
     *,
     converger: type,
-    representation: SCFRepresentation | None = None,
+    variable: SCFVariable | None = None,
     **changes,
 ):
     """Build an implicit test configuration through the public strategy API."""
     stage = config.strategy.stages[0]
-    if converger is LinearMethod:
-        method = LinearMethod()
-    elif converger is AndersonMethod:
+    if converger is LinearConverger:
+        method = LinearConverger()
+    elif converger is AndersonConverger:
         settings = (
-            stage.method.settings
-            if isinstance(stage.method, AndersonMethod)
-            else AndersonMethodSettings()
+            stage.converger.settings
+            if isinstance(stage.converger, AndersonConverger)
+            else AndersonConvergerSettings()
         )
-        method = AndersonMethod(settings)
+        method = AndersonConverger(settings)
     else:
         settings = (
-            stage.method.settings
-            if isinstance(stage.method, BroydenMethod)
-            else BroydenMethodSettings()
+            stage.converger.settings
+            if isinstance(stage.converger, BroydenConverger)
+            else BroydenConvergerSettings()
         )
-        method = BroydenMethod(settings)
-    stage_representation = (
-        stage.representation if representation is None else representation
+        method = BroydenConverger(settings)
+    stage_variable = (
+        stage.variable if variable is None else variable
     )
     return replace(
         config,
         strategy=SCFStrategy(
             (
                 replace(
-                    stage, method=method, representation=stage_representation
+                    stage, converger=method, variable=stage_variable
                 ),
             )
         ),
@@ -90,13 +90,13 @@ def _implicit_config(
 
 
 def _root_record(
-    representation: SCFRepresentation = SCFRepresentation.POTENTIAL,
+    variable: SCFVariable = SCFVariable.POTENTIAL,
 ):
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=representation,
-        converger=BroydenMethod,
+        variable=variable,
+        converger=BroydenConverger,
         tolerance=1.0e-12,
     )
     record = _run_root(
@@ -105,7 +105,7 @@ def _root_record(
         tolerance=1.0e-12,
         maxiter=100,
         eager=True,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
     )
     assert record.converged
     settings = setup_solver_settings(case.system.config.scf, record.root.dtype)
@@ -113,21 +113,21 @@ def _root_record(
 
 
 def test_response_root_conversion_is_single_certified_physical_root() -> None:
-    """All response spaces encode roots from each source representation."""
-    representations = (
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+    """All response spaces encode roots from each source variable."""
+    variables = (
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     )
-    for source in representations:
+    for source in variables:
         _, record, settings = _root_record(source)
-        for target in representations:
+        for target in variables:
             prepared = prepare_response_root(
                 record.outcome,
                 settings,
-                SCFResponseSettings(representation=target),
+                CPSCFSettings(variable=target),
             )
-            assert prepared.problem.representation is target
+            assert prepared.problem.variable is target
             assert bool(prepared.certification.certified)
             assert prepared.root_x.shape == prepared.map_result.mapped_x.shape
             assert len(prepared.adapter.parameter_paths) == len(
@@ -149,16 +149,16 @@ def test_response_root_conversion_is_single_certified_physical_root() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
     ids=("charge", "potential", "fock-full-matrix"),
 )
 def test_matrix_free_tangent_and_adjoint_match_dense_operator(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """Actual response coordinates match dense I-Gx and its transpose."""
     _, record, settings = _root_record()
@@ -167,7 +167,7 @@ def test_matrix_free_tangent_and_adjoint_match_dense_operator(
     prepared = prepare_response_root(
         record.outcome,
         settings,
-        SCFResponseSettings(representation=representation),
+        CPSCFSettings(variable=variable),
     )
     root_shape = prepared.root_x.shape
 
@@ -223,17 +223,17 @@ def test_matrix_free_tangent_and_adjoint_match_dense_operator(
 
 
 def test_default_response_root_preserves_primal_pair() -> None:
-    """Omitted response settings retain the final primal representation."""
-    _, record, settings = _root_record(SCFRepresentation.FOCK)
+    """Omitted response settings retain the final primal variable."""
+    _, record, settings = _root_record(SCFVariable.FOCK)
     prepared = prepare_response_root(record.outcome, settings)
 
-    assert prepared.problem.representation is SCFRepresentation.FOCK
+    assert prepared.problem.variable is SCFVariable.FOCK
     assert prepared.root_x is record.outcome.root_x
     assert prepared.map_result is record.outcome.map_result
     assert prepared.outcome.root_x is record.outcome.root_x
     assert not hasattr(prepared.outcome, "trace")
     assert not hasattr(prepared.outcome, "strategy_diagnostics")
-    assert prepared.settings == SCFResponseSettings()
+    assert prepared.settings == CPSCFSettings()
 
 
 def test_alternate_response_candidate_uses_one_raw_map_and_no_refinement(
@@ -249,12 +249,12 @@ def test_alternate_response_candidate_uses_one_raw_map_and_no_refinement(
         return original(self, x, *parameters)
 
     monkeypatch.setattr(_SCFMapTensorTree, "evaluate", counted)
-    _, record, settings = _root_record(SCFRepresentation.POTENTIAL)
+    _, record, settings = _root_record(SCFVariable.POTENTIAL)
     calls = 0
     prepared = prepare_response_root(
         record.outcome,
         settings,
-        SCFResponseSettings(representation=SCFRepresentation.FOCK),
+        CPSCFSettings(variable=SCFVariable.FOCK),
     )
 
     assert calls == 1
@@ -268,11 +268,11 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     results = []
-    for converger in (BroydenMethod, AndersonMethod):
+    for converger in (BroydenConverger, AndersonConverger):
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=SCFRepresentation.POTENTIAL,
+            variable=SCFVariable.POTENTIAL,
             converger=converger,
             tolerance=1.0e-12,
             field=field,
@@ -284,10 +284,10 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        for representation in (
-            SCFRepresentation.CHARGE,
-            SCFRepresentation.POTENTIAL,
-            SCFRepresentation.FOCK,
+        for variable in (
+            SCFVariable.CHARGE,
+            SCFVariable.POTENTIAL,
+            SCFVariable.FOCK,
         ):
             result = run_prepared_functional_implicit(
                 case.numbers,
@@ -300,8 +300,8 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
                 case.system.ihelp,
                 config,
                 case.integrals,
-                response_settings=SCFResponseSettings(
-                    representation=representation
+                response_settings=CPSCFSettings(
+                    variable=variable
                 ),
             )
             assert bool(result.converged)
@@ -333,8 +333,8 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
 
 def test_geometry_response_is_independent_of_primal_strategy() -> None:
     """Geometry, field, and mixed responses agree for Broyden and CDIIS."""
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
     from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
@@ -350,28 +350,28 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
 
     strategies = (
         (
-            SCFRepresentation.POTENTIAL,
+            SCFVariable.POTENTIAL,
             SCFStrategy(
                 (
                     SCFStage(
-                        BroydenMethod(),
-                        representation=SCFRepresentation.POTENTIAL,
+                        BroydenConverger(),
+                        variable=SCFVariable.POTENTIAL,
                     ),
                 )
             ),
         ),
         (
-            SCFRepresentation.FOCK,
+            SCFVariable.FOCK,
             SCFStrategy(
                 (
                     SCFStage(
-                        CDIISMethod(), representation=SCFRepresentation.FOCK
+                        CDIISConverger(), variable=SCFVariable.FOCK
                     ),
                 )
             ),
         ),
     )
-    for primal_representation, strategy in strategies:
+    for primal_variable, strategy in strategies:
         displacement = torch.zeros((), **_DD, requires_grad=True)
         field_parameter = torch.zeros((), **_DD, requires_grad=True)
         positions = base_positions + displacement * displacement_direction
@@ -379,19 +379,19 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=(
-                SCFRepresentation.POTENTIAL
-                if primal_representation is SCFRepresentation.POTENTIAL
-                else SCFRepresentation.FOCK
+            variable=(
+                SCFVariable.POTENTIAL
+                if primal_variable is SCFVariable.POTENTIAL
+                else SCFVariable.FOCK
             ),
-            converger=BroydenMethod,
+            converger=BroydenConverger,
             tolerance=1.0e-12,
             field=field,
             positions_override=positions,
         )
         config = _implicit_config(
             case.system.config.scf,
-            converger=BroydenMethod,
+            converger=BroydenConverger,
             maxiter=120,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -407,8 +407,8 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             case.system.ihelp,
             config,
             case.integrals,
-            response_settings=SCFResponseSettings(
-                representation=SCFRepresentation.POTENTIAL
+            response_settings=CPSCFSettings(
+                variable=SCFVariable.POTENTIAL
             ),
             strategy_override=strategy,
         )
@@ -448,14 +448,14 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=SCFRepresentation.POTENTIAL,
-            converger=BroydenMethod,
+            variable=SCFVariable.POTENTIAL,
+            converger=BroydenConverger,
             tolerance=1.0e-12,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            converger=BroydenMethod,
+            converger=BroydenConverger,
             maxiter=120,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -471,8 +471,8 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
             case.system.ihelp,
             config,
             case.integrals,
-            response_settings=SCFResponseSettings(
-                representation=SCFRepresentation.POTENTIAL,
+            response_settings=CPSCFSettings(
+                variable=SCFVariable.POTENTIAL,
                 rtol=rtol,
                 atol=rtol * 1.0e-2,
             ),
@@ -499,13 +499,13 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
 def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
     """The full fixed-occupation hybrid history does not enter the IFT."""
     from dxtb._src.scf.functional.anderson import (
-        AndersonMethod,
-        AndersonMethodSettings,
+        AndersonConverger,
+        AndersonConvergerSettings,
     )
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.soscf import SOSCFMethod
+    from dxtb._src.scf.functional.soscf import SOSCFConverger
     from dxtb._src.scf.functional.strategy import (
         SCFStage,
         SCFStrategy,
@@ -517,22 +517,22 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
     cases = (
         (
             "cdiis",
-            SCFRepresentation.FOCK,
-            SCFStrategy((SCFStage(CDIISMethod()),)),
+            SCFVariable.FOCK,
+            SCFStrategy((SCFStage(CDIISConverger()),)),
         ),
         (
             "broyden_cdiis_soscf",
-            SCFRepresentation.POTENTIAL,
+            SCFVariable.POTENTIAL,
             SCFStrategy(
                 (
                     SCFStage(
-                        BroydenMethod(),
-                        representation=SCFRepresentation.POTENTIAL,
+                        BroydenConverger(),
+                        variable=SCFVariable.POTENTIAL,
                         switch_policy=SCFSwitchPolicy(max_stage_iterations=8),
                     ),
                     SCFStage(
-                        CDIISMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        CDIISConverger(),
+                        variable=SCFVariable.FOCK,
                         switch_policy=SCFSwitchPolicy(
                             min_stage_iterations=2,
                             stationarity=1.0e-3,
@@ -541,29 +541,29 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
                         initial_damp=1.0,
                     ),
                     SCFStage(
-                        SOSCFMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        SOSCFConverger(),
+                        variable=SCFVariable.FOCK,
                         initial_damp=1.0,
                     ),
                 )
             ),
         ),
     )
-    for name, representation, strategy in cases:
+    for name, variable, strategy in cases:
         field = torch.zeros(3, **_DD, requires_grad=True)
         case = _case(
             "H2O",
             method=GFN2_XTB,
-            representation=representation,
-            converger=BroydenMethod,
+            variable=variable,
+            converger=BroydenConverger,
             tolerance=1.0e-10,
             maxiter=300,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            converger=BroydenMethod,
-            representation=representation,
+            converger=BroydenConverger,
+            variable=variable,
             maxiter=300,
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
@@ -579,8 +579,8 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             case.system.ihelp,
             config,
             case.integrals,
-            response_settings=SCFResponseSettings(
-                representation=SCFRepresentation.FOCK
+            response_settings=CPSCFSettings(
+                variable=SCFVariable.FOCK
             ),
             strategy_override=strategy,
         )
@@ -624,13 +624,13 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
 ):
     """Thermal implicit derivatives do not depend on Broyden/CDIIS history."""
     from dxtb._src.scf.functional.anderson import (
-        AndersonMethod,
-        AndersonMethodSettings,
+        AndersonConverger,
+        AndersonConvergerSettings,
     )
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+    from dxtb._src.scf.functional.problem import SCFVariable
     from dxtb._src.scf.functional.strategy import (
         SCFStage,
         SCFStrategy,
@@ -640,43 +640,43 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
     strategies = (
         (
             "broyden",
-            BroydenMethod,
+            BroydenConverger,
             SCFStrategy(
                 (
                     SCFStage(
-                        BroydenMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        BroydenConverger(),
+                        variable=SCFVariable.FOCK,
                     ),
                 )
             ),
         ),
         (
             "anderson",
-            AndersonMethod,
+            AndersonConverger,
             SCFStrategy(
                 (
                     SCFStage(
-                        AndersonMethod(
-                            AndersonMethodSettings(0.1, 5, True, 0.01)
+                        AndersonConverger(
+                            AndersonConvergerSettings(0.1, 5, True, 0.01)
                         ),
-                        representation=SCFRepresentation.FOCK,
+                        variable=SCFVariable.FOCK,
                     ),
                 )
             ),
         ),
         (
             "broyden_cdiis",
-            BroydenMethod,
+            BroydenConverger,
             SCFStrategy(
                 (
                     SCFStage(
-                        BroydenMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        BroydenConverger(),
+                        variable=SCFVariable.FOCK,
                         switch_policy=SCFSwitchPolicy(max_stage_iterations=12),
                     ),
                     SCFStage(
-                        CDIISMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        CDIISConverger(),
+                        variable=SCFVariable.FOCK,
                     ),
                 )
             ),
@@ -688,7 +688,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         case = _case(
             "NO2",
             method=GFN2_XTB,
-            representation=SCFRepresentation.FOCK,
+            variable=SCFVariable.FOCK,
             converger=converger,
             tolerance=1.0e-10,
             maxiter=300,
@@ -700,7 +700,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         config = _implicit_config(
             case.system.config.scf,
             converger=converger,
-            representation=SCFRepresentation.FOCK,
+            variable=SCFVariable.FOCK,
             maxiter=300,
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
@@ -716,8 +716,8 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
             case.system.ihelp,
             config,
             case.integrals,
-            response_settings=SCFResponseSettings(
-                representation=SCFRepresentation.FOCK
+            response_settings=CPSCFSettings(
+                variable=SCFVariable.FOCK
             ),
             strategy_override=strategy,
         )
@@ -757,23 +757,23 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
 
     derivatives = []
-    for representation in (
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+    for variable in (
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ):
         field = torch.zeros(3, **_DD, requires_grad=True)
         case = _case(
             "NO2",
             method=GFN2_XTB,
-            representation=SCFRepresentation.POTENTIAL,
-            converger=BroydenMethod,
+            variable=SCFVariable.POTENTIAL,
+            converger=BroydenConverger,
             tolerance=1.0e-12,
             maxiter=300,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            converger=BroydenMethod,
+            converger=BroydenConverger,
             maxiter=300,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -789,8 +789,8 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
             case.system.ihelp,
             config,
             case.integrals,
-            response_settings=SCFResponseSettings(
-                representation=representation
+            response_settings=CPSCFSettings(
+                variable=variable
             ),
         )
         assert bool(result.converged)
@@ -812,7 +812,7 @@ def test_response_adapter_flatten_roundtrip_is_complete() -> None:
     problem = record.outcome.final_problem
     adapter, parameters = _SCFMapTensorTree.prepare(
         problem.inputs,
-        SCFRepresentation.POTENTIAL,
+        SCFVariable.POTENTIAL,
         problem.potential_layout,
     )
     assert len(adapter.parameter_paths) == len(adapter.flatten())
@@ -833,14 +833,14 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-10,
         temperature=2000.0,
         field=field,
     )
     initial, layout = _initial_state(case, case.inputs)
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, SCFRepresentation.CHARGE, layout
+        case.inputs, SCFVariable.CHARGE, layout
     )
     assert len(adapter.parameter_paths) == len(parameters)
     assert "fermi_settings.kt" in adapter.parameter_paths
@@ -849,7 +849,7 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
     )
     assert "integrals.dipole" in adapter.parameter_paths
     actual = adapter.evaluate(initial, *parameters)
-    expected = SCFProblem(case.inputs, SCFRepresentation.CHARGE).map(initial)
+    expected = SCFProblem(case.inputs, SCFVariable.CHARGE).map(initial)
     torch.testing.assert_close(actual.mapped_x, expected.mapped_x)
     torch.testing.assert_close(actual.density, expected.density)
 
@@ -864,14 +864,14 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
     case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=SCFRepresentation.POTENTIAL,
-        converger=BroydenMethod,
+        variable=SCFVariable.POTENTIAL,
+        converger=BroydenConverger,
         tolerance=1.0e-12,
         parameter_module=parameter_module,
     )
     config = _implicit_config(
         case.system.config.scf,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
         maxiter=300,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -887,8 +887,8 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
         case.system.ihelp,
         config,
         case.integrals,
-        response_settings=SCFResponseSettings(
-            representation=SCFRepresentation.CHARGE
+        response_settings=CPSCFSettings(
+            variable=SCFVariable.CHARGE
         ),
     )
     observable = result.energy.sum() + result.fenergy.sum()
@@ -907,14 +907,14 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
-        converger=BroydenMethod,
+        variable=SCFVariable.CHARGE,
+        converger=BroydenConverger,
         tolerance=1.0e-12,
         field=field,
     )
     config = _implicit_config(
         case.system.config.scf,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
         maxiter=200,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -930,7 +930,7 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
         case.system.ihelp,
         config,
         case.integrals,
-        response_settings=SCFResponseSettings(rtol=0.0, atol=0.0, maxiter=1),
+        response_settings=CPSCFSettings(rtol=0.0, atol=0.0, maxiter=1),
     )
     assert torch.isfinite(result.energy).all()
     gradient = torch.autograd.grad(
@@ -966,8 +966,8 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
-        converger=BroydenMethod,
+        variable=SCFVariable.CHARGE,
+        converger=BroydenConverger,
         tolerance=1.0e-12,
         field=field,
     )
@@ -980,11 +980,11 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
         tolerance=1.0e-12,
         maxiter=200,
         eager=True,
-        converger=BroydenMethod,
+        converger=BroydenConverger,
     )
     problem = record.outcome.final_problem
     adapter, parameters = _SCFMapTensorTree.prepare(
-        problem.inputs, SCFRepresentation.CHARGE
+        problem.inputs, SCFVariable.CHARGE
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     hcore = parameters[hcore_index]
@@ -1025,14 +1025,14 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
 def test_response_settings_reject_invalid_linear_controls() -> None:
     """Internal response tolerances and iteration limits are validated."""
     with pytest.raises(ValueError, match="non-negative"):
-        SCFResponseSettings(rtol=-1.0)
+        CPSCFSettings(rtol=-1.0)
     with pytest.raises(ValueError, match="finite"):
-        SCFResponseSettings(atol=float("nan"))
+        CPSCFSettings(atol=float("nan"))
     with pytest.raises(ValueError, match="positive"):
-        SCFResponseSettings(maxiter=0)
+        CPSCFSettings(maxiter=0)
 
 
-def test_response_settings_representation_type_is_explicit() -> None:
-    """Only the three physical SCF representations can be requested."""
-    settings = SCFResponseSettings(representation=SCFRepresentation.CHARGE)
-    assert settings.representation is SCFRepresentation.CHARGE
+def test_response_settings_variable_type_is_explicit() -> None:
+    """Only the three physical SCF variables can be requested."""
+    settings = CPSCFSettings(variable=SCFVariable.CHARGE)
+    assert settings.variable is SCFVariable.CHARGE

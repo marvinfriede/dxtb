@@ -320,10 +320,10 @@ def test_system_broyden_uses_native_functional_route(
     monkeypatch,
 ) -> None:
     """Broyden reaches its native method without converger substitution."""
-    from dxtb._src.scf.functional.broyden import BroydenMethod
+    from dxtb._src.scf.functional.broyden import BroydenConverger
 
     system = _system(maxiter=2, converger="broyden")
-    original_propose = BroydenMethod.propose
+    original_propose = BroydenConverger.propose
     propose_calls = 0
 
     def tracked_propose(self, *args, **kwargs):
@@ -331,7 +331,7 @@ def test_system_broyden_uses_native_functional_route(
         propose_calls += 1
         return original_propose(self, *args, **kwargs)
 
-    monkeypatch.setattr(BroydenMethod, "propose", tracked_propose)
+    monkeypatch.setattr(BroydenConverger, "propose", tracked_propose)
     result = system.singlepoint(_positions()[0])
 
     assert propose_calls > 0

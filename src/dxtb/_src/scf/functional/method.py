@@ -28,17 +28,17 @@ from dxtb._src.typing import Tensor
 from .problem import SCFPhysicalState, SCFProblem
 
 __all__ = [
-    "LinearMethod",
-    "SCFMethod",
-    "SCFMethodContext",
-    "SCFMethodProposal",
-    "SCFMethodState",
+    "LinearConverger",
+    "SCFConverger",
+    "SCFConvergerContext",
+    "SCFConvergerProposal",
+    "SCFConvergerState",
     "simple_mix",
 ]
 
 
 @dataclass(frozen=True, eq=False)
-class SCFMethodContext:
+class SCFConvergerContext:
     """Controller progress and projected proposal input for one transition."""
 
     step: int
@@ -47,19 +47,19 @@ class SCFMethodContext:
     proposal_x: Tensor
 
 
-class SCFMethodState(Protocol):
+class SCFConvergerState(Protocol):
     """Marker protocol for immutable, method-specific state values."""
 
 
 @dataclass(frozen=True, eq=False)
-class SCFMethodProposal:
+class SCFConvergerProposal:
     """Proposed working state and explicit immutable method state."""
 
     x: Tensor
-    state: SCFMethodState | None
+    state: SCFConvergerState | None
 
 
-class SCFMethod(Protocol):
+class SCFConverger(Protocol):
     """Local numerical method acting on a paired physical observation."""
 
     supports_fixed_trip: ClassVar[bool]
@@ -68,13 +68,13 @@ class SCFMethod(Protocol):
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal: ...
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal: ...
 
 
 @dataclass(frozen=True, eq=False)
-class LinearMethod:
+class LinearConverger:
     """Stateless linear mixing under the shared SCF controller."""
 
     supports_fixed_trip: ClassVar[bool] = True
@@ -83,14 +83,14 @@ class LinearMethod:
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Mix the current input toward the controller-projected map value."""
         del problem
-        if method_state is not None:
-            raise TypeError("LinearMethod does not retain method history.")
-        return SCFMethodProposal(
+        if converger_state is not None:
+            raise TypeError("LinearConverger does not retain method history.")
+        return SCFConvergerProposal(
             x=simple_mix(physical_state.x, context.proposal_x, context.damp),
             state=None,
         )

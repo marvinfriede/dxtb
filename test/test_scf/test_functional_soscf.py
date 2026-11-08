@@ -27,8 +27,8 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.data import FermiSettings
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_density,
@@ -44,12 +44,12 @@ from dxtb._src.scf.functional.map import (
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import SCFMethodContext
+from dxtb._src.scf.functional.method import SCFConvergerContext
 from dxtb._src.scf.functional.orbital import build_orbital_model
 from dxtb._src.scf.functional.problem import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
@@ -57,8 +57,8 @@ from dxtb._src.scf.functional.solver import (
     solve_scf_problem,
 )
 from dxtb._src.scf.functional.soscf import (
-    SOSCFMethod,
-    SOSCFMethodSettings,
+    SOSCFConverger,
+    SOSCFConvergerSettings,
     SOSCFState,
     _backtracking_step,
     _build_fock_seed,
@@ -94,7 +94,7 @@ def _orbital_model(
         spin=spin,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -157,7 +157,7 @@ def test_soscf_stretched_h2_gradient_matches_energy_ad() -> None:
     case = _prepare_case(
         GFN1_XTB, sample_name="H2", positions=positions, dtype=torch.float64
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
     physical = problem.evaluate(initial)
@@ -380,7 +380,7 @@ def test_soscf_backtracking_rejects_block_crossing_before_seed() -> None:
                 )
             )
 
-    settings = SOSCFMethodSettings(max_backtracks=6)
+    settings = SOSCFConvergerSettings(max_backtracks=6)
     rotation, _, _, alpha, trials = _backtracking_step(
         _SyntheticModel(),
         torch.ones(1, dtype=torch.float64),
@@ -451,7 +451,7 @@ def test_soscf_open_shell_no2_seed_reproduces_all_occupation_sectors() -> None:
     case = _prepare_case(
         GFN2_XTB, sample_name="NO2", spin=1.0, dtype=torch.float64
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -459,7 +459,7 @@ def test_soscf_open_shell_no2_seed_reproduces_all_occupation_sectors() -> None:
         initial,
         problem,
         SCFSolverSettings(240, True, 1.0, 1.0e-9, 1.0e-9),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(root.converged)
@@ -516,7 +516,7 @@ def test_soscf_stationary_seed_matches_certified_fock_root() -> None:
         physical.x,
         problem,
         SCFSolverSettings(100, True, 1.0, 1.0e-9, 1.0e-9),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(outcome.converged)
@@ -537,7 +537,7 @@ def test_soscf_stationary_orbitals_reseed_stale_input_fock() -> None:
         physical.x,
         problem,
         SCFSolverSettings(160, True, 1.0, 1.0e-12, 1.0e-12),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(outcome.converged)
@@ -559,13 +559,13 @@ def test_soscf_stationary_orbitals_reseed_stale_input_fock() -> None:
     physical_stale = problem.evaluate(stale_input)
     assert torch.linalg.vector_norm(physical_stale.delta) > 1.0e-3
 
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=stale_input.new_tensor(1.0),
         proposal_x=physical_stale.map_result.mapped_x,
     )
-    proposal = SOSCFMethod().propose(problem, physical_stale, None, context)
+    proposal = SOSCFConverger().propose(problem, physical_stale, None, context)
     assert isinstance(proposal.state, SOSCFState)
     torch.testing.assert_close(
         proposal.x,
@@ -580,7 +580,7 @@ def test_soscf_stationary_orbitals_reseed_stale_input_fock() -> None:
     assert proposal.state.last_gradient_norm <= _stationary_gradient_floor(
         physical_stale.map_result.mapped_x,
         root_model.nrot,
-        SOSCFMethod().settings,
+        SOSCFConverger().settings,
     )
     assert proposal.state.last_hvp_count == 0
 
@@ -592,7 +592,7 @@ def test_soscf_stationary_floor_is_dtype_epsilon_scaled(
 ) -> None:
     """The stationary shortcut scales with epsilon and rotation dimension."""
     fock = torch.tensor([[0.5, 0.1], [0.1, -0.2]], dtype=dtype)
-    settings = SOSCFMethodSettings(stationary_atol_factor=factor)
+    settings = SOSCFConvergerSettings(stationary_atol_factor=factor)
     floor = _stationary_gradient_floor(fock, 4, settings)
     expected = (
         factor * torch.finfo(dtype).eps * fock.abs().amax().clamp_min(1.0) * 2.0
@@ -607,7 +607,7 @@ def test_soscf_refines_gradients_above_float64_resolution_floor() -> None:
         physical.x,
         problem,
         SCFSolverSettings(160, True, 1.0, 1.0e-10, 1.0e-10),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(root.converged)
@@ -631,13 +631,13 @@ def test_soscf_refines_gradients_above_float64_resolution_floor() -> None:
     assert 1.0e-10 < gradient_norm < old_floor
     assert torch.linalg.vector_norm(displaced.delta) > 1.0e-10
 
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=displaced.x.new_tensor(1.0),
         proposal_x=displaced.map_result.mapped_x,
     )
-    proposal = SOSCFMethod().propose(problem, displaced, None, context)
+    proposal = SOSCFConverger().propose(problem, displaced, None, context)
     assert isinstance(proposal.state, SOSCFState)
     assert int(proposal.state.last_hvp_count) > 0
 
@@ -650,7 +650,7 @@ def test_soscf_refines_gradients_above_float64_resolution_floor() -> None:
         displaced_seed,
         problem,
         SCFSolverSettings(24, False, 1.0, 1.0e-10, 1.0e-10),
-        SCFStrategy((SCFStage(SOSCFMethod()),)),
+        SCFStrategy((SCFStage(SOSCFConverger()),)),
         eager=True,
     )
     assert bool(refined.converged)
@@ -722,10 +722,10 @@ def test_soscf_same_sector_gauge_preserves_seed_spectrum_and_map() -> None:
         fresh.dtype
     ).eps ** 0.5 * fock_mo.abs().amax().clamp_min(1.0)
     _, original_gap_floor = _positive_preconditioner(
-        model, fresh, SOSCFMethod().settings
+        model, fresh, SOSCFConverger().settings
     )
     _, rotated_gap_floor = _positive_preconditioner(
-        rotated_model, fresh, SOSCFMethod().settings
+        rotated_model, fresh, SOSCFConverger().settings
     )
     torch.testing.assert_close(
         rotated_gap_floor, original_gap_floor, rtol=0.0, atol=0.0
@@ -764,13 +764,13 @@ def test_soscf_same_sector_gauge_preserves_seed_spectrum_and_map() -> None:
 def test_soscf_method_makes_finite_energy_decreasing_proposal() -> None:
     """The eager SOSCF method returns a finite Fock seed and diagnostics."""
     _, problem, physical, model = _orbital_model(GFN2_XTB, "H2O")
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=physical.x.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
-    proposal = SOSCFMethod().propose(problem, physical, None, context)
+    proposal = SOSCFConverger().propose(problem, physical, None, context)
     assert isinstance(proposal.state, SOSCFState)
     assert torch.isfinite(proposal.x).all()
     assert bool(proposal.state.last_step_accepted)
@@ -782,18 +782,18 @@ def test_soscf_method_makes_finite_energy_decreasing_proposal() -> None:
 def test_soscf_float32_proposal_is_finite() -> None:
     """Dtype-scaled floors keep a single-precision Newton step stable."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O", dtype=torch.float32)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
     physical = problem.evaluate(initial)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=initial.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
-    proposal = SOSCFMethod().propose(problem, physical, None, context)
+    proposal = SOSCFConverger().propose(problem, physical, None, context)
     assert torch.isfinite(proposal.x).all()
     assert isinstance(proposal.state, SOSCFState)
     assert torch.isfinite(proposal.state.last_inner_residual)
@@ -819,14 +819,14 @@ def test_soscf_rejects_active_fermi_smearing() -> None:
         ),
     )
     smeared_problem = replace(problem, inputs=new_inputs)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=physical.x.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
     with pytest.raises(NotImplementedError, match="Fermi smearing at nonzero electronic temperature"):
-        SOSCFMethod().propose(smeared_problem, physical, None, context)
+        SOSCFConverger().propose(smeared_problem, physical, None, context)
 
 
 def test_soscf_accepts_nonzero_temperature_without_smearing() -> None:
@@ -859,21 +859,21 @@ def test_soscf_proposal_does_not_evaluate_an_extra_physical_map(
         raise AssertionError("SOSCF must not evaluate the SCF map internally.")
 
     monkeypatch.setattr(SCFProblem, "map", fail_map)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=physical.x.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
-    proposal = SOSCFMethod().propose(problem, physical, None, context)
+    proposal = SOSCFConverger().propose(problem, physical, None, context)
     assert torch.isfinite(proposal.x).all()
 
 
 def test_soscf_inactive_transition_freezes_method_state() -> None:
     """An inactive eager transition preserves every SOSCF diagnostic."""
     _, problem, physical, _ = _orbital_model(GFN2_XTB, "H2O")
-    method = SOSCFMethod()
-    active = SCFMethodContext(
+    method = SOSCFConverger()
+    active = SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(True),
         damp=physical.x.new_tensor(1.0),
@@ -895,7 +895,7 @@ def test_soscf_inactive_transition_freezes_method_state() -> None:
 def test_soscf_fixed_trip_is_rejected_before_solver_map() -> None:
     """Fixed-trip controller rejects SOSCF before performing physical work."""
     _, problem, physical, _ = _orbital_model(GFN2_XTB, "H2O")
-    strategy = SCFStrategy((SCFStage(SOSCFMethod()),))
+    strategy = SCFStrategy((SCFStage(SOSCFConverger()),))
     settings = SCFSolverSettings(10, True, 0.5, 1.0e-7, 1.0e-7)
     with pytest.raises(NotImplementedError, match="fixed-trip"):
         solve_scf_problem(
@@ -913,13 +913,13 @@ def test_soscf_cdiis_strategy_reaches_certified_root() -> None:
     strategy = SCFStrategy(
         (
             SCFStage(
-                CDIISMethod(),
+                CDIISConverger(),
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2, stationarity=2.0e-2
                 ),
                 initial_damp=1.0,
             ),
-            SCFStage(SOSCFMethod(), initial_damp=1.0),
+            SCFStage(SOSCFConverger(), initial_damp=1.0),
         )
     )
     settings = SCFSolverSettings(140, True, 1.0, 1.0e-7, 1.0e-7)
@@ -943,12 +943,12 @@ def test_soscf_cdiis_strategy_reaches_certified_root() -> None:
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+        strategy=SCFStrategy((SCFStage(CDIISConverger()),)),
     )
     assert bool(cdiis_outcome.converged)
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        problem.inputs, SCFRepresentation.FOCK
+        problem.inputs, SCFVariable.FOCK
     )
     prepared = _prepare_scf_root(
         outcome,
@@ -959,7 +959,7 @@ def test_soscf_cdiis_strategy_reaches_certified_root() -> None:
         raw_map=adapter,
         parameters=parameters,
     )
-    assert "method_state" not in prepared.__dataclass_fields__
+    assert "converger_state" not in prepared.__dataclass_fields__
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     hcore = parameters[hcore_index]
     direction = torch.zeros_like(hcore)
@@ -1033,19 +1033,19 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
     case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=SCFRepresentation.FOCK,
+        variable=SCFVariable.FOCK,
         tolerance=1.0e-9,
         maxiter=140,
         dtype=torch.float64,
     )
     initial, _ = _initial_state(case, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     settings = SCFSolverSettings(140, True, 1.0, 1.0e-9, 1.0e-9)
     cdiis = solve_scf_problem(
         initial,
         problem,
         settings,
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(cdiis.converged)
@@ -1061,7 +1061,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(SOSCFMethod()),)),
+        strategy=SCFStrategy((SCFStage(SOSCFConverger()),)),
     )
     assert bool(soscf.converged)
     assert torch.linalg.vector_norm(soscf.root_x - root_state.x) < 3.0e-7
@@ -1097,7 +1097,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         positions[0, 0] = positions[0, 0] + delta
         inputs = inputs_at_positions(positions)
         adapter, parameters = _SCFMapTensorTree.prepare(
-            inputs, SCFRepresentation.FOCK
+            inputs, SCFVariable.FOCK
         )
         return implicit_root(root_x, *parameters, raw_map=adapter)
 
@@ -1117,21 +1117,21 @@ def test_soscf_potential_broyden_strategy_reaches_certified_root() -> None:
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial, layout = potential_initial_guess(charges, case.inputs)
     problem = SCFProblem(
-        case.inputs, SCFRepresentation.POTENTIAL, potential_layout=layout
+        case.inputs, SCFVariable.POTENTIAL, potential_layout=layout
     )
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                BroydenConverger(),
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2, stationarity=2.0e-2
                 ),
                 initial_damp=0.5,
             ),
             SCFStage(
-                SOSCFMethod(),
-                representation=SCFRepresentation.FOCK,
+                SOSCFConverger(),
+                variable=SCFVariable.FOCK,
                 initial_damp=1.0,
             ),
         )
@@ -1186,20 +1186,20 @@ def test_soscf_reference_cases_reach_certified_fixed_occupation_roots(
         positions=positions,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
     strategy = SCFStrategy(
         (
             SCFStage(
-                CDIISMethod(),
+                CDIISConverger(),
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2, stationarity=2.0e-2
                 ),
                 initial_damp=1.0,
             ),
-            SCFStage(SOSCFMethod(), initial_damp=1.0),
+            SCFStage(SOSCFConverger(), initial_damp=1.0),
         )
     )
     outcome = _solve_map(
@@ -1232,7 +1232,7 @@ def test_soscf_near_root_h2_gfn1_certifies(stretched: bool) -> None:
         positions=positions,
         dtype=torch.float64,
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -1240,7 +1240,7 @@ def test_soscf_near_root_h2_gfn1_certifies(stretched: bool) -> None:
         initial,
         problem,
         SCFSolverSettings(100, True, 1.0, 1.0e-9, 1.0e-9),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
         eager=True,
     )
     assert bool(root.converged)
@@ -1256,7 +1256,7 @@ def test_soscf_near_root_h2_gfn1_certifies(stretched: bool) -> None:
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(SOSCFMethod()),)),
+        strategy=SCFStrategy((SCFStage(SOSCFConverger()),)),
     )
     assert bool(outcome.converged)
     assert outcome.certification is not None
@@ -1274,7 +1274,7 @@ def test_soscf_open_shell_no2_strategy_reaches_certified_root() -> None:
     case = _prepare_case(
         GFN2_XTB, sample_name="NO2", spin=1.0, dtype=torch.float64
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -1292,13 +1292,13 @@ def test_soscf_open_shell_no2_strategy_reaches_certified_root() -> None:
     strategy = SCFStrategy(
         (
             SCFStage(
-                CDIISMethod(),
+                CDIISConverger(),
                 switch_policy=SCFSwitchPolicy(
                     min_stage_iterations=2, stationarity=1.0e-3
                 ),
                 initial_damp=1.0,
             ),
-            SCFStage(SOSCFMethod(), initial_damp=1.0),
+            SCFStage(SOSCFConverger(), initial_damp=1.0),
         )
     )
     outcome = solve_scf_problem(
@@ -1321,7 +1321,7 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
     case = _prepare_case(
         GFN2_XTB, sample_name="NO2", spin=1.0, dtype=torch.float64
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
@@ -1332,7 +1332,7 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+        strategy=SCFStrategy((SCFStage(CDIISConverger()),)),
     )
     switched = _solve_map(
         initial,
@@ -1343,13 +1343,13 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
         strategy=SCFStrategy(
             (
                 SCFStage(
-                    CDIISMethod(),
+                    CDIISConverger(),
                     switch_policy=SCFSwitchPolicy(
                         min_stage_iterations=2, stationarity=1.0e-3
                     ),
                     initial_damp=1.0,
                 ),
-                SCFStage(SOSCFMethod(), initial_damp=1.0),
+                SCFStage(SOSCFConverger(), initial_damp=1.0),
             )
         ),
     )
@@ -1358,7 +1358,7 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
     assert int(switched.strategy_diagnostics.final_stage_index) == 1
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, SCFRepresentation.FOCK
+        case.inputs, SCFVariable.FOCK
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     hcore = parameters[hcore_index]
@@ -1424,14 +1424,14 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.FOCK,
+        variable=SCFVariable.FOCK,
         tolerance=1.0e-9,
         maxiter=200,
         dtype=torch.float64,
         int_driver=labels.INTDRIVER_PYTORCH,
     )
     initial, _ = _initial_state(case, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     settings = SCFSolverSettings(200, True, 1.0, 1.0e-9, 1.0e-9)
     cdiis = _solve_map(
         initial,
@@ -1439,7 +1439,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+        strategy=SCFStrategy((SCFStage(CDIISConverger()),)),
     )
     switched = _solve_map(
         initial,
@@ -1450,13 +1450,13 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
         strategy=SCFStrategy(
             (
                 SCFStage(
-                    CDIISMethod(),
+                    CDIISConverger(),
                     switch_policy=SCFSwitchPolicy(
                         min_stage_iterations=2, stationarity=1.0e-3
                     ),
                     initial_damp=1.0,
                 ),
-                SCFStage(SOSCFMethod(), initial_damp=1.0),
+                SCFStage(SOSCFConverger(), initial_damp=1.0),
             )
         ),
     )
@@ -1479,7 +1479,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     )
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, SCFRepresentation.FOCK
+        case.inputs, SCFVariable.FOCK
     )
     prepared_cdiis = _prepare_scf_root(
         cdiis,
@@ -1533,7 +1533,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     ) -> Tensor:
         inputs = inputs_at_positions(positions)
         raw_map, updated_parameters = _SCFMapTensorTree.prepare(
-            inputs, SCFRepresentation.FOCK
+            inputs, SCFVariable.FOCK
         )
         return implicit_root(root_x, *updated_parameters, raw_map=raw_map).sum()
 
@@ -1579,7 +1579,7 @@ def test_soscf_inner_pcg_matches_spd_reference() -> None:
     def operator(vector: torch.Tensor) -> torch.Tensor:
         return matrix @ vector
 
-    settings = replace(SOSCFMethod().settings, micro_rtol=1.0e-12)
+    settings = replace(SOSCFConverger().settings, micro_rtol=1.0e-12)
     step, _, _, residual, _, _, fallback = _pcg_newton_step(
         operator,  # type: ignore[arg-type]
         gradient,
@@ -1597,7 +1597,7 @@ def test_soscf_curvature_threshold_scales_with_tiny_newton_direction() -> None:
     """Small converged-state residuals are not mistaken for curvature loss."""
     matrix = torch.tensor([[4.0, 0.5], [0.5, 2.0]], dtype=torch.float64)
     gradient = torch.tensor([0.3, -0.7], dtype=torch.float64) * 1.0e-8
-    settings = replace(SOSCFMethod().settings, micro_rtol=1.0e-12)
+    settings = replace(SOSCFConverger().settings, micro_rtol=1.0e-12)
 
     def operator(vector: torch.Tensor) -> torch.Tensor:
         return matrix @ vector
@@ -1620,7 +1620,7 @@ def test_soscf_inner_pcg_detects_negative_curvature() -> None:
     """Indefinite curvature triggers level shifts and finite descent fallback."""
     matrix = torch.tensor([[-1.0, 0.0], [0.0, 2.0]], dtype=torch.float64)
     gradient = torch.tensor([0.4, -0.2], dtype=torch.float64)
-    settings = SOSCFMethod().settings
+    settings = SOSCFConverger().settings
 
     def operator(vector: torch.Tensor) -> torch.Tensor:
         return matrix @ vector

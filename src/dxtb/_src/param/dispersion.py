@@ -41,7 +41,7 @@ __all__ = ["PD3Model", "PD4Model", "PDispersion"]
 
 class PD3Model(BaseModel):
     """
-    Representation of the DFT-D3(BJ) contribution for a parametrization.
+    Variable of the DFT-D3(BJ) contribution for a parametrization.
     """
 
     s6: float = dftd_defaults.D3_S6
@@ -62,7 +62,7 @@ class PD3Model(BaseModel):
 
 class PD4Model(BaseModel):
     """
-    Representation of the DFT-D4 contribution for a parametrization.
+    Variable of the DFT-D4 contribution for a parametrization.
     """
 
     sc: bool = False

@@ -107,7 +107,7 @@ def main() -> None:
     )
     from dxtb._src.scf.guess import get_guess
     from dxtb._src.scf.iterator import get_refocc
-    from dxtb.scf import AndersonMethod, SCFDifferentiation, SCFRepresentation
+    from dxtb.scf import AndersonConverger, SCFDifferentiation, SCFVariable
 
     _event(
         "imports",
@@ -123,8 +123,8 @@ def main() -> None:
     case = _case(
         args.molecule,
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
-        converger=AndersonMethod,
+        variable=SCFVariable.CHARGE,
+        converger=AndersonConverger,
         tolerance=args.tolerance,
         maxiter=args.maxiter,
         temperature=args.temperature,
@@ -204,7 +204,7 @@ def main() -> None:
             [0.0, 1.0e-3], dtype=n0.dtype, device=n0.device
         )
         adapter, flat = _SCFMapTensorTree.prepare(
-            inputs, SCFRepresentation.CHARGE
+            inputs, SCFVariable.CHARGE
         )
         n0_index = adapter.parameter_paths.index("n0")
         lane_records = []
@@ -215,7 +215,7 @@ def main() -> None:
             lane_n0 = n0 + delta * parameter_direction
             lane_inputs = replace(inputs, n0=lane_n0)
             lane_adapter, lane_values = _SCFMapTensorTree.prepare(
-                lane_inputs, SCFRepresentation.CHARGE
+                lane_inputs, SCFVariable.CHARGE
             )
             if lane_adapter.parameter_paths != adapter.parameter_paths:
                 raise RuntimeError("Mapped lane SCF input trees differ.")

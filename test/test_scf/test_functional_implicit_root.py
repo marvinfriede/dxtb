@@ -10,7 +10,7 @@ from dxtb._src.scf.functional.implicit import (
     implicit_root,
     solve_linear,
 )
-from dxtb.scf import SCFDifferentiation, SCFRepresentation
+from dxtb.scf import SCFDifferentiation, SCFVariable
 
 from ..utils import scf_strategy
 
@@ -362,17 +362,17 @@ def test_prepared_roots_vmap_matches_loop_and_nonleaf_input_gradient() -> None:
 
 
 @pytest.mark.parametrize(
-    ("representation", "temperature"),
+    ("variable", "temperature"),
     [
-        (SCFRepresentation.FOCK, 0.0),
-        (SCFRepresentation.CHARGE, 0.0),
-        (SCFRepresentation.POTENTIAL, 0.0),
-        (SCFRepresentation.FOCK, 300.0),
+        (SCFVariable.FOCK, 0.0),
+        (SCFVariable.CHARGE, 0.0),
+        (SCFVariable.POTENTIAL, 0.0),
+        (SCFVariable.FOCK, 300.0),
     ],
     ids=("fock", "charge", "potential", "fock-300K"),
 )
 def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
-    representation: SCFRepresentation, temperature: float
+    variable: SCFVariable, temperature: float
 ) -> None:
     from test.test_scf.test_functional_root_derivatives import (
         _case,
@@ -387,7 +387,7 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=representation,
+        variable=variable,
         tolerance=1.0e-12,
         temperature=temperature,
     )
@@ -401,7 +401,7 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     assert root_record.converged
     _, layout = _initial_state(case, case.inputs)
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, representation, layout
+        case.inputs, variable, layout
     )
     expected = _map_fn(case, case.inputs, layout)(root_record.root)
     actual = adapter.evaluate(root_record.root, *parameters)
@@ -484,16 +484,16 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
 
 
 @pytest.mark.parametrize(
-    ("representation", "converger"),
+    ("variable", "converger"),
     [
-        (SCFRepresentation.FOCK, "anderson"),
-        (SCFRepresentation.CHARGE, "broyden"),
-        (SCFRepresentation.POTENTIAL, "anderson"),
+        (SCFVariable.FOCK, "anderson"),
+        (SCFVariable.CHARGE, "broyden"),
+        (SCFVariable.POTENTIAL, "anderson"),
     ],
     ids=("fock-anderson", "charge-broyden", "potential-anderson"),
 )
 def test_prepared_h2_implicit_route_matches_direct_energy_fd(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
     converger: str,
 ) -> None:
     from dataclasses import replace
@@ -501,13 +501,13 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
 
     from dxtb import GFN1_XTB
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb.scf import SCFRepresentation, SCFResponseSettings
+    from dxtb.scf import SCFVariable, CPSCFSettings
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=representation,
+        variable=variable,
         converger=converger,
         tolerance=1.0e-12,
         temperature=0.0,
@@ -516,7 +516,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     config = replace(
         case.system.config.scf,
         differentiation=SCFDifferentiation.IMPLICIT,
-        response=SCFResponseSettings(representation=representation),
+        cpscf=CPSCFSettings(variable=variable),
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -558,7 +558,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         perturbed = _case(
             "H2",
             method=GFN1_XTB,
-            representation=representation,
+            variable=variable,
             converger=converger,
             tolerance=1.0e-12,
             temperature=0.0,
@@ -592,7 +592,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     )
 
 
-def test_switched_implicit_uses_final_fock_representation(
+def test_switched_implicit_uses_final_fock_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A potential primal switched to CDIIS attaches and finalizes as Fock."""
@@ -601,22 +601,22 @@ def test_switched_implicit_uses_final_fock_representation(
 
     from dxtb import GFN2_XTB
     from dxtb._src.scf.functional import eager as eager_module
-    from dxtb._src.scf.functional.broyden import BroydenMethod
-    from dxtb._src.scf.functional.cdiis import CDIISMethod
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.functional.cdiis import CDIISConverger
+    from dxtb._src.scf.functional.problem import SCFVariable
     from dxtb._src.scf.functional.solver import SCFSolverSettings
     from dxtb._src.scf.functional.strategy import (
         SCFStage,
         SCFStrategy,
         SCFSwitchPolicy,
     )
-    from dxtb.scf import SCFResponseSettings
+    from dxtb.scf import CPSCFSettings
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=SCFRepresentation.POTENTIAL,
+        variable=SCFVariable.POTENTIAL,
         converger="broyden",
         tolerance=1.0e-9,
         temperature=0.0,
@@ -625,7 +625,7 @@ def test_switched_implicit_uses_final_fock_representation(
     config = replace(
         case.system.config.scf,
         differentiation=SCFDifferentiation.IMPLICIT,
-        response=SCFResponseSettings(representation=SCFRepresentation.FOCK),
+        cpscf=CPSCFSettings(variable=SCFVariable.FOCK),
         maxiter=100,
         x_atol=1.0e-9,
         x_atol_max=1.0e-9,
@@ -640,25 +640,25 @@ def test_switched_implicit_uses_final_fock_representation(
     strategy = SCFStrategy(
         (
             SCFStage(
-                BroydenMethod(),
-                representation=SCFRepresentation.POTENTIAL,
+                BroydenConverger(),
+                variable=SCFVariable.POTENTIAL,
                 switch_policy=SCFSwitchPolicy(max_stage_iterations=1),
             ),
             SCFStage(
-                CDIISMethod(),
-                representation=SCFRepresentation.FOCK,
+                CDIISConverger(),
+                variable=SCFVariable.FOCK,
                 initial_damp=1.0,
             ),
         )
     )
 
     def prepare_strategy(scf_config, _dtype):
-        if scf_config.initial_representation is SCFRepresentation.FOCK:
+        if scf_config.initial_variable is SCFVariable.FOCK:
             return settings, SCFStrategy(
                 (
                     SCFStage(
-                        CDIISMethod(),
-                        representation=SCFRepresentation.FOCK,
+                        CDIISConverger(),
+                        variable=SCFVariable.FOCK,
                         initial_damp=1.0,
                     ),
                 )
@@ -667,12 +667,12 @@ def test_switched_implicit_uses_final_fock_representation(
 
     monkeypatch.setattr(eager_module, "_prepare_solver", prepare_strategy)
 
-    adapter_representations: list[SCFRepresentation] = []
+    adapter_variables: list[SCFVariable] = []
     original_prepare = eager_module._SCFMapTensorTree.prepare
 
-    def record_adapter(cls, inputs, representation, potential_layout=None):
-        adapter_representations.append(representation)
-        return original_prepare(inputs, representation, potential_layout)
+    def record_adapter(cls, inputs, variable, potential_layout=None):
+        adapter_variables.append(variable)
+        return original_prepare(inputs, variable, potential_layout)
 
     monkeypatch.setattr(
         eager_module._SCFMapTensorTree,
@@ -694,7 +694,7 @@ def test_switched_implicit_uses_final_fock_representation(
 
     assert bool(result.converged)
     assert result.root_x.shape == case.integrals.overlap.shape
-    assert adapter_representations == [SCFRepresentation.FOCK]
+    assert adapter_variables == [SCFVariable.FOCK]
     torch.testing.assert_close(
         result.root_x, result.map_result.spectral.hamiltonian
     )
@@ -709,7 +709,7 @@ def test_switched_implicit_uses_final_fock_representation(
     standalone_case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=SCFRepresentation.FOCK,
+        variable=SCFVariable.FOCK,
         converger="broyden",
         tolerance=1.0e-9,
         temperature=0.0,
@@ -718,7 +718,7 @@ def test_switched_implicit_uses_final_fock_representation(
     standalone_config = replace(
         standalone_case.system.config.scf,
         differentiation=SCFDifferentiation.IMPLICIT,
-        response=SCFResponseSettings(representation=SCFRepresentation.FOCK),
+        cpscf=CPSCFSettings(variable=SCFVariable.FOCK),
         maxiter=100,
         x_atol=1.0e-9,
         x_atol_max=1.0e-9,
@@ -736,9 +736,9 @@ def test_switched_implicit_uses_final_fock_representation(
         standalone_case.integrals,
     )
     assert bool(standalone_result.converged)
-    assert adapter_representations == [
-        SCFRepresentation.FOCK,
-        SCFRepresentation.FOCK,
+    assert adapter_variables == [
+        SCFVariable.FOCK,
+        SCFVariable.FOCK,
     ]
     torch.testing.assert_close(
         result.energy, standalone_result.energy, atol=2.0e-7, rtol=2.0e-7
@@ -769,12 +769,12 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     from dxtb import GFN1_XTB
     from dxtb._src.scf import functional as functional_package
     from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb.scf import SCFRepresentation, SCFResponseSettings
+    from dxtb.scf import SCFVariable, CPSCFSettings
 
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         converger="linear",
         tolerance=1.0e-12,
         temperature=0.0,
@@ -783,7 +783,7 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     config = replace(
         case.system.config.scf,
         differentiation=SCFDifferentiation.IMPLICIT,
-        response=SCFResponseSettings(representation=SCFRepresentation.CHARGE),
+        cpscf=CPSCFSettings(variable=SCFVariable.CHARGE),
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -840,7 +840,7 @@ def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=SCFRepresentation.CHARGE,
+            variable=SCFVariable.CHARGE,
             converger=converger,
             tolerance=1.0e-12,
             temperature=0.0,
@@ -887,7 +887,7 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=0.0,
     )
@@ -950,7 +950,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-14,
         maxiter=10,
     )
@@ -1023,7 +1023,7 @@ def test_public_singlepoint_uses_functional_implicit_route() -> None:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=0.0,
     )
@@ -1088,7 +1088,7 @@ def test_public_functional_implicit_h2_float32_response() -> None:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=tolerance,
         temperature=0.0,
         field=torch.tensor([0.0, 1.0e-2, 0.0], dtype=torch.float32),
@@ -1149,7 +1149,7 @@ def test_implicit_strategy_policy_selects_native_routes(
     from dxtb._src.scf.functional import data as functional_data
     from dxtb._src.scf.iterator import _implicit_differentiation_supported
     from dxtb.config import ConfigSCF
-    from dxtb.scf import AndersonMethod, strategy_preset
+    from dxtb.scf import AndersonConverger, strategy_preset
 
     case = _case("H2", method=GFN1_XTB, temperature=0.0)
     base = replace(
@@ -1157,7 +1157,7 @@ def test_implicit_strategy_policy_selects_native_routes(
         differentiation=SCFDifferentiation.IMPLICIT,
     )
     default = ConfigSCF()
-    assert isinstance(default.strategy.stages[0].method, AndersonMethod)
+    assert isinstance(default.strategy.stages[0].converger, AndersonConverger)
 
     for name in ("linear", "anderson", "broyden", "cdiis"):
         configured = replace(base, strategy=strategy_preset(name))
@@ -1242,7 +1242,7 @@ def test_public_implicit_strategy_values_agree_after_root_preparation() -> None:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=0.0,
     )
@@ -1314,7 +1314,7 @@ def test_iterator_routes_implicit_broyden_through_functional_primal(
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         converger="broyden",
         tolerance=1.0e-10,
         maxiter=100,
@@ -1368,7 +1368,7 @@ def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     implicit_case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=0.0,
         field=implicit_field,
@@ -1400,7 +1400,7 @@ def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     unrolled_case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=0.0,
         field=unrolled_field,
@@ -1432,7 +1432,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
         tolerance=1.0e-12,
         temperature=300.0,
         field=torch.zeros(3, **_DD),
@@ -1505,7 +1505,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.POTENTIAL,
+        variable=SCFVariable.POTENTIAL,
         converger=converger,
         tolerance=tolerance,
         maxiter=300,
@@ -1539,7 +1539,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
     )
     _, layout = _initial_state(case, case.inputs)
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, SCFRepresentation.POTENTIAL, layout
+        case.inputs, SCFVariable.POTENTIAL, layout
     )
     field_entry_index = next(
         index
@@ -1667,7 +1667,7 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
         perturbed = _case(
             "NO2",
             method=GFN2_XTB,
-            representation=SCFRepresentation.POTENTIAL,
+            variable=SCFVariable.POTENTIAL,
             converger=converger,
             tolerance=tolerance,
             maxiter=300,

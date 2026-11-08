@@ -28,22 +28,22 @@ from tad_mctc.tree import Node, child
 from dxtb._src.typing import Tensor
 
 from .method import (
-    SCFMethodContext,
-    SCFMethodProposal,
-    SCFMethodState,
+    SCFConvergerContext,
+    SCFConvergerProposal,
+    SCFConvergerState,
     simple_mix,
 )
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .problem import SCFPhysicalState, SCFProblem, SCFVariable
 from .stationarity import (
     ao_stationarity_matrix,
     orthogonalized_stationarity_matrix,
 )
 
-__all__ = ["CDIISMethod", "CDIISMethodSettings", "CDIISState"]
+__all__ = ["CDIISConverger", "CDIISConvergerSettings", "CDIISState"]
 
 
 @dataclass(frozen=True, eq=False)
-class CDIISMethodSettings:
+class CDIISConvergerSettings:
     """Static numerical policy for bounded Fock-space CDIIS history."""
 
     max_history: int = 8
@@ -93,28 +93,28 @@ class CDIISState(Node):
 
 
 @dataclass(frozen=True, eq=False)
-class CDIISMethod:
-    """Conventional commutator CDIIS operating on the Fock representation."""
+class CDIISConverger:
+    """Conventional commutator CDIIS operating on the Fock variable."""
 
     supports_fixed_trip: ClassVar[bool] = True
 
-    required_representation: ClassVar[SCFRepresentation] = (
-        SCFRepresentation.FOCK
+    required_variable: ClassVar[SCFVariable] = (
+        SCFVariable.FOCK
     )
-    settings: CDIISMethodSettings = CDIISMethodSettings()
+    settings: CDIISConvergerSettings = CDIISConvergerSettings()
 
     def propose(
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Insert the fresh mapped Fock/error and make a damped proposal."""
-        if problem.representation is not SCFRepresentation.FOCK:
-            raise ValueError("CDIIS requires a Fock working representation.")
+        if problem.variable is not SCFVariable.FOCK:
+            raise ValueError("CDIIS requires a Fock working variable.")
 
-        old = cast(CDIISState | None, method_state)
+        old = cast(CDIISState | None, converger_state)
         if old is None:
             old = _empty_state(physical_state.x, self.settings.max_history)
 
@@ -181,7 +181,7 @@ class CDIISMethod:
         proposal_x = torch.where(
             context.transition_active, proposal_x, physical_state.x
         )
-        return SCFMethodProposal(x=proposal_x, state=selected)
+        return SCFConvergerProposal(x=proposal_x, state=selected)
 
 
 def _empty_state(fock: Tensor, max_history: int) -> CDIISState:
@@ -280,7 +280,7 @@ def _history_condition(errors: Tensor, count: Tensor) -> tuple[Tensor, Tensor]:
 def _prune_history(
     history: CDIISState,
     count: Tensor,
-    settings: CDIISMethodSettings,
+    settings: CDIISConvergerSettings,
 ) -> tuple[CDIISState, Tensor, Tensor, Tensor, Tensor]:
     """Drop oldest vectors until conditioning is acceptable or restart."""
     maximum = settings.resolved_condition_limit(history.error_history.dtype)
@@ -364,7 +364,7 @@ def _keep_current_only(
 def _solve_pulay_coefficients(
     errors: Tensor,
     count: Tensor,
-    settings: CDIISMethodSettings,
+    settings: CDIISConvergerSettings,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Solve the regularized affine Pulay system without dynamic slicing."""
     max_history = errors.shape[0]

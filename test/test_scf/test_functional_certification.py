@@ -27,17 +27,17 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf.functional import (
-    AndersonMethod,
-    AndersonMethodSettings,
-    BroydenMethod,
-    CDIISMethod,
-    LinearMethod,
+    AndersonConverger,
+    AndersonConvergerSettings,
+    BroydenConverger,
+    CDIISConverger,
+    LinearConverger,
     SCFCertificationThresholds,
     SCFCoreFailure,
     SCFInternalCertificationProfile,
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     SCFSolverSettings,
 )
 from dxtb._src.scf.functional import certification as certification_module
@@ -62,7 +62,7 @@ from dxtb._src.scf.functional.certification import (
     SCF_CERTIFICATION_TIGHT,
     _stationarity_norms,
 )
-from dxtb._src.scf.functional.method import SCFMethod
+from dxtb._src.scf.functional.method import SCFConverger
 from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     SCFTrajectoryStatus,
@@ -82,7 +82,7 @@ from .test_functional_map import _prepare_case
 
 def _problem_and_state(
     method: int = GFN1_XTB,
-    representation: SCFRepresentation = SCFRepresentation.CHARGE,
+    variable: SCFVariable = SCFVariable.CHARGE,
     *,
     sample_name: str = "H2O",
     temperature: float = 0.0,
@@ -98,27 +98,27 @@ def _problem_and_state(
         dtype=dtype,
         scf_options={"fermi_etemp": temperature},
     )
-    if representation is SCFRepresentation.CHARGE:
+    if variable is SCFVariable.CHARGE:
         x = case.x
         layout = None
     else:
         from dxtb._src.scf.functional import unpack_charges
 
         charges = unpack_charges(case.x, case.inputs.charge_layout)
-        if representation is SCFRepresentation.POTENTIAL:
+        if variable is SCFVariable.POTENTIAL:
             x, layout = potential_initial_guess(charges, case.inputs)
         else:
             x = fock_initial_guess(charges, case.inputs)
             layout = None
-    problem = SCFProblem(case.inputs, representation, layout)
+    problem = SCFProblem(case.inputs, variable, layout)
     return case, problem, problem.evaluate(x)
 
 
 def _loose_thresholds(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> SCFCertificationThresholds:
     return SCFCertificationThresholds(
-        representation=representation,
+        variable=variable,
         fixed_point_l2=1.0e6,
         fixed_point_max=1.0e6,
         stationarity_orthogonalized_per_sqrt_orbital=1.0e6,
@@ -148,7 +148,7 @@ def test_characterization_h2o_helper_proves_resolved_method(
     assert case.system.h0_setup.method == h0_method
     assert case.par.forward().meta.name.value == parameter_name
 
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     outcome = _solve_map(
         case.x,
         SCFSolverSettings(120, False, 0.2, 1.0e-6, 1.0e-6),
@@ -362,14 +362,14 @@ def test_implicit_preparation_rejects_raw_only_root() -> None:
     outcome = _solve_map(
         case.x,
         SCFSolverSettings(2, False, 0.2, 1.0e6, 1.0e6),
-        SCFProblem(case.inputs, SCFRepresentation.CHARGE).map,
-        problem=SCFProblem(case.inputs, SCFRepresentation.CHARGE),
+        SCFProblem(case.inputs, SCFVariable.CHARGE).map,
+        problem=SCFProblem(case.inputs, SCFVariable.CHARGE),
         certification_profile=profile,
     )
     assert not bool(outcome.converged)
 
     def raw_map(x: torch.Tensor) -> torch.Tensor:
-        return SCFProblem(case.inputs, SCFRepresentation.CHARGE).map(x).mapped_x
+        return SCFProblem(case.inputs, SCFVariable.CHARGE).map(x).mapped_x
 
     with pytest.raises(SCFConvergenceError):
         _prepare_scf_root(
@@ -386,7 +386,7 @@ def test_implicit_preparation_rejects_raw_only_root() -> None:
 def test_certification_does_not_accept_trajectory_history_as_input() -> None:
     """One paired physical state has one verdict independent of history."""
     _, problem, state = _problem_and_state(sample_name="H2O")
-    thresholds = _loose_thresholds(problem.representation)
+    thresholds = _loose_thresholds(problem.variable)
     first = certify_scf_core_state(problem, state, thresholds)
     second = certify_scf_core_state(problem, state, thresholds)
     assert torch.equal(first.certified, second.certified)
@@ -437,20 +437,20 @@ def test_solver_diagnostics_pair_exact_root_and_map_result() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
     ids=("charge", "potential", "fock"),
 )
 def test_fixed_trip_certification_matches_selected_root_diagnostics(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """Final diagnostics agree with controller bits for the selected pair."""
     case, problem, state = _problem_and_state(
-        representation=representation, sample_name="H2"
+        variable=variable, sample_name="H2"
     )
     assert (
         signature(finalize_scf).parameters["root_x"].default is Parameter.empty
@@ -473,7 +473,7 @@ def test_fixed_trip_certification_matches_selected_root_diagnostics(
     assert torch.equal(outcome.converged, outcome.certification.certified)
     assert not bool(outcome.terminal_failed)
 
-    if representation is SCFRepresentation.CHARGE:
+    if variable is SCFVariable.CHARGE:
         result = finalize_scf(
             outcome.map_result,
             case.inputs,
@@ -484,7 +484,7 @@ def test_fixed_trip_certification_matches_selected_root_diagnostics(
             root_x=outcome.root_x,
             certification=outcome.certification,
         )
-    elif representation is SCFRepresentation.POTENTIAL:
+    elif variable is SCFVariable.POTENTIAL:
         assert problem.potential_layout is not None
         result = finalize_scf_potential(
             outcome.map_result,
@@ -622,18 +622,18 @@ def test_implicit_root_revalidation_uses_strict_tolerance_boundary() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
 def test_fixed_point_metric_uses_paired_projected_delta(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """The physical fixed-point metric is projected G(x)-x."""
-    _, problem, state = _problem_and_state(representation=representation)
+    _, problem, state = _problem_and_state(variable=variable)
     metrics = certification_metrics(problem, state)
     delta = problem.project_residual(state.map_result.mapped_x - state.x)
     torch.testing.assert_close(
@@ -807,20 +807,20 @@ def test_stationarity_metrics_respond_to_basis_rescaling() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
-def test_fresh_hamiltonian_matches_authoritative_representation_map(
-    representation: SCFRepresentation,
+def test_fresh_hamiltonian_matches_authoritative_variable_map(
+    variable: SCFVariable,
 ) -> None:
     """Charge-derived fresh Fock agrees with the authoritative raw map."""
-    _, problem, state = _problem_and_state(representation=representation)
+    _, problem, state = _problem_and_state(variable=variable)
     fresh = problem.rebuild_hamiltonian(state.map_result.spectral.charges)
-    if representation is SCFRepresentation.FOCK:
+    if variable is SCFVariable.FOCK:
         expected = state.map_result.mapped_x
     else:
         from dxtb._src.scf.functional import potential_from_charges
@@ -931,7 +931,7 @@ def test_fractional_float32_count_error_stays_below_effective_root_floor() -> (
 
 
 def test_padded_residual_entries_do_not_contribute() -> None:
-    """Representation residual projection excludes inactive AO entries."""
+    """Variable residual projection excludes inactive AO entries."""
     case, problem, _ = _problem_and_state()
     delta = torch.ones_like(case.x)
     projected = problem.project_residual(delta)
@@ -943,29 +943,29 @@ def test_padded_residual_entries_do_not_contribute() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
-def test_certification_thresholds_are_explicit_and_representation_bound(
-    representation: SCFRepresentation,
+def test_certification_thresholds_are_explicit_and_variable_bound(
+    variable: SCFVariable,
 ) -> None:
-    """Explicit thresholds yield a verdict and reject representation mismatch."""
-    _, problem, state = _problem_and_state(representation=representation)
+    """Explicit thresholds yield a verdict and reject variable mismatch."""
+    _, problem, state = _problem_and_state(variable=variable)
     result = certify_scf_state(
-        problem, state, _loose_thresholds(representation)
+        problem, state, _loose_thresholds(variable)
     )
     assert result.certified, result.metrics
     strict = replace(
-        _loose_thresholds(representation),
+        _loose_thresholds(variable),
         stationarity_orthogonalized_per_sqrt_orbital=0.0,
     )
     assert not certify_scf_state(problem, state, strict).certified
-    wrong = _loose_thresholds(SCFRepresentation.CHARGE)
-    if representation is not SCFRepresentation.CHARGE:
+    wrong = _loose_thresholds(SCFVariable.CHARGE)
+    if variable is not SCFVariable.CHARGE:
         with pytest.raises(ValueError, match="do not match"):
             certify_scf_state(problem, state, wrong)
 
@@ -1039,7 +1039,7 @@ def test_full_diagnostics_require_finite_optional_observables(
     full = certification_metrics(problem, state, core_metrics=core)
     assert not bool(full.finite_ok)
     result = certify_scf_state(
-        problem, state, _loose_thresholds(problem.representation)
+        problem, state, _loose_thresholds(problem.variable)
     )
     assert not bool(result.finite_ok)
     assert not bool(result.certified)
@@ -1086,7 +1086,7 @@ def test_fermi_validity_and_finite_validity_are_independent() -> None:
             hcore=case.inputs.integrals.hcore * 1.0e20,
         ),
     )
-    problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(inputs, SCFVariable.CHARGE)
     broken_state = problem.evaluate(case.x)
     metrics = certification_metrics(problem, broken_state)
     assert broken_state.map_result.fermi_status is not None
@@ -1094,7 +1094,7 @@ def test_fermi_validity_and_finite_validity_are_independent() -> None:
     assert metrics.fermi_ok
     assert not metrics.finite_ok
     assert not certify_scf_state(
-        problem, broken_state, _loose_thresholds(problem.representation)
+        problem, broken_state, _loose_thresholds(problem.variable)
     ).certified
 
 
@@ -1117,7 +1117,7 @@ def test_independent_electron_count_threshold_rejects_perturbed_density() -> (
         problem,
         bad_state,
         replace(
-            _loose_thresholds(problem.representation),
+            _loose_thresholds(problem.variable),
             electron_count=1.0e-5,
         ),
     )
@@ -1133,7 +1133,7 @@ def test_loose_root_has_larger_fresh_fock_stationarity_than_tight_root() -> (
 ):
     """Fresh-Fock stationarity resolves beyond a loose raw-root threshold."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
 
     def solve(tolerance: float) -> SCFPhysicalState:
         settings = SCFSolverSettings(
@@ -1184,7 +1184,7 @@ def test_fermi_failure_is_reported_without_changing_physical_metrics() -> None:
     assert torch.isfinite(metrics.fixed_point.l2)
     assert torch.isfinite(metrics.stationarity_ao_l2)
     assert not certify_scf_state(
-        problem, failed_state, _loose_thresholds(problem.representation)
+        problem, failed_state, _loose_thresholds(problem.variable)
     ).certified
 
 
@@ -1192,7 +1192,7 @@ def test_loose_fixed_point_threshold_does_not_imply_stationarity() -> None:
     """Raw root acceptance and physical stationarity remain separate metrics."""
     _, problem, state = _problem_and_state(sample_name="H2O")
     thresholds = SCFCertificationThresholds(
-        representation=problem.representation,
+        variable=problem.variable,
         fixed_point_l2=1.0e6,
         fixed_point_max=1.0e6,
         stationarity_orthogonalized_per_sqrt_orbital=1.0e-12,
@@ -1378,33 +1378,33 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
 
 
 @pytest.mark.parametrize(
-    "method,representation",
+    "method,variable",
     [
-        (LinearMethod(), SCFRepresentation.CHARGE),
+        (LinearConverger(), SCFVariable.CHARGE),
         (
-            AndersonMethod(AndersonMethodSettings(0.1, 4, True, 0.01)),
-            SCFRepresentation.CHARGE,
+            AndersonConverger(AndersonConvergerSettings(0.1, 4, True, 0.01)),
+            SCFVariable.CHARGE,
         ),
-        (BroydenMethod(), SCFRepresentation.CHARGE),
-        (CDIISMethod(), SCFRepresentation.FOCK),
+        (BroydenConverger(), SCFVariable.CHARGE),
+        (CDIISConverger(), SCFVariable.FOCK),
     ],
     ids=["linear", "anderson", "broyden", "cdiis"],
 )
 def test_terminal_nonfinite_candidate_does_not_reach_method(
     monkeypatch: pytest.MonkeyPatch,
-    method: SCFMethod,
-    representation: SCFRepresentation,
+    method: SCFConverger,
+    variable: SCFVariable,
 ) -> None:
     """A bad map is frozen and the method sees only finite transition data."""
     import dxtb._src.scf.functional.solver as solver_module
 
     _, problem, physical = _problem_and_state(
-        sample_name="H2O", representation=representation
+        sample_name="H2O", variable=variable
     )
     calls = 0
     transitions = 0
     inactive_observations = []
-    original_transition = solver_module._method_transition
+    original_transition = solver_module._converger_transition
 
     def map_fn(x: torch.Tensor):
         nonlocal calls
@@ -1434,8 +1434,8 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
         transitions += 1
         proposal = original_transition(*args, **kwargs)
         if not bool(args[7]):
-            before = solver_module._method_state_tensors(args[5])
-            after = solver_module._method_state_tensors(proposal.state)
+            before = solver_module._converger_state_tensors(args[5])
+            after = solver_module._converger_state_tensors(proposal.state)
             assert len(before) == len(after)
             for old_value, new_value in zip(before, after):
                 torch.testing.assert_close(
@@ -1443,7 +1443,7 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
                 )
         return proposal
 
-    monkeypatch.setattr(solver_module, "_method_transition", check_transition)
+    monkeypatch.setattr(solver_module, "_converger_transition", check_transition)
     outcome = _solve_map_control(
         physical.x,
         maxiter=2,

@@ -21,8 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
-from .method import SCFMethod
-from .problem import SCFRepresentation
+from .method import SCFConverger
+from .problem import SCFVariable
 
 __all__ = ["SCFStage", "SCFSwitchPolicy", "SCFStrategy"]
 
@@ -64,10 +64,10 @@ class SCFSwitchPolicy:
 
 @dataclass(frozen=True, eq=False)
 class SCFStage:
-    """One method stage and its representation, damping, and exit policy."""
+    """One SCF converger on one SCF variable, with damping and exit policy."""
 
-    method: SCFMethod
-    representation: SCFRepresentation | None = None
+    converger: SCFConverger
+    variable: SCFVariable | None = None
     switch_policy: SCFSwitchPolicy | None = None
     initial_damp: float | None = None
 
@@ -105,41 +105,41 @@ class SCFStrategy:
             )
         return self.stages[0]
 
-    def resolve_representations(
-        self, initial: SCFRepresentation
-    ) -> tuple[SCFRepresentation, ...]:
-        """Resolve inherited representations and validate each conversion."""
-        resolved: list[SCFRepresentation] = []
+    def resolve_variables(
+        self, initial: SCFVariable
+    ) -> tuple[SCFVariable, ...]:
+        """Resolve inherited variables and validate each conversion."""
+        resolved: list[SCFVariable] = []
         previous = initial
         for index, stage in enumerate(self.stages):
             target = (
                 previous
-                if stage.representation is None
-                else stage.representation
+                if stage.variable is None
+                else stage.variable
             )
             if index == 0 and target is not initial:
                 raise NotImplementedError(
                     "The first strategy stage must use the supplied problem "
-                    "representation."
+                    "variable."
                 )
-            required = getattr(stage.method, "required_representation", None)
+            required = getattr(stage.converger, "required_variable", None)
             if required is not None and target is not required:
                 raise ValueError(
-                    f"{type(stage.method).__name__} requires the "
-                    f"{required.value} representation."
+                    f"{type(stage.converger).__name__} requires the "
+                    f"{required.value} variable."
                 )
             if index > 0 and target is not previous:
-                if target is not SCFRepresentation.FOCK:
+                if target is not SCFVariable.FOCK:
                     raise NotImplementedError(
                         "S6 supports compact-to-Fock conversion only; "
                         "Fock-to-compact switching is unsupported."
                     )
                 if previous not in (
-                    SCFRepresentation.CHARGE,
-                    SCFRepresentation.POTENTIAL,
+                    SCFVariable.CHARGE,
+                    SCFVariable.POTENTIAL,
                 ):
                     raise NotImplementedError(
-                        "This SCF representation conversion is unsupported."
+                        "This SCF variable conversion is unsupported."
                     )
             resolved.append(target)
             previous = target

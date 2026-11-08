@@ -56,7 +56,7 @@ from dxtb._src.scf.functional import (
 )
 from dxtb._src.scf.functional.problem import (
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     _mask_packed_rows,
 )
 from dxtb._src.scf.functional.solver import (
@@ -822,7 +822,7 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
     With the potential SCF variable, Row 0 stores ``spread_shell_to_orbital(v_shell)``,
     where every shell potential ``v_shell`` is an SO(3) scalar; combined with the
     sqrt(2) quadrupole Frobenius metric, the entire state space is an orthogonal
-    representation of SO(3) at every SCF iteration.
+    variable of SO(3) at every SCF iteration.
 
     With the charge SCF variable, Row 0 stores orbital-resolved Mulliken charges
     ``q_mu = n0_mu - (P S)_{mu,mu}``. Under a 3D rotation R, the p- and d-shell
@@ -911,7 +911,7 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
             system.ihelp,
             config.scf,
         )
-        problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
+        problem = SCFProblem(inputs, SCFVariable.CHARGE)
         settings = setup_solver_settings(config.scf, DTYPE)
 
         orb_per_shell = system.ihelp.orbitals_per_shell.to(dtype=DTYPE)

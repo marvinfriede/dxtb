@@ -31,7 +31,7 @@ __all__ = ["PMultipoleDamped", "PMultipole"]
 
 class PMultipoleDamped(BaseModel):
     """
-    Representation of the anisotropic second-order multipolar interactions
+    Variable of the anisotropic second-order multipolar interactions
     for a parametrization.
     """
 

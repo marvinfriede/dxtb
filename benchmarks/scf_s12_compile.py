@@ -31,13 +31,13 @@ import torch
 
 from dxtb import GFN1_XTB
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
-from dxtb._src.scf.functional.method import LinearMethod, SCFMethodContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
+from dxtb._src.scf.functional.method import LinearConverger, SCFConvergerContext
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
 from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
@@ -46,14 +46,14 @@ def _git_value(*arguments: str) -> str:
 
 
 def _compile_map(
-    case_name: str, mode: SCFRepresentation
+    case_name: str, mode: SCFVariable
 ) -> dict[str, object]:
     """Compile one physical map with the Dynamo/eager backend."""
     case = _case(
         case_name,
         method=GFN1_XTB,
-        representation=mode,
-        converger=LinearMethod,
+        variable=mode,
+        converger=LinearConverger,
         maxiter=8,
         tolerance=1.0e-10,
     )
@@ -104,7 +104,7 @@ def _compile_map(
     return {
         "case": case_name,
         "method": "GFN1-xTB",
-        "representation": mode.value,
+        "variable": mode.value,
         "shape": list(guess.shape),
         "backend": "eager",
         "fullgraph": False,
@@ -181,13 +181,13 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.FOCK,
-        converger=LinearMethod,
+        variable=SCFVariable.FOCK,
+        converger=LinearConverger,
         maxiter=budget,
         tolerance=0.0,
     )
     initial, _ = _initial_state(case, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     settings = SCFSolverSettings(
         maxiter=budget,
         mix_guess=True,
@@ -196,17 +196,17 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
         x_atol_max=0.0,
     )
     method_factories = {
-        "Linear": LinearMethod,
-        "Anderson": lambda: AndersonMethod(
-            AndersonMethodSettings(
+        "Linear": LinearConverger,
+        "Anderson": lambda: AndersonConverger(
+            AndersonConvergerSettings(
                 damp_init=0.3,
                 generations=2,
                 soft_start=False,
                 diagonal_offset=None,
             )
         ),
-        "Broyden": BroydenMethod,
-        "CDIIS": CDIISMethod,
+        "Broyden": BroydenConverger,
+        "CDIIS": CDIISConverger,
     }
     method = method_factories[name]()
 
@@ -274,31 +274,31 @@ def _compile_transition(name: str) -> dict[str, object]:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=SCFRepresentation.FOCK,
-        converger=LinearMethod,
+        variable=SCFVariable.FOCK,
+        converger=LinearConverger,
         maxiter=4,
         tolerance=1.0e-10,
     )
     guess, _ = _initial_state(case, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     physical = problem.evaluate(guess)
     methods = {
-        "Linear": LinearMethod,
-        "Anderson": lambda: AndersonMethod(
-            AndersonMethodSettings(
+        "Linear": LinearConverger,
+        "Anderson": lambda: AndersonConverger(
+            AndersonConvergerSettings(
                 damp_init=0.3,
                 generations=2,
                 soft_start=False,
                 diagonal_offset=None,
             )
         ),
-        "Broyden": BroydenMethod,
-        "CDIIS": CDIISMethod,
+        "Broyden": BroydenConverger,
+        "CDIIS": CDIISConverger,
     }
     method = methods[name]()
     active = torch.ones((), dtype=torch.bool)
     damp = guess.new_tensor(0.5)
-    first_context = SCFMethodContext(
+    first_context = SCFConvergerContext(
         step=1,
         transition_active=active,
         damp=damp,
@@ -307,7 +307,7 @@ def _compile_transition(name: str) -> dict[str, object]:
     state = method.propose(problem, physical, None, first_context).state
 
     def transition(proposal_x: torch.Tensor):
-        context = SCFMethodContext(
+        context = SCFConvergerContext(
             step=2,
             transition_active=active,
             damp=damp,
@@ -339,7 +339,7 @@ def _compile_transition(name: str) -> dict[str, object]:
             )
     return {
         "method": name,
-        "representation": "fock",
+        "variable": "fock",
         "backend": "eager",
         "graph_count": explanation.graph_count,
         "graph_break_count": explanation.graph_break_count,
@@ -360,9 +360,9 @@ def main() -> None:
     maps = [
         _compile_map(args.case, mode)
         for mode in (
-            SCFRepresentation.CHARGE,
-            SCFRepresentation.POTENTIAL,
-            SCFRepresentation.FOCK,
+            SCFVariable.CHARGE,
+            SCFVariable.POTENTIAL,
+            SCFVariable.FOCK,
         )
     ]
     fixed_trip = [_compile_fixed_trip(budget) for budget in (4, 8, 16)]

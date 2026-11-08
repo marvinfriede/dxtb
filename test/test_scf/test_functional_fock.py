@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional Fock-representation SCF parity and transform tests."""
+"""Functional Fock-variable SCF parity and transform tests."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from dxtb._src.scf.functional import (
 )
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional import validate_fock_state
-from dxtb.scf import LinearMethod
+from dxtb.scf import LinearConverger
 
 from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
@@ -93,7 +93,7 @@ def _run_functional(
     guess = _fock_guess(functional)
     _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
-    if isinstance(config.strategy.stages[0].method, LinearMethod):
+    if isinstance(config.strategy.stages[0].converger, LinearConverger):
         settings = setup_solver_settings(config, guess.dtype)
         result = solve_scf_fock_simple(guess, functional.inputs, settings)
     else:

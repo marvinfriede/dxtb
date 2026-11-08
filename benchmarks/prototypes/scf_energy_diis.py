@@ -29,14 +29,14 @@ from scipy.optimize import minimize
 from dxtb._src.scf.functional.energy import electronic_energy_from_density
 from dxtb._src.scf.functional.map import density_to_charges_and_core_energy
 from dxtb._src.scf.functional.method import (
-    SCFMethodContext,
-    SCFMethodProposal,
+    SCFConvergerContext,
+    SCFConvergerProposal,
     simple_mix,
 )
 from dxtb._src.scf.functional.problem import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 
 
@@ -48,24 +48,24 @@ class ResearchDIISState:
 
 
 @dataclass(eq=False)
-class ResearchDIISMethod:
+class ResearchDIISConverger:
     """Prototype simplex energy interpolation for benchmark execution."""
 
     mode: str = "exact"
     capacity: int = 6
     records: list[dict[str, object]] = field(default_factory=list)
     supports_fixed_trip: ClassVar[bool] = False
-    required_representation: ClassVar[SCFRepresentation] = (
-        SCFRepresentation.FOCK
+    required_variable: ClassVar[SCFVariable] = (
+        SCFVariable.FOCK
     )
 
     def propose(
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: ResearchDIISState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: ResearchDIISState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         if (
             problem.inputs.fermi_settings is not None
             and problem.inputs.fermi_settings.smear
@@ -76,13 +76,13 @@ class ResearchDIISMethod:
         density = physical_state.map_result.spectral.density.detach()
         energy = electronic_energy_from_density(density, problem.inputs).sum()
         fock = context.proposal_x.detach()
-        if method_state is None:
+        if converger_state is None:
             histories = (density,), (energy,), (fock,)
         else:
             histories = (
-                (density, *method_state.densities)[: self.capacity],
-                (energy, *method_state.energies)[: self.capacity],
-                (fock, *method_state.focks)[: self.capacity],
+                (density, *converger_state.densities)[: self.capacity],
+                (energy, *converger_state.energies)[: self.capacity],
+                (fock, *converger_state.focks)[: self.capacity],
             )
         densities, energies, focks = histories
 
@@ -119,7 +119,7 @@ class ResearchDIISMethod:
 
         proposal = simple_mix(physical_state.x, target, context.damp)
         state = ResearchDIISState(*histories)
-        return SCFMethodProposal(proposal, state)
+        return SCFConvergerProposal(proposal, state)
 
 
 def _interpolate_density(

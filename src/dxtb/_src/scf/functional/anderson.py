@@ -29,23 +29,23 @@ from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
 from .method import (
-    SCFMethodContext,
-    SCFMethodProposal,
-    SCFMethodState,
+    SCFConvergerContext,
+    SCFConvergerProposal,
+    SCFConvergerState,
 )
 from .problem import SCFPhysicalState, SCFProblem
 
 __all__ = [
-    "AndersonMethod",
-    "AndersonMethodSettings",
+    "AndersonConverger",
+    "AndersonConvergerSettings",
     "AndersonState",
     "anderson_mix",
-    "setup_anderson_method_settings",
+    "setup_anderson_converger_settings",
 ]
 
 
 @dataclass(frozen=True, eq=False)
-class AndersonMethodSettings:
+class AndersonConvergerSettings:
     """Static numerical policy owned specifically by the Anderson method."""
 
     damp_init: float = 0.1
@@ -62,43 +62,43 @@ class AndersonState(Node):
 
 
 @dataclass(frozen=True, eq=False)
-class AndersonMethod:
+class AndersonConverger:
     """Anderson proposal rule with explicit immutable history."""
 
     supports_fixed_trip: ClassVar[bool] = True
 
-    settings: AndersonMethodSettings
+    settings: AndersonConvergerSettings
 
     def propose(
         self,
         problem: SCFProblem,
         physical_state: SCFPhysicalState,
-        method_state: SCFMethodState | None,
-        context: SCFMethodContext,
-    ) -> SCFMethodProposal:
+        converger_state: SCFConvergerState | None,
+        context: SCFConvergerContext,
+    ) -> SCFConvergerProposal:
         """Propose one Anderson transition from the paired physical state."""
         del problem
         mixed, next_state = anderson_mix(
             physical_state.x,
             context.proposal_x,
-            cast(AndersonState | None, method_state),
+            cast(AndersonState | None, converger_state),
             self.settings,
             context.step,
             transition_active=context.transition_active,
             damp=context.damp,
         )
-        return SCFMethodProposal(x=mixed, state=next_state)
+        return SCFConvergerProposal(x=mixed, state=next_state)
 
 
-def setup_anderson_method_settings(
+def setup_anderson_converger_settings(
     config: ConfigSCF,
-) -> AndersonMethodSettings:
+) -> AndersonConvergerSettings:
     """Resolve and validate only the effective Anderson method options."""
-    if not isinstance(config.strategy.stages[0].method, AndersonMethod):
+    if not isinstance(config.strategy.stages[0].converger, AndersonConverger):
         raise NotImplementedError(
             "Anderson settings require an Anderson strategy stage."
         )
-    settings = config.strategy.stages[0].method.settings
+    settings = config.strategy.stages[0].converger.settings
     if settings.generations < 1:
         raise ValueError("Anderson generations must be at least 1.")
     return settings
@@ -117,7 +117,7 @@ def anderson_mix(
     old: Tensor,
     mapped: Tensor,
     state: AndersonState | None,
-    settings: AndersonMethodSettings,
+    settings: AndersonConvergerSettings,
     step: int,
     transition_active: Tensor | None = None,
     *,

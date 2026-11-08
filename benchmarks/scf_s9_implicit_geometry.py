@@ -31,12 +31,12 @@ from test.test_scf.test_functional_root_derivatives import _case
 
 import torch
 
-from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovMethod
+from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovConverger
 from dxtb import GFN2_XTB
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.eager import _prepare_solver
-from dxtb._src.scf.functional.problem import SCFRepresentation
+from dxtb._src.scf.functional.problem import SCFVariable
 from dxtb._src.scf.functional.strategy import (
     SCFStage,
     SCFStrategy,
@@ -50,7 +50,7 @@ def main() -> None:
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=SCFRepresentation.FOCK,
+        variable=SCFVariable.FOCK,
         tolerance=1.0e-8,
         maxiter=120,
         temperature=2000.0,
@@ -62,7 +62,7 @@ def main() -> None:
             (
                 replace(
                     strategy_preset("broyden").stages[0],
-                    representation=SCFRepresentation.FOCK,
+                    variable=SCFVariable.FOCK,
                 ),
             )
         ),
@@ -74,22 +74,22 @@ def main() -> None:
     stages_by_policy = (
         (
             "CDIIS",
-            (SCFStage(CDIISMethod(), representation=SCFRepresentation.FOCK),),
+            (SCFStage(CDIISConverger(), variable=SCFVariable.FOCK),),
         ),
         (
             "Broyden->NewtonKrylov",
             (
                 SCFStage(
-                    BroydenMethod(),
-                    representation=SCFRepresentation.FOCK,
+                    BroydenConverger(),
+                    variable=SCFVariable.FOCK,
                     switch_policy=SCFSwitchPolicy(
                         min_stage_iterations=2,
                         fixed_point_l2=1.0e-2,
                     ),
                 ),
                 SCFStage(
-                    NewtonKrylovMethod(),
-                    representation=SCFRepresentation.FOCK,
+                    NewtonKrylovConverger(),
+                    variable=SCFVariable.FOCK,
                     initial_damp=1.0,
                 ),
             ),

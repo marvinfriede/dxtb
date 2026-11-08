@@ -36,7 +36,7 @@ from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
 
 from .core import replace_tensor_leaves, tensor_leaves
-from .problem import SCFRepresentation
+from .problem import SCFVariable
 
 __all__ = ["LinearSolveResult", "implicit_root", "solve_linear"]
 
@@ -277,7 +277,7 @@ class _SCFMapTensorTree:
     """
 
     template: object
-    representation: SCFRepresentation
+    variable: SCFVariable
     potential_layout: object | None
     input_fields: tuple[str, ...]
     interaction_tensor_paths: tuple[str, ...]
@@ -287,7 +287,7 @@ class _SCFMapTensorTree:
     def prepare(
         cls,
         inputs: object,
-        representation: SCFRepresentation,
+        variable: SCFVariable,
         potential_layout: object | None = None,
     ) -> tuple[_SCFMapTensorTree, tuple[Tensor, ...]]:
         from .data import SCFInputs
@@ -339,7 +339,7 @@ class _SCFMapTensorTree:
 
         adapter = cls(
             template=inputs,
-            representation=representation,
+            variable=variable,
             potential_layout=potential_layout,
             input_fields=input_fields,
             interaction_tensor_paths=interaction_tensor_paths,
@@ -426,16 +426,16 @@ class _SCFMapTensorTree:
             fermi_settings=fermi_settings,
             **changes,
         )
-        if self.representation == SCFRepresentation.CHARGE:
+        if self.variable == SCFVariable.CHARGE:
             return inputs, scf_map
-        if self.representation == SCFRepresentation.POTENTIAL:
+        if self.variable == SCFVariable.POTENTIAL:
             return inputs, lambda x, current: potential_map(
                 x, current, self.potential_layout
             )
-        if self.representation == SCFRepresentation.FOCK:
+        if self.variable == SCFVariable.FOCK:
             return inputs, fock_map
         raise ValueError(
-            f"Unsupported implicit representation {self.representation}."
+            f"Unsupported implicit variable {self.variable}."
         )
 
     def evaluate(self, x: Tensor, *parameters: Tensor):

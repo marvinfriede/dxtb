@@ -121,7 +121,7 @@ class LazyLoaderParam:
 
     def __repr__(self) -> str:  # pragma: no cover
         """
-        Custom representation of the `LazyLoaderParam` object.
+        Custom variable of the `LazyLoaderParam` object.
 
         Returns
         -------

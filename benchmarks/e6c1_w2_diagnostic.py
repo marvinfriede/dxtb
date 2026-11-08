@@ -134,7 +134,7 @@ def production_instrumentation():
     patch(eager, "get_refocc", "initial_scf_reference_occupations")
     patch(eager, "get_guess", "initial_scf_guess")
     patch(eager, "setup_scf_inputs", "initial_scf_input_setup")
-    patch(eager, "_solve_representation", "forward_scf_solver")
+    patch(eager, "_solve_variable", "forward_scf_solver")
     patch(eager, "functional_core_result", "functional_result_materialization")
     patch(map, "evaluate_hamiltonian", "spectral_evaluation")
     patch(map, "fermi_density_matrix", "fermi_density_matrix")
@@ -328,7 +328,7 @@ def main() -> None:
         from dxtb._src.calculators.model import Model
         from dxtb._src.scf.functional import eager, spectral
         from dxtb.config import Config
-        from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
+        from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--route", choices=("serial", "mapped"), required=True)
@@ -393,7 +393,7 @@ def main() -> None:
             (
                 replace(
                     strategy_preset("anderson").stages[0],
-                    representation=SCFRepresentation.CHARGE,
+                    variable=SCFVariable.CHARGE,
                 ),
             )
         ),

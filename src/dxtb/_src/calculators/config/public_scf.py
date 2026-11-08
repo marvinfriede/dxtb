@@ -43,32 +43,32 @@ def _preset(name: str):
     return strategy_preset(name)
 
 
-def _default_response():
-    from dxtb._src.scf.functional.problem import SCFRepresentation
-    from dxtb._src.scf.functional.response import SCFResponseSettings
+def _default_cpscf():
+    from dxtb._src.scf.functional.problem import SCFVariable
+    from dxtb._src.scf.functional.response import CPSCFSettings
 
-    return SCFResponseSettings(representation=SCFRepresentation.POTENTIAL)
+    return CPSCFSettings(variable=SCFVariable.POTENTIAL)
 
 
 def _default_strategy():
     return _preset("anderson")
 
 
-def _first_representation(strategy: Any):
-    from dxtb._src.scf.functional.problem import SCFRepresentation
+def _first_variable(strategy: Any):
+    from dxtb._src.scf.functional.problem import SCFVariable
 
     stage = strategy.stages[0]
-    if stage.representation is not None:
-        return stage.representation
-    required = getattr(stage.method, "required_representation", None)
-    return SCFRepresentation.POTENTIAL if required is None else required
+    if stage.variable is not None:
+        return stage.variable
+    required = getattr(stage.converger, "required_variable", None)
+    return SCFVariable.POTENTIAL if required is None else required
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
 class ConfigSCF:
     """Public SCF configuration with a single authoritative strategy.
 
-    The core stores immutable stages, derivative policy, response policy, and
+    The core stores immutable stages, derivative policy, CPSCF settings, and
     named accuracy profile.
 
     Example
@@ -76,7 +76,7 @@ class ConfigSCF:
     >>> config = ConfigSCF.create(
     ...     strategy="broyden", differentiation="implicit"
     ... )
-    >>> config.strategy.stages[0].representation.value
+    >>> config.strategy.stages[0].variable.value
     'potential'
 
     Raises
@@ -92,7 +92,7 @@ class ConfigSCF:
     strategy: Any = field(default_factory=_default_strategy)
     differentiation: SCFDifferentiation = SCFDifferentiation.UNROLLED
     convergence: SCFConvergenceProfile = SCFConvergenceProfile.STANDARD
-    response: Any = field(default_factory=_default_response)
+    cpscf: Any = field(default_factory=_default_cpscf)
     mix_guess: bool = defaults.MIX_GUESS
     damp: float = defaults.DAMP
     damp_dynamic: bool = defaults.DAMP_DYNAMIC
@@ -103,13 +103,13 @@ class ConfigSCF:
     fermi: ConfigFermi = field(default_factory=ConfigFermi)
 
     def __post_init__(self) -> None:
-        from dxtb._src.scf.functional.response import SCFResponseSettings
+        from dxtb._src.scf.functional.response import CPSCFSettings
         from dxtb._src.scf.functional.strategy import SCFStrategy
 
         if not isinstance(self.strategy, SCFStrategy):
             raise TypeError("strategy must be an SCFStrategy.")
-        if not isinstance(self.response, SCFResponseSettings):
-            raise TypeError("response must be SCFResponseSettings.")
+        if not isinstance(self.cpscf, CPSCFSettings):
+            raise TypeError("cpscf must be CPSCFSettings.")
         if not isinstance(self.differentiation, SCFDifferentiation):
             try:
                 self.__dict__["differentiation"] = SCFDifferentiation(
@@ -142,11 +142,11 @@ class ConfigSCF:
         if self.x_atol_max is None:
             self.__dict__["x_atol_max"] = thresholds[1]
 
-        initial = _first_representation(self.strategy)
-        self.strategy.resolve_representations(initial)
+        initial = _first_variable(self.strategy)
+        self.strategy.resolve_variables(initial)
         if self.differentiation is SCFDifferentiation.UNROLLED:
             eager_only = any(
-                not getattr(stage.method, "supports_fixed_trip", True)
+                not getattr(stage.converger, "supports_fixed_trip", True)
                 for stage in self.strategy.stages
             )
             if len(self.strategy.stages) > 1 or eager_only:
@@ -157,7 +157,7 @@ class ConfigSCF:
                 )
 
         if any(
-            type(stage.method).__name__ == "SOSCFMethod"
+            type(stage.converger).__name__ == "SOSCFConverger"
             for stage in self.strategy.stages
         ):
             kt = float(self.fermi.etemp) * 3.166811563e-6
@@ -177,7 +177,7 @@ class ConfigSCF:
         strategy: str | Any | None = None,
         differentiation: str | SCFDifferentiation | None = None,
         convergence: str | SCFConvergenceProfile = "standard",
-        response: Any = None,
+        cpscf: Any = None,
         mix_guess: bool = defaults.MIX_GUESS,
         damp: float = defaults.DAMP,
         damp_dynamic: bool = defaults.DAMP_DYNAMIC,
@@ -225,7 +225,7 @@ class ConfigSCF:
             strategy=strategy_value,
             differentiation=differentiation_value,
             convergence=convergence_value,
-            response=_default_response() if response is None else response,
+            cpscf=_default_cpscf() if cpscf is None else cpscf,
             mix_guess=mix_guess,
             damp=damp,
             damp_dynamic=damp_dynamic,
@@ -247,17 +247,17 @@ class ConfigSCF:
         return self.method != labels.GFN0_XTB
 
     @property
-    def initial_representation(self):
-        return _first_representation(self.strategy)
+    def initial_variable(self):
+        return _first_variable(self.strategy)
 
     def info(self) -> dict[str, Any]:
         """Return stable, address-free strategy and convergence diagnostics."""
         stage_details = []
         for index, stage in enumerate(self.strategy.stages):
-            representation = (
-                stage.representation
-                or self.strategy.resolve_representations(
-                    self.initial_representation
+            variable = (
+                stage.variable
+                or self.strategy.resolve_variables(
+                    self.initial_variable
                 )[index]
             )
             switch = (
@@ -269,13 +269,13 @@ class ConfigSCF:
                     if value is not None
                 }
             )
-            method_settings = getattr(stage.method, "settings", None)
+            method_settings = getattr(stage.converger, "settings", None)
             stage_details.append(
                 {
-                    "Method": type(stage.method).__name__.removesuffix(
-                        "Method"
+                    "Converger": type(stage.converger).__name__.removesuffix(
+                        "Converger"
                     ),
-                    "Representation": representation.value,
+                    "Variable": variable.value,
                     "Settings": (
                         None
                         if method_settings is None
@@ -286,15 +286,15 @@ class ConfigSCF:
                 }
             )
         strategy_label = " -> ".join(
-            f"{stage['Method']} / {stage['Representation']}"
+            f"{stage['Converger']} / {stage['Variable']}"
             for stage in stage_details
         )
         if not self.requires_iterations:
             strategy_label = "SCF not required"
-        response_representation = (
+        cpscf_variable = (
             "primal"
-            if self.response.representation is None
-            else self.response.representation.value
+            if self.cpscf.variable is None
+            else self.cpscf.variable.value
         )
         return {
             "SCF Options": {
@@ -311,10 +311,10 @@ class ConfigSCF:
                 "Dynamic damping factor": self.damp_dynamic_factor,
                 "Fixed-point L2 tolerance": self.x_atol,
                 "Fixed-point max tolerance": self.x_atol_max,
-                "Implicit response representation": response_representation,
-                "Implicit response rtol": self.response.rtol,
-                "Implicit response atol": self.response.atol,
-                "Implicit response maxiter": self.response.maxiter,
+                "CPSCF variable": cpscf_variable,
+                "CPSCF rtol": self.cpscf.rtol,
+                "CPSCF atol": self.cpscf.atol,
+                "CPSCF maxiter": self.cpscf.maxiter,
                 "Force convergence": self.force_convergence,
                 **self.fermi.info(),
             }

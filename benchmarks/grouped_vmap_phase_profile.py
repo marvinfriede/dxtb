@@ -20,7 +20,7 @@ Wall time of one energy evaluation (no autograd) is attributed to
 
 - ``integrals``:  ``build_integral_matrices``;
 - ``scf_prep``:   ``setup_scf_inputs`` (orthonormalizer, interaction setup);
-- ``scf_solve``:  ``_solve_representation`` (all map trips, final spectral
+- ``scf_solve``:  ``_solve_variable`` (all map trips, final spectral
   evaluation and status);
 - ``eigensolver``: every symmetric eigensolver call (inside ``scf_solve``),
   with its call count = number of spectral evaluations;
@@ -87,8 +87,8 @@ def _instrument() -> None:
         "integrals", sp_mod.build_integral_matrices
     )
     eager_mod.setup_scf_inputs = _timed("scf_prep", eager_mod.setup_scf_inputs)
-    eager_mod._solve_representation = _timed(
-        "scf_solve", eager_mod._solve_representation
+    eager_mod._solve_variable = _timed(
+        "scf_solve", eager_mod._solve_variable
     )
     torch.linalg.eigh = _timed("eigensolver", torch.linalg.eigh)
     storch.eighb = _timed("eigensolver", storch.eighb)

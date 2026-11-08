@@ -19,7 +19,7 @@
 PySCF: Moleclue
 ===============
 
-This module contains a class for a molecular representation in PySCF's format.
+This module contains a class for a molecular variable in PySCF's format.
 It also contains the short-cut version as in PySCF (``M``).
 """
 
@@ -72,7 +72,7 @@ def M(
 
 class PyscfMol(gto.Mole):
     """
-    Pyscf's molecule representation that can be created upon passing only
+    Pyscf's molecule variable that can be created upon passing only
     ``numbers`` and ``positions``. Note that the basis set is created from a
     database and only the xtb version must be provided during instantiation.
 

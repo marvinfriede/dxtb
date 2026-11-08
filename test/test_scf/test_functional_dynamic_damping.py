@@ -32,7 +32,7 @@ from dxtb._src.scf.functional import (
     anderson_mix,
 )
 from dxtb._src.scf.functional.anderson import anderson_mix
-from dxtb._src.scf.functional.method import LinearMethod
+from dxtb._src.scf.functional.method import LinearConverger
 from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     _solve_map_control,
@@ -73,7 +73,7 @@ def _run_simple(
         x_atol=0.0,
         x_atol_max=0.0,
         map_fn=map_fn,
-        method=LinearMethod(),
+        method=LinearConverger(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -119,7 +119,7 @@ def test_dynamic_damping_switches_after_transition_for_next_step() -> None:
         x_atol=0.0,
         x_atol_max=0.0,
         map_fn=map_fn,
-        method=LinearMethod(),
+        method=LinearConverger(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -152,7 +152,7 @@ def test_mix_guess_does_not_switch_and_convergence_freezes_damping() -> None:
         x_atol=1.0,
         x_atol_max=1.0,
         map_fn=map_fn,
-        method=LinearMethod(),
+        method=LinearConverger(),
         initial_damp=0.2,
         damping_settings=DynamicDampingSettings(True, 0.8),
     )
@@ -237,8 +237,8 @@ def test_anderson_dynamic_damping_is_lane_local_under_vmap() -> None:
 def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
     """Linear and Anderson stages freeze the configured dynamic factor."""
     from dxtb.scf import (
-        LinearMethod,
-        SCFRepresentation,
+        LinearConverger,
+        SCFVariable,
         SCFStage,
         SCFStrategy,
         strategy_preset,
@@ -250,7 +250,7 @@ def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
         strategy=SCFStrategy(
             (
                 SCFStage(
-                    LinearMethod(), representation=SCFRepresentation.POTENTIAL
+                    LinearConverger(), variable=SCFVariable.POTENTIAL
                 ),
             )
         ),

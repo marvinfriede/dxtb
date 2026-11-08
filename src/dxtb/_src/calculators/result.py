@@ -209,7 +209,7 @@ class Result:
     def cenergies(self) -> dict[str, Tensor]:
         """Materialize the immutable classical-energy pairs as a new dict.
 
-        ``Result.classical`` is the authoritative ordered tuple representation
+        ``Result.classical`` is the authoritative ordered tuple variable
         and preserves duplicate labels (for example, multiple identity-keyed
         classical setups). As a dictionary view, ``cenergies`` retains the last
         occurrence when a label is repeated.

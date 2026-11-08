@@ -33,7 +33,7 @@ __all__ = ["PRepulsionEffective", "PRepulsion"]
 
 class PRepulsionEffective(BaseModel):
     """
-    Representation of the repulsion contribution for a parametrization.
+    Variable of the repulsion contribution for a parametrization.
     """
 
     kexp: float

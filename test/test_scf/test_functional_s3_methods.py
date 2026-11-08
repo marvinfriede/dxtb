@@ -10,14 +10,14 @@ import torch
 from dxtb import GFN1_XTB
 from dxtb._src.scf.functional import anderson as anderson_module
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
     AndersonState,
     anderson_mix,
 )
 from dxtb._src.scf.functional.data import SCFMapResult
-from dxtb._src.scf.functional.method import SCFMethodContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.method import SCFConvergerContext
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb.scf import strategy_preset
 
@@ -26,9 +26,9 @@ from ._anderson_helpers import AndersonTestSettings, solve_common
 from .test_functional_map import _prepare_case
 
 
-def _method() -> AndersonMethod:
-    return AndersonMethod(
-        AndersonMethodSettings(
+def _method() -> AndersonConverger:
+    return AndersonConverger(
+        AndersonConvergerSettings(
             damp_init=0.15,
             generations=2,
             soft_start=True,
@@ -40,13 +40,13 @@ def _method() -> AndersonMethod:
 def test_anderson_proposal_uses_controller_projected_value() -> None:
     """Anderson consumes context.proposal_x after controller projection."""
     case = _prepare_case(GFN1_XTB)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     physical_state = problem.evaluate(case.x)
     projected = physical_state.map_result.mapped_x + 0.125
     assert not torch.equal(projected, physical_state.map_result.mapped_x)
     active = torch.ones((), dtype=torch.bool, device=case.x.device)
     damping = case.x.new_tensor(0.4)
-    context = SCFMethodContext(1, active, damping, projected)
+    context = SCFConvergerContext(1, active, damping, projected)
 
     proposal = _method().propose(problem, physical_state, None, context)
     expected, expected_state = anderson_mix(
@@ -71,11 +71,11 @@ def test_anderson_proposal_uses_controller_projected_value() -> None:
 def test_anderson_inactive_transition_freezes_fixed_size_history() -> None:
     """Inactive method proposals leave every history tensor unchanged."""
     case = _prepare_case(GFN1_XTB)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     state = problem.evaluate(case.x)
     method = _method()
     active = torch.ones((), dtype=torch.bool, device=case.x.device)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         1, active, case.x.new_tensor(0.4), state.map_result.mapped_x
     )
     initialized = method.propose(problem, state, None, context).state
@@ -85,7 +85,7 @@ def test_anderson_inactive_transition_freezes_fixed_size_history() -> None:
     assert initialized.f_hist.shape == expected_shape
 
     inactive = torch.zeros_like(active)
-    frozen_context = SCFMethodContext(
+    frozen_context = SCFConvergerContext(
         2, inactive, case.x.new_tensor(0.4), state.map_result.mapped_x + 0.25
     )
     frozen = method.propose(problem, state, initialized, frozen_context).state
@@ -115,7 +115,7 @@ def test_effective_configuration_builds_a_single_method_strategy() -> None:
     assert isinstance(linear_strategy, SCFStrategy)
     assert isinstance(anderson_strategy, SCFStrategy)
     assert len(linear_strategy.stages) == len(anderson_strategy.stages) == 1
-    assert isinstance(anderson_strategy.single_stage().method, AndersonMethod)
+    assert isinstance(anderson_strategy.single_stage().converger, AndersonConverger)
 
 
 def test_anderson_module_has_no_solver_lifecycle() -> None:
@@ -130,7 +130,7 @@ def test_anderson_module_has_no_solver_lifecycle() -> None:
         assert forbidden not in source
 
     solver_source = Path("src/dxtb/_src/scf/functional/solver.py").read_text()
-    assert "AndersonMethod" not in solver_source
+    assert "AndersonConverger" not in solver_source
     assert "mix_fn" not in solver_source
 
 
@@ -148,7 +148,7 @@ def test_terminal_map_does_not_advance_anderson_history(
             "x_atol_max": 0.0,
         },
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     calls = 0
     observed: list[tuple[torch.Tensor, AndersonState]] = []
     original = anderson_module.anderson_mix

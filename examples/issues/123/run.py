@@ -28,7 +28,7 @@ import torch
 from tad_mctc import read, read_chrg
 
 import dxtb
-from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
+from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
 
 
 def main() -> int:
@@ -42,7 +42,7 @@ def main() -> int:
 
     stage = replace(
         strategy_preset("anderson").stages[0],
-        representation=SCFRepresentation.CHARGE,
+        variable=SCFVariable.CHARGE,
     )
     opts = {"verbosity": 6, "strategy": SCFStrategy((stage,))}
     calc = dxtb.calculators.GFN1Calculator(numbers, opts=opts, **dd)

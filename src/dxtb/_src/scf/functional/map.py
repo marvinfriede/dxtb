@@ -223,7 +223,7 @@ def _map_result(
     spectral: SCFSpectralResult,
     driving_potential: SCFPotential | None = None,
 ) -> SCFMapResult:
-    """Bind representation-specific map values to a shared spectral result."""
+    """Bind variable-specific map values to a shared spectral result."""
     return SCFMapResult(
         mapped_x=mapped_x,
         spectral=spectral,
@@ -251,7 +251,7 @@ def scf_map(x: Tensor, inputs: SCFInputs) -> SCFMapResult:
 def potential_map(
     x: Tensor, inputs: SCFInputs, layout: PotentialLayout
 ) -> SCFMapResult:
-    """Evaluate one raw potential-representation map without solver state."""
+    """Evaluate one raw potential-variable map without solver state."""
     driving_potential = unpack_potential(x, layout)
     spectral = evaluate_potential(driving_potential, inputs)
     mapped_potential = potential_from_charges(spectral.charges, inputs)

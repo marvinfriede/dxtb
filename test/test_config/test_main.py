@@ -29,10 +29,10 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import get_default_dtype
 from dxtb.config import Config as Cfg
 from dxtb.scf import (
-    AndersonMethod,
+    AndersonConverger,
     SCFConvergenceProfile,
     SCFDifferentiation,
-    SCFRepresentation,
+    SCFVariable,
 )
 
 from ..conftest import DEVICE
@@ -53,8 +53,8 @@ def test_default() -> None:
 
     assert cfg.scf.maxiter == defaults.MAXITER
     stage = cfg.scf.strategy.stages[0]
-    assert isinstance(stage.method, AndersonMethod)
-    assert stage.representation is SCFRepresentation.POTENTIAL
+    assert isinstance(stage.converger, AndersonConverger)
+    assert stage.variable is SCFVariable.POTENTIAL
     assert cfg.scf.damp == defaults.DAMP
     assert cfg.scf.guess == defaults.GUESS
     assert cfg.scf.differentiation is SCFDifferentiation.UNROLLED

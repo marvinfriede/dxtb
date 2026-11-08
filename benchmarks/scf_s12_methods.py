@@ -31,17 +31,17 @@ import torch
 
 from dxtb import GFN2_XTB
 from dxtb._src.scf.functional.anderson import (
-    AndersonMethod,
-    AndersonMethodSettings,
+    AndersonConverger,
+    AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenMethod
-from dxtb._src.scf.functional.cdiis import CDIISMethod
+from dxtb._src.scf.functional.broyden import BroydenConverger
+from dxtb._src.scf.functional.cdiis import CDIISConverger
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_spectral,
     free_energy_from_spectral,
 )
-from dxtb._src.scf.functional.method import LinearMethod, SCFMethodContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
+from dxtb._src.scf.functional.method import LinearConverger, SCFConvergerContext
+from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
 from dxtb._src.scf.functional.solver import _solve_map, setup_solver_settings
 from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
@@ -59,21 +59,21 @@ def _prepare_case(name: str, method_name: str, tolerance: float, maxiter: int):
             "C4H5NCS": mols["C4H5NCS"],
         }
 
-    representation = (
-        SCFRepresentation.FOCK
+    variable = (
+        SCFVariable.FOCK
         if method_name == "CDIIS"
-        else SCFRepresentation.POTENTIAL
+        else SCFVariable.POTENTIAL
     )
     converger = {
-        "Linear": LinearMethod,
-        "Anderson": AndersonMethod,
-        "Broyden": BroydenMethod,
-        "CDIIS": LinearMethod,
+        "Linear": LinearConverger,
+        "Anderson": AndersonConverger,
+        "Broyden": BroydenConverger,
+        "CDIIS": LinearConverger,
     }[method_name]
     return root_reference._case(
         name,
         method=GFN2_XTB,
-        representation=representation,
+        variable=variable,
         converger=converger,
         tolerance=tolerance,
         maxiter=maxiter,
@@ -83,25 +83,25 @@ def _prepare_case(name: str, method_name: str, tolerance: float, maxiter: int):
 
 def _build_method(name: str, config) -> object:
     if name == "Linear":
-        return LinearMethod()
+        return LinearConverger()
     if name == "Anderson":
-        configured = config.strategy.stages[0].method
-        return AndersonMethod(
+        configured = config.strategy.stages[0].converger
+        return AndersonConverger(
             configured.settings
-            if isinstance(configured, AndersonMethod)
-            else AndersonMethodSettings()
+            if isinstance(configured, AndersonConverger)
+            else AndersonConvergerSettings()
         )
     if name == "Broyden":
-        return BroydenMethod()
+        return BroydenConverger()
     if name == "CDIIS":
-        return CDIISMethod()
+        return CDIISConverger()
     raise ValueError(f"Unknown method {name!r}")
 
 
 def _state_bytes(method, problem, guess: torch.Tensor) -> int:
     """Estimate persistent state size from one initialized method transition."""
     physical = problem.evaluate(guess)
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=1,
         transition_active=torch.ones((), dtype=torch.bool, device=guess.device),
         damp=guess.new_tensor(0.5),
@@ -128,12 +128,12 @@ def _run(
 ) -> dict[str, object]:
     case = _prepare_case(name, method_name, tolerance, maxiter)
     guess, layout = root_reference._initial_state(case, case.inputs)
-    representation = (
-        SCFRepresentation.FOCK
+    variable = (
+        SCFVariable.FOCK
         if method_name == "CDIIS"
-        else SCFRepresentation.POTENTIAL
+        else SCFVariable.POTENTIAL
     )
-    problem = SCFProblem(case.inputs, representation, potential_layout=layout)
+    problem = SCFProblem(case.inputs, variable, potential_layout=layout)
     method = _build_method(method_name, case.system.config.scf)
     strategy = SCFStrategy((SCFStage(method),))
     settings = setup_solver_settings(case.system.config.scf, guess.dtype)
@@ -163,7 +163,7 @@ def _run(
     return {
         "case": name,
         "method": method_name,
-        "representation": representation.value,
+        "variable": variable.value,
         "controller": "fixed_trip" if fixed_trip else "eager",
         "maxiter": maxiter,
         "requested_tolerance": tolerance,

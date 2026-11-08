@@ -11,19 +11,19 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional.cdiis import (
-    CDIISMethod,
-    CDIISMethodSettings,
+    CDIISConverger,
+    CDIISConvergerSettings,
     CDIISState,
     _history_condition,
     _insert_observation,
     _prune_history,
     _solve_pulay_coefficients,
 )
-from dxtb._src.scf.functional.method import SCFMethodContext
+from dxtb._src.scf.functional.method import SCFConvergerContext
 from dxtb._src.scf.functional.problem import (
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
 )
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
@@ -46,7 +46,7 @@ def _physical_fock_case(
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     return problem, problem.evaluate(initial)
 
 
@@ -56,9 +56,9 @@ def _context(
     *,
     active: bool = True,
     damp: float = 0.5,
-) -> SCFMethodContext:
+) -> SCFConvergerContext:
     """Create a single transition context for method-level tests."""
-    return SCFMethodContext(
+    return SCFConvergerContext(
         step=1,
         transition_active=torch.tensor(active, device=physical.x.device),
         damp=physical.x.new_tensor(damp),
@@ -95,7 +95,7 @@ def test_cdiis_stores_fresh_mapped_fock_commutator() -> None:
     rebuilt = problem.rebuild_hamiltonian(physical.map_result.spectral.charges)
     torch.testing.assert_close(fresh, rebuilt, rtol=0.0, atol=2.0e-14)
 
-    proposal = CDIISMethod().propose(
+    proposal = CDIISConverger().propose(
         problem, physical, None, _context(physical, fresh)
     )
     assert isinstance(proposal.state, CDIISState)
@@ -127,7 +127,7 @@ def test_cdiis_reaches_an_s2_certified_fock_root() -> None:
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     outcome = solve_scf_problem(
         initial,
         problem,
@@ -138,7 +138,7 @@ def test_cdiis_reaches_an_s2_certified_fock_root() -> None:
             x_atol=1.0e-8,
             x_atol_max=1.0e-8,
         ),
-        SCFStrategy((SCFStage(CDIISMethod()),)),
+        SCFStrategy((SCFStage(CDIISConverger()),)),
     )
     assert bool(outcome.converged)
     assert outcome.diagnostics is not None
@@ -158,14 +158,14 @@ def test_cdiis_certified_root_enters_history_free_implicit_preparation() -> (
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     outcome = _solve_map(
         initial,
         SCFSolverSettings(100, True, 1.0, 1.0e-8, 1.0e-8),
         problem.map,
         eager=True,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(CDIISMethod()),)),
+        strategy=SCFStrategy((SCFStage(CDIISConverger()),)),
     )
     assert bool(outcome.converged)
     assert outcome.certification is not None
@@ -185,23 +185,23 @@ def test_cdiis_certified_root_enters_history_free_implicit_preparation() -> (
     )
     attached = prepared.attach()
     torch.testing.assert_close(attached, outcome.root_x)
-    assert "method_state" not in prepared.__dataclass_fields__
+    assert "converger_state" not in prepared.__dataclass_fields__
 
 
-def test_cdiis_rejects_non_fock_representations() -> None:
+def test_cdiis_rejects_non_fock_variables() -> None:
     """CDIIS refuses charge and potential working variables."""
     problem, physical = _physical_fock_case()
-    charge_problem = SCFProblem(problem.inputs, SCFRepresentation.CHARGE)
+    charge_problem = SCFProblem(problem.inputs, SCFVariable.CHARGE)
     from dxtb._src.scf.functional import potential_initial_guess
 
     charges = physical.map_result.spectral.charges
     _, layout = potential_initial_guess(charges, problem.inputs)
     potential_problem = SCFProblem(
-        problem.inputs, SCFRepresentation.POTENTIAL, layout
+        problem.inputs, SCFVariable.POTENTIAL, layout
     )
-    method = CDIISMethod()
+    method = CDIISConverger()
     for invalid_problem in (charge_problem, potential_problem):
-        with pytest.raises(ValueError, match="Fock working representation"):
+        with pytest.raises(ValueError, match="Fock working variable"):
             method.propose(
                 invalid_problem,
                 physical,
@@ -221,7 +221,7 @@ def test_cdiis_pulay_solution_matches_regularized_kkt_system() -> None:
         ],
         dtype=torch.float64,
     )
-    settings = CDIISMethodSettings(
+    settings = CDIISConvergerSettings(
         max_history=4,
         condition_limit=1.0e8,
         relative_regularization=1.0e-10,
@@ -328,7 +328,7 @@ def test_cdiis_orthogonal_error_gram_is_invariant_under_basis_rescaling() -> (
     )
     assert not torch.allclose(gram, raw_gram, rtol=1.0e-4, atol=1.0e-4)
 
-    settings = CDIISMethodSettings(max_history=3)
+    settings = CDIISConvergerSettings(max_history=3)
     coeff, _, ok = _solve_pulay_coefficients(
         errors_t, torch.tensor(3), settings
     )
@@ -356,7 +356,7 @@ def test_cdiis_exactly_dependent_history_restarts_safely(
     first = torch.tensor([[1.0, 0.2], [-0.1, 0.4]], dtype=dtype)
     errors = torch.stack((first, first.clone(), torch.zeros_like(first)))
     state = _pulay_state(errors, count=2)
-    settings = CDIISMethodSettings(max_history=3)
+    settings = CDIISConvergerSettings(max_history=3)
     condition, valid = _history_condition(
         state.error_history, state.history_count
     )
@@ -380,7 +380,7 @@ def test_cdiis_exactly_dependent_history_restarts_safely(
 
 def test_cdiis_near_dependence_threshold_tracks_dtype() -> None:
     """Float32 rejects weaker secant separation than float64 can resolve."""
-    settings = CDIISMethodSettings(max_history=2)
+    settings = CDIISConvergerSettings(max_history=2)
     conditions: dict[torch.dtype, torch.Tensor] = {}
     for dtype in (torch.float64, torch.float32):
         errors = torch.tensor([[[1.0, 0.0]], [[1.0, 1.0e-3]]], dtype=dtype)
@@ -402,7 +402,7 @@ def test_cdiis_prunes_oldest_and_rolls_at_fixed_capacity() -> None:
     basis = torch.eye(3, dtype=torch.float64)
     errors = torch.stack((basis[0], basis[1], basis[2], basis[0] + basis[1]))
     state = _pulay_state(errors)
-    settings = CDIISMethodSettings(max_history=4, condition_limit=1.1)
+    settings = CDIISConvergerSettings(max_history=4, condition_limit=1.1)
     pruned, count, _, prune_count, restart = _prune_history(
         state, state.history_count, settings
     )
@@ -473,7 +473,7 @@ def test_cdiis_rejects_zero_and_nonfinite_observations() -> None:
 def test_cdiis_inactive_transition_freezes_every_state_leaf() -> None:
     """An inactive CDIIS lane preserves history and diagnostics exactly."""
     problem, physical = _physical_fock_case()
-    method = CDIISMethod()
+    method = CDIISConverger()
     fresh = physical.map_result.mapped_x
     first = method.propose(problem, physical, None, _context(physical, fresh))
     assert isinstance(first.state, CDIISState)
@@ -496,7 +496,7 @@ def test_cdiis_inactive_transition_freezes_every_state_leaf() -> None:
 def test_cdiis_pulay_solver_supports_vmap_and_forward_derivatives() -> None:
     """Fixed-shape Pulay algebra works with vmap, JVP, and jacfwd."""
     dtype = torch.float64
-    settings = CDIISMethodSettings(max_history=4)
+    settings = CDIISConvergerSettings(max_history=4)
 
     def solve(scale: torch.Tensor, count: torch.Tensor) -> torch.Tensor:
         errors = torch.stack(
@@ -545,7 +545,7 @@ def test_cdiis_pulay_solver_supports_vmap_and_forward_derivatives() -> None:
 def test_cdiis_state_history_is_fixed_size_and_tensor_only() -> None:
     """The method state stores bounded tensors rather than Python histories."""
     problem, physical = _physical_fock_case()
-    proposal = CDIISMethod(CDIISMethodSettings(max_history=6)).propose(
+    proposal = CDIISConverger(CDIISConvergerSettings(max_history=6)).propose(
         problem,
         physical,
         None,
@@ -567,7 +567,7 @@ def test_cdiis_fixed_trip_fock_controller_supports_vmap_and_jvp() -> None:
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
     settings = SCFSolverSettings(
         maxiter=4,
         mix_guess=True,
@@ -575,7 +575,7 @@ def test_cdiis_fixed_trip_fock_controller_supports_vmap_and_jvp() -> None:
         x_atol=0.0,
         x_atol_max=0.0,
     )
-    strategy = SCFStrategy((SCFStage(CDIISMethod()),))
+    strategy = SCFStrategy((SCFStage(CDIISConverger()),))
 
     def solve(fock: torch.Tensor) -> torch.Tensor:
         return _solve_map(
@@ -611,8 +611,8 @@ def test_cdiis_trace_and_zero_budget_keep_shared_controller_contract() -> None:
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
     )
-    problem = SCFProblem(case.inputs, SCFRepresentation.FOCK)
-    strategy = SCFStrategy((SCFStage(CDIISMethod()),))
+    problem = SCFProblem(case.inputs, SCFVariable.FOCK)
+    strategy = SCFStrategy((SCFStage(CDIISConverger()),))
     traced = _solve_map(
         initial,
         SCFSolverSettings(3, True, 0.5, 0.0, 0.0),
@@ -622,8 +622,8 @@ def test_cdiis_trace_and_zero_budget_keep_shared_controller_contract() -> None:
         record_trace=True,
     )
     assert traced.trace is not None
-    assert len(traced.trace.method_state) == len(fields(CDIISState))
-    assert traced.trace.method_state[0].shape == (4, 8, *initial.shape)
+    assert len(traced.trace.converger_state) == len(fields(CDIISState))
+    assert traced.trace.converger_state[0].shape == (4, 8, *initial.shape)
 
     zero_budget = _solve_map(
         initial,

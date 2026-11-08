@@ -27,12 +27,12 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 from dxtb import GFN1_XTB
 from dxtb._src.scf.functional import (
     DynamicDampingSettings,
-    LinearMethod,
+    LinearConverger,
     SCFConvergence,
-    SCFMethodContext,
+    SCFConvergerContext,
     SCFPhysicalState,
     SCFProblem,
-    SCFRepresentation,
+    SCFVariable,
     SCFSolverSettings,
     SCFStage,
     SCFStrategy,
@@ -52,11 +52,11 @@ from dxtb._src.scf.functional.solver import _solve_map
 from .test_functional_map import _prepare_case
 
 
-def _map_for_representation(case, representation: SCFRepresentation):
+def _map_for_variable(case, variable: SCFVariable):
     charges = unpack_charges(case.x, case.inputs.charge_layout)
-    if representation is SCFRepresentation.CHARGE:
+    if variable is SCFVariable.CHARGE:
         return case.x, None, scf_map
-    if representation is SCFRepresentation.POTENTIAL:
+    if variable is SCFVariable.POTENTIAL:
         value, layout = potential_initial_guess(charges, case.inputs)
         return value, layout, potential_map
     value = fock_initial_guess(charges, case.inputs)
@@ -94,24 +94,24 @@ def _assert_map_result_equal(actual, expected) -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
 @pytest.mark.parametrize("temperature", [0.0, 300.0], ids=["aufbau", "fermi"])
 def test_problem_evaluation_delegates_to_authoritative_maps(
-    representation: SCFRepresentation, temperature: float
+    variable: SCFVariable, temperature: float
 ) -> None:
-    """All S1 representations reuse the existing physical map functions."""
+    """All S1 variables reuse the existing physical map functions."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={"fermi_etemp": temperature},
     )
-    x, layout, map_function = _map_for_representation(case, representation)
-    problem = SCFProblem(case.inputs, representation, layout)
+    x, layout, map_function = _map_for_variable(case, variable)
+    problem = SCFProblem(case.inputs, variable, layout)
 
     actual = problem.evaluate(x)
     expected = (
@@ -132,7 +132,7 @@ def test_problem_evaluation_delegates_to_authoritative_maps(
 def test_physical_state_binds_tested_input_to_raw_map_result() -> None:
     """The physical state stores x and its exact raw map observation."""
     case = _prepare_case(GFN1_XTB)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     state = problem.evaluate(case.x)
 
     assert state.x is case.x
@@ -146,22 +146,22 @@ def test_physical_state_binds_tested_input_to_raw_map_result() -> None:
 
 
 @pytest.mark.parametrize(
-    "representation",
+    "variable",
     [
-        SCFRepresentation.CHARGE,
-        SCFRepresentation.POTENTIAL,
-        SCFRepresentation.FOCK,
+        SCFVariable.CHARGE,
+        SCFVariable.POTENTIAL,
+        SCFVariable.FOCK,
     ],
 )
-def test_linear_strategy_controller_supports_each_representation(
-    representation: SCFRepresentation,
+def test_linear_strategy_controller_supports_each_variable(
+    variable: SCFVariable,
 ) -> None:
     """One linear stage controls all three existing physical maps."""
     case = _prepare_case(GFN1_XTB)
-    x, layout, _ = _map_for_representation(case, representation)
-    problem = SCFProblem(case.inputs, representation, layout)
+    x, layout, _ = _map_for_variable(case, variable)
+    problem = SCFProblem(case.inputs, variable, layout)
     settings = SCFSolverSettings(2, True, 0.4, 0.0, 0.0)
-    strategy = SCFStrategy((SCFStage(LinearMethod()),))
+    strategy = SCFStrategy((SCFStage(LinearConverger()),))
 
     before = _solve_map(x, settings, problem.map, record_trace=True)
     after = _solve_map(
@@ -187,9 +187,9 @@ def test_linear_strategy_controller_supports_each_representation(
 def test_eager_and_fixed_trip_linear_controllers_agree() -> None:
     """Both lifecycle routes stop on the same tested physical root."""
     case = _prepare_case(GFN1_XTB, sample_name="H2")
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     settings = SCFSolverSettings(40, False, 0.4, 1.0e-8, 1.0e-8)
-    strategy = SCFStrategy((SCFStage(LinearMethod()),))
+    strategy = SCFStrategy((SCFStage(LinearConverger()),))
     common = {
         "problem": problem,
         "strategy": strategy,
@@ -241,18 +241,18 @@ def test_zero_budget_fixed_trip_and_eager_keep_distinct_status_ownership() -> (
 def test_linear_method_matches_simple_mix(
     dtype: torch.dtype, damp: float, residual: float
 ) -> None:
-    """LinearMethod preserves simple_mix arithmetic for both supported dtypes."""
+    """LinearConverger preserves simple_mix arithmetic for both supported dtypes."""
     case = _prepare_case(GFN1_XTB, dtype=dtype)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     state = problem.evaluate(case.x)
     proposal_x = state.x + residual
-    context = SCFMethodContext(
+    context = SCFConvergerContext(
         step=3,
         transition_active=torch.ones((), dtype=torch.bool),
         damp=case.x.new_tensor(damp),
         proposal_x=proposal_x,
     )
-    proposal = LinearMethod().propose(problem, state, None, context)
+    proposal = LinearConverger().propose(problem, state, None, context)
     expected = simple_mix(state.x, proposal_x, context.damp)
 
     torch.testing.assert_close(proposal.x, expected, atol=0.0, rtol=0.0)
@@ -261,7 +261,7 @@ def test_linear_method_matches_simple_mix(
 
 def test_single_stage_strategy_helper_rejects_dynamic_execution() -> None:
     """The fixed-trip convenience rejects eager-only stage composition."""
-    method = LinearMethod()
+    method = LinearConverger()
     stage = SCFStage(method)
     assert SCFStrategy((stage,)).single_stage() is stage
     first = SCFStage(
@@ -274,12 +274,12 @@ def test_single_stage_strategy_helper_rejects_dynamic_execution() -> None:
 def test_fixed_trip_multi_stage_strategy_is_rejected_by_solver_entry() -> None:
     """Fixed-trip execution rejects dynamic stages rather than ignoring them."""
     case = _prepare_case(GFN1_XTB)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     settings = SCFSolverSettings(1, False, 0.4, 1.0e-8, 1.0e-8)
     stage = SCFStage(
-        LinearMethod(), switch_policy=SCFSwitchPolicy(max_stage_iterations=1)
+        LinearConverger(), switch_policy=SCFSwitchPolicy(max_stage_iterations=1)
     )
-    final = SCFStage(LinearMethod())
+    final = SCFStage(LinearConverger())
 
     with pytest.raises(NotImplementedError, match="eager-only"):
         _solve_map(
@@ -306,7 +306,7 @@ def test_linear_controller_matches_transitional_simple_adapter(
 ) -> None:
     """The new method adapter preserves shared controller lifecycle behavior."""
     case = _prepare_case(GFN1_XTB)
-    problem = SCFProblem(case.inputs, SCFRepresentation.CHARGE)
+    problem = SCFProblem(case.inputs, SCFVariable.CHARGE)
     settings = SCFSolverSettings(
         maxiter=maxiter,
         mix_guess=mix_guess,
@@ -315,7 +315,7 @@ def test_linear_controller_matches_transitional_simple_adapter(
         x_atol_max=0.0,
         dynamic_damping=DynamicDampingSettings(enabled=True, factor=0.99),
     )
-    strategy = SCFStrategy((SCFStage(LinearMethod()),))
+    strategy = SCFStrategy((SCFStage(LinearConverger()),))
     baseline = _solve_map(
         case.x,
         settings,
@@ -361,23 +361,23 @@ def test_linear_controller_matches_transitional_simple_adapter(
 
 
 @pytest.mark.parametrize(
-    "representation",
-    [SCFRepresentation.CHARGE, SCFRepresentation.POTENTIAL],
+    "variable",
+    [SCFVariable.CHARGE, SCFVariable.POTENTIAL],
 )
 def test_converged_outcome_retains_the_tested_map_input(
-    representation: SCFRepresentation,
+    variable: SCFVariable,
 ) -> None:
     """A finite-tolerance root remains the input paired with its map result."""
     case = _prepare_case(GFN1_XTB)
-    x, layout, _ = _map_for_representation(case, representation)
-    problem = SCFProblem(case.inputs, representation, layout)
+    x, layout, _ = _map_for_variable(case, variable)
+    problem = SCFProblem(case.inputs, variable, layout)
     settings = SCFSolverSettings(100, False, 0.4, 1.0e-8, 1.0e-8)
     outcome = _solve_map(
         x,
         settings,
         problem.map,
         problem=problem,
-        strategy=SCFStrategy((SCFStage(LinearMethod()),)),
+        strategy=SCFStrategy((SCFStage(LinearConverger()),)),
     )
     expected = problem.evaluate(outcome.root_x)
 

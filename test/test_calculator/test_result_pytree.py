@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Pytree representation tests for immutable public calculation results."""
+"""Pytree variable tests for immutable public calculation results."""
 
 from __future__ import annotations
 

@@ -27,7 +27,7 @@ from dxtb._src.typing import Tensor
 
 from .convergence import SCFConvergence, SCFResidual
 from .energy import electronic_energy_from_spectral, free_energy_from_spectral
-from .problem import SCFPhysicalState, SCFProblem, SCFRepresentation
+from .problem import SCFPhysicalState, SCFProblem, SCFVariable
 from .stationarity import (
     ao_stationarity_matrix,
     orthogonalized_stationarity_matrix,
@@ -70,9 +70,9 @@ class SCFCoreFailure(IntEnum):
 
 @dataclass(frozen=True, eq=False)
 class SCFCertificationThresholds:
-    """Explicit representation-specific thresholds for diagnostic verdicts."""
+    """Explicit variable-specific thresholds for diagnostic verdicts."""
 
-    representation: SCFRepresentation
+    variable: SCFVariable
     fixed_point_l2: float
     fixed_point_max: float
     stationarity_orthogonalized_per_sqrt_orbital: float
@@ -148,7 +148,7 @@ SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE = SCFInternalCertificationProfile(
 class SCFCertificationCoreMetrics:
     """Certification metrics that do not require energy or entropy work."""
 
-    representation: SCFRepresentation
+    variable: SCFVariable
     fixed_point: SCFResidual
     stationarity_ao_l2: Tensor
     stationarity_ao_max: Tensor
@@ -169,7 +169,7 @@ class SCFCertificationCoreMetrics:
 class SCFCertificationMetrics:
     """Continuous physical metrics and independent validity flags."""
 
-    representation: SCFRepresentation
+    variable: SCFVariable
     fixed_point: SCFResidual
     stationarity_ao_l2: Tensor
     stationarity_ao_max: Tensor
@@ -417,7 +417,7 @@ def certification_core_metrics(
     finite_ok = _finite_all(finite_values, like=state.x)
 
     return SCFCertificationCoreMetrics(
-        representation=problem.representation,
+        variable=problem.variable,
         fixed_point=fixed_point,
         stationarity_ao_l2=stationarity_l2,
         stationarity_ao_max=stationarity_max,
@@ -459,7 +459,7 @@ def resolve_certification_thresholds(
         fixed_point_l2 = max(profile.fixed_point_l2, resolution_floor)
         fixed_point_max = max(profile.fixed_point_max, resolution_floor)
     return SCFCertificationThresholds(
-        representation=problem.representation,
+        variable=problem.variable,
         fixed_point_l2=fixed_point_l2,
         fixed_point_max=fixed_point_max,
         stationarity_orthogonalized_per_sqrt_orbital=(
@@ -491,9 +491,9 @@ def certify_scf_core_state(
     fixed_point_residual: SCFResidual | None = None,
 ) -> SCFCertificationCoreResult:
     """Apply explicit thresholds without computing energy or entropy."""
-    if thresholds.representation is not problem.representation:
+    if thresholds.variable is not problem.variable:
         raise ValueError(
-            "Certification thresholds do not match the SCF representation."
+            "Certification thresholds do not match the SCF variable."
         )
     metrics = certification_core_metrics(
         problem, state, fixed_point_residual=fixed_point_residual
@@ -636,7 +636,7 @@ def certification_metrics(
         + free_energy_from_spectral(spectral, problem.inputs).sum()
     )
     return SCFCertificationMetrics(
-        representation=core.representation,
+        variable=core.variable,
         fixed_point=core.fixed_point,
         stationarity_ao_l2=core.stationarity_ao_l2,
         stationarity_ao_max=core.stationarity_ao_max,

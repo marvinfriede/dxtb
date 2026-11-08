@@ -54,7 +54,7 @@ from dxtb import GFN1_XTB, Calculator, ParamModule  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import (  # noqa: E402
-    SCFRepresentation,
+    SCFVariable,
     SCFStrategy,
     strategy_preset,
 )
@@ -137,7 +137,7 @@ def _build(
                 (
                     replace(
                         strategy_preset("anderson").stages[0],
-                        representation=SCFRepresentation.CHARGE,
+                        variable=SCFVariable.CHARGE,
                     ),
                 )
             ),
