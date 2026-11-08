@@ -234,7 +234,7 @@ class D4SCCoreSetup(Node):
 
     @property
     def parameters(self) -> tuple[tuple[str, Any], ...]:
-        """Return the ordered compatibility view of parameter values."""
+        """Return the ordered view of parameter values."""
         return tuple(
             (entry.name, entry.value.decode())
             for entry in self.parameter_entries
@@ -242,7 +242,7 @@ class D4SCCoreSetup(Node):
 
     @property
     def model_extra(self) -> tuple[tuple[str, Any], ...]:
-        """Return the ordered immutable compatibility view of model state."""
+        """Return the ordered immutable view of model state."""
         return tuple(
             (entry.name, entry.value.decode())
             for entry in self.model_extra_entries
@@ -254,7 +254,7 @@ class D4SCCoreSetup(Node):
 
 
 def core_d4sc_setup(setup: D4SCSetup) -> D4SCCoreSetup:
-    """Convert the compatibility setup to immutable typed Node values."""
+    """Convert the component setup to immutable typed Node values."""
     return D4SCCoreSetup(
         numbers=setup.numbers,
         parameter_entries=tuple(
@@ -280,7 +280,7 @@ def core_d4sc_setup(setup: D4SCSetup) -> D4SCCoreSetup:
 
 
 def _d4sc_setup_view(setup: D4SCCoreSetup) -> D4SCSetup:
-    """Build a zero-copy compatibility view of a captured core setup."""
+    """Build a zero-copy component view of a captured core setup."""
     return D4SCSetup(
         numbers=setup.numbers,
         parameters=setup.parameters,
@@ -701,7 +701,7 @@ def new_d4sc(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

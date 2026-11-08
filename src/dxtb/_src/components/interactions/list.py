@@ -93,11 +93,11 @@ class InteractionList(ComponentList[Interaction]):
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Interaction:
-        """Update an interaction, preserving legacy subclass behavior."""
+        """Update an interaction through its own ``update`` method."""
         return super().update(name, **kwargs)
 
     def reset(self, name: str) -> Interaction:
-        """Reset an interaction, preserving legacy subclass behavior."""
+        """Reset an interaction through its own ``reset`` method."""
         return super().reset(name)
 
     def reset_all(self) -> None:

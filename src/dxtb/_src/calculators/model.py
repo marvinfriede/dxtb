@@ -272,10 +272,10 @@ class IntegralBackendNode(Node):
 
 
 class ExactSystemCore(Node):
-    """Registered exact single-System setup, separate from legacy state.
+    """Registered exact single-System setup, separate from the component setups.
 
     The selected backend and all family setup Nodes are dynamic children.
-    ``index`` and ``integral_setup`` remain compatibility views derived from
+    ``index`` and ``integral_setup`` are views derived from
     the backend, so the backend index is not registered a second time.
     """
 
@@ -311,7 +311,7 @@ class ExactSystemCore(Node):
 
     @property
     def integral_setup(self) -> IntegralSetup | None:
-        """Build a lightweight legacy view over the selected backend Node."""
+        """Build a lightweight view over the selected backend Node."""
         if self.integral is None:
             return None
         backend = self.integral.backend
@@ -391,7 +391,7 @@ class _ModelSetupAdapter(nn.Module):
     def __init__(self, model: Model) -> None:
         super().__init__()
         self.par = model.par
-        # Keep the compatibility façade outside the registered module tree.
+        # Keep the façade outside the registered module tree.
         self.__dict__["_model"] = model
 
     def forward(
@@ -663,7 +663,7 @@ class System:
     """Captured setup for each exact single-System classical D3 component."""
 
     exact_core: ExactSystemCore | None = field(default=None, repr=False)
-    """Exact unbatched values; None for packed compatibility Systems."""
+    """Exact unbatched values; None for padded or conformer Systems."""
 
     _setup_index_token: _SetupIndexToken | None = field(
         default=None, repr=False
@@ -1489,7 +1489,7 @@ class System:
 
     @property
     def classical_cache(self) -> ClassicalListCache:
-        """Build a compatibility view over captured setup values on demand."""
+        """Build a view over captured setup values on demand."""
         cache = ClassicalListCache()
         for component in self.classicals.components:
             setup = self._builtin_classical_setup(component)
@@ -1979,11 +1979,11 @@ class Model:
         if batch_mode == 0:
             for position, component in enumerate(classicals.components):
                 timer.start(component.label, parent_uid="Classicals")
-                legacy_setup = component.get_cache(numbers, ihelp)
+                component_setup = component.get_cache(numbers, ihelp)
                 if type(component) is DispersionD3:
-                    assert isinstance(legacy_setup, DispersionD3Cache)
+                    assert isinstance(component_setup, DispersionD3Cache)
                     setup = core_dispersion_d3_setup(
-                        legacy_setup,
+                        component_setup,
                         numbers,
                         component.numbers,
                         component.param,
@@ -1991,24 +1991,24 @@ class Model:
                     )
                     d3_setups.append((component, setup))
                 elif type(component) is Repulsion:
-                    assert isinstance(legacy_setup, RepulsionSetup)
-                    setup = core_repulsion_setup(legacy_setup)
+                    assert isinstance(component_setup, RepulsionSetup)
+                    setup = core_repulsion_setup(component_setup)
                     repulsion_setup = setup
                 elif type(component) is ShortRangeBond:
-                    assert isinstance(legacy_setup, ShortRangeBondSetup)
-                    setup = core_srb_setup(legacy_setup)
+                    assert isinstance(component_setup, ShortRangeBondSetup)
+                    setup = core_srb_setup(component_setup)
                     srb_setup = setup
                 elif type(component) is DispersionD4:
-                    assert isinstance(legacy_setup, DispersionD4Setup)
-                    setup = core_dispersion_d4_setup(legacy_setup)
+                    assert isinstance(component_setup, DispersionD4Setup)
+                    setup = core_dispersion_d4_setup(component_setup)
                     d4_setup = setup
                 elif type(component) is IES:
-                    assert isinstance(legacy_setup, IESSetup)
-                    setup = core_ies_setup(legacy_setup)
+                    assert isinstance(component_setup, IESSetup)
+                    setup = core_ies_setup(component_setup)
                     ies_setup = setup
                 else:
-                    assert isinstance(legacy_setup, HalogenSetup)
-                    setup = core_halogen_setup(legacy_setup)
+                    assert isinstance(component_setup, HalogenSetup)
+                    setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
                 timer.stop(component.label)
 

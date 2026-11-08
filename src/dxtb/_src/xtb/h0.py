@@ -182,7 +182,7 @@ class H0SetupNode(Node):
 
 
 def _h0_cn_kind(setup: H0Setup) -> str:
-    """Validate a legacy setup's CN callable and return its static descriptor."""
+    """Validate an H0 setup's CN callable and return its static descriptor."""
     if setup.method == "gfn0":
         if setup.cn is not None:
             raise TypeError(
@@ -238,7 +238,7 @@ def _h0_cn_kind(setup: H0Setup) -> str:
 
 
 def core_h0_setup(setup: H0Setup) -> H0SetupNode:
-    """Capture a legacy setup as an isolated Node, preserving autograd edges."""
+    """Capture an H0 setup as an isolated Node, preserving autograd edges."""
     cn_kind = _h0_cn_kind(setup)
 
     def clone(value: Tensor | None) -> Tensor | None:
@@ -534,7 +534,7 @@ def build_hcore_raw(
     *,
     ihelp: IndexHelper | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Build the pre-overlap H0 terms for legacy analytical use."""
+    """Build the pre-overlap H0 terms for analytical-force use."""
     return _build_hcore(setup, positions, None, charge, ihelp=ihelp)
 
 
@@ -546,7 +546,7 @@ def _build_hcore(
     *,
     ihelp: IndexHelper | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Implement the shared H0 formula for true and raw compatibility APIs."""
+    """Implement the shared H0 formula for the true and pre-overlap forms."""
     if ihelp is None:
         if isinstance(setup, H0Setup):
             ihelp = setup.ihelp

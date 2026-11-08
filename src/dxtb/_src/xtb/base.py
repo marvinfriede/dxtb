@@ -290,7 +290,7 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
             Hamiltonian (always symmetric).
         """
         if overlap is None:
-            # Preserve the legacy pre-overlap form for analytical-force users.
+            # Keep the pre-overlap form for analytical-force users.
             h0, _ = build_hcore_raw(self.setup, positions, charge)
         else:
             h0, _ = build_hcore(self.setup, positions, overlap, charge)

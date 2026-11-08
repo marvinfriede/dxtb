@@ -118,7 +118,7 @@ def core_pytorch_integral_setup(
     """Snapshot structural setup tensors while retaining basis graph edges.
 
     PairPlan indices, weights and index mappings are structural, so the
-    converted Node must not alias the compatibility setup. The basis exponent
+    converted Node must not alias the component setup. The basis exponent
     and contraction tensors remain shared to preserve their ParamModule
     autograd connections.
     """

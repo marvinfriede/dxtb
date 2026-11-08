@@ -24,14 +24,14 @@ Integral Driver: Libcint
 from .dipole import DipoleLibcint, build_dipole_libcint
 from .driver import (
     IntDriverLibcint,
-    LegacyLibcintSetup,
+    LibcintDriverSetup,
     LibcintBasisNode,
     LibcintCallData,
     LibcintIntegralSetup,
     LibcintIntegralSetupNode,
     core_libcint_setup,
     setup_libcint,
-    setup_libcint_legacy,
+    setup_libcint_driver,
 )
 from .overlap import OverlapLibcint, build_overlap_libcint
 from .quadrupole import QuadrupoleLibcint, build_quadrupole_libcint
@@ -43,7 +43,7 @@ __all__ = [
     "LibcintCallData",
     "LibcintIntegralSetup",
     "LibcintIntegralSetupNode",
-    "LegacyLibcintSetup",
+    "LibcintDriverSetup",
     "OverlapLibcint",
     "QuadrupoleLibcint",
     "build_overlap_libcint",
@@ -51,5 +51,5 @@ __all__ = [
     "build_quadrupole_libcint",
     "core_libcint_setup",
     "setup_libcint",
-    "setup_libcint_legacy",
+    "setup_libcint_driver",
 ]

@@ -161,7 +161,7 @@ class ES2CoreSetup(Node):
 
 
 def core_es2_setup(setup: ES2Setup) -> ES2CoreSetup:
-    """Convert a compatibility setup to immutable core value fields."""
+    """Convert a component setup to immutable core value fields."""
     average_context = setup.average
     try:
         hash(average_context)
@@ -681,7 +681,7 @@ def setup_es2(
         shell_mask=shell_mask,
         shell_hubbard=shell_hubbard,
         shells_to_atom=shells_to_atom,
-        # Avoid sharing mutable compatibility-object storage with System while
+        # Avoid sharing mutable component-setup storage with System while
         # retaining the autograd edge to the source parameter.
         gexp=gexp.clone(),
         average=average,
@@ -776,7 +776,7 @@ def new_es2(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

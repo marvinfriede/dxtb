@@ -116,7 +116,7 @@ __all__ = [
 
 @dataclass(frozen=True, eq=False)
 class DynamicDampingSettings:
-    """Static configuration for legacy-compatible dynamic damping."""
+    """Static configuration for dynamic damping."""
 
     threshold: ClassVar[float] = 0.1
     enabled: bool = False
@@ -161,7 +161,7 @@ class SCFStrategyDiagnostics:
 
 @dataclass(frozen=True, eq=False)
 class SCFSolverDiagnostics:
-    """Tensor-valued numerical diagnostics for eager compatibility."""
+    """Tensor-valued numerical diagnostics for the Eager controller."""
 
     final_damp: Tensor
     dynamic_damping_switched: Tensor
@@ -427,7 +427,7 @@ def functional_subsolves_ok(result: SCFSolveResult) -> Tensor:
     """Return historical trajectory and final-spectrum validity only.
 
     This operational diagnostic is deliberately separate from physical root
-    certification. It retains the compatibility rule that a missing
+    certification. It keeps the rule that a missing
     zero-budget trajectory is structurally valid.
     """
     trajectory_ok = (
@@ -461,7 +461,7 @@ def functional_finalization_ok(result: SCFSolveResult) -> Tensor:
 
 
 def functional_return_valid(result: SCFSolveResult) -> Tensor:
-    """Return physical convergence and compatibility validity for output."""
+    """Return physical convergence and subsolve validity for output."""
     return functional_physical_converged(result) & functional_subsolves_ok(
         result
     )
@@ -550,7 +550,7 @@ def _update_damping(
     transition_active: Tensor,
     settings: DynamicDampingSettings,
 ) -> DampingState:
-    """Select damping for the next transition using the legacy threshold."""
+    """Select damping for the next transition using the dynamic-damping threshold."""
     if not settings.enabled:
         return current
     switch = transition_active & (residual_l2 < settings.threshold)

@@ -164,7 +164,7 @@ class DriverManager(TensorLike):
             return self.driver.setup(positions, **kwargs)
 
         # Keep the caller tensor as the gradient source if positions are
-        # copied to CPU for the legacy stateful driver path below.
+        # copied to CPU for the stateful driver path below.
         grad_source = positions
 
         if self.force_cpu_for_libcint is True:
@@ -183,6 +183,6 @@ class DriverManager(TensorLike):
         """Invalidate the integral driver to require new setup."""
         if self.driver_type == labels.INTDRIVER_LIBCINT:
             # Libcint setup is call-local; there is no retained geometry to
-            # invalidate. Keep this method for legacy callers.
+            # invalidate; the method exists for the PyTorch driver.
             return
         self.driver.invalidate()

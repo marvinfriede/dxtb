@@ -40,7 +40,7 @@ from dxtb._src.scf.functional import eager as functional_eager
 from dxtb._src.scf.functional import method as functional_method
 from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    resolve_full_scf_route,
+    resolve_scf_plan,
     run_functional_full_eager,
     run_prepared_functional_full,
 )
@@ -74,14 +74,14 @@ def test_default_full_route_resolves_native_anderson_potential() -> None:
     from dxtb.config import ConfigSCF
 
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         ConfigSCF(),
         case.interactions,
         case.system.ihelp,
         case.system.numbers,
         case.integrals,
     )
-    assert route.kind == "functional"
+    assert route.kind == "scf"
     assert route.strategy_label == "anderson"
     assert route.warning is None
 
@@ -148,7 +148,7 @@ def test_legacy_engine_positional_override_is_retired() -> None:
 def test_invalid_temperature_and_fermi_budget_are_explicit_errors() -> None:
     case = _prepare_case(GFN1_XTB)
     with pytest.raises(ValueError, match="Temperature must be non-negative"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             replace(case.system.config.scf, fermi=ConfigFermi(etemp=-1.0)),
             case.interactions,
             case.system.ihelp,
@@ -156,7 +156,7 @@ def test_invalid_temperature_and_fermi_budget_are_explicit_errors() -> None:
             case.integrals,
         )
     with pytest.raises(ValueError, match="Fermi maxiter must be non-negative"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             replace(case.system.config.scf, fermi=ConfigFermi(maxiter=-1)),
             case.interactions,
             case.system.ihelp,
@@ -176,7 +176,7 @@ def test_missing_integrals_are_explicit_setup_errors(integral: str) -> None:
     }
     values[integral] = None
     with pytest.raises(ValueError, match="requires hcore and overlap"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             case.system.config.scf,
             case.interactions,
             case.system.ihelp,
@@ -188,7 +188,7 @@ def test_missing_integrals_are_explicit_setup_errors(integral: str) -> None:
 def test_nonfull_route_resolution_rejects_wrong_mode() -> None:
     case = _prepare_case(GFN1_XTB)
     with pytest.raises(ValueError, match="requires unrolled differentiation"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             replace(
                 case.system.config.scf,
                 differentiation="implicit",
@@ -204,8 +204,8 @@ def test_broyden_strategy_has_a_native_potential_full_route() -> None:
     from dxtb.config import ConfigSCF
 
     config = ConfigSCF.create(strategy="broyden")
-    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
-    assert route.kind == "functional"
+    route = resolve_scf_plan(config, case.interactions, case.system.ihelp)
+    assert route.kind == "scf"
     assert route.strategy_label == "broyden"
     assert route.warning is None
 
@@ -315,7 +315,7 @@ def test_negative_scf_maxiter_is_functional_configuration_error() -> None:
     case = _prepare_case(GFN1_XTB)
     config = replace(case.system.config.scf, maxiter=-1)
     with pytest.raises(ValueError, match="maxiter >= 0"):
-        resolve_full_scf_route(config, case.interactions, case.system.ihelp)
+        resolve_scf_plan(config, case.interactions, case.system.ihelp)
 
 
 def test_negative_scf_maxiter_invalid_spin_is_rejected_explicitly() -> None:
@@ -421,7 +421,7 @@ def test_packed_full_batch_is_an_explicit_compatibility_boundary() -> None:
     """Batched numbers are rejected by single-System functional SCF route resolution."""
     case = _prepare_case(GFN1_XTB)
     with pytest.raises(NotImplementedError, match="single-System SCF only"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             case.system.config.scf,
             case.interactions,
             case.system.ihelp,
@@ -444,11 +444,11 @@ def test_exact_call_local_field_interactions_remain_functional_eligible(
         *case.system.interactions.components, call_local
     )
 
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         case.system.config.scf, interactions, case.system.ihelp
     )
 
-    assert route.kind == "functional"
+    assert route.kind == "scf"
 
 
 @pytest.mark.parametrize(
@@ -627,7 +627,7 @@ def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
         dtype=case.positions.dtype,
     )
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        resolve_full_scf_route(
+        resolve_scf_plan(
             case.system.config.scf, interactions, case.system.ihelp
         )
 
@@ -688,7 +688,7 @@ def test_default_anderson_adapter_matches_legacy(
         functional_case.refocc,
     )
     assert actual.functional is not None
-    assert actual.legacy is None
+    assert actual.non_scf is None
     assert actual.route.strategy_label == "anderson"
     assert OutputHandler.warnings == []
     for name in (
@@ -898,10 +898,10 @@ def test_prepared_functional_runner_does_not_repeat_common_preparation(
 ) -> None:
     """Prepared functional execution consumes prepared tensors directly."""
     case = _prepare_case(GFN1_XTB)
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
-    assert route.kind == "functional"
+    assert route.kind == "scf"
 
     def unexpected(*args, **kwargs):
         raise AssertionError("common SCF preparation was repeated")
@@ -940,8 +940,8 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
     }
     case = _prepare_case(GFN1_XTB, scf_options=options)
     config = case.system.config.scf
-    route = resolve_full_scf_route(config, case.interactions, case.system.ihelp)
-    assert route.kind == "functional"
+    route = resolve_scf_plan(config, case.interactions, case.system.ihelp)
+    assert route.kind == "scf"
     assert route.strategy_label == converger
 
     direct = run_prepared_functional_full(
@@ -976,7 +976,7 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
 def test_prepared_runner_rejects_representation_mismatch() -> None:
     """A route cannot be reused with another convergence representation."""
     case = _prepare_case(GFN1_XTB)
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
     from dxtb.scf import SCFRepresentation, SCFStrategy
@@ -1041,14 +1041,14 @@ def test_eager_and_fixed_trip_controllers_match(
         "x_atol_max": 1.0e-6,
     }
     case = _prepare_case(GFN1_XTB, scf_options=options)
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         case.system.config.scf,
         case.interactions,
         case.system.ihelp,
         case.system.numbers,
         case.integrals,
     )
-    assert route.kind == "functional"
+    assert route.kind == "scf"
     config = case.system.config.scf
     inputs = setup_scf_inputs(
         case.system.numbers,

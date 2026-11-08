@@ -114,7 +114,7 @@ class RepulsionCoreSetup(Node):
 
 
 def core_repulsion_setup(setup: RepulsionSetup) -> RepulsionCoreSetup:
-    """Convert legacy setup values without copying their tensors."""
+    """Convert component setup values without copying their tensors."""
     return RepulsionCoreSetup(
         arep=setup.arep,
         zeff=setup.zeff,
@@ -167,7 +167,7 @@ def setup_repulsion(
         light_mask = ~real_pairs(numbers <= 2)
         pair_kexp = torch.where(light_mask, pair_kexp, klight) * mask
 
-    # Keep the compatibility object's mutable cutoff tensor from aliasing
+    # Keep the component setup's mutable cutoff tensor from aliasing
     # System setup while preserving a possible autograd edge.
     return RepulsionSetup(pair_arep, pair_zeff, pair_kexp, mask, cutoff.clone())
 
@@ -262,7 +262,7 @@ class BaseRepulsion(Classical):
 
         Note
         ----
-        This compatibility method returns a fresh setup. It does not store or
+        This component method returns a fresh setup. It does not store or
         reuse evaluation state on the Repulsion object.
         """
         if ihelp is None:

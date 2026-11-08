@@ -109,7 +109,7 @@ from dxtb._src.scf.functional.data import (
 from dxtb._src.scf.functional.eager import (
     _prepare_solver,
     public_scf_status,
-    resolve_full_scf_route,
+    resolve_scf_plan,
 )
 from dxtb._src.scf.functional.implicit import (
     _LINEAR_SOLVE_ATOL,
@@ -802,14 +802,14 @@ def _validate_system_and_positions(
             "Implicit physical-root differentiation requires maxiter > 0."
         )
 
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         config.scf,
         system.interactions,
         system.ihelp,
         numbers,
         allow_implicit=True,
     )
-    if route.kind != "functional":
+    if route.kind != "scf":
         raise NotImplementedError(
             f"System is not eligible for functional full SCF: {route.reason}."
         )

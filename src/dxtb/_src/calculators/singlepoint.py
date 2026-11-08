@@ -99,7 +99,7 @@ __all__ = ["singlepoint"]
 
 
 def _iteration_tensor(value: int | Tensor, like: Tensor) -> Tensor:
-    """Preserve functional iteration tensors and normalize legacy integers."""
+    """Keep iteration tensors and convert Python integer counts to tensors."""
     if isinstance(value, Tensor):
         return value
     return torch.tensor(value, dtype=torch.int64, device=like.device)
@@ -107,7 +107,7 @@ def _iteration_tensor(value: int | Tensor, like: Tensor) -> Tensor:
 
 @dataclass(frozen=True, eq=False)
 class _SCFOutput:
-    """Common read-only view over the legacy and functional result contracts."""
+    """Common read-only view over the non-SCF and SCF result contracts."""
 
     energy: Tensor
     fenergy: Tensor
@@ -571,7 +571,7 @@ def _prepare_singlepoint(
     core = system._active_exact_core()
     numbers = core.numbers if core is not None else system.numbers
     config = core.config if core is not None else system.config
-    # Keep the legacy IntegralSetup facade at this evaluation boundary. The
+    # Keep the IntegralSetup facade at this evaluation boundary. The
     # active core has already verified that its selected backend Node is the
     # same authoritative child held by this facade.
     integral_setup = system.integral_setup
@@ -789,7 +789,7 @@ def _prepare_singlepoint(
     if integral_setup is None:
         raise NotImplementedError(
             "Single-system integral setup is missing. Core evaluation does "
-            "not support legacy batched Calculator setup."
+            "not support a padded or conformer System."
         )
     if config.ints.level < labels.INTLEVEL_HCORE:
         raise NotImplementedError(

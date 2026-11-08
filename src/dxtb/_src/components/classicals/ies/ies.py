@@ -79,8 +79,8 @@ class IESSetup:
 
     ``EEQModel`` is an immutable tad-multicharge Node. Its ``solve`` method
     constructs all geometry-dependent values locally and does not update the
-    model. This dataclass remains the compatibility representation for direct
-    and packed legacy callers.
+    model. This dataclass is the component setup used by direct component calls
+    and padded batches.
     """
 
     numbers: Tensor
@@ -103,7 +103,7 @@ class IESCoreSetup(Node):
 
 
 def core_ies_setup(setup: IESSetup) -> IESCoreSetup:
-    """Convert a legacy IES setup to its immutable core Node."""
+    """Convert an IES component setup to its immutable core Node."""
     return IESCoreSetup(
         numbers=setup.numbers,
         eeq=setup.eeq,

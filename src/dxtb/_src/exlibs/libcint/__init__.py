@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Lazy compatibility boundary for tad-libcint's public integral API."""
+"""Lazy import boundary for tad-libcint's public integral API."""
 
 try:
     from tad_libcint import Basis, Shell, int1e, overlap

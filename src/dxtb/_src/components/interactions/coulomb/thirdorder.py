@@ -118,7 +118,7 @@ class ES3CoreSetup(Node):
 
 
 def core_es3_setup(setup: ES3Setup) -> ES3CoreSetup:
-    """Convert a compatibility setup to immutable core value fields."""
+    """Convert a component setup to immutable core value fields."""
     return ES3CoreSetup(
         hubbard_derivs=setup.hubbard_derivs,
         shell_resolved=setup.shell_resolved,
@@ -407,7 +407,7 @@ def new_es3(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

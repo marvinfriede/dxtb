@@ -1368,7 +1368,7 @@ def evaluate_calculator_packed_singlepoint(
     ignore_unknown_kwargs: bool = True,
     **kwargs: Any,
 ) -> Result:
-    """Evaluate a batched Calculator through packed functional System routing.
+    """Evaluate a batched Calculator Lane by Lane over its Systems.
 
     Builds deduplicated lane Systems (repeated compositions share one System
     and therefore one ``vmap`` group), evaluates them with

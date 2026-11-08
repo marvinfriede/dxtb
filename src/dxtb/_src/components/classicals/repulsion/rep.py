@@ -23,7 +23,7 @@ PyTorch operations, so reverse- and forward-mode derivatives use one path.
 
 Note
 ----
-The Repulsion class is a compatibility adapter. Single-system calculations
+The Repulsion class is the component API. Single-System calculations
 use the frozen ``RepulsionSetup`` stored on System and pass positions to the
 ordinary PyTorch energy formula.
 """

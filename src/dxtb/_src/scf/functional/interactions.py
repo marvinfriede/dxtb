@@ -62,7 +62,7 @@ def prepare_functional_interactions(
 
     ``d4sc_setup`` is supplied by the single-System call-data boundary so
     its functional reference weights use the same setup snapshot as the
-    geometry-dependent D4SC cache. Direct compatibility callers may omit it.
+    geometry-dependent D4SC cache. Direct callers may omit it.
     """
     entries: list[FunctionalInteractionEntry] = []
     for component in interactions.components:

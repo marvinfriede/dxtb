@@ -82,7 +82,7 @@ def new_dispersion(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

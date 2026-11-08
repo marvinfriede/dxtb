@@ -97,7 +97,7 @@ class AES2CoreSetup(Node):
 
 
 def core_aes2_setup(setup: AES2Setup) -> AES2CoreSetup:
-    """Convert the compatibility setup to immutable core tensor values."""
+    """Convert the component setup to immutable core tensor values."""
     return AES2CoreSetup(
         numbers=setup.numbers,
         dmp3=setup.dmp3,
@@ -317,7 +317,7 @@ class AES2(Interaction):
         positions: Tensor | None = None,
         ihelp: IndexHelper | None = None,
     ) -> AES2Cache:
-        """Build fresh AES2 data for the compatibility API.
+        """Build fresh AES2 data for direct component calls.
 
         Parameters
         ----------
@@ -706,7 +706,7 @@ def new_aes2(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

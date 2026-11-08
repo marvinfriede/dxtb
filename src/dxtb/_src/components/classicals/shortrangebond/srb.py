@@ -117,7 +117,7 @@ class ShortRangeBondCoreSetup(Node):
 def core_srb_setup(
     setup: ShortRangeBondSetup,
 ) -> ShortRangeBondCoreSetup:
-    """Convert a compatibility setup to the identity-preserving core Node."""
+    """Convert a component setup to the identity-preserving core Node."""
     return ShortRangeBondCoreSetup(
         numbers=setup.numbers,
         r0=setup.r0,

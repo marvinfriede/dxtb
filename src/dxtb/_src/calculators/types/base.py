@@ -581,7 +581,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         .. warning::
 
-            Legacy component tensors may be replaced by detached copies.
+            Component tensors may be replaced by detached copies.
             Explicit ``field=`` and ``field_grad=`` inputs are not component
             state and remain connected to their original tensors across reset.
             ES2 and ES3 setup-derived parameters are not reset. See
@@ -763,8 +763,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.interactions = self.interactions.type(dtype)
 
         # Keep the System consistent with the converted components where
-        # supported. Legacy System classical and ES2/ES3 setup objects are
-        # not converted; evaluating those legacy snapshots after `type` is a
+        # supported. Component setup objects of Classicals and ES2/ES3 are
+        # not converted; evaluating those snapshots after `type` is a
         # known issue (see known_issues.rst). The separate exact core below is
         # converted because it owns functional setup snapshots.
         self.system = _convert_system_dtype(

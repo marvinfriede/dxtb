@@ -228,7 +228,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
     ) -> Tensor:
         """Build the GFN0 H0 matrix from local CN and main EEQ charges."""
         if overlap is None:
-            # Preserve the legacy pre-overlap form for analytical-force users.
+            # Keep the pre-overlap form for analytical-force users.
             h0, _ = build_hcore_raw(self.setup, positions, charge)
         else:
             h0, _ = build_hcore(self.setup, positions, overlap, charge)

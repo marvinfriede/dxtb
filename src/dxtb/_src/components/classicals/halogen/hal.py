@@ -78,7 +78,7 @@ class HalogenCoreSetup(Node):
 
 
 def core_halogen_setup(setup: HalogenSetup) -> HalogenCoreSetup:
-    """Convert a legacy halogen setup to its immutable core Node."""
+    """Convert a halogen component setup to its immutable core Node."""
     return HalogenCoreSetup(
         numbers=setup.numbers,
         xbond=setup.xbond,
@@ -218,7 +218,7 @@ class Halogen(Classical):
     def get_cache(
         self, numbers: Tensor, ihelp: IndexHelper | None = None, **_: Any
     ) -> HalogenSetup:
-        """Build fresh halogen setup for the compatibility API."""
+        """Build a fresh halogen setup for direct component calls."""
         if ihelp is None:
             raise ValueError("IndexHelper is required for halogen bonding.")
         return setup_halogen(self, numbers, ihelp)
@@ -230,7 +230,7 @@ class Halogen(Classical):
         cache: HalogenSetup | HalogenCoreSetup,
         **_: Any,
     ) -> Tensor:
-        """Evaluate through setup; the legacy batch adapter loops structures."""
+        """Evaluate through setup; a padded batch is evaluated Structure by Structure."""
         if not isinstance(cache, (HalogenSetup, HalogenCoreSetup)):
             raise TypeError(
                 f"Setup in {self.label} is not of type 'HalogenSetup' or "
@@ -271,7 +271,7 @@ class Halogen(Classical):
 
 
 def _slice_setup(setup: HalogenSetup, index: int) -> HalogenSetup:
-    """Select one legacy packed structure for the single-System kernel."""
+    """Select one Structure of a padded batch for the single-System kernel."""
     return HalogenSetup(
         numbers=setup.numbers[index],
         xbond=setup.xbond[index],

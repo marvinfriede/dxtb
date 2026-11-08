@@ -172,7 +172,7 @@ class EnergyCalculator(BaseCalculator):
         field_grad: Tensor | None,
         kwargs: dict[str, Any],
     ) -> Result:
-        """Adapt a pure System result to legacy Calculator state and options."""
+        """Adapt a System result to the Calculator state and options."""
         eval_system = self._prepare_eval_system()
         old_cuda_sync = timer.cuda_sync
         timer.cuda_sync = kwargs.get(

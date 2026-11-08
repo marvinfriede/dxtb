@@ -53,14 +53,14 @@ if TYPE_CHECKING:
 __all__ = ["solve"]
 
 
-def _use_functional_implicit_route(
+def _implicit_differentiation_supported(
     config: ConfigSCF,
     interactions: InteractionList,
     ihelp: IndexHelper,
     numbers: Tensor,
     integrals: IntegralMatrices,
 ) -> bool:
-    """Resolve the single or packed functional implicit route.
+    """Return whether Implicit differentiation supports this SCF.
 
     Public packed implicit calls retain their tensor-batched behavior through
     the functional map and response. This is separate from W2c9's internal
@@ -123,7 +123,7 @@ def solve(
     Returns
     -------
     SCFResult | FunctionalCoreResult
-    Legacy GFN0 result mapping or tensor-status functional iterative result.
+    Non-SCF GFN0 result mapping or tensor-status iterative SCF result.
     """
     return _solve_impl(
         numbers,
@@ -217,11 +217,11 @@ def _solve_impl(
     if config.differentiation.value == "implicit":
         is_public_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
         route_name = (
-            "public packed implicit compatibility"
+            "batched implicit SCF"
             if is_public_batch
-            else "single-System functional implicit"
+            else "single-System implicit SCF"
         )
-        if not _use_functional_implicit_route(
+        if not _implicit_differentiation_supported(
             config,
             interactions,
             ihelp,
@@ -279,11 +279,11 @@ def _solve_impl(
 
         from .functional.eager import (
             apply_functional_full_policy,
-            resolve_full_scf_route,
+            resolve_scf_plan,
             run_prepared_functional_full,
         )
 
-        route = resolve_full_scf_route(
+        route = resolve_scf_plan(
             config,
             interactions,
             ihelp,

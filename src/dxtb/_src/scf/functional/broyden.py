@@ -99,7 +99,7 @@ class BroydenMethod:
         flat_x = x.reshape(-1)
         flat_proposal = context.proposal_x.reshape(-1)
 
-        # The controller residual is r=G(x)-x, while the legacy rootfinder
+        # The controller residual is r=G(x)-x, while a Broyden rootfinder
         # solves F=x-G(x) and applies -H F. Thus the undamped proposal is H r.
         residual_f = flat_x - flat_proposal
         old = cast(BroydenState | None, method_state)

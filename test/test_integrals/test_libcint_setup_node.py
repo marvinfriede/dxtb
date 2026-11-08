@@ -369,8 +369,8 @@ def test_libcint_singlepoint_matches_legacy_setup() -> None:
     assert system.integral_setup is not None
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
     legacy_backend = _legacy_setup(numbers, par, force_cpu=True)
-    legacy_setup = replace(system.integral_setup, libcint=legacy_backend)
-    legacy_system = replace(system, integral_setup=legacy_setup)
+    component_setup = replace(system.integral_setup, libcint=legacy_backend)
+    legacy_system = replace(system, integral_setup=component_setup)
 
     core_result = system.singlepoint(positions)
     legacy_result = legacy_system.singlepoint(positions)

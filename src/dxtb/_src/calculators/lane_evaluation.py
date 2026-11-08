@@ -25,7 +25,7 @@ representation:
   fixed-trip single-System kernel.
 - Every other lane, including groups of size one and Systems that cannot run
   under the transform-compatible route, is evaluated independently with the
-  ordinary eager single-System route.
+  Eager controller (Independent evaluation).
 
 Different molecules are therefore never padded to a common layout for
 physics. Padding across heterogeneous shapes only happens afterwards, when
@@ -72,9 +72,9 @@ __all__ = [
 
 
 def can_vmap_system(system: System) -> bool:
-    """Return whether ``system`` may run under the grouped ``vmap`` route.
+    """Return whether ``system`` may run in a Mapped evaluation.
 
-    The grouped route maps the fixed-trip, transform-compatible single-System
+    A Mapped evaluation maps the Fixed-trip controller single-System
     kernel. Systems that are valid but need the eager controller (libcint,
     implicit differentiation, multi-stage or eager-only SCF strategies,
     classical extensions without exact setup, SCF-free calculations) return
@@ -83,7 +83,7 @@ def can_vmap_system(system: System) -> bool:
     Raises
     ------
     ValueError, NotImplementedError
-        For configurations that are invalid on every route. These errors are
+        For configurations that are invalid for every evaluation. These errors are
         raised here so that a batch fails before any lane is evaluated.
     """
     if system.batch_mode != 0 or system.numbers.ndim != 1:
@@ -113,7 +113,7 @@ def can_vmap_system(system: System) -> bool:
     if config.scf.requires_iterations is False:
         return False
 
-    # Invalid SCF configurations fail regardless of the execution route.
+    # Invalid SCF configurations fail regardless of how a Lane is evaluated.
     eligible, _ = functional_scf_interactions_eligible(system.interactions)
     if not eligible:
         names = ", ".join(
@@ -200,7 +200,7 @@ def group_lanes(
     order of their first source lane. Every lane belongs to exactly one group.
 
     Each distinct System is passed to :func:`can_vmap_system` once, so a
-    configuration that is invalid on every route raises here, before any lane
+    configuration that is invalid for every evaluation raises here, before any lane
     is evaluated. The returned groups are therefore prevalidated.
     """
     mapped: dict[tuple[int, bool, bool, bool], list[int]] = {}
@@ -252,7 +252,7 @@ def evaluate_systems_independently(
     field: Tensor | Sequence[Tensor | None] | None = None,
     field_grad: Tensor | Sequence[Tensor | None] | None = None,
 ) -> tuple[Result, ...]:
-    """Evaluate Systems one by one with the eager single-System route.
+    """Evaluate Systems one by one (Independent evaluation, Eager controller).
 
     Errors raised by a lane carry its ``source_id`` attribute.
     """
@@ -284,7 +284,7 @@ def evaluate_systems_independently(
             "Systems and per-lane field gradients must have equal length."
         )
 
-    # Configuration validation shared with the grouped route (once per
+    # Configuration validation shared with Mapped evaluation (once per
     # distinct System); the eligibility verdict itself is not needed here.
     validated: set[int] = set()
     for system in systems:
@@ -312,7 +312,7 @@ def _evaluate_prevalidated(
     field_grads: Sequence[Tensor | None],
     source_ids: Sequence[int],
 ) -> tuple[Result, ...]:
-    """Run aligned lanes through the eager single-System route.
+    """Run aligned Lanes through Independent evaluation.
 
     The Systems must already have passed :func:`can_vmap_system`.
     """
@@ -347,7 +347,7 @@ def evaluate_lane_group(
 
     The per-lane sequences are indexed by source lane. ``group`` must come
     from :func:`group_lanes`, which has validated its System. Groups of size
-    one use the independent eager route; larger groups stack their per-lane
+    one use Independent evaluation; larger groups stack their per-lane
     inputs and map the fixed-trip single-System kernel with
     ``torch.func.vmap``.
     """
@@ -624,14 +624,14 @@ def _validate_group_electrons(
 ) -> None:
     """Apply the eager electron/spin checks to all lanes of a mapped group.
 
-    The rules are those of the single-System route (``get_refocc`` with
+    The rules are those of a single-System evaluation (``get_refocc`` with
     ``validate_spin=True``), evaluated for the whole group at once so that a
     valid group needs a single host decision. The first invalid source lane
     is then re-checked with the single-System route, which raises the exact
     eager error; the error carries that lane's ``source_id``.
     """
     ids = group.source_ids
-    # Without an explicit spin the single-System route performs no value
+    # Without an explicit spin a single-System evaluation performs no value
     # checks (lanes of one group agree on spin presence).
     if spins[ids[0]] is None:
         return
@@ -673,10 +673,10 @@ def _electron_setup(system: System):
 def _validate_electrons(
     system: System, charge: Tensor, spin: Tensor | None
 ) -> None:
-    """Run the eager electron/spin checks of the single-System route."""
+    """Run the eager electron/spin checks of a single-System evaluation."""
     h0_setup = _electron_setup(system)
 
-    # Match the one-element scalar layout of the single-System route.
+    # Match the one-element scalar layout of a single-System evaluation.
     get_refocc(
         h0_setup.refocc,
         charge.reshape(1),

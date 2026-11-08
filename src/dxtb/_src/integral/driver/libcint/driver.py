@@ -51,10 +51,10 @@ __all__ = [
     "LibcintBasisNode",
     "LibcintIntegralSetupNode",
     "LibcintIntegralSetup",
-    "LegacyLibcintSetup",
+    "LibcintDriverSetup",
     "core_libcint_setup",
     "setup_libcint",
-    "setup_libcint_legacy",
+    "setup_libcint_driver",
 ]
 
 
@@ -188,7 +188,7 @@ def core_libcint_setup(
     *,
     copy_index: bool = True,
 ) -> LibcintIntegralSetupNode:
-    """Snapshot a single-system legacy setup as structural Node data."""
+    """Snapshot a single-System driver setup as structural Node data."""
     if setup.ihelp.batch_mode != 0 or len(setup.basis_setups) != 1:
         raise ValueError("Core libcint setup requires one single System.")
 
@@ -265,7 +265,7 @@ def core_libcint_setup(
 
 
 @dataclass(frozen=True, eq=False)
-class LegacyLibcintSetup:
+class LibcintDriverSetup:
     """Calculator-local inputs used by the transitional libcint driver."""
 
     numbers: Tensor
@@ -349,8 +349,8 @@ def setup_libcint(
     return LibcintCallData(inputs=tuple(inputs), ihelp=setup.ihelp)
 
 
-def setup_libcint_legacy(
-    setup: LegacyLibcintSetup,
+def setup_libcint_driver(
+    setup: LibcintDriverSetup,
     positions: Tensor,
     *,
     mask: Tensor | None = None,
@@ -418,7 +418,7 @@ class BaseIntDriverLibcint(LibcintImplementation, IntDriver):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         force_cpu = kwargs.pop("force_cpu", False)
         super().__init__(*args, **kwargs)
-        self._integral_setup = LegacyLibcintSetup(
+        self._integral_setup = LibcintDriverSetup(
             numbers=self.numbers,
             par=self.par,
             ihelp=self.ihelp,
@@ -426,13 +426,13 @@ class BaseIntDriverLibcint(LibcintImplementation, IntDriver):
         )
 
     @property
-    def integral_setup(self) -> LegacyLibcintSetup:
-        """Legacy Calculator-local libcint setup data."""
+    def integral_setup(self) -> LibcintDriverSetup:
+        """Driver-local libcint setup data."""
         return self._integral_setup
 
     def setup(self, positions: Tensor, **kwargs: Any) -> LibcintCallData:
         """Create call-local libcint wrappers for ``positions``."""
-        return setup_libcint_legacy(
+        return setup_libcint_driver(
             self.integral_setup, positions, mask=kwargs.get("mask")
         )
 

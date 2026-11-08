@@ -88,10 +88,10 @@ from .solver import (
 from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
-    "FullSCFRoute",
+    "SCFPlan",
     "FunctionalCoreResult",
-    "EagerFullResult",
-    "resolve_full_scf_route",
+    "EagerSCFResult",
+    "resolve_scf_plan",
     "apply_functional_full_policy",
     "functional_core_result",
     "run_functional_full_eager",
@@ -103,8 +103,12 @@ __all__ = [
 
 
 @dataclass(frozen=True)
-class FullSCFRoute:
-    """Static decision made before entering either SCF implementation."""
+class SCFPlan:
+    """Static decision whether and how the SCF iterates, made before it runs.
+
+    ``kind`` is ``"scf"`` for a self-consistent Method and ``"non_scf"``
+    for a non-self-consistent one.
+    """
 
     kind: str
     representation: SCFRepresentation
@@ -134,33 +138,33 @@ class FunctionalCoreResult:
 
 
 @dataclass(frozen=True, eq=False)
-class EagerFullResult:
-    """Parallel eager execution result, retaining the chosen route."""
+class EagerSCFResult:
+    """Eager SCF result together with the plan that produced it."""
 
-    route: FullSCFRoute
+    route: SCFPlan
     functional: FunctionalCoreResult | None
-    legacy: dict[str, object] | None
+    non_scf: dict[str, object] | None
 
 
-def resolve_full_scf_route(
+def resolve_scf_plan(
     config: ConfigSCF,
     interactions: InteractionList,
     ihelp: IndexHelper,
     numbers: Tensor | None = None,
     integrals: IntegralMatrices | None = None,
     allow_implicit: bool = False,
-) -> FullSCFRoute:
-    """Resolve a supported functional route or its explicit batch boundary."""
+) -> SCFPlan:
+    """Resolve the SCF plan of a single System, or reject a batch."""
     if (
         config.differentiation is SCFDifferentiation.IMPLICIT
         and not allow_implicit
     ):
         raise ValueError(
-            "Functional SCF route resolution requires unrolled "
+            "SCF plan resolution requires unrolled "
             "differentiation."
         )
     if not config.requires_iterations:
-        raise ValueError("FULL route resolution requires iterative SCF.")
+        raise ValueError("SCF plan resolution requires an iterative SCF.")
     if config.maxiter < 0:
         raise ValueError("The functional SCF solver requires maxiter >= 0.")
     if config.fermi.etemp < 0.0:
@@ -189,8 +193,8 @@ def resolve_full_scf_route(
             "The functional SCF solver supports single-System SCF only; "
             "use evaluate_packed_systems or Calculator batch evaluation for batches."
         )
-    return FullSCFRoute(
-        "functional", representation, strategy_label, config.strategy
+    return SCFPlan(
+        "scf", representation, strategy_label, config.strategy
     )
 
 
@@ -264,9 +268,9 @@ def _raise_failure_code(code: Tensor) -> None:
 
 
 def _nonconvergence_message(
-    config: ConfigSCF, route: FullSCFRoute, switched: bool
+    config: ConfigSCF, route: SCFPlan, switched: bool
 ) -> str:
-    """Format the legacy warning from configured Python values."""
+    """Format the non-convergence warning from configured Python values."""
     damp = config.damp_dynamic_factor if switched else config.damp
     strategy = " -> ".join(
         type(stage.method).__name__.removesuffix("Method").lower()
@@ -281,7 +285,7 @@ def _nonconvergence_message(
 def apply_functional_full_policy(
     result: SCFSolveResult,
     config: ConfigSCF,
-    route: FullSCFRoute,
+    route: SCFPlan,
 ) -> FunctionalCoreResult:
     """Apply eager Fermi and convergence policy to a completed solve."""
     _check_subsolve_status(result)
@@ -396,7 +400,7 @@ def run_functional_full_eager(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-) -> EagerFullResult:
+) -> EagerSCFResult:
     """Run the functional FULL calculation or retained batch boundary.
 
     Tensor-status inspection and warning/error behavior stay outside the
@@ -404,14 +408,14 @@ def run_functional_full_eager(
     """
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
-        route = FullSCFRoute(
+        route = SCFPlan(
             "non_scf",
             config.initial_representation,
             "none",
             config.strategy,
             reason="non-SCF method",
         )
-        legacy = solve_nonselfconsistent(
+        non_scf = solve_nonselfconsistent(
             numbers,
             interactions,
             cache,
@@ -421,10 +425,10 @@ def run_functional_full_eager(
             n0,
             occupation,
         )
-        return EagerFullResult(route, None, legacy)
+        return EagerSCFResult(route, None, non_scf)
 
     guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         config,
         interactions,
         ihelp,
@@ -447,7 +451,7 @@ def run_functional_full_eager(
         route,
     )
     functional = apply_functional_full_policy(result, config, route)
-    return EagerFullResult(route, functional, None)
+    return EagerSCFResult(route, functional, None)
 
 
 def _prepared_functional_inputs(
@@ -460,19 +464,19 @@ def _prepared_functional_inputs(
     ihelp: IndexHelper,
     config: ConfigSCF,
     integrals: IntegralMatrices,
-    route: FullSCFRoute,
+    route: SCFPlan,
     *,
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> SCFInputs:
-    """Check a functional route and build its immutable SCF inputs."""
-    if route.kind != "functional":
+    """Check an SCF plan and build its immutable SCF inputs."""
+    if route.kind != "scf":
         raise ValueError(
-            "The prepared functional runner requires a functional route."
+            "The prepared SCF runner requires an iterative SCF plan."
         )
     if route.representation != config.initial_representation:
         raise ValueError(
-            "The prepared functional route representation does not match "
+            "The SCF variable of the prepared SCF plan does not match "
             "the SCF configuration."
         )
     return setup_scf_inputs(
@@ -501,7 +505,7 @@ def run_prepared_functional_full(
     ihelp: IndexHelper,
     config: ConfigSCF,
     integrals: IntegralMatrices,
-    route: FullSCFRoute,
+    route: SCFPlan,
     *,
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
@@ -540,18 +544,18 @@ def prepare_system_fixed_trip(
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> tuple[Tensor, SCFProblem]:
-    """Build the initial state and problem of the System fixed-trip route.
+    """Build the initial state and problem of a System for the Fixed-trip controller.
 
     Requires an iterative, unrolled functional single-System SCF.
     """
     if config.differentiation.value == "implicit":
         raise ValueError(
-            "The fixed-trip System route requires differentiation='unrolled'."
+            "The Fixed-trip controller requires differentiation='unrolled'."
         )
-    route = resolve_full_scf_route(
+    route = resolve_scf_plan(
         config, interactions, ihelp, numbers, integrals
     )
-    if route.kind != "functional":
+    if route.kind != "scf":
         raise NotImplementedError(
             "The fixed-trip System API supports functional single-System "
             "SCF only."
@@ -583,7 +587,7 @@ def prepare_system_fixed_trip(
 def fixed_trip_control(
     x: Tensor, problem: SCFProblem, config: ConfigSCF
 ) -> FixedTripControl:
-    """Return the resumable controller of the System fixed-trip route."""
+    """Return the resumable Fixed-trip controller of a System."""
     settings, strategy = _prepare_solver(config, x.dtype)
     return fixed_trip_problem_control(
         x,
@@ -609,10 +613,10 @@ def run_system_fixed_trip(
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> FunctionalCoreResult | dict[str, object]:
-    """Run fixed trips for supported functional single-System SCF routes."""
+    """Run the Fixed-trip controller for a supported single-System SCF."""
     if config.differentiation.value == "implicit":
         raise ValueError(
-            "The fixed-trip System route requires differentiation='unrolled'."
+            "The Fixed-trip controller requires differentiation='unrolled'."
         )
     if not config.requires_iterations:
         n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)

@@ -399,7 +399,7 @@ def dispersion_d4_energy(
 
 
 class DispersionD4(Dispersion):
-    """Compatibility component for the plain-PyTorch classical D4 term."""
+    """Classical for the plain-PyTorch D4 dispersion term."""
 
     @override
     def get_cache(

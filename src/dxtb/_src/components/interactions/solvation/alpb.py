@@ -273,7 +273,7 @@ class GeneralizedBornCoreSetup(Node):
 def core_generalized_born_setup(
     setup: GeneralizedBornSetup,
 ) -> GeneralizedBornCoreSetup:
-    """Convert a compatibility setup to the immutable core value."""
+    """Convert a component setup to the immutable core value."""
     device = setup.keps.device
     return GeneralizedBornCoreSetup(
         numbers=setup.numbers,
@@ -529,7 +529,7 @@ def new_solvation(
         "dtype": dtype if dtype is not None else get_default_dtype(),
     }
 
-    # compatibility with previous version based on `Param`
+    # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
 

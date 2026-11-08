@@ -111,11 +111,11 @@ class ClassicalList(ComponentList[Classical]):
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Classical:
-        """Update classicals through their family-specific compatibility API."""
+        """Update classicals through their family-specific component API."""
         return super().update(name, **kwargs)
 
     def reset(self, name: str) -> Classical:
-        """Reset classicals through their family-specific compatibility API."""
+        """Reset classicals through their family-specific component API."""
         return super().reset(name)
 
     def reset_all(self) -> None:

@@ -1147,7 +1147,7 @@ def test_implicit_strategy_policy_selects_native_routes(
 
     from dxtb import GFN1_XTB
     from dxtb._src.scf.functional import data as functional_data
-    from dxtb._src.scf.iterator import _use_functional_implicit_route
+    from dxtb._src.scf.iterator import _implicit_differentiation_supported
     from dxtb.config import ConfigSCF
     from dxtb.scf import AndersonMethod, strategy_preset
 
@@ -1161,7 +1161,7 @@ def test_implicit_strategy_policy_selects_native_routes(
 
     for name in ("linear", "anderson", "broyden", "cdiis"):
         configured = replace(base, strategy=strategy_preset(name))
-        assert _use_functional_implicit_route(
+        assert _implicit_differentiation_supported(
             configured,
             case.interactions,
             case.system.ihelp,
@@ -1169,7 +1169,7 @@ def test_implicit_strategy_policy_selects_native_routes(
             case.integrals,
         )
 
-    assert _use_functional_implicit_route(
+    assert _implicit_differentiation_supported(
         base,
         case.interactions,
         SimpleNamespace(batch_mode=1),
@@ -1181,7 +1181,7 @@ def test_implicit_strategy_policy_selects_native_routes(
         "functional_scf_interactions_eligible",
         lambda _: (False, "test extension"),
     )
-    assert not _use_functional_implicit_route(
+    assert not _implicit_differentiation_supported(
         base,
         case.interactions,
         case.system.ihelp,
@@ -1189,28 +1189,28 @@ def test_implicit_strategy_policy_selects_native_routes(
         case.integrals,
     )
     monkeypatch.undo()
-    assert _use_functional_implicit_route(
+    assert _implicit_differentiation_supported(
         base,
         case.interactions,
         case.system.ihelp,
         case.numbers.unsqueeze(0),
         case.integrals,
     )
-    assert not _use_functional_implicit_route(
+    assert not _implicit_differentiation_supported(
         base,
         case.interactions,
         case.system.ihelp,
         case.numbers,
         SimpleNamespace(hcore=None, overlap=None),
     )
-    assert not _use_functional_implicit_route(
+    assert not _implicit_differentiation_supported(
         replace(base, maxiter=-1),
         case.interactions,
         case.system.ihelp,
         case.numbers,
         case.integrals,
     )
-    assert not _use_functional_implicit_route(
+    assert not _implicit_differentiation_supported(
         replace(
             base,
             fermi=replace(base.fermi, etemp=-1.0),
@@ -1220,7 +1220,7 @@ def test_implicit_strategy_policy_selects_native_routes(
         case.numbers,
         case.integrals,
     )
-    assert not _use_functional_implicit_route(
+    assert not _implicit_differentiation_supported(
         replace(
             base,
             fermi=replace(base.fermi, maxiter=-1),

@@ -1142,7 +1142,7 @@ def get_fermi_entropy(
 
 
 def get_fermi_entropy_low_temperature(occupation: Tensor, kt: Tensor) -> Tensor:
-    """Return the legacy clamped entropy expression below the Fermi cutoff."""
+    """Return the clamped entropy expression below the Fermi cutoff."""
     eps = torch.tensor(
         torch.finfo(occupation.dtype).eps,
         device=occupation.device,

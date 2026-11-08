@@ -189,15 +189,15 @@ def core_dispersion_d3_setup(
     *,
     snapshot: bool = False,
 ) -> DispersionD3CoreSetup:
-    """Represent one legacy D3 cache explicitly, preserving its two number sources.
+    """Represent one D3 component cache explicitly, keeping its two number sources.
 
-    The legacy API gathers ``rcov``, ``rvdw`` and ``r4r2`` from the numbers
+    The component API gathers ``rcov``, ``rvdw`` and ``r4r2`` from the numbers
     passed to ``get_cache`` but evaluates the D3 kernels using the component's
     own numbers. The two tensors are therefore retained separately.
 
     ``snapshot`` is used only at the System ownership boundary: it clones the
     number and parameter inputs while preserving their autograd edges. Other
-    cache tensors transfer to the Node when the legacy cache entry is replaced.
+    cache tensors transfer to the Node when the component cache entry is replaced.
     """
     if setup.counting_function is not exp_count:
         raise TypeError(

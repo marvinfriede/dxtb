@@ -103,7 +103,7 @@ class PotentialLayout:
 
     @property
     def shapes(self) -> tuple[tuple[int, ...], ...]:
-        """Present component shapes in legacy packed order."""
+        """Present component shapes in packed charge order."""
         return tuple(
             shape
             for shape in (
@@ -140,7 +140,7 @@ class SCFPotential:
 class SCFInputs:
     """Immutable tensor and structural inputs to the single-System core.
 
-    Legacy setup/component containers are converted once at the setup
+    Component setup containers are converted once at the setup
     boundary. No mutable interaction list or cache is retained.
     Solver and convergence configuration is validated during setup and is not
     retained here.
@@ -263,14 +263,14 @@ def setup_scf_inputs(
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
 ) -> SCFInputs:
-    """Build immutable core values from one legacy single-System setup.
+    """Build immutable core values from one single-System component setup.
 
     ``core_index`` and ``core_index_owner`` are reserved for a trusted index
     captured by the active System integral setup. The owner must be the
     compatible System façade whose active exact core owns the supplied map.
     Its map values are established at setup; this function validates owner,
     IndexHelper provenance, shape, dtype, and device without synchronizing
-    tensor values during SCF preparation. Direct and legacy callers should
+    tensor values during SCF preparation. Direct callers should
     omit both and reuse the frozen ``ihelp`` directly.
     """
     if config.fermi.etemp < 0.0:
@@ -415,7 +415,7 @@ def validate_functional_scf_interactions(
 
     The E4.0 raw map is guaranteed pure for exact migrated built-in
     interactions. Arbitrary subclasses are rejected by functional SCF setup
-    and are not routed to a legacy iterative solver.
+    and are not routed to another iterative solver.
     """
     eligible, names = functional_scf_interactions_eligible(interactions)
     if not eligible:
@@ -486,7 +486,7 @@ def unpack_charges(x: Tensor, layout: ChargeLayout) -> SCFCharges:
 
 
 def pack_charges(charges: SCFCharges, layout: ChargeLayout) -> Tensor:
-    """Pack fixed-shape charges using the legacy PADNZ row convention.
+    """Pack fixed-shape charges using the PADNZ row convention.
 
     Off-diagonal quadrupole components ``[1, 3, 4]`` (``xy``, ``xz``, ``yz``)
     are weighted by ``sqrt(2)`` so the packed quadrupole row carries the
@@ -522,7 +522,7 @@ def pack_charges(charges: SCFCharges, layout: ChargeLayout) -> Tensor:
 
 
 def pack_potential(potential: SCFPotential, layout: PotentialLayout) -> Tensor:
-    """Pack fixed-shape potential rows using the legacy PADNZ convention."""
+    """Pack fixed-shape potential rows using the PADNZ convention."""
     values = _validated_components(potential, layout)
     width = max(value.shape[-1] for value in values)
     rows = [
