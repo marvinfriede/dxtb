@@ -47,20 +47,20 @@ def new_ies(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers of the system (shape: ``(natom,)``).
+        Atomic numbers of the Structure (shape: ``(natom,)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------
     IES | None
-        An instance of the IES class if the tight-binding model supports isotropic electrostatics,
+        An instance of the IES class if the tight-binding Method supports isotropic electrostatics,
         otherwise None.
 
     Raises
     ------
     ValueError
-        If the tight-binding model does not contain an isotropic electrostatics component.
+        If the tight-binding Method does not contain an isotropic electrostatics component.
     """
     dd: DD = {
         "device": device,

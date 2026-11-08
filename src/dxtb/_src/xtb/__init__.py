@@ -18,5 +18,5 @@
 xTB: Hamiltonians
 =================
 
-Hamiltonians for extended tight-binding models.
+Hamiltonians for extended tight-binding Methods.
 """

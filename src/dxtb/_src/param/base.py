@@ -59,7 +59,7 @@ __all__ = ["Param"]
 
 class Param(BaseModel):
     """
-    Complete self-contained representation of an extended tight-binding model.
+    Complete self-contained Parametrization of an extended tight-binding (xTB) Method.
 
     The parametrization of a calculator with the model data must account for
     missing transformations, like extracting the principal quantum numbers from

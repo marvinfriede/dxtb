@@ -110,7 +110,7 @@ class Driver:
             else:
                 vals.append(0)
 
-        # do not return list if only one system is considered
+        # do not return list if only one Structure is considered
         if len(vals) == 1:
             vals = vals[0]
 

@@ -72,7 +72,7 @@ class Config:
     """Whether to compute the gradient."""
 
     max_element: int = defaults.MAX_ELEMENT
-    """The maximum element number in the system."""
+    """The maximum element number in the Structure."""
 
     # PyTorch
 

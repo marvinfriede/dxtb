@@ -75,8 +75,8 @@ The command line accepts the same named policy:
    dxtb input.xyz --scf-strategy anderson --scf-differentiation unrolled \
        --scf-convergence standard
 
-Active Fermi smearing supports Linear, Anderson, Broyden, and CDIIS. SOSCF
-and every SOSCF-containing strategy reject active smearing. Thermal
+Fermi smearing at nonzero electronic temperature supports Linear, Anderson,
+Broyden, and CDIIS. SOSCF and every SOSCF-containing strategy reject it. Thermal
 occupations are never frozen to enable orbital SOSCF.
 
 The ``standard``, ``tight``, and ``higher_order`` convergence profiles set

@@ -51,9 +51,9 @@ def new_repulsion(
     Parameters
     ----------
     unique : Tensor
-        Unique elements in the system (shape: ``(nunique,)``).
+        Unique elements in the Structure (shape: ``(nunique,)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
     cutoff : float
         Real space cutoff for repulsion interactions (default: 25.0).
     Returns

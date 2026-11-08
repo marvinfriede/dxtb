@@ -40,7 +40,7 @@ class IntDriver(TensorLike):
     """Base class for the integral driver."""
 
     numbers: Tensor
-    """Atomic numbers of the atoms in the system."""
+    """Atomic numbers of the atoms in the Structure."""
 
     par: ParamModule
     """Representation of parametrization of xTB method."""

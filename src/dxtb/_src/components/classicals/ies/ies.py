@@ -177,7 +177,7 @@ def ies_energy(
 
 class IES(Classical):
     """
-    Representation of the isotropic electrostatics (IES) component in a tight-binding model.
+    Isotropic electrostatics (IES) Classical of a tight-binding Method.
     """
 
     chi: Tensor
@@ -248,7 +248,7 @@ class IES(Classical):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers of the system (shape: ``(natom,)``).
+            Atomic numbers of the Structure (shape: ``(natom,)``).
         ihelp : IndexHelper | None
             Helper class for indexing.
 
@@ -275,7 +275,7 @@ class IES(Classical):
         Parameters
         ----------
         positions : Tensor
-            Atomic positions of the system (shape: ``(natom, 3)``).
+            Atomic positions of the Structure (shape: ``(natom, 3)``).
         cache : IESSetup | IESCoreSetup
             Frozen coordinate-independent data for the EEQ solve.
         charge : Tensor | float | int | None
@@ -286,7 +286,7 @@ class IES(Classical):
         Returns
         -------
         Tensor
-            Isotropic electrostatics energy of the system (shape: ``()``).
+            Isotropic electrostatics energy of the Structure (shape: ``()``).
         """
         if not isinstance(cache, (IESSetup, IESCoreSetup)):
             raise TypeError(

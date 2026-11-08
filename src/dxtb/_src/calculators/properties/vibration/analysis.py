@@ -182,9 +182,9 @@ def vib_analysis(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
-        Cartesian coordinates of all atoms in the system ``(..., nat, 3)``.
+        Cartesian coordinates of all atoms in the Structure ``(..., nat, 3)``.
     hessian : Tensor
         Hessian matrix of shape ``(..., nat, 3, nat, 3)``.
     project_rotational : bool, optional
@@ -210,7 +210,7 @@ def vib_analysis(
     elif hessian.shape == (*numbers.shape[:-1], nat * 3, nat * 3):
         raise ValueError(
             f"The Hessian matrix must have either shape (..., nat, 3, nat, 3) "
-            "or (..., nat*3, nat*3) for a system with `nat` atoms. The shape "
+            "or (..., nat*3, nat*3) for a Structure with `nat` atoms. The shape "
             f"of the Hessian matrix is {hessian.shape}, while the shape of the "
             f"atomic numbers is {numbers.shape}."
         )

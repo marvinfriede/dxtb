@@ -171,7 +171,7 @@ class ConfigSCF:
             kt = float(self.fermi.etemp) * 3.166811563e-6
             if kt >= 3.0e-7:
                 raise ValueError(
-                    "SOSCF cannot be used with active Fermi smearing. Use "
+                    "SOSCF cannot be used with Fermi smearing at nonzero electronic temperature. Use "
                     "Anderson, Broyden, or CDIIS, or disable smearing explicitly."
                 )
 

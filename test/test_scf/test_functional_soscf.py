@@ -825,7 +825,7 @@ def test_soscf_rejects_active_fermi_smearing() -> None:
         damp=physical.x.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
-    with pytest.raises(NotImplementedError, match="active Fermi smearing"):
+    with pytest.raises(NotImplementedError, match="Fermi smearing at nonzero electronic temperature"):
         SOSCFMethod().propose(smeared_problem, physical, None, context)
 
 

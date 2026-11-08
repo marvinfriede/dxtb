@@ -446,7 +446,7 @@ class GeneralizedBorn(Interaction):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         positions : Tensor
             Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
 
@@ -514,9 +514,9 @@ def new_solvation(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------

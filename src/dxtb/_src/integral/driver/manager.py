@@ -100,7 +100,7 @@ class DriverManager(TensorLike):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         par : Param | ParamModule
             The parametrization data.
         ihelp : IndexHelper

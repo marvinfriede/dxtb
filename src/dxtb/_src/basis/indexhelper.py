@@ -158,11 +158,11 @@ class IndexHelper(Node):
 
     batch_mode: int = context(default=0)
     """
-    Whether multiple systems or a single one are handled:
+    Batch layout of the atomic numbers:
 
-    - 0: Single system
-    - 1: Multiple systems with padding
-    - 2: Multiple systems with no padding (conformer ensemble)
+    - 0: one Structure (no Batch)
+    - 1: Padded batch
+    - 2: Conformer batch
     """
 
     def _normalize(self) -> dict[str, Any]:
@@ -311,15 +311,15 @@ class IndexHelper(Node):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         par : Param
-            Representation of an extended tight-binding model.
+            Parametrization of an extended tight-binding (xTB) Method.
         batch_mode : int
-            Whether multiple systems or a single one are handled:
+            Batch layout of the atomic numbers:
 
-            - 0: Single system
-            - 1: Multiple systems with padding
-            - 2: Multiple systems with no padding (conformer ensemble)
+            - 0: one Structure (no Batch)
+            - 1: Padded batch
+            - 2: Conformer batch
         move_to_numbers_device : bool
             Move the resulting tensors to the device of the ``numbers`` tensor.
             This should be switched off for GPU calculations that use `libcint`
@@ -366,15 +366,15 @@ class IndexHelper(Node):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         angular : dict[int, Tensor]
             Map between atomic numbers and angular momenta of all shells.
         batch_mode : int
-            Whether multiple systems or a single one are handled:
+            Batch layout of the atomic numbers:
 
-            - 0: Single system
-            - 1: Multiple systems with padding
-            - 2: Multiple systems with no padding (conformer ensemble)
+            - 0: one Structure (no Batch)
+            - 1: Padded batch
+            - 2: Conformer batch
         move_to_numbers_device : bool
             Move the resulting tensors to the device of the ``numbers`` tensor.
             This should be switched off for GPU calculations that use `libcint`
@@ -1161,13 +1161,13 @@ class IndexHelperGFN1(IndexHelper):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         batch_mode : int
-            Whether multiple systems or a single one are handled:
+            Batch layout of the atomic numbers:
 
-            - 0: Single system
-            - 1: Multiple systems with padding
-            - 2: Multiple systems with no padding (conformer ensemble)
+            - 0: one Structure (no Batch)
+            - 1: Padded batch
+            - 2: Conformer batch
         move_to_numbers_device : bool
             Move the resulting tensors to the device of the ``numbers`` tensor.
             This should be switched off for GPU calculations that use `libcint`
@@ -1210,13 +1210,13 @@ class IndexHelperGFN2(IndexHelper):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         batch_mode : int
-            Whether multiple systems or a single one are handled:
+            Batch layout of the atomic numbers:
 
-            - 0: Single system
-            - 1: Multiple systems with padding
-            - 2: Multiple systems with no padding (conformer ensemble)
+            - 0: one Structure (no Batch)
+            - 1: Padded batch
+            - 2: Conformer batch
         move_to_numbers_device : bool
             Move the resulting tensors to the device of the ``numbers`` tensor.
             This should be switched off for GPU calculations that use `libcint`

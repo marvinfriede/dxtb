@@ -28,7 +28,7 @@ SCF. The :class:`~dxtb.components.base.Classical` components are classical
 corrections that do not dependent on the density or charges.
 
 The components are usually initialized with a parametrization and the atomic
-numbers of the system within the :class:`~dxtb.Calculator`, i.e., they do not
+numbers of the Structure within the :class:`~dxtb.Calculator`, i.e., they do not
 require user intervention. For explicit instantiation, we provide factory
 functions.
 

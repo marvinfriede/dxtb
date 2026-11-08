@@ -181,7 +181,7 @@ def _mask_packed_rows(
     kind: str,
     pad_value: float,
 ) -> Tensor:
-    """Mask inactive orbitals/atoms and row tails without rescaling multipoles."""
+    """Mask Padding orbitals/atoms and row tails without rescaling multipoles."""
     lengths = tuple(_shape_numel(shape) for shape in shapes)
     expected_width = max(lengths)
     if value.ndim != 2 or value.shape[0] != len(shapes):

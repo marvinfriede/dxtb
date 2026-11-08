@@ -89,7 +89,7 @@ class GFN1Hamiltonian(BaseHamiltonian):
         Parameters
         ----------
         par : ParamModule
-            Representation of an extended tight-binding model.
+            Parametrization of an extended tight-binding (xTB) Method.
 
         Returns
         -------

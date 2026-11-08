@@ -322,7 +322,7 @@ class AES2(Interaction):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         positions : Tensor
             Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
         ihelp : IndexHelper
@@ -352,7 +352,7 @@ class AES2(Interaction):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         positions : Tensor
             Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
         ihelp : IndexHelper
@@ -692,9 +692,9 @@ def new_aes2(
     Parameters
     ----------
     unique : Tensor
-        Unique elements in the system (shape: ``(nunique,)``).
+        Unique elements in the Structure (shape: ``(nunique,)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------

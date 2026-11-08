@@ -251,7 +251,7 @@ class BaseRepulsion(Classical):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         ihelp : IndexHelper
             Helper class for indexing.
 

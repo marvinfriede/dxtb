@@ -47,7 +47,7 @@ class HamiltonianABC(ABC):
         Parameters
         ----------
         par : ParamModule
-            Representation of an extended tight-binding model.
+            Parametrization of an extended tight-binding (xTB) Method.
 
         Returns
         -------
@@ -64,7 +64,7 @@ class HamiltonianABC(ABC):
         Parameters
         ----------
         par : ParamModule
-            Representation of an extended tight-binding model.
+            Parametrization of an extended tight-binding (xTB) Method.
 
         Returns
         -------

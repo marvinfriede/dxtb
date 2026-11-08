@@ -600,7 +600,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
                 (mutated_sys, mutated_sys), (pos_h2, pos_h2)
             )
 
-    with pytest.raises(ValueError, match="active Fermi smearing"):
+    with pytest.raises(ValueError, match="Fermi smearing at nonzero electronic temperature"):
         Config.create(
             method="GFN1-xTB",
             int_driver=labels.INTDRIVER_PYTORCH,
@@ -625,7 +625,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         config=bypassed_smear_cfg,
     )
     with pytest.raises(
-        ValueError, match="active Fermi smearing|fixed-occupation"
+        ValueError, match="Fermi smearing at nonzero electronic temperature|fixed-occupation"
     ):
         can_vmap_system(sys_soscf_smear)
 

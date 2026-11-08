@@ -574,7 +574,7 @@ def _update_damping(
 def _fock_state_projection(
     problem: SCFProblem,
 ) -> Callable[[Tensor], Tensor]:
-    """Keep inactive padded Fock rows at the physical core Hamiltonian."""
+    """Keep Padding Fock rows at the physical core Hamiltonian."""
     mask = (
         problem.inputs.orbital_mask[..., :, None]
         & problem.inputs.orbital_mask[..., None, :]

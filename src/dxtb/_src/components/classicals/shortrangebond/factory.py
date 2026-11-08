@@ -48,14 +48,14 @@ def new_srb(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers of the system (shape: ``(natom,)``).
+        Atomic numbers of the Structure (shape: ``(natom,)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------
     ShortRangeBond | None
-        An instance of the ShortRangeBond class if the tight-binding model supports short-range bond correction,
+        An instance of the ShortRangeBond class if the tight-binding Method supports short-range bond correction,
         otherwise None.
 
     Raises

@@ -30,7 +30,7 @@ def get_energy(
     charges: Charges, data: _Data, interactions: InteractionList
 ) -> Tensor:
     """
-    Get the energy of the system with the given charges.
+    Get the energy of the Structure with the given charges.
 
     Parameters
     ----------
@@ -44,7 +44,7 @@ def get_energy(
     Returns
     -------
     Tensor
-        Energy of the system.
+        Energy of the Structure.
     """
     energy = data.ihelp.reduce_orbital_to_atom(data.energy)
     return energy + interactions.get_energy(charges, data.cache, data.ihelp)

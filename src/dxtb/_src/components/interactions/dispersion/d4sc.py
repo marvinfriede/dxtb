@@ -590,7 +590,7 @@ class DispersionD4SC(Interaction):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         ihelp : IndexHelper
             Index mapping for the basis set.
 
@@ -686,9 +686,9 @@ def new_d4sc(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------

@@ -32,7 +32,7 @@ __all__ = ["Calculator"]
 
 class Calculator(AutogradCalculator, NumericalCalculator):
     """
-    Calculator for the extended tight-binding models (xTB).
+    Calculator for the extended tight-binding Methods (xTB).
     """
 
     implemented_properties = list(

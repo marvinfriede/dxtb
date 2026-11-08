@@ -71,10 +71,10 @@ METHOD_CHOICES = [
 """List of possible choices for `METHOD`."""
 
 SPIN = None
-"""Number of unpaired electrons of the system."""
+"""Number of unpaired electrons of the Structure."""
 
 CHRG = 0
-"""Total charge of the system."""
+"""Total charge of the Structure."""
 
 EXCLUDE: list[str] = []
 """List of xTB components to exclude during the calculation."""

@@ -18,7 +18,7 @@
 Calculators: Numerical
 ======================
 
-Calculator for the extended tight-binding model with numerical differentiation.
+Calculator for the extended tight-binding Method with numerical differentiation.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 class NumericalCalculator(EnergyCalculator):
     """
-    Parametrized calculator defining the extended tight-binding model.
+    Parametrized calculator defining the extended tight-binding Method.
 
     This class provides various molecular properties through numerical
     differentiation.

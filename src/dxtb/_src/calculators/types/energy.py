@@ -18,7 +18,7 @@
 Calculators: Energy
 ===================
 
-Base calculator for the energy calculation of an extended tight-binding model.
+Base calculator for the energy calculation of an extended tight-binding Method.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ _UNSET = object()
 
 class EnergyCalculator(BaseCalculator):
     """
-    Parametrized calculator defining the extended tight-binding model.
+    Parametrized calculator defining the extended tight-binding Method.
 
     This class provides the basic functionality for the extended tight-binding
     model. It provides methods for single point calculations, nuclear
@@ -210,7 +210,7 @@ class EnergyCalculator(BaseCalculator):
         **kwargs: Any,
     ) -> Tensor:
         """
-        Calculate the total energy :math:`E` of the system.
+        Calculate the total energy :math:`E` of the Structure.
 
         Parameters
         ----------
@@ -224,7 +224,7 @@ class EnergyCalculator(BaseCalculator):
         Returns
         -------
         Tensor
-            Total energy of the system (scalar value).
+            Total energy of the Structure (scalar value).
         """
         result = self.singlepoint(
             positions, chrg, spin, field=field, field_grad=field_grad, **kwargs

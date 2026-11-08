@@ -18,7 +18,7 @@
 Calculators: Autograd
 =====================
 
-Calculator for the extended tight-binding model with automatic gradients.
+Calculator for the extended tight-binding Method with automatic gradients.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 class AutogradCalculator(EnergyCalculator):
     """
-    Parametrized calculator defining the extended tight-binding model.
+    Parametrized calculator defining the extended tight-binding Method.
 
     This class provides properties via automatic differentiation.
     """
@@ -258,7 +258,7 @@ class AutogradCalculator(EnergyCalculator):
                 from torch.func import jacrev
 
                 def _grad(pos: Tensor) -> Tensor:
-                    # sum over the batch: the systems are independent
+                    # sum over the Batch: the Lanes are independent
                     e = self.energy(pos, chrg, spin, **kwargs).sum()
                     if e.grad_fn is None:
                         return torch.zeros_like(pos)

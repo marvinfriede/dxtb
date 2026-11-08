@@ -18,7 +18,7 @@
 Calculators: Types
 ==================
 
-All calculator types for the extended tight-binding models (xTB).
+All calculator types for the extended tight-binding Methods (xTB).
 
 Besides the basic energy calculator, different calculator types utilize
 different methods for differentiation, i.e., automatic differentiation

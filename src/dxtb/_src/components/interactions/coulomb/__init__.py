@@ -18,7 +18,7 @@
 Interactions: Coulomb
 =====================
 
-Second and third order electrostatics in the extended tight-binding model.
+Second and third order electrostatics in the extended tight-binding Method.
 """
 
 from .average import AveragingFunction, averaging_function

@@ -317,7 +317,7 @@ def test_newton_krylov_requires_active_smearing() -> None:
         proposal_x=physical.map_result.mapped_x,
     )
 
-    with pytest.raises(NotImplementedError, match="active Fermi smearing"):
+    with pytest.raises(NotImplementedError, match="Fermi smearing at nonzero electronic temperature"):
         method.propose(problem, physical, None, context)
 
 

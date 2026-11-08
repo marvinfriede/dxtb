@@ -49,9 +49,9 @@ def new_halogen(
     Parameters
     ----------
     unique : Tensor
-        Unique elements in the system (shape: ``(nunique,)``).
+        Unique elements in the Structure (shape: ``(nunique,)``).
     par : Param | ParamModule
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
     cutoff : Tensor
         Real space cutoff for halogen bonding interactions (default: 20.0).
 

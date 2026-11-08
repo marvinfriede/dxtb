@@ -331,7 +331,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     """
 
     numbers: Tensor
-    """Atomic numbers for all atoms in the system (shape: ``(..., nat)``)."""
+    """Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``)."""
 
     classicals: ClassicalList
     """Classical contributions."""
@@ -370,10 +370,10 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         par : Param
-            Representation of an extended tight-binding model (full xTB
-            parametrization). Decides energy contributions.
+            Parametrization of an extended tight-binding (xTB) Method. Decides
+            the Components.
         classical : Sequence[Classical] | None, optional
             Additional classical contributions. Defaults to ``None``.
         interaction : Sequence[Interaction] | None, optional
@@ -834,7 +834,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
 
-        # Keep the system consistent with the converted components where
+        # Keep the System consistent with the converted components where
         # supported. Legacy System classical and ES2/ES3 setup objects are
         # not converted; evaluating those legacy snapshots after `type` is a
         # known issue (see known_issues.rst). The separate exact core below is

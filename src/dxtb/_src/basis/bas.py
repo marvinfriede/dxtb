@@ -418,8 +418,8 @@ class BasisSetup:
 
         if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
             raise NotImplementedError(
-                "Libcint BasisSetup conversion is per structure; packed "
-                "systems are converted independently by the integral driver."
+                "Libcint BasisSetup conversion is per Structure; the Lanes "
+                "of a Batch are converted independently by the integral driver."
             )
 
         alphas, coeffs = self.create_libcint_cgtos()

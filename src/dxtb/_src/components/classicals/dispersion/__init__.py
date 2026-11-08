@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Dispersion models in the extended tight-binding model.
+Dispersion models in the extended tight-binding Method.
 """
 
 from .d3 import (

@@ -139,7 +139,7 @@ def build_orbital_model(
     settings = problem.inputs.fermi_settings
     if settings is not None and settings.smear:
         raise NotImplementedError(
-            "SOSCF requires fixed/Aufbau occupations; active Fermi smearing "
+            "SOSCF requires fixed/Aufbau occupations; Fermi smearing at nonzero electronic temperature "
             "is not supported."
         )
     occupation = spectral.occupation

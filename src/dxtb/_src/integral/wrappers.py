@@ -94,11 +94,11 @@ def hcore(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     par : Param
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
     charge : Tensor | float | int | None, optional
         Total molecular charge required by GFN0 H0.
 
@@ -155,11 +155,11 @@ def overlap(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     par : Param
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------
@@ -178,11 +178,11 @@ def dipint(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     par : Param
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------
@@ -200,11 +200,11 @@ def quadint(
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     par : Param
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------
@@ -228,11 +228,11 @@ def _integral(
     integral_type : Literal['_overlap', '_dipole', '_quadrupole']
         Type of integral to calculate.
     numbers : Tensor
-        Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
     positions : Tensor
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     par : Param
-        Representation of an extended tight-binding model.
+        Parametrization of an extended tight-binding (xTB) Method.
 
     Returns
     -------

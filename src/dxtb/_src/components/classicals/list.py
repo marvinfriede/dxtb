@@ -140,7 +140,7 @@ class ClassicalList(ComponentList[Classical]):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         ihelp: IndexHelper
             Index mapping for the basis set.
 

@@ -18,7 +18,7 @@
 Components: Interactions
 ========================
 
-Definition of interactions in the extended tight-binding model.
+Definition of interactions in the extended tight-binding Method.
 """
 
 from .base import Interaction

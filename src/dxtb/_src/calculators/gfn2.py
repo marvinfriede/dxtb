@@ -18,7 +18,7 @@
 Calculators: GFN2
 =================
 
-Calculator for the second generation extended tight-binding model (GFN2-xTB).
+Calculator for the second-generation extended tight-binding Method (GFN2-xTB).
 """
 
 from __future__ import annotations

@@ -590,7 +590,7 @@ def _prepare_singlepoint(
     h0_setup = core.h0_setup if core is not None else system.h0_setup
 
     if numbers.ndim != 1:
-        raise ValueError("Core singlepoint accepts one system at a time.")
+        raise ValueError("Core singlepoint accepts one Structure at a time.")
     if positions.shape != (numbers.shape[0], 3):
         raise ValueError(
             "Core singlepoint expects positions with shape (nat, 3)."

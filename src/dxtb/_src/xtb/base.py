@@ -58,9 +58,9 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
     """
 
     numbers: Tensor
-    """Atomic numbers of the atoms in the system."""
+    """Atomic numbers of the atoms in the Structure."""
     unique: Tensor
-    """Unique species of the system."""
+    """Unique species of the Structure."""
 
     ihelp: IndexHelper
     """Helper class for indexing."""

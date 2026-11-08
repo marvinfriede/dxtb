@@ -42,13 +42,13 @@ class Dispersion(Classical):
     """
 
     numbers: Tensor
-    """Atomic numbers for all atoms in the system (shape: ``(..., nat)``)."""
+    """Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``)."""
 
     param: D4Param
     """Dispersion parameters."""
 
     charge: Tensor | None
-    """Total charge of the system."""
+    """Total charge of the Structure."""
 
     ref_charges: Literal["eeq", "gfn2"]
     """
@@ -85,7 +85,7 @@ class Dispersion(Classical):
         Parameters
         ----------
         numbers : Tensor
-            Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
+            Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
         ihelp : IndexHelper, optional
             Helper class for indexing. Not needed for D3 and D4. Only passed for
             consistency with other classical contributions.

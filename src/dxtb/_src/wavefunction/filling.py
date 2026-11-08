@@ -379,7 +379,7 @@ def get_aufbau_occupation(norb: Tensor, nel: Tensor) -> Tensor:
     """
     Set occupation numbers according to the aufbau principle.
     The number of electrons is a real number and can be fractional.
-    Orbitals beyond the number of available orbitals `norb` of a system
+    Orbitals beyond the number of available orbitals `norb` of a Structure
     (padding in a batch) are never occupied.
 
     Parameters
@@ -446,13 +446,13 @@ def get_aufbau_occupation(norb: Tensor, nel: Tensor) -> Tensor:
         print(all(nel == occ.sum(-1)))  # True
     """
 
-    # electrons fill the available orbitals, orbitals of smaller systems in a
+    # electrons fill the available orbitals, orbitals of smaller Structures in a
     # batch (`norb` per system) are padding
     nmax = int(torch.max(norb).item())
     valid = None  # [b, (1,) nmax]: True for orbitals that exist
     if norb.dim() > 0:
         # `norb` has one entry per system ([b]), `nel` may have additional
-        # (channel) dimensions between the systems and the orbitals
+        # (channel) dimensions between the Lanes and the orbitals
         # ([b, 2]), i.e., `norb` becomes [b, 1, 1] and the orbital indices
         # [nmax] are broadcast against it
         extra = max(nel.dim() - norb.dim(), 0)
@@ -732,7 +732,7 @@ def get_fermi_occupation(
       ``vmap`` does not, and ``torch.compile`` breaks the graph at every
       convergence check.
     """
-    # the temperature is a single value for all systems and channels
+    # the temperature is a single value for all Lanes and channels
     if not isinstance(kt, Tensor):
         raise TypeError("Electronic temperature must be `Tensor`.")
     if kt.numel() != 1:
@@ -1654,7 +1654,7 @@ def _fermi_energy_search(
             thresh,
         )
 
-        # check if all channels of all systems are converged (host
+        # check if all channels of all Lanes are converged (host
         # synchronization) and if the input was invalid; the flags only
         # need to be read once
         if it % _CHECK_EVERY == 0 or it == maxiter:

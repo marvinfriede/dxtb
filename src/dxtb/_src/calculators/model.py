@@ -29,7 +29,7 @@ The calculator is split into a molecule-independent :class:`Model` and a
   integral/H0 setup values. It does not depend on positions, charge or spin.
 
 :meth:`Model.setup` is a function of the parameters and the numbers.
-Gradients flow from everything computed in the system to the parameter
+Gradients flow from everything computed in the System to the parameter
 leaves, i.e., it can be called inside a differentiated function.
 
 .. note::
@@ -543,8 +543,8 @@ class System:
 
     batch_mode: int
     """
-    Batch mode (0: single system, 1: padded batch, 2: conformers without
-    padding). The default follows the shape of the atomic numbers.
+    Batch mode (0: one Structure, 1: Padded batch, 2: Conformer batch). The
+    default follows the shape of the atomic numbers.
     """
 
     ihelp: IndexHelper
@@ -626,7 +626,7 @@ class System:
     """Exact Halogen associated with :attr:`halogen_setup`."""
 
     dd: DD
-    """Device and data type of the tensors of the system."""
+    """Device and data type of the tensors of the System."""
 
     d3_setups: tuple[tuple[DispersionD3, DispersionD3CoreSetup], ...] = ()
     """Captured setup for each exact single-System classical D3 component."""
@@ -1485,10 +1485,10 @@ class Model:
     """Configuration."""
 
     classical: tuple[Classical, ...] = ()
-    """Additional classical contributions (instances for a given system)."""
+    """Additional Classical Components."""
 
     interaction: tuple[Interaction, ...] = ()
-    """Additional self-consistent contributions (instances for a given system)."""
+    """Additional Interaction Components."""
 
     auto_int_level: bool = True
     """
@@ -1646,7 +1646,7 @@ class Model:
         dd: DD | None = None,
     ) -> System:
         """
-        Set up the system for the atomic numbers.
+        Set up the System for the atomic numbers.
 
         The result is a function of the parameters and the numbers, i.e.,
         everything that is computed here (including the gathering of the
@@ -1658,9 +1658,9 @@ class Model:
         numbers : Tensor
             Atomic numbers (shape: ``(..., nat)``).
         batch_mode : int | None, optional
-            Batch mode. The default follows the shape of `numbers` (0 for a
-            single system, 1 for a padded batch). Mode 2 (conformers without
-            padding) has to be requested.
+            Batch mode. The default follows the shape of `numbers` (0 for one
+            Structure, 1 for a Padded batch). Mode 2 (Conformer batch) has
+            to be requested.
         dd : DD | None, optional
             Device and data type of the tensors. Default: the ones of the
             parameters.
@@ -1668,7 +1668,7 @@ class Model:
         Returns
         -------
         System
-            Data of the system that depends on `numbers` only.
+            Data of the System that depends on `numbers` only.
         """
         par = self.par
         if not torch.is_inference_mode_enabled() and any(

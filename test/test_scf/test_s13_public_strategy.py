@@ -126,7 +126,7 @@ def test_dynamic_and_soscf_presets_require_implicit_eager_policy() -> None:
 
 def test_soscf_preset_rejects_active_fermi_smearing() -> None:
     """SOSCF eligibility rejects active smearing rather than freezing it."""
-    with pytest.raises(ValueError, match="active Fermi smearing"):
+    with pytest.raises(ValueError, match="Fermi smearing at nonzero electronic temperature"):
         ConfigSCF.create(
             strategy="cdiis-soscf",
             differentiation="implicit",

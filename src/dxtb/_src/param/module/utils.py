@@ -341,7 +341,7 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
         Parameters
         ----------
         unique : Tensor
-            Unique atomic numbers in the system (shape: ``(nunique,)``).
+            Unique atomic numbers in the Structure (shape: ``(nunique,)``).
         key : str
             Name of the quantity to obtain (e.g. gam3 for Hubbard derivatives).
         pad_val : int, optional
@@ -424,7 +424,7 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
         Parameters
         ----------
         unique : Tensor
-            Unique atomic numbers in the system (shape: ``(nunique,)``).
+            Unique atomic numbers in the Structure (shape: ``(nunique,)``).
 
         Returns
         -------
@@ -500,7 +500,7 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
         Parameters
         ----------
         unique : Tensor
-            Unique elements in the system (shape: ``(nunique,)``).
+            Unique elements in the Structure (shape: ``(nunique,)``).
         pad_val : int, optional
             Value to pad the tensor with. Default is -1.
 
@@ -552,7 +552,7 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
         Parameters
         ----------
         unique : Tensor
-            Unique elements in the system (shape: ``(nunique,)``).
+            Unique elements in the Structure (shape: ``(nunique,)``).
         pad_val : int, optional
             Value to pad the tensor with. Default is `-1`.
 
