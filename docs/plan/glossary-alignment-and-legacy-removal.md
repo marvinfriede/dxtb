@@ -1,7 +1,7 @@
 # Glossary alignment and legacy compatibility removal
 
 Status: complete on `claude/tender-dijkstra-cda42s` (commits `e02f70a5`
-to `0ae13b72`). Vocabulary: [`.agent-docs/GLOSSARY.md`](../../.agent-docs/GLOSSARY.md).
+to `aa489c55`). Vocabulary: [`.agent-docs/GLOSSARY.md`](../../.agent-docs/GLOSSARY.md).
 
 ## Decisions (architecture owner)
 
@@ -36,10 +36,26 @@ Local workstation, CPU only, `.venv-grouped-cpu` (Python 3.12, torch
   pre-existing: libcint multipole/overlap precision, `test_basis` export,
   `test_baseline` cells, the missing `tblite` module, two
   batch-lifecycle tests, `refocc` NO2 and a few SCF cases.
-- After `0ae13b72` there are no new failures against that baseline. The
-  only differences are renamed parametrize ids (`full` → `unrolled`) of
-  the same pre-existing failures, and tests that were deleted or
-  converted together with the removed behaviour.
+- Every package was checked against that baseline. Full per-directory
+  runs were done after `4cdc1397`, `15816c28`, `c53073af` and
+  `0ae13b72`, and focused module runs after each fix. After the final
+  fixes (`aa489c55`), `test_scf`, `test_calculator`, `test_classical`
+  and `test_config` were rerun on HEAD with the standard flags:
+
+  | Directory | Baseline (`0ed13b38`) | HEAD |
+  |---|---|---|
+  | `test_scf` | 11 failed, 1476 passed | 11 failed, 1473 passed |
+  | `test_calculator` | 2 failed, 484 passed | 2 failed, 476 passed |
+  | `test_classical` | 575 passed | 572 passed |
+  | `test_config` | 46 passed | 35 passed |
+
+  The failing node ids are identical except for renamed parametrize ids
+  (`refocc` `full` → `unrolled`). The lower pass counts are tests of
+  removed behaviour that were deleted, or merged into one rejection test
+  per file. All other directories matched the baseline in the
+  `0ae13b72` run.
+- `dxtb.__main__` imports a non-existent `dxtb.cli` already at
+  `0ed13b38`. This is a pre-existing bug and is not touched here.
 - No tolerance was changed and no golden reference was regenerated.
 - Independent review was not run (skipped on this workstation).
   Multi-environment runs are pending.
