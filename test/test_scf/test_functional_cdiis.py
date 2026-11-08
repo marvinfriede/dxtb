@@ -10,7 +10,7 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional.cdiis import (
+from dxtb._src.scf.cdiis import (
     CDIISConverger,
     CDIISConvergerSettings,
     CDIISState,
@@ -19,22 +19,22 @@ from dxtb._src.scf.functional.cdiis import (
     _prune_history,
     _solve_pulay_coefficients,
 )
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     SCFSolverSettings,
     _solve_map,
     solve_scf_problem,
 )
-from dxtb._src.scf.functional.stationarity import (
+from dxtb._src.scf.stationarity import (
     ao_stationarity_matrix,
     orthogonalized_stationarity_matrix,
 )
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
 
 def _physical_fock_case(
@@ -42,7 +42,7 @@ def _physical_fock_case(
 ) -> tuple[SCFProblem, SCFPhysicalState]:
     """Construct an independent H2O/GFN2 Fock observation."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O", dtype=dtype)
-    from dxtb._src.scf.functional import fock_initial_guess, unpack_charges
+    from dxtb._src.scf import fock_initial_guess, unpack_charges
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
@@ -123,7 +123,7 @@ def test_cdiis_stores_fresh_mapped_fock_commutator() -> None:
 def test_cdiis_reaches_an_s2_certified_fock_root() -> None:
     """Standalone Fock CDIIS uses the shared physical convergence gate."""
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    from dxtb._src.scf.functional import fock_initial_guess, unpack_charges
+    from dxtb._src.scf import fock_initial_guess, unpack_charges
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
@@ -150,10 +150,10 @@ def test_cdiis_certified_root_enters_history_free_implicit_preparation() -> (
     None
 ):
     """The implicit boundary receives only the certified physical root."""
-    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+    from dxtb._src.scf.implicit import _prepare_scf_root
 
     case = _prepare_case(GFN2_XTB, sample_name="H2O")
-    from dxtb._src.scf.functional import fock_initial_guess, unpack_charges
+    from dxtb._src.scf import fock_initial_guess, unpack_charges
 
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs
@@ -192,7 +192,7 @@ def test_cdiis_rejects_non_fock_variables() -> None:
     """CDIIS refuses charge and potential working variables."""
     problem, physical = _physical_fock_case()
     charge_problem = SCFProblem(problem.inputs, SCFVariable.CHARGE)
-    from dxtb._src.scf.functional import potential_initial_guess
+    from dxtb._src.scf import potential_initial_guess
 
     charges = physical.map_result.spectral.charges
     _, layout = potential_initial_guess(charges, problem.inputs)
@@ -563,7 +563,7 @@ def test_cdiis_state_history_is_fixed_size_and_tensor_only() -> None:
 def test_cdiis_fixed_trip_fock_controller_supports_vmap_and_jvp() -> None:
     """A short physical CDIIS trajectory is transform-compatible."""
     case = _prepare_case(GFN1_XTB, sample_name="H2")
-    from dxtb._src.scf.functional import fock_initial_guess, unpack_charges
+    from dxtb._src.scf import fock_initial_guess, unpack_charges
 
     charges = unpack_charges(case.x, case.inputs.charge_layout)
     initial = fock_initial_guess(charges, case.inputs)
@@ -606,7 +606,7 @@ def test_cdiis_fixed_trip_fock_controller_supports_vmap_and_jvp() -> None:
 def test_cdiis_trace_and_zero_budget_keep_shared_controller_contract() -> None:
     """Trace flattens CDIIS history and zero budget skips method transitions."""
     case = _prepare_case(GFN1_XTB, sample_name="H2")
-    from dxtb._src.scf.functional import fock_initial_guess, unpack_charges
+    from dxtb._src.scf import fock_initial_guess, unpack_charges
 
     initial = fock_initial_guess(
         unpack_charges(case.x, case.inputs.charge_layout), case.inputs

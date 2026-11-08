@@ -101,8 +101,8 @@ def main() -> None:
     from dxtb import GFN1_XTB
     from dxtb._src.calculators.singlepoint import _interaction_data
     from dxtb._src.integral.evaluation import build_integral_matrices
-    from dxtb._src.scf.functional import setup_scf_inputs
-    from dxtb._src.scf.functional.eager import (
+    from dxtb._src.scf import setup_scf_inputs
+    from dxtb._src.scf.eager import (
         run_prepared_functional_implicit,
     )
     from dxtb._src.scf.guess import get_guess
@@ -183,11 +183,11 @@ def main() -> None:
     _event("prepared_inputs", duration_s=time.perf_counter() - setup_start)
 
     if args.route == "mapped-roots":
-        from dxtb._src.scf.functional.implicit import (
+        from dxtb._src.scf.implicit import (
             _SCFMapTensorTree,
             implicit_root,
         )
-        from dxtb._src.scf.functional.solver import (
+        from dxtb._src.scf.solver import (
             SCFTrajectoryStatus,
             finalize_scf,
         )

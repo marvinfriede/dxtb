@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-import dxtb._src.scf.functional.spectral as spectral  # noqa: E402
+import dxtb._src.scf.spectral as spectral  # noqa: E402
 from benchmarks.baseline.workloads import conformers  # noqa: E402
 from benchmarks.e6c1_w2c2_implicit import (  # noqa: E402
     DTYPE,
@@ -53,9 +53,9 @@ from benchmarks.e6c1_w2c2_implicit import (  # noqa: E402
     prepare_call_inputs,
     setup_model_system,
 )
-from dxtb._src.scf.functional.anderson import _solve_map_anderson  # noqa: E402
-from dxtb._src.scf.functional.eager import _solver_settings  # noqa: E402
-from dxtb._src.scf.functional.map import scf_map  # noqa: E402
+from dxtb._src.scf.anderson import _solve_map_anderson  # noqa: E402
+from dxtb._src.scf.eager import _solver_settings  # noqa: E402
+from dxtb._src.scf.map import scf_map  # noqa: E402
 
 STARTED = time.perf_counter()
 

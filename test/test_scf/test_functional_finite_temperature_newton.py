@@ -30,27 +30,27 @@ from benchmarks.prototypes.scf_newton_krylov import (
     fixed_point_jvp,
 )
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.data import unpack_charges
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.data import unpack_charges
+from dxtb._src.scf.map import (
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.solver import (
     SCFSolverSettings,
     _solve_map,
 )
-from dxtb._src.scf.functional.spectral import (
+from dxtb._src.scf.spectral import (
     eager_primal_fermi_scope,
     fermi_density_matrix,
 )
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,
@@ -265,7 +265,7 @@ def test_fixed_point_jvp_uses_static_fermi_schedule_inside_eager_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Newton JVP bypasses W2c10's detached eager adaptive schedule."""
-    import dxtb._src.scf.functional.spectral as spectral
+    import dxtb._src.scf.spectral as spectral
 
     problem, x = _small_active_case(SCFVariable.CHARGE)
     calls = 0
@@ -324,8 +324,8 @@ def test_newton_krylov_requires_active_smearing() -> None:
 def test_newton_krylov_rejected_before_fixed_trip_map() -> None:
     """The eager-only method is rejected before a fixed-trip physical map."""
     from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovConverger
-    from dxtb._src.scf.functional.solver import _solve_map
-    from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+    from dxtb._src.scf.solver import _solve_map
+    from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
     problem, guess = _small_active_case(SCFVariable.CHARGE)
     calls = 0

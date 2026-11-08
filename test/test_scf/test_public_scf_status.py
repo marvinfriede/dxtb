@@ -26,11 +26,11 @@ import torch
 from torch.func import vmap
 
 from dxtb import SCFFailureCode
-from dxtb._src.scf.functional.eager import (
+from dxtb._src.scf.eager import (
     _check_subsolve_status,
     public_scf_status,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
     FERMI_FAILURE_NONE,
@@ -43,7 +43,7 @@ from dxtb._src.scf.functional.solver import (
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb._src.calculators.singlepoint import _normalize_scf_output
-from dxtb._src.scf.functional.data import SCFCharges, SCFPotential
+from dxtb._src.scf.data import SCFCharges, SCFPotential
 
 
 def _fermi_status(

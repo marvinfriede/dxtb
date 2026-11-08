@@ -30,20 +30,20 @@ import torch
 
 from benchmarks.prototypes.scf_energy_diis import ResearchDIISConverger
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf import unpack_charges
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.energy import electronic_energy_from_spectral
-from dxtb._src.scf.functional.map import fock_initial_guess
-from dxtb._src.scf.functional.method import LinearConverger
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
-from dxtb._src.scf.functional.soscf import SOSCFConverger
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.energy import electronic_energy_from_spectral
+from dxtb._src.scf.map import fock_initial_guess
+from dxtb._src.scf.converger import LinearConverger
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.solver import SCFSolverSettings, _solve_map
+from dxtb._src.scf.soscf import SOSCFConverger
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,

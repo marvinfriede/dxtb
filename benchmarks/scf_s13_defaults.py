@@ -40,17 +40,17 @@ from test.test_scf.samples import samples
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.energy import electronic_energy_from_spectral
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.solver import _solve_map, setup_solver_settings
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.energy import electronic_energy_from_spectral
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.solver import _solve_map, setup_solver_settings
+from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
 METHODS = ("Anderson", "Broyden", "CDIIS")
 

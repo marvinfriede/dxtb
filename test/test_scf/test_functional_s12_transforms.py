@@ -27,12 +27,12 @@ import torch
 from torch.utils import _pytree
 
 from dxtb import GFN1_XTB
-from dxtb._src.scf.functional.anderson import AndersonState
-from dxtb._src.scf.functional.broyden import BroydenConverger, BroydenState
-from dxtb._src.scf.functional.cdiis import CDIISState
-from dxtb._src.scf.functional.method import LinearConverger
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.soscf import SOSCFConverger
+from dxtb._src.scf.anderson import AndersonState
+from dxtb._src.scf.broyden import BroydenConverger, BroydenState
+from dxtb._src.scf.cdiis import CDIISState
+from dxtb._src.scf.converger import LinearConverger
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.soscf import SOSCFConverger
 from dxtb.scf import SCFDifferentiation
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
@@ -93,9 +93,9 @@ def test_method_state_pytree_round_trip(state: object) -> None:
 
 def test_fixed_trip_capability_matrix() -> None:
     """Only eager-only SOSCF is outside the established fixed-trip contract."""
-    from dxtb._src.scf.functional.anderson import AndersonConverger
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
+    from dxtb._src.scf.anderson import AndersonConverger
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
 
     assert LinearConverger.supports_fixed_trip is True
     assert AndersonConverger.supports_fixed_trip is True
@@ -107,7 +107,7 @@ def test_fixed_trip_capability_matrix() -> None:
 
 def test_transform_methods_have_no_tensor_to_host_extraction() -> None:
     """Transform-capable method modules do not inspect tensor values in Python."""
-    package = Path(__file__).parents[2] / "src/dxtb/_src/scf/functional"
+    package = Path(__file__).parents[2] / "src/dxtb/_src/scf"
     for filename in ("anderson.py", "broyden.py", "cdiis.py"):
         tree = ast.parse((package / filename).read_text())
         host_extractions = [
@@ -125,8 +125,8 @@ def test_compile_uses_static_fermi_path(
 ) -> None:
     """Compiled active-smearing maps never call detached adaptive Fermi code."""
     from dxtb import GFN2_XTB
-    from dxtb._src.scf.functional import spectral
-    from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
+    from dxtb._src.scf import spectral
+    from dxtb._src.scf.spectral import eager_primal_fermi_scope
 
     from .test_functional_root_derivatives import _case, _initial_state
 
@@ -199,8 +199,8 @@ def test_broyden_vmap_lane_permutation_duplicate_and_isolation() -> None:
 
 def test_alternate_response_keeps_primal_residual_semantics() -> None:
     """An alternate IFT coordinate does not replace primal solve diagnostics."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.response import CPSCFSettings
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.cpscf import CPSCFSettings
 
     from .test_functional_root_derivatives import _case, _run_root
 
@@ -252,10 +252,10 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
 def test_float32_fixed_trip_vmap_and_jvp_are_finite(name: str) -> None:
     """Float32 method histories remain finite under fixed-trip transforms."""
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
-    from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
-    from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
+    from dxtb._src.scf.solver import SCFSolverSettings, _solve_map
+    from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
     from .test_functional_root_derivatives import _case, _initial_state
 

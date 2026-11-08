@@ -65,19 +65,19 @@ from dxtb._src.calculators.singlepoint import (  # noqa: E402
 )
 from dxtb._src.constants import defaults  # noqa: E402
 from dxtb._src.integral.evaluation import build_integral_matrices  # noqa: E402
-from dxtb._src.scf.functional import (  # noqa: E402
+from dxtb._src.scf import (  # noqa: E402
     SCFCharges,
     pack_charges,
     setup_scf_inputs,
 )
-from dxtb._src.scf.functional.eager import _prepare_solver  # noqa: E402
-from dxtb._src.scf.functional.implicit import (  # noqa: E402
+from dxtb._src.scf.eager import _prepare_solver  # noqa: E402
+from dxtb._src.scf.implicit import (  # noqa: E402
     _prepare_scf_root,
     _SCFMapTensorTree,
     implicit_root,
 )
-from dxtb._src.scf.functional.map import scf_map  # noqa: E402
-from dxtb._src.scf.functional.solver import (  # noqa: E402
+from dxtb._src.scf.map import scf_map  # noqa: E402
+from dxtb._src.scf.solver import (  # noqa: E402
     SCFTrajectoryStatus,
     _solve_map,
     fermi_failure_code,
@@ -158,7 +158,7 @@ def profile_primal_map(prepared: PreparedInputs) -> None:
     """Profile one raw SCF map and its named physical subcomponents."""
     from torch.profiler import ProfilerActivity, profile
 
-    import dxtb._src.scf.functional.map as map_module
+    import dxtb._src.scf.map as map_module
     from dxtb._src.wavefunction import filling
 
     components = (

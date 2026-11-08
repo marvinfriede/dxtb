@@ -47,7 +47,7 @@ import torch
 from tad_mctc import storch
 
 import dxtb  # noqa: E402
-from dxtb._src.scf.functional.spectral import (  # noqa: E402
+from dxtb._src.scf.spectral import (  # noqa: E402
     _matrix_fermi,
     _prepare_matrix,
     fermi_density_matrix,

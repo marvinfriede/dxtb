@@ -90,15 +90,15 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional.certification import (
+from dxtb._src.scf.certification import (
     certify_scf_core_state,
     resolve_certification_thresholds,
 )
-from dxtb._src.scf.functional.core import (
+from dxtb._src.scf.core import (
     replace_tensor_leaves,
     tensor_leaves,
 )
-from dxtb._src.scf.functional.data import (
+from dxtb._src.scf.data import (
     PotentialLayout,
     SCFCharges,
     SCFInputs,
@@ -106,20 +106,20 @@ from dxtb._src.scf.functional.data import (
     pack_charges,
     setup_scf_inputs,
 )
-from dxtb._src.scf.functional.eager import (
+from dxtb._src.scf.eager import (
     _prepare_solver,
     public_scf_status,
     resolve_scf_plan,
 )
-from dxtb._src.scf.functional.implicit import (
+from dxtb._src.scf.implicit import (
     _LINEAR_SOLVE_ATOL,
     _LINEAR_SOLVE_RTOL,
     _SCFMapTensorTree,
 )
-from dxtb._src.scf.functional.implicit import (
+from dxtb._src.scf.implicit import (
     implicit_root as _functional_implicit_root,
 )
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf.map import (
     evaluate_hamiltonian,
     evaluate_potential,
     fock_initial_guess,
@@ -129,16 +129,16 @@ from dxtb._src.scf.functional.map import (
     scf_map,
     unpack_potential,
 )
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.response import (
+from dxtb._src.scf.cpscf import (
     CPSCFSettings,
     prepare_response_root,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
     FERMI_FAILURE_NONCONVERGENCE,
@@ -154,8 +154,8 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf_fock,
     finalize_scf_potential,
 )
-from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
-from dxtb._src.scf.functional.strategy import SCFStrategy
+from dxtb._src.scf.spectral import eager_primal_fermi_scope
+from dxtb._src.scf.strategy import SCFStrategy
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.status import SCFStatus

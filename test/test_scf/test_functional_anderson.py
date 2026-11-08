@@ -26,17 +26,17 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     AndersonState,
     SCFCharges,
     SCFMapResult,
     SCFPotential,
     SCFSpectralResult,
 )
-from dxtb._src.scf.functional import anderson as anderson_module
-from dxtb._src.scf.functional import anderson_mix
-from dxtb._src.scf.functional.anderson import AndersonConvergerSettings
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
+from dxtb._src.scf import anderson as anderson_module
+from dxtb._src.scf import anderson_mix
+from dxtb._src.scf.anderson import AndersonConvergerSettings
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
 
 from ..utils import scf_strategy
 from ._anderson_helpers import (

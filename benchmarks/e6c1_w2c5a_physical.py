@@ -49,10 +49,10 @@ import benchmarks.e6c1_w2c2_implicit as w2c2  # noqa: E402
 import dxtb  # noqa: E402
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
-from dxtb._src.scf.functional import eager as eager_module  # noqa: E402
-from dxtb._src.scf.functional import map as map_module  # noqa: E402
-from dxtb._src.scf.functional import solver as solver_module  # noqa: E402
-from dxtb._src.scf.functional import spectral as spectral_module  # noqa: E402
+from dxtb._src.scf import eager as eager_module  # noqa: E402
+from dxtb._src.scf import map as map_module  # noqa: E402
+from dxtb._src.scf import solver as solver_module  # noqa: E402
+from dxtb._src.scf import spectral as spectral_module  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import (  # noqa: E402
     SCFVariable,

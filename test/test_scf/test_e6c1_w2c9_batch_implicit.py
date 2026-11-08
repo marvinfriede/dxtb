@@ -38,9 +38,9 @@ from dxtb._src.calculators.batch_implicit import (
 )
 from dxtb._src.calculators.batch_streaming import stream_batch_value_and_grad
 from dxtb._src.calculators.model import Model
-from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-from dxtb._src.scf.functional.implicit import implicit_root
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.eager import run_prepared_functional_implicit
+from dxtb._src.scf.implicit import implicit_root
+from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
     FERMI_FAILURE_NONCONVERGENCE,
@@ -1639,7 +1639,7 @@ def test_electric_field_and_field_grad_perturbations() -> None:
 
 def test_nested_jvp_and_outer_nel_tangent() -> None:
     """Nested jvp(jvp(...)) unwraps primal tensors cleanly and propagates outer nel tangents."""
-    from dxtb._src.scf.functional.spectral import (
+    from dxtb._src.scf.spectral import (
         fermi_density_matrix,
         fermi_free_energy_matrix,
         fermi_free_energy_trace,
@@ -2389,7 +2389,7 @@ def test_w2c11_streaming_api_contracts_aliasing_hooks_and_long_lived_execution()
 
 def test_w2c11_eager_primal_fermi_modes_and_scope_isolation() -> None:
     """Verify static, adaptive, and spectral primal modes with streaming and scope safety."""
-    from dxtb._src.scf.functional.spectral import (
+    from dxtb._src.scf.spectral import (
         _current_primal_fermi_mode,
         eager_primal_fermi_scope,
     )

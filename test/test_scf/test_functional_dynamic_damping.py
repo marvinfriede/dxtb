@@ -24,16 +24,16 @@ import torch
 from torch.func import vmap
 
 from dxtb import GFN1_XTB, labels
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
     SCFMapResult,
     SCFSolverSettings,
     SCFSpectralResult,
     anderson_mix,
 )
-from dxtb._src.scf.functional.anderson import anderson_mix
-from dxtb._src.scf.functional.method import LinearConverger
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.anderson import anderson_mix
+from dxtb._src.scf.converger import LinearConverger
+from dxtb._src.scf.solver import (
     DynamicDampingSettings,
     _solve_map_control,
     setup_solver_settings,

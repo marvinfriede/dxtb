@@ -47,7 +47,7 @@ from dxtb._src.calculators.batch_implicit import (
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.constants import defaults
 from dxtb._src.io import OutputHandler
-from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
+from dxtb._src.scf.spectral import eager_primal_fermi_scope
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.typing.exceptions import (

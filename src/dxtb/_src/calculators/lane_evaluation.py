@@ -51,14 +51,14 @@ from dxtb._src.calculators.singlepoint import (
     _singlepoint_result,
     system_singlepoint,
 )
-from dxtb._src.scf.functional.core import replace_tensor_leaves, tensor_leaves
-from dxtb._src.scf.functional.data import functional_scf_interactions_eligible
-from dxtb._src.scf.functional.eager import (
+from dxtb._src.scf.core import replace_tensor_leaves, tensor_leaves
+from dxtb._src.scf.data import functional_scf_interactions_eligible
+from dxtb._src.scf.eager import (
     fixed_trip_control,
     functional_core_result,
     prepare_system_fixed_trip,
 )
-from dxtb._src.scf.functional.solver import finalize_fixed_trip_problem
+from dxtb._src.scf.solver import finalize_fixed_trip_problem
 from dxtb._src.scf.iterator import get_refocc, reference_electron_count
 from dxtb._src.wavefunction.filling import spin_electron_violations
 

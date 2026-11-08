@@ -8,17 +8,17 @@ from pathlib import Path
 import torch
 
 from dxtb import GFN1_XTB
-from dxtb._src.scf.functional import anderson as anderson_module
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf import anderson as anderson_module
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
     AndersonState,
     anderson_mix,
 )
-from dxtb._src.scf.functional.data import SCFMapResult
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.strategy import SCFStrategy
+from dxtb._src.scf.data import SCFMapResult
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.strategy import SCFStrategy
 from dxtb.scf import strategy_preset
 
 from ..utils import scf_strategy
@@ -100,7 +100,7 @@ def test_anderson_inactive_transition_freezes_fixed_size_history() -> None:
 
 def test_effective_configuration_builds_a_single_method_strategy() -> None:
     """Configuration chooses a method before the shared solver starts."""
-    from dxtb._src.scf.functional.eager import _prepare_solver
+    from dxtb._src.scf.eager import _prepare_solver
 
     case = _prepare_case(GFN1_XTB)
     config = case.system.config.scf
@@ -129,7 +129,7 @@ def test_anderson_module_has_no_solver_lifecycle() -> None:
     ):
         assert forbidden not in source
 
-    solver_source = Path("src/dxtb/_src/scf/functional/solver.py").read_text()
+    solver_source = Path("src/dxtb/_src/scf/solver.py").read_text()
     assert "AndersonConverger" not in solver_source
     assert "mix_fn" not in solver_source
 

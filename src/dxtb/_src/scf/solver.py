@@ -65,7 +65,7 @@ from .map import (
     evaluate_potential,
     potential_from_charges,
 )
-from .method import (
+from .converger import (
     LinearConverger,
     SCFConverger,
     SCFConvergerContext,

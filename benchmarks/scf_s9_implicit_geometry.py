@@ -33,11 +33,11 @@ import torch
 
 from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovConverger
 from dxtb import GFN2_XTB
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.eager import _prepare_solver
-from dxtb._src.scf.functional.problem import SCFVariable
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.eager import _prepare_solver
+from dxtb._src.scf.problem import SCFVariable
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,
@@ -103,7 +103,7 @@ def main() -> None:
             settings, _ = _prepare_solver(config, dtype)
             return settings, SCFStrategy(stages)
 
-        import dxtb._src.scf.functional.eager as eager
+        import dxtb._src.scf.eager as eager
 
         previous = eager._prepare_solver
         eager._prepare_solver = prepare

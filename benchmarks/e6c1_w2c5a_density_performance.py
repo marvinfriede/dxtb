@@ -46,7 +46,7 @@ import dxtb  # noqa: E402
 from benchmarks.e6c1_w2c5_fermi_shift import (  # noqa: E402
     _shift_density,
 )
-from dxtb._src.scf.functional.spectral import _matrix_fermi  # noqa: E402
+from dxtb._src.scf.spectral import _matrix_fermi  # noqa: E402
 
 DTYPE = torch.float64
 THREAD_ENV = {

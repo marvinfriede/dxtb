@@ -25,7 +25,7 @@ from tad_mctc.math import einsum
 from dxtb import IndexHelper, labels
 from dxtb._src.typing import Tensor
 
-from ...wavefunction import filling
+from ..wavefunction import filling
 from .data import (
     PotentialLayout,
     SCFCharges,

@@ -138,7 +138,7 @@ def run_case(
         evaluate_lane_group,
         evaluate_systems_independently,
     )
-    from dxtb._src.scf.functional.problem import SCFProblem
+    from dxtb._src.scf.problem import SCFProblem
 
     counts = {"maps": 0, "chunks": 0}
     original_map = SCFProblem.map

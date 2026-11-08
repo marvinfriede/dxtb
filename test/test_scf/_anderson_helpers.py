@@ -7,21 +7,21 @@ from dataclasses import dataclass
 import torch
 
 from dxtb._src.calculators.config.scf import ConfigSCF
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
     setup_anderson_converger_settings,
 )
-from dxtb._src.scf.functional.data import SCFMapResult
-from dxtb._src.scf.functional.problem import SCFProblem
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.data import SCFMapResult
+from dxtb._src.scf.problem import SCFProblem
+from dxtb._src.scf.solver import (
     DynamicDampingSettings,
     SCFSolveResult,
     SCFSolverSettings,
     _solve_map,
     setup_solver_settings,
 )
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 from dxtb._src.typing import Tensor
 
 
@@ -130,8 +130,8 @@ def solve_physical(
     eager: bool = False,
 ) -> SCFSolveResult:
     """Run a physical Anderson case through the common variable API."""
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.solver import solve_scf_problem
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.solver import solve_scf_problem
 
     selected = SCFVariable.CHARGE if variable is None else variable
     problem = SCFProblem(inputs, selected, layout)
@@ -146,8 +146,8 @@ def solve_physical(
 
 def solve_potential(guess, inputs, layout, settings, *, eager=False):
     """Run a potential-variable Anderson test case."""
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.solver import solve_scf_problem
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.solver import solve_scf_problem
 
     return solve_scf_problem(
         guess,
@@ -160,8 +160,8 @@ def solve_potential(guess, inputs, layout, settings, *, eager=False):
 
 def solve_fock(guess, inputs, settings, *, eager=False):
     """Run a Fock-variable Anderson test case."""
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.solver import solve_scf_problem
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.solver import solve_scf_problem
 
     return solve_scf_problem(
         guess,

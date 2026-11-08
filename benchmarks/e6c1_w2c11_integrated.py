@@ -131,7 +131,7 @@ def get_environment_metadata() -> dict[str, Any]:
     source_files = (
         ROOT / "src/dxtb/_src/calculators/batch_implicit.py",
         ROOT / "src/dxtb/_src/calculators/batch_streaming.py",
-        ROOT / "src/dxtb/_src/scf/functional/spectral.py",
+        ROOT / "src/dxtb/_src/scf/spectral.py",
     )
     source_hash = hashlib.sha256()
     for source_file in source_files:
@@ -212,10 +212,10 @@ def _make_weights(nconformers: int, weights_mode: str) -> torch.Tensor:
 
 def run_root_profile(fermi_mode: str) -> dict[str, Any]:
     """Profile physical root preparation phases on tmpda conformer 0."""
-    import dxtb._src.scf.functional.anderson as anderson_mod
-    import dxtb._src.scf.functional.map as map_mod
-    import dxtb._src.scf.functional.solver as solver_mod
-    import dxtb._src.scf.functional.spectral as spectral_mod
+    import dxtb._src.scf.anderson as anderson_mod
+    import dxtb._src.scf.map as map_mod
+    import dxtb._src.scf.solver as solver_mod
+    import dxtb._src.scf.spectral as spectral_mod
 
     all_numbers, all_positions = conformers("tmpda", 8, sigma=0.1, seed=0)
     numbers = all_numbers[0].to(device=DEVICE)

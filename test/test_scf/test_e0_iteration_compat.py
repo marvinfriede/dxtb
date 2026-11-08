@@ -25,8 +25,8 @@ import torch
 
 from dxtb import GFN1_XTB, Calculator, OutputHandler, Result
 from dxtb._src.constants import labels
-from dxtb._src.scf.functional import method as functional_method
-from dxtb._src.scf.functional import problem as functional_problem
+from dxtb._src.scf import converger as functional_method
+from dxtb._src.scf import problem as functional_problem
 
 from ..utils import get_param_module, scf_strategy
 from .samples import samples

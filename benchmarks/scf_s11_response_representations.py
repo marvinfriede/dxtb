@@ -30,18 +30,18 @@ from test.test_scf import test_functional_root_derivatives as root_reference
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.energy import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.energy import (
     electronic_energy_from_spectral,
     free_energy_from_spectral,
 )
-from dxtb._src.scf.functional.implicit import solve_linear
-from dxtb._src.scf.functional.problem import SCFVariable
-from dxtb._src.scf.functional.response import (
+from dxtb._src.scf.implicit import solve_linear
+from dxtb._src.scf.problem import SCFVariable
+from dxtb._src.scf.cpscf import (
     CPSCFSettings,
     prepare_response_root,
 )
-from dxtb._src.scf.functional.solver import setup_solver_settings
+from dxtb._src.scf.solver import setup_solver_settings
 
 
 def _git_value(*arguments: str) -> str:

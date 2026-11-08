@@ -41,7 +41,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 import benchmarks.e6c1_w2c2_implicit as w2c2  # noqa: E402
 import dxtb  # noqa: E402
 from benchmarks.e6c1_w2c5_fermi_shift import _candidate_density  # noqa: E402
-from dxtb._src.scf.functional import map as map_module  # noqa: E402
+from dxtb._src.scf import map as map_module  # noqa: E402
 
 THREAD_ENV = {
     "OMP_NUM_THREADS": "1",

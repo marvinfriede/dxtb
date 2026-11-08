@@ -47,7 +47,7 @@ import torch
 from tad_mctc.storch.linsolve import dense_solve
 
 import dxtb  # noqa: E402
-from dxtb._src.scf.functional.spectral import (  # noqa: E402
+from dxtb._src.scf.spectral import (  # noqa: E402
     _FERMI_MAX_SCALE_POWER,
     _FERMI_MAX_SCALED_NORM,
     _matrix_expm1,

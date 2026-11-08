@@ -26,37 +26,37 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
-from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.data import FermiSettings
-from dxtb._src.scf.functional.energy import (
+from dxtb._src.scf import unpack_charges
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.data import FermiSettings
+from dxtb._src.scf.energy import (
     electronic_energy_from_density,
     electronic_energy_from_spectral,
 )
-from dxtb._src.scf.functional.implicit import (
+from dxtb._src.scf.implicit import (
     _prepare_scf_root,
     _SCFMapTensorTree,
     implicit_root,
 )
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf.map import (
     density_to_charges_and_core_energy,
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.orbital import build_orbital_model
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.orbital import build_orbital_model
+from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     SCFSolverSettings,
     _solve_map,
     solve_scf_problem,
 )
-from dxtb._src.scf.functional.soscf import (
+from dxtb._src.scf.soscf import (
     SOSCFConverger,
     SOSCFConvergerSettings,
     SOSCFState,
@@ -68,11 +68,11 @@ from dxtb._src.scf.functional.soscf import (
     _positive_preconditioner,
     _stationary_gradient_floor,
 )
-from dxtb._src.scf.functional.stationarity import (
+from dxtb._src.scf.stationarity import (
     ao_stationarity_matrix,
     orthogonalized_stationarity_matrix,
 )
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,
@@ -1028,7 +1028,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
     from dxtb._src.components.interactions import InteractionList
     from dxtb._src.components.interactions.field.efield import ElectricField
     from dxtb._src.integral.evaluation import build_integral_matrices
-    from dxtb._src.scf.functional import setup_scf_inputs
+    from dxtb._src.scf import setup_scf_inputs
 
     case = _case(
         "H2O",
@@ -1419,7 +1419,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     from dxtb._src.components.interactions import InteractionList
     from dxtb._src.components.interactions.field.efield import ElectricField
     from dxtb._src.integral.evaluation import build_integral_matrices
-    from dxtb._src.scf.functional import setup_scf_inputs
+    from dxtb._src.scf import setup_scf_inputs
 
     case = _case(
         "NO2",

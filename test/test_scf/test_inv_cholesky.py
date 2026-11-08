@@ -28,7 +28,7 @@ from tad_mctc.convert import symbol_to_number
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.integral.wrappers import overlap
-from dxtb._src.scf.functional import data as scf_data
+from dxtb._src.scf import data as scf_data
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE

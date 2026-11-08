@@ -29,7 +29,7 @@ from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import labels
 from dxtb._src.typing import Tensor
 
-from .method import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
+from .converger import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
 from .problem import SCFPhysicalState, SCFProblem
 
 __all__ = [

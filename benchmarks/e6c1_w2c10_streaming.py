@@ -96,8 +96,8 @@ def run(nconformers: int, mode: str, chunk_size: int, gradient_mode: str):
     source_files = (
         ROOT / "src/dxtb/_src/calculators/batch_implicit.py",
         ROOT / "src/dxtb/_src/calculators/batch_streaming.py",
-        ROOT / "src/dxtb/_src/scf/functional/map.py",
-        ROOT / "src/dxtb/_src/scf/functional/spectral.py",
+        ROOT / "src/dxtb/_src/scf/map.py",
+        ROOT / "src/dxtb/_src/scf/spectral.py",
     )
     source_hash = hashlib.sha256()
     for source_file in source_files:

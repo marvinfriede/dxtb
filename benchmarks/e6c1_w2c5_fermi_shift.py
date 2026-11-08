@@ -50,8 +50,8 @@ from tad_mctc import storch
 from tad_mctc.storch.linsolve import dense_solve
 
 import dxtb  # noqa: E402
-from dxtb._src.scf.functional import spectral as spectral_module  # noqa: E402
-from dxtb._src.scf.functional.spectral import (  # noqa: E402
+from dxtb._src.scf import spectral as spectral_module  # noqa: E402
+from dxtb._src.scf.spectral import (  # noqa: E402
     _gap_electron_response,
     _matrix_fermi,
     _prepare_matrix,

@@ -27,7 +27,7 @@ import torch
 from tad_mctc import storch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
-import dxtb._src.scf.functional.map as functional_map
+import dxtb._src.scf.map as functional_map
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.calculators.model import Model
@@ -48,7 +48,7 @@ from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     ChargeLayout,
     PotentialLayout,
     SCFCharges,
@@ -69,15 +69,15 @@ from dxtb._src.scf.functional import (
     unpack_potential,
     validate_functional_scf_interactions,
 )
-from dxtb._src.scf.functional.core import (
+from dxtb._src.scf.core import (
     FunctionalInteractionSet,
 )
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf.map import (
     _transitional_diagonalize,
     evaluate_hamiltonian,
 )
-from dxtb._src.scf.functional.problem import SCFVariable
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.problem import SCFVariable
+from dxtb._src.scf.solver import (
     SCFSolverSettings,
     free_energy_from_spectral,
     solve_scf_simple,

@@ -60,9 +60,9 @@ from .map import (
     potential_initial_guess,
     unpack_potential,
 )
-from .method import LinearConverger
+from .converger import LinearConverger
 from .problem import SCFProblem, SCFVariable
-from .response import CPSCFSettings, prepare_response_root
+from .cpscf import CPSCFSettings, prepare_response_root
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,

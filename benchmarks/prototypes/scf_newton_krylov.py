@@ -29,17 +29,17 @@ from typing import ClassVar, cast
 import torch
 from torch.func import jvp
 
-from dxtb._src.scf.functional.method import (
+from dxtb._src.scf.converger import (
     SCFConvergerContext,
     SCFConvergerProposal,
     SCFConvergerState,
 )
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.spectral import eager_primal_fermi_scope
+from dxtb._src.scf.spectral import eager_primal_fermi_scope
 from dxtb._src.typing import Tensor
 
 __all__ = [

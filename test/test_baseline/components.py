@@ -554,7 +554,7 @@ def _eigensolver(spectrum: str, filling: str) -> Target:
         # pylint: disable=import-outside-toplevel
         from tad_mctc import storch
 
-        from dxtb._src.scf.functional.spectral import (
+        from dxtb._src.scf.spectral import (
             aufbau_density_matrix,
             fermi_density_matrix,
         )

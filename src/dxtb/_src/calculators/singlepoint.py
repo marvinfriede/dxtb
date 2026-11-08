@@ -126,7 +126,7 @@ class _SCFOutput:
 
 def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     """Read SCF outputs once without copying functional tensors."""
-    from dxtb._src.scf.functional.eager import (
+    from dxtb._src.scf.eager import (
         FunctionalCoreResult,
         public_scf_status,
     )
@@ -505,7 +505,7 @@ def _singlepoint_impl(
         return prepared
 
     if fixed_trip and prepared.config.scf.differentiation.value != "implicit":
-        from dxtb._src.scf.functional.eager import run_system_fixed_trip
+        from dxtb._src.scf.eager import run_system_fixed_trip
 
         scf_results = run_system_fixed_trip(
             *prepared.scf_arguments(),

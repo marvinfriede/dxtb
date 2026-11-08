@@ -32,18 +32,18 @@ from scipy.optimize import minimize
 
 from benchmarks.prototypes.scf_energy_diis import exact_energy_value_gradient
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional import unpack_charges
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.core import FunctionalInteractionSet
-from dxtb._src.scf.functional.data import SCFInputs
-from dxtb._src.scf.functional.energy import electronic_energy_from_density
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf import unpack_charges
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.core import FunctionalInteractionSet
+from dxtb._src.scf.data import SCFInputs
+from dxtb._src.scf.energy import electronic_energy_from_density
+from dxtb._src.scf.map import (
     density_to_charges_and_core_energy,
     fock_initial_guess,
 )
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.solver import SCFSolverSettings, _solve_map
+from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
 
 def _classic_objective(

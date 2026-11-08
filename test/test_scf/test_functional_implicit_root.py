@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from dxtb._src.scf.functional.implicit import (
+from dxtb._src.scf.implicit import (
     _require_linear_convergence,
     implicit_root,
     solve_linear,
@@ -382,7 +382,7 @@ def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     )
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
+    from dxtb._src.scf.implicit import _SCFMapTensorTree
 
     case = _case(
         "H2",
@@ -500,7 +500,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
     from dxtb.scf import SCFVariable, CPSCFSettings
 
     field = torch.zeros(3, **_DD, requires_grad=True)
@@ -600,12 +600,12 @@ def test_switched_implicit_uses_final_fock_variable(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN2_XTB
-    from dxtb._src.scf.functional import eager as eager_module
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.solver import SCFSolverSettings
-    from dxtb._src.scf.functional.strategy import (
+    from dxtb._src.scf import eager as eager_module
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.solver import SCFSolverSettings
+    from dxtb._src.scf.strategy import (
         SCFStage,
         SCFStrategy,
         SCFSwitchPolicy,
@@ -767,8 +767,8 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf import functional as functional_package
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src import scf as functional_package
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
     from dxtb.scf import SCFVariable, CPSCFSettings
 
     case = _case(
@@ -832,7 +832,7 @@ def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     responses = []
     for converger in ("linear", "anderson"):
@@ -882,7 +882,7 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
     from test.test_scf.test_functional_root_derivatives import _case, _run_root
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     case = _case(
         "H2",
@@ -944,7 +944,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
     import pytest
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
     from dxtb._src.typing.exceptions import SCFConvergenceError
 
     case = _case(
@@ -1146,7 +1146,7 @@ def test_implicit_strategy_policy_selects_native_routes(
     from types import SimpleNamespace
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional import data as functional_data
+    from dxtb._src.scf import data as functional_data
     from dxtb._src.scf.iterator import _implicit_differentiation_supported
     from dxtb.config import ConfigSCF
     from dxtb.scf import AndersonConverger, strategy_preset
@@ -1352,7 +1352,7 @@ def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     )
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     def derivatives(energy: torch.Tensor, field: torch.Tensor):
         first = torch.autograd.grad(
@@ -1426,8 +1426,8 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     from test.test_scf.test_functional_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.functional import energy
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf import energy
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     case = _case(
         "H2",
@@ -1495,8 +1495,8 @@ def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
     )
 
     from dxtb import GFN2_XTB
-    from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
-    from dxtb._src.scf.functional.solver import finalize_scf_potential
+    from dxtb._src.scf.implicit import _SCFMapTensorTree
+    from dxtb._src.scf.solver import finalize_scf_potential
 
     tolerance = 1.0e-12
     origin = torch.zeros((), **_DD, requires_grad=True)

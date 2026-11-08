@@ -41,7 +41,7 @@ import torch
 import dxtb
 from benchmarks import e6c1_w2c2_implicit as w2c2
 from benchmarks.e6c1_w2c6_tanh_solve import _matrix_fermi_identity_rhs
-from dxtb._src.scf.functional import spectral
+from dxtb._src.scf import spectral
 
 
 def main() -> None:

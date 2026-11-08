@@ -232,9 +232,9 @@ def _instrument_implicit_solve():
 
 def run_kernel_ab_benchmark() -> dict[str, Any]:
     """Level 1 & Level 2 isolated kernel and response A/B benchmark on tmpda conformer 0."""
-    import dxtb._src.scf.functional.spectral as spectral_mod
-    from dxtb._src.scf.functional.map import scf_map
-    from dxtb._src.scf.functional.solver import free_energy_from_spectral
+    import dxtb._src.scf.spectral as spectral_mod
+    from dxtb._src.scf.map import scf_map
+    from dxtb._src.scf.solver import free_energy_from_spectral
 
     all_numbers, all_positions = frozen_conformers(
         "tmpda", 8, sigma=0.1, seed=0

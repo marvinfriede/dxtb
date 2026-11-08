@@ -236,7 +236,7 @@ def test_system_negative_temperature_fails_before_transform_guess(
     monkeypatch,
 ) -> None:
     """An invalid electronic temperature fails before SCF preparation."""
-    import dxtb._src.scf.functional.eager as eager
+    import dxtb._src.scf.eager as eager
 
     system = _system(maxiter=1, temperature=-1.0)
     positions = _positions()[0]
@@ -269,7 +269,7 @@ def test_system_functional_fixed_trip_constructs_one_transform_guess(
     monkeypatch,
 ) -> None:
     """Eligible System execution builds exactly one non-eagerly-validated guess."""
-    import dxtb._src.scf.functional.eager as eager
+    import dxtb._src.scf.eager as eager
 
     system = _system(maxiter=1)
     original_get_guess = eager.get_guess
@@ -290,7 +290,7 @@ def test_system_negative_fermi_maxiter_fails_before_transform_guess(
     monkeypatch,
 ) -> None:
     """An invalid Fermi iteration limit fails before SCF preparation."""
-    import dxtb._src.scf.functional.eager as eager
+    import dxtb._src.scf.eager as eager
 
     system = _system(maxiter=1, fermi_maxiter=-1)
     guess_calls = 0
@@ -320,7 +320,7 @@ def test_system_broyden_uses_native_functional_route(
     monkeypatch,
 ) -> None:
     """Broyden reaches its native method without converger substitution."""
-    from dxtb._src.scf.functional.broyden import BroydenConverger
+    from dxtb._src.scf.broyden import BroydenConverger
 
     system = _system(maxiter=2, converger="broyden")
     original_propose = BroydenConverger.propose

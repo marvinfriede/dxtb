@@ -22,7 +22,7 @@ import torch
 from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import GFN1_XTB, labels
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     functional_return_valid,
     functional_subsolves_ok,
     setup_solver_settings,

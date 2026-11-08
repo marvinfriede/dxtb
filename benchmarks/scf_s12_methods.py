@@ -30,20 +30,20 @@ from test.test_scf import test_functional_root_derivatives as root_reference
 import torch
 
 from dxtb import GFN2_XTB
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.energy import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.energy import (
     electronic_energy_from_spectral,
     free_energy_from_spectral,
 )
-from dxtb._src.scf.functional.method import LinearConverger, SCFConvergerContext
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.solver import _solve_map, setup_solver_settings
-from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+from dxtb._src.scf.converger import LinearConverger, SCFConvergerContext
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.solver import _solve_map, setup_solver_settings
+from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
 
 def _git_value(*arguments: str) -> str:

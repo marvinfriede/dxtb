@@ -55,7 +55,7 @@ from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 
 from dxtb._src.constants import defaults
-from dxtb._src.scf.functional.eager import _raise_failure_code
+from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import Tensor

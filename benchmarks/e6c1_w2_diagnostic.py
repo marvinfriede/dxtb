@@ -116,7 +116,7 @@ def _wrap(target: object, name: str, stage: str, details: dict[str, Any]):
 def production_instrumentation():
     """Add temporary timers around actual production call boundaries."""
     from dxtb._src.calculators import singlepoint
-    from dxtb._src.scf.functional import eager, map, solver, spectral
+    from dxtb._src.scf import eager, map, solver, spectral
     from dxtb._src.wavefunction import filling
 
     restorers: list[tuple[object, str, object]] = []
@@ -326,7 +326,7 @@ def main() -> None:
         from dxtb import GFN1_XTB, ParamModule, labels
         from dxtb._src.calculators import singlepoint
         from dxtb._src.calculators.model import Model
-        from dxtb._src.scf.functional import eager, spectral
+        from dxtb._src.scf import eager, spectral
         from dxtb.config import Config
         from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
 

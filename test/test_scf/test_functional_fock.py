@@ -29,25 +29,25 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
     SCFPotential,
 )
-from dxtb._src.scf.functional import anderson as functional_anderson
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import anderson as functional_anderson
+from dxtb._src.scf import (
     fock_initial_guess,
     fock_map,
     functional_subsolves_ok,
 )
-from dxtb._src.scf.functional import map as functional_map
-from dxtb._src.scf.functional import potential_to_hamiltonian
-from dxtb._src.scf.functional import problem as functional_problem
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import map as functional_map
+from dxtb._src.scf import potential_to_hamiltonian
+from dxtb._src.scf import problem as functional_problem
+from dxtb._src.scf import (
     setup_solver_settings,
     solve_scf_fock_simple,
 )
-from dxtb._src.scf.functional import solver as functional_solver
-from dxtb._src.scf.functional import validate_fock_state
+from dxtb._src.scf import solver as functional_solver
+from dxtb._src.scf import validate_fock_state
 from dxtb.scf import LinearConverger
 
 from ..utils import scf_strategy

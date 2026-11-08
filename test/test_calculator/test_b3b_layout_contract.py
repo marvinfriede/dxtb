@@ -218,7 +218,7 @@ def test_interaction_descriptors_feed_functional_preparation(
     method: str, method_label: int
 ) -> None:
     """Exact setup descriptors supply the existing functional entry schema."""
-    from dxtb._src.scf.functional.interactions import (
+    from dxtb._src.scf.interactions import (
         prepare_functional_interactions,
     )
 
@@ -721,7 +721,7 @@ def test_functional_singlepoint_reuses_captured_scf_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Eligible System SCF inputs reuse the active backend map Node."""
-    from dxtb._src.scf.functional import eager
+    from dxtb._src.scf import eager
 
     system = _model().setup(torch.tensor([1, 1]))
     assert system.integral_setup is not None
@@ -765,7 +765,7 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
     """The implicit physical-root route receives the same captured map."""
     from dataclasses import replace
 
-    from dxtb._src.scf.functional import eager
+    from dxtb._src.scf import eager
 
     from dxtb.config import ConfigSCF
 
@@ -815,7 +815,7 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
     """Direct functional setup reuses the frozen IndexHelper without cloning."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional.data import setup_scf_inputs
+    from dxtb._src.scf.data import setup_scf_inputs
 
     case = _prepare_case(GFN1_XTB, setup_functional=False)
     legacy_maps = (
@@ -878,7 +878,7 @@ def test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding() -> None:
     """The captured reduction maps do not replace padding-aware mask setup."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional.data import _symmetric_inverse_sqrt
+    from dxtb._src.scf.data import _symmetric_inverse_sqrt
 
     case = _prepare_case(GFN1_XTB, sample_name="SiH4")
     expected_mask = case.system.ihelp.spread_shell_to_orbital(
@@ -1149,7 +1149,7 @@ def test_system_ihelp_replacement_and_structural_consistency(
     """Equivalent IndexHelper replacement preserves core reuse; incompatible replacements fail early."""
     from dxtb._src.calculators.lane_evaluation import can_vmap_system
     from dxtb._src.calculators.packed_result import evaluate_packed_systems
-    from dxtb._src.scf.functional import eager as scf_eager
+    from dxtb._src.scf import eager as scf_eager
 
     model = _model()
     numbers = mols["H2O"]["numbers"].to(device="cpu")

@@ -26,14 +26,14 @@ import numpy as np
 import torch
 from scipy.optimize import minimize
 
-from dxtb._src.scf.functional.energy import electronic_energy_from_density
-from dxtb._src.scf.functional.map import density_to_charges_and_core_energy
-from dxtb._src.scf.functional.method import (
+from dxtb._src.scf.energy import electronic_energy_from_density
+from dxtb._src.scf.map import density_to_charges_and_core_energy
+from dxtb._src.scf.converger import (
     SCFConvergerContext,
     SCFConvergerProposal,
     simple_mix,
 )
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,

@@ -24,13 +24,13 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, ParamModule
-from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
-from dxtb._src.scf.functional.problem import SCFProblem, SCFVariable
-from dxtb._src.scf.functional.response import (
+from dxtb._src.scf.implicit import _SCFMapTensorTree
+from dxtb._src.scf.problem import SCFProblem, SCFVariable
+from dxtb._src.scf.cpscf import (
     CPSCFSettings,
     prepare_response_root,
 )
-from dxtb._src.scf.functional.solver import setup_solver_settings
+from dxtb._src.scf.solver import setup_solver_settings
 from dxtb.scf import (
     AndersonConverger,
     AndersonConvergerSettings,
@@ -162,7 +162,7 @@ def test_matrix_free_tangent_and_adjoint_match_dense_operator(
 ) -> None:
     """Actual response coordinates match dense I-Gx and its transpose."""
     _, record, settings = _root_record()
-    from dxtb._src.scf.functional.implicit import solve_linear
+    from dxtb._src.scf.implicit import solve_linear
 
     prepared = prepare_response_root(
         record.outcome,
@@ -264,7 +264,7 @@ def test_alternate_response_candidate_uses_one_raw_map_and_no_refinement(
 
 def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
     """Broyden and Anderson agree across charge, potential and Fock IFT spaces."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     results = []
@@ -333,10 +333,10 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
 
 def test_geometry_response_is_independent_of_primal_strategy() -> None:
     """Geometry, field, and mixed responses agree for Broyden and CDIIS."""
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
     from .test_functional_root_derivatives import samples
 
@@ -440,7 +440,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
 
 def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
     """The default IFT tolerances stabilize H2 response through order three."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     derivatives = []
     for rtol in (1.0e-8, 1.0e-12):
@@ -498,15 +498,15 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
 
 def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
     """The full fixed-occupation hybrid history does not enter the IFT."""
-    from dxtb._src.scf.functional.anderson import (
+    from dxtb._src.scf.anderson import (
         AndersonConverger,
         AndersonConvergerSettings,
     )
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.soscf import SOSCFConverger
-    from dxtb._src.scf.functional.strategy import (
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.soscf import SOSCFConverger
+    from dxtb._src.scf.strategy import (
         SCFStage,
         SCFStrategy,
         SCFSwitchPolicy,
@@ -623,15 +623,15 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
     None
 ):
     """Thermal implicit derivatives do not depend on Broyden/CDIIS history."""
-    from dxtb._src.scf.functional.anderson import (
+    from dxtb._src.scf.anderson import (
         AndersonConverger,
         AndersonConvergerSettings,
     )
-    from dxtb._src.scf.functional.broyden import BroydenConverger
-    from dxtb._src.scf.functional.cdiis import CDIISConverger
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.strategy import (
+    from dxtb._src.scf.broyden import BroydenConverger
+    from dxtb._src.scf.cdiis import CDIISConverger
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.strategy import (
         SCFStage,
         SCFStrategy,
         SCFSwitchPolicy,
@@ -754,7 +754,7 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
     None
 ):
     """Open-shell GFN2 hyperpolarizability is coordinate independent."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     derivatives = []
     for variable in (
@@ -856,7 +856,7 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
 
 def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
     """IFT differentiates through a live GFN2 parameter, not only hcore."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     parameter_module = ParamModule(GFN2_XTB, device="cpu", dtype=torch.float64)
     parameter = parameter_module.parameter_tree.charge.effective.gexp.param
@@ -901,7 +901,7 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
 
 def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
     """A one-step physical response limit remains visibly non-finite."""
-    from dxtb._src.scf.functional.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_functional_implicit
 
     field = torch.tensor([0.0, 0.0, 0.0], **_DD, requires_grad=True)
     case = _case(
@@ -958,7 +958,7 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
 
 def test_physical_tangent_response_failure_is_nonfinite() -> None:
     """An unconverged physical tangent Krylov iterate is never returned."""
-    from dxtb._src.scf.functional.implicit import implicit_root
+    from dxtb._src.scf.implicit import implicit_root
 
     from .test_functional_root_derivatives import _initial_state
 

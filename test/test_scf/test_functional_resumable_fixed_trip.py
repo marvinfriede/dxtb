@@ -33,11 +33,11 @@ import torch
 
 from dxtb import labels
 from dxtb._src.calculators.singlepoint import system_singlepoint
-from dxtb._src.scf.functional import eager as eager_mod
-from dxtb._src.scf.functional import solver as solver_mod
-from dxtb._src.scf.functional.core import tensor_leaves
-from dxtb._src.scf.functional.problem import SCFVariable
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf import eager as eager_mod
+from dxtb._src.scf import solver as solver_mod
+from dxtb._src.scf.core import tensor_leaves
+from dxtb._src.scf.problem import SCFVariable
+from dxtb._src.scf.solver import (
     SCFSolverTrace,
     _finalize_problem_outcome,
     _problem_state_projection,

@@ -25,11 +25,11 @@ import torch
 from torch.func import jacfwd, jacrev, jvp, vmap
 from torch.utils import _pytree
 
-import dxtb._src.scf.functional.map as functional_map
+import dxtb._src.scf.map as functional_map
 from dxtb import GFN1_XTB, GFN2_XTB, labels
-from dxtb._src.scf.functional.map import evaluate_hamiltonian
-from dxtb._src.scf.functional.solver import free_energy_from_spectral
-from dxtb._src.scf.functional.spectral import (
+from dxtb._src.scf.map import evaluate_hamiltonian
+from dxtb._src.scf.solver import free_energy_from_spectral
+from dxtb._src.scf.spectral import (
     _prepare_matrix,
     aufbau_free_energy_matrix,
     fermi_free_energy_matrix,

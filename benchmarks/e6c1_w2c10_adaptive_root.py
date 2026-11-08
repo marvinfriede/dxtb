@@ -41,7 +41,7 @@ from dxtb._src.calculators.batch_implicit import (  # noqa: E402
     evaluate_converged_root_batch,
     prepare_converged_root_batch,
 )
-from dxtb._src.scf.functional import spectral as spectral_module  # noqa: E402
+from dxtb._src.scf import spectral as spectral_module  # noqa: E402
 
 
 def run(adaptive: bool) -> dict[str, object]:
@@ -64,8 +64,8 @@ def run(adaptive: bool) -> dict[str, object]:
     diff = subprocess.check_output(["git", "diff", "HEAD"], cwd=ROOT)
     source_files = (
         ROOT / "src/dxtb/_src/calculators/batch_implicit.py",
-        ROOT / "src/dxtb/_src/scf/functional/map.py",
-        ROOT / "src/dxtb/_src/scf/functional/spectral.py",
+        ROOT / "src/dxtb/_src/scf/map.py",
+        ROOT / "src/dxtb/_src/scf/spectral.py",
     )
     source_hash = hashlib.sha256()
     for source_file in source_files:

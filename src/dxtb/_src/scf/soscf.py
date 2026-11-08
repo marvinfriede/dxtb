@@ -26,7 +26,7 @@ import torch
 
 from dxtb._src.typing import Tensor
 
-from .method import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
+from .converger import SCFConvergerContext, SCFConvergerProposal, SCFConvergerState
 from .orbital import SOSCFOrbitalModel, build_orbital_model
 from .problem import SCFPhysicalState, SCFProblem, SCFVariable
 

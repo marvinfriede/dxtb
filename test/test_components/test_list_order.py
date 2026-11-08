@@ -37,7 +37,7 @@ from dxtb._src.components.interactions.list import (
     InteractionListCache,
 )
 from dxtb._src.components.list import ComponentList
-from dxtb._src.scf.functional.interactions import (
+from dxtb._src.scf.interactions import (
     prepare_functional_interactions,
 )
 

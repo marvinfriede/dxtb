@@ -25,7 +25,7 @@ import torch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     DynamicDampingSettings,
     LinearConverger,
     SCFConvergence,
@@ -47,7 +47,7 @@ from dxtb._src.scf.functional import (
     solve_scf_simple,
     unpack_charges,
 )
-from dxtb._src.scf.functional.solver import _solve_map
+from dxtb._src.scf.solver import _solve_map
 
 from .test_functional_map import _prepare_case
 

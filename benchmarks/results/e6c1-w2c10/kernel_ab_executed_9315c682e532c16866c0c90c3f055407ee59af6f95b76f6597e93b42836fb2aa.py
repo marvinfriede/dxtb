@@ -38,8 +38,8 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from benchmarks import e6c1_w2c2_implicit as w2c2  # noqa: E402
-from dxtb._src.scf.functional.map import scf_map  # noqa: E402
-from dxtb._src.scf.functional.solver import (  # noqa: E402
+from dxtb._src.scf.map import scf_map  # noqa: E402
+from dxtb._src.scf.solver import (  # noqa: E402
     free_energy_from_spectral,
 )
 

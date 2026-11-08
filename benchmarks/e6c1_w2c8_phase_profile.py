@@ -138,11 +138,11 @@ def build_system(maxiter: int) -> tuple[Any, torch.Tensor, int]:
 def timed_patches() -> Iterator[dict[str, dict[str, float | int]]]:
     """Time call-local production boundaries and restore all patches."""
     import dxtb._src.calculators.singlepoint as singlepoint_module
-    import dxtb._src.scf.functional.anderson as anderson_module
-    import dxtb._src.scf.functional.eager as eager_module
-    import dxtb._src.scf.functional.map as map_module
-    import dxtb._src.scf.functional.solver as solver_module
-    from dxtb._src.scf.functional import spectral as spectral_module
+    import dxtb._src.scf.anderson as anderson_module
+    import dxtb._src.scf.eager as eager_module
+    import dxtb._src.scf.map as map_module
+    import dxtb._src.scf.solver as solver_module
+    from dxtb._src.scf import spectral as spectral_module
     from dxtb._src.wavefunction import filling
 
     rows: dict[str, dict[str, float | int]] = defaultdict(

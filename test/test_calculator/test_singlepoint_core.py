@@ -240,7 +240,7 @@ def test_default_full_singlepoint_uses_functional_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Default FULL singlepoint uses the functional SCF engine."""
-    from dxtb._src.scf.functional.eager import FunctionalCoreResult
+    from dxtb._src.scf.eager import FunctionalCoreResult
 
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
@@ -370,8 +370,8 @@ def test_production_converged_route_executes_only_physical_maps(
     """Eager production stops mapping after convergence, unlike fixed trips."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional import map as functional_map
-    from dxtb._src.scf.functional import problem as functional_problem
+    from dxtb._src.scf import map as functional_map
+    from dxtb._src.scf import problem as functional_problem
 
     options = {
         "strategy": scf_strategy("anderson", "potential"),
@@ -444,7 +444,7 @@ def test_production_singlepoint_matches_legacy_full(
     """Production FULL dispatch preserves functional eager values in each route."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional import run_functional_full_eager
+    from dxtb._src.scf import run_functional_full_eager
 
     options = {
         "strategy": scf_strategy(converger, variable),
@@ -536,7 +536,7 @@ def test_production_maxiter_zero_is_valid_one_shot(
     from test.test_scf.test_functional_map import _prepare_case
 
     from dxtb import SCFFailureCode
-    from dxtb._src.scf.functional import run_functional_full_eager
+    from dxtb._src.scf import run_functional_full_eager
 
     case = _prepare_case(
         GFN1_XTB,
@@ -656,7 +656,7 @@ def test_production_dynamic_damping_matches_legacy(
     """Production routing retains dynamic-damping trajectory and warnings."""
     from test.test_scf.test_functional_map import _prepare_case
 
-    from dxtb._src.scf.functional import run_functional_full_eager
+    from dxtb._src.scf import run_functional_full_eager
 
     maxiter = 12 if variable == "charge" else 8
     anderson = (

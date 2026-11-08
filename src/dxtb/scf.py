@@ -35,20 +35,20 @@ from dxtb._src.calculators.config.public_scf import (
     SCFConvergenceProfile,
     SCFDifferentiation,
 )
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import (
+from dxtb._src.scf.broyden import (
     BroydenConverger,
     BroydenConvergerSettings,
 )
-from dxtb._src.scf.functional.cdiis import CDIISConverger, CDIISConvergerSettings
-from dxtb._src.scf.functional.method import LinearConverger
-from dxtb._src.scf.functional.problem import SCFVariable
-from dxtb._src.scf.functional.response import CPSCFSettings
-from dxtb._src.scf.functional.soscf import SOSCFConverger
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.cdiis import CDIISConverger, CDIISConvergerSettings
+from dxtb._src.scf.converger import LinearConverger
+from dxtb._src.scf.problem import SCFVariable
+from dxtb._src.scf.cpscf import CPSCFSettings
+from dxtb._src.scf.soscf import SOSCFConverger
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,

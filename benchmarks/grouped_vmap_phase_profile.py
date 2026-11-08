@@ -81,7 +81,7 @@ def _instrument() -> None:
 
     from dxtb._src.calculators import lane_evaluation, packed_result
     from dxtb._src.calculators import singlepoint as sp_mod
-    from dxtb._src.scf.functional import eager as eager_mod
+    from dxtb._src.scf import eager as eager_mod
 
     sp_mod.build_integral_matrices = _timed(
         "integrals", sp_mod.build_integral_matrices

@@ -23,7 +23,7 @@ from dataclasses import replace
 import torch
 from torch.func import vmap
 
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
     SCFMapResult,
     SCFPotential,
@@ -33,8 +33,8 @@ from dxtb._src.scf.functional import (
     functional_return_valid,
     functional_subsolves_ok,
 )
-from dxtb._src.scf.functional.method import LinearConverger
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.converger import LinearConverger
+from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
     FERMI_FAILURE_NONCONVERGENCE,
@@ -118,7 +118,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
 
     # Build the public result to check trajectory validity separately from
     # the selected map's successful Fermi status.
-    from dxtb._src.scf.functional import SCFSolveResult
+    from dxtb._src.scf import SCFSolveResult
 
     result = SCFSolveResult(
         map_result=outcome.map_result,

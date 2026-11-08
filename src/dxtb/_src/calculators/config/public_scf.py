@@ -44,8 +44,8 @@ def _preset(name: str):
 
 
 def _default_cpscf():
-    from dxtb._src.scf.functional.problem import SCFVariable
-    from dxtb._src.scf.functional.response import CPSCFSettings
+    from dxtb._src.scf.problem import SCFVariable
+    from dxtb._src.scf.cpscf import CPSCFSettings
 
     return CPSCFSettings(variable=SCFVariable.POTENTIAL)
 
@@ -55,7 +55,7 @@ def _default_strategy():
 
 
 def _first_variable(strategy: Any):
-    from dxtb._src.scf.functional.problem import SCFVariable
+    from dxtb._src.scf.problem import SCFVariable
 
     stage = strategy.stages[0]
     if stage.variable is not None:
@@ -103,8 +103,8 @@ class ConfigSCF:
     fermi: ConfigFermi = field(default_factory=ConfigFermi)
 
     def __post_init__(self) -> None:
-        from dxtb._src.scf.functional.response import CPSCFSettings
-        from dxtb._src.scf.functional.strategy import SCFStrategy
+        from dxtb._src.scf.cpscf import CPSCFSettings
+        from dxtb._src.scf.strategy import SCFStrategy
 
         if not isinstance(self.strategy, SCFStrategy):
             raise TypeError("strategy must be an SCFStrategy.")

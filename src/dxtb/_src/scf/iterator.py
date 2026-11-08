@@ -48,7 +48,7 @@ from .guess import get_guess
 from .result import SCFResult
 
 if TYPE_CHECKING:
-    from .functional.eager import FunctionalCoreResult
+    from .eager import FunctionalCoreResult
 
 __all__ = ["solve"]
 
@@ -66,7 +66,7 @@ def _implicit_differentiation_supported(
     the functional map and response. This is separate from W2c9's internal
     converged-root conformer orchestration.
     """
-    from .functional.data import functional_scf_interactions_eligible
+    from .data import functional_scf_interactions_eligible
 
     eligible, _ = functional_scf_interactions_eligible(interactions)
     is_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
@@ -228,7 +228,7 @@ def _solve_impl(
             numbers,
             integrals,
         ):
-            from .functional.data import functional_scf_interactions_eligible
+            from .data import functional_scf_interactions_eligible
 
             eligible, names = functional_scf_interactions_eligible(interactions)
             if not eligible:
@@ -253,7 +253,7 @@ def _solve_impl(
                 f"'{type(config.strategy.stages[0].converger).__name__}'."
             )
 
-        from .functional.eager import (
+        from .eager import (
             functional_core_result,
             run_prepared_functional_implicit,
         )
@@ -277,7 +277,7 @@ def _solve_impl(
         # pylint: disable=import-outside-toplevel
         from dxtb import OutputHandler
 
-        from .functional.eager import (
+        from .eager import (
             apply_functional_full_policy,
             resolve_scf_plan,
             run_prepared_functional_full,

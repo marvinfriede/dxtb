@@ -30,23 +30,23 @@ from torch.func import vmap
 from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.constants import defaults
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
 )
-from dxtb._src.scf.functional import anderson as functional_anderson
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import anderson as functional_anderson
+from dxtb._src.scf import (
     functional_return_valid,
     functional_subsolves_ok,
 )
-from dxtb._src.scf.functional import map as functional_map
-from dxtb._src.scf.functional import potential_initial_guess
-from dxtb._src.scf.functional import problem as functional_problem
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import map as functional_map
+from dxtb._src.scf import potential_initial_guess
+from dxtb._src.scf import problem as functional_problem
+from dxtb._src.scf import (
     setup_solver_settings,
     simple_mix,
     solve_scf_potential_simple,
 )
-from dxtb._src.scf.functional.map import potential_map as apply_potential_map
+from dxtb._src.scf.map import potential_map as apply_potential_map
 from dxtb.scf import LinearConverger
 
 from ..utils import scf_strategy
@@ -634,8 +634,8 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
     assert torch.isfinite(forward_jacobian).all()
     assert torch.isfinite(primal).all()
 
-    from dxtb._src.scf.functional.data import unpack_potential
-    from dxtb._src.scf.functional.map import potential_to_hamiltonian
+    from dxtb._src.scf.data import unpack_potential
+    from dxtb._src.scf.map import potential_to_hamiltonian
 
     direction = torch.linspace(
         -0.7, 0.9, guess.numel(), dtype=guess.dtype

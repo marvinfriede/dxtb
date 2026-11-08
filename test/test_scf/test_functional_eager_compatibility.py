@@ -35,23 +35,23 @@ from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.scf import iterator as scf_iterator
-from dxtb._src.scf.functional import anderson as functional_anderson
-from dxtb._src.scf.functional import eager as functional_eager
-from dxtb._src.scf.functional import method as functional_method
-from dxtb._src.scf.functional import problem as functional_problem
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import anderson as functional_anderson
+from dxtb._src.scf import eager as functional_eager
+from dxtb._src.scf import converger as functional_method
+from dxtb._src.scf import problem as functional_problem
+from dxtb._src.scf import (
     resolve_scf_plan,
     run_functional_full_eager,
     run_prepared_functional_full,
 )
-from dxtb._src.scf.functional import solver as functional_solver
-from dxtb._src.scf.functional import spectral as functional_spectral
-from dxtb._src.scf.functional.data import setup_scf_inputs
-from dxtb._src.scf.functional.eager import (
+from dxtb._src.scf import solver as functional_solver
+from dxtb._src.scf import spectral as functional_spectral
+from dxtb._src.scf.data import setup_scf_inputs
+from dxtb._src.scf.eager import (
     _check_subsolve_status,
     _solve_variable,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_NONE,
     SCFTrajectoryStatus,

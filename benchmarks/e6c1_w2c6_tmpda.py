@@ -40,7 +40,7 @@ import torch
 import dxtb
 from benchmarks import e6c1_w2c2_implicit as w2c2
 from benchmarks.e6c1_w2c6_tanh_solve import _matrix_fermi_direct_rhs
-from dxtb._src.scf.functional import spectral as spectral_module
+from dxtb._src.scf import spectral as spectral_module
 
 ROOT = Path(__file__).resolve().parents[1]
 

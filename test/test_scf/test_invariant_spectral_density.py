@@ -26,8 +26,8 @@ from tad_mctc import storch
 from tad_mctc.units import KELVIN2AU
 from torch.func import jacfwd, jacrev, jvp
 
-from dxtb._src.scf.functional import spectral as spectral_module
-from dxtb._src.scf.functional.spectral import (
+from dxtb._src.scf import spectral as spectral_module
+from dxtb._src.scf.spectral import (
     _matrix_expm1,
     _matrix_fermi,
     _prepare_matrix,

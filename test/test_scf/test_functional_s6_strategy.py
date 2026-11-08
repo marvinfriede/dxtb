@@ -26,25 +26,25 @@ import torch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional.anderson import (
+from dxtb._src.scf.anderson import (
     AndersonConverger,
     AndersonConvergerSettings,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger
-from dxtb._src.scf.functional.cdiis import CDIISConverger
-from dxtb._src.scf.functional.data import unpack_charges
-from dxtb._src.scf.functional.map import (
+from dxtb._src.scf.broyden import BroydenConverger
+from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.data import unpack_charges
+from dxtb._src.scf.map import (
     fock_initial_guess,
     fock_map,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import LinearConverger, SCFConverger
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.converger import LinearConverger, SCFConverger
+from dxtb._src.scf.problem import (
     SCFProblem,
     SCFVariable,
     convert_physical_state_to_fock,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     DampingState,
     DynamicDampingSettings,
     SCFSolverSettings,
@@ -52,7 +52,7 @@ from dxtb._src.scf.functional.solver import (
     _converger_state_tensors,
     _solve_map,
 )
-from dxtb._src.scf.functional.strategy import (
+from dxtb._src.scf.strategy import (
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,
@@ -241,8 +241,8 @@ def test_eager_compact_method_to_cdiis_switch_shares_global_budget(
         dynamic_damping=DynamicDampingSettings(enabled=True),
     )
 
-    from dxtb._src.scf.functional import problem as problem_module
-    from dxtb._src.scf.functional import solver as solver_module
+    from dxtb._src.scf import problem as problem_module
+    from dxtb._src.scf import solver as solver_module
 
     original_transition = solver_module._converger_transition
     original_update_damping = solver_module._update_damping
@@ -419,7 +419,7 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     sample_name: str, spin: float, temperature: float
 ) -> None:
     """S2 implicit preparation discards switched method history."""
-    from dxtb._src.scf.functional.implicit import (
+    from dxtb._src.scf.implicit import (
         _prepare_scf_root,
         _SCFMapTensorTree,
     )
@@ -649,7 +649,7 @@ def test_strategy_rejects_unsupported_fock_to_compact_transition() -> None:
 
 def test_methods_do_not_own_stage_selection_or_controller_lifecycle() -> None:
     """The strategy controller depends only on the SCFConverger interface."""
-    from dxtb._src.scf.functional import anderson, broyden, cdiis, solver
+    from dxtb._src.scf import anderson, broyden, cdiis, solver
 
     controller_source = getsource(solver)
     for concrete_name in ("AndersonConverger", "BroydenConverger", "CDIISConverger"):

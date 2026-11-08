@@ -43,7 +43,7 @@ from dxtb._src.calculators.config.main import Config
 from dxtb._src.calculators.model import Model
 from dxtb._src.constants import defaults, labels
 from dxtb._src.param.module import ParamModule
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     ChargeLayout,
     PotentialLayout,
     SCFCharges,
@@ -54,12 +54,12 @@ from dxtb._src.scf.functional import (
     unpack_charges,
     unpack_potential,
 )
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.problem import (
     SCFProblem,
     SCFVariable,
     _mask_packed_rows,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     _project_charge_padding,
     _project_potential_padding,
     _solve_map,
@@ -887,7 +887,7 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
         system = Model(par=par, config=config).setup(sys.numbers, batch_mode=0)
         from dxtb._src.calculators.singlepoint import _interaction_data
         from dxtb._src.integral.evaluation import build_integral_matrices
-        from dxtb._src.scf.functional.data import setup_scf_inputs
+        from dxtb._src.scf.data import setup_scf_inputs
         from dxtb._src.scf.guess import get_guess
         from dxtb._src.scf.iterator import get_refocc
 
@@ -971,7 +971,7 @@ def test_charge_mode_quadrupole_weighting_strictly_improves_invariance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Confirm sqrt(2) quadrupole weighting improves charge-mode invariance and never worsens the orbital-anisotropy baseline."""
-    import dxtb._src.scf.functional.data as scf_data
+    import dxtb._src.scf.data as scf_data
 
     def _measure_rot_and_torque(name: str) -> tuple[float, float, float]:
         sys = SYSTEMS[name]

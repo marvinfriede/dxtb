@@ -27,7 +27,7 @@ from tad_mctc.tree import Node, child
 
 from dxtb._src.typing import Tensor
 
-from .method import (
+from .converger import (
     SCFConvergerContext,
     SCFConvergerProposal,
     SCFConvergerState,

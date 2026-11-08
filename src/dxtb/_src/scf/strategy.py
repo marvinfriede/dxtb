@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
-from .method import SCFConverger
+from .converger import SCFConverger
 from .problem import SCFVariable
 
 __all__ = ["SCFStage", "SCFSwitchPolicy", "SCFStrategy"]

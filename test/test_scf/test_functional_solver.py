@@ -27,7 +27,7 @@ from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, labels
 from dxtb._src.param import ParamModule
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
     SCFMapResult,
     SCFPotential,
@@ -37,7 +37,7 @@ from dxtb._src.scf.functional import (
     simple_mix,
     solve_scf_simple,
 )
-from dxtb._src.scf.functional.solver import _solve_map
+from dxtb._src.scf.solver import _solve_map
 
 from ..utils import scf_strategy
 from .samples import samples
@@ -745,7 +745,7 @@ def test_functional_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (
     from pathlib import Path
 
     source = (
-        Path(__file__).parents[2] / "src/dxtb/_src/scf/functional/solver.py"
+        Path(__file__).parents[2] / "src/dxtb/_src/scf/solver.py"
     )
     text = source.read_text()
     for forbidden in (

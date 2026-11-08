@@ -40,35 +40,35 @@ from benchmarks.prototypes.scf_newton_krylov import (  # noqa: E402
     NewtonKrylovState,
 )
 from dxtb import GFN1_XTB, GFN2_XTB  # noqa: E402
-from dxtb._src.scf.functional.anderson import (  # noqa: E402
+from dxtb._src.scf.anderson import (  # noqa: E402
     AndersonConverger,
     setup_anderson_converger_settings,
 )
-from dxtb._src.scf.functional.broyden import BroydenConverger  # noqa: E402
-from dxtb._src.scf.functional.cdiis import CDIISConverger  # noqa: E402
-from dxtb._src.scf.functional.data import unpack_charges  # noqa: E402
-from dxtb._src.scf.functional.energy import (  # noqa: E402
+from dxtb._src.scf.broyden import BroydenConverger  # noqa: E402
+from dxtb._src.scf.cdiis import CDIISConverger  # noqa: E402
+from dxtb._src.scf.data import unpack_charges  # noqa: E402
+from dxtb._src.scf.energy import (  # noqa: E402
     electronic_energy_from_spectral,
     free_energy_from_spectral,
 )
-from dxtb._src.scf.functional.map import (  # noqa: E402
+from dxtb._src.scf.map import (  # noqa: E402
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.functional.method import (  # noqa: E402
+from dxtb._src.scf.converger import (  # noqa: E402
     SCFConvergerContext,
     SCFConvergerProposal,
 )
-from dxtb._src.scf.functional.problem import (  # noqa: E402
+from dxtb._src.scf.problem import (  # noqa: E402
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.solver import (  # noqa: E402
+from dxtb._src.scf.solver import (  # noqa: E402
     SCFSolverSettings,
     _solve_map,
 )
-from dxtb._src.scf.functional.strategy import (  # noqa: E402
+from dxtb._src.scf.strategy import (  # noqa: E402
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,

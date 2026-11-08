@@ -717,7 +717,7 @@ def test_result_fields_are_all_split_from_a_mapped_group() -> None:
         "dxtb._src.calculators.canonical_padding",
         "dxtb._src.calculators.padding",
         "dxtb._src.calculators.padded_integrals",
-        "dxtb._src.scf.functional.padded",
+        "dxtb._src.scf.padded",
     ],
 )
 def test_cross_composition_padding_modules_are_removed(module: str) -> None:

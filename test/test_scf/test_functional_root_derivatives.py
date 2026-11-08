@@ -31,7 +31,7 @@ from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.integral.evaluation import build_integral_matrices
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     BroydenConverger,
     BroydenConvergerSettings,
     SCFCharges,
@@ -43,8 +43,8 @@ from dxtb._src.scf.functional import (
     fock_initial_guess,
     fock_map,
 )
-from dxtb._src.scf.functional import map as functional_map
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import map as functional_map
+from dxtb._src.scf import (
     pack_charges,
     potential_initial_guess,
     potential_map,
@@ -52,7 +52,7 @@ from dxtb._src.scf.functional import (
     setup_scf_inputs,
     setup_solver_settings,
 )
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.solver import (
     _project_potential_padding,
     _solve_map,
     finalize_scf,

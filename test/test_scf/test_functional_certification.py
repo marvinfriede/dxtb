@@ -26,7 +26,7 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, labels
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     AndersonConverger,
     AndersonConvergerSettings,
     BroydenConverger,
@@ -40,8 +40,8 @@ from dxtb._src.scf.functional import (
     SCFVariable,
     SCFSolverSettings,
 )
-from dxtb._src.scf.functional import certification as certification_module
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import certification as certification_module
+from dxtb._src.scf import (
     certification_core_metrics,
     certification_metrics,
     certify_scf_core_state,
@@ -56,14 +56,14 @@ from dxtb._src.scf.functional import (
     scf_progress_metrics,
     stationarity_matrix,
 )
-from dxtb._src.scf.functional.certification import (
+from dxtb._src.scf.certification import (
     SCF_CERTIFICATION_HIGHER_ORDER_REFERENCE,
     SCF_CERTIFICATION_STANDARD,
     SCF_CERTIFICATION_TIGHT,
     _stationarity_norms,
 )
-from dxtb._src.scf.functional.method import SCFConverger
-from dxtb._src.scf.functional.solver import (
+from dxtb._src.scf.converger import SCFConverger
+from dxtb._src.scf.solver import (
     DynamicDampingSettings,
     SCFTrajectoryStatus,
     _resolve_tolerance,
@@ -102,7 +102,7 @@ def _problem_and_state(
         x = case.x
         layout = None
     else:
-        from dxtb._src.scf.functional import unpack_charges
+        from dxtb._src.scf import unpack_charges
 
         charges = unpack_charges(case.x, case.inputs.charge_layout)
         if variable is SCFVariable.POTENTIAL:
@@ -350,7 +350,7 @@ def test_independent_count_failure_blocks_controller_certification(
 
 def test_implicit_preparation_rejects_raw_only_root() -> None:
     """Implicit attachment cannot accept a raw-converged uncertified root."""
-    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+    from dxtb._src.scf.implicit import _prepare_scf_root
 
     case, _, _ = _problem_and_state(sample_name="H2O")
     profile = SCFInternalCertificationProfile(
@@ -541,7 +541,7 @@ def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
     None
 ):
     """The same certified root prepares identically with different history."""
-    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+    from dxtb._src.scf.implicit import _prepare_scf_root
 
     case, problem, _ = _problem_and_state(sample_name="H2O")
     settings = SCFSolverSettings(140, False, 0.2, 1.0e-8, 1.0e-8)
@@ -588,7 +588,7 @@ def test_implicit_preparation_ignores_trajectory_history_for_same_root() -> (
 
 def test_implicit_root_revalidation_uses_strict_tolerance_boundary() -> None:
     """A raw residual exactly on either tolerance is rejected like S2."""
-    from dxtb._src.scf.functional.implicit import _prepare_scf_root
+    from dxtb._src.scf.implicit import _prepare_scf_root
 
     case, problem, _ = _problem_and_state(sample_name="H2O")
     outcome = _solve_map(
@@ -823,8 +823,8 @@ def test_fresh_hamiltonian_matches_authoritative_variable_map(
     if variable is SCFVariable.FOCK:
         expected = state.map_result.mapped_x
     else:
-        from dxtb._src.scf.functional import potential_from_charges
-        from dxtb._src.scf.functional.map import potential_to_hamiltonian
+        from dxtb._src.scf import potential_from_charges
+        from dxtb._src.scf.map import potential_to_hamiltonian
 
         potential = potential_from_charges(
             state.map_result.spectral.charges, problem.inputs
@@ -1315,7 +1315,7 @@ def test_fresh_fock_stationarity_requires_no_spectral_evaluation(
 ) -> None:
     """Stationarity construction does not diagonalize the rebuilt Hamiltonian."""
     _, problem, state = _problem_and_state(sample_name="H2")
-    import dxtb._src.scf.functional.map as physical_map
+    import dxtb._src.scf.map as physical_map
 
     def unexpected_diagonalization(*args, **kwargs):
         raise AssertionError("fresh-Fock certification must not diagonalize")
@@ -1396,7 +1396,7 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
     variable: SCFVariable,
 ) -> None:
     """A bad map is frozen and the method sees only finite transition data."""
-    import dxtb._src.scf.functional.solver as solver_module
+    import dxtb._src.scf.solver as solver_module
 
     _, problem, physical = _problem_and_state(
         sample_name="H2O", variable=variable

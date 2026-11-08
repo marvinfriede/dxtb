@@ -40,29 +40,29 @@ from test.test_scf.test_functional_map import _prepare_case  # noqa: E402
 import torch
 
 from dxtb import GFN2_XTB  # noqa: E402
-from dxtb._src.scf.functional import unpack_charges  # noqa: E402
-from dxtb._src.scf.functional.cdiis import CDIISConverger  # noqa: E402
-from dxtb._src.scf.functional.map import fock_initial_guess  # noqa: E402
-from dxtb._src.scf.functional.method import (  # noqa: E402
+from dxtb._src.scf import unpack_charges  # noqa: E402
+from dxtb._src.scf.cdiis import CDIISConverger  # noqa: E402
+from dxtb._src.scf.map import fock_initial_guess  # noqa: E402
+from dxtb._src.scf.converger import (  # noqa: E402
     SCFConvergerContext,
     SCFConvergerProposal,
 )
-from dxtb._src.scf.functional.problem import (  # noqa: E402
+from dxtb._src.scf.problem import (  # noqa: E402
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.solver import (  # noqa: E402
+from dxtb._src.scf.solver import (  # noqa: E402
     SCFSolverSettings,
     solve_scf_problem,
 )
-from dxtb._src.scf.functional.soscf import (  # noqa: E402
+from dxtb._src.scf.soscf import (  # noqa: E402
     SOSCFConverger,
     SOSCFConvergerSettings,
     SOSCFState,
     _occupation_sector_spectra,
 )
-from dxtb._src.scf.functional.strategy import (  # noqa: E402
+from dxtb._src.scf.strategy import (  # noqa: E402
     SCFStage,
     SCFStrategy,
     SCFSwitchPolicy,
@@ -218,7 +218,7 @@ def main() -> None:
     }
     # The orbital coordinate count is read from the actual final occupation
     # pattern, without constructing a dense Hessian.
-    from dxtb._src.scf.functional.orbital import build_orbital_model
+    from dxtb._src.scf.orbital import build_orbital_model
 
     final_model = build_orbital_model(problem, outcome.map_result.spectral)
     result["nrot"] = final_model.nrot

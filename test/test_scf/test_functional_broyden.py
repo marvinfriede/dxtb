@@ -10,7 +10,7 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.scf.functional import (
+from dxtb._src.scf import (
     SCFCharges,
     SCFMapResult,
     SCFPotential,
@@ -19,21 +19,21 @@ from dxtb._src.scf.functional import (
     SCFStage,
     SCFStrategy,
 )
-from dxtb._src.scf.functional.broyden import (
+from dxtb._src.scf.broyden import (
     BroydenConverger,
     BroydenConvergerSettings,
     BroydenState,
     _apply_inverse,
     _update_inverse,
 )
-from dxtb._src.scf.functional.method import SCFConvergerContext
-from dxtb._src.scf.functional.problem import (
+from dxtb._src.scf.converger import SCFConvergerContext
+from dxtb._src.scf.problem import (
     SCFMapResult,
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
 )
-from dxtb._src.scf.functional.solver import _solve_map
+from dxtb._src.scf.solver import _solve_map
 
 
 def _propose(
@@ -392,7 +392,7 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
 
     from dxtb import GFN1_XTB
     from dxtb._src.param import ParamModule
-    from dxtb._src.scf.functional.eager import run_functional_full_eager
+    from dxtb._src.scf.eager import run_functional_full_eager
 
     dtype = torch.float64
     positions = torch.tensor(
