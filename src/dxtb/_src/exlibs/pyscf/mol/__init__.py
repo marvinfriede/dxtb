@@ -15,10 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-PySCF: Molecule Variable
+PySCF: Molecule Representation
 ==============================
 
-This module contains a class for a molecular variable in PySCF's format.
+This module contains a class for a molecular representation in PySCF's format.
 It also contains the short-cut version as in PySCF (``M``).
 
 Example

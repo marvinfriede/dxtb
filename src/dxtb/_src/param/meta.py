@@ -33,7 +33,7 @@ __all__ = ["Meta"]
 
 class Meta(BaseModel):
     """
-    Variable of the meta data for a parametrization.
+    Representation of the meta data for a parametrization.
     """
 
     name: Optional[str] = None

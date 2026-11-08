@@ -52,7 +52,7 @@ Label for the :class:`.Repulsion` component, coinciding with the class name.
 
 class Repulsion(BaseRepulsion):
     """
-    Variable of the classical repulsion.
+    Representation of the classical repulsion.
     """
 
     @override

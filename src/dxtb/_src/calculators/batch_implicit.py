@@ -1341,7 +1341,7 @@ def _make_variable_projections(
         map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
     else:
         raise ValueError(
-            f"Unknown convergence target (SCP mode) '{variable}'."
+            f"Unknown SCF variable '{variable}'."
         )
 
     return initial_state, layout, state_projection, map_fn

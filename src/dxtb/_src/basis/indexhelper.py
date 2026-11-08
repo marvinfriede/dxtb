@@ -19,7 +19,7 @@ Basis: IndexHelper
 ==================
 
 Index helper utility to create index maps between atomic, shell-resolved, and
-orbital resolved variables of quantities.
+orbital resolved representations of quantities.
 
 Example
 -------

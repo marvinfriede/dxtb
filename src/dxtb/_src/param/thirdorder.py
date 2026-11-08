@@ -31,7 +31,7 @@ __all__ = ["PThirdOrderShell", "PThirdOrder"]
 
 
 class PThirdOrderShell(BaseModel):
-    """Variable of shell-resolved third-order electrostatics."""
+    """Representation of shell-resolved third-order electrostatics."""
 
     s: float
     """Scaling factor for s-orbitals."""
@@ -45,7 +45,7 @@ class PThirdOrderShell(BaseModel):
 
 class PThirdOrder(BaseModel):
     """
-    Variable of the isotropic third-order onsite correction.
+    Representation of the isotropic third-order onsite correction.
     """
 
     shell: Union[Literal[False], PThirdOrderShell] = False

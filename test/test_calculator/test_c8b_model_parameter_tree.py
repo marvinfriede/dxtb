@@ -1214,3 +1214,37 @@ def test_functional_setup_preserves_additional_classical_component() -> None:
         term.label == extension.label
         for term in system.exact_core.classical_terms
     )
+
+
+def test_functional_setup_rejects_custom_classical_component() -> None:
+    """Functional setup applies the same built-in Component check."""
+    from dxtb._src.components.classicals import Repulsion
+    from dxtb._src.components.classicals.repulsion import new_repulsion
+
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    builtin = new_repulsion(numbers, par, dtype=torch.float64)
+    assert builtin is not None
+
+    class CustomRepulsion(Repulsion):
+        pass
+
+    custom = CustomRepulsion(
+        builtin.arep,
+        builtin.zeff,
+        builtin.kexp,
+        klight=builtin.klight,
+        cutoff=builtin.cutoff,
+        en=builtin.en,
+        enscale=builtin.enscale,
+        dtype=torch.float64,
+    )
+    model = Model(
+        par=par,
+        config=Config.create(
+            method=labels.GFN1_XTB, int_driver=labels.INTDRIVER_PYTORCH
+        ),
+        classical=(custom,),
+    )
+    with pytest.raises(TypeError, match="Only the built-in"):
+        model.setup_functional(numbers, model.parameter_tree)

@@ -18,7 +18,7 @@
 Parametrization: Differentiable Parametrization
 ===============================================
 
-This module provides a differentiable variable of the
+This module provides a differentiable representation of the
 extended tight-binding parametrization using PyTorch.
 
 The :class:`.ParamModule` class automatically converts a Pydantic
@@ -117,7 +117,7 @@ class ParamModule(nn.Module, ParamElementsPairsMixin):
         Returns
         -------
         dict[str, Any]
-            A dictionary variable of the differentiable parameters.
+            A dictionary representation of the differentiable parameters.
         """
 
         return _revert(self.parameter_tree)
@@ -129,7 +129,7 @@ class ParamModule(nn.Module, ParamElementsPairsMixin):
         Returns
         -------
         Param
-            A Pydantic model variable of the differentiable parameters.
+            A Pydantic model representation of the differentiable parameters.
         """
         return Param(**self.to_dict())
 

@@ -18,7 +18,7 @@
 Parametrizations: Module
 ========================
 
-This module provides a differentiable variable of the
+This module provides a differentiable representation of the
 extended tight-binding parametrization using PyTorch.
 
 The :class:`.ParamModule` class automatically converts a Pydantic

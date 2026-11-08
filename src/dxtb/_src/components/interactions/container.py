@@ -192,14 +192,14 @@ class Container:
     ) -> T:
         """
         Create a container from the tensor representation (stacked properties).
-        This variable always assumes the following order within the
+        This representation always assumes the following order within the
         stacked tensor: monopolar, dipolar, quadrupolar. Therefore, one cannot
         use a dipolar but no monopolar property.
 
         Parameters
         ----------
         tensor : Tensor
-            Tensor variable of the container.
+            Tensor representation of the container.
         data : ContainerData
             Collection of shapes and labels of the container. This information
             is required for correctly restoring the Container class.

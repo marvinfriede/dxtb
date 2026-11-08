@@ -104,7 +104,7 @@ def get_elem_angular(
 
 class Element(BaseModel):
     """
-    Variable of the parameters for a species.
+    Representation of the parameters for a species.
     """
 
     shells: List[str]
