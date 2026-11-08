@@ -416,6 +416,14 @@ peak RSS of the case process, watchdog 12 GiB; raw data
 full fixed-trip schedule (used inside transforms), `adaptive` the default
 mapped route, `eager` independent eager lanes. Cells: wall time / peak RSS.
 
+Both JSON files record commit `b0f44881`, the pre-rebase tree with the
+same package code (the branch was later rebased onto the WP0–WP3 commits,
+whose only solver change, the charge-padding projection, is shared by both
+schedules). A spot check at the rebased tree reproduced the counts exactly
+and the timings within 5 % (H2O energy B = 8: static 7.26 s / 101 maps,
+adaptive 0.76 s / 9 maps / 8 chunks; CH4 forces B = 16: adaptive 1.35 s,
+0.7 GiB, 10 maps).
+
 | Molecule | Mode | Route | B=2 | B=4 | B=8 | B=16 | B=32 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | H2O (3/8) | energy | static | 7.22 s / 0.4 G | 7.31 s / 0.4 G | 7.51 s / 0.4 G | 8.00 s / 0.4 G | 8.31 s / 0.4 G |
