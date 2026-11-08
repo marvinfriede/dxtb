@@ -510,6 +510,8 @@ def test_unequal_lane_iterations_match_and_freeze(monkeypatch) -> None:
     static, static_gradient = call()
 
     _route(monkeypatch, False)
+    # One snapshot per trip (the freeze check below counts trips).
+    monkeypatch.setattr(lane_evaluation, "_ADAPTIVE_CHUNK_TRIPS", 1)
     snapshots: list[tuple[torch.Tensor, ...]] = []
     original = lane_evaluation._group_active
 
