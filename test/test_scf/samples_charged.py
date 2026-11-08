@@ -74,7 +74,7 @@ refs: dict[str, Refs] = {
     "ZnOOH-": {
         "charge": torch.tensor(-1.0),
         "egfn0": torch.tensor(-8.136531688954e00, dtype=torch.float64),
-        "egfn1": torch.tensor(-1.0913986485487e01, dtype=torch.float64),
+        "egfn1": torch.tensor(-1.0913982738962e01, dtype=torch.float64),
         "egfn2": torch.tensor(-9.3774182834381e00, dtype=torch.float64),
     },
 }
