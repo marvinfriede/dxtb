@@ -185,10 +185,15 @@ def _assert_packed_serial_parity(
     assert tuple(name for name, _ in public.classical) == tuple(
         name for name, _ in serial[0].classical
     )
-    assert public.status is None  # Legacy packed status is not SCFStatus.
-    assert public.converged is None and public.residual is None
-    public_iterations = torch.as_tensor(public.iterations)
-    assert public_iterations.ndim == 0
+    # Per-Lane SCF metadata of the batched Result.
+    assert public.iterations.shape == (count,)
+    for lane, physical in enumerate(serial):
+        assert int(public.iterations[lane]) == int(physical.iterations)
+        if physical.converged is not None:
+            assert public.converged is not None
+            assert bool(public.converged[lane]) == bool(physical.converged)
+        if physical.status is not None:
+            assert public.status is not None
     for lane, (physical, system, composition) in enumerate(
         zip(serial, systems, compositions)
     ):
@@ -490,7 +495,6 @@ def test_packed_gfn2_rejects_nonfock_strategy_without_substitution(
     packed = evaluate_packed_systems(
         (sys_h2, sys_h2o),
         (pos_h2, pos_h2o),
-        legacy_compat=False,
     )
     assert not any(
         "Fock" in msg or "fock" in msg for msg, _ in OutputHandler.warnings
@@ -680,7 +684,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
         spins,
         field=field,
         field_grad=field_grad,
-        legacy_compat=True,
+        eager_status_policy=True,
     )
     _assert_packed_serial_parity(packed_compat, serial, systems, compositions)
     torch.testing.assert_close(
@@ -694,7 +698,6 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
         spins,
         field=field,
         field_grad=field_grad,
-        legacy_compat=False,
     )
     assert packed_functional.iterations.shape == (3,)
     assert packed_functional.converged is not None
@@ -706,7 +709,7 @@ def test_pack_system_results_and_evaluate_packed_systems_parity(
     assert packed_functional.status.final_failure.shape == (3,)
 
     # Direct pack_system_results on serial results matches packed_functional
-    repacked_serial = pack_system_results(serial, legacy_compat=False)
+    repacked_serial = pack_system_results(serial)
     torch.testing.assert_close(
         packed_functional.energy,
         repacked_serial.energy,
@@ -849,7 +852,6 @@ def test_evaluate_packed_systems_mixed_methods_and_independent_routes() -> None:
     packed_open_and_nonscf = evaluate_packed_systems(
         (sys_oh, sys_non_scf),
         (oh_pos, h2_pos),
-        legacy_compat=False,
     )
     ref_oh = sys_oh.singlepoint(oh_pos)
     ref_non_scf = sys_non_scf.singlepoint(h2_pos)
@@ -931,7 +933,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     packed = evaluate_packed_systems(
         (sys_h2, sys_h2o),
         (pos_h2, pos_h2o),
-        legacy_compat=False,
     )
     serial_h2 = sys_h2.singlepoint(pos_h2)
     serial_h2o = sys_h2o.singlepoint(pos_h2o)
@@ -1019,7 +1020,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     packed_custom = evaluate_packed_systems(
         (sys_custom, sys_h2),
         (pos_c, pos_h2),
-        legacy_compat=False,
     )
     harmonic_slots = [
         val
@@ -1079,49 +1079,39 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             ignore_unknown_kwargs=True,
             store_overlap=True,
         )
-    # Explicit legacy_compat + ignore_unknown_kwargs ignores unknown PUBLIC kwargs
+    # ignore_unknown_kwargs ignores unknown PUBLIC kwargs
     res_ignored = evaluate_packed_systems(
         (sys_h2,),
         (pos_h2,),
-        legacy_compat=True,
         ignore_unknown_kwargs=True,
         ignored_public_extra=123,
     )
     assert res_ignored.energy.shape == (1, 2)
 
-    # 2. Charge rules in legacy_compat=True vs legacy_compat=False
-    with pytest.raises(ValueError, match="single float or integer"):
-        evaluate_packed_systems(
-            (sys_h3p, sys_h3p),
-            (pos_h3p, pos_h3p),
-            chrg=1.0,
-            legacy_compat=True,
-        )
-    with pytest.raises(ValueError, match="0D scalar tensor"):
-        evaluate_packed_systems(
-            (sys_h3p, sys_h3p),
-            (pos_h3p, pos_h3p),
-            chrg=torch.tensor(1.0, dtype=DTYPE),
-            legacy_compat=True,
-        )
-    # Default scalar charge 0 is accepted in legacy_compat=True
+    # 2. Charge rules: a scalar charge (Python or 0D tensor) is broadcast
     res_default_chrg = evaluate_packed_systems(
         (sys_h2, sys_h2),
         (pos_h2, pos_h2),
         chrg=0,
-        legacy_compat=True,
     )
     assert res_default_chrg.energy.shape == (2, 2)
 
-    # Nonzero scalar charge is broadcast in legacy_compat=False
     res_broadcast_chrg = evaluate_packed_systems(
         (sys_h3p, sys_h3p),
         (pos_h3p, pos_h3p),
         chrg=1.0,
         spin=0,
-        legacy_compat=False,
     )
     assert res_broadcast_chrg.energy.shape == (2, 3)
+    res_broadcast_0d = evaluate_packed_systems(
+        (sys_h3p, sys_h3p),
+        (pos_h3p, pos_h3p),
+        chrg=torch.tensor(1.0, dtype=DTYPE),
+        spin=0,
+    )
+    torch.testing.assert_close(
+        res_broadcast_0d.energy, res_broadcast_chrg.energy, rtol=0, atol=0
+    )
 
     # Per-lane charge tensor (1D and 2D) and sequence, mixed GFN1/GFN2
     for chrg_input in (
@@ -1134,7 +1124,6 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             (pos_h2, pos_h3p),
             chrg=chrg_input,
             spin=None,
-            legacy_compat=True,
         )
         assert res_mixed.energy.shape == (2, 3)
 
@@ -1159,7 +1148,7 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             spin=(0.0, 1.0),
         )
 
-    # Too many electrons: status in legacy_compat=False vs ValueError in legacy_compat=True
+    # Too many electrons: status by default, ValueError with eager_status_policy
     cfg_etemp = Config.create(
         method=labels.GFN1_XTB,
         **(
@@ -1180,7 +1169,6 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
         (pos_h2, pos_h2),
         chrg=(0.0, -7.0),
         spin=(0.0, 1.0),
-        legacy_compat=False,
     )
     assert res_too_many.status is not None
     assert int(res_too_many.status.trajectory_failure[0].item()) == int(
@@ -1204,7 +1192,7 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
             (pos_h2, pos_h2),
             chrg=torch.tensor([0.0, -7.0], dtype=DTYPE),
             spin=torch.tensor([0.0, 1.0], dtype=DTYPE),
-            legacy_compat=True,
+            eager_status_policy=True,
         )
 
 
@@ -1264,7 +1252,6 @@ def test_complete_packed_result_adapter_all_fields_and_model_param_gradients() -
         spin=(None, None, None),
         field=per_lane_fields,
         field_grad=per_lane_fgs,
-        legacy_compat=False,
     )
     serial = tuple(
         sys.singlepoint(pos, 0.0, None, field=f, field_grad=fg)
@@ -1522,15 +1509,19 @@ def test_option_ownership_and_side_effects_contract(
 
     # 4. Option separation: unknown public kwargs
     lane_systems = pr_mod.build_calculator_lane_systems(calc)
-    # Functional API (legacy_compat=False) always rejects unknown public kwargs
+    # Unknown public kwargs are rejected unless ignore_unknown_kwargs is set
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         evaluate_packed_systems(
             lane_systems,
             source_positions,
-            legacy_compat=False,
-            ignore_unknown_kwargs=True,
             unknown_public_kw=1,
         )
+    evaluate_packed_systems(
+        lane_systems,
+        source_positions,
+        ignore_unknown_kwargs=True,
+        unknown_public_kw=1,
+    )
 
 
 def test_classical_display_key_collision_resolution() -> None:
@@ -1639,7 +1630,7 @@ def test_failure_precedence_six_stages() -> None:
             (sys_stage4,),
             (bad_pos_dtype,),
             field=valid_field,
-            legacy_compat=True,
+            eager_status_policy=True,
             store_overlap=True,
         )
 
@@ -1649,7 +1640,7 @@ def test_failure_precedence_six_stages() -> None:
             (sys_stage4,),
             (bad_pos_dtype,),
             field=valid_field,
-            legacy_compat=True,
+            eager_status_policy=True,
         )
 
     # Stage 3 beats Stages 4, 6: field with int_level < INTLEVEL_DIPOLE -> RuntimeError
@@ -1658,7 +1649,7 @@ def test_failure_precedence_six_stages() -> None:
             (sys_stage4,),
             (pos_h2,),
             field=valid_field,
-            legacy_compat=True,
+            eager_status_policy=True,
         )
 
     # Stage 4 beats Stage 6: int_level < INTLEVEL_HCORE -> NotImplementedError
@@ -1666,7 +1657,7 @@ def test_failure_precedence_six_stages() -> None:
         evaluate_packed_systems(
             (sys_stage4,),
             (pos_h2,),
-            legacy_compat=True,
+            eager_status_policy=True,
         )
 
     # Now upgrade int_level to INTLEVEL_HCORE so Stage 4 passes:
@@ -1693,5 +1684,5 @@ def test_failure_precedence_six_stages() -> None:
         evaluate_packed_systems(
             (sys_stage56,),
             (pos_h2o,),
-            legacy_compat=True,
+            eager_status_policy=True,
         )

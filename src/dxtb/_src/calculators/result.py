@@ -90,10 +90,11 @@ class Multipoles:
 
 @dataclass(frozen=True, eq=False)
 class Result:
-    """Immutable structure for single-system or legacy-batch outputs.
+    """Immutable outputs of one evaluation of a Structure or a Batch.
 
-    Functional full-SCF routes provide convergence, residual and solver-status
-    tensors; legacy fallback routes may leave those fields ``None``. Fields are
+    Iterative SCF evaluations provide convergence, residual and solver-status
+    tensors; for a Batch they are reported per Lane. Non-self-consistent
+    evaluations leave those fields ``None``. Fields are
     never rebound by evaluation, and later evaluations do not mutate a prior
     Result. Tensor values remain ordinary PyTorch tensors, so callers can still
     mutate them in place. Charge and potential outputs use plain immutable

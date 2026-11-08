@@ -284,7 +284,7 @@ def _outcome(call: Callable[[], object]):
 
 
 _FAILURES = {
-    # name: (numbers, model settings, charges, spins, legacy_compat)
+    # name: (numbers, model settings, charges, spins, eager_status_policy)
     "unconverged-warn": (H2O, {"maxiter": 3}, None, None, True),
     "unconverged-force": (
         H2O,
@@ -304,7 +304,7 @@ _FAILURES = {
 
 @pytest.mark.parametrize("case", sorted(_FAILURES))
 def test_failure_semantics_match_static_schedule(monkeypatch, case) -> None:
-    numbers, settings, charges, spins, legacy = _FAILURES[case]
+    numbers, settings, charges, spins, eager = _FAILURES[case]
     system = _setup(_model(**settings), numbers)
     positions = tuple(_geometry(numbers, seed) for seed in range(3))
 
@@ -314,7 +314,7 @@ def test_failure_semantics_match_static_schedule(monkeypatch, case) -> None:
             positions,
             chrg=0.0 if charges is None else charges,
             spin=spins,
-            legacy_compat=legacy,
+            eager_status_policy=eager,
         )
 
     _route(monkeypatch, True)

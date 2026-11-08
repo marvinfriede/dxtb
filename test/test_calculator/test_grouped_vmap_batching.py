@@ -352,7 +352,7 @@ def test_fully_heterogeneous_batch_equals_independent_evaluation() -> None:
     assert all(not group.use_vmap for group in groups)
 
     positions = tuple(_geometry(c) for c in compositions)
-    packed = evaluate_packed_systems(systems, positions, legacy_compat=False)
+    packed = evaluate_packed_systems(systems, positions)
     independent = evaluate_systems_independently(systems, positions)
 
     for lane, (system, reference) in enumerate(zip(systems, independent)):

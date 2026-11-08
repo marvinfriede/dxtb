@@ -17,7 +17,7 @@
 """Dispatcher mechanics of grouped-vmap batching.
 
 Structural batch handling (lane deduplication, System classification,
-electron/spin validation of mapped groups, legacy status inspection and
+electron/spin validation of mapped groups, the eager status policy and
 Result packing) must resolve host decisions once per batch or group, not once
 per atom, Result field or lane. On CPU, Python-level tensor-to-host
 conversions (``item``, ``tolist``, ``bool(tensor)``, ...) serve as the proxy
@@ -367,7 +367,7 @@ def test_valid_groups_need_no_per_lane_electron_checks(
     assert calls == []
 
 
-# Legacy status inspection of mapped groups
+# Eager status policy of mapped groups
 
 
 @pytest.mark.parametrize("force", [False, True])
@@ -380,12 +380,12 @@ def test_mapped_nonconvergence_policy_per_lane(force: bool) -> None:
     if force:
         with pytest.raises(SCFConvergenceError) as excinfo:
             evaluate_packed_systems(
-                (system,) * 3, positions, legacy_compat=True
+                (system,) * 3, positions, eager_status_policy=True
             )
         assert getattr(excinfo.value, "source_id", None) == 0
         assert OutputHandler.warnings == []
     else:
-        evaluate_packed_systems((system,) * 3, positions, legacy_compat=True)
+        evaluate_packed_systems((system,) * 3, positions, eager_status_policy=True)
         assert [w[1] for w in OutputHandler.warnings] == [
             SCFConvergenceWarning
         ] * 3
@@ -400,14 +400,14 @@ def test_mapped_failure_status_raises_with_source_id() -> None:
     # Reference: the same lane evaluated by the eager singleton route.
     with pytest.raises(ValueError) as reference:
         evaluate_packed_systems(
-            (system,), positions[:1], chrg=(-6.5,), legacy_compat=True
+            (system,), positions[:1], chrg=(-6.5,), eager_status_policy=True
         )
     with pytest.raises(ValueError) as excinfo:
         evaluate_packed_systems(
             (system,) * 3,
             positions,
             chrg=(0.0, -6.5, -6.5),
-            legacy_compat=True,
+            eager_status_policy=True,
         )
     assert str(excinfo.value) == str(reference.value)
     assert getattr(excinfo.value, "source_id", None) == 1
@@ -462,7 +462,7 @@ def test_interleaved_fermi_failure_follows_group_order() -> None:
             systems,
             positions,
             chrg=(0.0, -8.5, -6.5, 0.0),
-            legacy_compat=True,
+            eager_status_policy=True,
         )
     assert getattr(excinfo.value, "source_id", None) == 2
 
@@ -472,7 +472,7 @@ def test_interleaved_fermi_failure_follows_group_order() -> None:
             systems,
             positions,
             chrg=(0.0, -8.5, 0.0, 0.0),
-            legacy_compat=True,
+            eager_status_policy=True,
         )
     assert getattr(excinfo.value, "source_id", None) == 1
 
@@ -487,7 +487,7 @@ def test_interleaved_forced_nonconvergence_follows_group_order() -> None:
         for lane, s in enumerate(systems)
     )
     with pytest.raises(SCFConvergenceError) as excinfo:
-        evaluate_packed_systems(systems, positions, legacy_compat=True)
+        evaluate_packed_systems(systems, positions, eager_status_policy=True)
     assert getattr(excinfo.value, "source_id", None) == 1
 
 
