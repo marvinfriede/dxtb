@@ -117,7 +117,7 @@ from dxtb._src.scf.implicit import (
     _SCFMapTensorTree,
 )
 from dxtb._src.scf.implicit import (
-    implicit_root as _functional_implicit_root,
+    implicit_root as _implicit_scf_root,
 )
 from dxtb._src.scf.map import (
     evaluate_hamiltonian,
@@ -283,10 +283,10 @@ def implicit_root(
             and atol == _LINEAR_SOLVE_ATOL
             and maxiter is None
         ):
-            return _functional_implicit_root(
+            return _implicit_scf_root(
                 root_x, *parameters, raw_map=raw_map
             )
-        return _functional_implicit_root(
+        return _implicit_scf_root(
             root_x,
             *parameters,
             raw_map=raw_map,
@@ -811,7 +811,7 @@ def _validate_system_and_positions(
     )
     if route.kind != "scf":
         raise NotImplementedError(
-            f"System is not eligible for functional full SCF: {route.reason}."
+            f"System is not eligible for SCF: {route.reason}."
         )
     if route.warning is not None:
         OutputHandler.warn(route.warning)
@@ -2801,7 +2801,7 @@ def _evaluate_valid_lanes_mapped(
             and response_settings.atol == _LINEAR_SOLVE_ATOL
             and response_settings.maxiter is None
         ):
-            return _functional_implicit_root(root, *params, raw_map=raw_map)
+            return _implicit_scf_root(root, *params, raw_map=raw_map)
         method = (
             "bicgstab"
             if response_diagnostics is None
@@ -3182,7 +3182,7 @@ def evaluate_converged_root_batch(
     ...)``. Reusing prepared roots at changed physical inputs is rejected;
     call :func:`prepare_converged_root_batch` again for a new primal point.
     Valid lanes are evaluated simultaneously via ``torch.func.vmap`` over
-    :func:`implicit_root` and functional SCF finalization. Invalid lanes in
+    :func:`implicit_root` and SCF finalization. Invalid lanes in
     non-strict mode are isolated from :func:`implicit_root` and receive
     ``NaN`` physical observables and ``NaN`` derivatives without corrupting
     valid lanes.

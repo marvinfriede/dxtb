@@ -42,7 +42,7 @@ from dxtb.scf import (
     SCFStrategy,
 )
 
-from .test_functional_root_derivatives import _case, _run_root
+from .test_root_derivatives import _case, _run_root
 
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
@@ -264,7 +264,7 @@ def test_alternate_response_candidate_uses_one_raw_map_and_no_refinement(
 
 def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
     """Broyden and Anderson agree across charge, potential and Fock IFT spaces."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     results = []
@@ -289,7 +289,7 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
             SCFVariable.POTENTIAL,
             SCFVariable.FOCK,
         ):
-            result = run_prepared_functional_implicit(
+            result = run_prepared_implicit_scf(
                 case.numbers,
                 case.initial_charges,
                 case.n0,
@@ -335,10 +335,10 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
     """Geometry, field, and mixed responses agree for Broyden and CDIIS."""
     from dxtb._src.scf.broyden import BroydenConverger
     from dxtb._src.scf.cdiis import CDIISConverger
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
-    from .test_functional_root_derivatives import samples
+    from .test_root_derivatives import samples
 
     base_positions = samples["H2"]["positions"].to(**_DD)
     bond = base_positions[1] - base_positions[0]
@@ -396,7 +396,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -440,7 +440,7 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
 
 def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
     """The default IFT tolerances stabilize H2 response through order three."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     derivatives = []
     for rtol in (1.0e-8, 1.0e-12):
@@ -460,7 +460,7 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -504,7 +504,7 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
     )
     from dxtb._src.scf.broyden import BroydenConverger
     from dxtb._src.scf.cdiis import CDIISConverger
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb._src.scf.soscf import SOSCFConverger
     from dxtb._src.scf.strategy import (
         SCFStage,
@@ -568,7 +568,7 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -629,7 +629,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
     )
     from dxtb._src.scf.broyden import BroydenConverger
     from dxtb._src.scf.cdiis import CDIISConverger
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb._src.scf.problem import SCFVariable
     from dxtb._src.scf.strategy import (
         SCFStage,
@@ -705,7 +705,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -754,7 +754,7 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
     None
 ):
     """Open-shell GFN2 hyperpolarizability is coordinate independent."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     derivatives = []
     for variable in (
@@ -778,7 +778,7 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -827,7 +827,7 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
     None
 ):
     """GFN2, field, multipole and thermal tensors remain explicit IFT leaves."""
-    from .test_functional_root_derivatives import _initial_state
+    from .test_root_derivatives import _initial_state
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     case = _case(
@@ -856,7 +856,7 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
 
 def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
     """IFT differentiates through a live GFN2 parameter, not only hcore."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     parameter_module = ParamModule(GFN2_XTB, device="cpu", dtype=torch.float64)
     parameter = parameter_module.parameter_tree.charge.effective.gexp.param
@@ -876,7 +876,7 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -901,7 +901,7 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
 
 def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
     """A one-step physical response limit remains visibly non-finite."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     field = torch.tensor([0.0, 0.0, 0.0], **_DD, requires_grad=True)
     case = _case(
@@ -919,7 +919,7 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -940,7 +940,7 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
     second = torch.autograd.grad(gradient.sum(), field, retain_graph=True)[0]
     assert not torch.isfinite(second).all()
 
-    normal = run_prepared_functional_implicit(
+    normal = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -960,7 +960,7 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
     """An unconverged physical tangent Krylov iterate is never returned."""
     from dxtb._src.scf.implicit import implicit_root
 
-    from .test_functional_root_derivatives import _initial_state
+    from .test_root_derivatives import _initial_state
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     case = _case(
@@ -972,7 +972,7 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
         field=field,
     )
     # Use a real H2O primal observation and its complete explicit parameter tree.
-    from .test_functional_root_derivatives import _run_root
+    from .test_root_derivatives import _run_root
 
     record = _run_root(
         case,

@@ -23,7 +23,7 @@ from dxtb.scf import strategy_preset
 
 from ..utils import scf_strategy
 from ._anderson_helpers import AndersonTestSettings, solve_common
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _method() -> AndersonConverger:

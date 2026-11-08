@@ -102,7 +102,7 @@ def _convert_system_dtype(
     classicals: ClassicalList | None = None,
     interactions: InteractionList | None = None,
 ) -> System:
-    """Convert functional System setup snapshots to ``dtype`` per ``Calculator.type``."""
+    """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
     integral_setup = (
         None
         if system.integral_setup is None
@@ -766,7 +766,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         # supported. Component setup objects of Classicals and ES2/ES3 are
         # not converted; evaluating those snapshots after `type` is a
         # known issue (see known_issues.rst). The separate exact core below is
-        # converted because it owns functional setup snapshots.
+        # converted because it owns setup snapshots.
         self.system = _convert_system_dtype(
             self.system,
             dtype,

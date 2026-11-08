@@ -48,7 +48,7 @@ from .guess import get_guess
 from .result import SCFResult
 
 if TYPE_CHECKING:
-    from .eager import FunctionalCoreResult
+    from .eager import SCFCoreResult
 
 __all__ = ["solve"]
 
@@ -63,12 +63,12 @@ def _implicit_differentiation_supported(
     """Return whether Implicit differentiation supports this SCF.
 
     Public packed implicit calls retain their tensor-batched behavior through
-    the functional map and response. This is separate from W2c9's internal
+    the map and response. This is separate from W2c9's internal
     converged-root conformer orchestration.
     """
-    from .data import functional_scf_interactions_eligible
+    from .data import scf_interactions_eligible
 
-    eligible, _ = functional_scf_interactions_eligible(interactions)
+    eligible, _ = scf_interactions_eligible(interactions)
     is_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
     strategy = config.strategy
     if is_batch and (
@@ -99,7 +99,7 @@ def solve(
     refocc: Tensor,
     *,
     core_index: IndexHelper | None = None,
-) -> SCFResult | FunctionalCoreResult:
+) -> SCFResult | SCFCoreResult:
     """
     Obtain self-consistent solution for a given Hamiltonian.
 
@@ -122,7 +122,7 @@ def solve(
 
     Returns
     -------
-    SCFResult | FunctionalCoreResult
+    SCFResult | SCFCoreResult
     Non-SCF GFN0 result mapping or tensor-status iterative SCF result.
     """
     return _solve_impl(
@@ -155,7 +155,7 @@ def solve_with_core_index(
     *,
     core_index: IndexHelper,
     core_index_owner: object,
-) -> SCFResult | FunctionalCoreResult:
+) -> SCFResult | SCFCoreResult:
     """Run SCF with an internally trusted captured structural map."""
     return _solve_impl(
         numbers,
@@ -186,14 +186,14 @@ def _solve_impl(
     refocc: Tensor,
     core_index: IndexHelper | None,
     core_index_owner: object | None,
-) -> SCFResult | FunctionalCoreResult:
-    """Dispatch iterative functional SCF and the retained GFN0 special case."""
+) -> SCFResult | SCFCoreResult:
+    """Dispatch iterative SCF and the retained GFN0 special case."""
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic Temperature must be non-negative.")
     if config.fermi.maxiter < 0:
         raise ValueError("Fermi maxiter must be non-negative.")
     if config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+        raise ValueError("The SCF solver requires maxiter >= 0.")
 
     n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
 
@@ -228,9 +228,9 @@ def _solve_impl(
             numbers,
             integrals,
         ):
-            from .data import functional_scf_interactions_eligible
+            from .data import scf_interactions_eligible
 
-            eligible, names = functional_scf_interactions_eligible(interactions)
+            eligible, names = scf_interactions_eligible(interactions)
             if not eligible:
                 raise NotImplementedError(
                     f"{route_name} does not support interaction "
@@ -242,7 +242,7 @@ def _solve_impl(
                 raise ValueError("Fermi maxiter must be non-negative.")
             if config.maxiter < 0:
                 raise ValueError(
-                    "The functional SCF solver requires maxiter >= 0."
+                    "The SCF solver requires maxiter >= 0."
                 )
             if integrals.hcore is None or integrals.overlap is None:
                 raise ValueError(
@@ -254,11 +254,11 @@ def _solve_impl(
             )
 
         from .eager import (
-            functional_core_result,
-            run_prepared_functional_implicit,
+            scf_core_result,
+            run_prepared_implicit_scf,
         )
 
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             numbers,
             charges,
             n0,
@@ -272,15 +272,15 @@ def _solve_impl(
             core_index=core_index,
             core_index_owner=core_index_owner,
         )
-        return functional_core_result(result)
+        return scf_core_result(result)
     elif config.differentiation.value == "unrolled":
         # pylint: disable=import-outside-toplevel
         from dxtb import OutputHandler
 
         from .eager import (
-            apply_functional_full_policy,
+            apply_eager_scf_policy,
             resolve_scf_plan,
-            run_prepared_functional_full,
+            run_prepared_scf,
         )
 
         route = resolve_scf_plan(
@@ -292,7 +292,7 @@ def _solve_impl(
         )
         if route.warning is not None:
             OutputHandler.warn(route.warning)
-        result = run_prepared_functional_full(
+        result = run_prepared_scf(
             numbers,
             charges,
             n0,
@@ -307,7 +307,7 @@ def _solve_impl(
             core_index=core_index,
             core_index_owner=core_index_owner,
         )
-        return apply_functional_full_policy(result, config, route)
+        return apply_eager_scf_policy(result, config, route)
     else:
         raise ValueError(
             f"Unknown differentiation policy '{config.differentiation}'."

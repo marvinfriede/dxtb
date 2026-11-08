@@ -77,7 +77,7 @@ from dxtb._src.scf.solver import (
 )
 from dxtb._src.typing.exceptions import SCFConvergenceError
 
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _problem_and_state(

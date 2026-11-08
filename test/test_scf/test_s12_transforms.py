@@ -128,7 +128,7 @@ def test_compile_uses_static_fermi_path(
     from dxtb._src.scf import spectral
     from dxtb._src.scf.spectral import eager_primal_fermi_scope
 
-    from .test_functional_root_derivatives import _case, _initial_state
+    from .test_root_derivatives import _case, _initial_state
 
     case = _case(
         "NO2",
@@ -199,10 +199,10 @@ def test_broyden_vmap_lane_permutation_duplicate_and_isolation() -> None:
 
 def test_alternate_response_keeps_primal_residual_semantics() -> None:
     """An alternate IFT coordinate does not replace primal solve diagnostics."""
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb._src.scf.cpscf import CPSCFSettings
 
-    from .test_functional_root_derivatives import _case, _run_root
+    from .test_root_derivatives import _case, _run_root
 
     case = _case(
         "H2",
@@ -226,7 +226,7 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
         x_atol=1.0e-11,
         x_atol_max=1.0e-11,
     )
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -257,7 +257,7 @@ def test_float32_fixed_trip_vmap_and_jvp_are_finite(name: str) -> None:
     from dxtb._src.scf.solver import SCFSolverSettings, _solve_map
     from dxtb._src.scf.strategy import SCFStage, SCFStrategy
 
-    from .test_functional_root_derivatives import _case, _initial_state
+    from .test_root_derivatives import _case, _initial_state
 
     mode = (
         SCFVariable.POTENTIAL

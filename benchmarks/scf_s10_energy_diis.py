@@ -24,7 +24,7 @@ import platform
 import subprocess
 import time
 from pathlib import Path
-from test.test_scf.test_functional_map import _prepare_case
+from test.test_scf.test_map import _prepare_case
 
 import torch
 
@@ -275,7 +275,7 @@ def main() -> None:
                     "src/dxtb",
                     "benchmarks/prototypes",
                     "benchmarks/scf_s10_energy_diis.py",
-                    "test/test_scf/test_functional_ediis.py",
+                    "test/test_scf/test_ediis.py",
                 ],
                 text=True,
             ).strip()

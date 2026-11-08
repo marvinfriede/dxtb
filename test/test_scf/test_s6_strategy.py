@@ -58,7 +58,7 @@ from dxtb._src.scf.strategy import (
     SCFSwitchPolicy,
 )
 
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 @pytest.mark.parametrize(

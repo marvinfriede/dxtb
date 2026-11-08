@@ -24,8 +24,8 @@ import platform
 import subprocess
 import time
 from pathlib import Path
-from test.test_scf.test_functional_root_derivatives import _case, _initial_state
-from test.test_scf.test_functional_solver import _map_result
+from test.test_scf.test_root_derivatives import _case, _initial_state
+from test.test_scf.test_solver import _map_result
 
 import torch
 

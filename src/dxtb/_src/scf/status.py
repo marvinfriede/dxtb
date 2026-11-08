@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Public tensor-valued status for functional SCF evaluations."""
+"""Public tensor-valued status for SCF evaluations."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ __all__ = ["SCFFailureCode", "SCFStatus"]
 
 
 class SCFFailureCode(IntEnum):
-    """Stable public categories for functional Fermi-subsolve failures."""
+    """Stable public categories for Fermi-subsolve failures."""
 
     NONE = 0
     INVALID_TEMPERATURE = 1

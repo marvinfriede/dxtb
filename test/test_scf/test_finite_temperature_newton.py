@@ -57,7 +57,7 @@ from dxtb._src.scf.strategy import (
 )
 from dxtb._src.wavefunction.filling import _get_fermi_occupation_core_state
 
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _small_active_case(

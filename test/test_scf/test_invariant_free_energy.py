@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Focused acceptance tests for invariant functional SCF free energy."""
+"""Focused acceptance tests for invariant SCF free energy."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from dxtb._src.scf.spectral import (
 )
 from dxtb._src.wavefunction import filling, mulliken
 
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _fermi_state(

@@ -171,7 +171,7 @@ def has_tensor_memory_growth(
 ) -> bool:
     """Check for continuing tensor growth after one-time runtime setup.
 
-    Functional SCF and autograd may leave a small, stable set of tensors in
+    SCF and autograd may leave a small, stable set of tensors in
     framework caches. This check distinguishes that fixed baseline from a leak
     that grows with each repeated call.
     """

@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Physical problem and input-bound physical state for functional SCF."""
+"""Physical problem and input-bound physical state for SCF."""
 
 from __future__ import annotations
 

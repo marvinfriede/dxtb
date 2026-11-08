@@ -38,7 +38,7 @@ from dxtb._src.components.interactions.list import (
 )
 from dxtb._src.components.list import ComponentList
 from dxtb._src.scf.interactions import (
-    prepare_functional_interactions,
+    prepare_scf_interactions,
 )
 
 
@@ -174,7 +174,7 @@ def test_interaction_and_functional_order_match() -> None:
     )
     cache[field.label] = build_electric_field_data(positions, field.field)
 
-    descriptors = prepare_functional_interactions(interactions, cache, numbers)
+    descriptors = prepare_scf_interactions(interactions, cache, numbers)
 
     assert interactions.components == [field_grad, field]
     assert [entry.kind for entry in descriptors.entries] == [

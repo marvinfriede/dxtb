@@ -44,27 +44,27 @@ from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.typing import Tensor
 
 from .core import (
-    FunctionalInteractionEntry,
-    FunctionalInteractionSet,
+    SCFInteractionEntry,
+    SCFInteractionSet,
 )
 from .data import SCFCharges, SCFPotential
 
 
-def prepare_functional_interactions(
+def prepare_scf_interactions(
     interactions: InteractionList,
     interaction_data: InteractionListCache,
     numbers: Tensor,
     *,
     d4sc_setup: D4SCCoreSetup | None = None,
     kind_by_label: dict[str, str] | None = None,
-) -> FunctionalInteractionSet:
+) -> SCFInteractionSet:
     """Convert supported components/caches to frozen core entries.
 
     ``d4sc_setup`` is supplied by the single-System call-data boundary so
     its functional reference weights use the same setup snapshot as the
     geometry-dependent D4SC cache. Direct callers may omit it.
     """
-    entries: list[FunctionalInteractionEntry] = []
+    entries: list[SCFInteractionEntry] = []
     for component in interactions.components:
         cache = interaction_data[component.label]
         kind = (
@@ -84,7 +84,7 @@ def prepare_functional_interactions(
             }.get(type(component))
         if kind == "es2":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "es2",
                     (("mat", cache.mat),),
                     (("shell_resolved", cache.shell_resolved),),
@@ -92,7 +92,7 @@ def prepare_functional_interactions(
             )
         elif kind == "es3":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "es3",
                     (("hd", cache.hd),),
                     (("shell_resolved", cache.shell_resolved),),
@@ -100,7 +100,7 @@ def prepare_functional_interactions(
             )
         elif kind == "aes2":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "aes2",
                     tuple(
                         (name, getattr(cache, name))
@@ -121,7 +121,7 @@ def prepare_functional_interactions(
                 else setup_d4sc(component, numbers)
             )
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "d4sc",
                     (("cn", cache.cn), ("dispmat", cache.dispmat)),
                     (("setup", setup),),
@@ -129,20 +129,20 @@ def prepare_functional_interactions(
             )
         elif kind == "generalized_born":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "generalized_born", (("mat", cache.mat),)
                 )
             )
         elif kind == "electric_field":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "electric_field",
                     (("vat", cache.vat), ("vdp", cache.vdp)),
                 )
             )
         elif kind == "electric_field_grad":
             entries.append(
-                FunctionalInteractionEntry(
+                SCFInteractionEntry(
                     "electric_field_grad",
                     (
                         ("vat", cache.vat),
@@ -153,9 +153,9 @@ def prepare_functional_interactions(
             )
         else:  # guarded by exact-type eligibility before conversion
             raise TypeError(
-                f"Unsupported functional interaction {type(component)!r}."
+                f"Unsupported interaction {type(component)!r}."
             )
-    return FunctionalInteractionSet(tuple(entries))
+    return SCFInteractionSet(tuple(entries))
 
 
 def _optional_add(left: Tensor | None, right: Tensor | None) -> Tensor | None:
@@ -165,7 +165,7 @@ def _optional_add(left: Tensor | None, right: Tensor | None) -> Tensor | None:
 
 
 def _potential_parts(
-    entry: FunctionalInteractionEntry,
+    entry: SCFInteractionEntry,
     charges: SCFCharges,
     index: IndexHelper,
 ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
@@ -237,14 +237,14 @@ def _potential_parts(
         dipole = entry.tensor("vdp")
         quadrupole = entry.tensor("vqp")
     else:
-        raise TypeError(f"Unknown functional interaction kind {entry.kind!r}.")
+        raise TypeError(f"Unknown interaction kind {entry.kind!r}.")
 
     return shell, atom, dipole, quadrupole
 
 
 def potential_from_charges(
     charges: SCFCharges,
-    interactions: FunctionalInteractionSet,
+    interactions: SCFInteractionSet,
     index: IndexHelper,
 ) -> SCFPotential:
     """Evaluate total potential by pure addition of immutable contributions."""
@@ -263,7 +263,7 @@ def potential_from_charges(
 
 
 def _entry_energy(
-    entry: FunctionalInteractionEntry,
+    entry: SCFInteractionEntry,
     charges: SCFCharges,
     shell_charges: Tensor,
     atom_charges: Tensor,
@@ -346,7 +346,7 @@ def _entry_energy(
 
 def interaction_energy_from_charges(
     charges: SCFCharges,
-    interactions: FunctionalInteractionSet,
+    interactions: SCFInteractionSet,
     index: IndexHelper,
 ) -> Tensor:
     """Evaluate atom-resolved energy using immutable core interaction data."""

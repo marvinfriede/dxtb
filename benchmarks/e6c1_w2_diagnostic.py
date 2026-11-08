@@ -135,7 +135,7 @@ def production_instrumentation():
     patch(eager, "get_guess", "initial_scf_guess")
     patch(eager, "setup_scf_inputs", "initial_scf_input_setup")
     patch(eager, "_solve_variable", "forward_scf_solver")
-    patch(eager, "functional_core_result", "functional_result_materialization")
+    patch(eager, "scf_core_result", "functional_result_materialization")
     patch(map, "evaluate_hamiltonian", "spectral_evaluation")
     patch(map, "fermi_density_matrix", "fermi_density_matrix")
     patch(filling, "_get_fermi_occupation_core_state", "fermi_state_and_mu")

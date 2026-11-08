@@ -34,7 +34,7 @@ from dataclasses import replace
 from pathlib import Path
 from test.molecules import mols
 from test.test_baseline.molecules import SYSTEMS
-from test.test_scf import test_functional_root_derivatives as reference
+from test.test_scf import test_root_derivatives as reference
 from test.test_scf.samples import samples
 
 import torch

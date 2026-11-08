@@ -275,7 +275,7 @@ def test_core_bypasses_host_control_search_helpers(
     spectra, electrons, mask, kt = _case()
 
     def fail(*args: object, **kwargs: object) -> None:
-        raise AssertionError("the functional Fermi core called eager control")
+        raise AssertionError("the Fermi core called eager control")
 
     monkeypatch.setattr(filling, "_read_flags", fail)
     monkeypatch.setattr(filling, "_fermi_energy_search", fail)

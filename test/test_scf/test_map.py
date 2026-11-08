@@ -55,7 +55,7 @@ from dxtb._src.scf import (
     SCFPotential,
     fock_initial_guess,
     fock_map,
-    functional_scf_interactions_eligible,
+    scf_interactions_eligible,
     interaction_energy_from_charges,
     pack_charges,
     pack_potential,
@@ -67,10 +67,10 @@ from dxtb._src.scf import (
     setup_scf_inputs,
     unpack_charges,
     unpack_potential,
-    validate_functional_scf_interactions,
+    validate_scf_interactions,
 )
 from dxtb._src.scf.core import (
-    FunctionalInteractionSet,
+    SCFInteractionSet,
 )
 from dxtb._src.scf.map import (
     _transitional_diagonalize,
@@ -1142,7 +1142,7 @@ class _MutatingPotentialInteraction(Interaction):
         return torch.zeros_like(qat)
 
 
-def test_functional_eligibility_rejects_custom_mutable_interactions() -> None:
+def test_eligibility_rejects_custom_mutable_interactions() -> None:
     case = _prepare_case(GFN1_XTB)
     custom = _MutatingPotentialInteraction()
     interactions = InteractionList(custom, device="cpu", dtype=torch.float64)
@@ -1151,7 +1151,7 @@ def test_functional_eligibility_rejects_custom_mutable_interactions() -> None:
     assert len(interactions.components) == 1
     assert interactions.components[0] is custom
     with pytest.raises(TypeError, match="exact migrated built-in"):
-        validate_functional_scf_interactions(interactions)
+        validate_scf_interactions(interactions)
     assert custom.calls == 0
     with pytest.raises(TypeError, match="exact migrated built-in"):
         setup_scf_inputs(
@@ -1280,7 +1280,7 @@ def test_map_parameter_graph_reaches_param_module() -> None:
     assert torch.count_nonzero(gradient) > 0
 
 
-def test_functional_core_has_no_legacy_mutation_owners(
+def test_core_has_no_legacy_mutation_owners(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """All raw variables run without receiving legacy containers."""
@@ -1291,7 +1291,7 @@ def test_functional_core_has_no_legacy_mutation_owners(
     )
     inputs = case.inputs
     assert isinstance(inputs.index, IndexHelper)
-    assert isinstance(inputs.interactions, FunctionalInteractionSet)
+    assert isinstance(inputs.interactions, SCFInteractionSet)
     assert {field.name for field in fields(type(inputs))}.isdisjoint(
         {"ihelp", "interaction_data"}
     )
@@ -1407,7 +1407,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
         *system.interactions.components, *call_fields
     )
     assert {type(item) for item in interactions.components} == expected_types
-    assert functional_scf_interactions_eligible(interactions) == (True, "")
+    assert scf_interactions_eligible(interactions) == (True, "")
 
     def persistent_snapshot(current_system):
         return _snapshot_tree(
@@ -1540,7 +1540,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
     _assert_snapshot_equal(persistent_snapshot(system), before)
 
 
-def test_functional_interaction_aggregates_match_legacy() -> None:
+def test_interaction_aggregates_match_legacy() -> None:
     """Pure interaction dispatch preserves legacy potential and energy."""
     case = _prepare_case(GFN2_XTB)
     numbers = case.system.numbers

@@ -33,7 +33,7 @@ from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf import unpack_charges
 from dxtb._src.scf.broyden import BroydenConverger
 from dxtb._src.scf.cdiis import CDIISConverger
-from dxtb._src.scf.core import FunctionalInteractionSet
+from dxtb._src.scf.core import SCFInteractionSet
 from dxtb._src.scf.energy import (
     electronic_energy_from_density,
     free_energy_from_spectral,
@@ -52,7 +52,7 @@ from dxtb._src.scf.strategy import (
 )
 
 from ..utils import scf_strategy
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 @pytest.mark.parametrize(
@@ -154,7 +154,7 @@ def test_rebuilt_fock_is_nonlinear_in_density_interpolation(
         )
         reduced_inputs = replace(
             case.inputs,
-            interactions=FunctionalInteractionSet(reduced_entries),
+            interactions=SCFInteractionSet(reduced_entries),
         )
         reduced_problem = replace(problem, inputs=reduced_inputs)
         reduced_focks = tuple(

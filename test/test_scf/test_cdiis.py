@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from test.test_scf.test_functional_map import _prepare_case
+from test.test_scf.test_map import _prepare_case
 
 import pytest
 import torch

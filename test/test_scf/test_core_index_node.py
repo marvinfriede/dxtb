@@ -153,7 +153,7 @@ def test_core_index_methods_match_indexhelper_and_gradients(
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     # Match the non-default dim / extra convention used by multipole reduction
-    # in functional SCF charge construction.
+    # in SCF charge construction.
     orbital_multipoles = torch.arange(2 * norb * 6, dtype=dtype).reshape(
         2, norb, 6
     )

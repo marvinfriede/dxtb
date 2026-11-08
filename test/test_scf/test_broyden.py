@@ -388,11 +388,11 @@ def test_broyden_shared_controller_supports_transforms_and_trace() -> None:
 
 def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     """Unrolled single-System Broyden keeps physical input graphs connected."""
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
     from dxtb._src.param import ParamModule
-    from dxtb._src.scf.eager import run_functional_full_eager
+    from dxtb._src.scf.eager import run_eager_scf
 
     dtype = torch.float64
     positions = torch.tensor(
@@ -418,7 +418,7 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
         parameter_module=parameter_module,
         dtype=dtype,
     )
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         case.system.numbers,
         positions,
         case.charge,
@@ -430,8 +430,8 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
         case.integrals,
         case.refocc,
     )
-    assert result.functional is not None
-    energy = result.functional.energy.sum() + result.functional.fenergy.sum()
+    assert result.scf is not None
+    energy = result.scf.energy.sum() + result.scf.fenergy.sum()
     gradients = torch.autograd.grad(energy, (positions, parameter, field))
     for gradient in gradients:
         assert torch.isfinite(gradient).all()
@@ -497,7 +497,7 @@ def test_broyden_full_physical_case_matrix(
     dtype: torch.dtype,
 ) -> None:
     """Broyden certifies open-shell, thermal, and difficult single-System roots."""
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     positions = None
     molecule = sample_name

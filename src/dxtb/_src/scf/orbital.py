@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Fixed-occupation orbital response primitives for functional SOSCF."""
+"""Fixed-occupation orbital response primitives for SOSCF."""
 
 from __future__ import annotations
 

@@ -41,7 +41,7 @@ from dxtb._src.scf.solver import _solve_map
 
 from ..utils import scf_strategy
 from .samples import samples
-from .test_functional_map import (
+from .test_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
     _prepare_case,
@@ -368,7 +368,7 @@ def test_affine_solver_reverse_jvp_jacfwd_and_vmap() -> None:
         _assert_tensor_equal(actual, expected)
 
 
-def test_functional_solver_real_position_parameter_and_field_gradients() -> (
+def test_solver_real_position_parameter_and_field_gradients() -> (
     None
 ):
     """Geometry, ParamModule, and explicit field graphs reach final energy."""
@@ -738,7 +738,7 @@ def test_real_functional_solver_jvp_and_jacfwd_characterization() -> None:
     # spectral-density path; the output stays finite in each AD mode.
 
 
-def test_functional_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (
+def test_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (
     None
 ):
     """The new solver avoids legacy mixer state and host tensor decisions."""

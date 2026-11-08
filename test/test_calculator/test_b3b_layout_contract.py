@@ -219,7 +219,7 @@ def test_interaction_descriptors_feed_functional_preparation(
 ) -> None:
     """Exact setup descriptors supply the existing functional entry schema."""
     from dxtb._src.scf.interactions import (
-        prepare_functional_interactions,
+        prepare_scf_interactions,
     )
 
     numbers = torch.tensor([1, 1])
@@ -256,15 +256,15 @@ def test_interaction_descriptors_feed_functional_preparation(
         )
     )
     data = _interaction_data(system, positions)
-    assert data.functional_kinds == {
+    assert data.scf_kinds == {
         term.label: term.kind for term in core.interaction_terms
     }
-    prepared = prepare_functional_interactions(
+    prepared = prepare_scf_interactions(
         system.interactions,
         data,
         numbers,
         d4sc_setup=data.d4sc_setup,
-        kind_by_label=data.functional_kinds,
+        kind_by_label=data.scf_kinds,
     )
     assert tuple(entry.kind for entry in prepared.entries) == tuple(
         term.kind for term in core.interaction_terms
@@ -717,7 +717,7 @@ def test_captured_libcint_index_maps_match_h0_and_legacy() -> None:
     assert not hasattr(system.h0_setup, "ihelp")
 
 
-def test_functional_singlepoint_reuses_captured_scf_index(
+def test_singlepoint_reuses_captured_scf_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Eligible System SCF inputs reuse the active backend map Node."""
@@ -812,8 +812,8 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
 def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Direct functional setup reuses the frozen IndexHelper without cloning."""
-    from test.test_scf.test_functional_map import _prepare_case
+    """Direct setup reuses the frozen IndexHelper without cloning."""
+    from test.test_scf.test_map import _prepare_case
 
     from dxtb._src.scf.data import setup_scf_inputs
 
@@ -876,7 +876,7 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
 
 def test_scf_orbital_mask_and_conditioning_keep_indexhelper_padding() -> None:
     """The captured reduction maps do not replace padding-aware mask setup."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     from dxtb._src.scf.data import _symmetric_inverse_sqrt
 

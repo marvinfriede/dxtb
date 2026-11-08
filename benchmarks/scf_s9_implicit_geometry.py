@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from test.test_scf.test_functional_root_derivatives import _case
+from test.test_scf.test_root_derivatives import _case
 
 import torch
 

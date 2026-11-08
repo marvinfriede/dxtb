@@ -93,7 +93,7 @@ def _energy(
     )
 
 
-def test_functional_parameter_training_invariant() -> None:
+def test_parameter_training_invariant() -> None:
     """Real ParamModule values train through fresh Systems without mutation."""
     system_data = get_system("H2O")
     numbers = system_data.numbers.clone().to(device=DEVICE)

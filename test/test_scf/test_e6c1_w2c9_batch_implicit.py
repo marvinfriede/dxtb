@@ -38,7 +38,7 @@ from dxtb._src.calculators.batch_implicit import (
 )
 from dxtb._src.calculators.batch_streaming import stream_batch_value_and_grad
 from dxtb._src.calculators.model import Model
-from dxtb._src.scf.eager import run_prepared_functional_implicit
+from dxtb._src.scf.eager import run_prepared_implicit_scf
 from dxtb._src.scf.implicit import implicit_root
 from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,

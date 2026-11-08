@@ -18,7 +18,7 @@ from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling, mulliken
 from dxtb.config import ConfigSCF
 
-from .data import _Data
+from .nonscf_data import _Data
 
 __all__ = [
     "get_energy",

@@ -374,7 +374,7 @@ def test_prepared_roots_vmap_matches_loop_and_nonleaf_input_gradient() -> None:
 def test_scf_input_tree_uses_explicit_integral_tensors_for_raw_map(
     variable: SCFVariable, temperature: float
 ) -> None:
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _case,
         _initial_state,
         _map_fn,
@@ -497,10 +497,10 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
     converger: str,
 ) -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb.scf import SCFVariable, CPSCFSettings
 
     field = torch.zeros(3, **_DD, requires_grad=True)
@@ -521,7 +521,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -534,7 +534,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
         case.integrals,
     )
     assert bool(result.converged)
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _initial_state,
         _map_fn,
     )
@@ -571,7 +571,7 @@ def test_prepared_h2_implicit_route_matches_direct_energy_fd(
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        perturbed_result = run_prepared_functional_implicit(
+        perturbed_result = run_prepared_implicit_scf(
             perturbed.numbers,
             perturbed.initial_charges,
             perturbed.n0,
@@ -597,7 +597,7 @@ def test_switched_implicit_uses_final_fock_variable(
 ) -> None:
     """A potential primal switched to CDIIS attaches and finalizes as Fock."""
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN2_XTB
     from dxtb._src.scf import eager as eager_module
@@ -679,7 +679,7 @@ def test_switched_implicit_uses_final_fock_variable(
         "prepare",
         classmethod(record_adapter),
     )
-    result = eager_module.run_prepared_functional_implicit(
+    result = eager_module.run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -723,7 +723,7 @@ def test_switched_implicit_uses_final_fock_variable(
         x_atol=1.0e-9,
         x_atol_max=1.0e-9,
     )
-    standalone_result = eager_module.run_prepared_functional_implicit(
+    standalone_result = eager_module.run_prepared_implicit_scf(
         standalone_case.numbers,
         standalone_case.initial_charges,
         standalone_case.n0,
@@ -764,11 +764,11 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
     from dxtb._src import scf as functional_package
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb.scf import SCFVariable, CPSCFSettings
 
     case = _case(
@@ -798,7 +798,7 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
         return outcome
 
     monkeypatch.setattr(solver_module, "_solve_map", capture_outcome)
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -829,10 +829,10 @@ def test_final_map_is_recomputed_from_the_detached_accepted_root(
 
 def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     responses = []
     for converger in ("linear", "anderson"):
@@ -853,7 +853,7 @@ def test_implicit_h2_response_is_independent_of_primal_mixer() -> None:
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
         )
-        result = run_prepared_functional_implicit(
+        result = run_prepared_implicit_scf(
             case.numbers,
             case.initial_charges,
             case.n0,
@@ -879,10 +879,10 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
 ):
     """The explicit model-derived n0 input keeps its IFT response."""
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case, _run_root
+    from test.test_scf.test_root_derivatives import _case, _run_root
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     case = _case(
         "H2",
@@ -902,7 +902,7 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
     direction[0] = 0.2
     delta = torch.zeros((), **_DD, requires_grad=True)
     n0 = case.n0 + delta * direction
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         n0,
@@ -939,12 +939,12 @@ def test_implicit_reference_occupation_parameter_matches_tight_unroll_fd() -> (
 
 def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     import pytest
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
     from dxtb._src.typing.exceptions import SCFConvergenceError
 
     case = _case(
@@ -965,7 +965,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
                 force_convergence=force_convergence,
             )
             with pytest.raises(SCFConvergenceError):
-                run_prepared_functional_implicit(
+                run_prepared_implicit_scf(
                     case.numbers,
                     case.initial_charges,
                     case.n0,
@@ -978,7 +978,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
                     case.integrals,
                 )
 
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     invalid = _prepare_case(
         GFN1_XTB,
@@ -1000,7 +1000,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
         x_atol_max=1.0e-12,
     )
     with pytest.raises(ValueError, match="Number of electrons exceeds"):
-        run_prepared_functional_implicit(
+        run_prepared_implicit_scf(
             invalid.system.numbers,
             invalid.initial_charges,
             invalid.n0,
@@ -1016,7 +1016,7 @@ def test_implicit_preparation_rejects_nonconverged_and_one_shot_roots() -> None:
 
 def test_public_singlepoint_uses_functional_implicit_route() -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
 
@@ -1080,7 +1080,7 @@ def test_public_singlepoint_uses_functional_implicit_route() -> None:
 def test_public_functional_implicit_h2_float32_response() -> None:
     """Check a public float32 implicit response against functional unrolling."""
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
 
@@ -1142,7 +1142,7 @@ def test_implicit_strategy_policy_selects_native_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
     from types import SimpleNamespace
 
     from dxtb import GFN1_XTB
@@ -1178,7 +1178,7 @@ def test_implicit_strategy_policy_selects_native_routes(
     )
     monkeypatch.setattr(
         functional_data,
-        "functional_scf_interactions_eligible",
+        "scf_interactions_eligible",
         lambda _: (False, "test extension"),
     )
     assert not _implicit_differentiation_supported(
@@ -1234,7 +1234,7 @@ def test_implicit_strategy_policy_selects_native_routes(
 
 def test_public_implicit_strategy_values_agree_after_root_preparation() -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
     from dxtb.scf import strategy_preset
@@ -1306,7 +1306,7 @@ def test_iterator_routes_implicit_broyden_through_functional_primal(
 ) -> None:
     """The implicit iterator acquires a certified native Broyden root."""
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
     from dxtb._src.scf.iterator import solve
@@ -1346,13 +1346,13 @@ def test_iterator_routes_implicit_broyden_through_functional_primal(
 
 def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _case,
         _run_root,
     )
 
     from dxtb import GFN1_XTB
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     def derivatives(energy: torch.Tensor, field: torch.Tensor):
         first = torch.autograd.grad(
@@ -1380,7 +1380,7 @@ def test_h2_implicit_higher_responses_match_tight_unrolled_reference() -> None:
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
     )
-    implicit_result = run_prepared_functional_implicit(
+    implicit_result = run_prepared_implicit_scf(
         implicit_case.numbers,
         implicit_case.initial_charges,
         implicit_case.n0,
@@ -1423,11 +1423,11 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
-    from test.test_scf.test_functional_root_derivatives import _case
+    from test.test_scf.test_root_derivatives import _case
 
     from dxtb import GFN1_XTB
     from dxtb._src.scf import energy
-    from dxtb._src.scf.eager import run_prepared_functional_implicit
+    from dxtb._src.scf.eager import run_prepared_implicit_scf
 
     case = _case(
         "H2",
@@ -1458,7 +1458,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
     for name in ("fermi_free_energy_matrix", "fermi_free_energy_trace"):
         monkeypatch.setattr(energy, name, counting(getattr(energy, name)))
     electron_count = case.nel.clone().requires_grad_(True)
-    result = run_prepared_functional_implicit(
+    result = run_prepared_implicit_scf(
         case.numbers,
         case.initial_charges,
         case.n0,
@@ -1487,7 +1487,7 @@ def test_finite_temperature_free_energy_runs_only_during_finalization(
 def test_no2_potential_implicit_response_matches_dense_ift_and_physical_fd(
     converger: str,
 ) -> None:
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _case,
         _initial_state,
         _inputs_at_field,

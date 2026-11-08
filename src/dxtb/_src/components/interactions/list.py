@@ -45,7 +45,7 @@ from .solvation.alpb import GeneralizedBorn
 
 __all__ = ["InteractionList", "InteractionListCache"]
 
-_FUNCTIONAL_SCF_INTERACTION_TYPES = (
+_SCF_INTERACTION_TYPES = (
     ES2,
     ES3,
     AES2,
@@ -54,9 +54,9 @@ _FUNCTIONAL_SCF_INTERACTION_TYPES = (
     ElectricField,
     ElectricFieldGrad,
 )
-_FUNCTIONAL_SCF_INTERACTION_LABELS = tuple(
+_SCF_INTERACTION_LABELS = tuple(
     interaction_type.__name__
-    for interaction_type in _FUNCTIONAL_SCF_INTERACTION_TYPES
+    for interaction_type in _SCF_INTERACTION_TYPES
 )
 
 
@@ -79,7 +79,7 @@ class InteractionList(ComponentList[Interaction]):
         dtype: torch.dtype | None = None,
     ) -> None:
         """Create a list and reject duplicate migrated interaction labels."""
-        for label in _FUNCTIONAL_SCF_INTERACTION_LABELS:
+        for label in _SCF_INTERACTION_LABELS:
             matching = [
                 component
                 for component in components
@@ -103,7 +103,7 @@ class InteractionList(ComponentList[Interaction]):
     def reset_all(self) -> None:
         """Reset unmigrated interactions, leaving setup terms untouched."""
         for component in self.components:
-            if type(component) not in _FUNCTIONAL_SCF_INTERACTION_TYPES:
+            if type(component) not in _SCF_INTERACTION_TYPES:
                 component.reset()
 
     @override

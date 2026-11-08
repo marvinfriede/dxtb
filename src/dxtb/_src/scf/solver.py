@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Shared functional SCF controller, diagnostics, and finalization."""
+"""Shared SCF controller, diagnostics, and finalization."""
 
 from __future__ import annotations
 
@@ -95,11 +95,11 @@ __all__ = [
     "SCFSolverSettings",
     "finalize_scf",
     "finalize_scf_fock",
-    "functional_subsolves_ok",
-    "functional_physical_converged",
-    "functional_trajectory_ok",
-    "functional_finalization_ok",
-    "functional_return_valid",
+    "scf_subsolves_ok",
+    "scf_physical_converged",
+    "scf_trajectory_ok",
+    "scf_finalization_ok",
+    "scf_return_valid",
     "trajectory_status_from_map",
     "accumulate_trajectory_status",
     "fermi_status_ok",
@@ -203,7 +203,7 @@ class SCFSolverTrace(Node):
 
 @dataclass(frozen=True, eq=False)
 class SCFSolverSettings:
-    """Common controller settings for a functional SCF solve."""
+    """Common controller settings for a SCF solve."""
 
     maxiter: int
     mix_guess: bool
@@ -423,7 +423,7 @@ def fermi_status_ok(status: FermiStatus | None, *, like: Tensor) -> Tensor:
     )
 
 
-def functional_subsolves_ok(result: SCFSolveResult) -> Tensor:
+def scf_subsolves_ok(result: SCFSolveResult) -> Tensor:
     """Return historical trajectory and final-spectrum validity only.
 
     This operational diagnostic is deliberately separate from physical root
@@ -441,28 +441,28 @@ def functional_subsolves_ok(result: SCFSolveResult) -> Tensor:
     return trajectory_ok & final_ok
 
 
-def functional_physical_converged(result: SCFSolveResult) -> Tensor:
+def scf_physical_converged(result: SCFSolveResult) -> Tensor:
     """Return the authoritative physical-root certification verdict."""
     return result.converged
 
 
-def functional_trajectory_ok(result: SCFSolveResult) -> Tensor:
+def scf_trajectory_ok(result: SCFSolveResult) -> Tensor:
     """Return historical raw-map Fermi validity without finalization status."""
     if result.trajectory_status is None:
         return torch.ones((), dtype=torch.bool, device=result.converged.device)
     return _trajectory_status_ok(result.trajectory_status)
 
 
-def functional_finalization_ok(result: SCFSolveResult) -> Tensor:
+def scf_finalization_ok(result: SCFSolveResult) -> Tensor:
     """Return validity of the selected public final-spectrum evaluation."""
     return fermi_status_ok(
         result.final_evaluation.fermi_status, like=result.converged
     )
 
 
-def functional_return_valid(result: SCFSolveResult) -> Tensor:
+def scf_return_valid(result: SCFSolveResult) -> Tensor:
     """Return physical convergence and subsolve validity for output."""
-    return functional_physical_converged(result) & functional_subsolves_ok(
+    return scf_physical_converged(result) & scf_subsolves_ok(
         result
     )
 
@@ -526,7 +526,7 @@ def setup_solver_settings(
 ) -> SCFSolverSettings:
     """Resolve method-independent controller settings without mutation."""
     if config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+        raise ValueError("The SCF solver requires maxiter >= 0.")
     return SCFSolverSettings(
         maxiter=config.maxiter,
         mix_guess=config.mix_guess,

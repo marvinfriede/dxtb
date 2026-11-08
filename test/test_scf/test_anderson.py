@@ -46,7 +46,7 @@ from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_common as solve_common
 from ._anderson_helpers import solve_physical as solve_scf_anderson
 from .samples import samples
-from .test_functional_map import (
+from .test_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
     _prepare_case,

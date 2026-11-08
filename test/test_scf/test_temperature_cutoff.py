@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional SCF temperature-cutoff compatibility tests."""
+"""SCF temperature-cutoff compatibility tests."""
 
 from __future__ import annotations
 
@@ -23,15 +23,15 @@ from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import GFN1_XTB, labels
 from dxtb._src.scf import (
-    functional_return_valid,
-    functional_subsolves_ok,
+    scf_return_valid,
+    scf_subsolves_ok,
     setup_solver_settings,
     solve_scf_simple,
 )
 from dxtb._src.wavefunction import filling
 
 from ..utils import scf_strategy
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def test_positive_subcutoff_temperature_matches_low_temperature_entropy() -> (
@@ -141,8 +141,8 @@ def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
             assert torch.count_nonzero(result.fenergy) == 0
             assert result.trajectory_status is None
             assert result.final_evaluation.fermi_status is None
-            assert functional_subsolves_ok(result).item() is True
-            assert functional_return_valid(result).item() is False
+            assert scf_subsolves_ok(result).item() is True
+            assert scf_return_valid(result).item() is False
         else:
             assert settings is not None
             assert settings.smear is expected_smear
@@ -161,7 +161,7 @@ def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
                 assert torch.count_nonzero(result.fenergy) > 0
                 assert result.trajectory_status is None
                 assert result.final_evaluation.fermi_status is None
-                assert functional_subsolves_ok(result).item() is True
+                assert scf_subsolves_ok(result).item() is True
                 assert settings is not None
                 expected_entropy = filling.get_fermi_entropy_low_temperature(
                     case.inputs.occupation, settings.kt
@@ -205,5 +205,5 @@ def test_raw_fixed_point_and_fermi_status_remain_separate() -> None:
     assert result.converged.item() is False
     assert status is not None
     assert not bool(status.converged.all())
-    assert functional_subsolves_ok(result).item() is False
-    assert functional_return_valid(result).item() is False
+    assert scf_subsolves_ok(result).item() is False
+    assert scf_return_valid(result).item() is False

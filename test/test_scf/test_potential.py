@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional potential-variable solver parity and transforms."""
+"""Potential-variable SCF solver parity and transforms."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ from dxtb._src.scf import (
 )
 from dxtb._src.scf import anderson as functional_anderson
 from dxtb._src.scf import (
-    functional_return_valid,
-    functional_subsolves_ok,
+    scf_return_valid,
+    scf_subsolves_ok,
 )
 from dxtb._src.scf import map as functional_map
 from dxtb._src.scf import potential_initial_guess
@@ -53,7 +53,7 @@ from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_physical as solve_scf_anderson
 from ._anderson_helpers import solve_potential as solve_scf_potential_anderson
-from .test_functional_map import (
+from .test_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
     _prepare_case,
@@ -167,8 +167,8 @@ def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
     assert result.final_evaluation.fermi_status is not None
     assert bool(result.final_evaluation.fermi_status.converged.all())
     assert int(result.iterations) == 1
-    assert bool(functional_subsolves_ok(result))
-    assert not bool(functional_return_valid(result))
+    assert bool(scf_subsolves_ok(result))
+    assert not bool(scf_return_valid(result))
 
 
 def test_potential_initial_guess_has_no_spectral_evaluation(
@@ -329,7 +329,7 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
     )
     assert torch.isfinite(result.fenergy).all()
     assert result.final_evaluation.fermi_status is not None
-    assert functional_subsolves_ok(result).shape == ()
+    assert scf_subsolves_ok(result).shape == ()
     assert result.final_evaluation is not result.map_result.spectral
 
     failed_status = replace(
@@ -348,7 +348,7 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
     assert not bool(result.converged)
     assert result.diagnostics.certification is not None
     assert not bool(result.diagnostics.certification.result.stationarity_ok)
-    assert not bool(functional_subsolves_ok(failed_final))
+    assert not bool(scf_subsolves_ok(failed_final))
 
 
 def test_potential_trajectory_failure_survives_valid_final_spectrum(
@@ -400,7 +400,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
     assert result.trajectory_status is not None
     assert not bool(result.trajectory_status.fermi_converged.all())
     assert not bool(result.trajectory_status.electron_count_ok.all())
-    assert not bool(functional_subsolves_ok(result))
+    assert not bool(scf_subsolves_ok(result))
 
 
 def test_potential_solver_vmap_over_fixed_system_guesses() -> None:

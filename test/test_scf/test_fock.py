@@ -37,7 +37,7 @@ from dxtb._src.scf import anderson as functional_anderson
 from dxtb._src.scf import (
     fock_initial_guess,
     fock_map,
-    functional_subsolves_ok,
+    scf_subsolves_ok,
 )
 from dxtb._src.scf import map as functional_map
 from dxtb._src.scf import potential_to_hamiltonian
@@ -53,7 +53,7 @@ from dxtb.scf import LinearConverger
 from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_fock as solve_scf_fock_anderson
-from .test_functional_map import (
+from .test_map import (
     _assert_directional_fd,
     _assert_tensor_equal,
     _prepare_case,
@@ -417,7 +417,7 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
     assert result.trajectory_status is None
     assert result.map_result.fermi_status is not None
     assert result.final_evaluation.fermi_status is not None
-    assert bool(functional_subsolves_ok(result))
+    assert bool(scf_subsolves_ok(result))
 
 
 @pytest.mark.parametrize("temperature", [0.0, 300.0])
@@ -730,7 +730,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
     assert bool(result.map_result.fermi_status.converged.all())
     assert result.final_evaluation.fermi_status is not None
     assert bool(result.final_evaluation.fermi_status.converged.all())
-    assert not bool(functional_subsolves_ok(result))
+    assert not bool(scf_subsolves_ok(result))
 
 
 def test_fock_zero_budget_uses_final_status_only(
@@ -765,7 +765,7 @@ def test_fock_zero_budget_uses_final_status_only(
     assert bool(result.map_result.fermi_status.converged.all())
     assert result.final_evaluation.fermi_status is not None
     assert not bool(result.final_evaluation.fermi_status.converged.all())
-    assert not bool(functional_subsolves_ok(result))
+    assert not bool(scf_subsolves_ok(result))
 
 
 def test_fock_path_has_no_value_based_padding_cleanup() -> None:

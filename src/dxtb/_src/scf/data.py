@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Immutable values for the functional SCF map."""
+"""Immutable values for the SCF map."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from dxtb._src.components.interactions import (
     InteractionListCache,
 )
 from dxtb._src.components.interactions.list import (
-    _FUNCTIONAL_SCF_INTERACTION_TYPES,
+    _SCF_INTERACTION_TYPES,
 )
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
@@ -38,7 +38,7 @@ from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
-from .core import FunctionalInteractionSet
+from .core import SCFInteractionSet
 
 __all__ = [
     "ChargeLayout",
@@ -53,8 +53,8 @@ __all__ = [
     "potential_layout",
     "setup_scf_inputs",
     "unpack_potential",
-    "validate_functional_scf_interactions",
-    "functional_scf_interactions_eligible",
+    "validate_scf_interactions",
+    "scf_interactions_eligible",
 ]
 
 
@@ -152,7 +152,7 @@ class SCFInputs:
     n0: Tensor
     nel: Tensor
     occupation: Tensor
-    interactions: FunctionalInteractionSet
+    interactions: SCFInteractionSet
     charge_layout: ChargeLayout
     inverse_cholesky: Tensor
     orbital_mask: Tensor
@@ -276,8 +276,8 @@ def setup_scf_inputs(
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
     if config.fermi.maxiter < 0:
-        raise ValueError("Functional Fermi maxiter must be non-negative.")
-    validate_functional_scf_interactions(interactions)
+        raise ValueError("Fermi maxiter must be non-negative.")
+    validate_scf_interactions(interactions)
     if numbers.ndim < 1:
         raise ValueError("SCFInputs require an atomic-number axis.")
     if integrals.hcore is None or integrals.overlap is None:
@@ -328,14 +328,14 @@ def setup_scf_inputs(
     overlap = integrals.overlap + torch.diag_embed(padding_diagonal)
 
     inverse_cholesky = _symmetric_inverse_sqrt(overlap)
-    from .interactions import prepare_functional_interactions
+    from .interactions import prepare_scf_interactions
 
-    core_interactions = prepare_functional_interactions(
+    core_interactions = prepare_scf_interactions(
         interactions,
         interaction_data,
         numbers,
         d4sc_setup=getattr(interaction_data, "d4sc_setup", None),
-        kind_by_label=getattr(interaction_data, "functional_kinds", None),
+        kind_by_label=getattr(interaction_data, "scf_kinds", None),
     )
     kt_value = config.fermi.etemp * KELVIN2AU
     if kt_value == 0.0:
@@ -408,31 +408,31 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
     return result.to(dtype=input_dtype)
 
 
-def validate_functional_scf_interactions(
+def validate_scf_interactions(
     interactions: InteractionList,
 ) -> None:
-    """Reject interaction extensions without a functional-purity contract.
+    """Reject interaction extensions without a purity contract.
 
     The E4.0 raw map is guaranteed pure for exact migrated built-in
-    interactions. Arbitrary subclasses are rejected by functional SCF setup
+    interactions. Arbitrary subclasses are rejected by SCF setup
     and are not routed to another iterative solver.
     """
-    eligible, names = functional_scf_interactions_eligible(interactions)
+    eligible, names = scf_interactions_eligible(interactions)
     if not eligible:
         raise TypeError(
-            "Functional SCF currently supports exact migrated built-in "
+            "SCF currently supports exact migrated built-in "
             f"interactions only; unsupported extension(s): {names}."
         )
 
 
-def functional_scf_interactions_eligible(
+def scf_interactions_eligible(
     interactions: InteractionList,
 ) -> tuple[bool, str]:
-    """Check exact interaction types before functional setup begins."""
+    """Check exact interaction types before SCF setup begins."""
     unsupported = [
         component
         for component in interactions.components
-        if type(component) not in _FUNCTIONAL_SCF_INTERACTION_TYPES
+        if type(component) not in _SCF_INTERACTION_TYPES
     ]
     names = ", ".join(
         f"{type(component).__module__}.{type(component).__qualname__}"
@@ -569,7 +569,7 @@ def unpack_potential(x: Tensor, layout: PotentialLayout) -> SCFPotential:
 def potential_layout(potential: SCFPotential) -> PotentialLayout:
     """Freeze component shapes from one call-local physical potential."""
     if potential.mono is None:
-        raise ValueError("A functional potential requires a monopole row.")
+        raise ValueError("A potential requires a monopole row.")
     return PotentialLayout(
         tuple(potential.mono.shape),
         None if potential.dipole is None else tuple(potential.dipole.shape),

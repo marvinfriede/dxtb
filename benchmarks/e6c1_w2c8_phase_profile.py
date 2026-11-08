@@ -98,7 +98,7 @@ def cpu_model() -> str | None:
 
 
 def build_system(maxiter: int) -> tuple[Any, torch.Tensor, int]:
-    """Build the frozen conformer-zero functional System."""
+    """Build the frozen conformer-zero System."""
     numbers, positions = conformers("tmpda", 8, sigma=0.1, seed=0)
     config = Config.create(
         method=labels.GFN1_XTB,

@@ -272,7 +272,7 @@ class _SCFMapTensorTree:
 
     Structural objects and integer/bool masks remain static. Every floating
     tensor stored directly on ``SCFInputs``, its integral/Fermi records, or the
-    immutable functional interaction tree becomes an explicit custom-function
+    immutable interaction tree becomes an explicit custom-function
     input. The interaction tree paths are resolved once when prepared.
     """
 
@@ -366,7 +366,7 @@ class _SCFMapTensorTree:
         values.extend(
             interaction_leaves[path] for path in self.interaction_tensor_paths
         )
-        # Functional interaction data may contain expanded views (for
+        # interaction data may contain expanded views (for
         # example a field broadcast over atoms). Explicit transform leaves
         # must have non-overlapping storage for forward-AD dual attachment.
         return tuple(value.contiguous().clone() for value in values)

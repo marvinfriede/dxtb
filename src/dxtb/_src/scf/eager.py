@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Eager policy adapter for the parallel functional full-SCF implementation."""
+"""Eager policy adapter for the SCF implementation."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from .data import (
     SCFCharges,
     SCFInputs,
     SCFPotential,
-    functional_scf_interactions_eligible,
+    scf_interactions_eligible,
     pack_charges,
     setup_scf_inputs,
 )
@@ -89,15 +89,15 @@ from .strategy import SCFStage, SCFStrategy
 
 __all__ = [
     "SCFPlan",
-    "FunctionalCoreResult",
+    "SCFCoreResult",
     "EagerSCFResult",
     "resolve_scf_plan",
-    "apply_functional_full_policy",
-    "functional_core_result",
-    "run_functional_full_eager",
+    "apply_eager_scf_policy",
+    "scf_core_result",
+    "run_eager_scf",
     "fixed_trip_control",
     "prepare_system_fixed_trip",
-    "run_prepared_functional_implicit",
+    "run_prepared_implicit_scf",
     "run_system_fixed_trip",
 ]
 
@@ -119,8 +119,8 @@ class SCFPlan:
 
 
 @dataclass(frozen=True, eq=False)
-class FunctionalCoreResult:
-    """Core-compatible functional values with tensor-valued solver status."""
+class SCFCoreResult:
+    """Core-compatible values with tensor-valued solver status."""
 
     charges: SCFCharges
     coefficients: Tensor
@@ -141,8 +141,8 @@ class FunctionalCoreResult:
 class EagerSCFResult:
     """Eager SCF result together with the plan that produced it."""
 
-    route: SCFPlan
-    functional: FunctionalCoreResult | None
+    plan: SCFPlan
+    scf: SCFCoreResult | None
     non_scf: dict[str, object] | None
 
 
@@ -166,7 +166,7 @@ def resolve_scf_plan(
     if not config.requires_iterations:
         raise ValueError("SCF plan resolution requires an iterative SCF.")
     if config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+        raise ValueError("The SCF solver requires maxiter >= 0.")
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic Temperature must be non-negative.")
     if config.fermi.maxiter < 0:
@@ -174,12 +174,12 @@ def resolve_scf_plan(
     if integrals is not None and (
         integrals.hcore is None or integrals.overlap is None
     ):
-        raise ValueError("Functional SCF requires hcore and overlap integrals.")
+        raise ValueError("SCF requires hcore and overlap integrals.")
 
-    eligible, names = functional_scf_interactions_eligible(interactions)
+    eligible, names = scf_interactions_eligible(interactions)
     if not eligible:
         raise NotImplementedError(
-            "Functional SCF does not support interaction extension(s): "
+            "SCF does not support interaction extension(s): "
             f"{names}."
         )
 
@@ -190,7 +190,7 @@ def resolve_scf_plan(
     )
     if ihelp.batch_mode != 0 or (numbers is not None and numbers.ndim != 1):
         raise NotImplementedError(
-            "The functional SCF solver supports single-System SCF only; "
+            "The SCF solver supports single-System SCF only; "
             "use evaluate_packed_systems or Calculator batch evaluation for batches."
         )
     return SCFPlan(
@@ -198,9 +198,9 @@ def resolve_scf_plan(
     )
 
 
-def functional_core_result(result: SCFSolveResult) -> FunctionalCoreResult:
+def scf_core_result(result: SCFSolveResult) -> SCFCoreResult:
     """Expose core values without converting tensor status to Python scalars."""
-    return FunctionalCoreResult(
+    return SCFCoreResult(
         charges=result.final_charges,
         coefficients=result.coefficients,
         density=result.density,
@@ -282,11 +282,11 @@ def _nonconvergence_message(
     )
 
 
-def apply_functional_full_policy(
+def apply_eager_scf_policy(
     result: SCFSolveResult,
     config: ConfigSCF,
     route: SCFPlan,
-) -> FunctionalCoreResult:
+) -> SCFCoreResult:
     """Apply eager Fermi and convergence policy to a completed solve."""
     _check_subsolve_status(result)
 
@@ -304,7 +304,7 @@ def apply_functional_full_policy(
             )
         OutputHandler.warn(message, SCFConvergenceWarning)
 
-    return functional_core_result(result)
+    return scf_core_result(result)
 
 
 def _prepare_solver(
@@ -389,7 +389,7 @@ def _solve_variable(
     )
 
 
-def run_functional_full_eager(
+def run_eager_scf(
     numbers: Tensor,
     positions: Tensor,
     chrg: Tensor,
@@ -401,7 +401,7 @@ def run_functional_full_eager(
     integrals: IntegralMatrices,
     refocc: Tensor,
 ) -> EagerSCFResult:
-    """Run the functional FULL calculation or retained batch boundary.
+    """Run the SCF calculation or retained batch boundary.
 
     Tensor-status inspection and warning/error behavior stay outside the
     fixed-trip numerical solver.
@@ -437,7 +437,7 @@ def run_functional_full_eager(
     )
     if route.warning is not None:
         OutputHandler.warn(route.warning)
-    result = run_prepared_functional_full(
+    result = run_prepared_scf(
         numbers,
         guess,
         n0,
@@ -450,11 +450,11 @@ def run_functional_full_eager(
         integrals,
         route,
     )
-    functional = apply_functional_full_policy(result, config, route)
+    functional = apply_eager_scf_policy(result, config, route)
     return EagerSCFResult(route, functional, None)
 
 
-def _prepared_functional_inputs(
+def _prepared_scf_inputs(
     numbers: Tensor,
     n0: Tensor,
     occupation: Tensor,
@@ -494,7 +494,7 @@ def _prepared_functional_inputs(
     )
 
 
-def run_prepared_functional_full(
+def run_prepared_scf(
     numbers: Tensor,
     guess: Tensor,
     n0: Tensor,
@@ -511,8 +511,8 @@ def run_prepared_functional_full(
     core_index_owner: object | None = None,
     eager: bool = True,
 ) -> SCFSolveResult:
-    """Run only functional physics after common SCF preparation is complete."""
-    inputs = _prepared_functional_inputs(
+    """Run only the SCF physics after common SCF preparation is complete."""
+    inputs = _prepared_scf_inputs(
         numbers,
         n0,
         occupation,
@@ -546,7 +546,7 @@ def prepare_system_fixed_trip(
 ) -> tuple[Tensor, SCFProblem]:
     """Build the initial state and problem of a System for the Fixed-trip controller.
 
-    Requires an iterative, unrolled functional single-System SCF.
+    Requires an iterative, unrolled single-System SCF.
     """
     if config.differentiation.value == "implicit":
         raise ValueError(
@@ -557,7 +557,7 @@ def prepare_system_fixed_trip(
     )
     if route.kind != "scf":
         raise NotImplementedError(
-            "The fixed-trip System API supports functional single-System "
+            "The fixed-trip System API supports single-System "
             "SCF only."
         )
 
@@ -567,7 +567,7 @@ def prepare_system_fixed_trip(
     guess = get_guess(
         numbers, positions, chrg, ihelp, config.guess, validate=False
     )
-    inputs = _prepared_functional_inputs(
+    inputs = _prepared_scf_inputs(
         numbers,
         n0,
         occupation,
@@ -612,7 +612,7 @@ def run_system_fixed_trip(
     *,
     core_index: IndexHelper | None = None,
     core_index_owner: object | None = None,
-) -> FunctionalCoreResult | dict[str, object]:
+) -> SCFCoreResult | dict[str, object]:
     """Run the Fixed-trip controller for a supported single-System SCF."""
     if config.differentiation.value == "implicit":
         raise ValueError(
@@ -654,10 +654,10 @@ def run_system_fixed_trip(
         eager=False,
         certification_profile=_certification_profile(config),
     )
-    return functional_core_result(result)
+    return scf_core_result(result)
 
 
-def run_prepared_functional_implicit(
+def run_prepared_implicit_scf(
     numbers: Tensor,
     guess: Tensor,
     n0: Tensor,
@@ -674,7 +674,7 @@ def run_prepared_functional_implicit(
     response_settings: CPSCFSettings | None = None,
     strategy_override: SCFStrategy | None = None,
 ) -> SCFSolveResult:
-    """Acquire a functional primal root, attach its raw-map IFT, then finalize.
+    """Acquire a primal root, attach its raw-map IFT, then finalize.
 
     This entry point is intentionally single-System and eager. It rejects an
     invalid primal before calling the transform-capable root attachment.

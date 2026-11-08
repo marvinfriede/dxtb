@@ -39,7 +39,7 @@ from dxtb._src.scf import (
     SCFSwitchPolicy,
     fock_initial_guess,
     fock_map,
-    functional_subsolves_ok,
+    scf_subsolves_ok,
     potential_initial_guess,
     potential_map,
     scf_map,
@@ -49,7 +49,7 @@ from dxtb._src.scf import (
 )
 from dxtb._src.scf.solver import _solve_map
 
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _map_for_variable(case, variable: SCFVariable):
@@ -227,7 +227,7 @@ def test_zero_budget_fixed_trip_and_eager_keep_distinct_status_ownership() -> (
     assert eager.trajectory_status is not None
     assert fixed.map_result.fermi_status is not None
     assert fixed.final_evaluation.fermi_status is not None
-    assert bool(functional_subsolves_ok(fixed))
+    assert bool(scf_subsolves_ok(fixed))
 
     _assert_map_result_equal(fixed.map_result, eager.map_result)
     torch.testing.assert_close(fixed.energy, eager.energy)

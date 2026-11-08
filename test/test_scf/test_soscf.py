@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from test.test_scf.test_functional_map import _prepare_case
+from test.test_scf.test_map import _prepare_case
 from types import SimpleNamespace
 
 import pytest
@@ -1019,7 +1019,7 @@ def test_soscf_cdiis_strategy_reaches_certified_root() -> None:
 
 def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
     """Implicit root geometry response is independent of the primal method."""
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _case,
         _initial_state,
     )
@@ -1410,7 +1410,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     None
 ):
     """Tight NO2 roots give method-independent geometry root derivatives."""
-    from test.test_scf.test_functional_root_derivatives import (
+    from test.test_scf.test_root_derivatives import (
         _case,
         _initial_state,
     )

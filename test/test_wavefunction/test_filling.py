@@ -35,8 +35,8 @@ from torch.func import jacrev
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.scf.pure.data import _Data
-from dxtb._src.scf.pure.energies import get_electronic_free_energy
+from dxtb._src.scf.nonscf_data import _Data
+from dxtb._src.scf.nonscf_energies import get_electronic_free_energy
 from dxtb._src.typing import DD
 from dxtb._src.wavefunction import filling
 from dxtb.config import ConfigSCF

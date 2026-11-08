@@ -125,13 +125,13 @@ class _SCFOutput:
 
 
 def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
-    """Read SCF outputs once without copying functional tensors."""
+    """Read SCF outputs once without copying tensors."""
     from dxtb._src.scf.eager import (
-        FunctionalCoreResult,
+        SCFCoreResult,
         public_scf_status,
     )
 
-    if isinstance(result, FunctionalCoreResult):
+    if isinstance(result, SCFCoreResult):
         return _SCFOutput(
             energy=result.energy,
             fenergy=result.fenergy,
@@ -228,12 +228,12 @@ class _SystemInteractionData(InteractionListCache):
     def __init__(
         self,
         d4sc_setup: D4SCCoreSetup | None,
-        functional_kinds: dict[str, str] | None = None,
+        scf_kinds: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.d4sc_setup = d4sc_setup
-        self.functional_kinds = (
-            {} if functional_kinds is None else functional_kinds
+        self.scf_kinds = (
+            {} if scf_kinds is None else scf_kinds
         )
 
 
@@ -248,7 +248,7 @@ def _interaction_data(
         if core is not None
         else {}
     )
-    functional_kinds: dict[str, str] = {}
+    scf_kinds: dict[str, str] = {}
     d4sc_descriptor = next(
         (term for term in descriptors.values() if term.kind == "d4sc"), None
     )
@@ -264,7 +264,7 @@ def _interaction_data(
         is d4sc_descriptor.setup
         else system.d4sc_setup if owns_selected_d4sc else None
     )
-    data = _SystemInteractionData(authoritative_d4sc_setup, functional_kinds)
+    data = _SystemInteractionData(authoritative_d4sc_setup, scf_kinds)
     for position, interaction in enumerate(interactions.components):
         descriptor = descriptors.get(position)
         if descriptor is not None:
@@ -275,7 +275,7 @@ def _interaction_data(
             ):
                 descriptor = None
         if descriptor is not None:
-            functional_kinds[descriptor.label] = descriptor.kind
+            scf_kinds[descriptor.label] = descriptor.kind
             data[descriptor.label] = _build_builtin_interaction_cache(
                 descriptor.setup, positions
             )

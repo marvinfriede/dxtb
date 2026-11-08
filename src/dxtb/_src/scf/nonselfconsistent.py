@@ -34,9 +34,9 @@ from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
 from dxtb.config import ConfigSCF
 
-from .pure.conversions import density_to_charges, hamiltonian_to_density
-from .pure.data import _Data
-from .pure.energies import get_electronic_free_energy, get_energy
+from .nonscf_conversions import density_to_charges, hamiltonian_to_density
+from .nonscf_data import _Data
+from .nonscf_energies import get_electronic_free_energy, get_energy
 from .result import SCFResult
 
 __all__ = ["solve_nonselfconsistent"]

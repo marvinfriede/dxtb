@@ -25,7 +25,7 @@ import resource
 import subprocess
 import time
 from pathlib import Path
-from test.test_scf import test_functional_root_derivatives as root_reference
+from test.test_scf import test_root_derivatives as root_reference
 
 import torch
 

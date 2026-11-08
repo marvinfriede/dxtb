@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from test.test_scf.test_functional_map import _prepare_case  # noqa: E402
+from test.test_scf.test_map import _prepare_case  # noqa: E402
 
 import torch
 

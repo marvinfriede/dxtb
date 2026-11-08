@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functional SCF trajectory-status compatibility tests."""
+"""SCF trajectory-status compatibility tests."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ from dxtb._src.scf import (
     SCFSolverSettings,
     SCFSpectralResult,
     SCFTrajectoryStatus,
-    functional_return_valid,
-    functional_subsolves_ok,
+    scf_return_valid,
+    scf_subsolves_ok,
 )
 from dxtb._src.scf.converger import LinearConverger
 from dxtb._src.scf.solver import (
@@ -136,8 +136,8 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     assert result.trajectory_status is not None
     assert result.trajectory_status.fermi_converged.item() is False
     assert result.trajectory_status.invalid_temperature.item() is False
-    assert functional_subsolves_ok(result).item() is False
-    assert functional_return_valid(result).item() is False
+    assert scf_subsolves_ok(result).item() is False
+    assert scf_return_valid(result).item() is False
 
 
 def test_newly_converged_candidate_contributes_first_failure() -> None:

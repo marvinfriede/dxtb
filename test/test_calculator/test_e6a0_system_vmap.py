@@ -254,7 +254,7 @@ def test_system_negative_temperature_fails_before_transform_guess(
         pytest.fail("invalid temperature must fail before SCF solving")
 
     monkeypatch.setattr(eager, "get_guess", unexpected_guess)
-    monkeypatch.setattr(eager, "run_prepared_functional_full", unexpected_solve)
+    monkeypatch.setattr(eager, "run_prepared_scf", unexpected_solve)
 
     with pytest.raises(
         ValueError, match="Electronic Temperature must be non-negative"
@@ -307,7 +307,7 @@ def test_system_negative_fermi_maxiter_fails_before_transform_guess(
         pytest.fail("invalid Fermi settings must fail before SCF solving")
 
     monkeypatch.setattr(eager, "get_guess", unexpected_guess)
-    monkeypatch.setattr(eager, "run_prepared_functional_full", unexpected_solve)
+    monkeypatch.setattr(eager, "run_prepared_scf", unexpected_solve)
 
     with pytest.raises(ValueError, match="Fermi maxiter must be non-negative"):
         system.singlepoint(_positions()[0])

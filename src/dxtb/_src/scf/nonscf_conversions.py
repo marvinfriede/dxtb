@@ -17,9 +17,9 @@ from dxtb._src.typing import Callable, Tensor
 from dxtb._src.wavefunction import filling
 from dxtb.config import ConfigSCF
 
-from ..utils import get_density
-from .data import _Data
-from .ovlp_diag import diagonalize
+from .utils import get_density
+from .nonscf_data import _Data
+from .nonscf_ovlp_diag import diagonalize
 
 __all__ = [
     "density_to_charges",

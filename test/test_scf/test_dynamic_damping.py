@@ -44,7 +44,7 @@ from ._anderson_helpers import (
 )
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_common as solve_common
-from .test_functional_map import _prepare_case
+from .test_map import _prepare_case
 
 
 def _map_result(mapped: torch.Tensor) -> SCFMapResult:

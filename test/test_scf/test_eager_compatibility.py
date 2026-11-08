@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Static routing and eager-policy characterization for functional SCF."""
+"""Static routing and eager-policy characterization for SCF."""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ from dxtb._src.scf import converger as functional_method
 from dxtb._src.scf import problem as functional_problem
 from dxtb._src.scf import (
     resolve_scf_plan,
-    run_functional_full_eager,
-    run_prepared_functional_full,
+    run_eager_scf,
+    run_prepared_scf,
 )
 from dxtb._src.scf import solver as functional_solver
 from dxtb._src.scf import spectral as functional_spectral
@@ -59,7 +59,7 @@ from dxtb._src.scf.solver import (
 from dxtb._src.wavefunction.filling import FermiStatus
 
 from ..utils import scf_strategy
-from .test_functional_map import _assert_tensor_equal, _prepare_case
+from .test_map import _assert_tensor_equal, _prepare_case
 
 
 def _strategy(converger: str, variable: str, **anderson: object):
@@ -216,7 +216,7 @@ def test_explicit_broyden_runs_after_common_preparation() -> None:
 
     case = _prepare_case(GFN1_XTB)
     config = ConfigSCF.create(strategy="broyden")
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -228,8 +228,8 @@ def test_explicit_broyden_runs_after_common_preparation() -> None:
         case.integrals,
         case.refocc,
     )
-    assert result.route.strategy_label == "broyden"
-    assert result.functional is not None
+    assert result.plan.strategy_label == "broyden"
+    assert result.scf is not None
 
 
 def test_invalid_spin_precedes_broyden_warning_in_both_routes() -> None:
@@ -279,7 +279,7 @@ def test_invalid_spin_precedes_functional_route_error() -> None:
     assert OutputHandler.warnings == []
 
     with pytest.raises(type(legacy_error.value), match="unpaired electrons"):
-        run_functional_full_eager(
+        run_eager_scf(
             case.system.numbers,
             case.positions,
             case.charge,
@@ -295,7 +295,7 @@ def test_invalid_spin_precedes_functional_route_error() -> None:
 
     OutputHandler.clear_warnings()
     with pytest.raises(type(legacy_error.value), match="unpaired electrons"):
-        run_functional_full_eager(
+        run_eager_scf(
             case.system.numbers,
             case.positions,
             case.charge,
@@ -339,7 +339,7 @@ def test_negative_scf_maxiter_invalid_spin_is_rejected_explicitly() -> None:
             case.refocc,
         )
     with pytest.raises(ValueError, match="unpaired electrons"):
-        run_functional_full_eager(
+        run_eager_scf(
             case.system.numbers,
             case.positions,
             case.charge,
@@ -358,7 +358,7 @@ def test_negative_scf_maxiter_valid_preparation_raises_e0_error() -> None:
     case = _prepare_case(GFN1_XTB)
     config = replace(case.system.config.scf, maxiter=-1)
     with pytest.raises(ValueError, match="maxiter >= 0"):
-        run_functional_full_eager(
+        run_eager_scf(
             case.system.numbers,
             case.positions,
             case.charge,
@@ -387,7 +387,7 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
         GFN1_XTB, dtype=torch.float32, scf_options=options
     )
     OutputHandler.clear_warnings()
-    functional = run_functional_full_eager(
+    functional = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -399,8 +399,8 @@ def test_float32_damping_warning_uses_configured_decimal() -> None:
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert functional.functional is not None
-    diagnostics = functional.functional.solve_result.diagnostics
+    assert functional.scf is not None
+    diagnostics = functional.scf.solve_result.diagnostics
     assert diagnostics is not None
     assert diagnostics.dynamic_damping_switched
     assert OutputHandler.warnings
@@ -418,7 +418,7 @@ def test_gfn0_remains_a_nonselfconsistent_special_case() -> None:
 
 
 def test_packed_full_batch_is_an_explicit_compatibility_boundary() -> None:
-    """Batched numbers are rejected by single-System functional SCF route resolution."""
+    """Batched numbers are rejected by single-System SCF route resolution."""
     case = _prepare_case(GFN1_XTB)
     with pytest.raises(NotImplementedError, match="single-System SCF only"):
         resolve_scf_plan(
@@ -471,7 +471,7 @@ def test_eager_subsolve_error_priority(
             "maxiter": 0,
         },
     )
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -482,7 +482,7 @@ def test_eager_subsolve_error_priority(
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert result is not None
     values = {
         "fermi_converged": True,
@@ -569,7 +569,7 @@ def test_eager_failure_order_is_chronological(
             "maxiter": 0,
         },
     )
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -580,7 +580,7 @@ def test_eager_failure_order_is_chronological(
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert result is not None
     solve_result = result.solve_result
     trajectory = solve_result.trajectory_status
@@ -617,7 +617,7 @@ def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
     case = _prepare_case(GFN1_XTB)
 
     class ExtendedField(ElectricField):
-        """A custom field extension outside the functional interaction API."""
+        """A custom field extension outside the interaction API."""
 
     field = ExtendedField(torch.zeros(3, dtype=torch.float64))
     interactions = InteractionList(
@@ -660,7 +660,7 @@ def test_default_anderson_adapter_matches_legacy(
     )
 
     OutputHandler.clear_warnings()
-    ref = run_functional_full_eager(
+    ref = run_eager_scf(
         ref_case.system.numbers,
         ref_case.positions,
         ref_case.charge,
@@ -672,10 +672,10 @@ def test_default_anderson_adapter_matches_legacy(
         ref_case.integrals,
         ref_case.refocc,
     )
-    assert ref.functional is not None
+    assert ref.scf is not None
 
     OutputHandler.clear_warnings()
-    actual = run_functional_full_eager(
+    actual = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -687,9 +687,9 @@ def test_default_anderson_adapter_matches_legacy(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert actual.functional is not None
+    assert actual.scf is not None
     assert actual.non_scf is None
-    assert actual.route.strategy_label == "anderson"
+    assert actual.plan.strategy_label == "anderson"
     assert OutputHandler.warnings == []
     for name in (
         "density",
@@ -700,27 +700,27 @@ def test_default_anderson_adapter_matches_legacy(
         "fenergy",
     ):
         torch.testing.assert_close(
-            getattr(actual.functional, name),
-            getattr(ref.functional, name),
+            getattr(actual.scf, name),
+            getattr(ref.scf, name),
             rtol=1.0e-7,
             atol=1.0e-8,
         )
     torch.testing.assert_close(
-        actual.functional.charges.mono,
-        ref.functional.charges.mono,
+        actual.scf.charges.mono,
+        ref.scf.charges.mono,
         rtol=1.0e-7,
         atol=1.0e-8,
     )
     torch.testing.assert_close(
-        actual.functional.potential.mono,
-        ref.functional.potential.mono,
+        actual.scf.potential.mono,
+        ref.scf.potential.mono,
         rtol=1.0e-7,
         atol=1.0e-8,
     )
-    assert actual.functional.converged.item() is True
-    assert isinstance(actual.functional.iterations, torch.Tensor)
-    assert isinstance(actual.functional.converged, torch.Tensor)
-    assert isinstance(actual.functional.residual, torch.Tensor)
+    assert actual.scf.converged.item() is True
+    assert isinstance(actual.scf.iterations, torch.Tensor)
+    assert isinstance(actual.scf.converged, torch.Tensor)
+    assert isinstance(actual.scf.residual, torch.Tensor)
 
 
 @pytest.mark.parametrize(
@@ -751,7 +751,7 @@ def test_eager_variable_mixer_budget_parity(
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
 
     OutputHandler.clear_warnings()
-    actual = run_functional_full_eager(
+    actual = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -763,10 +763,10 @@ def test_eager_variable_mixer_budget_parity(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert actual.functional is not None
-    assert not bool(actual.functional.converged)
-    assert int(actual.functional.iterations) == 3
-    assert torch.isfinite(actual.functional.energy).all()
+    assert actual.scf is not None
+    assert not bool(actual.scf.converged)
+    assert int(actual.scf.iterations) == 3
+    assert torch.isfinite(actual.scf.energy).all()
     assert len(OutputHandler.warnings) == 1
     assert OutputHandler.warnings[0][0].startswith("SCF did not certify after")
 
@@ -806,7 +806,7 @@ def test_eager_converged_variable_mixer_parity(
         },
     )
     OutputHandler.clear_warnings()
-    ref = run_functional_full_eager(
+    ref = run_eager_scf(
         ref_case.system.numbers,
         ref_case.positions,
         ref_case.charge,
@@ -818,9 +818,9 @@ def test_eager_converged_variable_mixer_parity(
         ref_case.integrals,
         ref_case.refocc,
     )
-    assert ref.functional is not None
+    assert ref.scf is not None
     OutputHandler.clear_warnings()
-    actual = run_functional_full_eager(
+    actual = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -832,25 +832,25 @@ def test_eager_converged_variable_mixer_parity(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert actual.functional is not None
-    assert bool(actual.functional.converged)
+    assert actual.scf is not None
+    assert bool(actual.scf.converged)
     assert OutputHandler.warnings == []
     torch.testing.assert_close(
-        actual.functional.energy,
-        ref.functional.energy,
+        actual.scf.energy,
+        ref.scf.energy,
         rtol=1.0e-7,
         atol=1.0e-7,
     )
     torch.testing.assert_close(
-        actual.functional.charges.mono,
-        ref.functional.charges.mono,
+        actual.scf.charges.mono,
+        ref.scf.charges.mono,
         rtol=1.0e-6,
         atol=1.0e-6,
     )
 
 
 def test_core_result_boundary_keeps_solver_status_tensors() -> None:
-    """Functional core conversion preserves all status tensors directly."""
+    """SCF core conversion preserves all status tensors directly."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
@@ -858,7 +858,7 @@ def test_core_result_boundary_keeps_solver_status_tensors() -> None:
             "maxiter": 0,
         },
     )
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -869,7 +869,7 @@ def test_core_result_boundary_keeps_solver_status_tensors() -> None:
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert result is not None
     assert isinstance(result.iterations, torch.Tensor)
     assert isinstance(result.converged, torch.Tensor)
@@ -908,7 +908,7 @@ def test_prepared_functional_runner_does_not_repeat_common_preparation(
 
     monkeypatch.setattr(functional_eager, "get_refocc", unexpected)
     monkeypatch.setattr(functional_eager, "get_guess", unexpected)
-    result = run_prepared_functional_full(
+    result = run_prepared_scf(
         case.system.numbers,
         case.initial_charges,
         case.n0,
@@ -944,7 +944,7 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
     assert route.kind == "scf"
     assert route.strategy_label == converger
 
-    direct = run_prepared_functional_full(
+    direct = run_prepared_scf(
         case.system.numbers,
         case.initial_charges,
         case.n0,
@@ -957,7 +957,7 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
         case.integrals,
         route,
     )
-    eager = run_functional_full_eager(
+    eager = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -969,8 +969,8 @@ def test_prepared_runner_reports_configured_method(converger: str) -> None:
         case.integrals,
         case.refocc,
     )
-    assert eager.functional is not None
-    _assert_tensor_equal(direct.hamiltonian, eager.functional.hamiltonian)
+    assert eager.scf is not None
+    _assert_tensor_equal(direct.hamiltonian, eager.scf.hamiltonian)
 
 
 def test_prepared_runner_rejects_variable_mismatch() -> None:
@@ -990,7 +990,7 @@ def test_prepared_runner_rejects_variable_mismatch() -> None:
         strategy=SCFStrategy((stage,)),
     )
     with pytest.raises(ValueError, match="SCF variable of the prepared SCF plan does not match"):
-        run_prepared_functional_full(
+        run_prepared_scf(
             case.system.numbers,
             case.initial_charges,
             case.n0,
@@ -1141,7 +1141,7 @@ def test_result_snapshot_retains_functional_tensor_identity() -> None:
             "maxiter": 0,
         },
     )
-    functional = run_functional_full_eager(
+    functional = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -1152,7 +1152,7 @@ def test_result_snapshot_retains_functional_tensor_identity() -> None:
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert functional is not None
     snapshot = Result.snapshot(
         energy=functional.energy,
@@ -1210,7 +1210,7 @@ def test_dynamic_damping_adapter_matches_legacy(
     }
     functional_case = _prepare_case(GFN1_XTB, scf_options=options)
     OutputHandler.clear_warnings()
-    actual = run_functional_full_eager(
+    actual = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -1222,14 +1222,14 @@ def test_dynamic_damping_adapter_matches_legacy(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert actual.functional is not None
-    assert actual.functional.solve_result.diagnostics is not None
-    assert actual.functional.solve_result.diagnostics.dynamic_damping_switched
+    assert actual.scf is not None
+    assert actual.scf.solve_result.diagnostics is not None
+    assert actual.scf.solve_result.diagnostics.dynamic_damping_switched
     torch.testing.assert_close(
-        actual.functional.solve_result.diagnostics.final_damp,
+        actual.scf.solve_result.diagnostics.final_damp,
         torch.tensor(0.75, dtype=torch.float64),
     )
-    if not bool(actual.functional.converged):
+    if not bool(actual.scf.converged):
         assert len(OutputHandler.warnings) == 1
         assert OutputHandler.warnings[0][0].startswith(
             "SCF did not certify after"
@@ -1328,7 +1328,7 @@ def test_dynamic_damping_iterate_and_switch_parity(
             functional_anderson, "anderson_mix", record_anderson_mix
         )
 
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -1340,7 +1340,7 @@ def test_dynamic_damping_iterate_and_switch_parity(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert result.functional is not None
+    assert result.scf is not None
     assert len(transitions) == maxiter + 1
     assert len(transition_damps) == maxiter + 1
 
@@ -1394,7 +1394,7 @@ def test_eager_force_convergence_policy(
         from dxtb._src.typing.exceptions import SCFConvergenceError
 
         with pytest.raises(SCFConvergenceError) as functional_error:
-            run_functional_full_eager(
+            run_eager_scf(
                 functional_case.system.numbers,
                 functional_case.positions,
                 functional_case.charge,
@@ -1414,7 +1414,7 @@ def test_eager_force_convergence_policy(
         )
         return
 
-    result = run_functional_full_eager(
+    result = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -1426,7 +1426,7 @@ def test_eager_force_convergence_policy(
         functional_case.integrals,
         functional_case.refocc,
     )
-    assert result.functional is not None
+    assert result.scf is not None
     if expected == "warn":
         assert len(OutputHandler.warnings) == 1
         assert OutputHandler.warnings[0][0].startswith(
@@ -1460,7 +1460,7 @@ def test_unsupported_spectral_lane_cannot_report_public_scf_success(
             "force_convergence": True,
         },
     )
-    one_shot_result = run_functional_full_eager(
+    one_shot_result = run_eager_scf(
         one_shot.system.numbers,
         one_shot.positions,
         one_shot.charge,
@@ -1472,10 +1472,10 @@ def test_unsupported_spectral_lane_cannot_report_public_scf_success(
         one_shot.integrals,
         one_shot.refocc,
     )
-    assert one_shot_result.functional is not None
-    assert not one_shot_result.functional.converged
-    assert not torch.isfinite(one_shot_result.functional.density).all()
-    assert not torch.isfinite(one_shot_result.functional.energy).all()
+    assert one_shot_result.scf is not None
+    assert not one_shot_result.scf.converged
+    assert not torch.isfinite(one_shot_result.scf.density).all()
+    assert not torch.isfinite(one_shot_result.scf.energy).all()
 
     forced = _prepare_case(
         GFN1_XTB,
@@ -1490,7 +1490,7 @@ def test_unsupported_spectral_lane_cannot_report_public_scf_success(
     # The next map can encounter a NaN state before eager policy evaluation;
     # this still fails visibly and cannot produce an accepted result.
     with pytest.raises(RuntimeError):
-        run_functional_full_eager(
+        run_eager_scf(
             forced.system.numbers,
             forced.positions,
             forced.charge,
@@ -1520,7 +1520,7 @@ def test_unsupported_spectral_lane_cannot_report_public_scf_success(
         functional_eager._SCFMapTensorTree, "prepare", no_root_attachment
     )
     with pytest.raises(RuntimeError):
-        functional_eager.run_prepared_functional_implicit(
+        functional_eager.run_prepared_implicit_scf(
             implicit.system.numbers,
             implicit.initial_charges,
             implicit.n0,

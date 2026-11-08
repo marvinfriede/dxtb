@@ -33,7 +33,7 @@ from dxtb._src.integral.factory import new_hcore
 from dxtb._src.integral.wrappers import overlap
 from dxtb._src.param import GFN0_XTB
 from dxtb._src.scf.iterator import solve
-from dxtb._src.scf.pure.conversions import diagonalize
+from dxtb._src.scf.nonscf_conversions import diagonalize
 from dxtb._src.scf.result import SCFResult
 from dxtb._src.typing import Tensor
 from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
@@ -171,7 +171,7 @@ def test_exactly_one_diagonalization_and_no_initial_guess() -> None:
     )
 
     with patch(
-        "dxtb._src.scf.pure.conversions.diagonalize", wraps=diagonalize
+        "dxtb._src.scf.nonscf_conversions.diagonalize", wraps=diagonalize
     ) as diagonalize_mock:
         with patch(
             "dxtb._src.scf.iterator.get_guess",

@@ -25,7 +25,7 @@ from dxtb._src.typing import Tensor
 
 
 @dataclass(frozen=True, eq=False)
-class FunctionalInteractionEntry:
+class SCFInteractionEntry:
     """Immutable exact-built-in interaction kind, tensor data, and setup."""
 
     kind: str
@@ -46,10 +46,10 @@ class FunctionalInteractionEntry:
 
 
 @dataclass(frozen=True, eq=False)
-class FunctionalInteractionSet:
-    """Ordered immutable interaction descriptors for the functional core."""
+class SCFInteractionSet:
+    """Ordered immutable interaction descriptors for the SCF core."""
 
-    entries: tuple[FunctionalInteractionEntry, ...]
+    entries: tuple[SCFInteractionEntry, ...]
 
 
 def tensor_leaves(value: Any, path: str = "") -> tuple[tuple[str, Tensor], ...]:

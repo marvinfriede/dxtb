@@ -52,10 +52,10 @@ from dxtb._src.calculators.singlepoint import (
     system_singlepoint,
 )
 from dxtb._src.scf.core import replace_tensor_leaves, tensor_leaves
-from dxtb._src.scf.data import functional_scf_interactions_eligible
+from dxtb._src.scf.data import scf_interactions_eligible
 from dxtb._src.scf.eager import (
     fixed_trip_control,
-    functional_core_result,
+    scf_core_result,
     prepare_system_fixed_trip,
 )
 from dxtb._src.scf.solver import finalize_fixed_trip_problem
@@ -114,14 +114,14 @@ def can_vmap_system(system: System) -> bool:
         return False
 
     # Invalid SCF configurations fail regardless of how a Lane is evaluated.
-    eligible, _ = functional_scf_interactions_eligible(system.interactions)
+    eligible, _ = scf_interactions_eligible(system.interactions)
     if not eligible:
         names = ", ".join(
             type(component).__name__
             for component in system.interactions.components
         )
         raise NotImplementedError(
-            f"Functional SCF does not support interaction extension(s): {names}."
+            f"SCF does not support interaction extension(s): {names}."
         )
 
     scf_config = config.scf
@@ -130,7 +130,7 @@ def can_vmap_system(system: System) -> bool:
     if scf_config.fermi.maxiter < 0:
         raise ValueError("Fermi maxiter must be non-negative.")
     if scf_config.maxiter < 0:
-        raise ValueError("The functional SCF solver requires maxiter >= 0.")
+        raise ValueError("The SCF solver requires maxiter >= 0.")
 
     if any(
         type(stage.converger).__name__ == "SOSCFConverger"
@@ -535,7 +535,7 @@ def _group_finish(
     )
     return _singlepoint_result(
         replace(prepared, positions=positions),
-        functional_core_result(scf_result),
+        scf_core_result(scf_result),
     )
 
 

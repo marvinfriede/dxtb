@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Audit reference EDIIS objectives on actual functional SCF histories."""
+"""Audit reference EDIIS objectives on actual SCF histories."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import platform
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from test.test_scf.test_functional_map import _prepare_case
+from test.test_scf.test_map import _prepare_case
 
 import numpy as np
 import torch
@@ -34,7 +34,7 @@ from benchmarks.prototypes.scf_energy_diis import exact_energy_value_gradient
 from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf import unpack_charges
 from dxtb._src.scf.cdiis import CDIISConverger
-from dxtb._src.scf.core import FunctionalInteractionSet
+from dxtb._src.scf.core import SCFInteractionSet
 from dxtb._src.scf.data import SCFInputs
 from dxtb._src.scf.energy import electronic_energy_from_density
 from dxtb._src.scf.map import (
@@ -206,7 +206,7 @@ def _audit_history(
     )
     reduced_inputs = replace(
         problem.inputs,
-        interactions=FunctionalInteractionSet(reduced_entries),
+        interactions=SCFInteractionSet(reduced_entries),
     )
     reduced_problem = replace(problem, inputs=reduced_inputs)
     reduced_focks = torch.stack(
@@ -402,7 +402,7 @@ def main() -> None:
                     "src/dxtb",
                     "benchmarks/prototypes",
                     "benchmarks/scf_s10_objective_audit.py",
-                    "test/test_scf/test_functional_ediis.py",
+                    "test/test_scf/test_ediis.py",
                 ],
                 text=True,
             ).strip()

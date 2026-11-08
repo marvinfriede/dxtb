@@ -239,8 +239,8 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
 def test_default_full_singlepoint_uses_functional_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default FULL singlepoint uses the functional SCF engine."""
-    from dxtb._src.scf.eager import FunctionalCoreResult
+    """Default FULL singlepoint uses the SCF engine."""
+    from dxtb._src.scf.eager import SCFCoreResult
 
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
@@ -270,7 +270,7 @@ def test_default_full_singlepoint_uses_functional_route(
     result = singlepoint(system, positions)
     assert OutputHandler.warnings == []
     functional = captured["result"]
-    assert isinstance(functional, FunctionalCoreResult)
+    assert isinstance(functional, SCFCoreResult)
     assert result.charges is not None
     assert result.potential is not None
     assert result.charges.mono is functional.charges.mono
@@ -368,7 +368,7 @@ def test_production_converged_route_executes_only_physical_maps(
     monkeypatch: pytest.MonkeyPatch, method: int
 ) -> None:
     """Eager production stops mapping after convergence, unlike fixed trips."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     from dxtb._src.scf import map as functional_map
     from dxtb._src.scf import problem as functional_problem
@@ -442,9 +442,9 @@ def test_production_singlepoint_matches_legacy_full(
     variable: str, converger: str, temperature: float
 ) -> None:
     """Production FULL dispatch preserves functional eager values in each route."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
-    from dxtb._src.scf import run_functional_full_eager
+    from dxtb._src.scf import run_eager_scf
 
     options = {
         "strategy": scf_strategy(converger, variable),
@@ -460,7 +460,7 @@ def test_production_singlepoint_matches_legacy_full(
     production_case = _prepare_case(
         GFN1_XTB, scf_options=options, setup_functional=False
     )
-    expected = run_functional_full_eager(
+    expected = run_eager_scf(
         functional_case.system.numbers,
         functional_case.positions,
         functional_case.charge,
@@ -471,7 +471,7 @@ def test_production_singlepoint_matches_legacy_full(
         functional_case.system.config.scf,
         functional_case.integrals,
         functional_case.refocc,
-    ).functional
+    ).scf
     assert expected is not None
     actual = singlepoint(production_case.system, production_case.positions)
     assert actual.status is not None
@@ -533,10 +533,10 @@ def test_production_maxiter_zero_is_valid_one_shot(
     variable: str, converger: str, force_convergence: bool
 ) -> None:
     """The production boundary preserves maxiter=0 for every variable."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     from dxtb import SCFFailureCode
-    from dxtb._src.scf import run_functional_full_eager
+    from dxtb._src.scf import run_eager_scf
 
     case = _prepare_case(
         GFN1_XTB,
@@ -548,7 +548,7 @@ def test_production_maxiter_zero_is_valid_one_shot(
         },
         setup_functional=False,
     )
-    expected = run_functional_full_eager(
+    expected = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -559,7 +559,7 @@ def test_production_maxiter_zero_is_valid_one_shot(
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert expected is not None
     OutputHandler.clear_warnings()
     actual = singlepoint(case.system, case.positions)
@@ -583,7 +583,7 @@ def test_production_positive_budget_nonconvergence_policy(
     force_convergence: bool,
 ) -> None:
     """Production FULL policy warns or raises after a positive failed budget."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     from dxtb._src.typing.exceptions import (
         SCFConvergenceError,
@@ -622,7 +622,7 @@ def test_production_negative_temperature_is_rejected(
     converger: str,
 ) -> None:
     """Negative electronic temperature fails before SCF iteration."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
     case = _prepare_case(
         GFN1_XTB,
@@ -654,9 +654,9 @@ def test_production_dynamic_damping_matches_legacy(
     variable: str, converger: str
 ) -> None:
     """Production routing retains dynamic-damping trajectory and warnings."""
-    from test.test_scf.test_functional_map import _prepare_case
+    from test.test_scf.test_map import _prepare_case
 
-    from dxtb._src.scf import run_functional_full_eager
+    from dxtb._src.scf import run_eager_scf
 
     maxiter = 12 if variable == "charge" else 8
     anderson = (
@@ -679,7 +679,7 @@ def test_production_dynamic_damping_matches_legacy(
         setup_functional=False,
     )
     OutputHandler.clear_warnings()
-    expected = run_functional_full_eager(
+    expected = run_eager_scf(
         case.system.numbers,
         case.positions,
         case.charge,
@@ -690,7 +690,7 @@ def test_production_dynamic_damping_matches_legacy(
         case.system.config.scf,
         case.integrals,
         case.refocc,
-    ).functional
+    ).scf
     assert expected is not None
     OutputHandler.clear_warnings()
     actual = singlepoint(case.system, case.positions)
