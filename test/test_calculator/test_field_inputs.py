@@ -9,7 +9,6 @@ from torch import nn
 
 from dxtb import GFN1_XTB, Calculator, ParamModule, labels
 from dxtb._src.calculators.model import Model
-from dxtb._src.components.interactions.base import Interaction
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
@@ -27,6 +26,7 @@ from dxtb._src.components.interactions.list import (
     InteractionList,
     InteractionListCache,
 )
+from dxtb.components.coulomb import new_es2
 from dxtb.config import Config
 
 
@@ -494,22 +494,26 @@ def test_calculator_legacy_promotion_ignores_auto_int_level() -> None:
     )
 
 
-def test_field_subclasses_are_not_translated_as_defaults() -> None:
-    """Only exact field types are intercepted by the Calculator adapter."""
+def test_field_subclasses_are_rejected() -> None:
+    """Field subclasses are custom Interactions and fail at setup."""
 
     class FieldExtension(ElectricField):
         pass
 
-    numbers = torch.tensor([8, 1, 1])
-    extension = FieldExtension(torch.ones(3, dtype=torch.double))
-    calc = _calc(numbers, interaction=extension)
+    class FieldGradExtension(ElectricFieldGrad):
+        pass
 
-    assert calc._field_default is None
-    assert calc.model.interaction == (extension,)
-    assert any(
-        component is extension
-        for component in calc.system.interactions.components
-    )
+    numbers = torch.tensor([8, 1, 1])
+    with pytest.raises(TypeError, match="Only the built-in"):
+        _calc(
+            numbers,
+            interaction=FieldExtension(torch.ones(3, dtype=torch.double)),
+        )
+    with pytest.raises(TypeError, match="Only the built-in"):
+        _calc(
+            numbers,
+            interaction=FieldGradExtension(torch.eye(3, dtype=torch.double)),
+        )
 
 
 def test_calculate_forwards_explicit_field_and_grad() -> None:
@@ -676,177 +680,24 @@ def test_duplicate_legacy_field_defaults_are_rejected() -> None:
         )
 
 
-def test_constructor_field_defaults_reject_custom_label_conflicts() -> None:
-    """Exact defaults cannot coexist with any retained same-label term."""
-
-    class FieldExtension(ElectricField):
-        def __init__(self, field: torch.Tensor) -> None:
-            super().__init__(field)
-            self.label = LABEL_EFIELD
-
-    class FieldGradExtension(ElectricFieldGrad):
-        def __init__(self, field_grad: torch.Tensor) -> None:
-            super().__init__(field_grad)
-            self.label = LABEL_EFIELD_GRAD
-
-    class CustomInteraction(Interaction):
-        pass
-
+def test_constructor_field_defaults_reject_same_label_conflicts() -> None:
+    """Exact defaults cannot coexist with another term carrying their label."""
     numbers = torch.tensor([8, 1, 1])
     field = torch.ones(3, dtype=torch.double)
     field_grad = torch.eye(3, dtype=torch.double)
+    par = ParamModule(GFN1_XTB, dtype=torch.double)
 
-    with pytest.raises(ValueError, match="cannot both represent the same"):
-        _calc(
-            numbers,
-            interaction=[new_efield(field), FieldExtension(field)],
-        )
-    with pytest.raises(ValueError, match="cannot both represent the same"):
-        _calc(
-            numbers,
-            interaction=[
-                new_efield_grad(field_grad),
-                FieldGradExtension(field_grad),
-            ],
-        )
-
-    custom_field = CustomInteraction()
-    custom_field.label = LABEL_EFIELD
-    with pytest.raises(ValueError, match="cannot both represent the same"):
-        _calc(numbers, interaction=[new_efield(field), custom_field])
-
-    custom_grad = CustomInteraction()
-    custom_grad.label = LABEL_EFIELD_GRAD
-    with pytest.raises(ValueError, match="cannot both represent the same"):
-        _calc(
-            numbers,
-            interaction=[new_efield_grad(field_grad), custom_grad],
-        )
+    for default, label in (
+        (new_efield(field), LABEL_EFIELD),
+        (new_efield_grad(field_grad), LABEL_EFIELD_GRAD),
+    ):
+        same_label = new_es2(torch.unique(numbers), par, dtype=torch.double)
+        assert same_label is not None
+        same_label.label = label
+        with pytest.raises(ValueError, match="cannot both represent the same"):
+            _calc(numbers, interaction=[default, same_label])
 
     # Every unambiguous adapter configuration remains constructible.
     _calc(numbers, interaction=new_efield(field))
     _calc(numbers, interaction=new_efield_grad(field_grad))
     _calc(numbers, interaction=[new_efield(field), new_efield_grad(field_grad)])
-    _calc(numbers, interaction=FieldExtension(field))
-    _calc(numbers, interaction=FieldGradExtension(field_grad))
-
-
-def test_custom_same_label_field_remains_an_energy_force_extension() -> None:
-    """Custom field terms remain in system.interactions and hit the extension boundary."""
-
-    class FieldExtension(ElectricField):
-        def __init__(self, field: torch.Tensor) -> None:
-            super().__init__(field)
-            self.label = LABEL_EFIELD
-
-    numbers = torch.tensor([8, 1, 1])
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
-        dtype=torch.double,
-    )
-    extension = FieldExtension(
-        torch.tensor([0.02, -0.01, 0.03], dtype=torch.double)
-    )
-    calc = _calc(numbers, interaction=extension)
-
-    assert any(x is extension for x in calc.system.interactions.components)
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        calc.energy(positions, chrg=1)
-
-    positions_grad = positions.clone().requires_grad_(True)
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        calc.forces(positions_grad, chrg=1)
-    cache = extension.get_cache(numbers=numbers, positions=positions)
-    atomic_charges = torch.tensor([1.0, 0.0, 0.0], dtype=torch.double)
-    field_gradient = extension.get_atom_gradient(
-        atomic_charges, positions, cache
-    )
-    torch.testing.assert_close(
-        field_gradient,
-        -atomic_charges[:, None] * extension.field,
-    )
-
-
-def test_custom_field_response_has_an_explicit_extension_boundary() -> None:
-    """Generic response asks custom same-label fields for no inferred AD."""
-
-    class FieldExtension(ElectricField):
-        def __init__(self, field: torch.Tensor) -> None:
-            super().__init__(field)
-            self.label = LABEL_EFIELD
-
-    class FieldGradExtension(ElectricFieldGrad):
-        def __init__(self, field_grad: torch.Tensor) -> None:
-            super().__init__(field_grad)
-            self.label = LABEL_EFIELD_GRAD
-
-    numbers = torch.tensor([8, 1, 1])
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
-        dtype=torch.double,
-    ).requires_grad_(True)
-    field_calc = _calc(
-        numbers,
-        interaction=FieldExtension(torch.ones(3, dtype=torch.double)),
-    )
-    field_methods = (
-        field_calc.dipole,
-        field_calc.polarizability,
-        field_calc.hyperpolarizability,
-        field_calc.dipole_deriv,
-        field_calc.pol_deriv,
-        field_calc.dipole_numerical,
-        field_calc.polarizability_numerical,
-        field_calc.hyperpolarizability_numerical,
-        field_calc.ir_numerical,
-        field_calc.raman_numerical,
-    )
-    for method in field_methods:
-        with pytest.raises(RuntimeError, match="custom ElectricField-labelled"):
-            method(positions)
-
-    grad_calc = _calc(
-        numbers,
-        interaction=FieldGradExtension(torch.eye(3, dtype=torch.double)),
-    )
-    with pytest.raises(RuntimeError, match="custom ElectricFieldGrad-labelled"):
-        grad_calc.quadrupole(positions)
-    with pytest.raises(RuntimeError, match="custom ElectricFieldGrad-labelled"):
-        grad_calc.quadrupole_numerical(positions)
-
-
-def test_custom_same_label_interaction_rejects_explicit_double_counting() -> (
-    None
-):
-    """A custom legacy term cannot be combined with an explicit standard one."""
-
-    class FieldExtension(ElectricField):
-        def __init__(self, field: torch.Tensor) -> None:
-            super().__init__(field)
-            self.label = LABEL_EFIELD
-
-    class FieldGradExtension(ElectricFieldGrad):
-        def __init__(self, field_grad: torch.Tensor) -> None:
-            super().__init__(field_grad)
-            self.label = LABEL_EFIELD_GRAD
-
-    numbers = torch.tensor([8, 1, 1])
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
-        dtype=torch.double,
-    )
-    field_calc = _calc(
-        numbers,
-        interaction=FieldExtension(torch.ones(3, dtype=torch.double)),
-    )
-    with pytest.raises(ValueError, match="ElectricField.*label"):
-        field_calc.energy(positions, field=torch.zeros(3, dtype=torch.double))
-
-    grad_calc = _calc(
-        numbers,
-        interaction=FieldGradExtension(torch.eye(3, dtype=torch.double)),
-    )
-    with pytest.raises(ValueError, match="ElectricFieldGrad.*label"):
-        grad_calc.energy(
-            positions, field_grad=torch.zeros((3, 3), dtype=torch.double)
-        )

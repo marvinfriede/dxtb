@@ -327,7 +327,6 @@ def _evaluate_prevalidated(
                 fields[idx],
                 field_grads[idx],
                 fixed_trip=False,
-                refresh_extension_caches=True,
             )
         except Exception as error:
             _attach_source_id(error, source_id)

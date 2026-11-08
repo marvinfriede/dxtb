@@ -765,32 +765,19 @@ def test_normal_singlepoint_uses_captured_d3_core() -> None:
     )
 
 
-def test_d3_subclass_remains_on_legacy_cache_route() -> None:
-    class D3Extension(DispersionD3):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.energy_calls = 0
-
-        def get_energy(self, positions, cache, **kwargs):
-            self.energy_calls += 1
-            return super().get_energy(positions, cache, **kwargs)
-
-    sample = samples["LiH"]
-    numbers = sample["numbers"]
-    positions = sample["positions"].double()
+def test_d3_subclass_is_rejected() -> None:
+    """D3 subclasses are custom Classicals and fail at setup."""
     from dxtb.config import Config
 
+    class D3Extension(DispersionD3):
+        pass
+
+    numbers = samples["LiH"]["numbers"]
     base = _component(numbers)
     extension = D3Extension(numbers, base.param, dtype=torch.double)
-    extension.label = "D3:extension"
-    system = Model(
-        par=ParamModule(GFN1_XTB, dtype=torch.double),
-        config=Config.create(exclude=("disp", "scf")),
-        classical=(extension,),
-    ).setup(numbers)
-    assert system.d3_setups == ()
-    assert isinstance(
-        system.classical_cache[extension.label], DispersionD3Cache
-    )
-    system.singlepoint(positions)
-    assert extension.energy_calls == 1
+    with pytest.raises(TypeError, match="Only the built-in"):
+        Model(
+            par=ParamModule(GFN1_XTB, dtype=torch.double),
+            config=Config.create(exclude=("disp", "scf")),
+            classical=(extension,),
+        ).setup(numbers)

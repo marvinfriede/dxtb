@@ -66,7 +66,6 @@ class DispersionD4Setup:
     counting_function: CountingFunction
     damping_function: Damping
     ref_charges: str
-    compatibility_q: Tensor | None = None
 
     def as_param(self) -> d4.Param:
         """Materialize the external library mapping for this call."""
@@ -154,11 +153,10 @@ class DispersionD4CoreSetup(Node):
     counting_function: CountingFunction = context()
     damping_type: type[Damping] = context()
     ref_charges: str = context()
-    compatibility_q: Tensor | None = child()
 
     @property
     def parameters(self) -> tuple[tuple[str, Any], ...]:
-        """Return the ordered legacy-compatible parameter view."""
+        """Return the ordered parameter entries as ``(name, value)`` pairs."""
         return tuple(
             (entry.name, entry.value.decode())
             for entry in self.parameter_entries
@@ -172,21 +170,21 @@ class DispersionD4CoreSetup(Node):
 def core_dispersion_d4_setup(
     setup: DispersionD4Setup,
 ) -> DispersionD4CoreSetup:
-    """Convert a supported built-in legacy D4 setup without cloning tensors.
+    """Convert a built-in D4 component setup without cloning tensors.
 
-    Custom models and damping strategies remain available through the direct
-    legacy setup API. The System-owned Node path accepts only the canonical
-    built-in model and rational damping strategy.
+    Custom models and damping strategies are only available through direct
+    ``DispersionD4.get_cache``/``get_energy`` calls. The System-owned Node path
+    accepts only the canonical built-in model and rational damping strategy.
     """
     if type(setup.model) is not d4.model.D4Model:
         raise TypeError(
             "System-owned classical D4 setup requires the built-in D4Model; "
-            "custom model subclasses remain on the legacy path."
+            "custom model subclasses only work with direct component calls."
         )
     if type(setup.damping_function) is not d4.damping.RationalDamping:
         raise TypeError(
             "System-owned classical D4 setup requires RationalDamping; "
-            "custom damping strategies remain on the legacy path."
+            "custom damping strategies only work with direct component calls."
         )
     if setup.counting_function is not erf_count:
         raise TypeError(
@@ -227,7 +225,6 @@ def core_dispersion_d4_setup(
         counting_function=setup.counting_function,
         damping_type=type(setup.damping_function),
         ref_charges=setup.ref_charges,
-        compatibility_q=setup.compatibility_q,
     )
 
 
@@ -262,7 +259,6 @@ def _d4_setup_view(setup: DispersionD4CoreSetup) -> DispersionD4Setup:
         counting_function=setup.counting_function,
         damping_function=damping_function,
         ref_charges=setup.ref_charges,
-        compatibility_q=setup.compatibility_q,
     )
 
 
@@ -297,8 +293,8 @@ def setup_dispersion_d4(
             numbers, ref_charges=dispersion.ref_charges, **dd
         )
     elif type(model) is not d4.model.D4Model:
-        # Preserve caller extensions at this legacy compatibility boundary.
-        # Canonical Model.setup never accepts or stores a custom D4Model.
+        # Keep a caller's D4Model subclass for direct component calls.
+        # Model.setup never accepts or stores a custom D4Model.
         model = model.type(dd["dtype"]).to(dd["device"])
     else:
         model = _copy_model(model, numbers, dd)
@@ -333,10 +329,6 @@ def setup_dispersion_d4(
             **dd,
         )
 
-    compatibility_q = kwargs.pop("q", None)
-    if compatibility_q is not None and not isinstance(compatibility_q, Tensor):
-        raise TypeError("D4: 'q' is not of type 'Tensor'.")
-
     counting_function = kwargs.pop("counting_function", erf_count)
     damping_function = kwargs.pop(
         "damping_function", d4.damping.RationalDamping()
@@ -350,8 +342,6 @@ def setup_dispersion_d4(
         (key, value.clone() if isinstance(value, Tensor) else value)
         for key, value in dispersion.param.items()
     )
-    if compatibility_q is not None:
-        compatibility_q = compatibility_q.clone()
     return DispersionD4Setup(
         numbers=numbers,
         parameters=parameters,
@@ -362,7 +352,6 @@ def setup_dispersion_d4(
         counting_function=counting_function,
         damping_function=damping_function,
         ref_charges=dispersion.ref_charges,
-        compatibility_q=compatibility_q,
     )
 
 
@@ -432,8 +421,6 @@ class DispersionD4(Dispersion):
             raise TypeError(
                 f"Setup in {self.label} is not of type 'DispersionD4Setup'."
             )
-        if q is None:
-            q = cache.compatibility_q
         charge = kwargs.pop("charge", self.charge)
         if kwargs:
             unknown = ", ".join(sorted(kwargs))

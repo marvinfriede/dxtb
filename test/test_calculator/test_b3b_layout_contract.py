@@ -271,40 +271,29 @@ def test_interaction_descriptors_feed_functional_preparation(
     )
 
 
-def test_mixed_classical_extension_keeps_global_result_order() -> None:
-    """Descriptor-built terms and legacy extensions retain list ordering."""
-    from dxtb._src.components.classicals import Classical
-
-    class ClassicalExtension(Classical):
-        __slots__ = ("scale",)
-
-        def __init__(self) -> None:
-            super().__init__(device="cpu", dtype=torch.float64)
-            self.label = "ClassicalExtension"
-            self.scale = torch.tensor(0.125, dtype=torch.float64)
-
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            return self.scale
-
-        def get_energy(self, positions, cache, **kwargs):
-            return (
-                torch.ones(positions.shape[-2], dtype=positions.dtype) * cache
-            )
+def test_additional_classical_keeps_global_result_order() -> None:
+    """Descriptor-built terms retain the Classical list order."""
+    from dxtb._src.components.classicals import DispersionD3
+    from dxtb._src.components.classicals.dispersion import new_dispersion
 
     numbers = torch.tensor([1, 1])
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
     )
-    extension = ClassicalExtension()
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    extra = new_dispersion(numbers, par, dtype=torch.float64)
+    assert type(extra) is DispersionD3
+    extra.label = "D3:extra"
     system = Model(
-        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        par=par,
         config=Config.create(
             method=labels.GFN1_XTB,
             int_driver=labels.INTDRIVER_PYTORCH,
             exclude="scf",
         ),
-        classical=(extension,),
+        classical=(extra,),
     ).setup(numbers)
+    assert system.classicals.components[-1] is extra
     assert system.exact_core is not None
     assert system._active_exact_core() is system.exact_core
     actual = system.singlepoint(positions)

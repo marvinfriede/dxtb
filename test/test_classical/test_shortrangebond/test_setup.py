@@ -365,21 +365,11 @@ def test_calculator_reset_preserves_srb_setup_and_parameter_graph() -> None:
     assert torch.count_nonzero(gradient) > 0
 
 
-def test_subclass_uses_legacy_hooks_and_remains_mutable() -> None:
-    """SRB subclasses retain their legacy cache, energy, and mutation hooks."""
+def test_subclass_is_rejected() -> None:
+    """SRB subclasses are custom Classicals and fail at setup."""
 
     class SRBExtension(ShortRangeBond):
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            self.cache_calls = getattr(self, "cache_calls", 0) + 1
-            return super().get_cache(numbers, ihelp, **kwargs)
-
-        def get_energy(self, positions, cache, **kwargs):
-            self.energy_calls = getattr(self, "energy_calls", 0) + 1
-            return super().get_energy(positions, cache, **kwargs)
-
-        def reset(self):
-            self.reset_calls = getattr(self, "reset_calls", 0) + 1
-            super().reset()
+        pass
 
     par = ParamModule(GFN0_XTB, **DD64)
     numbers = samples["NO2"]["numbers"].to(DEVICE)
@@ -389,36 +379,12 @@ def test_subclass_uses_legacy_hooks_and_remains_mutable() -> None:
         **{slot: getattr(base, slot) for slot in ShortRangeBond.__slots__},
         dtype=torch.double,
     )
-    extension.label = LABEL_SRB
-    model = Model(
-        par=par,
-        config=Config.create(exclude=("scf", "srb")),
-        classical=(extension,),
-    )
-    system = model.setup(numbers)
-    assert system.srb_setup is None
-
-    positions = samples["NO2"]["positions"].to(**DD64)
-    before = _srb_energy(system.singlepoint(positions))
-    assert extension.cache_calls >= 2
-    assert extension.energy_calls == 1
-
-    extension.update(prefactor=extension.prefactor * 1.2)
-    after = _srb_energy(system.singlepoint(positions))
-    assert not torch.isclose(before, after)
-    extension.reset()
-    assert extension.energy_calls == 2
-    assert extension.cache_calls >= 3
-
-    calc = Calculator(
-        numbers,
-        par,
-        classical=extension,
-        dtype=torch.double,
-        opts={"exclude": ["srb", "scf"], "verbosity": 0},
-    )
-    calc.reset()
-    assert extension.reset_calls == 2
+    with pytest.raises(TypeError, match="Only the built-in"):
+        Model(
+            par=par,
+            config=Config.create(exclude=("scf", "srb")),
+            classical=(extension,),
+        ).setup(numbers)
 
 
 @pytest.mark.parametrize(

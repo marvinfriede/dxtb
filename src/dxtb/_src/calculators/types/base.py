@@ -224,53 +224,22 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         elif inter is system.generalized_born_interaction:
             generalized_born_setup = conv_setup
 
-    from dxtb._src.calculators.packed_result import (
-        _BUILTIN_CLASSICAL_TYPES,
-        _BUILTIN_INTERACTION_TYPES,
-    )
-
-    new_classicals = system.classicals
-    if any(
-        type(c) not in _BUILTIN_CLASSICAL_TYPES
-        for c in system.classicals.components
-    ):
-        new_classicals = copy.copy(system.classicals)
-        new_classicals.components = [
-            c if type(c) in _BUILTIN_CLASSICAL_TYPES else c.type(dtype)
-            for c in system.classicals.components
-        ]
-        new_classicals.override_dtype(dtype)
-
-    new_interactions = system.interactions
-    if any(
-        type(i) not in _BUILTIN_INTERACTION_TYPES
-        for i in system.interactions.components
-    ):
-        new_interactions = copy.copy(system.interactions)
-        new_interactions.components = [
-            i if type(i) in _BUILTIN_INTERACTION_TYPES else i.type(dtype)
-            for i in system.interactions.components
-        ]
-        new_interactions.override_dtype(dtype)
-
-    ext_cache = system._classical_extension_cache
-    if ext_cache:
+    packed_setups = system._packed_classical_setups
+    if packed_setups:
         from dxtb._src.components.classicals.list import ClassicalListCache
 
-        new_ext_cache = ClassicalListCache()
-        for k, v in ext_cache.items():
-            if isinstance(v, Tensor):
-                new_ext_cache[k] = v.to(dtype=dtype)
-            elif isinstance(v, TensorLike):
-                new_ext_cache[k] = v.type(dtype)
+        converted = ClassicalListCache()
+        for key, value in packed_setups.items():
+            if isinstance(value, Tensor):
+                converted[key] = value.to(dtype=dtype)
+            elif isinstance(value, TensorLike):
+                converted[key] = value.type(dtype)
             else:
-                new_ext_cache[k] = v
-        ext_cache = new_ext_cache
+                converted[key] = value
+        packed_setups = converted
 
     return replace(
         system,
-        classicals=new_classicals,
-        interactions=new_interactions,
         integral_setup=integral_setup,
         h0_setup=h0_setup,
         repulsion_setup=repulsion_setup,
@@ -288,7 +257,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         generalized_born_setup=generalized_born_setup,
         dd={**system.dd, "dtype": dtype},
         exact_core=exact_core,
-        _classical_extension_cache=ext_cache,
+        _packed_classical_setups=packed_setups,
     )
 
 
@@ -553,8 +522,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     def _prepare_eval_system(self) -> System:
         """Build a call-local System setup for 1D single-System evaluation."""
         from dxtb._src.calculators.packed_result import (
-            _BUILTIN_CLASSICAL_TYPES,
-            _BUILTIN_INTERACTION_TYPES,
             _sync_lane_system_labels,
         )
 
@@ -574,24 +541,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         eval_classicals = []
         for idx, comp in enumerate(self.model.classical):
-            needs_copy = (
-                type(comp) in _BUILTIN_CLASSICAL_TYPES
-                or has_label_collision
-            )
-            if needs_copy:
-                c_copy = copy.copy(comp)
-                if has_label_collision:
-                    c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
-                eval_classicals.append(c_copy)
-            else:
-                eval_classicals.append(comp)
+            # Caller-owned Components are never mutated in place.
+            c_copy = copy.copy(comp)
+            if has_label_collision:
+                c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
+            eval_classicals.append(c_copy)
 
-        eval_interactions = [
-            copy.copy(inter)
-            if type(inter) in _BUILTIN_INTERACTION_TYPES
-            else inter
-            for inter in self.model.interaction
-        ]
+        eval_interactions = [copy.copy(inter) for inter in self.model.interaction]
         setup_model = Model(
             par=self.model.par,
             config=self.opts,

@@ -11,13 +11,11 @@ from dxtb._src.calculators.lane_evaluation import (
     evaluate_systems_independently,
 )
 from dxtb._src.calculators.model import Model, System
+from dxtb._src.components.classicals import DispersionD3
 from dxtb._src.components.classicals.base import Classical
-from dxtb._src.components.interactions.base import (
-    Interaction,
-    InteractionCache,
-)
+from dxtb._src.components.classicals.dispersion import new_dispersion
+from dxtb._src.components.interactions.base import Interaction
 from dxtb._src.components.interactions.container import Charges
-from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb.config import Config
 
 DTYPE = torch.float64
@@ -62,55 +60,17 @@ def _positions(numbers: list[int], shift: float = 0.0) -> torch.Tensor:
     )
 
 
-class _GeometryInteractionCache(InteractionCache):
-    __slots__ = ["geometry_scale"]
-
-    def __init__(self, geometry_scale: torch.Tensor) -> None:
-        self.geometry_scale = geometry_scale
-
-
-class _NonzeroInteraction(Interaction):
-    label = "E6bLegacyNonzeroInteraction"
-
-    def __init__(self) -> None:
-        super().__init__(device=DEVICE, dtype=DTYPE)
-        self.calls = 0
-
-    def get_cache(self, *, numbers=None, positions=None, ihelp=None):
-        return _GeometryInteractionCache(positions.square().sum() * 1.0e-1)
-
-    def get_monopole_atom_potential(
-        self,
-        cache: InteractionCache,
-        qat: torch.Tensor,
-        qdp: torch.Tensor | None = None,
-        qqp: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        self.calls += 1
-        atom_shape = qat.shape[-1]
-        pattern = torch.arange(atom_shape, dtype=qat.dtype, device=qat.device)
-        return cache.geometry_scale * pattern
-
-    def get_monopole_atom_energy(
-        self, cache: InteractionCache, qat: torch.Tensor, **kwargs
-    ) -> torch.Tensor:
-        self.calls += 1
-        return 0.5 * cache.geometry_scale * qat.square()
-
-
-class _CacheClassical(Classical):
-    def __init__(self) -> None:
-        super().__init__(device=DEVICE, dtype=DTYPE)
-        self.label = "E6bCacheClassical"
-        self.cache_calls = 0
-
-    def get_cache(self, numbers, ihelp=None, **kwargs):
-        self.cache_calls += 1
-        return numbers.to(dtype=DTYPE).sum()
-
-    def get_energy(self, positions, cache, **kwargs):
-        atom_scale = cache / positions.shape[-2]
-        return atom_scale * positions.square().sum(dim=-1) * 1.0e-4
+def _extra_d3(numbers: list[int], label: str) -> DispersionD3:
+    """Create an additional built-in D3 Classical with its own label."""
+    component = new_dispersion(
+        torch.tensor(numbers, device=DEVICE),
+        ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE),
+        device=DEVICE,
+        dtype=DTYPE,
+    )
+    assert type(component) is DispersionD3
+    component.label = label
+    return component
 
 
 def test_libcint_independent_evaluation_matches_independent_serial_systems() -> (
@@ -217,61 +177,35 @@ def test_libcint_independent_evaluation_preserves_model_parameter_gradient() -> 
     assert par.parameter_tree.hamiltonian.xtb.kpol.param is kpol
 
 
-def test_field_label_conflict_is_not_silently_replaced() -> None:
-    pytest.importorskip("tad_libcint")
-    custom = _NonzeroInteraction()
-    custom.label = LABEL_EFIELD
-    numbers = [1, 1]
-    system = _system(
-        numbers,
-        driver=labels.INTDRIVER_LIBCINT,
-        interaction=(custom,),
-    )
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        evaluate_systems_independently(
-            (system,),
-            (_positions(numbers),),
-            field=torch.ones(3, dtype=DTYPE),
+def test_custom_components_are_rejected() -> None:
+    """Custom Classicals and Interactions fail at Model setup."""
+
+    class CustomClassical(Classical):
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            return None
+
+        def get_energy(self, positions, cache, **kwargs):
+            return positions.new_zeros(positions.shape[-2])
+
+    class CustomInteraction(Interaction):
+        pass
+
+    with pytest.raises(TypeError, match="Only the built-in"):
+        _system(
+            [1, 1], classical=(CustomClassical(device=DEVICE, dtype=DTYPE),)
+        )
+    with pytest.raises(TypeError, match="Only the built-in"):
+        _system(
+            [1, 1],
+            interaction=(CustomInteraction(device=DEVICE, dtype=DTYPE),),
         )
 
 
-def test_custom_interaction_is_explicitly_unsupported() -> None:
-    interaction = _NonzeroInteraction()
-    na, nb = [1, 1], [3, 1]
-    a = _system(na, interaction=(interaction,))
-    b = _system(nb, interaction=(interaction,))
-    pa, pb = _positions(na), _positions(nb)
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        can_vmap_system(a)
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        evaluate_systems_independently((a, b), (pa, pb))
-
-
-def test_custom_classical_cache_is_refreshed_per_independent_call() -> None:
-    component = _CacheClassical()
-    numbers = [1, 1]
-    system = _system(numbers, classical=(component,))
-    positions = _positions(numbers)
-    assert not can_vmap_system(system)
-    before = component.cache_calls
-    first = evaluate_systems_independently((system,), (positions,))[0]
-    second = evaluate_systems_independently((system,), (positions,))[0]
-    assert component.cache_calls >= before + 2
-    first_classicals = dict(first.classical)
-    second_classicals = dict(second.classical)
-    assert component.label in first_classicals
-    assert torch.count_nonzero(first_classicals[component.label]) > 0
-    torch.testing.assert_close(
-        first_classicals[component.label], second_classicals[component.label]
-    )
-    torch.testing.assert_close(first.energy, second.energy)
-
-
-def test_independent_evaluation_preserves_custom_classical_position_gradient() -> (
+def test_independent_evaluation_preserves_additional_classical_position_gradient() -> (
     None
 ):
-    component = _CacheClassical()
     numbers = [1, 1]
+    component = _extra_d3(numbers, "D3:extra")
     system = _system(numbers, classical=(component,))
     mapped_pos = _positions(numbers).requires_grad_()
     serial_pos = _positions(numbers).requires_grad_()
@@ -360,9 +294,8 @@ def test_classical_only_calculation_retains_separate_route() -> None:
 def test_heterogeneous_classical_results_keep_per_system_schema() -> None:
     """Each heterogeneous lane retains its own configured classical labels."""
     numbers = [1, 1]
-    first_component = _CacheClassical()
-    second_component = _CacheClassical()
-    second_component.label = "E6bOtherCacheClassical"
+    first_component = _extra_d3(numbers, "D3:first")
+    second_component = _extra_d3(numbers, "D3:second")
     first_system = _system(numbers, classical=(first_component,))
     second_system = _system(numbers, classical=(second_component,))
     results = evaluate_systems_independently(

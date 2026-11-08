@@ -51,39 +51,9 @@ from dxtb._src.calculators.types.base import (
     _convert_system_dtype,
     reject_removed_store_kwargs,
 )
-from dxtb._src.components.classicals import (
-    IES,
-    DispersionD3,
-    DispersionD4,
-    Halogen,
-    Repulsion,
-    ShortRangeBond,
-)
-from dxtb._src.components.interactions.coulomb import (
-    AES2,
-    ES2,
-    ES3,
-)
-from dxtb._src.components.interactions.dispersion import DispersionD4SC
-from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 
-_BUILTIN_CLASSICAL_TYPES = (
-    DispersionD3,
-    DispersionD4,
-    Halogen,
-    IES,
-    Repulsion,
-    ShortRangeBond,
-)
-_BUILTIN_INTERACTION_TYPES = (
-    AES2,
-    ES2,
-    ES3,
-    DispersionD4SC,
-    GeneralizedBorn,
-)
 from dxtb._src.constants import defaults
 from dxtb._src.scf.functional.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
@@ -1216,15 +1186,10 @@ def _sync_lane_system_labels(
             zip(new_classicals, source_classicals)
         ):
             if lane_comp.label != orig_comp.label:
-                old_label = lane_comp.label
                 if id(lane_comp) in caller_owned_ids:
                     lane_comp = copy.copy(lane_comp)
                     new_classicals[idx] = lane_comp
                 lane_comp.label = orig_comp.label
-                if old_label in lane_sys._classical_extension_cache:
-                    lane_sys._classical_extension_cache[orig_comp.label] = (
-                        lane_sys._classical_extension_cache.pop(old_label)
-                    )
                 classical_changed = True
         if classical_changed:
             lane_sys.classicals.components = new_classicals
@@ -1351,12 +1316,8 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     and isinstance(comp.numbers, Tensor)
                     and comp.numbers.ndim == 2
                 )
-                needs_copy = (
-                    has_2d_nums
-                    or has_label_collision
-                    or type(comp) in _BUILTIN_CLASSICAL_TYPES
-                )
-                c_copy = copy.copy(comp) if needs_copy else comp
+                # Caller-owned Components are never mutated in place.
+                c_copy = copy.copy(comp)
                 if has_2d_nums:
                     c_copy.numbers = comp.numbers[idx].index_select(
                         0, slots.to(comp.numbers.device)
@@ -1366,10 +1327,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 lane_classical_list.append(c_copy)
 
             lane_interaction_list = [
-                copy.copy(inter)
-                if type(inter) in _BUILTIN_INTERACTION_TYPES
-                else inter
-                for inter in model_interactions
+                copy.copy(inter) for inter in model_interactions
             ]
 
             lane_model = Model(

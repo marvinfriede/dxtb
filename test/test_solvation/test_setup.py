@@ -39,7 +39,6 @@ from dxtb._src.components.interactions.solvation.alpb import (
     new_solvation,
     setup_generalized_born,
 )
-from dxtb._src.components.interactions.container import Charges
 from dxtb._src.param import Param
 from dxtb._src.typing import Tensor
 
@@ -556,94 +555,20 @@ def test_geometry_charge_and_backward_history_is_independent() -> None:
     torch.testing.assert_close(_energy(setup, pos_a, q0), first)
 
 
-def test_subclass_uses_legacy_cache_update_and_reset() -> None:
-    """Unmigrated subclasses keep cache-driven extension behavior."""
-    numbers, positions = _geometry()
+def test_subclass_is_rejected() -> None:
+    """A Model sets up only the built-in GeneralizedBorn Interaction."""
+    numbers, _ = _geometry()
 
     class ScaledGeneralizedBorn(GeneralizedBorn):
-        __slots__ = ["scale"]
+        pass
 
-        def __init__(self) -> None:
-            super().__init__(numbers, 78.9, **DD)
-            self.scale = torch.tensor(1.0, **DD)
-
-        def get_cache(self, *, numbers=None, positions=None, ihelp=None):
-            return (
-                super().get_cache(
-                    numbers=numbers, positions=positions, ihelp=ihelp
-                ),
-                self.scale.clone(),
-            )
-
-        def get_monopole_atom_potential(self, cache, qat, *args, **kwargs):
-            base, scale = cache
-            return scale * (base.mat @ qat)
-
-        def get_monopole_atom_energy(self, cache, qat, **kwargs):
-            return 0.5 * qat * self.get_monopole_atom_potential(cache, qat)
-
-    component = ScaledGeneralizedBorn()
-    system = Model(
-        par=ParamModule(GFN1_XTB, **DD),
-        interaction=(component,),
-        auto_int_level=False,
-    ).setup(numbers)
-    first_data = _interaction_data(system, positions)
-    charges = torch.tensor([0.2, -0.1, -0.05, -0.05], **DD)
-    first = component.get_energy(
-        first_data[component.label], Charges(mono=charges), system.ihelp
-    )
-    component.update(scale=torch.tensor(2.0, **DD))
-    second_data = _interaction_data(system, positions)
-    second = component.get_energy(
-        second_data[component.label], Charges(mono=charges), system.ihelp
-    )
-    assert not torch.allclose(first, second)
-    component.reset()
-    second_after_reset_data = _interaction_data(system, positions)
-    second_after_reset = component.get_energy(
-        second_after_reset_data[component.label],
-        Charges(mono=charges),
-        system.ihelp,
-    )
-    torch.testing.assert_close(second, second_after_reset)
-
-    component.update(scale=torch.tensor(3.0, **DD))
-    scale_before_reset_all = component.scale
-    InteractionList(component).reset_all()
-    assert component.scale is not scale_before_reset_all
-    third_data = _interaction_data(system, positions)
-    third = component.get_energy(
-        third_data[component.label], Charges(mono=charges), system.ihelp
-    )
-    torch.testing.assert_close(first * 3, third)
-
-    calculator_component = ScaledGeneralizedBorn()
-    calculator = Calculator(
-        numbers,
-        ParamModule(GFN1_XTB, **DD),
-        interaction=(calculator_component,),
-        opts={"verbosity": 0},
-        dtype=torch.double,
-        auto_int_level=False,
-    )
-    calculator_component.update(scale=torch.tensor(3.0, **DD))
-    calculator_data = _interaction_data(calculator.system, positions)
-    calculator_energy_before_reset = calculator_component.get_energy(
-        calculator_data[calculator_component.label],
-        Charges(mono=charges),
-        calculator.system.ihelp,
-    )
-    scale_before_calculator_reset = calculator_component.scale
-    calculator.reset()
-    assert calculator_component.scale is not scale_before_calculator_reset
-    reset_data = _interaction_data(calculator.system, positions)
-    reset_energy = calculator_component.get_energy(
-        reset_data[calculator_component.label],
-        Charges(mono=charges),
-        calculator.system.ihelp,
-    )
-    torch.testing.assert_close(calculator_energy_before_reset, reset_energy)
+    component = ScaledGeneralizedBorn(numbers, 78.9, **DD)
+    with pytest.raises(TypeError, match="Only the built-in"):
+        Model(
+            par=ParamModule(GFN1_XTB, **DD),
+            interaction=(component,),
+            auto_int_level=False,
+        ).setup(numbers)
 
 
 def test_core_node_mixed_dtype_device_and_context_edge_cases() -> None:

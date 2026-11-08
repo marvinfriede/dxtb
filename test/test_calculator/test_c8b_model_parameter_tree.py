@@ -40,7 +40,6 @@ from dxtb._src.calculators.model import (
     _ModelSetupAdapter,
     _parameter_setup_lock,
 )
-from dxtb._src.components.classicals import Repulsion, new_repulsion
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
@@ -1178,30 +1177,16 @@ def test_functional_setup_preserves_packed_mode_compatibility() -> None:
     assert model.par.get("element.H.arep") is tree.parameters.params[name]
 
 
-def test_functional_setup_preserves_custom_classical_component() -> None:
-    """Functional setup retains legacy extension identity and cache hooks."""
+def test_functional_setup_preserves_additional_classical_component() -> None:
+    """Functional setup retains an additional Classical's identity and order."""
+    from dxtb._src.components.classicals import DispersionD3
+    from dxtb._src.components.classicals.dispersion import new_dispersion
+
     par = ParamModule(GFN1_XTB, dtype=torch.float64)
     numbers = torch.tensor([1, 1], dtype=torch.int64)
-    base = new_repulsion(torch.tensor([1]), par, dtype=torch.float64)
-    assert base is not None
-    calls = []
-
-    class RepulsionExtension(Repulsion):
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            calls.append("get_cache")
-            return super().get_cache(numbers, ihelp=ihelp, **kwargs)
-
-    extension = RepulsionExtension(
-        base.arep,
-        base.zeff,
-        base.kexp,
-        base.klight,
-        base.cutoff,
-        device=torch.device("cpu"),
-        dtype=torch.float64,
-        en=base.en,
-        enscale=base.enscale,
-    )
+    extension = new_dispersion(numbers, par, dtype=torch.float64)
+    assert type(extension) is DispersionD3
+    extension.label = "D3:extra"
     model = Model(
         par=par,
         config=Config.create(
@@ -1222,10 +1207,10 @@ def test_functional_setup_preserves_custom_classical_component() -> None:
         component is extension for component in system.classicals.components
     )
     assert system.classicals.components[-1] is extension
-    assert "get_cache" in calls
-    assert system.classical_cache[extension.label] is not None
+    assert system.d3_setups[-1][0] is extension
+    assert system.classical_cache[extension.label] is system.d3_setups[-1][1]
     assert system.exact_core is not None
-    assert all(
-        term.label != extension.label
+    assert any(
+        term.label == extension.label
         for term in system.exact_core.classical_terms
     )

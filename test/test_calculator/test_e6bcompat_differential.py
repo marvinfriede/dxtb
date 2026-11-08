@@ -881,7 +881,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         evaluate_packed_systems,
         pack_system_results,
     )
-    from dxtb._src.components.classicals.base import Classical
     from dxtb._src.components.classicals.dispersion import new_dispersion
 
     param = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
@@ -983,64 +982,66 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         assert l1 == l2
         assert v1 is v2
 
-    # 2. Distinct custom classical terms sharing a label with distinct gradients
-    class _ScaledHarmonicClassical(Classical):
-        def __init__(self, scale: torch.Tensor) -> None:
-            super().__init__(device=DEVICE, dtype=DTYPE)
-            self.label = "CustomHarmonic"
-            self.scale = scale
-
-        def get_cache(self, numbers: torch.Tensor, ihelp=None):
-            return numbers
-
-        def get_energy(
-            self, positions: torch.Tensor, cache, **kwargs
-        ) -> torch.Tensor:
-            return self.scale * (positions**2).sum(dim=-1)
-
-    scale_a = torch.tensor(0.15, dtype=DTYPE, requires_grad=True)
-    scale_b = torch.tensor(0.35, dtype=DTYPE, requires_grad=True)
-    c_a = _ScaledHarmonicClassical(scale_a)
-    c_b = _ScaledHarmonicClassical(scale_b)
+    # 2. Distinct classical terms sharing a label keep distinct gradients
+    s8_a = torch.tensor(0.15, dtype=DTYPE, requires_grad=True)
+    s8_b = torch.tensor(0.35, dtype=DTYPE, requires_grad=True)
+    c_a = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
+    c_b = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
+    assert c_a is not None and c_b is not None
+    c_a.param = {**c_a.param, "s8": s8_a}
+    c_b.param = {**c_b.param, "s8": s8_b}
+    c_a.label = "SharedD3:a"
+    c_b.label = "SharedD3:b"
 
     cfg_classical_only = Config.create(
         method=labels.GFN1_XTB,
         **(_SETTINGS | {"exclude": ["scf"]}),
     )
     sys_custom = Model(
-        par=param, config=cfg_classical_only, auto_int_level=False
+        par=param,
+        config=cfg_classical_only,
+        classical=(c_a, c_b),
+        auto_int_level=False,
     ).setup(numbers_h2)
-    sys_custom.classicals.components = [
-        *sys_custom.classicals.components,
-        c_a,
-        c_b,
-    ]
+    c_a.label = "SharedD3"
+    c_b.label = "SharedD3"
 
     pos_c = _geometry((1, 1), 0).clone().requires_grad_(True)
     packed_custom = evaluate_packed_systems(
         (sys_custom, sys_h2),
         (pos_c, pos_h2),
     )
-    harmonic_slots = [
-        val
-        for label, val in packed_custom.classical
-        if label == "CustomHarmonic"
+    shared_slots = [
+        val for label, val in packed_custom.classical if label == "SharedD3"
     ]
-    assert len(harmonic_slots) == 2
+    assert len(shared_slots) == 2
     g_a = torch.autograd.grad(
-        harmonic_slots[0].sum(),
-        (pos_c, scale_a, scale_b),
+        shared_slots[0].sum(),
+        (pos_c, s8_a, s8_b),
         retain_graph=True,
         allow_unused=True,
     )
     g_b = torch.autograd.grad(
-        harmonic_slots[1].sum(),
-        (pos_c, scale_a, scale_b),
+        shared_slots[1].sum(),
+        (pos_c, s8_a, s8_b),
         retain_graph=True,
         allow_unused=True,
     )
-    torch.testing.assert_close(g_a[0], 2.0 * scale_a * pos_c)
-    torch.testing.assert_close(g_b[0], 2.0 * scale_b * pos_c)
+
+    pos_serial = _geometry((1, 1), 0).clone().requires_grad_(True)
+    serial_slots = [
+        val
+        for label, val in sys_custom.singlepoint(pos_serial).classical
+        if label == "SharedD3"
+    ]
+    assert len(serial_slots) == 2
+    (serial_a,) = torch.autograd.grad(
+        serial_slots[0].sum(), pos_serial, retain_graph=True
+    )
+    (serial_b,) = torch.autograd.grad(serial_slots[1].sum(), pos_serial)
+    torch.testing.assert_close(g_a[0], serial_a)
+    torch.testing.assert_close(g_b[0], serial_b)
+    assert not torch.allclose(g_a[0], g_b[0])
     assert g_a[1] is not None and float(g_a[1].abs()) > 0.0 and g_a[2] is None
     assert g_b[1] is None and g_b[2] is not None and float(g_b[2].abs()) > 0.0
 

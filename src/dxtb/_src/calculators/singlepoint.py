@@ -47,14 +47,12 @@ from dxtb._src.components.classicals.halogen import (
     HalogenCoreSetup,
     halogen_energy,
 )
-from dxtb._src.components.classicals.ies import IES, IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.ies import IESCoreSetup, ies_energy
 from dxtb._src.components.classicals.repulsion.base import repulsion_energy
 from dxtb._src.components.classicals.repulsion.rep import (
-    Repulsion,
     RepulsionCoreSetup,
 )
 from dxtb._src.components.classicals.shortrangebond import (
-    ShortRangeBond,
     ShortRangeBondCoreSetup,
     short_range_bond_energy,
 )
@@ -418,10 +416,8 @@ def singlepoint(
     spin: Tensor | float | int | None = defaults.SPIN,
     field: Tensor | None = None,
     field_grad: Tensor | None = None,
-    *,
-    use_captured_extension_cache: bool = False,
 ) -> Result:
-    """Run the internal eager singlepoint adapter retained for compatibility."""
+    """Evaluate one System with the Eager controller."""
     return _singlepoint_impl(
         system,
         positions,
@@ -430,7 +426,6 @@ def singlepoint(
         field,
         field_grad,
         fixed_trip=False,
-        use_captured_extension_cache=use_captured_extension_cache,
     )
 
 
@@ -496,8 +491,6 @@ def _singlepoint_impl(
     field_grad: Tensor | None,
     *,
     fixed_trip: bool,
-    refresh_extension_caches: bool = False,
-    use_captured_extension_cache: bool = False,
 ) -> Result:
     """Share setup, physical kernels, and Result construction by controller."""
     prepared = _prepare_singlepoint(
@@ -507,8 +500,6 @@ def _singlepoint_impl(
         spin,
         field,
         field_grad,
-        refresh_extension_caches=refresh_extension_caches,
-        use_captured_extension_cache=use_captured_extension_cache,
     )
     if isinstance(prepared, Result):
         return prepared
@@ -572,9 +563,6 @@ def _prepare_singlepoint(
     spin: Tensor | float | int | None,
     field: Tensor | None,
     field_grad: Tensor | None,
-    *,
-    refresh_extension_caches: bool = False,
-    use_captured_extension_cache: bool = False,
 ) -> _PreparedSinglepoint | Result:
     """Evaluate everything before the SCF and collect the SCF inputs.
 
@@ -738,19 +726,7 @@ def _prepare_singlepoint(
                     (component.label, halogen_energy(halogen_setup, positions))
                 )
             else:
-                if refresh_extension_caches and not isinstance(
-                    captured_setup,
-                    (
-                        RepulsionCoreSetup,
-                        ShortRangeBondCoreSetup,
-                        DispersionD3CoreSetup,
-                        DispersionD4CoreSetup,
-                        IESCoreSetup,
-                        HalogenCoreSetup,
-                    ),
-                ):
-                    setup = component.get_cache(system.numbers, system.ihelp)
-                elif isinstance(captured_setup, RepulsionCoreSetup):
+                if isinstance(captured_setup, RepulsionCoreSetup):
                     setup = captured_setup
                 elif isinstance(captured_setup, ShortRangeBondCoreSetup):
                     setup = captured_setup
@@ -778,27 +754,10 @@ def _prepare_singlepoint(
                     )
                     timer.stop(component.label)
                     continue
-                elif isinstance(
-                    component,
-                    (Repulsion, ShortRangeBond, DispersionD4, Halogen, IES),
-                ) and type(component) not in (
-                    Repulsion,
-                    ShortRangeBond,
-                    DispersionD4,
-                    Halogen,
-                    IES,
-                ):
-                    # Custom subclasses retain their legacy extension hooks.
-                    # Refresh their call data unless Model.setup just populated
-                    # it for this call-local System; exact built-ins use System setup.
-                    setup = (
-                        system._classical_extension_cache[component.label]
-                        if use_captured_extension_cache
-                        and component.label in system._classical_extension_cache
-                        else component.get_cache(system.numbers, system.ihelp)
-                    )
                 else:
-                    setup = system._classical_extension_cache[component.label]
+                    raise RuntimeError(
+                        f"No setup for the Classical '{component.label}'."
+                    )
                 classical.append(
                     (
                         component.label,

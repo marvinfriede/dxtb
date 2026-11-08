@@ -68,13 +68,11 @@ from dxtb._src.components.classicals.halogen import (
     HalogenCoreSetup,
     halogen_energy,
 )
-from dxtb._src.components.classicals.ies import IES, IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.ies import IESCoreSetup, ies_energy
 from dxtb._src.components.classicals.repulsion.rep import (
-    Repulsion,
     RepulsionCoreSetup,
 )
 from dxtb._src.components.classicals.shortrangebond import (
-    ShortRangeBond,
     ShortRangeBondCoreSetup,
 )
 from dxtb._src.components.interactions.field.efield import (
@@ -2328,28 +2326,10 @@ def _evaluate_lane_classical(
                 setup = system.repulsion_setup
             elif component is system.srb_classical:
                 setup = system.srb_setup
-            elif (
-                (
-                    isinstance(component, Repulsion)
-                    and type(component) is not Repulsion
-                )
-                or (
-                    isinstance(component, ShortRangeBond)
-                    and type(component) is not ShortRangeBond
-                )
-                or (
-                    isinstance(component, DispersionD4)
-                    and type(component) is not DispersionD4
-                )
-                or (
-                    isinstance(component, Halogen)
-                    and type(component) is not Halogen
-                )
-                or (isinstance(component, IES) and type(component) is not IES)
-            ):
-                setup = component.get_cache(system.numbers, system.ihelp)
             else:
-                setup = system._classical_extension_cache[component.label]
+                raise RuntimeError(
+                    f"No setup for the Classical '{component.label}'."
+                )
             classical.append(
                 (
                     component.label,

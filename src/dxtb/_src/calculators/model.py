@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from threading import Lock, RLock
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable
 from weakref import WeakKeyDictionary
 
@@ -145,6 +146,36 @@ __all__ = ["Model", "ModelParameterNode", "System"]
 # registry avoids making the lock part of either the parameter tree or System.
 _PARAM_SETUP_LOCKS: WeakKeyDictionary[ParamModule, RLock] = WeakKeyDictionary()
 _PARAM_SETUP_LOCKS_GUARD = Lock()
+
+
+BUILTIN_CLASSICAL_TYPES = (
+    DispersionD3,
+    DispersionD4,
+    Halogen,
+    IES,
+    Repulsion,
+    ShortRangeBond,
+)
+"""The Classical Components a Model can set up."""
+
+BUILTIN_INTERACTION_TYPES = (AES2, ES2, ES3, DispersionD4SC, GeneralizedBorn)
+"""The Interactions a Model can set up (External fields are call inputs)."""
+
+
+def _require_builtin_components(
+    components: Sequence[Any], builtin: tuple[type, ...], kind: str
+) -> None:
+    """Reject Components whose exact type is not a built-in one."""
+    custom = [c for c in components if type(c) not in builtin]
+    if custom:
+        names = ", ".join(
+            f"{type(c).__module__}.{type(c).__qualname__}" for c in custom
+        )
+        supported = ", ".join(t.__name__ for t in builtin)
+        raise TypeError(
+            f"Only the built-in {kind} Components ({supported}) are "
+            f"supported; got {names}."
+        )
 
 
 def _parameter_setup_lock(par: ParamModule) -> RLock:
@@ -592,8 +623,8 @@ class System:
     h0_setup: H0Setup | H0SetupNode | None
     """Composition-dependent H0 data for pure matrix construction."""
 
-    _classical_extension_cache: ClassicalListCache = field(repr=False)
-    """Setup-time compatibility data for custom classical extensions only."""
+    _packed_classical_setups: ClassicalListCache = field(repr=False)
+    """Setups of a padded or conformer System's D3 Classicals."""
 
     repulsion_setup: RepulsionCoreSetup | RepulsionSetup | None
     """Numbers-only setup associated with the exact migrated Repulsion."""
@@ -1463,9 +1494,9 @@ class System:
         for component in self.classicals.components:
             setup = self._builtin_classical_setup(component)
             if setup is None:
-                if component.label not in self._classical_extension_cache:
+                if component.label not in self._packed_classical_setups:
                     continue
-                setup = self._classical_extension_cache[component.label]
+                setup = self._packed_classical_setups[component.label]
             if setup is not None:
                 cache[component.label] = setup
         return cache
@@ -1773,24 +1804,9 @@ class Model:
         interactions = InteractionList(
             es2, aes2, es3, d4sc, *self.interaction, **dd
         )
-        # Exact field adapters are removed by the Calculator before setup.
-        # Preserve automatic integral promotion for legacy field subclasses.
-        if any(
-            interaction.label == efield.LABEL_EFIELD
-            and type(interaction) is not efield.ElectricField
-            for interaction in interactions.components
-        ):
-            config = _with_int_level(
-                config, max(labels.INTLEVEL_DIPOLE, config.ints.level)
-            )
-        if any(
-            interaction.label == efield_grad.LABEL_EFIELD_GRAD
-            and type(interaction) is not efield_grad.ElectricFieldGrad
-            for interaction in interactions.components
-        ):
-            config = _with_int_level(
-                config, max(labels.INTLEVEL_QUADRUPOLE, config.ints.level)
-            )
+        _require_builtin_components(
+            interactions.components, BUILTIN_INTERACTION_TYPES, "Interaction"
+        )
         es2_interaction = next(
             (i for i in interactions.components if type(i) is ES2), None
         )
@@ -1892,6 +1908,9 @@ class Model:
         classicals = ClassicalList(
             halogen, ies, dispersion, repulsion, srb, *self.classical, **dd
         )
+        _require_builtin_components(
+            classicals.components, BUILTIN_CLASSICAL_TYPES, "Classical"
+        )
 
         if batch_mode == 0:
             labels_by_name: dict[str, Classical] = {}
@@ -1929,9 +1948,9 @@ class Model:
                         f"{len(matches)} with distinct labels."
                     )
 
-        # The single-System core captures each exact built-in setup directly;
-        # custom components retain their setup hooks.
-        classical_extension_cache = ClassicalListCache()
+        # The single-System core captures each built-in setup directly. A
+        # padded or conformer System keeps the D3 setups here instead.
+        packed_classical_setups = ClassicalListCache()
         d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
@@ -1987,13 +2006,10 @@ class Model:
                     assert isinstance(legacy_setup, IESSetup)
                     setup = core_ies_setup(legacy_setup)
                     ies_setup = setup
-                elif type(component) is Halogen:
+                else:
                     assert isinstance(legacy_setup, HalogenSetup)
                     setup = core_halogen_setup(legacy_setup)
                     halogen_setup = setup
-                else:
-                    setup = legacy_setup
-                    classical_extension_cache[component.label] = setup
                 timer.stop(component.label)
 
                 kind = _classical_term_kind(component, setup)
@@ -2023,7 +2039,7 @@ class Model:
                 elif component is halogen_classical:
                     halogen_setup = setup
                 else:
-                    classical_extension_cache[component.label] = setup
+                    packed_classical_setups[component.label] = setup
                 timer.stop(component.label)
 
         OutputHandler.write_stdout("done", v=4)
@@ -2142,7 +2158,7 @@ class Model:
             interactions=interactions,
             integral_setup=integral_setup,
             h0_setup=h0_setup,
-            _classical_extension_cache=classical_extension_cache,
+            _packed_classical_setups=packed_classical_setups,
             repulsion_setup=repulsion_setup,
             repulsion_classical=repulsion_classical,
             srb_setup=srb_setup,

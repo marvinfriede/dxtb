@@ -487,10 +487,8 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     assert scale_grad.abs() > 0
 
 
-def test_independent_systems_and_alternate_or_custom_d4sc_setup_authority() -> (
-    None
-):
-    """Independent systems keep distinct setups and alternate/subclass D4SC uses its own route."""
+def test_independent_systems_and_alternate_d4sc_setup_authority() -> None:
+    """Independent systems keep distinct setups, an alternate D4SC uses its own route, and subclasses are rejected."""
     numbers, positions = _sample()
     model_a = _model()
     par_b = GFN2_XTB.model_copy(deep=True)
@@ -528,14 +526,10 @@ def test_independent_systems_and_alternate_or_custom_d4sc_setup_authority() -> (
         alternate.cutoff,
         **DD,
     )
-    sub_system = Model(
-        par=model_a.par,
-        config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
-        interaction=(subclass,),
-        auto_int_level=False,
-    ).setup(numbers)
-    assert sub_system.d4sc_setup is None
-    assert sub_system.d4sc_interaction is None
-    sub_data = _interaction_data(sub_system, positions)
-    assert sub_data.d4sc_setup is None
-    assert sub_data.functional_kinds == {}
+    with pytest.raises(TypeError, match="Only the built-in"):
+        Model(
+            par=model_a.par,
+            config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
+            interaction=(subclass,),
+            auto_int_level=False,
+        ).setup(numbers)

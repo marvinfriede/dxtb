@@ -1422,7 +1422,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
                 current_system.generalized_born_setup,
                 current_system.integral_setup,
                 current_system.h0_setup,
-                current_system._classical_extension_cache,
+                current_system._packed_classical_setups,
                 current_system.d3_setups,
             )
         )

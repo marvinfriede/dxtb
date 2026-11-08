@@ -186,7 +186,6 @@ class EnergyCalculator(BaseCalculator):
                 spin,
                 field,
                 field_grad,
-                use_captured_extension_cache=True,
             )
         finally:
             timer.cuda_sync = old_cuda_sync

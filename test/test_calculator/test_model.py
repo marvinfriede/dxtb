@@ -37,7 +37,7 @@ from dxtb._src.components.classicals.base import Classical
 from dxtb._src.components.classicals.dispersion.factory import new_dispersion
 from dxtb._src.components.classicals.repulsion.factory import new_repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
-from dxtb._src.components.interactions.coulomb.thirdorder import ES3, ES3Cache
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb.components.coulomb import new_es2, new_es3
@@ -88,7 +88,7 @@ def test_single_system_setup_does_not_use_generic_classical_cache(
     assert type(system.repulsion_setup).__name__ == "RepulsionCoreSetup"
     assert len(system.d3_setups) == 1
     assert type(system.d3_setups[0][1]).__name__ == "DispersionD3CoreSetup"
-    assert not system._classical_extension_cache
+    assert not system._packed_classical_setups
     assert not hasattr(system, "_packed_classical_cache")
     assert set(system.classical_cache) == {
         component.label for component in system.classicals.components
@@ -116,80 +116,108 @@ def test_empty_single_system_has_no_classical_cache_entries() -> None:
     ).setup(numbers)
 
     assert system.classicals.components == []
-    assert not system._classical_extension_cache
+    assert not system._packed_classical_setups
     assert not system.classical_cache
     result = system.singlepoint(positions)
     assert result.classical == ()
     torch.testing.assert_close(result.energy, torch.zeros_like(result.energy))
 
 
-def test_classical_cache_view_includes_legacy_extension_data() -> None:
-    """The view combines family Nodes with setup-time extension values."""
+def test_custom_components_are_rejected() -> None:
+    """Model setup accepts only the exact built-in Component types."""
 
-    class ClassicalExtension(Classical):
-        __slots__ = ["scale"]
-
-        def __init__(self) -> None:
-            super().__init__(device=DEVICE, dtype=torch.double)
-            self.scale = torch.tensor(0.125, device=DEVICE, dtype=torch.double)
-            self.label = "ClassicalExtension"
-
+    class CustomClassical(Classical):
         def get_cache(self, numbers, ihelp=None, **kwargs):
-            return self.scale
+            return None
 
         def get_energy(self, positions, cache, **kwargs):
-            return torch.ones(positions.shape[-2], **DD) * cache
+            return positions.new_zeros(positions.shape[-2])
 
-    numbers = torch.tensor([3, 1], device=DEVICE)
-    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.6]], **DD)
-    extension = ClassicalExtension()
-    system = Model(
-        par=ParamModule(GFN1_XTB, **DD),
-        config=Config.create(exclude="scf"),
-        classical=(extension,),
-    ).setup(numbers)
+    class RepulsionExtension(Repulsion):
+        pass
 
-    first = system.classical_cache
-    second = system.classical_cache
-    assert first is not second
-    assert first[extension.label] is extension.scale
-    assert second[extension.label] is extension.scale
-    first[extension.label] = object()
-    assert system.classical_cache[extension.label] is extension.scale
+    class ES2Extension(ES2):
+        pass
 
-    charge = torch.tensor(0.0, **DD)
-    compatibility = system.classicals.get_energy(
-        positions, second, charge=charge
+    class ES3Extension(ES3):
+        pass
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, **DD)
+    unique = torch.unique(numbers)
+    repulsion = new_repulsion(unique, par, **DD)
+    es2 = new_es2(unique, par, dtype=torch.double)
+    es3 = new_es3(unique, par, dtype=torch.double)
+    assert repulsion is not None and es2 is not None and es3 is not None
+
+    classicals = (
+        CustomClassical(device=DEVICE, dtype=torch.double),
+        RepulsionExtension(
+            repulsion.arep,
+            repulsion.zeff,
+            repulsion.kexp,
+            repulsion.klight,
+            repulsion.cutoff,
+            device=DEVICE,
+            dtype=torch.double,
+            en=repulsion.en,
+            enscale=repulsion.enscale,
+        ),
     )
-    expected = dict(system.singlepoint(positions, chrg=charge).classical)
-    assert compatibility.keys() == expected.keys()
-    for label, energy in compatibility.items():
-        torch.testing.assert_close(energy, expected[label])
+    for classical in classicals:
+        with pytest.raises(TypeError, match="Only the built-in"):
+            Model(
+                par=par,
+                config=Config.create(exclude="rep"),
+                classical=(classical,),
+            ).setup(numbers)
+
+    interactions = (
+        ES2Extension(
+            es2.hubbard,
+            es2.lhubbard,
+            average=es2.average,
+            gexp=es2.gexp,
+            shell_resolved=es2.shell_resolved,
+            dtype=torch.double,
+        ),
+        ES3Extension(
+            es3.hubbard_derivs,
+            shell_scale=es3.shell_scale,
+            dtype=torch.double,
+        ),
+    )
+    for interaction in interactions:
+        with pytest.raises(TypeError, match="Only the built-in"):
+            Calculator(
+                numbers,
+                par,
+                interaction=(interaction,),
+                opts={"verbosity": 0, "exclude": ["es2", "es3"]},
+                dtype=torch.double,
+            )
 
 
-def test_single_system_rejects_ambiguous_extension_labels() -> None:
+def test_single_system_rejects_ambiguous_labels() -> None:
     """Reject labels that would collapse distinct System contributions."""
     numbers = torch.tensor([3, 1], device=DEVICE)
     par = ParamModule(GFN1_XTB, **DD)
 
-    exact_d3 = new_dispersion(
+    first_d3 = new_dispersion(
         numbers, par, charge=torch.tensor(0.0, **DD), **DD
     )
-    assert type(exact_d3) is DispersionD3
-
-    class D3Extension(DispersionD3):
-        pass
-
-    extension = D3Extension(
-        exact_d3.numbers, exact_d3.param, dtype=torch.double, device=DEVICE
+    second_d3 = new_dispersion(
+        numbers, par, charge=torch.tensor(0.0, **DD), **DD
     )
-    exact_d3.label = extension.label = "D3:shared"
+    assert type(first_d3) is DispersionD3
+    assert type(second_d3) is DispersionD3
+    first_d3.label = second_d3.label = "D3:shared"
 
     with pytest.raises(ValueError, match="D3:shared"):
         Model(
             par=par,
             config=Config.create(exclude="disp"),
-            classical=(exact_d3, extension),
+            classical=(first_d3, second_d3),
         ).setup(numbers)
 
     repulsion_a = new_repulsion(numbers.unique(), par, **DD)
@@ -203,62 +231,14 @@ def test_single_system_rejects_ambiguous_extension_labels() -> None:
             classical=(repulsion_a, repulsion_b),
         ).setup(numbers)
 
-    class RepulsionExtension(Repulsion):
-        pass
-
-    repulsion_extension_a = RepulsionExtension(
-        repulsion_a.arep,
-        repulsion_a.zeff,
-        repulsion_a.kexp,
-        repulsion_a.klight,
-        repulsion_a.cutoff,
-        device=DEVICE,
-        dtype=torch.double,
-        en=repulsion_a.en,
-        enscale=repulsion_a.enscale,
-    )
-    repulsion_extension_b = RepulsionExtension(
-        repulsion_b.arep,
-        repulsion_b.zeff,
-        repulsion_b.kexp,
-        repulsion_b.klight,
-        repulsion_b.cutoff,
-        device=DEVICE,
-        dtype=torch.double,
-        en=repulsion_b.en,
-        enscale=repulsion_b.enscale,
-    )
-    repulsion_extension_a.label = repulsion_extension_b.label = (
-        "Repulsion:two-subclasses"
-    )
-    with pytest.raises(ValueError, match="Repulsion:two-subclasses"):
-        Model(
-            par=par,
-            config=Config.create(exclude="rep,disp"),
-            classical=(repulsion_extension_a, repulsion_extension_b),
-        ).setup(numbers)
-
-    exact_d3_extension = D3Extension(
-        exact_d3.numbers, exact_d3.param, dtype=torch.double, device=DEVICE
-    )
-    repulsion_extension_a.label = exact_d3_extension.label = (
-        "Two-unrelated-extensions"
-    )
-    with pytest.raises(ValueError, match="Two-unrelated-extensions"):
-        Model(
-            par=par,
-            config=Config.create(exclude="rep,disp"),
-            classical=(repulsion_extension_a, exact_d3_extension),
-        ).setup(numbers)
-
     d3_repulsion = new_repulsion(numbers.unique(), par, **DD)
     assert d3_repulsion is not None
-    exact_d3.label = d3_repulsion.label = "same-custom-label"
+    first_d3.label = d3_repulsion.label = "same-custom-label"
     with pytest.raises(ValueError, match="same-custom-label"):
         Model(
             par=par,
             config=Config.create(exclude="rep,disp"),
-            classical=(exact_d3, d3_repulsion),
+            classical=(first_d3, d3_repulsion),
         ).setup(numbers)
 
 
@@ -342,88 +322,6 @@ def test_custom_ordinary_es2_replaces_excluded_builtin() -> None:
     assert torch.isfinite(system.singlepoint(positions).energy).all()
 
 
-def test_es2_subclass_uses_legacy_extension_path() -> None:
-    """A custom ES2 subclass is not intercepted by the built-in setup path."""
-
-    class ES2Extension(ES2):
-        __slots__ = ("cache_calls",)
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.cache_calls = 0
-
-        def get_cache(self, **kwargs):
-            self.cache_calls += 1
-            return super().get_cache(**kwargs)
-
-    numbers = torch.tensor([8, 1, 1], device=DEVICE)
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
-        **DD,
-    )
-    par = ParamModule(GFN1_XTB, **DD)
-    original = new_es2(torch.unique(numbers), par, dtype=torch.double)
-    assert original is not None
-    custom = ES2Extension(
-        original.hubbard,
-        original.lhubbard,
-        average=original.average,
-        gexp=original.gexp,
-        shell_resolved=original.shell_resolved,
-        dtype=torch.double,
-    )
-    custom.label = "ES2"
-    model = Model(
-        par=par,
-        config=Config.create(exclude="es2"),
-        interaction=(custom,),
-    )
-    system = model.setup(numbers)
-
-    assert system.es2_setup is None
-    assert system.es2_interaction is None
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        system.singlepoint(positions)
-    assert custom.cache_calls == 1
-
-
-def test_es2_subclass_keeps_legacy_update_and_reset() -> None:
-    """ES2 subclasses retain the generic Component mutation behavior."""
-
-    class ES2Extension(ES2):
-        __slots__ = ("extension_value",)
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.extension_value = torch.tensor(1.0, **DD)
-
-    numbers = torch.tensor([8, 1, 1], device=DEVICE)
-    par = ParamModule(GFN1_XTB, **DD)
-    original = new_es2(torch.unique(numbers), par, dtype=torch.double)
-    assert original is not None
-    custom = ES2Extension(
-        original.hubbard,
-        original.lhubbard,
-        average=original.average,
-        gexp=original.gexp,
-        shell_resolved=original.shell_resolved,
-        dtype=torch.double,
-    )
-    custom.label = "ES2"
-    system = Model(
-        par=par,
-        config=Config.create(exclude="es2"),
-        interaction=(custom,),
-    ).setup(numbers)
-
-    system.interactions.update("ES2", extension_value=torch.tensor(2.0, **DD))
-    assert custom.extension_value.item() == 2.0
-    system.interactions.reset("ES2")
-    assert custom.extension_value.item() == 2.0
-    system.interactions.reset_all()
-    assert custom.extension_value.item() == 2.0
-
-
 def test_es3_custom_exact_replaces_excluded_builtin() -> None:
     """An active exact custom ES3 supplies the System setup values."""
     numbers = torch.tensor([8, 1, 1], device=DEVICE)
@@ -450,68 +348,6 @@ def test_es3_custom_exact_replaces_excluded_builtin() -> None:
     result = system.singlepoint(positions)
     assert torch.isfinite(result.energy).all()
     assert not torch.isclose(result.energy.sum(), reference_result.energy.sum())
-
-
-def test_es3_subclass_keeps_legacy_extension_and_mutation() -> None:
-    """An ES3 subclass uses its cache hook and legacy mutation methods."""
-
-    class ES3Extension(ES3):
-        __slots__ = ("extension_scale", "cache_calls", "reset_calls")
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.extension_scale = torch.tensor(1.0, **DD)
-            self.cache_calls = 0
-            self.reset_calls = 0
-
-        def get_cache(self, **kwargs):
-            self.cache_calls += 1
-            cache = super().get_cache(**kwargs)
-            return ES3Cache(
-                cache.hd * self.extension_scale,
-                shell_resolved=cache.shell_resolved,
-            )
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            super().reset()
-
-    numbers = torch.tensor([8, 1, 1], device=DEVICE)
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
-        **DD,
-    )
-    par = ParamModule(GFN1_XTB, **DD)
-    original = new_es3(torch.unique(numbers), par, dtype=torch.double)
-    assert original is not None
-    custom = ES3Extension(
-        original.hubbard_derivs,
-        shell_scale=original.shell_scale,
-        dtype=torch.double,
-    )
-    custom.label = "ES3"
-    calc = Calculator(
-        numbers,
-        par,
-        interaction=(custom,),
-        opts={"verbosity": 0, "exclude": "es3"},
-        dtype=torch.double,
-    )
-
-    assert calc.system.es3_setup is None
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        calc.singlepoint(positions)
-    assert custom.cache_calls == 1
-    calc.interactions.update("ES3", extension_scale=torch.tensor(2.0, **DD))
-    assert custom.extension_scale.item() == 2.0
-    with pytest.raises(NotImplementedError, match="interaction extension"):
-        calc.singlepoint(positions.clone())
-    assert custom.cache_calls == 2
-    calc.interactions.reset("ES3")
-    assert custom.reset_calls == 1
-    calc.reset()
-    assert custom.reset_calls == 2
-    assert custom.extension_scale.item() == 2.0
 
 
 def test_exact_es2_es3_mutations_are_rejected() -> None:
@@ -832,32 +668,23 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
 
 @pytest.mark.parametrize("batch_mode", [1, 2])
 def test_packed_system_setup_captures_classical_cache_once(
-    batch_mode: int,
+    batch_mode: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Packed Model.setup captures classical setups once and exposes an on-demand view."""
+    cache_calls: list[str] = []
+    original_get_cache = DispersionD3.get_cache
 
-    class CountingClassical(Classical):
-        __slots__ = ["scale", "cache_calls"]
+    def counting_get_cache(self, *args, **kwargs):
+        cache_calls.append(self.label)
+        return original_get_cache(self, *args, **kwargs)
 
-        def __init__(self) -> None:
-            super().__init__(device=DEVICE, dtype=torch.double)
-            self.scale = torch.tensor(0.25, device=DEVICE, dtype=torch.double)
-            self.cache_calls = 0
-            self.label = "CountingClassical"
-
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            self.cache_calls += 1
-            return self.scale.clone()
-
-        def get_energy(self, positions, cache, **kwargs):
-            return torch.ones(positions.shape[:-1], **DD) * cache
+    monkeypatch.setattr(DispersionD3, "get_cache", counting_get_cache)
 
     numbers_2d = (
         torch.tensor([[8, 1, 1], [1, 1, 0]], device=DEVICE)
         if batch_mode == 1
         else torch.tensor([[8, 1, 1], [8, 1, 1]], device=DEVICE)
     )
-    extension = CountingClassical()
     par = ParamModule(GFN1_XTB, **DD)
     arep = dict(par.named_parameters())["parameter_tree.element.H.arep.param"]
     arep.requires_grad_(True)
@@ -865,32 +692,34 @@ def test_packed_system_setup_captures_classical_cache_once(
     packed = Model(
         par=par,
         config=Config.create(exclude="scf"),
-        classical=(extension,),
     ).setup(numbers_2d, batch_mode=batch_mode)
+    d3 = next(
+        component
+        for component in packed.classicals.components
+        if type(component) is DispersionD3
+    )
 
-    assert extension.cache_calls == 1
+    assert cache_calls == [d3.label]
+    assert set(packed._packed_classical_setups) == {d3.label}
     first_view = packed.classical_cache
     second_view = packed.classical_cache
-    assert extension.cache_calls == 1
+    assert cache_calls == [d3.label]
     assert first_view is not second_view
     assert set(first_view) == {
         component.label for component in packed.classicals.components
     }
     assert first_view["Repulsion"] is packed.repulsion_setup
-    torch.testing.assert_close(
-        first_view[extension.label],
-        torch.tensor(0.25, device=DEVICE, dtype=torch.double),
-    )
+    assert first_view[d3.label] is packed._packed_classical_setups[d3.label]
+    assert second_view[d3.label] is first_view[d3.label]
 
-    extension.scale = torch.tensor(9.0, device=DEVICE, dtype=torch.double)
-    torch.testing.assert_close(
-        packed.classical_cache[extension.label],
-        torch.tensor(0.25, device=DEVICE, dtype=torch.double),
+    first_view[d3.label] = object()
+    assert (
+        packed.classical_cache[d3.label]
+        is packed._packed_classical_setups[d3.label]
     )
-    assert extension.cache_calls == 1
+    assert cache_calls == [d3.label]
 
     (grad_arep,) = torch.autograd.grad(
         packed.classical_cache["Repulsion"].arep.sum(), arep
     )
     assert torch.isfinite(grad_arep).all() and grad_arep.abs().sum() > 0
-

@@ -1377,54 +1377,8 @@ def test_inference_mode_param_module_ownership_and_identity() -> None:
     assert par_mixed.get("element.O.gam") is new_o_gam
 
 
-def test_call_local_setup_preserves_custom_component_labels_and_state() -> None:
-    """Label restoration and repeated evaluation never mutate caller-owned custom components."""
-    from dxtb._src.components.classicals.base import Classical, ClassicalCache
-    from dxtb._src.components.interactions.base import (
-        Interaction,
-        InteractionCache,
-    )
-
-    class CustomSpringClassical(Classical):
-        def __init__(self, scale: Tensor) -> None:
-            super().__init__(device=scale.device, dtype=scale.dtype)
-            self.scale = scale
-            self.label = "CustomSpring"
-
-        def get_cache(
-            self, numbers: Tensor | None = None, ihelp: object | None = None
-        ) -> ClassicalCache:
-            _ = (numbers, ihelp)
-            return ClassicalCache()
-
-        def get_energy(
-            self, positions: Tensor, cache: ClassicalCache, **kwargs: object
-        ) -> Tensor:
-            _ = (cache, kwargs)
-            return self.scale * (positions**2).sum(dim=-1)
-
-    class CustomShiftInteraction(Interaction):
-        def __init__(self, shift: Tensor) -> None:
-            super().__init__(device=shift.device, dtype=shift.dtype)
-            self.shift = shift
-            self.label = "CustomShift"
-
-        def get_cache(
-            self,
-            *,
-            numbers: Tensor | None = None,
-            positions: Tensor | None = None,
-            ihelp: object | None = None,
-        ) -> InteractionCache:
-            _ = (numbers, positions, ihelp)
-            return InteractionCache()
-
-        def get_monopole_atom_energy(
-            self, cache: InteractionCache, qat: Tensor, **kwargs: object
-        ) -> Tensor:
-            _ = (cache, kwargs)
-            return self.shift * (qat**2)
-
+def test_call_local_setup_preserves_component_labels_and_state() -> None:
+    """Label restoration and repeated evaluation never mutate caller-owned components."""
     num_w, pos_w = _water_geometry(0.0)
     _, pos_l = _lih_geometry(0.0)
     padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
@@ -1433,12 +1387,18 @@ def test_call_local_setup_preserves_custom_component_labels_and_state() -> None:
         dim=0,
     )
 
-    scale = torch.tensor(0.02, **DD, requires_grad=True)
-    shift = torch.tensor(0.01, **DD)
-    custom_cls = CustomSpringClassical(scale)
-    custom_int = CustomShiftInteraction(shift)
     par = ParamModule(GFN1_XTB, **DD)
+    s8 = torch.tensor(1.5, **DD, requires_grad=True)
+
+    def extra_d3(label: str):
+        component = new_dispersion(padded_nums, par, **DD)
+        assert component is not None
+        component.param = {**component.param, "s8": s8}
+        component.label = label
+        return component
+
     d3_a = new_dispersion(padded_nums, par, **DD)
+    extra_cls = extra_d3("ExtraD3")
     unique_nums = torch.unique(padded_nums[padded_nums > 0])
     es2_a = new_es2(unique_nums, par, **DD)
     assert d3_a is not None and es2_a is not None
@@ -1446,56 +1406,69 @@ def test_call_local_setup_preserves_custom_component_labels_and_state() -> None:
     calc_b = Calculator(
         padded_nums,
         par,
-        classical=(d3_a, custom_cls),
+        classical=(d3_a, extra_cls),
         interaction=(es2_a,),
         opts={"verbosity": 0, "exclude": ["disp", "es2"], "batch_mode": 1},
         **DD,
     )
     # Replace calc.classicals component with a renamed instance while Model
-    # still holds the caller's custom_cls with its caller-owned label:
-    custom_cls.label = "CallerOwnedSpring"
+    # still holds the caller's extra_cls with its caller-owned label:
+    extra_cls.label = "CallerOwnedD3"
     es2_a.label = "CallerOwnedES2"
-    copy_cls = CustomSpringClassical(scale)
-    copy_cls.label = "RenamedSpringOnCalc"
+    copy_cls = extra_d3("RenamedD3OnCalc")
     calc_b.classicals.components[-1] = copy_cls
 
     e_b = calc_b.energy(padded_pos)
-    (g_scale,) = torch.autograd.grad(e_b.sum(), scale)
-    assert torch.isfinite(g_scale) and g_scale.abs().item() > 0.0
-    assert custom_cls.label == "CallerOwnedSpring"
+    (g_s8,) = torch.autograd.grad(e_b.sum(), s8)
+    assert torch.isfinite(g_s8) and g_s8.abs().item() > 0.0
+    assert extra_cls.label == "CallerOwnedD3"
     assert es2_a.label == "CallerOwnedES2"
     assert d3_a.label == "DispersionD3"
 
-    # Also verify custom Interaction label isolation on 1D _prepare_eval_system
+    # Also verify Interaction label isolation on 1D _prepare_eval_system
     # and 2D build_calculator_lane_systems
+    def renamed_es2(numbers: Tensor, label: str):
+        component = new_es2(torch.unique(numbers[numbers > 0]), par, **DD)
+        assert component is not None
+        component.label = label
+        return component
+
+    caller_int = renamed_es2(num_w, "ES2")
     calc_int_1d = Calculator(
         num_w,
         par,
-        interaction=(custom_int,),
-        opts={"verbosity": 0, "exclude": ["scf"]},
+        interaction=(caller_int,),
+        opts={"verbosity": 0, "exclude": ["scf", "es2"]},
         **DD,
     )
-    custom_int.label = "CallerOwnedShift"
-    copy_int = CustomShiftInteraction(shift)
-    copy_int.label = "RenamedShiftOnCalc"
-    calc_int_1d.interactions.components[-1] = copy_int
+    caller_int.label = "CallerOwnedES2"
+    calc_int_1d.interactions.components[-1] = renamed_es2(
+        num_w, "RenamedES2OnCalc"
+    )
     eval_sys_1d = calc_int_1d._prepare_eval_system()
-    assert eval_sys_1d.interactions.components[-1].label == "RenamedShiftOnCalc"
-    assert custom_int.label == "CallerOwnedShift"
+    assert eval_sys_1d.interactions.components[-1].label == "RenamedES2OnCalc"
+    assert caller_int.label == "CallerOwnedES2"
 
+    caller_int_2d = renamed_es2(padded_nums, "ES2")
     calc_int_2d = Calculator(
         padded_nums,
         par,
-        interaction=(custom_int,),
-        opts={"verbosity": 0, "exclude": ["scf"], "batch_mode": 1},
+        interaction=(caller_int_2d,),
+        opts={
+            "verbosity": 0,
+            "exclude": ["scf", "es2"],
+            "batch_mode": 1,
+        },
         **DD,
     )
-    custom_int.label = "CallerOwnedShift"
-    calc_int_2d.interactions.components[-1] = copy_int
+    caller_int_2d.label = "CallerOwnedES2"
+    calc_int_2d.interactions.components[-1] = renamed_es2(
+        padded_nums, "RenamedES2OnCalc"
+    )
     lanes_2d = build_calculator_lane_systems(calc_int_2d)
     for lane in lanes_2d:
-        assert lane.interactions.components[-1].label == "RenamedShiftOnCalc"
-    assert custom_int.label == "CallerOwnedShift"
+        assert lane.interactions.components[-1].label == "RenamedES2OnCalc"
+    assert caller_int_2d.label == "CallerOwnedES2"
 
 
 def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> None:
