@@ -135,8 +135,8 @@ def test_gfn1_live_4sp_fe_co_5() -> None:
     # Tolerances accommodating the 11-atom transition-metal complex
     fe_tolerances = {
         **TIGHT_LIVE_TOLERANCES,
-        "energy": Tolerance(atol=2.0e-6, rtol=1.0e-6),
-        "gradient": Tolerance(atol=2.0e-8, rtol=1.0e-5),
+        "energy": Tolerance(atol=2.0e-6, rtol=0.0),
+        "gradient": Tolerance(atol=2.0e-8, rtol=0.0),
     }
     assert_tblite_agrees(
         method="GFN1-xTB",
