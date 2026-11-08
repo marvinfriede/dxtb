@@ -85,8 +85,14 @@ evaluates the initial map (and the optional initial mix), `advance(state,
 start, stop)` runs map trips `start <= index < stop` of the configured
 schedule, and `finish` certifies the selected state. Advancing through
 consecutive ranges is bitwise the same computation as one range over
-`maxiter` (`test_functional_resumable_fixed_trip.py`); the monolithic
-`_solve_map_control` is `start`, `advance(0, maxiter)`, `finish`. There is one
+`maxiter` (`test_functional_resumable_fixed_trip.py`: solver state, Result,
+`record_trace=True` traces with observations carried between chunks, the
+`maxiter = 0 / 1` and `record_initial_status` boundaries, and the
+representation-owned charge/potential projection); the monolithic
+`_solve_map_control` is `start`, `advance(0, maxiter)`, `finish`.
+`fixed_trip_problem_control` is the resumable form of the standard problem
+solve only (representation projection, default options); it does not expose
+the caller projections of `solve_scf_problem`. There is one
 transition implementation (`_solver_control_step`) for eager, static and
 adaptive execution.
 
@@ -404,8 +410,10 @@ trips dominate: chunk 1 was fastest or within noise everywhere (e.g. CH4
 forces B = 16: 1.35 / 1.45 / 1.70 / 2.21 / 2.24 s for 1 / 2 / 4 / 8 / 16)
 and records the fewest trips (C4H5NCS forces B = 16: 5.9 GiB at chunk 1,
 6.9 GiB at chunk 4). The internal default is `_ADAPTIVE_CHUNK_TRIPS = 1`.
-GPU was not measured; there a host read per trip is a device
-synchronization, so the default may need re-measurement.
+Chunk length 1 is the measured CPU optimum; the CUDA optimum is unknown.
+On CUDA every chunk boundary is a device-to-host read of the group's
+`active` flags, so if CUDA is revisited the chunk length must be benchmarked
+there independently; no device-specific default is set in advance.
 
 ### Static vs adaptive vs eager (CPU)
 
@@ -422,7 +430,9 @@ whose only solver change, the charge-padding projection, is shared by both
 schedules). A spot check at the rebased tree reproduced the counts exactly
 and the timings within 5 % (H2O energy B = 8: static 7.26 s / 101 maps,
 adaptive 0.76 s / 9 maps / 8 chunks; CH4 forces B = 16: adaptive 1.35 s,
-0.7 GiB, 10 maps).
+0.7 GiB, 10 maps). The grid below is therefore historical (pre-rebase)
+evidence; the accepted rebased implementation is verified separately in
+"Final-HEAD verification" below.
 
 | Molecule | Mode | Route | B=2 | B=4 | B=8 | B=16 | B=32 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -480,3 +490,26 @@ C4H5NCS 14, with 8 / 9 / 9 / 13 chunks); eager lanes need the sum over lanes
   B = 4 (1.6–2.2×), up to 9–15× at B = 32 for the small molecules and
   2.6–4× for C4H5NCS. Peak memory is at most that of the eager lanes.
 
+### Final-HEAD verification
+
+A representative subset was rerun at the accepted rebased commit
+`4c014d36` from a clean detached worktree (no uncommitted changes), with the
+same settings (`--maxiter 100 --repeats 2 --mem-gib 12 --chunk 1`,
+`OMP_NUM_THREADS=1`; raw data
+`benchmarks/results/adaptive-final-head-smoke-cpu.json`). Cells: minimum
+wall time / peak RSS; maps = SCF map evaluations of the group.
+
+| Case | nat / nao | static | adaptive | eager | iterations (max) | maps static / adaptive / eager |
+| --- | --- | --- | --- | --- | --- | --- |
+| H2O energy, B = 8 | 3 / 8 | 7.52 s / 0.36 G | 0.78 s / 0.35 G | 2.73 s / 0.35 G | 9 | 101 / 9 / 72 |
+| H2O forces, B = 16 | 3 / 8 | 11.82 s / 1.56 G | 1.18 s / 0.48 G | 9.92 s / 0.79 G | 9 | 101 / 9 / 144 |
+| SiH4 forces, B = 32 | 5 / 17 | 22.08 s / 11.1 G | 2.74 s / 1.63 G | 23.67 s / 1.88 G | 10 | 101 / 10 / 320 |
+| C4H5NCS forces, B = 16 | 12 / 43 | killed above 12 GiB | 6.89 s / 5.73 G | 19.86 s / 5.91 G | 14 | – / 14 / 218 |
+
+For chunk length 1 the adaptive map evaluations equal the group's maximum
+physical iteration count in every case (`adaptive_maps_equal_max_iterations`
+in the JSON), i.e. no overshoot trip is run. Counts reproduce the pre-rebase
+grid exactly; timings agree within 6 % except C4H5NCS forces B = 16,
+where this adaptive run was 15 % faster (H2O energy B = 8 adaptive 0.78 vs
+0.78 s; SiH4 forces B = 32 adaptive 2.74 vs 2.60 s, static 22.1 vs 23.2 s;
+C4H5NCS forces B = 16 adaptive 6.89 vs 8.09 s, eager 19.9 vs 19.9 s).
