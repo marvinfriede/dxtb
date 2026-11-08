@@ -20,6 +20,9 @@ Setup for pytest.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -261,3 +264,34 @@ def _check_shared_param_modules():
     """
     yield
     check_param_modules()
+
+
+def _libc_malloc_trim():
+    """Return glibc's ``malloc_trim``, or ``None`` on other C libraries."""
+    name = ctypes.util.find_library("c")
+    if name is None:
+        return None
+    try:
+        return ctypes.CDLL(name).malloc_trim
+    except (OSError, AttributeError):
+        return None
+
+
+_MALLOC_TRIM = _libc_malloc_trim()
+
+
+@pytest.fixture(autouse=True)
+def _release_freed_memory():
+    """
+    Return the heap freed by a test to the operating system.
+
+    glibc keeps freed heap pages in the process, so without this every
+    xdist worker grows to the peak of the largest test it has run (up to
+    a few GiB) and many workers together exhaust the RAM of a workstation.
+    Collecting cycles and trimming the heap after each test keeps a worker
+    near its baseline at no measurable runtime cost.
+    """
+    yield
+    gc.collect()
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
