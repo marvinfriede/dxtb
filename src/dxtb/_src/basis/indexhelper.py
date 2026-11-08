@@ -169,7 +169,9 @@ class IndexHelper(Node):
         updates: dict[str, Any] = {}
         if isinstance(self.batch_mode, bool):
             updates["batch_mode"] = int(self.batch_mode)
+
         first_device: torch.device | None = None
+
         for name in _INDEX_TENSOR_FIELDS:
             tensor = getattr(self, name)
             if not isinstance(tensor, Tensor):
@@ -177,10 +179,12 @@ class IndexHelper(Node):
                     f"IndexHelper.{name} must be a torch.Tensor, "
                     f"got {type(tensor).__name__}."
                 )
+
             if first_device is None:
                 first_device = tensor.device
             elif tensor.device != first_device:
                 raise ValueError("All tensors must be on the same device")
+
         return updates
 
     def _validate(self) -> None:
