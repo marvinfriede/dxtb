@@ -38,7 +38,7 @@ from dxtb._src.typing import DD, Tensor
 from ..conftest import DEVICE
 from ..molecules import mols
 
-MODES = ["full", "implicit"]
+DIFFERENTIATIONS = ["unrolled", "implicit"]
 
 C2 = ([6, 6], [[0.0, 0.0, 0.0], [0.0, 0.0, 2.9]])
 
@@ -63,7 +63,7 @@ def _system(name: str, dd: DD) -> tuple[Tensor, Tensor]:
 
 
 def _calc(
-    name: str, etemp: float, mode: str, guess: str = "eeq"
+    name: str, etemp: float, differentiation: str, guess: str = "eeq"
 ) -> tuple[Calculator, Tensor]:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers, pos = _system(name, dd)
@@ -72,28 +72,36 @@ def _calc(
         "fermi_maxiter": 500,
         "fermi_thresh": 1e-12,
         "x_atol": 1e-10,
-        "scf_mode": mode,
+        "differentiation": differentiation,
         "guess": guess,
         "verbosity": 0,
     }
     return Calculator(numbers, GFN1_XTB, opts=options, **dd), pos
 
 
-def _energy(name: str, etemp: float, mode: str, guess: str, q: Tensor):
+def _energy(
+    name: str, etemp: float, differentiation: str, guess: str, q: Tensor
+):
     # a new calculator for every energy: results are cached per calculator
-    calc, pos = _calc(name, etemp, mode, guess)
-    return calc.singlepoint(pos, chrg=q).total.sum(-1)
+    calc, pos = _calc(name, etemp, differentiation, guess)
+    return calc.singlepoint(pos, chrg=q).energy.sum(-1)
 
 
 def _grad_and_fd(
-    name: str, etemp: float, mode: str, guess: str, q0: float
+    name: str, etemp: float, differentiation: str, guess: str, q0: float
 ) -> tuple[Tensor, Tensor]:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     q = torch.tensor(q0, **dd, requires_grad=True)
-    (grad,) = torch.autograd.grad(_energy(name, etemp, mode, guess, q), q)
+    (grad,) = torch.autograd.grad(
+        _energy(name, etemp, differentiation, guess, q), q
+    )
 
-    ep = _energy(name, etemp, mode, guess, torch.tensor(q0 + STEP, **dd))
-    em = _energy(name, etemp, mode, guess, torch.tensor(q0 - STEP, **dd))
+    ep = _energy(
+        name, etemp, differentiation, guess, torch.tensor(q0 + STEP, **dd)
+    )
+    em = _energy(
+        name, etemp, differentiation, guess, torch.tensor(q0 - STEP, **dd)
+    )
     return grad, (ep - em) / (2 * STEP)
 
 
@@ -102,20 +110,22 @@ def test_no_plateau() -> None:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     qs = [0.0, 0.1, 0.2, 0.3, 0.4]
     e = [
-        _energy("H2O", 300.0, "full", "eeq", torch.tensor(q, **dd)).item()
+        _energy("H2O", 300.0, "unrolled", "eeq", torch.tensor(q, **dd)).item()
         for q in qs
     ]
     assert all(b > a for a, b in zip(e[:-1], e[1:])), e
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("differentiation", DIFFERENTIATIONS)
 @pytest.mark.parametrize(
     "name,etemp,q0",
     [("H2O", 300.0, 0.3), ("C2", 5000.0, 0.0), ("C2", 5000.0, 0.2)],
 )
-def test_gradient_fd(name: str, etemp: float, q0: float, mode: str) -> None:
+def test_gradient_fd(
+    name: str, etemp: float, q0: float, differentiation: str
+) -> None:
     """dE/dQ at finite temperature matches central differences."""
-    grad, fd = _grad_and_fd(name, etemp, mode, "eeq", q0)
+    grad, fd = _grad_and_fd(name, etemp, differentiation, "eeq", q0)
     assert pytest.approx(fd.cpu(), abs=FD_ATOL) == grad.cpu()
 
 
@@ -129,10 +139,10 @@ def test_chemical_potential() -> None:
     """dE/dQ equals the negative chemical potential of the Fermi level."""
     etemp = 300.0
     dd: DD = {"device": DEVICE, "dtype": torch.double}
-    calc, pos = _calc("H2O", etemp, "full")
+    calc, pos = _calc("H2O", etemp, "unrolled")
     q = torch.tensor(0.3, **dd, requires_grad=True)
     res = calc.singlepoint(pos, chrg=q)
-    (grad,) = torch.autograd.grad(res.total.sum(-1), q)
+    (grad,) = torch.autograd.grad(res.energy.sum(-1), q)
 
     # closed shell: alpha channel, partially filled orbital
     f = res.occupation[0].detach()
@@ -144,10 +154,10 @@ def test_chemical_potential() -> None:
     assert pytest.approx(-mu.cpu(), abs=MU_ATOL) == grad.cpu()
 
 
-@pytest.mark.parametrize("mode", ["full", "implicit"])
-def test_zero_kelvin(mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["unrolled", "implicit"])
+def test_zero_kelvin(differentiation: str) -> None:
     """The derivative w.r.t. the charge at 0 K is unchanged."""
-    grad, fd = _grad_and_fd("H2O", 0.0, mode, "eeq", 0.3)
+    grad, fd = _grad_and_fd("H2O", 0.0, differentiation, "eeq", 0.3)
     assert pytest.approx(fd.cpu(), abs=FD_ATOL) == grad.cpu()
 
 
@@ -170,13 +180,13 @@ def test_batch_culling() -> None:
         "fermi_maxiter": 500,
         "fermi_thresh": 1e-12,
         "x_atol": 1e-10,
-        "scf_mode": "full",
+        "differentiation": "unrolled",
         "batch_mode": 1,
         "verbosity": 0,
     }
     calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
-    batch = calc.singlepoint(pos, chrg=torch.tensor(chrg, **dd)).total.sum(-1)
+    batch = calc.singlepoint(pos, chrg=torch.tensor(chrg, **dd)).energy.sum(-1)
 
     for i, (name, q) in enumerate(zip(names, chrg)):
-        e = _energy(name, 300.0, "full", "eeq", torch.tensor(q, **dd))
+        e = _energy(name, 300.0, "unrolled", "eeq", torch.tensor(q, **dd))
         assert pytest.approx(e.cpu(), abs=1e-8) == batch[i].cpu()

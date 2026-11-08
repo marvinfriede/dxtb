@@ -389,8 +389,8 @@ class PreparedConvergedRootBatch:
 
     system: System
     positions: Tensor
-    primal_representation: int
-    response_representation: int
+    primal_representation: SCFRepresentation
+    response_representation: SCFRepresentation
     response_settings: SCFResponseSettings
     strategy_label: str
     lanes: tuple[ConvergedRootLaneRecord, ...]
@@ -1310,7 +1310,7 @@ def classify_response_failure_status(
 
 def _make_representation_projections(
     primal_inputs: SCFInputs,
-    representation: int,
+    representation: SCFRepresentation,
     guess_charges: SCFCharges,
 ) -> tuple[
     Tensor,
@@ -1320,14 +1320,14 @@ def _make_representation_projections(
 ]:
     """Construct initial state, layout, structural projection, and raw map."""
     state_projection: Callable[[Tensor], Tensor] | None = None
-    if representation == labels.SCP_MODE_CHARGE:
+    if representation == SCFRepresentation.CHARGE:
         initial_state = pack_charges(guess_charges, primal_inputs.charge_layout)
         layout = None
         state_projection = lambda val, _lay=primal_inputs.charge_layout: (
             _project_charge_padding(val, _lay)
         )
         map_fn = lambda x, _inp=primal_inputs: scf_map(x, _inp)
-    elif representation == labels.SCP_MODE_POTENTIAL:
+    elif representation == SCFRepresentation.POTENTIAL:
         initial_state, layout = potential_initial_guess(
             guess_charges, primal_inputs
         )
@@ -1337,7 +1337,7 @@ def _make_representation_projections(
         map_fn = lambda x, _inp=primal_inputs, _lay=layout: potential_map(
             x, _inp, _lay
         )
-    elif representation == labels.SCP_MODE_FOCK:
+    elif representation == SCFRepresentation.FOCK:
         initial_state = fock_initial_guess(guess_charges, primal_inputs)
         layout = None
         map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
@@ -1583,7 +1583,7 @@ def _solve_and_validate_lane_primal(
     primal_inputs: SCFInputs,
     guess_charges: SCFCharges,
     numbers: Tensor,
-    representation: int,
+    representation: SCFRepresentation,
     settings: Any,
     strategy: SCFStrategy,
     strategy_label: str,
@@ -1635,9 +1635,9 @@ def _solve_and_validate_lane_primal(
             )
             independent_mapped_x = certified_map_result.mapped_x
 
-            if representation == labels.SCP_MODE_CHARGE:
+            if representation == SCFRepresentation.CHARGE:
                 final_spectral = certified_map_result.spectral
-            elif representation == labels.SCP_MODE_POTENTIAL:
+            elif representation == SCFRepresentation.POTENTIAL:
                 assert layout is not None
                 final_state = unpack_potential(independent_mapped_x, layout)
                 final_spectral = evaluate_potential(final_state, primal_inputs)
@@ -1788,30 +1788,18 @@ def _solve_and_validate_lane_primal(
         )
 
 
-def _scf_representation_from_label(representation: int) -> SCFRepresentation:
-    """Translate the controller representation label to its public enum."""
-    return {
-        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-    }[representation]
-
-
 def _prepare_lane_response_root(
     inputs: SCFInputs,
-    primal_representation: int,
+    primal_representation: SCFRepresentation,
     primal_layout: PotentialLayout | None,
     solve: _LanePrimalSolveOutcome,
     settings: Any,
     response_settings: SCFResponseSettings,
 ):
     """Use shared S11 response conversion/certification for one valid lane."""
-    source_representation = _scf_representation_from_label(
-        primal_representation
-    )
     problem = SCFProblem(
         inputs,
-        source_representation,
+        primal_representation,
         potential_layout=primal_layout,
     )
     thresholds = resolve_certification_thresholds(
@@ -1910,19 +1898,11 @@ def prepare_converged_root_batch(
 
     representation = route.representation
     response_settings = effective_scf_config.response
-    primal_response_representation = _scf_representation_from_label(
+    response_representation = (
         representation
-    )
-    requested_response_representation = (
-        primal_response_representation
         if response_settings.representation is None
         else response_settings.representation
     )
-    response_representation = {
-        SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
-        SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
-        SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
-    }[requested_response_representation]
     settings, strategy = _prepare_solver(effective_scf_config, positions.dtype)
 
     external_input_ids = {
@@ -2041,7 +2021,7 @@ def prepare_converged_root_batch(
         )
 
         same_representation = (
-            requested_response_representation is primal_response_representation
+            response_representation is representation
         )
         response_root = None
         if solve_outcome.root_valid and not same_representation:
@@ -2743,8 +2723,8 @@ def _refresh_prepared_batch_inputs(
 def _evaluate_valid_lanes_mapped(
     valid_lanes: list[ConvergedRootLaneRecord],
     valid_indices: list[int],
-    representation: int,
-    primal_representation: int,
+    representation: SCFRepresentation,
+    primal_representation: SCFRepresentation,
     response_settings: SCFResponseSettings,
     device: torch.device,
     strict_mode: bool,
@@ -2879,7 +2859,7 @@ def _evaluate_valid_lanes_mapped(
             else None
         )
         damp_state = DampingState(damp_val, damp_sw)
-        if representation == labels.SCP_MODE_CHARGE:
+        if representation == SCFRepresentation.CHARGE:
             finalized = finalize_scf(
                 mapped_result,
                 lane_inputs,
@@ -2890,7 +2870,7 @@ def _evaluate_valid_lanes_mapped(
                 damp_state,
                 root_x=attached,
             )
-        elif representation == labels.SCP_MODE_POTENTIAL:
+        elif representation == SCFRepresentation.POTENTIAL:
             assert layout is not None
             finalized = finalize_scf_potential(
                 mapped_result,

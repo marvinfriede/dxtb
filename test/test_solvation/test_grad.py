@@ -25,16 +25,16 @@ import torch
 
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.components.interactions.solvation import alpb
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 opts = {
     "x_atol": 1e-10,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
 

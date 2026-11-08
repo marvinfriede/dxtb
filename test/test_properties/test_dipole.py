@@ -33,7 +33,7 @@ from dxtb._src.typing import DD, Tensor
 from dxtb.labels import INTLEVEL_DIPOLE
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 slist = ["LiH"]
@@ -43,8 +43,8 @@ slist_large = ["PbH4-BiH3", "MB16_43_01", "LYS_xao", "C60"]
 opts = {
     "int_level": INTLEVEL_DIPOLE,
     "maxiter": 100,
-    "mixer": "anderson",
-    "scf_mode": "full",
+    "strategy": scf_strategy("anderson"),
+    "differentiation": "unrolled",
     "verbosity": 0,
     "x_atol": 1.0e-10,
 }
@@ -213,10 +213,10 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["HHe", "LiH", "H2O"])
-@pytest.mark.parametrize("scp_mode", ["charge", "potential", "fock"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 def test_batch_settings(
-    dtype: torch.dtype, name1: str, name2: str, scp_mode: str, mixer: str
+    dtype: torch.dtype, name1: str, name2: str, variable: str, converger: str
 ) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
@@ -250,7 +250,7 @@ def test_batch_settings(
     field_vector.requires_grad_(True)
 
     efield = new_efield(field_vector)
-    options = dict(opts, **{"scp_mode": scp_mode, "mixer": mixer})
+    options = dict(opts, strategy=scf_strategy(converger, variable))
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
@@ -301,7 +301,7 @@ def test_batch_unconverged(dtype: torch.dtype, name1: str, name2: str) -> None:
     field_vector.requires_grad_(True)
 
     # with 5 iterations, both do not converge, but pass the test
-    options = dict(opts, **{"maxiter": 5, "mixer": "simple"})
+    options = dict(opts, maxiter=5, strategy=scf_strategy("linear"))
 
     efield = new_efield(field_vector)
     calc = Calculator(

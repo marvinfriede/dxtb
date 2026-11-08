@@ -24,18 +24,19 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .element_sets import REPRESENTATIVE_ELEMENTS, reps_both_dtypes
 from .uhf_table import uhf_anion, uhf_cation
 
 opts = {
     "fermi_etemp": 300,
     "fermi_maxiter": 500,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": "potential",  # important for atoms (better convergence)
+    "differentiation": "implicit",
+    # potential variable: important for atoms (better convergence)
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
 
@@ -88,11 +89,11 @@ def test_element(dtype: torch.dtype, partition: str, number: int) -> None:
         },
     )
 
-    o = dict(options, **{"scf_mode": "implicit"})
+    o = dict(options, **{"differentiation": "implicit"})
     calc1 = Calculator(numbers, GFN1_XTB, opts=o, **dd)
     result1 = calc1.singlepoint(positions, charges)
 
-    o = dict(options, **{"scf_mode": "full"})
+    o = dict(options, **{"differentiation": "unrolled"})
     calc2 = Calculator(numbers, GFN1_XTB, opts=o, **dd)
     result2 = calc2.singlepoint(positions, charges)
 
@@ -100,8 +101,8 @@ def test_element(dtype: torch.dtype, partition: str, number: int) -> None:
     f2 = result2.fenergy.cpu()
     assert pytest.approx(f1, abs=tol) == f2
 
-    e1 = result1.total.sum(-1).cpu()
-    e2 = result2.total.sum(-1).cpu()
+    e1 = result1.energy.sum(-1).cpu()
+    e2 = result2.energy.sum(-1).cpu()
     assert pytest.approx(e1, abs=tol) == e2
 
 

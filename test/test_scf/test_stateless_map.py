@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Physical agreement between FULL and functional implicit SCF routes."""
+"""Physical agreement between unrolled and functional implicit SCF routes."""
 
 from __future__ import annotations
 
@@ -25,21 +25,22 @@ from dxtb import GFN1_XTB, Calculator
 
 from ..conftest import DEVICE
 from ..molecules import mols
+from ..utils import scf_strategy
 
 DD = {"device": DEVICE, "dtype": torch.double}
 
 
-@pytest.mark.parametrize("scp_mode", ["charge", "potential", "fock"])
-def test_result_hamiltonian_matches_full(scp_mode: str) -> None:
-    """Implicit and FULL routes agree on the converged physical observables."""
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+def test_result_hamiltonian_matches_full(variable: str) -> None:
+    """Implicit and unrolled routes agree on converged physical observables."""
     molecule = mols["H2O"]
     results = {}
-    for mode in ("implicit", "full"):
+    for mode in ("implicit", "unrolled"):
         tolerance = 1e-12
         options = {
             "verbosity": 0,
-            "scf_mode": mode,
-            "scp_mode": scp_mode,
+            "differentiation": mode,
+            "strategy": scf_strategy("anderson", variable),
             "x_atol": tolerance,
             "x_atol_max": tolerance,
         }
@@ -52,5 +53,5 @@ def test_result_hamiltonian_matches_full(scp_mode: str) -> None:
 
     for name in ("hamiltonian", "density", "emo"):
         implicit = getattr(results["implicit"], name)
-        full = getattr(results["full"], name)
+        full = getattr(results["unrolled"], name)
         assert torch.allclose(implicit, full, atol=1e-8, rtol=0), name

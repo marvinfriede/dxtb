@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from dxtb import GFN1_XTB, labels
+from dxtb import GFN1_XTB
 from dxtb._src.scf.functional import anderson as anderson_module
 from dxtb._src.scf.functional.anderson import (
     AndersonMethod,
@@ -21,6 +21,7 @@ from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.strategy import SCFStrategy
 from dxtb.scf import strategy_preset
 
+from ..utils import scf_strategy
 from ._anderson_helpers import AndersonTestSettings, solve_common
 from .test_functional_map import _prepare_case
 
@@ -140,7 +141,7 @@ def test_terminal_map_does_not_advance_anderson_history(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_ANDERSON,
+            "strategy": scf_strategy("anderson", "charge"),
             "maxiter": 2,
             "mix_guess": False,
             "x_atol": 0.0,

@@ -28,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,11 @@ from dxtb._src.calculators.batch_streaming import (  # noqa: E402
 )
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from dxtb.scf import (  # noqa: E402
+    SCFRepresentation,
+    SCFStrategy,
+    strategy_preset,
+)
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -156,24 +162,26 @@ def get_environment_metadata() -> dict[str, Any]:
     }
 
 
+def _anderson_strategy(variable: str) -> SCFStrategy:
+    """Return the Anderson preset Stage on the given SCF variable."""
+    stage = strategy_preset("anderson").stages[0]
+    return SCFStrategy(
+        (replace(stage, representation=SCFRepresentation(variable)),)
+    )
+
+
 def setup_w2_model_and_system(
     numbers: torch.Tensor,
     *,
     gradient_mode: str = "positions-only",
-    scp_mode: str = "charge",
+    variable: str = "charge",
 ) -> tuple[Model, Any]:
     par = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
-    scp_label = (
-        labels.SCP_MODE_CHARGE
-        if scp_mode == "charge"
-        else labels.SCP_MODE_POTENTIAL
-    )
     config = Config.create(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
-        mixer=labels.MIXER_ANDERSON,
-        scf_mode=labels.SCF_MODE_FULL,
-        scp_mode=scp_label,
+        strategy=_anderson_strategy(variable),
+        differentiation="unrolled",
         maxiter=300,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
@@ -779,11 +787,11 @@ def run_integrated(
 
 def run_legacy_audit(
     nconformers: int,
-    scp_mode: str,
+    variable: str,
     route: str,
     reference_json: Path | None,
 ) -> dict[str, Any]:
-    """Run legacy Calculator(batch_mode=2) or serial loop under explicit scp_mode."""
+    """Run legacy Calculator(batch_mode=2) or serial loop on one SCF variable."""
     rss_monitor = RSSMonitor()
     rss_monitor.start()
 
@@ -798,9 +806,8 @@ def run_legacy_audit(
     )
     opts = {
         "verbosity": 0,
-        "scf_mode": "full",
-        "mixer": "anderson",
-        "scp_mode": scp_mode,
+        "differentiation": "unrolled",
+        "strategy": _anderson_strategy(variable),
         "maxiter": 300,
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-5,
@@ -913,7 +920,7 @@ def run_legacy_audit(
     return {
         "stage": "legacy-audit",
         "route": route,
-        "scp_mode": scp_mode,
+        "variable": variable,
         "nconformers": nconformers,
         "iterations": iterations,
         "timings_s": {
@@ -973,7 +980,7 @@ def main() -> None:
         default="unit",
     )
     parser.add_argument(
-        "--scp-mode",
+        "--variable",
         choices=("charge", "potential"),
         default="charge",
     )
@@ -1015,7 +1022,7 @@ def main() -> None:
     elif args.stage == "legacy-audit":
         report = run_legacy_audit(
             args.nconformers,
-            args.scp_mode,
+            args.variable,
             args.legacy_route,
             args.reference_json,
         )

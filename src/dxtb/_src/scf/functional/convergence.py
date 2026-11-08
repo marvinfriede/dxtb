@@ -46,7 +46,7 @@ class SCFConvergence:
 
     Notes
     -----
-    In ``scp_mode="potential"`` with ``sqrt(2)`` off-diagonal quadrupole
+    With the potential SCF variable and ``sqrt(2)`` off-diagonal quadrupole
     weighting, ``residual.l2`` is strictly invariant under :math:`\\mathrm{SO}(3)`
     rotations because shell monopole potentials are rotational scalars,
     Cartesian dipoles carry the Euclidean norm, and weighted packed quadrupoles

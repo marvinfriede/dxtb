@@ -28,18 +28,17 @@ import pytest
 import torch
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_npz
+from ..utils import get_param_module, load_from_npz, scf_strategy
 from .samples_charged import samples
 
 opts = {
     "verbosity": 0,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 ref_grad = np.load("test/test_scf/grad.npz")

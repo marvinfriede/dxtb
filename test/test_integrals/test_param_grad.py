@@ -55,7 +55,7 @@ def energy_of_scaled_exponents(
         opts = {
             "verbosity": 0,
             "int_driver": driver,
-            "scf_mode": "full",
+            "differentiation": "unrolled",
             "x_atol": 1e-11,
         }
         par = get_param_module(gfn, **dd)

@@ -34,6 +34,7 @@ import os
 import platform
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,11 @@ from dxtb._src.scf.functional import map as map_module  # noqa: E402
 from dxtb._src.scf.functional import solver as solver_module  # noqa: E402
 from dxtb._src.scf.functional import spectral as spectral_module  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from dxtb.scf import (  # noqa: E402
+    SCFRepresentation,
+    SCFStrategy,
+    strategy_preset,
+)
 
 DTYPE = torch.float64
 THREAD_ENV = {
@@ -181,10 +187,10 @@ def _model_and_case(
     if case_id.startswith("tmpda"):
         index = int(case_id[-1])
         numbers, positions = w2c2.construct_workload(index)
-        method, method_label, scp_mode, temperature = (
+        method, method_label, variable, temperature = (
             GFN1_XTB,
             labels.GFN1_XTB,
-            labels.SCP_MODE_CHARGE,
+            SCFRepresentation.CHARGE,
             300.0,
         )
         system_id = f"tmpda-conformer-{index}-frozen-W2"
@@ -199,7 +205,9 @@ def _model_and_case(
         high_temperature = case_id.endswith("10000K")
         method = GFN2_XTB if gfn2_case else GFN1_XTB
         method_label = labels.GFN2_XTB if gfn2_case else labels.GFN1_XTB
-        scp_mode = labels.SCP_MODE_FOCK if gfn2_case else labels.SCP_MODE_CHARGE
+        variable = (
+            SCFRepresentation.FOCK if gfn2_case else SCFRepresentation.CHARGE
+        )
         temperature = 10_000.0 if high_temperature else 300.0
         system_id = case_id
     else:
@@ -209,9 +217,15 @@ def _model_and_case(
     config = Config.create(
         method=method_label,
         int_driver=labels.INTDRIVER_PYTORCH,
-        mixer=labels.MIXER_ANDERSON,
-        scf_mode=labels.SCF_MODE_FULL,
-        scp_mode=scp_mode,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    strategy_preset("anderson").stages[0],
+                    representation=variable,
+                ),
+            )
+        ),
+        differentiation="unrolled",
         maxiter=300,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
@@ -622,7 +636,7 @@ def run_case(
         atoms=int(numbers.numel()),
         temperature_kelvin=system.config.scf.fermi.etemp,
         method=system.config.method,
-        scp_mode=system.config.scf.scp_mode,
+        variable=system.config.scf.initial_representation.value,
         maxiter=system.config.scf.maxiter,
         x_atol=system.config.scf.x_atol,
         x_atol_max=system.config.scf.x_atol_max,

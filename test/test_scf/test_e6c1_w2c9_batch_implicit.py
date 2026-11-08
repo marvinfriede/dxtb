@@ -55,6 +55,8 @@ from dxtb._src.wavefunction.filling import FermiStatus
 from dxtb.config import Config
 from dxtb.scf import SCFRepresentation, SCFResponseSettings
 
+from ..utils import scf_strategy
+
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
 
@@ -95,8 +97,8 @@ def _build_system(
     numbers: torch.Tensor,
     *,
     method: int = labels.GFN1_XTB,
-    scp_mode: int = labels.SCP_MODE_CHARGE,
-    mixer: int = labels.MIXER_ANDERSON,
+    variable: str = "charge",
+    converger: str = "anderson",
     etemp: float = 300.0,
     partition: int = labels.FERMI_PARTITION_EQUAL,
     maxiter: int = 100,
@@ -111,16 +113,11 @@ def _build_system(
     cfg_kwargs = dict(
         method=method,
         int_driver=labels.INTDRIVER_PYTORCH,
-        scf_mode=labels.SCF_MODE_FULL,
-        scp_mode=scp_mode,
+        differentiation="unrolled",
+        strategy=scf_strategy(converger, variable),
         response=SCFResponseSettings(
-            representation={
-                labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-                labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-                labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-            }[scp_mode]
+            representation=SCFRepresentation(variable)
         ),
-        mixer=mixer,
         maxiter=maxiter,
         x_atol=x_atol,
         x_atol_max=x_atol_max,
@@ -222,15 +219,8 @@ def test_cdiis_fock_batch_uses_configured_response_coordinates(
             else response_representation
         )
     )
-    assert prepared.primal_representation == labels.SCP_MODE_FOCK
-    assert (
-        prepared.response_representation
-        == {
-            SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
-            SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
-            SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
-        }[expected_response]
-    )
+    assert prepared.primal_representation == SCFRepresentation.FOCK
+    assert prepared.response_representation == expected_response
     assert prepared.all_roots_valid
 
     batch_result = evaluate_converged_root_batch(prepared)
@@ -323,20 +313,20 @@ def _no2_conformers() -> tuple[torch.Tensor, torch.Tensor]:
 
 
 @pytest.mark.parametrize(
-    ("method", "scp_mode", "mixer"),
+    ("method", "variable", "converger"),
     [
-        (labels.GFN1_XTB, labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
-        (labels.GFN1_XTB, labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
-        (labels.GFN2_XTB, labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
+        (labels.GFN1_XTB, "charge", "anderson"),
+        (labels.GFN1_XTB, "fock", "anderson"),
+        (labels.GFN2_XTB, "potential", "anderson"),
     ],
 )
 def test_conformer_batch_matches_serial_and_permutes_cleanly(
-    method: int, scp_mode: int, mixer: int
+    method: int, variable: str, converger: str
 ) -> None:
     """Batch evaluation matches independent single-conformer implicit results."""
     numbers, base_positions = _h2o_conformers()
     _, system = _build_system(
-        numbers, method=method, scp_mode=scp_mode, mixer=mixer
+        numbers, method=method, variable=variable, converger=converger
     )
     positions = base_positions.clone().requires_grad_(True)
 
@@ -437,7 +427,7 @@ def test_open_shell_finite_temperature_partially_occupied_no2(
     _, system = _build_system(
         numbers,
         method=labels.GFN1_XTB,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        variable="charge",
         etemp=1000.0,
         partition=partition,
     )

@@ -26,7 +26,7 @@ import pytest
 from tad_mctc.tree import Node, stack
 from torch.utils import _pytree
 
-from dxtb import GFN2_XTB, ParamModule, labels
+from dxtb import GFN2_XTB, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
@@ -48,6 +48,7 @@ from dxtb._src.components.interactions.dispersion.d4sc import (
 from dxtb._src.typing import Tensor
 from dxtb.config import Config
 
+from ...utils import scf_strategy
 from .samples import samples
 
 DEVICE = torch.device("cpu")
@@ -464,9 +465,8 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
         par=par,
         config=Config.create(
             exclude=("es2", "es3", "aes2", "d4sc"),
-            scf_mode=labels.SCF_MODE_IMPLICIT,
-            scp_mode=labels.SCP_MODE_CHARGE,
-            mixer=labels.MIXER_LINEAR,
+            differentiation="implicit",
+            strategy=scf_strategy("linear", "charge"),
             maxiter=80,
             x_atol=1.0e-11,
             x_atol_max=1.0e-11,

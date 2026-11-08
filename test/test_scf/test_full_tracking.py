@@ -33,21 +33,21 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 slist = ["LiH", "SiH4"]
 slist_more = ["H2", "H2O", "CH4"]
-# Mixers are compared on C60; the (much slower) vancoh2 only runs with Anderson.
-large_cases = [("C60", "anderson"), ("C60", "simple"), ("vancoh2", "anderson")]
+# Convergers are compared on C60; the (much slower) vancoh2 only runs with Anderson.
+large_cases = [("C60", "anderson"), ("C60", "linear"), ("vancoh2", "anderson")]
 
 slist_large = ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao"]
 
 opts = {
     "verbosity": 0,
     "maxiter": 300,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "unrolled",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 drivers = [
@@ -60,9 +60,9 @@ def single(
     dtype: torch.dtype,
     name: str,
     gfn: str,
-    mixer: str,
+    converger: str,
     tol: float,
-    scp_mode: str = "charge",
+    variable: str = "charge",
     intdriver: int = labels.INTDRIVER_LIBCINT,
 ) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -78,11 +78,10 @@ def single(
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
-            "damp_dynamic": mixer != "simple",
+            "damp": 0.05 if converger == "linear" else 0.4,
+            "damp_dynamic": converger != "linear",
             "int_driver": intdriver,
-            "mixer": mixer,
-            "scp_mode": scp_mode,
+            "strategy": scf_strategy(converger, variable),
             "x_atol": tol,
         },
     )
@@ -95,109 +94,123 @@ def single(
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 @pytest.mark.parametrize("intdriver", drivers)
 def test_single_gfn1(
-    dtype: torch.dtype, name: str, mixer: str, intdriver: int
+    dtype: torch.dtype, name: str, converger: str, intdriver: int
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn1", mixer, tol, intdriver=intdriver)
+    single(dtype, name, "gfn1", converger, tol, intdriver=intdriver)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-def test_single_gfn2(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+def test_single_gfn2(dtype: torch.dtype, name: str, converger: str) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn2", mixer, tol, intdriver=labels.INTDRIVER_LIBCINT)
+    single(
+        dtype, name, "gfn2", converger, tol, intdriver=labels.INTDRIVER_LIBCINT
+    )
 
 
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_more)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 @pytest.mark.parametrize("intdriver", drivers)
 def test_single_gfn1_more(
-    dtype: torch.dtype, name: str, mixer: str, intdriver: int
+    dtype: torch.dtype, name: str, converger: str, intdriver: int
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn1", mixer, tol, intdriver=intdriver)
+    single(dtype, name, "gfn1", converger, tol, intdriver=intdriver)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_more)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-def test_single_gfn2_more(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+def test_single_gfn2_more(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn2", mixer, tol, intdriver=labels.INTDRIVER_LIBCINT)
+    single(
+        dtype, name, "gfn2", converger, tol, intdriver=labels.INTDRIVER_LIBCINT
+    )
 
 
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_large)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-def test_single_medium_gfn1(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+def test_single_medium_gfn1(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
     """Test a few larger system."""
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn1", mixer, tol)
+    single(dtype, name, "gfn1", converger, tol)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_large)
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-def test_single_medium_gfn2(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+def test_single_medium_gfn2(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
     """Test a few larger system."""
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn2", mixer, tol)
+    single(dtype, name, "gfn2", converger, tol)
 
 
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["S2", "LYS_xao_dist"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 def test_single_difficult_gfn1(
-    dtype: torch.dtype, name: str, mixer: str
+    dtype: torch.dtype, name: str, converger: str
 ) -> None:
     """These systems do not reproduce tblite energies to high accuracy."""
     tol = 5e-3
-    single(dtype, name, "gfn1", mixer, tol, scp_mode="potential")
+    single(dtype, name, "gfn1", converger, tol, variable="potential")
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["S2", "LYS_xao_dist"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 def test_single_difficult_gfn2(
-    dtype: torch.dtype, name: str, mixer: str
+    dtype: torch.dtype, name: str, converger: str
 ) -> None:
     """These systems do not reproduce tblite energies to high accuracy."""
     tol = 5e-3
-    single(dtype, name, "gfn2", mixer, tol, scp_mode="potential")
+    single(dtype, name, "gfn2", converger, tol, variable="potential")
 
 
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float])
-@pytest.mark.parametrize("name, mixer", large_cases)
-def test_single_large_gfn1(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("name, converger", large_cases)
+def test_single_large_gfn1(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
     """Test a large systems (only float32 as they take some time)."""
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn1", mixer, tol)
+    single(dtype, name, "gfn1", converger, tol)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float])
-@pytest.mark.parametrize("name, mixer", large_cases)
-def test_single_large_gfn2(dtype: torch.dtype, name: str, mixer: str) -> None:
+@pytest.mark.parametrize("name, converger", large_cases)
+def test_single_large_gfn2(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
     """Test a large systems (only float32 as they take some time)."""
     tol = sqrt(torch.finfo(dtype).eps) * 10
-    single(dtype, name, "gfn2", mixer, tol)
+    single(dtype, name, "gfn2", converger, tol)
 
 
 def batched(
@@ -205,8 +218,8 @@ def batched(
     name1: str,
     name2: str,
     gfn: str,
-    mixer: str,
-    scp_mode: str,
+    converger: str,
+    variable: str,
     tol: float,
     intdriver: int = labels.INTDRIVER_LIBCINT,
 ) -> None:
@@ -238,10 +251,9 @@ def batched(
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
-            "damp_dynamic": mixer != "simple",
-            "mixer": mixer,
-            "scp_mode": scp_mode,
+            "damp": 0.05 if converger == "linear" else 0.4,
+            "damp_dynamic": converger != "linear",
+            "strategy": scf_strategy(converger, variable),
             "int_driver": intdriver,
             "x_atol": 0.1 * tol,
         },
@@ -257,19 +269,19 @@ def batched(
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH", "SiH4"])
 @pytest.mark.parametrize(
-    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+    "converger", ["anderson", pytest.param("linear", marks=pytest.mark.slow)]
 )
 @pytest.mark.parametrize("intdriver", drivers)
 def test_batch_gfn1(
-    dtype: torch.dtype, name1: str, name2: str, mixer: str, intdriver: int
+    dtype: torch.dtype, name1: str, name2: str, converger: str, intdriver: int
 ) -> None:
     batched(
         dtype,
         name1,
         name2,
         "gfn1",
-        mixer,
-        scp_mode="charge",
+        converger,
+        variable="charge",
         tol=sqrt(torch.finfo(dtype).eps) * 10,
         intdriver=intdriver,
     )
@@ -280,18 +292,18 @@ def test_batch_gfn1(
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH", "SiH4"])
 @pytest.mark.parametrize(
-    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+    "converger", ["anderson", pytest.param("linear", marks=pytest.mark.slow)]
 )
 def test_batch_gfn2(
-    dtype: torch.dtype, name1: str, name2: str, mixer: str
+    dtype: torch.dtype, name1: str, name2: str, converger: str
 ) -> None:
     batched(
         dtype,
         name1,
         name2,
         "gfn2",
-        mixer,
-        scp_mode="fock",
+        converger,
+        variable="fock",
         tol=sqrt(torch.finfo(dtype).eps) * 10,
         intdriver=labels.INTDRIVER_LIBCINT,
     )
@@ -304,7 +316,7 @@ def batched_unconverged(
     name2: str,
     name3: str,
     gfn: str,
-    mixer: str,
+    converger: str,
     maxiter: int,
 ) -> None:
     """
@@ -334,10 +346,10 @@ def batched_unconverged(
 
     if gfn == "gfn1":
         par = GFN1_XTB
-        scp_mode = "potential"
+        variable = "potential"
     elif gfn == "gfn2":
         par = GFN2_XTB
-        scp_mode = "fock"
+        variable = "fock"
     else:
         assert False
 
@@ -346,10 +358,9 @@ def batched_unconverged(
         **{
             "damp": 0.3,
             "maxiter": maxiter,
-            "mixer": mixer,
+            "strategy": scf_strategy(converger, variable),
             "mix_guess": False,
-            "scf_mode": "full",
-            "scp_mode": scp_mode,
+            "differentiation": "unrolled",
             "x_atol": tol,
         },
     )
@@ -388,7 +399,7 @@ def test_batch_unconverged_partly_simple(dtype: torch.dtype) -> None:
         [-1.058598357054241, -0.8818244757849318, -4.017705657967151], **dd
     )
 
-    batched_unconverged(ref, dtype, "H2", "LiH", "SiH4", "gfn1", "simple", 0)
+    batched_unconverged(ref, dtype, "H2", "LiH", "SiH4", "gfn1", "linear", 0)
 
     # only for regression testing (copied unconverged energies)
     ref = torch.tensor(
@@ -421,7 +432,7 @@ def test_batch_unconverged_fully_simple(
         [-0.8818244757849318, -0.8818244757849318, -4.017705657967151], **dd
     )
 
-    batched_unconverged(ref, dtype, "LiH", "LiH", "SiH4", "gfn1", "simple", 0)
+    batched_unconverged(ref, dtype, "LiH", "LiH", "SiH4", "gfn1", "linear", 0)
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
@@ -429,12 +440,12 @@ def test_batch_unconverged_fully_simple(
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
 @pytest.mark.parametrize(
-    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+    "converger", ["anderson", pytest.param("linear", marks=pytest.mark.slow)]
 )
 def test_batch_three_gfn1(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, mixer: str
+    dtype: torch.dtype, name1: str, name2: str, name3: str, converger: str
 ) -> None:
-    batch_three(dtype, name1, name2, name3, "gfn1", mixer)
+    batch_three(dtype, name1, name2, name3, "gfn1", converger)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
@@ -443,16 +454,21 @@ def test_batch_three_gfn1(
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
 @pytest.mark.parametrize(
-    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+    "converger", ["anderson", pytest.param("linear", marks=pytest.mark.slow)]
 )
 def test_batch_three_gfn2(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, mixer: str
+    dtype: torch.dtype, name1: str, name2: str, name3: str, converger: str
 ) -> None:
-    batch_three(dtype, name1, name2, name3, "gfn2", mixer)
+    batch_three(dtype, name1, name2, name3, "gfn2", converger)
 
 
 def batch_three(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, gfn: str, mixer: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    gfn: str,
+    converger: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -486,10 +502,9 @@ def batch_three(
     options = dict(
         opts,
         **{
-            "damp": 0.1 if mixer == "simple" else 0.4,
-            "mixer": mixer,
-            "scf_mode": "full",
-            "scp_mode": "fock",
+            "damp": 0.1 if converger == "linear" else 0.4,
+            "strategy": scf_strategy(converger, "fock"),
+            "differentiation": "unrolled",
             "x_atol": tol,
         },
     )
@@ -501,8 +516,8 @@ def batch_three(
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-def test_batch_special(dtype: torch.dtype, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+def test_batch_special(dtype: torch.dtype, converger: str) -> None:
     """
     Test case for https://github.com/grimme-lab/dxtb/issues/67.
 
@@ -527,8 +542,8 @@ def test_batch_special(dtype: torch.dtype, mixer: str) -> None:
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
-            "mixer": mixer,
+            "damp": 0.05 if converger == "linear" else 0.4,
+            "strategy": scf_strategy(converger, "potential"),
         },
     )
     calc = Calculator(

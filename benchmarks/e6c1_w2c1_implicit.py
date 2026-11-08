@@ -98,7 +98,7 @@ def main() -> None:
 
     from test.test_scf.test_functional_root_derivatives import _case, _run_root
 
-    from dxtb import GFN1_XTB, labels
+    from dxtb import GFN1_XTB
     from dxtb._src.calculators.singlepoint import _interaction_data
     from dxtb._src.integral.evaluation import build_integral_matrices
     from dxtb._src.scf.functional import setup_scf_inputs
@@ -107,6 +107,7 @@ def main() -> None:
     )
     from dxtb._src.scf.guess import get_guess
     from dxtb._src.scf.iterator import get_refocc
+    from dxtb.scf import AndersonMethod, SCFDifferentiation, SCFRepresentation
 
     _event(
         "imports",
@@ -122,8 +123,8 @@ def main() -> None:
     case = _case(
         args.molecule,
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_CHARGE,
-        mixer=labels.MIXER_ANDERSON,
+        representation=SCFRepresentation.CHARGE,
+        converger=AndersonMethod,
         tolerance=args.tolerance,
         maxiter=args.maxiter,
         temperature=args.temperature,
@@ -203,7 +204,7 @@ def main() -> None:
             [0.0, 1.0e-3], dtype=n0.dtype, device=n0.device
         )
         adapter, flat = _SCFMapTensorTree.prepare(
-            inputs, labels.SCP_MODE_CHARGE
+            inputs, SCFRepresentation.CHARGE
         )
         n0_index = adapter.parameter_paths.index("n0")
         lane_records = []
@@ -214,7 +215,7 @@ def main() -> None:
             lane_n0 = n0 + delta * parameter_direction
             lane_inputs = replace(inputs, n0=lane_n0)
             lane_adapter, lane_values = _SCFMapTensorTree.prepare(
-                lane_inputs, labels.SCP_MODE_CHARGE
+                lane_inputs, SCFRepresentation.CHARGE
             )
             if lane_adapter.parameter_paths != adapter.parameter_paths:
                 raise RuntimeError("Mapped lane SCF input trees differ.")
@@ -963,7 +964,7 @@ def main() -> None:
         root_module.implicit_solve = record_implicit_solve
         config = replace(
             case.system.config.scf,
-            scf_mode=labels.SCF_MODE_IMPLICIT,
+            differentiation=SCFDifferentiation.IMPLICIT,
             maxiter=args.maxiter,
             x_atol=args.tolerance,
             x_atol_max=args.tolerance,

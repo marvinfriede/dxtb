@@ -54,7 +54,7 @@ STEP = 1e-4
 # mode), of BeH2: 3e-8 (full) and 4e-9 (implicit). The limits contain a safety
 # factor of 10 and more.
 FORCES_ATOL = 5e-8
-HESSIAN_ATOL = {"full": 5e-8, "implicit": 5e-8}
+HESSIAN_ATOL = {"unrolled": 5e-8, "implicit": 5e-8}
 
 # Error with too few steps (zero for forces, one for Hessians), the test
 # demands at least this much (measured: forces at least 7e-3, Hessian of C2
@@ -62,11 +62,13 @@ HESSIAN_ATOL = {"full": 5e-8, "implicit": 5e-8}
 TOO_FEW_FORCES = 1e-4
 TOO_FEW_HESSIAN = {"C2": 1e-2, "BeH2": 1e-5}
 
-# Supported SCF differentiation modes.
-MODES = ["full", "implicit"]
+# Supported SCF differentiation policies.
+DIFFERENTIATIONS = ["unrolled", "implicit"]
 
 
-def _setup(name: str, ktemp: float, mode: str, steps: int | None = None):
+def _setup(
+    name: str, ktemp: float, differentiation: str, steps: int | None = None
+):
     """
     Positions and energy function of a system. ``steps`` differentiable
     Newton steps of the Fermi energy are exact through order ``2**steps - 1``
@@ -80,7 +82,7 @@ def _setup(name: str, ktemp: float, mode: str, steps: int | None = None):
         "fermi_maxiter": 500,
         "fermi_thresh": 1e-12,
         "x_atol": 1e-10,
-        "scf_mode": mode,
+        "differentiation": differentiation,
         "verbosity": 0,
     }
     if steps is not None:
@@ -89,7 +91,7 @@ def _setup(name: str, ktemp: float, mode: str, steps: int | None = None):
 
     def energy(pos: Tensor) -> Tensor:
         calc = Calculator(numbers_, GFN1_XTB, opts=opts, **dd)
-        return calc.singlepoint(pos, spin=spin).total.sum(-1)
+        return calc.singlepoint(pos, spin=spin).energy.sum(-1)
 
     return torch.tensor(positions, **dd), energy
 
@@ -139,20 +141,20 @@ def _hessian_reference(name: str, ktemp: float) -> Tensor:
 
 
 def _forces_error(
-    name: str, ktemp: float, mode: str, steps: int | None
+    name: str, ktemp: float, differentiation: str, steps: int | None
 ) -> float:
     ref = _forces_reference(name, ktemp)
-    pos, energy = _setup(name, ktemp, mode, steps)
+    pos, energy = _setup(name, ktemp, differentiation, steps)
 
     grad = _gradient(energy, pos.clone().requires_grad_())
     return (grad - ref).abs().max().item()
 
 
 def _hessian_error(
-    name: str, ktemp: float, mode: str, steps: int | None
+    name: str, ktemp: float, differentiation: str, steps: int | None
 ) -> float:
     ref = _hessian_reference(name, ktemp)
-    pos, energy = _setup(name, ktemp, mode, steps)
+    pos, energy = _setup(name, ktemp, differentiation, steps)
 
     p = pos.clone().requires_grad_()
     grad = _gradient(energy, p, create_graph=True)
@@ -170,16 +172,16 @@ FORCES = [("C2", 300.0), ("O2", 5000.0)]
 
 @pytest.mark.grad
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("differentiation", DIFFERENTIATIONS)
 @pytest.mark.parametrize("name, ktemp", FORCES)
-def test_forces(name: str, ktemp: float, mode: str) -> None:
+def test_forces(name: str, ktemp: float, differentiation: str) -> None:
     """Forces agree with finite differences and need the Newton steps."""
     # production number of steps
-    assert _forces_error(name, ktemp, mode, None) < FORCES_ATOL
-    assert _forces_error(name, ktemp, mode, 1) < FORCES_ATOL
+    assert _forces_error(name, ktemp, differentiation, None) < FORCES_ATOL
+    assert _forces_error(name, ktemp, differentiation, 1) < FORCES_ATOL
 
     # too few steps: the change of the Fermi energy is missing
-    assert _forces_error(name, ktemp, mode, 0) > TOO_FEW_FORCES
+    assert _forces_error(name, ktemp, differentiation, 0) > TOO_FEW_FORCES
 
 
 # BeH2 (25000 K) only in the exact modes, see below; the unrolled Hessian of
@@ -192,20 +194,16 @@ HESSIANS = [
 
 @pytest.mark.grad
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("name, ktemp, mode", HESSIANS)
-def test_hessian(name: str, ktemp: float, mode: str) -> None:
+@pytest.mark.parametrize("name, ktemp, differentiation", HESSIANS)
+def test_hessian(name: str, ktemp: float, differentiation: str) -> None:
     """The Hessian agrees with finite differences and needs two steps."""
     # production number of steps
-    assert _hessian_error(name, ktemp, mode, None) < HESSIAN_ATOL[mode]
+    assert (
+        _hessian_error(name, ktemp, differentiation, None)
+        < HESSIAN_ATOL[differentiation]
+    )
 
     # one step is exact for forces only
-    assert _hessian_error(name, ktemp, mode, 1) > TOO_FEW_HESSIAN[name]
-
-
-def test_experimental_mode_retired() -> None:
-    """Experimental single-shot SCF mode is explicitly retired."""
-    pos, energy = _setup("BeH2", 25000.0, "experimental", None)
-    with pytest.raises(
-        ValueError, match="Experimental single-shot SCF was retired"
-    ):
-        energy(pos)
+    assert (
+        _hessian_error(name, ktemp, differentiation, 1) > TOO_FEW_HESSIAN[name]
+    )

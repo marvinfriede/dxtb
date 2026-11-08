@@ -23,12 +23,11 @@ from dataclasses import dataclass, replace
 import torch
 
 from dxtb import IndexHelper, OutputHandler
-from dxtb._src.calculators.config.scf import ConfigSCF
+from dxtb._src.calculators.config.scf import ConfigSCF, SCFDifferentiation
 from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.constants import defaults, labels
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
@@ -108,7 +107,7 @@ class FullSCFRoute:
     """Static decision made before entering either SCF implementation."""
 
     kind: str
-    representation: int
+    representation: SCFRepresentation
     strategy_label: str
     strategy: SCFStrategy | None = None
     warning: str | None = None
@@ -149,18 +148,16 @@ def resolve_full_scf_route(
     ihelp: IndexHelper,
     numbers: Tensor | None = None,
     integrals: IntegralMatrices | None = None,
-    legacy_engine_overrides: bool = False,
     allow_implicit: bool = False,
 ) -> FullSCFRoute:
     """Resolve a supported functional route or its explicit batch boundary."""
-    supported_modes = (
-        (labels.SCF_MODE_FULL, labels.SCF_MODE_IMPLICIT)
-        if allow_implicit
-        else (labels.SCF_MODE_FULL,)
-    )
-    if config._legacy_mode_code not in supported_modes:
+    if (
+        config.differentiation is SCFDifferentiation.IMPLICIT
+        and not allow_implicit
+    ):
         raise ValueError(
-            "Functional SCF route resolution requires SCF_MODE_FULL."
+            "Functional SCF route resolution requires unrolled "
+            "differentiation."
         )
     if not config.requires_iterations:
         raise ValueError("FULL route resolution requires iterative SCF.")
@@ -174,11 +171,6 @@ def resolve_full_scf_route(
         integrals.hcore is None or integrals.overlap is None
     ):
         raise ValueError("Functional SCF requires hcore and overlap integrals.")
-    if legacy_engine_overrides:
-        raise NotImplementedError(
-            "Legacy SCF engine positional/keyword overrides are no longer "
-            "supported by functional SCF."
-        )
 
     eligible, names = functional_scf_interactions_eligible(interactions)
     if not eligible:
@@ -187,7 +179,7 @@ def resolve_full_scf_route(
             f"{names}."
         )
 
-    representation = config._legacy_representation_code
+    representation = config.initial_representation
     strategy_label = " -> ".join(
         type(item.method).__name__.removesuffix("Method").lower()
         for item in config.strategy.stages
@@ -341,7 +333,7 @@ def _representation_problem(
     guess: Tensor, inputs: SCFInputs, config: ConfigSCF
 ) -> tuple[Tensor, SCFProblem]:
     """Build the initial state and problem of the configured representation."""
-    mode = config._legacy_representation_code
+    mode = config.initial_representation
     charges = SCFCharges(
         mono=guess,
         dipole=(
@@ -355,20 +347,20 @@ def _representation_problem(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
-    if mode == labels.SCP_MODE_CHARGE:
+    if mode == SCFRepresentation.CHARGE:
         return (
             pack_charges(charges, inputs.charge_layout),
             SCFProblem(inputs, SCFRepresentation.CHARGE),
         )
-    if mode == labels.SCP_MODE_POTENTIAL:
+    if mode == SCFRepresentation.POTENTIAL:
         packed, layout = potential_initial_guess(charges, inputs)
         return packed, SCFProblem(inputs, SCFRepresentation.POTENTIAL, layout)
-    if mode == labels.SCP_MODE_FOCK:
+    if mode == SCFRepresentation.FOCK:
         return (
             fock_initial_guess(charges, inputs),
             SCFProblem(inputs, SCFRepresentation.FOCK),
         )
-    raise ValueError(f"Unknown convergence target (SCP mode) '{mode}'.")
+    raise ValueError(f"Unknown SCF variable '{mode}'.")
 
 
 def _solve_representation(
@@ -404,24 +396,17 @@ def run_functional_full_eager(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    *args: object,
-    **kwargs: object,
 ) -> EagerFullResult:
     """Run the functional FULL calculation or retained batch boundary.
 
     Tensor-status inspection and warning/error behavior stay outside the
     fixed-trip numerical solver.
     """
-    if args or kwargs:
-        raise NotImplementedError(
-            "Legacy SCF engine positional/keyword overrides are no longer "
-            "supported by functional SCF."
-        )
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
         route = FullSCFRoute(
             "non_scf",
-            config._legacy_representation_code,
+            config.initial_representation,
             "none",
             config.strategy,
             reason="non-SCF method",
@@ -435,19 +420,16 @@ def run_functional_full_eager(
             integrals,
             n0,
             occupation,
-            **kwargs,
         )
         return EagerFullResult(route, None, legacy)
 
     guess = get_guess(numbers, positions, chrg, ihelp, config.guess)
-    legacy_engine_overrides = bool(args) or bool(kwargs)
     route = resolve_full_scf_route(
         config,
         interactions,
         ihelp,
         numbers,
         integrals,
-        legacy_engine_overrides,
     )
     if route.warning is not None:
         OutputHandler.warn(route.warning)
@@ -488,7 +470,7 @@ def _prepared_functional_inputs(
         raise ValueError(
             "The prepared functional runner requires a functional route."
         )
-    if route.representation != config._legacy_representation_code:
+    if route.representation != config.initial_representation:
         raise ValueError(
             "The prepared functional route representation does not match "
             "the SCF configuration."
@@ -727,33 +709,30 @@ def run_prepared_functional_implicit(
             else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
         ),
     )
-    initial_representation = config._legacy_representation_code
-    if initial_representation == labels.SCP_MODE_CHARGE:
+    initial_representation = config.initial_representation
+    if initial_representation == SCFRepresentation.CHARGE:
         state = pack_charges(charges, inputs.charge_layout)
         initial_layout = None
         problem = SCFProblem(inputs, SCFRepresentation.CHARGE)
-    elif initial_representation == labels.SCP_MODE_POTENTIAL:
+    elif initial_representation == SCFRepresentation.POTENTIAL:
         state, initial_layout = potential_initial_guess(charges, inputs)
         problem = SCFProblem(
             inputs,
             SCFRepresentation.POTENTIAL,
             potential_layout=initial_layout,
         )
-    elif initial_representation == labels.SCP_MODE_FOCK:
+    elif initial_representation == SCFRepresentation.FOCK:
         state = fock_initial_guess(charges, inputs)
         initial_layout = None
         problem = SCFProblem(inputs, SCFRepresentation.FOCK)
     else:
-        raise ValueError(
-            "Unknown convergence target (SCP mode) "
-            f"'{initial_representation}'."
-        )
+        raise ValueError(f"Unknown SCF variable '{initial_representation}'.")
 
-    if initial_representation == labels.SCP_MODE_CHARGE:
+    if initial_representation == SCFRepresentation.CHARGE:
         state_projection: Callable[[Tensor], Tensor] | None = (
             lambda value: _project_charge_padding(value, inputs.charge_layout)
         )
-    elif initial_representation == labels.SCP_MODE_POTENTIAL:
+    elif initial_representation == SCFRepresentation.POTENTIAL:
         assert initial_layout is not None
         state_projection = lambda value: _project_potential_padding(
             value, initial_layout

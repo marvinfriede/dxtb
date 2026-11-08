@@ -17,7 +17,7 @@ positions = torch.tensor(
 )
 
 # FIX
-opts = {"scf_mode": dxtb.labels.SCF_MODE_FULL}
+opts = {"differentiation": "unrolled"}
 
 calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts, **dd)
 

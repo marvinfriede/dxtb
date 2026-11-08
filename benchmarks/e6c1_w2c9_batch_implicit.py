@@ -34,6 +34,7 @@ import resource
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,11 @@ from dxtb._src.calculators.batch_implicit import (  # noqa: E402
 )
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from dxtb.scf import (  # noqa: E402
+    SCFRepresentation,
+    SCFStrategy,
+    strategy_preset,
+)
 
 DTYPE = torch.float64
 DEVICE = torch.device("cpu")
@@ -119,9 +125,15 @@ def setup_w2_model_and_system(
     config = Config.create(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
-        mixer=labels.MIXER_ANDERSON,
-        scf_mode=labels.SCF_MODE_FULL,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    strategy_preset("anderson").stages[0],
+                    representation=SCFRepresentation.CHARGE,
+                ),
+            )
+        ),
+        differentiation="unrolled",
         maxiter=300,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,

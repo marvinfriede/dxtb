@@ -31,6 +31,8 @@ from dxtb._src.integral.evaluation import (
 from dxtb._src.scf.iterator import solve
 from dxtb.config import ConfigSCF
 
+from ..utils import scf_strategy
+
 
 def test_invalid_public_strategy_and_differentiation_are_rejected() -> None:
     """The public API validates named strategy and derivative policy values."""
@@ -62,7 +64,11 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
         numbers_batch,
         GFN1_XTB,
         dtype=torch.float64,
-        opts={"verbosity": 0, "mixer": "linear", "maxiter": 5},
+        opts={
+            "verbosity": 0,
+            "strategy": scf_strategy("linear"),
+            "maxiter": 5,
+        },
         batch_mode=2,
     )
     charge_batch = torch.zeros((2, 1), dtype=torch.float64)
@@ -103,8 +109,7 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
         dtype=torch.float64,
         opts={
             "verbosity": 0,
-            "mixer": "anderson",
-            "scp_mode": "charge",
+            "strategy": scf_strategy("anderson", "charge"),
             "maxiter": 30,
         },
     )

@@ -54,7 +54,10 @@ with ``SCFConvergenceError`` for an uncertified primal root. The removed global
 ``strict`` configuration flag does not alter SCF policy.
 
 In dxtb 0.4.0, second and higher derivatives were wrong with the implicit
-modes, and ``scf_mode="nonpure"`` existed; that mode was removed.
+modes, and ``scf_mode="nonpure"`` existed; that mode was removed. The
+``scf_mode`` option itself is no longer accepted: select
+``differentiation="unrolled"`` or ``differentiation="implicit"`` instead (see
+:doc:`../02_indepth/scf_strategy`).
 
 
 Derivative with respect to ``refocc`` (fixed)
@@ -74,8 +77,9 @@ Padded batches with the implicit SCF mode (fixed)
 Up to dxtb 0.4.0, the implicit SCF modes put electrons into the padding
 orbitals of a batch if a system had an occupied orbital close to zero
 energy (e.g., an anion), which gave wrong energies (OH- next to water:
-8e-6 Eh too low with GFN2-xTB). The default ``scf_mode="full"`` was not
-affected.
+8e-6 Eh too low with GFN2-xTB). The default ``scf_mode="full"`` (now
+``differentiation="unrolled"``; the ``scf_mode`` option is no longer accepted)
+was not affected.
 
 
 Cached results after a call without gradient tracking (fixed)
@@ -132,7 +136,8 @@ more than one PyTorch thread could stall in the eigensolver: batched LU
 factorizations (``torch.linalg.solve``) of matrices of a few hundred orbitals
 did not finish with four threads in the baseline environment (PyTorch 2.14
 wheel, MKL 2024.2), while they take a fraction of a second with one thread.
-The unrolled SCF (``scf_mode="full"``) now computes the inverse Cholesky
+The unrolled SCF (``differentiation="unrolled"``, formerly
+``scf_mode="full"``) now computes the inverse Cholesky
 factor of the overlap matrix once and passes it to the eigensolver, which
 avoids the solve (requires tad-mctc 0.9.1). A batched ``torch.linalg.solve``
 in your own code can still stall in such an environment.

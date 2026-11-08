@@ -33,13 +33,13 @@ from dxtb._src.scf.functional import (
     SCFPotential,
     SCFSolverSettings,
     SCFSpectralResult,
-    setup_simple_solver_settings,
     setup_solver_settings,
     simple_mix,
     solve_scf_simple,
 )
 from dxtb._src.scf.functional.solver import _solve_map
 
+from ..utils import scf_strategy
 from .samples import samples
 from .test_functional_map import (
     _assert_directional_fd,
@@ -74,7 +74,7 @@ def _run_simple_solver(
 ) -> SimpleNamespace:
     """Run a functional simple-solver configuration and verify core invariants."""
     options: dict[str, object] = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": maxiter,
         "mix_guess": mix_guess,
         "x_atol": x_atol,
@@ -86,7 +86,7 @@ def _run_simple_solver(
     actual = solve_scf_simple(
         functional.x,
         functional.inputs,
-        setup_simple_solver_settings(
+        setup_solver_settings(
             functional.system.config.scf, functional.positions.dtype
         ),
     )
@@ -119,7 +119,7 @@ def test_simple_solver_initial_mix_is_not_convergence_tested() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 4,
             "mix_guess": True,
             "x_atol": 1.0e6,
@@ -214,13 +214,13 @@ def test_atomic_partition_supports_reverse_and_vmap() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "fermi_etemp": 300.0,
             "fermi_partition": labels.FERMI_PARTITION_ATOMIC,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
 
@@ -255,13 +255,15 @@ def test_simple_solver_tolerance_resolution(
     dtype: torch.dtype,
 ) -> None:
     """Effective tolerances clamp to machine epsilon for the target dtype."""
-    case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
+    case = _prepare_case(
+        GFN1_XTB, scf_options={"strategy": scf_strategy("linear", "charge")}
+    )
     config = replace(
         case.system.config.scf,
         x_atol=1.0e-9,
         x_atol_max=1.0e-11,
     )
-    settings = setup_simple_solver_settings(config, dtype)
+    settings = setup_solver_settings(config, dtype)
     resolution = float(torch.finfo(dtype).resolution)
     assert settings.x_atol == (
         resolution * 50 if resolution > config.x_atol else config.x_atol
@@ -273,11 +275,13 @@ def test_simple_solver_tolerance_resolution(
     assert config.x_atol_max == 1.0e-11
 
 
-def test_common_solver_settings_resolve_independent_of_mixer() -> None:
+def test_common_solver_settings_resolve_independent_of_converger() -> None:
     """Controller settings are shared and independent of method choice."""
     from dxtb.scf import strategy_preset
 
-    case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_LINEAR})
+    case = _prepare_case(
+        GFN1_XTB, scf_options={"strategy": scf_strategy("linear", "charge")}
+    )
     linear = setup_solver_settings(case.system.config.scf, torch.float64)
     anderson = setup_solver_settings(
         replace(case.system.config.scf, strategy=strategy_preset("anderson")),
@@ -378,14 +382,14 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
         GFN1_XTB,
         positions=positions,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 1.0e-30,
             "x_atol_max": 1.0e-30,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, positions.dtype
     )
     result = solve_scf_simple(case.x, case.inputs, settings)
@@ -398,7 +402,7 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
     assert torch.isfinite(position_gradient).all()
     assert torch.isfinite(position_hessian_projection).all()
     position_options = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 2,
         "mix_guess": True,
         "x_atol": 1.0e-30,
@@ -409,7 +413,7 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
         local_case = _prepare_case(
             GFN1_XTB, positions=value, scf_options=position_options
         )
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             local_case.system.config.scf, value.dtype
         )
         local_result = solve_scf_simple(
@@ -425,9 +429,12 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
     parameter_case = _prepare_case(
         GFN1_XTB,
         par=par,
-        scf_options={"mixer": labels.MIXER_LINEAR, "maxiter": 2},
+        scf_options={
+            "strategy": scf_strategy("linear", "charge"),
+            "maxiter": 2,
+        },
     )
-    parameter_settings = setup_simple_solver_settings(
+    parameter_settings = setup_solver_settings(
         parameter_case.system.config.scf, torch.float64
     )
     parameter_energy = solve_scf_simple(
@@ -444,14 +451,14 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
         GFN1_XTB,
         field=field,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 1.0e-30,
             "x_atol_max": 1.0e-30,
         },
     )
-    field_settings = setup_simple_solver_settings(
+    field_settings = setup_solver_settings(
         field_case.system.config.scf, torch.float64
     )
     field_energy = solve_scf_simple(
@@ -465,7 +472,7 @@ def test_functional_solver_real_position_parameter_and_field_gradients() -> (
         local_case = _prepare_case(
             GFN1_XTB, field=value, scf_options=position_options
         )
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             local_case.system.config.scf, value.dtype
         )
         return solve_scf_simple(
@@ -480,14 +487,14 @@ def test_real_functional_solver_vmap_over_charge_guesses() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
     guesses = torch.stack((case.x, case.x + 0.01, case.x - 0.02), dim=0)
@@ -505,7 +512,7 @@ def test_finite_temperature_solver_vmap_over_charge_guesses() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 0.0,
@@ -513,7 +520,7 @@ def test_finite_temperature_solver_vmap_over_charge_guesses() -> None:
             "fermi_etemp": 300.0,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
     guesses = torch.stack((case.x, case.x + 0.01, case.x - 0.02), dim=0)
@@ -532,7 +539,7 @@ def test_finite_temperature_real_solver_forward_ad_characterization() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 0.0,
@@ -540,7 +547,7 @@ def test_finite_temperature_real_solver_forward_ad_characterization() -> None:
             "fermi_etemp": 300.0,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
 
@@ -564,7 +571,7 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
     """Total charge remains connected through nel, Fermi response and entropy."""
     charge = torch.tensor([0.25], dtype=torch.float64, requires_grad=True)
     options = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 2,
         "mix_guess": True,
         "fermi_etemp": 1000.0,
@@ -574,7 +581,7 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
         charge=charge,
         scf_options=options,
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
     result = solve_scf_simple(case.x, case.inputs, settings)
@@ -586,7 +593,7 @@ def test_fractional_charge_gradient_through_finite_temperature_solver() -> None:
 
     def free_energy_at_charge(value: torch.Tensor) -> torch.Tensor:
         local_case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             local_case.system.config.scf, local_case.positions.dtype
         )
         local_result = solve_scf_simple(
@@ -606,7 +613,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
         .requires_grad_(True)
     )
     options = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 2,
         "mix_guess": True,
         "x_atol": 1.0e-30,
@@ -616,7 +623,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
     position_case = _prepare_case(
         GFN1_XTB, positions=positions, scf_options=options
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         position_case.system.config.scf, positions.dtype
     )
     position_result = solve_scf_simple(
@@ -637,7 +644,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
         local_case = _prepare_case(
             GFN1_XTB, positions=value, scf_options=options
         )
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             local_case.system.config.scf, value.dtype
         )
         local_result = solve_scf_simple(
@@ -651,7 +658,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
     leaf = par.get("element.O.levels")
     leaf.requires_grad_(True)
     parameter_case = _prepare_case(GFN1_XTB, par=par, scf_options=options)
-    parameter_settings = setup_simple_solver_settings(
+    parameter_settings = setup_solver_settings(
         parameter_case.system.config.scf, torch.float64
     )
     parameter_result = solve_scf_simple(
@@ -671,7 +678,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
         field=field,
         scf_options={**options, "int_level": labels.INTLEVEL_DIPOLE},
     )
-    field_settings = setup_simple_solver_settings(
+    field_settings = setup_solver_settings(
         field_case.system.config.scf, torch.float64
     )
     field_result = solve_scf_simple(
@@ -685,7 +692,7 @@ def test_position_parameter_and_field_gradients_at_finite_temperature() -> None:
 
     def free_energy_at_field(value: torch.Tensor) -> torch.Tensor:
         local_case = _prepare_case(GFN1_XTB, field=value, scf_options=options)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             local_case.system.config.scf, value.dtype
         )
         local_result = solve_scf_simple(
@@ -701,14 +708,14 @@ def test_real_functional_solver_jvp_and_jacfwd_characterization() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
         },
     )
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         case.system.config.scf, case.positions.dtype
     )
 

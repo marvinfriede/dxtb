@@ -33,6 +33,7 @@ import platform
 import resource
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -327,6 +328,7 @@ def main() -> None:
         from dxtb._src.calculators.model import Model
         from dxtb._src.scf.functional import eager, spectral
         from dxtb.config import Config
+        from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--route", choices=("serial", "mapped"), required=True)
@@ -387,9 +389,15 @@ def main() -> None:
     config = Config.create(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
-        mixer=labels.MIXER_ANDERSON,
-        scp_mode=labels.SCP_MODE_CHARGE,
-        scf_mode=labels.SCF_MODE_FULL,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    strategy_preset("anderson").stages[0],
+                    representation=SCFRepresentation.CHARGE,
+                ),
+            )
+        ),
+        differentiation="unrolled",
         maxiter=args.maxiter,
         force_convergence=False,
         x_atol=1.0e-8,

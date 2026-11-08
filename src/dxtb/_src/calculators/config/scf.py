@@ -82,21 +82,6 @@ _GUESS = {
     labels.GUESS_EEQ: labels.GUESS_EEQ_STRS,
     labels.GUESS_SAD: labels.GUESS_SAD_STRS,
 }
-_SCF_MODE = {
-    labels.SCF_MODE_IMPLICIT: labels.SCF_MODE_IMPLICIT_STRS,
-    labels.SCF_MODE_FULL: labels.SCF_MODE_FULL_STRS,
-    labels.SCF_MODE_EXPERIMENTAL: labels.SCF_MODE_EXPERIMENTAL_STRS,
-}
-_SCP_MODE = {
-    labels.SCP_MODE_CHARGE: labels.SCP_MODE_CHARGE_STRS,
-    labels.SCP_MODE_POTENTIAL: labels.SCP_MODE_POTENTIAL_STRS,
-    labels.SCP_MODE_FOCK: labels.SCP_MODE_FOCK_STRS,
-}
-_MIXER = {
-    labels.MIXER_LINEAR: labels.MIXER_LINEAR_STRS,
-    labels.MIXER_ANDERSON: labels.MIXER_ANDERSON_STRS,
-    labels.MIXER_BROYDEN: labels.MIXER_BROYDEN_STRS,
-}
 _PARTITION = {
     labels.FERMI_PARTITION_EQUAL: labels.FERMI_PARTITION_EQUAL_STRS,
     labels.FERMI_PARTITION_ATOMIC: labels.FERMI_PARTITION_ATOMIC_STRS,
@@ -246,8 +231,8 @@ def check_tols(value: float, dtype: Any) -> float:
     return value
 
 
-# Keep the public strategy configuration separate from the retired integer
-# configuration above while preserving ConfigFermi/check_tols construction.
+# The public SCF configuration lives in public_scf; ConfigFermi and the
+# tolerance checks above are shared with it.
 from .public_scf import ConfigSCF as ConfigSCF  # noqa: E402
 from .public_scf import SCFConvergenceProfile as SCFConvergenceProfile
 from .public_scf import SCFDifferentiation as SCFDifferentiation

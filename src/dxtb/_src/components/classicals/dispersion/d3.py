@@ -23,7 +23,6 @@ The DFT-D3 dispersion model.
 
 from __future__ import annotations
 
-import warnings
 
 import tad_dftd as d3
 import torch
@@ -48,32 +47,6 @@ __all__ = [
 
 _DXTB_D3_CN_CUTOFF = 25.0
 _DXTB_D3_DISPERSION_CUTOFF = 50.0
-
-
-def _atomic_c6(
-    numbers: Tensor,
-    weights: Tensor,
-    reference: d3.reference.Reference,
-    *,
-    chunk_size: int | None,
-) -> Tensor:
-    """Call the installed tad-dftd3 atomic C6 API compatibly.
-
-    The supported tad-dftd3 0.7 release uses an element-grouped contraction
-    and no longer exposes explicit chunking. Keep accepting the legacy
-    keyword, but make its changed semantics visible when a caller supplies a
-    value.
-    """
-    if chunk_size is not None:
-        warnings.warn(
-            "tad-dftd3 no longer accepts chunk_size; its grouped atomic-C6 "
-            "algorithm bounds the former pair/reference intermediate, so "
-            "the requested chunk_size is not applied",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    return d3.model.atomic_c6(numbers, weights, reference)
 
 
 LABEL_DISPERSIOND3 = "DispersionD3"
@@ -272,8 +245,6 @@ def core_dispersion_d3_setup(
 def dispersion_d3_energy(
     setup: DispersionD3CoreSetup,
     positions: Tensor,
-    *,
-    chunk_size: int | None = None,
 ) -> Tensor:
     """Evaluate D3 using only captured setup values and call-local geometry."""
     # Keep the fixed atomic numbers aligned with geometry batch dimensions.
@@ -300,7 +271,7 @@ def dispersion_d3_energy(
     weights = d3.model.weight_references(
         numbers, cn, reference, setup.weighting_function
     )
-    c6 = _atomic_c6(numbers, weights, reference, chunk_size=chunk_size)
+    c6 = d3.model.atomic_c6(numbers, weights, reference)
     return d3.disp.dispersion(
         numbers,
         positions,
@@ -396,11 +367,7 @@ class DispersionD3(Dispersion):
             Atom-resolved D3 dispersion energy.
         """
         if isinstance(cache, DispersionD3CoreSetup):
-            return dispersion_d3_energy(
-                cache,
-                positions,
-                chunk_size=kwargs.pop("chunk_size", None),
-            )
+            return dispersion_d3_energy(cache, positions)
 
         if not isinstance(cache, DispersionD3Cache):
             raise TypeError(
@@ -418,8 +385,7 @@ class DispersionD3(Dispersion):
             self.numbers, cn, cache.ref, cache.weighting_function
         )
 
-        chunk_size = kwargs.pop("chunk_size", None)
-        c6 = _atomic_c6(self.numbers, weights, cache.ref, chunk_size=chunk_size)
+        c6 = d3.model.atomic_c6(self.numbers, weights, cache.ref)
 
         return d3.disp.dispersion(
             self.numbers,

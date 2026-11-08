@@ -59,9 +59,6 @@ def test_default() -> None:
     assert cfg.scf.guess == defaults.GUESS
     assert cfg.scf.differentiation is SCFDifferentiation.UNROLLED
     assert cfg.scf.convergence is SCFConvergenceProfile.STANDARD
-    assert not hasattr(cfg.scf, "mixer")
-    assert not hasattr(cfg.scf, "scp_mode")
-    assert not hasattr(cfg.scf, "f_atol")
     assert cfg.scf.x_atol == defaults.X_ATOL
     assert cfg.scf.force_convergence == False
 
@@ -85,6 +82,27 @@ def test_result_cache_configuration_is_removed() -> None:
     assert not hasattr(cfg, "cache")
     with pytest.raises(TypeError, match="cache_enabled"):
         Cfg.create(cache_enabled=True)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mixer",
+        "scp_mode",
+        "scf_mode",
+        "damp_init",
+        "damp_soft_start",
+        "damp_generations",
+        "damp_diagonal_offset",
+        "f_atol",
+    ],
+)
+def test_removed_scf_options_raise(name: str) -> None:
+    """Removed SCF options are rejected instead of silently accepted."""
+    cfg = Cfg.create()
+    assert not hasattr(cfg.scf, name)
+    with pytest.raises(TypeError, match=name):
+        Cfg.create(**{name: None})
 
 
 def test_method() -> None:

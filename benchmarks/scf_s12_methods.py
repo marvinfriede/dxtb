@@ -29,7 +29,7 @@ from test.test_scf import test_functional_root_derivatives as root_reference
 
 import torch
 
-from dxtb import GFN2_XTB, labels
+from dxtb import GFN2_XTB
 from dxtb._src.scf.functional.anderson import (
     AndersonMethod,
     AndersonMethodSettings,
@@ -59,22 +59,22 @@ def _prepare_case(name: str, method_name: str, tolerance: float, maxiter: int):
             "C4H5NCS": mols["C4H5NCS"],
         }
 
-    mode = (
-        labels.SCP_MODE_FOCK
+    representation = (
+        SCFRepresentation.FOCK
         if method_name == "CDIIS"
-        else labels.SCP_MODE_POTENTIAL
+        else SCFRepresentation.POTENTIAL
     )
-    mixer = {
-        "Linear": labels.MIXER_LINEAR,
-        "Anderson": labels.MIXER_ANDERSON,
-        "Broyden": labels.MIXER_BROYDEN,
-        "CDIIS": labels.MIXER_LINEAR,
+    converger = {
+        "Linear": LinearMethod,
+        "Anderson": AndersonMethod,
+        "Broyden": BroydenMethod,
+        "CDIIS": LinearMethod,
     }[method_name]
     return root_reference._case(
         name,
         method=GFN2_XTB,
-        representation=mode,
-        mixer=mixer,
+        representation=representation,
+        converger=converger,
         tolerance=tolerance,
         maxiter=maxiter,
         temperature=0.0,
@@ -85,13 +85,11 @@ def _build_method(name: str, config) -> object:
     if name == "Linear":
         return LinearMethod()
     if name == "Anderson":
+        configured = config.strategy.stages[0].method
         return AndersonMethod(
-            AndersonMethodSettings(
-                damp_init=config.damp_init,
-                generations=config.damp_generations,
-                soft_start=config.damp_soft_start,
-                diagonal_offset=config.damp_diagonal_offset,
-            )
+            configured.settings
+            if isinstance(configured, AndersonMethod)
+            else AndersonMethodSettings()
         )
     if name == "Broyden":
         return BroydenMethod()

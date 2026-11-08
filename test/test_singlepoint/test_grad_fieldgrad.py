@@ -32,16 +32,15 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Callable, Tensor
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 opts = {
     "int_level": labels.INTLEVEL_DIPOLE,
     "x_atol": 1.0e-8,
     "maxiter": 100,
-    "mixer": labels.MIXER_ANDERSON,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "strategy": scf_strategy("anderson", "potential"),
+    "differentiation": "unrolled",
     "verbosity": 0,
 }
 
@@ -80,7 +79,7 @@ def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
             numbers, par, interaction=[efield, efield_grad], opts=opts, **dd
         )
         result = calc.singlepoint(positions, charge)
-        energy = result.total.sum(-1)
+        energy = result.energy.sum(-1)
         return energy
 
     return func, field_grad
@@ -152,7 +151,7 @@ def gradchecker_batch(
             numbers, par, interaction=[efield, efield_grad], opts=opts, **dd
         )
         result = calc.singlepoint(positions, charge)
-        energy = result.total.sum(-1)
+        energy = result.energy.sum(-1)
         return energy
 
     return func, field_grad

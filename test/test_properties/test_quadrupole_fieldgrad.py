@@ -36,12 +36,13 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 opts = {
     "maxiter": 100,
-    "mixer": "anderson",
-    "scf_mode": "full",
+    "strategy": scf_strategy("anderson"),
+    "differentiation": "unrolled",
     "verbosity": 0,
     "x_atol": 1.0e-10,
 }

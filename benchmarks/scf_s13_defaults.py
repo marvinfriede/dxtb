@@ -39,7 +39,7 @@ from test.test_scf.samples import samples
 
 import torch
 
-from dxtb import GFN1_XTB, GFN2_XTB, labels
+from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional.anderson import (
     AndersonMethod,
     AndersonMethodSettings,
@@ -179,18 +179,16 @@ def _state_bytes(method, problem, guess: torch.Tensor) -> int:
 
 def _run(spec: dict[str, object], method_name: str, maxiter: int) -> dict:
     representation = (
-        labels.SCP_MODE_FOCK
+        SCFRepresentation.FOCK
         if method_name == "CDIIS"
-        else labels.SCP_MODE_POTENTIAL
+        else SCFRepresentation.POTENTIAL
     )
     case = reference._case(
         str(spec["name"]),
         method=spec["method"],
         representation=representation,
-        mixer=(
-            labels.MIXER_ANDERSON
-            if method_name == "Anderson"
-            else labels.MIXER_BROYDEN
+        converger=(
+            AndersonMethod if method_name == "Anderson" else BroydenMethod
         ),
         tolerance=1.0e-5,
         maxiter=maxiter,

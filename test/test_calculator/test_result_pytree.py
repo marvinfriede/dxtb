@@ -157,8 +157,6 @@ def test_result_and_nested_values_round_trip() -> None:
 
     assert result.classical[0][0] == "my custom term"
     assert result.classical[1][0] == "term_with_punctuation!?"
-    assert result.total is result.energy
-    assert result.iter is result.iterations
     assert result.cenergies["my custom term"] is result.classical[0][1]
     assert result.integrals is not None
     assert result.integrals.hcore is result.hcore

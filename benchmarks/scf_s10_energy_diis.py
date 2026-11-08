@@ -50,6 +50,14 @@ from dxtb._src.scf.functional.strategy import (
 )
 
 
+def _config_anderson_settings(config: object) -> AndersonMethodSettings:
+    """Return the Anderson settings of the configured first Stage."""
+    method = config.strategy.stages[0].method
+    if isinstance(method, AndersonMethod):
+        return method.settings
+    return AndersonMethodSettings()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", default="H2O")
@@ -139,14 +147,8 @@ def main() -> None:
     if args.method == "linear":
         stages = (SCFStage(LinearMethod(), SCFRepresentation.FOCK),)
     elif args.method == "anderson":
-        config = case.system.config.scf
         method_instance = AndersonMethod(
-            AndersonMethodSettings(
-                config.damp_init,
-                config.damp_generations,
-                config.damp_soft_start,
-                config.damp_diagonal_offset,
-            )
+            _config_anderson_settings(case.system.config.scf)
         )
         stages = (SCFStage(method_instance, SCFRepresentation.FOCK),)
     elif args.method == "broyden":
@@ -167,14 +169,8 @@ def main() -> None:
             SCFStage(CDIISMethod(), SCFRepresentation.FOCK, initial_damp=1.0),
         )
     elif args.method == "anderson-cdiis":
-        config = case.system.config.scf
         method_instance = AndersonMethod(
-            AndersonMethodSettings(
-                config.damp_init,
-                config.damp_generations,
-                config.damp_soft_start,
-                config.damp_diagonal_offset,
-            )
+            _config_anderson_settings(case.system.config.scf)
         )
         stages = (
             SCFStage(

@@ -30,19 +30,19 @@ from tad_mctc.convert import reshape_fortran
 from torch.func import jacrev
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
 from ..test_classical.test_dispersion.samples import samples as samples_disp
 from ..test_classical.test_halogen.samples import samples as samples_hal
 from ..test_classical.test_repulsion.samples import samples as samples_rep
+from ..utils import scf_strategy
 
 opts = {
     "x_atol": 1.0e-10,
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "unrolled",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
 
@@ -78,7 +78,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
 
     def energy(p: Tensor) -> Tensor:
         result = calc.singlepoint(p, charge)
-        return result.total.sum()
+        return result.energy.sum()
 
     hess = jacrev(jacrev(energy))(pos)
     assert isinstance(hess, Tensor)

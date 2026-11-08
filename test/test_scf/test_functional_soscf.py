@@ -948,7 +948,7 @@ def test_soscf_cdiis_strategy_reaches_certified_root() -> None:
     assert bool(cdiis_outcome.converged)
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        problem.inputs, labels.SCP_MODE_FOCK
+        problem.inputs, SCFRepresentation.FOCK
     )
     prepared = _prepare_scf_root(
         outcome,
@@ -1033,7 +1033,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
     case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_FOCK,
+        representation=SCFRepresentation.FOCK,
         tolerance=1.0e-9,
         maxiter=140,
         dtype=torch.float64,
@@ -1097,7 +1097,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         positions[0, 0] = positions[0, 0] + delta
         inputs = inputs_at_positions(positions)
         adapter, parameters = _SCFMapTensorTree.prepare(
-            inputs, labels.SCP_MODE_FOCK
+            inputs, SCFRepresentation.FOCK
         )
         return implicit_root(root_x, *parameters, raw_map=adapter)
 
@@ -1358,7 +1358,7 @@ def test_soscf_no2_implicit_response_matches_cdiis() -> None:
     assert int(switched.strategy_diagnostics.final_stage_index) == 1
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, labels.SCP_MODE_FOCK
+        case.inputs, SCFRepresentation.FOCK
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     hcore = parameters[hcore_index]
@@ -1424,7 +1424,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_FOCK,
+        representation=SCFRepresentation.FOCK,
         tolerance=1.0e-9,
         maxiter=200,
         dtype=torch.float64,
@@ -1479,7 +1479,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     )
 
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, labels.SCP_MODE_FOCK
+        case.inputs, SCFRepresentation.FOCK
     )
     prepared_cdiis = _prepare_scf_root(
         cdiis,
@@ -1533,7 +1533,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     ) -> Tensor:
         inputs = inputs_at_positions(positions)
         raw_map, updated_parameters = _SCFMapTensorTree.prepare(
-            inputs, labels.SCP_MODE_FOCK
+            inputs, SCFRepresentation.FOCK
         )
         return implicit_root(root_x, *updated_parameters, raw_map=raw_map).sum()
 

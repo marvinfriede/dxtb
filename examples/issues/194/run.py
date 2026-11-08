@@ -61,7 +61,7 @@ def main() -> int:
     opts = {
         "verbosity": 6,
         "batch_mode": 1,
-        "scf_mode": dxtb.labels.SCF_MODE_FULL,
+        "differentiation": "unrolled",
     }
 
     dxtb.timer.reset()

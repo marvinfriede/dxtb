@@ -38,7 +38,7 @@ positions = torch.tensor(
 )
 
 opts = {
-    "scf_mode": dxtb.labels.SCF_MODE_FULL,
+    "differentiation": "unrolled",
 }
 
 

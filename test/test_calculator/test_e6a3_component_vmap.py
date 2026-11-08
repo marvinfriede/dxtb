@@ -27,6 +27,8 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _model(
     method: object = GFN1_XTB,
@@ -43,8 +45,11 @@ def _model(
         method=method_label,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=labels.MIXER_ANDERSON if gfn2 else labels.MIXER_LINEAR,
-        scp_mode=labels.SCP_MODE_FOCK if gfn2 else labels.SCP_MODE_CHARGE,
+        strategy=(
+            scf_strategy("anderson", "fock")
+            if gfn2
+            else scf_strategy("linear", "charge")
+        ),
         maxiter=2,
         fermi_etemp=0.0,
         x_atol=0.0,

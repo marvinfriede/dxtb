@@ -28,7 +28,7 @@ from dxtb._src.constants import labels
 from dxtb._src.scf.functional import method as functional_method
 from dxtb._src.scf.functional import problem as functional_problem
 
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 # Total energies include the constant classical GFN1-xTB D3(BJ) dispersion
@@ -184,9 +184,8 @@ def test_full_mode_iteration_compatibility(
     par = get_param_module("gfn1", device="cpu", dtype=torch.double)
     opts = {
         "verbosity": 0,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_CHARGE,
-        "mixer": "simple",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("linear", "charge"),
         "mix_guess": mix_guess,
         "damp": 0.25,
         "maxiter": maxiter,
@@ -244,9 +243,8 @@ def test_full_mode_maxiter_zero_ignores_force_convergence() -> None:
             par,
             opts={
                 "verbosity": 0,
-                "scf_mode": labels.SCF_MODE_FULL,
-                "scp_mode": labels.SCP_MODE_CHARGE,
-                "mixer": "simple",
+                "differentiation": "unrolled",
+                "strategy": scf_strategy("linear", "charge"),
                 "maxiter": 0,
                 "force_convergence": True,
                 "int_driver": labels.INTDRIVER_PYTORCH,
@@ -271,9 +269,8 @@ def _full_result(
     par = get_param_module("gfn1", device="cpu", dtype=torch.double)
     opts = {
         "verbosity": 0,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_CHARGE,
-        "mixer": "simple",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("linear", "charge"),
         "mix_guess": True,
         "damp": 0.25,
         "maxiter": 5,

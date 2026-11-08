@@ -29,12 +29,11 @@ from tad_mctc.units import VAA2AU
 
 from dxtb import Calculator
 from dxtb._src.components.interactions import new_efield
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 sample_list = ["LiH", "SiH4", "MB16_43_01"]
@@ -42,8 +41,8 @@ sample_list = ["LiH", "SiH4", "MB16_43_01"]
 opts = {
     "verbosity": 0,
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 
@@ -73,7 +72,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     )
 
     result = calc.singlepoint(positions, charges)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
@@ -81,11 +80,9 @@ def test_single(dtype: torch.dtype, name: str) -> None:
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1", sample_list)
 @pytest.mark.parametrize("name2", sample_list)
-@pytest.mark.parametrize(
-    "scf_mode", [labels.SCF_MODE_IMPLICIT, labels.SCF_MODE_FULL]
-)
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch(
-    dtype: torch.dtype, name1: str, name2: str, scf_mode: str
+    dtype: torch.dtype, name1: str, name2: str, differentiation: str
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
     dd: DD = {"dtype": dtype, "device": DEVICE}
@@ -114,7 +111,7 @@ def test_batch(
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
     efield = new_efield(field_vector)
-    options = dict(opts, **{"scf_mode": scf_mode, "mixer": "anderson"})
+    options = dict(opts, differentiation=differentiation)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
@@ -124,7 +121,7 @@ def test_batch(
     )
 
     result = calc.singlepoint(positions, charges)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
@@ -133,11 +130,13 @@ def test_batch(
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", sample_list)
-@pytest.mark.parametrize(
-    "scf_mode", [labels.SCF_MODE_IMPLICIT, labels.SCF_MODE_FULL]
-)
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch_three(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, scf_mode: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
     dd: DD = {"dtype": dtype, "device": DEVICE}
@@ -169,7 +168,7 @@ def test_batch_three(
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
     efield = new_efield(field_vector)
-    options = dict(opts, **{"scf_mode": scf_mode, "mixer": "anderson"})
+    options = dict(opts, differentiation=differentiation)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
@@ -179,5 +178,5 @@ def test_batch_three(
     )
 
     result = calc.singlepoint(positions, charges)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()

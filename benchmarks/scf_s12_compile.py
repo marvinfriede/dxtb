@@ -29,7 +29,7 @@ from test.test_scf.test_functional_solver import _map_result
 
 import torch
 
-from dxtb import GFN1_XTB, labels
+from dxtb import GFN1_XTB
 from dxtb._src.scf.functional.anderson import (
     AndersonMethod,
     AndersonMethodSettings,
@@ -41,31 +41,26 @@ from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.solver import SCFSolverSettings, _solve_map
 from dxtb._src.scf.functional.strategy import SCFStage, SCFStrategy
 
-_REPRESENTATIONS = {
-    labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-    labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-    labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-}
-
-
 def _git_value(*arguments: str) -> str:
     return subprocess.check_output(["git", *arguments], text=True).strip()
 
 
-def _compile_map(case_name: str, mode: int) -> dict[str, object]:
+def _compile_map(
+    case_name: str, mode: SCFRepresentation
+) -> dict[str, object]:
     """Compile one physical map with the Dynamo/eager backend."""
     case = _case(
         case_name,
         method=GFN1_XTB,
         representation=mode,
-        mixer=labels.MIXER_LINEAR,
+        converger=LinearMethod,
         maxiter=8,
         tolerance=1.0e-10,
     )
     guess, layout = _initial_state(case, case.inputs)
     problem = SCFProblem(
         case.inputs,
-        _REPRESENTATIONS[mode],
+        mode,
         potential_layout=layout,
     )
 
@@ -109,7 +104,7 @@ def _compile_map(case_name: str, mode: int) -> dict[str, object]:
     return {
         "case": case_name,
         "method": "GFN1-xTB",
-        "representation": _REPRESENTATIONS[mode].value,
+        "representation": mode.value,
         "shape": list(guess.shape),
         "backend": "eager",
         "fullgraph": False,
@@ -186,8 +181,8 @@ def _compile_physical_solver(name: str, budget: int) -> dict[str, object]:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_FOCK,
-        mixer=labels.MIXER_LINEAR,
+        representation=SCFRepresentation.FOCK,
+        converger=LinearMethod,
         maxiter=budget,
         tolerance=0.0,
     )
@@ -279,8 +274,8 @@ def _compile_transition(name: str) -> dict[str, object]:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_FOCK,
-        mixer=labels.MIXER_LINEAR,
+        representation=SCFRepresentation.FOCK,
+        converger=LinearMethod,
         maxiter=4,
         tolerance=1.0e-10,
     )
@@ -365,9 +360,9 @@ def main() -> None:
     maps = [
         _compile_map(args.case, mode)
         for mode in (
-            labels.SCP_MODE_CHARGE,
-            labels.SCP_MODE_POTENTIAL,
-            labels.SCP_MODE_FOCK,
+            SCFRepresentation.CHARGE,
+            SCFRepresentation.POTENTIAL,
+            SCFRepresentation.FOCK,
         )
     ]
     fixed_trip = [_compile_fixed_trip(budget) for budget in (4, 8, 16)]

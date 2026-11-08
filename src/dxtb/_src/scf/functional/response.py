@@ -23,7 +23,6 @@ from math import isfinite
 
 import torch
 
-from dxtb import labels
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
 
@@ -108,18 +107,6 @@ class SCFResponseRoot:
     source_representation: SCFRepresentation
 
 
-def _representation_label(representation: SCFRepresentation) -> int:
-    if representation is SCFRepresentation.CHARGE:
-        return labels.SCP_MODE_CHARGE
-    if representation is SCFRepresentation.POTENTIAL:
-        return labels.SCP_MODE_POTENTIAL
-    if representation is SCFRepresentation.FOCK:
-        return labels.SCP_MODE_FOCK
-    raise ValueError(
-        f"Unsupported SCF response representation {representation!r}."
-    )
-
-
 def _response_candidate(
     outcome: object,
     representation: SCFRepresentation,
@@ -191,7 +178,7 @@ def prepare_response_root(
 
     adapter, parameters = _SCFMapTensorTree.prepare(
         problem.inputs,
-        _representation_label(target),
+        target,
         problem.potential_layout,
     )
 

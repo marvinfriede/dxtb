@@ -36,6 +36,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 from typing import Any, Callable
@@ -52,13 +53,18 @@ from dxtb import labels  # noqa: E402
 from dxtb import GFN1_XTB, Calculator, ParamModule  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from dxtb.scf import (  # noqa: E402
+    SCFRepresentation,
+    SCFStrategy,
+    strategy_preset,
+)
 
 DTYPE = torch.float64
 METHOD = GFN1_XTB
 OPTIONS = {
     "verbosity": 0,
-    "scf_mode": "full",
-    "mixer": "anderson",
+    "differentiation": "unrolled",
+    "strategy": "anderson",
     "maxiter": 300,
     "x_atol": 1.0e-8,
     "int_driver": "pytorch",
@@ -127,9 +133,15 @@ def _build(
         positions_config = Config.create(
             method=labels.GFN1_XTB,
             int_driver=labels.INTDRIVER_PYTORCH,
-            mixer=labels.MIXER_ANDERSON,
-            scp_mode=labels.SCP_MODE_CHARGE,
-            scf_mode=labels.SCF_MODE_FULL,
+            strategy=SCFStrategy(
+                (
+                    replace(
+                        strategy_preset("anderson").stages[0],
+                        representation=SCFRepresentation.CHARGE,
+                    ),
+                )
+            ),
+            differentiation="unrolled",
             maxiter=args.maxiter,
             force_convergence=False,
             x_atol=1.0e-8,
@@ -386,8 +398,8 @@ def main() -> None:
             "method": "GFN1-xTB",
             "int_driver": "pytorch",
             "fermi_etemp_kelvin": 300.0,
-            "mode": "full",
-            "mixer": "anderson",
+            "differentiation": "unrolled",
+            "converger": "anderson",
             "maxiter": args.maxiter,
             "x_atol": 1.0e-8,
             "controller": (

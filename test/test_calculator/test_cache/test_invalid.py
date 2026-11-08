@@ -29,6 +29,7 @@ from dxtb._src.typing import DD, Tensor
 from dxtb.calculators import AutogradCalculator
 
 from ...conftest import DEVICE
+from ...utils import scf_strategy
 
 opts = {"verbosity": 0}
 
@@ -45,7 +46,9 @@ def test_invalid_newpos(dtype: torch.dtype) -> None:
     positions2 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]], **dd)
     positions2.requires_grad_(True)
 
-    options = dict(opts, **{"scf_mode": "full", "mixer": "anderson"})
+    options = dict(
+        opts, differentiation="unrolled", strategy=scf_strategy("anderson")
+    )
     calc = AutogradCalculator(numbers, GFN1_XTB, opts=options, **dd)
     assert calc._ncalcs == 0
 
@@ -70,7 +73,9 @@ def test_invalid_requiresgrad(dtype: torch.dtype) -> None:
     positions1 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], **dd)
     positions1.requires_grad_(False)  # no grad!
 
-    options = dict(opts, **{"scf_mode": "full", "mixer": "anderson"})
+    options = dict(
+        opts, differentiation="unrolled", strategy=scf_strategy("anderson")
+    )
     calc = AutogradCalculator(numbers, GFN1_XTB, opts=options, **dd)
     assert calc._ncalcs == 0
 
@@ -99,7 +104,9 @@ def test_invalid_inplace(dtype: torch.dtype) -> None:
     numbers = torch.tensor([3, 1], device=DEVICE)
     positions1 = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], **dd)
 
-    options = dict(opts, **{"scf_mode": "full", "mixer": "anderson"})
+    options = dict(
+        opts, differentiation="unrolled", strategy=scf_strategy("anderson")
+    )
     calc = AutogradCalculator(numbers, GFN1_XTB, opts=options, **dd)
     assert calc._ncalcs == 0
 

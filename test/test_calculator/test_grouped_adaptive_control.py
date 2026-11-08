@@ -46,6 +46,7 @@ from test.test_calculator.test_grouped_vmap_batching import (
     _model,
     _setup,
 )
+from test.utils import scf_strategy
 
 EXACT = {"rtol": 0.0, "atol": 0.0, "equal_nan": True}
 
@@ -90,7 +91,7 @@ _CONFIGS = {
     "gfn1-potential": (labels.GFN1_XTB, {}),
     "gfn1-charge-anderson": (
         labels.GFN1_XTB,
-        {"mixer": "anderson", "scp_mode": "charge"},
+        {"strategy": scf_strategy("anderson", "charge")},
     ),
     "gfn1-0K": (labels.GFN1_XTB, {"fermi_etemp": 0.0}),
     "gfn2-potential": (labels.GFN2_XTB, {}),

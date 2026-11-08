@@ -30,7 +30,6 @@ from benchmarks.prototypes.scf_energy_diis import (
     exact_energy_value_gradient,
 )
 from dxtb import GFN1_XTB, GFN2_XTB
-from dxtb._src.constants import labels
 from dxtb._src.scf.functional import unpack_charges
 from dxtb._src.scf.functional.broyden import BroydenMethod
 from dxtb._src.scf.functional.cdiis import CDIISMethod
@@ -52,6 +51,7 @@ from dxtb._src.scf.functional.strategy import (
     SCFSwitchPolicy,
 )
 
+from ..utils import scf_strategy
 from .test_functional_map import _prepare_case
 
 
@@ -391,7 +391,7 @@ def test_subcutoff_fixed_occupation_entropy_is_constant_in_density_history(
         dtype=torch.float64,
         scf_options={
             "fermi_etemp": 0.05,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
         },
     )
     settings = case.inputs.fermi_settings

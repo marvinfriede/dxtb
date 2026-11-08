@@ -39,7 +39,6 @@ from benchmarks.prototypes.scf_newton_krylov import (  # noqa: E402
     NewtonKrylovSettings,
     NewtonKrylovState,
 )
-from dxtb import labels  # noqa: E402
 from dxtb import GFN1_XTB, GFN2_XTB  # noqa: E402
 from dxtb._src.scf.functional.anderson import (  # noqa: E402
     AndersonMethod,
@@ -74,6 +73,7 @@ from dxtb._src.scf.functional.strategy import (  # noqa: E402
     SCFStrategy,
     SCFSwitchPolicy,
 )
+from dxtb.scf import strategy_preset  # noqa: E402
 
 CASES = {
     "h2o-300k": (GFN2_XTB, "H2O", 0.0, 0.0, 300.0),
@@ -199,7 +199,7 @@ def _method(case, name: str):
             setup_anderson_method_settings(
                 replace(
                     case.system.config.scf,
-                    mixer=labels.MIXER_ANDERSON,
+                    strategy=strategy_preset("anderson"),
                 )
             )
         )

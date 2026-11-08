@@ -35,6 +35,7 @@ from dxtb._src.param import ParamModule
 from dxtb.config import Config
 
 from ..molecules import mols
+from ..utils import scf_strategy
 
 
 class _MapCloneCounter(TorchDispatchMode):
@@ -782,8 +783,8 @@ def test_implicit_singlepoint_reuses_captured_scf_index(
     system = _model().setup(torch.tensor([1, 1]))
     scf = ConfigSCF.create(
         method=system.config.scf.method,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
-        mixer=labels.MIXER_LINEAR,
+        differentiation="implicit",
+        strategy=scf_strategy("linear"),
         maxiter=100,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,

@@ -34,12 +34,13 @@ from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 opts = {
     "x_atol": 1e-10,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
 
@@ -214,8 +215,8 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
 
     gfn2_opts = {
         "int_driver": labels.INTDRIVER_PYTORCH,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson", "potential"),
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-9,
         "verbosity": 0,
@@ -223,7 +224,7 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
     pos_vac = positions.detach().clone().requires_grad_(True)
     calc_vac = Calculator(numbers, GFN2_XTB, opts=gfn2_opts, **dd)
     res_dx_vac = calc_vac.singlepoint(pos_vac)
-    e_dx_vac = res_dx_vac.total.sum(-1)
+    e_dx_vac = res_dx_vac.energy.sum(-1)
 
     # Omit kernel= so GeneralizedBorn resolves the default ("p16" or "still").
     gb = alpb.GeneralizedBorn(numbers, eps, alpb=alpb_flag, rvdw=rvdw, **dd)
@@ -233,7 +234,7 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
         numbers, GFN2_XTB, interaction=[gb], opts=gfn2_opts, **dd
     )
     res_dx_sol = calc_sol.singlepoint(pos_sol)
-    e_dx_sol = res_dx_sol.total.sum(-1)
+    e_dx_sol = res_dx_sol.energy.sum(-1)
     (grad_dx_sol,) = torch.autograd.grad(e_dx_sol, pos_sol)
     q_dx_sol = calc_sol.ihelp.reduce_orbital_to_atom(res_dx_sol.charges.mono)
 

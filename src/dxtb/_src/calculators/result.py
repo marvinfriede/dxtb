@@ -196,16 +196,6 @@ class Result:
         )
 
     @property
-    def total(self) -> Tensor:
-        """Compatibility alias for the canonical total-energy field."""
-        return self.energy
-
-    @property
-    def iter(self) -> Tensor:
-        """Compatibility alias for the per-system iteration tensor."""
-        return self.iterations
-
-    @property
     def multipoles(self) -> Multipoles | None:
         """Expose charge multipoles without duplicating their tensors."""
         if self.charges is None:

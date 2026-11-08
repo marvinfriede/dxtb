@@ -96,7 +96,6 @@ __all__ = [
     "finalize_scf",
     "finalize_scf_fock",
     "functional_subsolves_ok",
-    "functional_converged_and_valid",
     "functional_physical_converged",
     "functional_trajectory_ok",
     "functional_finalization_ok",
@@ -105,7 +104,6 @@ __all__ = [
     "accumulate_trajectory_status",
     "fermi_status_ok",
     "interaction_energy_from_charges",
-    "setup_simple_solver_settings",
     "setup_solver_settings",
     "solve_scf_problem",
     "simple_mix",
@@ -469,9 +467,6 @@ def functional_return_valid(result: SCFSolveResult) -> Tensor:
     )
 
 
-def functional_converged_and_valid(result: SCFSolveResult) -> Tensor:
-    """Compatibility alias for :func:`functional_return_valid`."""
-    return functional_return_valid(result)
 
 
 @dataclass(frozen=True, eq=False)
@@ -547,11 +542,6 @@ def setup_solver_settings(
     )
 
 
-def setup_simple_solver_settings(
-    config: ConfigSCF, dtype: torch.dtype
-) -> SCFSolverSettings:
-    """Compatibility alias for the common solver-settings builder."""
-    return setup_solver_settings(config, dtype)
 
 
 def _update_damping(

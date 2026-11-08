@@ -32,7 +32,7 @@ from test.test_scf.test_functional_root_derivatives import _case
 import torch
 
 from benchmarks.prototypes.scf_newton_krylov import NewtonKrylovMethod
-from dxtb import GFN2_XTB, labels
+from dxtb import GFN2_XTB
 from dxtb._src.scf.functional.broyden import BroydenMethod
 from dxtb._src.scf.functional.cdiis import CDIISMethod
 from dxtb._src.scf.functional.eager import _prepare_solver
@@ -42,6 +42,7 @@ from dxtb._src.scf.functional.strategy import (
     SCFStrategy,
     SCFSwitchPolicy,
 )
+from dxtb.scf import SCFDifferentiation, strategy_preset
 
 
 def main() -> None:
@@ -49,16 +50,22 @@ def main() -> None:
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_FOCK,
+        representation=SCFRepresentation.FOCK,
         tolerance=1.0e-8,
         maxiter=120,
         temperature=2000.0,
     )
     scf = replace(
         case.system.config.scf,
-        scf_mode=labels.SCF_MODE_IMPLICIT,
-        scp_mode=labels.SCP_MODE_FOCK,
-        mixer=labels.MIXER_BROYDEN,
+        differentiation=SCFDifferentiation.IMPLICIT,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    strategy_preset("broyden").stages[0],
+                    representation=SCFRepresentation.FOCK,
+                ),
+            )
+        ),
         maxiter=120,
         x_atol=1.0e-8,
         x_atol_max=1.0e-8,

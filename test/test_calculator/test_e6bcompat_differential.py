@@ -207,8 +207,8 @@ def _assert_packed_serial_parity(
             assert torch.count_nonzero(public.scf[lane, atoms:]) == 0
             for _, values in public.classical:
                 assert torch.count_nonzero(values[lane, atoms:]) == 0
-        assert torch.isfinite(public_iterations)
-        assert public_iterations >= 0
+        assert torch.isfinite(public.iterations[lane])
+        assert public.iterations[lane] >= 0
         for name, private_value in physical.classical:
             public_value = dict(public.classical)[name]
             _assert_vector_row(public_value, private_value, lane, atoms)

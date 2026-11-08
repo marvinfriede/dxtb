@@ -18,9 +18,9 @@
 Correctness matrix for the SCF modes.
 
 Every SCF mode is compared with central finite differences of the quantities
-(the reference) for a grid of systems, quantities and derivatives. ``full``
-(unrolled) mode is itself one of the tested modes, because its derivatives of
-non-variational quantities are not exact. For ``BIG`` systems, position
+(the reference) for a grid of systems, quantities and derivatives. The
+``unrolled`` mode is itself one of the tested modes, because its derivatives
+of non-variational quantities are not exact. For ``BIG`` systems, position
 derivatives are compared as directional derivatives (cost).
 
 Seam under test: the public ``Calculator.singlepoint`` interface and
@@ -59,15 +59,15 @@ from ..molecules import mols
 
 DD = {"device": DEVICE, "dtype": torch.double}
 
-# tightest tolerance at which `full` mode converges for all systems below
+# tightest tolerance at which `unrolled` mode converges for all systems below
 SCF_TOL = 1e-12
 
 TOL_FIRST_ABS = 1e-8
 TOL_FIRST_REL = 1e-7  # relative to max|ref|, used if it is larger
 TOL_SECOND = 1e-6
 
-MODES = ["implicit", "full"]
-REFERENCE = "full"  # only used to evaluate values for finite differences
+MODES = ["implicit", "unrolled"]
+REFERENCE = "unrolled"  # only used to evaluate values for finite differences
 
 # name -> (molecule names, total charge)
 SYSTEMS: dict[str, tuple[list[str], float]] = {
@@ -109,7 +109,7 @@ def _opts(mode: str) -> dict:
     return {
         "verbosity": 0,
         "maxiter": 300,
-        "scf_mode": mode,
+        "differentiation": mode,
         "x_atol": SCF_TOL,
         "x_atol_max": SCF_TOL,
         "force_convergence": True,
@@ -138,7 +138,7 @@ def weights(nb: int) -> torch.Tensor:
 def quantity(calc, res, pos: torch.Tensor, name: str) -> torch.Tensor:
     """Per-system value of a quantity from a ``singlepoint`` result."""
     if name == "E":
-        return res.total.sum(-1)
+        return res.energy.sum(-1)
 
     q = calc.ihelp.reduce_orbital_to_atom(res.charges.mono)
     if name == "q":
@@ -391,35 +391,35 @@ def project(system: str, deriv: str, val: torch.Tensor) -> torch.Tensor:
 # `strict=True` forces removal of the marker once a cell is fixed; cells within
 # 3x of the tolerance are not strict (their outcome depends on FD/SCF noise).
 KNOWN_FAILURES: dict[tuple[str, str, str, str], tuple[str, bool]] = {
-    ("full", "H2", "pos", "dip"): (
+    ("unrolled", "H2", "pos", "dip"): (
         "unrolled derivative of a non-variational quantity is inexact (err 1.09e-08)",
         False,
     ),
-    ("full", "LiH", "pos", "q2"): (
+    ("unrolled", "LiH", "pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 2.70e-08)",
         False,
     ),
-    ("full", "LiH", "pos", "dip"): (
+    ("unrolled", "LiH", "pos", "dip"): (
         "unrolled derivative of a non-variational quantity is inexact (err 5.25e-08)",
         False,
     ),
-    ("full", "LiH", "field", "q2"): (
+    ("unrolled", "LiH", "field", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 4.58e-07)",
         False,
     ),
-    ("full", "LiH", "field", "dip"): (
+    ("unrolled", "LiH", "field", "dip"): (
         "unrolled derivative of a non-variational quantity is inexact (err 8.92e-07)",
         False,
     ),
-    ("full", "LYS_xao", "hvp_pos", "q2"): (
+    ("unrolled", "LYS_xao", "hvp_pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 4.16e-03)",
         True,
     ),
-    ("full", "batch_H2_LYS", "pos", "q2"): (
+    ("unrolled", "batch_H2_LYS", "pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 1.12e-08)",
         False,
     ),
-    ("full", "batch_H2_LYS", "hvp_pos", "q2"): (
+    ("unrolled", "batch_H2_LYS", "hvp_pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 2.72e-03)",
         True,
     ),
@@ -431,23 +431,23 @@ KNOWN_FAILURES: dict[tuple[str, str, str, str], tuple[str, bool]] = {
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
-    ("full", "slow", "pos", "q2"): (
+    ("unrolled", "slow", "pos", "q2"): (
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
-    ("full", "slow", "field", "q2"): (
+    ("unrolled", "slow", "field", "q2"): (
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
-    ("full", "slow", "param", "q2"): (
+    ("unrolled", "slow", "param", "q2"): (
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
-    ("full", "slow", "hvp_pos", "E"): (
+    ("unrolled", "slow", "hvp_pos", "E"): (
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
-    ("full", "slow", "hvp_pos", "q2"): (
+    ("unrolled", "slow", "hvp_pos", "q2"): (
         "Fermi smearing: HOMO-LUMO gap 4.6 mEh, fractional frontier occupations (inexact in every mode)",
         True,
     ),
@@ -455,23 +455,23 @@ KNOWN_FAILURES: dict[tuple[str, str, str, str], tuple[str, bool]] = {
         "FD-reference-noise limited, slow-converging system (err 2.13e-06, tol 1e-06)",
         False,
     ),
-    ("full", "slow_gap", "hvp_pos", "E"): (
+    ("unrolled", "slow_gap", "hvp_pos", "E"): (
         "FD-reference-noise limited, slow-converging system (err 1.74e-06 on CI, 1e-07 locally, tol 1e-06)",
         False,
     ),
-    ("full", "slow_gap", "pos", "q2"): (
+    ("unrolled", "slow_gap", "pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 4.22e-03)",
         False,
     ),
-    ("full", "slow_gap", "field", "q2"): (
+    ("unrolled", "slow_gap", "field", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 6.21e+00)",
         False,
     ),
-    ("full", "slow_gap", "param", "q2"): (
+    ("unrolled", "slow_gap", "param", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 1.14e-03)",
         False,
     ),
-    ("full", "slow_gap", "hvp_pos", "q2"): (
+    ("unrolled", "slow_gap", "hvp_pos", "q2"): (
         "unrolled derivative of a non-variational quantity is inexact (err 5.41e+06)",
         False,
     ),
@@ -530,10 +530,10 @@ def test_float32_smoke(mode: str) -> None:
     """Single precision runs and roughly agrees with the double reference."""
     numbers, pos0, chrg = build("H2O")
     # energy gradients are variational, hence exact in every mode
-    ref_pos_e = compute_cell("full", "H2O", "pos", "E")
+    ref_pos_e = compute_cell("unrolled", "H2O", "pos", "E")
 
     dd32 = {"device": DEVICE, "dtype": torch.float32}
-    opts = {"verbosity": 0, "maxiter": 100, "scf_mode": mode}
+    opts = {"verbosity": 0, "maxiter": 100, "differentiation": mode}
     pos = pos0.to(**dd32).requires_grad_(True)
     calc = Calculator(
         numbers,
@@ -544,7 +544,7 @@ def test_float32_smoke(mode: str) -> None:
     )
     res = calc.singlepoint(pos, chrg.to(**dd32))
 
-    e = res.total.sum(-1)
+    e = res.energy.sum(-1)
     (g,) = torch.autograd.grad(e, pos)
     assert isinstance(ref_pos_e, torch.Tensor)
     assert (g.double() - ref_pos_e).abs().max().item() < 5e-4
@@ -552,7 +552,7 @@ def test_float32_smoke(mode: str) -> None:
 
 def test_cache_is_order_independent_detached_and_matches_uncached() -> None:
     """Cached cell and reference values retain no graphs and match uncached calls."""
-    keys = [("implicit", "H2O", "field", "E"), ("full", "H2O", "param", "q2")]
+    keys = [("implicit", "H2O", "field", "E"), ("unrolled", "H2O", "param", "q2")]
     compute_cell.cache_clear()
     reference_deriv.cache_clear()
     miss_cells = [compute_cell(*key) for key in keys]

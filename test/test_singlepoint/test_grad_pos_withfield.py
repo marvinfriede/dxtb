@@ -33,6 +33,7 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Callable, Tensor
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 opts = {
@@ -40,11 +41,9 @@ opts = {
     "x_atol": 1.0e-10,
     "maxiter": 100,
     "damp": 0.3,
-    "damp_init": 0.01,
     "damp_dynamic": False,
-    "mixer": labels.MIXER_ANDERSON,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "strategy": scf_strategy("anderson", "potential", damp_init=0.01),
+    "differentiation": "unrolled",
     "verbosity": 0,
 }
 
@@ -81,7 +80,7 @@ def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
 
     def func(p: Tensor) -> Tensor:
         result = calc.singlepoint(p, charge)
-        energy = result.total.sum(-1)
+        energy = result.energy.sum(-1)
         return energy
 
     return func, pos
@@ -162,7 +161,7 @@ def gradchecker_batch(
 
     def func(p: Tensor) -> Tensor:
         result = calc.singlepoint(p, charge)
-        energy = result.total.sum(-1)
+        energy = result.energy.sum(-1)
         return energy
 
     return func, pos
@@ -222,8 +221,8 @@ def full_vs_implicit_autograd(
 ) -> None:
     field_vector = torch.tensor([-2.0, 1.0, 0.5], **dd) * VAA2AU
 
-    options_imp = dict(opts, **{"scf_mode": labels.SCF_MODE_IMPLICIT})
-    options_full = dict(opts, **{"scf_mode": labels.SCF_MODE_FULL})
+    options_imp = dict(opts, differentiation="implicit")
+    options_full = dict(opts, differentiation="unrolled")
 
     calc_imp = Calculator(
         numbers,

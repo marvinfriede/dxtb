@@ -267,8 +267,8 @@ def calculator(
 ) -> Calculator:
     opts = dict(
         SCF_OPTIONS,
-        scf_mode=scf,
-        mixer="anderson" if scf == "full" else "broyden",
+        differentiation="unrolled" if scf == "full" else "implicit",
+        strategy="anderson" if scf == "full" else "broyden",
         int_driver=driver,
         batch_mode=batch_mode,
     )

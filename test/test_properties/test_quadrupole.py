@@ -36,6 +36,7 @@ from dxtb._src.components.interactions import new_efield, new_efield_grad
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 sample_list = [
@@ -52,8 +53,8 @@ sample_list = [
 
 opts = {
     "maxiter": 100,
-    "mixer": "anderson",
-    "scf_mode": "full",
+    "strategy": scf_strategy("anderson"),
+    "differentiation": "unrolled",
     "verbosity": 0,
     "x_atol": 1.0e-9,
     # an electric field alone only raises the integral level to the dipole
@@ -218,13 +219,13 @@ def test_batch_medium(
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["HHe", "H2O"])
-@pytest.mark.parametrize("scp_mode", ["charge", "potential", "fock"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
 def test_batch_settings(
-    dtype: torch.dtype, name1: str, name2: str, scp_mode: str, mixer: str
+    dtype: torch.dtype, name1: str, name2: str, variable: str, converger: str
 ) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
-    options = dict(opts, **{"scp_mode": scp_mode, "mixer": mixer})
+    options = dict(opts, strategy=scf_strategy(converger, variable))
     batched(
         name1, name2, "quadrupole", dd, atol=1e-4, rtol=1e-4, options=options
     )
@@ -238,7 +239,7 @@ def test_batch_unconverged(dtype: torch.dtype, name1: str, name2: str) -> None:
     dd: DD = {"dtype": dtype, "device": DEVICE}
 
     # with 5 iterations, both do not converge, but pass the test
-    options = dict(opts, **{"maxiter": 5, "mixer": "simple"})
+    options = dict(opts, maxiter=5, strategy=scf_strategy("linear"))
     batched(
         name1, name2, "quadrupole", dd, atol=1e-4, rtol=1e-4, options=options
     )

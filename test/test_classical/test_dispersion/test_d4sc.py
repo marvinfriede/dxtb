@@ -30,12 +30,11 @@ from tad_mctc.batch import pack
 from dxtb import Calculator
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.calculators.result import Result
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 from dxtb.components.dispersion import new_dispersion
 
 from ...conftest import DEVICE
-from ...utils import get_param_module
+from ...utils import get_param_module, scf_strategy
 from .samples import samples
 
 slist = ["LiH", "SiH4", "PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01"]
@@ -44,8 +43,8 @@ opts = {
     "verbosity": 0,
     "maxiter": 50,
     "exclude": ["aes2", "es2", "es3"],
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 

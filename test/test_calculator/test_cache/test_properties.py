@@ -201,13 +201,10 @@ def test_calculator_has_no_result_cache_state() -> None:
 
 
 @pytest.mark.parametrize("option", ["cache_enabled", "cache_overlap"])
-def test_removed_cache_options_have_transition_message(option: str) -> None:
-    """Calculator reports why removed result-cache options are rejected."""
+def test_removed_cache_options_are_rejected(option: str) -> None:
+    """Removed result-cache options are unknown Calculator options."""
     numbers, positions = _system()
-    with pytest.raises(
-        TypeError,
-        match=f"result caching has been removed.*Unsupported cache option: {option}",
-    ):
+    with pytest.raises(TypeError, match=option):
         Calculator(
             numbers,
             GFN1_XTB,

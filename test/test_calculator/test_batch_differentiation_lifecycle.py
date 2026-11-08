@@ -34,6 +34,7 @@ from dxtb._src.typing import Tensor
 from dxtb.config import Config
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 
 DTYPE = torch.float64
 DD = {"device": DEVICE, "dtype": DTYPE}
@@ -185,7 +186,7 @@ def test_three_batching_interfaces_coexist_and_agree(
         [res_w1.energy.sum(-1), res_lih.energy.sum(-1), res_w2.energy.sum(-1)]
     )
     torch.testing.assert_close(
-        sp_m1.total.sum(-1), expected_e, atol=1e-9, rtol=1e-9
+        sp_m1.energy.sum(-1), expected_e, atol=1e-9, rtol=1e-9
     )
     torch.testing.assert_close(f_m1[0, :3], f_w1, atol=1e-7, rtol=1e-7)
     torch.testing.assert_close(
@@ -590,7 +591,7 @@ def test_caller_owned_components_are_not_mutated_and_exact_core_stays_active() -
     assert user_d3.numbers.shape == (2, 3)
     assert user_d3.label == orig_d3_label
     res_het = calc_het.singlepoint(padded_pos)
-    assert torch.isfinite(res_het.total).all()
+    assert torch.isfinite(res_het.energy).all()
 
     # 2. Conformer batch with caller-owned DispersionD3, Repulsion, and ES2
     conf_nums = torch.tensor([[8, 1, 1], [8, 1, 1]], device=DEVICE)
@@ -630,12 +631,12 @@ def test_caller_owned_components_are_not_mutated_and_exact_core_stays_active() -
     assert user_es2.label == orig_es2_label
 
     res_conf = calc_conf.singlepoint(conf_pos)
-    assert torch.isfinite(res_conf.total).all()
+    assert torch.isfinite(res_conf.energy).all()
 
 
-@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
+@pytest.mark.parametrize("differentiation", ["unrolled", "implicit"])
 def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
-    scf_mode: str,
+    differentiation: str,
 ) -> None:
     """Batched dipole, quadrupole, polarizability, dipole_deriv, and bond_orders match serial Systems."""
     num_w, pos_w = _water_geometry(0.0)
@@ -654,8 +655,8 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": scf_mode,
-        "mixer": "anderson",
+        "differentiation": differentiation,
+        "strategy": scf_strategy("anderson"),
         "maxiter": 12,
         "x_atol": 1e-10,
         "fermi_etemp": 0.0,
@@ -691,7 +692,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
     assert torch.all(bo_batch[1, 1, :] == 0.0)
     assert torch.all(bo_batch[1, :, 1] == 0.0)
 
-    # 2. Shared and per-lane dipole & quadrupole (supported for both "full" and "implicit")
+    # 2. Shared and per-lane dipole & quadrupole (supported for both "unrolled" and "implicit")
     for f_in, f_lanes in (
         (shared_f, (shared_f, shared_f)),
         (lane_f, (lane_f[0], lane_f[1])),
@@ -706,7 +707,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
             use_functorch=False,
             field=f_lanes[1].detach().requires_grad_(True),
         )
-        if scf_mode == "full":
+        if differentiation == "unrolled":
             pol_0 = calc_w.polarizability(
                 pos_w,
                 use_functorch=False,
@@ -736,7 +737,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
             torch.testing.assert_close(dip_b[0], dip_0, atol=1e-7, rtol=1e-7)
             torch.testing.assert_close(dip_b[1], dip_1, atol=1e-7, rtol=1e-7)
 
-            if scf_mode != "full":
+            if differentiation != "unrolled":
                 continue
 
             # Polarizability (both derived_quantity="dipole" and "energy")
@@ -791,7 +792,7 @@ def test_batched_higher_order_electric_responses_match_serial_and_preserve_grad(
             torch.testing.assert_close(quad_b[0], quad_0, atol=1e-7, rtol=1e-7)
             torch.testing.assert_close(quad_b[1], quad_1, atol=1e-7, rtol=1e-7)
 
-    if scf_mode != "full":
+    if differentiation != "unrolled":
         return
 
     # 3. Differentiability of batched polarizability w.r.t. Model.par, positions, and field
@@ -889,8 +890,8 @@ def test_batched_third_order_electric_responses_match_serial() -> None:
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_level": labels.INTLEVEL_DIPOLE,
-        "scf_mode": "full",
-        "mixer": "anderson",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson"),
         "maxiter": 2,
         "x_atol": 1e-10,
         "fermi_etemp": 0.0,
@@ -981,8 +982,8 @@ def test_cross_lane_derivative_isolation_for_fields_and_positions() -> None:
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": "full",
-        "mixer": "anderson",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson"),
         "maxiter": 12,
         "x_atol": 1e-10,
         "fermi_etemp": 0.0,
@@ -1086,8 +1087,8 @@ def test_three_lane_batch_field_and_field_grad_disambiguation() -> None:
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": "full",
-        "mixer": "anderson",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson"),
         "maxiter": 12,
         "x_atol": 1e-10,
         "fermi_etemp": 0.0,
@@ -1273,7 +1274,7 @@ def test_inference_mode_param_module_ownership_and_identity() -> None:
     opts = {
         "verbosity": 0,
         "int_driver": "pytorch",
-        "scf_mode": "full",
+        "differentiation": "unrolled",
         "maxiter": 14,
         "fermi_etemp": 0.0,
     }
@@ -1535,8 +1536,8 @@ def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> N
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": "full",
-        "mixer": "anderson",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson"),
         "maxiter": 0,
         "fermi_etemp": 0.0,
     }

@@ -58,7 +58,6 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
-    setup_simple_solver_settings,
 )
 from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.iterator import get_refocc
@@ -116,12 +115,30 @@ def _force_lorentzian(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+_CONVERGERS = {
+    "linear": LinearMethod,
+    "anderson": AndersonMethod,
+    "broyden": BroydenMethod,
+}
+
+
+def _method(converger: type | str) -> object:
+    """Build a default-settings SCF method from its class or preset name."""
+    if isinstance(converger, str):
+        converger = _CONVERGERS[converger]
+    return {
+        LinearMethod: LinearMethod(),
+        AndersonMethod: AndersonMethod(AndersonMethodSettings()),
+        BroydenMethod: BroydenMethod(BroydenMethodSettings()),
+    }[converger]
+
+
 def _case(
     sample_name: str,
     *,
     method: int = GFN1_XTB,
-    representation: int = labels.SCP_MODE_POTENTIAL,
-    mixer: int = labels.MIXER_ANDERSON,
+    representation: SCFRepresentation | str = SCFRepresentation.POTENTIAL,
+    converger: type | str = AndersonMethod,
     tolerance: float = 1.0e-12,
     maxiter: int = 300,
     temperature: float = 0.0,
@@ -150,18 +167,13 @@ def _case(
         )
     if positions_override is not None:
         positions = positions_override
-    representation_value = {
-        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-    }[representation]
-    method_value = {
-        labels.MIXER_LINEAR: LinearMethod(),
-        labels.MIXER_ANDERSON: AndersonMethod(AndersonMethodSettings()),
-        labels.MIXER_BROYDEN: BroydenMethod(BroydenMethodSettings()),
-    }[mixer]
     strategy = SCFStrategy(
-        (SCFStage(method_value, representation=representation_value),)
+        (
+            SCFStage(
+                _method(converger),
+                representation=SCFRepresentation(representation),
+            ),
+        )
     )
     options = {
         "strategy": strategy,
@@ -367,29 +379,17 @@ def _run_root(
     tolerance: float,
     maxiter: int,
     eager: bool,
-    mixer: int | None = None,
+    converger: type | str | None = None,
 ) -> _RootRecord:
+    if converger is None:
+        converger = type(case.system.config.scf.strategy.stages[0].method)
     config = replace(
         case.system.config.scf,
         strategy=SCFStrategy(
             (
                 replace(
                     case.system.config.scf.strategy.stages[0],
-                    method={
-                        labels.MIXER_LINEAR: LinearMethod(),
-                        labels.MIXER_ANDERSON: AndersonMethod(
-                            AndersonMethodSettings()
-                        ),
-                        labels.MIXER_BROYDEN: BroydenMethod(
-                            BroydenMethodSettings()
-                        ),
-                    }[
-                        (
-                            case.system.config.scf._legacy_method_code
-                            if mixer is None
-                            else mixer
-                        )
-                    ],
+                    method=_method(converger),
                 ),
             )
         ),
@@ -411,14 +411,10 @@ def _run_root(
         if config.initial_representation is SCFRepresentation.POTENTIAL
         else None
     )
-    representation = {
-        labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-        labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-        labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-    }[case.system.config.scf._legacy_representation_code]
+    representation = case.system.config.scf.initial_representation
     problem = SCFProblem(inputs, representation, layout)
-    method_code = config._legacy_method_code
-    if method_code == labels.MIXER_ANDERSON:
+    method_type = type(config.strategy.stages[0].method)
+    if method_type is AndersonMethod:
         settings = setup_anderson_solver_settings(config, initial.dtype)
         outcome = solve_common(
             initial,
@@ -428,8 +424,8 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif method_code == labels.MIXER_LINEAR:
-        settings = setup_simple_solver_settings(config, initial.dtype)
+    elif method_type is LinearMethod:
+        settings = setup_solver_settings(config, initial.dtype)
         outcome = _solve_map(
             initial,
             settings,
@@ -438,7 +434,7 @@ def _run_root(
             eager=eager,
             problem=problem,
         )
-    elif method_code == labels.MIXER_BROYDEN:
+    elif method_type is BroydenMethod:
         settings = setup_solver_settings(config, initial.dtype)
         strategy = SCFStrategy(
             (SCFStage(BroydenMethod(BroydenMethodSettings())),)
@@ -453,7 +449,7 @@ def _run_root(
             strategy=strategy,
         )
     else:
-        raise ValueError(f"Unsupported reference method: {method_code}")
+        raise ValueError(f"Unsupported reference method: {method_type}")
 
     finalized = _finalize_map_result(
         case,
@@ -489,9 +485,9 @@ def _run_root(
 def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
     """Charge, potential and Fock residuals are their raw physical maps."""
     for representation in (
-        labels.SCP_MODE_CHARGE,
-        labels.SCP_MODE_POTENTIAL,
-        labels.SCP_MODE_FOCK,
+        SCFRepresentation.CHARGE,
+        SCFRepresentation.POTENTIAL,
+        SCFRepresentation.FOCK,
     ):
         case = _case("H2", representation=representation)
         initial, layout = _initial_state(case, case.inputs)
@@ -509,25 +505,25 @@ def test_raw_fixed_point_residual_uses_only_each_representation_map() -> None:
 
 
 @pytest.mark.parametrize(
-    "mixer",
+    "converger",
     (
-        pytest.param(labels.MIXER_LINEAR, id="simple"),
-        pytest.param(labels.MIXER_ANDERSON, id="anderson"),
+        pytest.param(LinearMethod, id="linear"),
+        pytest.param(AndersonMethod, id="anderson"),
     ),
 )
 def test_solver_outcome_retains_the_convergence_tested_input(
-    mixer: int,
+    converger: type,
 ) -> None:
     """The selected map result and convergence residual use the same x* input."""
     tolerance = 1.0e-12
-    case = _case("H2", mixer=mixer, tolerance=tolerance, maxiter=300)
+    case = _case("H2", converger=converger, tolerance=tolerance, maxiter=300)
     record = _run_root(
         case,
         case.inputs,
         tolerance=tolerance,
         maxiter=300,
         eager=True,
-        mixer=mixer,
+        converger=converger,
     )
     assert record.converged
     torch.testing.assert_close(
@@ -581,28 +577,28 @@ def test_solver_outcome_retains_the_convergence_tested_input(
 
 
 @pytest.mark.parametrize(
-    "mixer",
+    "converger",
     (
-        pytest.param(labels.MIXER_LINEAR, id="simple"),
-        pytest.param(labels.MIXER_ANDERSON, id="anderson"),
+        pytest.param(LinearMethod, id="linear"),
+        pytest.param(AndersonMethod, id="anderson"),
     ),
 )
 @pytest.mark.parametrize(
     "representation",
     (
-        pytest.param(labels.SCP_MODE_CHARGE, id="charge"),
-        pytest.param(labels.SCP_MODE_POTENTIAL, id="potential"),
+        pytest.param(SCFRepresentation.CHARGE, id="charge"),
+        pytest.param(SCFRepresentation.POTENTIAL, id="potential"),
     ),
 )
 def test_fixed_trip_outcome_retains_accepted_map_input(
-    mixer: int, representation: int
+    converger: type, representation: SCFRepresentation
 ) -> None:
     """Masked fixed-trip maps cannot replace the accepted root/result pair."""
     tolerance = 1.0e-10
     case = _case(
         "H2",
         representation=representation,
-        mixer=mixer,
+        converger=converger,
         tolerance=tolerance,
         maxiter=45,
     )
@@ -612,7 +608,7 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
         tolerance=tolerance,
         maxiter=35,
         eager=False,
-        mixer=mixer,
+        converger=converger,
     )
     long = _run_root(
         case,
@@ -620,7 +616,7 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
         tolerance=tolerance,
         maxiter=45,
         eager=False,
-        mixer=mixer,
+        converger=converger,
     )
 
     assert short.converged and long.converged
@@ -697,28 +693,28 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
 
 
 @pytest.mark.parametrize(
-    "mixer",
+    "converger",
     (
-        pytest.param(labels.MIXER_LINEAR, id="simple"),
-        pytest.param(labels.MIXER_ANDERSON, id="anderson"),
+        pytest.param(LinearMethod, id="linear"),
+        pytest.param(AndersonMethod, id="anderson"),
     ),
 )
 @pytest.mark.parametrize(
     "representation",
     (
-        pytest.param(labels.SCP_MODE_CHARGE, id="charge"),
-        pytest.param(labels.SCP_MODE_POTENTIAL, id="potential"),
+        pytest.param(SCFRepresentation.CHARGE, id="charge"),
+        pytest.param(SCFRepresentation.POTENTIAL, id="potential"),
     ),
 )
 def test_fixed_trip_exhaustion_retains_last_selected_map_input(
-    mixer: int, representation: int
+    converger: type, representation: SCFRepresentation
 ) -> None:
     """An exhausted fixed-trip solve reports its last selected map pair."""
     tolerance = 1.0e-14
     case = _case(
         "H2O",
         representation=representation,
-        mixer=mixer,
+        converger=converger,
         tolerance=tolerance,
         maxiter=1,
     )
@@ -728,7 +724,7 @@ def test_fixed_trip_exhaustion_retains_last_selected_map_input(
         tolerance=tolerance,
         maxiter=1,
         eager=False,
-        mixer=mixer,
+        converger=converger,
     )
 
     assert not record.converged
@@ -943,8 +939,8 @@ def test_no2_tight_root_third_order_reference(
     base_case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_ANDERSON,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=AndersonMethod,
         tolerance=1.0e-12,
         maxiter=300,
         temperature=300.0,
@@ -991,13 +987,13 @@ def test_no2_tight_root_third_order_reference(
 @pytest.mark.parametrize(
     ("representation", "expected_map"),
     (
-        (labels.SCP_MODE_CHARGE, "charge"),
-        (labels.SCP_MODE_POTENTIAL, "potential"),
-        (labels.SCP_MODE_FOCK, "fock"),
+        (SCFRepresentation.CHARGE, "charge"),
+        (SCFRepresentation.POTENTIAL, "potential"),
+        (SCFRepresentation.FOCK, "fock"),
     ),
 )
 def test_fixed_point_map_representation_contract(
-    representation: int, expected_map: str
+    representation: SCFRepresentation, expected_map: str
 ) -> None:
     """The configured root variable chooses its existing raw map."""
     case = _case("H2", representation=representation)
@@ -1008,7 +1004,7 @@ def test_fixed_point_map_representation_contract(
         "potential": potential_map,
         "fock": fock_map,
     }[expected_map]
-    if representation == labels.SCP_MODE_POTENTIAL:
+    if representation is SCFRepresentation.POTENTIAL:
         expected_result = expected(initial, case.inputs, layout)
     else:
         expected_result = expected(initial, case.inputs)
@@ -1022,12 +1018,14 @@ def test_fixed_point_map_representation_contract(
 def test_simple_and_anderson_reach_the_same_h2_root_and_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tight physical-root energy derivatives do not depend on the mixer."""
+    """Tight physical-root energy derivatives do not depend on the converger."""
     _force_lorentzian(monkeypatch)
     tolerance = 1.0e-12
     records = {}
-    for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
-        case = _case("H2", mixer=mixer, tolerance=tolerance, maxiter=300)
+    for converger in (LinearMethod, AndersonMethod):
+        case = _case(
+            "H2", converger=converger, tolerance=tolerance, maxiter=300
+        )
         inputs = _inputs_at_field(case, torch.zeros((), **_DD))
         record = _run_root(
             case,
@@ -1035,30 +1033,30 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
             tolerance=tolerance,
             maxiter=300,
             eager=True,
-            mixer=mixer,
+            converger=converger,
         )
         assert record.converged
         assert float(record.residual.abs().max()) < 1.0e-10
-        records[mixer] = record
+        records[converger] = record
     torch.testing.assert_close(
-        records[labels.MIXER_LINEAR].root,
-        records[labels.MIXER_ANDERSON].root,
+        records[LinearMethod].root,
+        records[AndersonMethod].root,
         rtol=0.0,
         atol=2.0e-9,
     )
     torch.testing.assert_close(
-        records[labels.MIXER_LINEAR].finalized_energy,
-        records[labels.MIXER_ANDERSON].finalized_energy,
+        records[LinearMethod].finalized_energy,
+        records[AndersonMethod].finalized_energy,
         rtol=0.0,
         atol=2.0e-11,
     )
     for name in ("density", "occupation", "emo"):
         torch.testing.assert_close(
             getattr(
-                records[labels.MIXER_LINEAR].outcome.map_result.spectral, name
+                records[LinearMethod].outcome.map_result.spectral, name
             ),
             getattr(
-                records[labels.MIXER_ANDERSON].outcome.map_result.spectral,
+                records[AndersonMethod].outcome.map_result.spectral,
                 name,
             ),
             rtol=0.0,
@@ -1066,8 +1064,10 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
         )
 
     derivatives = []
-    for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON):
-        case = _case("H2", mixer=mixer, tolerance=tolerance, maxiter=300)
+    for converger in (LinearMethod, AndersonMethod):
+        case = _case(
+            "H2", converger=converger, tolerance=tolerance, maxiter=300
+        )
 
         def energy(parameter: Tensor) -> Tensor:
             inputs = _inputs_at_field(case, parameter)
@@ -1077,7 +1077,7 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
                 tolerance=tolerance,
                 maxiter=300,
                 eager=True,
-                mixer=mixer,
+                converger=converger,
             )
             assert record.converged
             return record.finalized_energy
@@ -1099,35 +1099,35 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
             "H2",
             GFN1_XTB,
             0.0,
-            labels.SCP_MODE_CHARGE,
+            SCFRepresentation.CHARGE,
             id="h2-charge",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             0.0,
-            labels.SCP_MODE_POTENTIAL,
+            SCFRepresentation.POTENTIAL,
             id="h2-potential",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             0.0,
-            labels.SCP_MODE_FOCK,
+            SCFRepresentation.FOCK,
             id="h2-fock",
         ),
         pytest.param(
             "H2",
             GFN1_XTB,
             300.0,
-            labels.SCP_MODE_CHARGE,
+            SCFRepresentation.CHARGE,
             id="h2-finite-temperature",
         ),
         pytest.param(
             "NO2",
             GFN2_XTB,
             300.0,
-            labels.SCP_MODE_POTENTIAL,
+            SCFRepresentation.POTENTIAL,
             marks=pytest.mark.slow,
             id="no2-potential",
         ),
@@ -1137,7 +1137,7 @@ def test_jacobian_root_reference_matches_unrolled_and_finite_difference(
     sample_name: str,
     method: int,
     temperature: float,
-    representation: int,
+    representation: SCFRepresentation,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Dense IFT response matches unrolled and physical FD by representation."""

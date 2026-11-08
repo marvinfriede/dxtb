@@ -268,9 +268,9 @@ def test_gfn2_live_default_convergence(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ["H2O", "glycine", "PbH4-BiH3"])
-@pytest.mark.parametrize("scp_mode", ["potential", "charge"])
+@pytest.mark.parametrize("variable", ["potential", "charge"])
 def test_gfn2_live_rotational_invariance_and_agreement(
-    name: str, scp_mode: str
+    name: str, variable: str
 ) -> None:
     """Compare GFN2-xTB against live tblite 0.8.0 on original and rotated geometries."""
     sys = SYSTEMS[name]
@@ -314,7 +314,7 @@ def test_gfn2_live_rotational_invariance_and_agreement(
         pos_orig,
         charge=sys.charge,
         spin=sys.spin,
-        scp_mode=scp_mode,
+        variable=variable,
         x_atol=1.0e-9,
     )
     dxtb_rot = evaluate_dxtb_reference(
@@ -323,19 +323,19 @@ def test_gfn2_live_rotational_invariance_and_agreement(
         pos_rot,
         charge=sys.charge,
         spin=sys.spin,
-        scp_mode=scp_mode,
+        variable=variable,
         x_atol=1.0e-9,
     )
 
     assert_tblite_agrees(
-        method=f"GFN2-xTB[{scp_mode}]",
+        method=f"GFN2-xTB[{variable}]",
         structure=f"{name}-orig",
         live=live_orig,
         computed=dxtb_orig,
         tolerances=TIGHT_LIVE_TOLERANCES,
     )
     assert_tblite_agrees(
-        method=f"GFN2-xTB[{scp_mode}]",
+        method=f"GFN2-xTB[{variable}]",
         structure=f"{name}-rotated",
         live=live_rot,
         computed=dxtb_rot,

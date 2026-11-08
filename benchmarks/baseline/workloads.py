@@ -70,8 +70,8 @@ RESULTS = Path(__file__).parent / "results"
 PARAMS = {"gfn1": GFN1_XTB, "gfn2": GFN2_XTB}
 OPTS = {
     "verbosity": 0,
-    "scf_mode": "full",
-    "mixer": "anderson",
+    "differentiation": "unrolled",
+    "strategy": "anderson",
     "maxiter": 300,
     "x_atol": 1e-8,
 }

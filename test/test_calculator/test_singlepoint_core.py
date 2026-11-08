@@ -42,6 +42,8 @@ from dxtb._src.calculators.singlepoint import singlepoint
 from dxtb._src.components.interactions.container import Charges, Potential
 from dxtb._src.scf.status import SCFStatus
 
+from ..utils import scf_strategy
+
 
 def _assert_result_values_equal(left: Result, right: Result) -> None:
     """Compare stable tensor outputs without relying on object identity."""
@@ -197,7 +199,6 @@ def test_core_singlepoint_without_calculator_is_history_independent() -> None:
     with pytest.raises(FrozenInstanceError):
         first.potential.mono = second.potential.mono  # type: ignore[union-attr,misc]
 
-    assert first.energy is first.total
     assert first.integrals is not None
     assert first.integrals.hcore is not None
     assert first.multipoles is not None
@@ -373,8 +374,7 @@ def test_production_converged_route_executes_only_physical_maps(
     from dxtb._src.scf.functional import problem as functional_problem
 
     options = {
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_ANDERSON,
+        "strategy": scf_strategy("anderson", "potential"),
         "fermi_etemp": 300.0,
         "maxiter": 100,
         "verbosity": 0,
@@ -419,14 +419,14 @@ def test_production_converged_route_executes_only_physical_maps(
 
 
 @pytest.mark.parametrize(
-    ("representation", "mixer"),
+    ("variable", "converger"),
     [
-        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_CHARGE, labels.MIXER_ANDERSON),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
-        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
+        ("charge", "linear"),
+        ("charge", "anderson"),
+        ("potential", "linear"),
+        ("potential", "anderson"),
+        ("fock", "linear"),
+        ("fock", "anderson"),
     ],
     ids=[
         "charge-simple",
@@ -439,7 +439,7 @@ def test_production_converged_route_executes_only_physical_maps(
 )
 @pytest.mark.parametrize("temperature", [0.0, 300.0], ids=["zero-k", "300-k"])
 def test_production_singlepoint_matches_legacy_full(
-    representation: int, mixer: int, temperature: float
+    variable: str, converger: str, temperature: float
 ) -> None:
     """Production FULL dispatch preserves functional eager values in each route."""
     from test.test_scf.test_functional_map import _prepare_case
@@ -447,8 +447,7 @@ def test_production_singlepoint_matches_legacy_full(
     from dxtb._src.scf.functional import run_functional_full_eager
 
     options = {
-        "scp_mode": representation,
-        "mixer": mixer,
+        "strategy": scf_strategy(converger, variable),
         "maxiter": 2,
         "mix_guess": True,
         "x_atol": 0.0,
@@ -521,17 +520,17 @@ def test_production_singlepoint_matches_legacy_full(
 
 
 @pytest.mark.parametrize(
-    ("representation", "mixer"),
+    ("variable", "converger"),
     [
-        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
-        (labels.SCP_MODE_FOCK, labels.MIXER_LINEAR),
+        ("charge", "linear"),
+        ("potential", "anderson"),
+        ("fock", "linear"),
     ],
     ids=["charge-simple", "potential-anderson", "fock-simple"],
 )
 @pytest.mark.parametrize("force_convergence", [False, True])
 def test_production_maxiter_zero_is_valid_one_shot(
-    representation: int, mixer: int, force_convergence: bool
+    variable: str, converger: str, force_convergence: bool
 ) -> None:
     """The production boundary preserves maxiter=0 for every representation."""
     from test.test_scf.test_functional_map import _prepare_case
@@ -542,8 +541,7 @@ def test_production_maxiter_zero_is_valid_one_shot(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": representation,
-            "mixer": mixer,
+            "strategy": scf_strategy(converger, variable),
             "maxiter": 0,
             "force_convergence": force_convergence,
             "fermi_etemp": 300.0,
@@ -595,8 +593,7 @@ def test_production_positive_budget_nonconvergence_policy(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "potential"),
             "maxiter": 1,
             "force_convergence": force_convergence,
             "x_atol": 0.0,
@@ -617,12 +614,12 @@ def test_production_positive_budget_nonconvergence_policy(
 
 
 @pytest.mark.parametrize(
-    "mixer",
-    [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
+    "converger",
+    ["linear", "anderson"],
     ids=["linear", "anderson"],
 )
 def test_production_negative_temperature_is_rejected(
-    mixer: int,
+    converger: str,
 ) -> None:
     """Negative electronic temperature fails before SCF iteration."""
     from test.test_scf.test_functional_map import _prepare_case
@@ -630,7 +627,7 @@ def test_production_negative_temperature_is_rejected(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": mixer,
+            "strategy": scf_strategy(converger, "charge"),
             "maxiter": 1,
             "fermi_etemp": -1.0,
         },
@@ -645,36 +642,37 @@ def test_production_negative_temperature_is_rejected(
 
 
 @pytest.mark.parametrize(
-    ("representation", "mixer"),
+    ("variable", "converger"),
     [
-        (labels.SCP_MODE_CHARGE, labels.MIXER_LINEAR),
-        (labels.SCP_MODE_POTENTIAL, labels.MIXER_ANDERSON),
-        (labels.SCP_MODE_FOCK, labels.MIXER_ANDERSON),
+        ("charge", "linear"),
+        ("potential", "anderson"),
+        ("fock", "anderson"),
     ],
     ids=["charge-simple", "potential-anderson", "fock-anderson"],
 )
 def test_production_dynamic_damping_matches_legacy(
-    representation: int, mixer: int
+    variable: str, converger: str
 ) -> None:
     """Production routing retains dynamic-damping trajectory and warnings."""
     from test.test_scf.test_functional_map import _prepare_case
 
     from dxtb._src.scf.functional import run_functional_full_eager
 
-    maxiter = 12 if representation == labels.SCP_MODE_CHARGE else 8
+    maxiter = 12 if variable == "charge" else 8
+    anderson = (
+        {"damp_init": 0.05, "generations": 2, "soft_start": True}
+        if converger == "anderson"
+        else {}
+    )
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": representation,
-            "mixer": mixer,
+            "strategy": scf_strategy(converger, variable, **anderson),
             "maxiter": maxiter,
             "mix_guess": True,
             "damp": 0.2,
-            "damp_init": 0.05,
             "damp_dynamic": True,
             "damp_dynamic_factor": 0.75,
-            "damp_generations": 2,
-            "damp_soft_start": True,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
         },

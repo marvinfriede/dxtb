@@ -25,7 +25,7 @@ import pytest
 import torch
 from torch.func import jacfwd, jvp, vmap
 
-from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, labels
+from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler
 from dxtb._src.scf.functional import (
     AndersonState,
     SCFCharges,
@@ -38,6 +38,7 @@ from dxtb._src.scf.functional import anderson_mix
 from dxtb._src.scf.functional.anderson import AndersonMethodSettings
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 
+from ..utils import scf_strategy
 from ._anderson_helpers import (
     AndersonTestSettings,
 )
@@ -96,20 +97,23 @@ def _run_anderson(
     mix_guess: bool,
     x_atol: float,
     x_atol_max: float,
-    damp_generations: int = 5,
-    damp_soft_start: bool = True,
-    damp_diagonal_offset: float | None = 0.01,
+    generations: int = 5,
+    soft_start: bool = True,
+    diagonal_offset: float | None = 0.01,
     extra_options: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     options: dict[str, object] = {
-        "mixer": labels.MIXER_ANDERSON,
+        "strategy": scf_strategy(
+            "anderson",
+            "charge",
+            generations=generations,
+            soft_start=soft_start,
+            diagonal_offset=diagonal_offset,
+        ),
         "maxiter": maxiter,
         "mix_guess": mix_guess,
         "x_atol": x_atol,
         "x_atol_max": x_atol_max,
-        "damp_generations": damp_generations,
-        "damp_soft_start": damp_soft_start,
-        "damp_diagonal_offset": damp_diagonal_offset,
     }
     if extra_options is not None:
         options.update(extra_options)
@@ -504,8 +508,8 @@ def test_anderson_soft_start_false() -> None:
         mix_guess=True,
         x_atol=1.0e-30,
         x_atol_max=1.0e-30,
-        damp_generations=3,
-        damp_soft_start=False,
+        generations=3,
+        soft_start=False,
     )
     assert int(result.actual.iterations) == 6
 
@@ -513,7 +517,7 @@ def test_anderson_soft_start_false() -> None:
 def _solve_loose_anderson_with_certification(maxiter: int):
     """Large raw tolerances still require a valid selected physical root."""
     options = {
-        "mixer": labels.MIXER_ANDERSON,
+        "strategy": scf_strategy("anderson", "charge"),
         "maxiter": maxiter,
         "mix_guess": True,
         "x_atol": 1.0e6,
@@ -579,7 +583,10 @@ def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
     """Anderson setup rejects Broyden and freezes dynamic settings."""
     from dxtb.scf import AndersonMethod, SCFStrategy, strategy_preset
 
-    case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_ANDERSON})
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"strategy": scf_strategy("anderson", "charge")},
+    )
     config = case.system.config.scf
     with pytest.raises(NotImplementedError, match="require an Anderson"):
         setup_anderson_solver_settings(
@@ -616,7 +623,10 @@ def test_anderson_tolerance_resolution(
     dtype: torch.dtype,
 ) -> None:
     """Anderson setup resolves thresholds using dtype epsilon floor."""
-    case = _prepare_case(GFN1_XTB, scf_options={"mixer": labels.MIXER_ANDERSON})
+    case = _prepare_case(
+        GFN1_XTB,
+        scf_options={"strategy": scf_strategy("anderson", "charge")},
+    )
     config = replace(
         case.system.config.scf,
         x_atol=1.0e-9,
@@ -722,13 +732,13 @@ def test_anderson_solver_real_position_parameter_and_field_gradients() -> None:
         .requires_grad_(True)
     )
     options = {
-        "mixer": labels.MIXER_ANDERSON,
+        "strategy": scf_strategy(
+            "anderson", "charge", soft_start=False, generations=2
+        ),
         "maxiter": 2,
         "mix_guess": True,
         "x_atol": 0.0,
         "x_atol_max": 0.0,
-        "damp_soft_start": False,
-        "damp_generations": 2,
     }
     geom = _prepare_case(GFN1_XTB, positions=positions, scf_options=options)
     settings = setup_anderson_solver_settings(
@@ -801,13 +811,13 @@ def test_anderson_real_xTB_jvp_jacfwd_characterization() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "mixer": labels.MIXER_ANDERSON,
+            "strategy": scf_strategy(
+                "anderson", "charge", generations=2, soft_start=False
+            ),
             "maxiter": 2,
             "mix_guess": True,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
-            "damp_generations": 2,
-            "damp_soft_start": False,
         },
     )
     settings = setup_anderson_solver_settings(

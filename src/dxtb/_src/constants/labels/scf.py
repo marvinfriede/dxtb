@@ -27,37 +27,11 @@ __all__ = [
     "GUESS_SAD",
     "GUESS_SAD_STRS",
     "GUESS_MAP",
-    "SCF_MODE_FULL",
-    "SCF_MODE_FULL_STRS",
-    "SCF_MODE_IMPLICIT",
-    "SCF_MODE_IMPLICIT_STRS",
-    "SCF_MODE_REMOVED",
-    "SCF_MODE_REPLACEMENT",
-    "SCF_MODE_REMOVED_STRS",
-    "SCF_MODE_IMPLICIT_NON_PURE",
-    "SCF_MODE_IMPLICIT_NON_PURE_STRS",
-    "SCF_MODE_EXPERIMENTAL",
-    "SCF_MODE_EXPERIMENTAL_STRS",
-    "SCF_MODE_MAP",
-    "SCP_MODE_FOCK",
-    "SCP_MODE_FOCK_STRS",
-    "SCP_MODE_CHARGE",
-    "SCP_MODE_CHARGE_STRS",
-    "SCP_MODE_POTENTIAL",
-    "SCP_MODE_POTENTIAL_STRS",
-    "SCP_MODE_MAP",
     "FERMI_PARTITION_EQUAL",
     "FERMI_PARTITION_EQUAL_STRS",
     "FERMI_PARTITION_ATOMIC",
     "FERMI_PARTITION_ATOMIC_STRS",
     "FERMI_PARTITION_MAP",
-    "MIXER_LINEAR",
-    "MIXER_LINEAR_STRS",
-    "MIXER_ANDERSON",
-    "MIXER_ANDERSON_STRS",
-    "MIXER_BROYDEN",
-    "MIXER_BROYDEN_STRS",
-    "MIXER_MAP",
 ]
 
 # guess
@@ -74,94 +48,6 @@ GUESS_SAD_STRS = ("sad", "zero")
 GUESS_MAP = ["EEQ", "SAD"]
 """String map (for printing) of SCF guess methods."""
 
-# backward differentiation method
-SCF_MODE_FULL = 0
-"""Integer code for SCF with full tracking (unrolling) for Autograd."""
-
-SCF_MODE_FULL_STRS = ("full", "full_tracking", "unrolling")
-"""String codes for SCF with full tracking (unrolling) for Autograd."""
-
-SCF_MODE_IMPLICIT = 1
-"""Integer code for SCF using implicit function theorem for differentiation."""
-
-SCF_MODE_IMPLICIT_STRS = ("default", "implicit")
-"""String codes for SCF using implicit function theorem for differentiation."""
-
-SCF_MODE_REMOVED = 2
-"""Removed integer code (former non-pure implicit mode)."""
-
-SCF_MODE_REPLACEMENT = SCF_MODE_IMPLICIT_STRS[-1]
-"""String of the mode that replaces all removed modes."""
-
-SCF_MODE_REMOVED_STRS = {
-    name: SCF_MODE_REPLACEMENT
-    for name in (
-        "implicit_old",
-        "implicit_nonpure",
-        "nonpure",
-        "non-pure",
-        "old",
-    )
-}
-"""
-Removed SCF mode strings (the former non-pure implicit mode, integer code 2)
-and their replacement. The single implicit mode is now the one that
-differentiates the fixed point exactly (first and second derivatives).
-"""
-
-SCF_MODE_IMPLICIT_NON_PURE = SCF_MODE_REMOVED
-"""
-Deprecated alias of :data:`SCF_MODE_REMOVED`, kept so that code naming it
-gets the error that the mode was removed.
-"""
-
-SCF_MODE_IMPLICIT_NON_PURE_STRS = tuple(SCF_MODE_REMOVED_STRS)
-"""
-Deprecated: removed SCF mode strings (see :data:`SCF_MODE_REMOVED_STRS`),
-kept so that code naming them gets the error that the mode was removed.
-"""
-
-SCF_MODE_EXPERIMENTAL = 3
-"""Integer code for SCF with single-shot gradient."""
-
-SCF_MODE_EXPERIMENTAL_STRS = (
-    "experimental",
-    "perfect",
-    "single-shot",
-    "single_shot",
-)
-"""String codes for SCF with single-shot gradient."""
-
-SCF_MODE_MAP = [
-    "Full Tracking (unrolling)",
-    "implicit",
-    "(removed)",
-    "experimental",
-]
-"""String map (for printing) of SCF modes."""
-
-# convergence target
-SCP_MODE_FOCK = 0
-"""Integer code for SCF convergence targets."""
-
-SCP_MODE_FOCK_STRS = ("fock", "fockian")
-"""String codes for SCF convergence targets."""
-
-SCP_MODE_CHARGE = 1
-"""Integer code for SCF convergence targets."""
-
-SCP_MODE_CHARGE_STRS = ("charge", "charges")
-"""String codes for SCF convergence targets."""
-
-SCP_MODE_POTENTIAL = 2
-"""Integer code for SCF convergence targets."""
-
-SCP_MODE_POTENTIAL_STRS = ("potential", "pot")
-"""String codes for SCF convergence targets."""
-
-SCP_MODE_MAP = ["Fock matrix", "charges", "potential"]
-"""String map (for printing) of SCF convergence targets."""
-
 # fermi partition
 FERMI_PARTITION_EQUAL = 0
 """Integer code for equal Fermi partition."""
@@ -177,25 +63,3 @@ FERMI_PARTITION_ATOMIC_STRS = ("atom", "atomic")
 
 FERMI_PARTITION_MAP = ["equal", "atom"]
 """String map (for printing) of Fermi partitioning methods."""
-
-# mixer
-MIXER_LINEAR = 0
-"""Integer code for linear/simple mixing."""
-
-MIXER_LINEAR_STRS = ("linear", "l", "simple", "s")
-"""String codes for linear/simple mixing."""
-
-MIXER_ANDERSON = 1
-"""Integer code for Anderson mixing."""
-
-MIXER_ANDERSON_STRS = ("anderson", "a")
-"""String codes for Anderson mixing."""
-
-MIXER_BROYDEN = 2
-"""Integer code for Broyden mixing."""
-
-MIXER_BROYDEN_STRS = ("broyden", "b")
-"""String codes for Broyden mixing."""
-
-MIXER_MAP = ["Linear", "Anderson", "Broyden"]
-"""String map (for printing) of mixing methods."""

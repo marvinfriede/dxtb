@@ -31,6 +31,7 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 sample_list = ["LiH", "SiH4"]
@@ -38,8 +39,8 @@ sample_list = ["LiH", "SiH4"]
 opts = {
     "exclude": ["disp", "hal", "rep"],
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "unrolled",
+    "strategy": scf_strategy("anderson", "potential"),
     "x_atol": 1.0e-12,
     "verbosity": 0,
 }

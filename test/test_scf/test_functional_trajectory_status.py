@@ -30,7 +30,7 @@ from dxtb._src.scf.functional import (
     SCFSolverSettings,
     SCFSpectralResult,
     SCFTrajectoryStatus,
-    functional_converged_and_valid,
+    functional_return_valid,
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional.method import LinearMethod
@@ -137,7 +137,7 @@ def test_early_fermi_failure_survives_later_valid_selected_map() -> None:
     assert result.trajectory_status.fermi_converged.item() is False
     assert result.trajectory_status.invalid_temperature.item() is False
     assert functional_subsolves_ok(result).item() is False
-    assert functional_converged_and_valid(result).item() is False
+    assert functional_return_valid(result).item() is False
 
 
 def test_newly_converged_candidate_contributes_first_failure() -> None:

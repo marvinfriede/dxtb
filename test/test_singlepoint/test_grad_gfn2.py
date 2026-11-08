@@ -28,21 +28,26 @@ import torch
 from tad_mctc import read, read_chrg
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_tblite_grad
+from ..utils import get_param_module, load_from_tblite_grad, scf_strategy
 
 f = Path(__file__).resolve().parent / "refs" / "gfn2"
 
 opts = {
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
+
+
+def _strategy(differentiation: str):
+    """Anderson for unrolled, Broyden for implicit SCF differentiation."""
+    converger = "anderson" if differentiation == "unrolled" else "broyden"
+    return scf_strategy(converger, "potential")
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
@@ -50,8 +55,10 @@ opts = {
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["H2", "H2O", "SiH4"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_backward(
+    dtype: torch.dtype, name: str, differentiation: str
+) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50  # slightly larger for H2O!
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -67,16 +74,16 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
     options = dict(
         opts,
         **{
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "strategy": _strategy(differentiation),
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
-            "scf_mode": scf_mode,
+            "differentiation": differentiation,
         },
     )
     calc = Calculator(
         numbers, get_param_module("gfn2", **dd), opts=options, **dd
     )
     result = calc.singlepoint(positions, charge)
-    energy = result.total.sum(-1)
+    energy = result.energy.sum(-1)
 
     # autograd
     energy.backward()
@@ -99,8 +106,8 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 @pytest.mark.parametrize(
     "name", ["H2", "H2O", pytest.param("CH4", marks=pytest.mark.slow)]
 )
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_num(name: str, scf_mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_num(name: str, differentiation: str) -> None:
     dtype = torch.double
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -111,7 +118,7 @@ def test_num(name: str, scf_mode: str) -> None:
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     # do calc
-    gradient = num_grad(numbers, positions, charge, scf_mode, dd)
+    gradient = num_grad(numbers, positions, charge, differentiation, dd)
 
     ref = load_from_tblite_grad(f / f"{name.casefold()}.txt", **dd)
     g = ref["gradient"]
@@ -119,15 +126,19 @@ def test_num(name: str, scf_mode: str) -> None:
 
 
 def num_grad(
-    numbers: Tensor, positions: Tensor, charge: Tensor, scf_mode: str, dd: DD
+    numbers: Tensor,
+    positions: Tensor,
+    charge: Tensor,
+    differentiation: str,
+    dd: DD,
 ) -> Tensor:
     """Calculate gradient numerically for reference."""
 
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
             "x_atol": 1e-5 if dd["dtype"] == torch.float else 1e-10,
         },
     )
@@ -142,11 +153,11 @@ def num_grad(
         for j in range(3):
             positions[i, j] += step
             result = calc.singlepoint(positions, charge)
-            er = result.total.sum(-1)
+            er = result.energy.sum(-1)
 
             positions[i, j] -= 2 * step
             result = calc.singlepoint(positions, charge)
-            el = result.total.sum(-1)
+            el = result.energy.sum(-1)
 
             positions[i, j] += step
             gradient[i, j] = 0.5 * (er - el) / step

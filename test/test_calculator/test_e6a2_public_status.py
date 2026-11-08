@@ -32,6 +32,8 @@ from dxtb import (
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _system(
     *,
@@ -46,16 +48,16 @@ def _system(
     """Build an independent production GFN1/GFN2 PyTorch System."""
     dtype = torch.float64
     method_label = labels.GFN2_XTB if method is GFN2_XTB else labels.GFN1_XTB
-    mixer = labels.MIXER_ANDERSON if method is GFN2_XTB else labels.MIXER_LINEAR
-    scp_mode = (
-        labels.SCP_MODE_FOCK if method is GFN2_XTB else labels.SCP_MODE_CHARGE
+    strategy = (
+        scf_strategy("anderson", "fock")
+        if method is GFN2_XTB
+        else scf_strategy("linear", "charge")
     )
     config = Config.create(
         method=method_label,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=mixer,
-        scp_mode=scp_mode,
+        strategy=strategy,
         maxiter=maxiter,
         force_convergence=force_convergence,
         fermi_etemp=temperature,

@@ -396,3 +396,50 @@ def get_elem_param(
             l.append(val)
 
     return torch.tensor(l, device=device, dtype=dtype)
+
+
+def scf_strategy(
+    converger: str = "anderson",
+    variable: str | None = None,
+    **anderson: Any,
+):
+    """
+    Build a one-Stage SCF strategy from a preset SCF converger.
+
+    Parameters
+    ----------
+    converger : str, optional
+        Preset name of the SCF converger (``"linear"``, ``"anderson"``,
+        ``"broyden"`` or ``"cdiis"``). Defaults to ``"anderson"``.
+    variable : str | None, optional
+        SCF variable of the Stage (``"charge"``, ``"potential"`` or
+        ``"fock"``). ``None`` keeps the preset's variable.
+    **anderson : Any
+        Overrides of :class:`dxtb.scf.AndersonMethodSettings` fields
+        (only for the Anderson converger).
+
+    Returns
+    -------
+    SCFStrategy
+        Strategy with exactly one Stage.
+    """
+    from dataclasses import replace
+
+    from dxtb.scf import (
+        AndersonMethod,
+        SCFRepresentation,
+        SCFStrategy,
+        strategy_preset,
+    )
+
+    stage = strategy_preset(converger).stages[0]
+    if variable is not None:
+        stage = replace(stage, representation=SCFRepresentation(variable))
+    if anderson:
+        if not isinstance(stage.method, AndersonMethod):
+            raise ValueError("Anderson settings need the Anderson converger.")
+        stage = replace(
+            stage,
+            method=AndersonMethod(replace(stage.method.settings, **anderson)),
+        )
+    return SCFStrategy((stage,))

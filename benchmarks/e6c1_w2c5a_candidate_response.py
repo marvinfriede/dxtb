@@ -170,9 +170,9 @@ def run(output: Path, baseline_path: Path, mode: str) -> None:
                 torch_inter_threads=torch.get_num_interop_threads(),
                 thread_environment=THREAD_ENV,
                 scf={
-                    "scp_mode": "charge",
-                    "scf_mode": "full",
-                    "mixer": "anderson",
+                    "variable": "charge",
+                    "differentiation": "unrolled",
+                    "converger": "anderson",
                     "temperature_kelvin": 300.0,
                     "maxiter": 300,
                     "x_atol": 1.0e-8,

@@ -23,7 +23,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
+from dxtb import GFN1_XTB, GFN2_XTB, ParamModule
 from dxtb._src.scf.functional.implicit import _SCFMapTensorTree
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
 from dxtb._src.scf.functional.response import (
@@ -50,15 +50,15 @@ _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 def _implicit_config(
     config,
     *,
-    mixer: int,
-    representation: int | None = None,
+    converger: type,
+    representation: SCFRepresentation | None = None,
     **changes,
 ):
     """Build an implicit test configuration through the public strategy API."""
     stage = config.strategy.stages[0]
-    if mixer == labels.MIXER_LINEAR:
+    if converger is LinearMethod:
         method = LinearMethod()
-    elif mixer == labels.MIXER_ANDERSON:
+    elif converger is AndersonMethod:
         settings = (
             stage.method.settings
             if isinstance(stage.method, AndersonMethod)
@@ -72,14 +72,9 @@ def _implicit_config(
             else BroydenMethodSettings()
         )
         method = BroydenMethod(settings)
-    if representation is not None:
-        stage_representation = {
-            labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-            labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-            labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-        }[representation]
-    else:
-        stage_representation = stage.representation
+    stage_representation = (
+        stage.representation if representation is None else representation
+    )
     return replace(
         config,
         strategy=SCFStrategy(
@@ -94,12 +89,14 @@ def _implicit_config(
     )
 
 
-def _root_record(representation: int = labels.SCP_MODE_POTENTIAL):
+def _root_record(
+    representation: SCFRepresentation = SCFRepresentation.POTENTIAL,
+):
     case = _case(
         "H2",
         method=GFN1_XTB,
         representation=representation,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
         tolerance=1.0e-12,
     )
     record = _run_root(
@@ -108,7 +105,7 @@ def _root_record(representation: int = labels.SCP_MODE_POTENTIAL):
         tolerance=1.0e-12,
         maxiter=100,
         eager=True,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
     )
     assert record.converged
     settings = setup_solver_settings(case.system.config.scf, record.root.dtype)
@@ -123,13 +120,7 @@ def test_response_root_conversion_is_single_certified_physical_root() -> None:
         SCFRepresentation.FOCK,
     )
     for source in representations:
-        _, record, settings = _root_record(
-            {
-                SCFRepresentation.CHARGE: labels.SCP_MODE_CHARGE,
-                SCFRepresentation.POTENTIAL: labels.SCP_MODE_POTENTIAL,
-                SCFRepresentation.FOCK: labels.SCP_MODE_FOCK,
-            }[source]
-        )
+        _, record, settings = _root_record(source)
         for target in representations:
             prepared = prepare_response_root(
                 record.outcome,
@@ -233,7 +224,7 @@ def test_matrix_free_tangent_and_adjoint_match_dense_operator(
 
 def test_default_response_root_preserves_primal_pair() -> None:
     """Omitted response settings retain the final primal representation."""
-    _, record, settings = _root_record(labels.SCP_MODE_FOCK)
+    _, record, settings = _root_record(SCFRepresentation.FOCK)
     prepared = prepare_response_root(record.outcome, settings)
 
     assert prepared.problem.representation is SCFRepresentation.FOCK
@@ -258,7 +249,7 @@ def test_alternate_response_candidate_uses_one_raw_map_and_no_refinement(
         return original(self, x, *parameters)
 
     monkeypatch.setattr(_SCFMapTensorTree, "evaluate", counted)
-    _, record, settings = _root_record(labels.SCP_MODE_POTENTIAL)
+    _, record, settings = _root_record(SCFRepresentation.POTENTIAL)
     calls = 0
     prepared = prepare_response_root(
         record.outcome,
@@ -277,18 +268,18 @@ def test_first_and_second_responses_ignore_strategy_and_coordinates() -> None:
 
     field = torch.zeros(3, **_DD, requires_grad=True)
     results = []
-    for mixer in (labels.MIXER_BROYDEN, labels.MIXER_ANDERSON):
+    for converger in (BroydenMethod, AndersonMethod):
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=labels.SCP_MODE_POTENTIAL,
-            mixer=mixer,
+            representation=SCFRepresentation.POTENTIAL,
+            converger=converger,
             tolerance=1.0e-12,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            mixer=mixer,
+            converger=converger,
             maxiter=120,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -389,18 +380,18 @@ def test_geometry_response_is_independent_of_primal_strategy() -> None:
             "H2",
             method=GFN1_XTB,
             representation=(
-                labels.SCP_MODE_POTENTIAL
+                SCFRepresentation.POTENTIAL
                 if primal_representation is SCFRepresentation.POTENTIAL
-                else labels.SCP_MODE_FOCK
+                else SCFRepresentation.FOCK
             ),
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             tolerance=1.0e-12,
             field=field,
             positions_override=positions,
         )
         config = _implicit_config(
             case.system.config.scf,
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             maxiter=120,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -457,14 +448,14 @@ def test_response_tolerance_sweep_preserves_higher_derivatives() -> None:
         case = _case(
             "H2",
             method=GFN1_XTB,
-            representation=labels.SCP_MODE_POTENTIAL,
-            mixer=labels.MIXER_BROYDEN,
+            representation=SCFRepresentation.POTENTIAL,
+            converger=BroydenMethod,
             tolerance=1.0e-12,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             maxiter=120,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -526,12 +517,12 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
     cases = (
         (
             "cdiis",
-            labels.SCP_MODE_FOCK,
+            SCFRepresentation.FOCK,
             SCFStrategy((SCFStage(CDIISMethod()),)),
         ),
         (
             "broyden_cdiis_soscf",
-            labels.SCP_MODE_POTENTIAL,
+            SCFRepresentation.POTENTIAL,
             SCFStrategy(
                 (
                     SCFStage(
@@ -564,14 +555,14 @@ def test_broyden_cdiis_soscf_implicit_matches_cdiis_reference() -> None:
             "H2O",
             method=GFN2_XTB,
             representation=representation,
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             tolerance=1.0e-10,
             maxiter=300,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             representation=representation,
             maxiter=300,
             x_atol=1.0e-10,
@@ -649,7 +640,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
     strategies = (
         (
             "broyden",
-            labels.MIXER_BROYDEN,
+            BroydenMethod,
             SCFStrategy(
                 (
                     SCFStage(
@@ -661,7 +652,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         ),
         (
             "anderson",
-            labels.MIXER_ANDERSON,
+            AndersonMethod,
             SCFStrategy(
                 (
                     SCFStage(
@@ -675,7 +666,7 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         ),
         (
             "broyden_cdiis",
-            labels.MIXER_BROYDEN,
+            BroydenMethod,
             SCFStrategy(
                 (
                     SCFStage(
@@ -692,13 +683,13 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         ),
     )
     results = []
-    for name, mixer, strategy in strategies:
+    for name, converger, strategy in strategies:
         field = torch.zeros(3, **_DD, requires_grad=True)
         case = _case(
             "NO2",
             method=GFN2_XTB,
-            representation=labels.SCP_MODE_FOCK,
-            mixer=mixer,
+            representation=SCFRepresentation.FOCK,
+            converger=converger,
             tolerance=1.0e-10,
             maxiter=300,
             temperature=2000.0,
@@ -708,8 +699,8 @@ def test_active_smearing_responses_agree_across_first_order_strategies() -> (
         assert case.inputs.fermi_settings.smear
         config = _implicit_config(
             case.system.config.scf,
-            mixer=mixer,
-            representation=labels.SCP_MODE_FOCK,
+            converger=converger,
+            representation=SCFRepresentation.FOCK,
             maxiter=300,
             x_atol=1.0e-10,
             x_atol_max=1.0e-10,
@@ -774,15 +765,15 @@ def test_no2_third_order_response_agrees_in_potential_and_fock_coordinates() -> 
         case = _case(
             "NO2",
             method=GFN2_XTB,
-            representation=labels.SCP_MODE_POTENTIAL,
-            mixer=labels.MIXER_BROYDEN,
+            representation=SCFRepresentation.POTENTIAL,
+            converger=BroydenMethod,
             tolerance=1.0e-12,
             maxiter=300,
             field=field,
         )
         config = _implicit_config(
             case.system.config.scf,
-            mixer=labels.MIXER_BROYDEN,
+            converger=BroydenMethod,
             maxiter=300,
             x_atol=1.0e-12,
             x_atol_max=1.0e-12,
@@ -821,7 +812,7 @@ def test_response_adapter_flatten_roundtrip_is_complete() -> None:
     problem = record.outcome.final_problem
     adapter, parameters = _SCFMapTensorTree.prepare(
         problem.inputs,
-        labels.SCP_MODE_POTENTIAL,
+        SCFRepresentation.POTENTIAL,
         problem.potential_layout,
     )
     assert len(adapter.parameter_paths) == len(adapter.flatten())
@@ -842,14 +833,14 @@ def test_response_adapter_parameter_tree_covers_thermal_gfn2_field_leaves() -> (
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_CHARGE,
+        representation=SCFRepresentation.CHARGE,
         tolerance=1.0e-10,
         temperature=2000.0,
         field=field,
     )
     initial, layout = _initial_state(case, case.inputs)
     adapter, parameters = _SCFMapTensorTree.prepare(
-        case.inputs, labels.SCP_MODE_CHARGE, layout
+        case.inputs, SCFRepresentation.CHARGE, layout
     )
     assert len(adapter.parameter_paths) == len(parameters)
     assert "fermi_settings.kt" in adapter.parameter_paths
@@ -873,14 +864,14 @@ def test_implicit_response_reaches_a_genuine_gfn2_model_parameter() -> None:
     case = _case(
         "H2O",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=BroydenMethod,
         tolerance=1.0e-12,
         parameter_module=parameter_module,
     )
     config = _implicit_config(
         case.system.config.scf,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
         maxiter=300,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -916,14 +907,14 @@ def test_response_linear_solve_controls_are_forwarded_and_fail_closed() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_CHARGE,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.CHARGE,
+        converger=BroydenMethod,
         tolerance=1.0e-12,
         field=field,
     )
     config = _implicit_config(
         case.system.config.scf,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
         maxiter=200,
         x_atol=1.0e-12,
         x_atol_max=1.0e-12,
@@ -975,8 +966,8 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_CHARGE,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.CHARGE,
+        converger=BroydenMethod,
         tolerance=1.0e-12,
         field=field,
     )
@@ -989,11 +980,11 @@ def test_physical_tangent_response_failure_is_nonfinite() -> None:
         tolerance=1.0e-12,
         maxiter=200,
         eager=True,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
     )
     problem = record.outcome.final_problem
     adapter, parameters = _SCFMapTensorTree.prepare(
-        problem.inputs, labels.SCP_MODE_CHARGE
+        problem.inputs, SCFRepresentation.CHARGE
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     hcore = parameters[hcore_index]

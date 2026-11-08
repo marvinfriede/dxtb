@@ -43,13 +43,14 @@ from dxtb._src.scf.functional import map as functional_map
 from dxtb._src.scf.functional import potential_to_hamiltonian
 from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    setup_simple_solver_settings,
+    setup_solver_settings,
     solve_scf_fock_simple,
 )
 from dxtb._src.scf.functional import solver as functional_solver
 from dxtb._src.scf.functional import validate_fock_state
 from dxtb.scf import LinearMethod
 
+from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_fock as solve_scf_fock_anderson
 from .test_functional_map import (
@@ -78,15 +79,22 @@ def _fock_guess(case: SimpleNamespace) -> torch.Tensor:
 
 
 def _run_functional(
-    options: dict[str, object], *, method: int = GFN1_XTB
+    options: dict[str, object],
+    *,
+    method: int = GFN1_XTB,
+    converger: str = "anderson",
+    **anderson: object,
 ) -> tuple[SimpleNamespace, torch.Tensor, object]:
-    options = {"scp_mode": labels.SCP_MODE_FOCK, **options}
+    options = {
+        "strategy": scf_strategy(converger, "fock", **anderson),
+        **options,
+    }
     functional = _prepare_case(method, scf_options=options)
     guess = _fock_guess(functional)
     _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
     if isinstance(config.strategy.stages[0].method, LinearMethod):
-        settings = setup_simple_solver_settings(config, guess.dtype)
+        settings = setup_solver_settings(config, guess.dtype)
         result = solve_scf_fock_simple(guess, functional.inputs, settings)
     else:
         settings = setup_anderson_solver_settings(config, guess.dtype)
@@ -101,7 +109,7 @@ def test_fock_initial_guess_without_spectrum(
     """Initial Fock guess is a charge-to-potential-to-H conversion only."""
     case = _prepare_case(
         method,
-        scf_options={"scp_mode": labels.SCP_MODE_FOCK},
+        scf_options={"strategy": scf_strategy("anderson", "fock")},
     )
     functional_guess = _fock_guess(case)
     _assert_tensor_equal(functional_guess, case.x)
@@ -129,7 +137,7 @@ def test_fock_initial_guess_call_local_parity(
     """Fock guess conversion preserves explicit count and field inputs."""
     case = _prepare_case(
         GFN1_XTB,
-        scf_options={"scp_mode": labels.SCP_MODE_FOCK},
+        scf_options={"strategy": scf_strategy("anderson", "fock")},
         **kwargs,
     )
     _assert_tensor_equal(_fock_guess(case), case.x)
@@ -138,7 +146,7 @@ def test_fock_initial_guess_call_local_parity(
 def test_fock_state_requires_single_structural_matrix() -> None:
     """Fock validation checks rank and static shape without values."""
     case = _prepare_case(
-        GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
+        GFN1_XTB, scf_options={"strategy": scf_strategy("anderson", "fock")}
     )
     guess = _fock_guess(case)
     validate_fock_state(guess, case.inputs)
@@ -170,7 +178,7 @@ def test_fock_raw_map_invariants(
     functional = _prepare_case(
         method,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
+            "strategy": scf_strategy("anderson", "fock"),
             "fermi_etemp": temperature,
         },
     )
@@ -210,7 +218,7 @@ def test_fock_raw_map_charged_spin_and_field(kwargs: dict[str, object]) -> None:
     """Fock raw maps retain explicit count and call-local field inputs."""
     functional = _prepare_case(
         GFN1_XTB,
-        scf_options={"scp_mode": labels.SCP_MODE_FOCK},
+        scf_options={"strategy": scf_strategy("anderson", "fock")},
         **kwargs,
     )
     x = _fock_guess(functional)
@@ -228,12 +236,12 @@ def test_fock_simple_finite_budget(
     """Fock Simple preserves finite-budget result phases and counts."""
     _, _, result = _run_functional(
         {
-            "mixer": labels.MIXER_LINEAR,
             "maxiter": maxiter,
             "mix_guess": mix_guess,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
-        }
+        },
+        converger="linear",
     )
     assert int(result.iterations) == maxiter + 1
     _assert_tensor_equal(result.hamiltonian, result.map_result.mapped_x)
@@ -249,22 +257,22 @@ def test_fock_simple_finite_budget(
 
 
 @pytest.mark.parametrize(
-    "mixer",
-    [labels.MIXER_LINEAR, labels.MIXER_ANDERSON],
+    "converger",
+    ["linear", "anderson"],
     ids=["simple", "anderson"],
 )
-def test_fock_normal_convergence(mixer: int) -> None:
+def test_fock_normal_convergence(converger: str) -> None:
     """Fock Simple and Anderson converge to matching public results."""
     options: dict[str, object] = {
-        "mixer": mixer,
         "maxiter": 80,
         "mix_guess": True,
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-8,
     }
-    if mixer == labels.MIXER_ANDERSON:
-        options.update({"damp_generations": 2, "damp_soft_start": False})
-    _, _, result = _run_functional(options)
+    anderson: dict[str, object] = {}
+    if converger == "anderson":
+        anderson = {"generations": 2, "soft_start": False}
+    _, _, result = _run_functional(options, converger=converger, **anderson)
     assert bool(result.converged)
     assert torch.isfinite(result.energy).all()
 
@@ -273,14 +281,13 @@ def test_fock_anderson_early_convergence_matches_selected_map() -> None:
     """Raw convergence alone cannot stop before Fock certification passes."""
     case, _, result = _run_functional(
         {
-            "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
             "mix_guess": True,
-            "damp_generations": 2,
-            "damp_soft_start": False,
             "x_atol": 1.0e6,
             "x_atol_max": 1.0e6,
-        }
+        },
+        generations=2,
+        soft_start=False,
     )
     assert bool(result.converged)
     assert int(result.iterations) > 2
@@ -314,15 +321,14 @@ def test_fock_final_free_energy(
         GFN1_XTB,
         charge=charge,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "fock"),
             "maxiter": 0,
             "fermi_etemp": temperature,
             "fermi_partition": partition,
         },
     )
     guess = _fock_guess(functional_case)
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         functional_case.system.config.scf, guess.dtype
     )
     result = solve_scf_fock_simple(guess, functional_case.inputs, settings)
@@ -339,12 +345,11 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_ANDERSON,
+            "strategy": scf_strategy(
+                "anderson", "fock", generations=1, soft_start=False
+            ),
             "maxiter": 5,
             "mix_guess": True,
-            "damp_generations": 1,
-            "damp_soft_start": False,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
         },
@@ -374,24 +379,23 @@ def test_fock_anderson_intermediate_matrices_remain_symmetric(
         torch.testing.assert_close(value, value.mT, rtol=0.0, atol=2e-13)
 
 
-@pytest.mark.parametrize("mixer", [labels.MIXER_LINEAR, labels.MIXER_ANDERSON])
+@pytest.mark.parametrize("converger", ["linear", "anderson"])
 def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
-    mixer: int, monkeypatch: pytest.MonkeyPatch
+    converger: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One-shot Fock solve has one map spectrum and one final spectrum."""
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": mixer,
+            "strategy": scf_strategy(converger, "fock"),
             "maxiter": 0,
             "fermi_etemp": 300.0,
         },
     )
     guess = _fock_guess(case)
     settings = (
-        setup_simple_solver_settings(case.system.config.scf, guess.dtype)
-        if mixer == labels.MIXER_LINEAR
+        setup_solver_settings(case.system.config.scf, guess.dtype)
+        if converger == "linear"
         else setup_anderson_solver_settings(case.system.config.scf, guess.dtype)
     )
     calls = 0
@@ -403,7 +407,7 @@ def test_fock_maxiter_zero_uses_one_raw_and_one_final_spectrum(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(functional_map, "_transitional_diagonalize", counted)
-    if mixer == labels.MIXER_LINEAR:
+    if converger == "linear":
         result = solve_scf_fock_simple(guess, case.inputs, settings)
     else:
         result = solve_scf_fock_anderson(guess, case.inputs, settings)
@@ -423,15 +427,14 @@ def test_fock_anderson_accelerates_and_preserves_symmetry(
     """Accelerated full-matrix Anderson updates remain symmetric."""
     _, guess, result = _run_functional(
         {
-            "mixer": labels.MIXER_ANDERSON,
             "maxiter": 8,
             "mix_guess": True,
-            "damp_generations": 2,
-            "damp_soft_start": False,
             "fermi_etemp": temperature,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
-        }
+        },
+        generations=2,
+        soft_start=False,
     )
     assert int(result.iterations) == 9
     assert torch.allclose(guess, guess.mT, atol=2e-13, rtol=0)
@@ -450,13 +453,13 @@ def test_fock_gfn2_multipole_solver() -> None:
     """GFN2 Fock solving retains monopole, dipole, and quadrupole physics."""
     _, _, result = _run_functional(
         {
-            "mixer": labels.MIXER_LINEAR,
             "maxiter": 2,
             "mix_guess": False,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
             "fermi_etemp": 300.0,
         },
+        converger="linear",
         method=GFN2_XTB,
     )
     assert result.final_charges.dipole is not None
@@ -468,8 +471,7 @@ def test_fock_gfn2_multipole_solver() -> None:
 def test_fock_position_derivatives_match_physical_fd() -> None:
     """Fock density response matches physical finite differences."""
     options: dict[str, object] = {
-        "scp_mode": labels.SCP_MODE_FOCK,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "fock"),
         "maxiter": 1,
         "mix_guess": False,
         "x_atol": 0.0,
@@ -481,7 +483,7 @@ def test_fock_position_derivatives_match_physical_fd() -> None:
         GFN1_XTB, positions=positions, scf_options=options
     )
     guess = _fock_guess(functional)
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         functional.system.config.scf, positions.dtype
     )
     energy = solve_scf_fock_simple(
@@ -495,7 +497,7 @@ def test_fock_position_derivatives_match_physical_fd() -> None:
     def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
         initial = _fock_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, value.dtype
         )
         return solve_scf_fock_simple(
@@ -508,8 +510,7 @@ def test_fock_position_derivatives_match_physical_fd() -> None:
 def test_fock_parameter_and_field_gradients() -> None:
     """Fock finalization preserves parameter and explicit-field graphs."""
     options: dict[str, object] = {
-        "scp_mode": labels.SCP_MODE_FOCK,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "fock"),
         "maxiter": 0,
         "fermi_etemp": 300.0,
     }
@@ -518,7 +519,7 @@ def test_fock_parameter_and_field_gradients() -> None:
     leaf.requires_grad_(True)
     case = _prepare_case(GFN1_XTB, par=parameter, scf_options=options)
     guess = _fock_guess(case)
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
     total = (result.energy + result.fenergy).sum()
     grad = torch.autograd.grad(total, leaf)[0]
@@ -530,7 +531,7 @@ def test_fock_parameter_and_field_gradients() -> None:
     )
     field_case = _prepare_case(GFN1_XTB, field=field, scf_options=options)
     field_guess = _fock_guess(field_case)
-    field_settings = setup_simple_solver_settings(
+    field_settings = setup_solver_settings(
         field_case.system.config.scf, field_guess.dtype
     )
     field_result = solve_scf_fock_simple(
@@ -545,7 +546,7 @@ def test_fock_parameter_and_field_gradients() -> None:
     def total_at_field(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, field=value, scf_options=options)
         initial = _fock_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, value.dtype
         )
         result = solve_scf_fock_simple(initial, case.inputs, local_settings)
@@ -558,14 +559,13 @@ def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
     """Finite-temperature Fock finalization preserves charge/electron AD."""
     charge = torch.tensor([0.25], dtype=torch.float64, requires_grad=True)
     options: dict[str, object] = {
-        "scp_mode": labels.SCP_MODE_FOCK,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "fock"),
         "maxiter": 0,
         "fermi_etemp": 300.0,
     }
     functional = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
     guess = _fock_guess(functional)
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         functional.system.config.scf, guess.dtype
     )
     result = solve_scf_fock_simple(guess, functional.inputs, settings)
@@ -579,7 +579,7 @@ def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
     def total_at_charge(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
         initial = _fock_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, initial.dtype
         )
         result = solve_scf_fock_simple(initial, case.inputs, local_settings)
@@ -591,7 +591,7 @@ def test_fock_fractional_charge_gradient_matches_physical_fd() -> None:
 def test_fock_map_reverse_jvp_jacfwd_are_finite() -> None:
     """Fock map transforms remain finite for symmetric matrix directions."""
     case = _prepare_case(
-        GFN1_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
+        GFN1_XTB, scf_options={"strategy": scf_strategy("anderson", "fock")}
     )
     x = _fock_guess(case)
     direction = torch.arange(x.numel(), dtype=x.dtype).reshape_as(x) / 1000
@@ -609,7 +609,7 @@ def test_fock_map_reverse_jvp_jacfwd_are_finite() -> None:
 def test_potential_to_hamiltonian_transform_ladder_is_consistent() -> None:
     """The smooth potential assembly subpath agrees across AD modes."""
     case = _prepare_case(
-        GFN2_XTB, scf_options={"scp_mode": labels.SCP_MODE_FOCK}
+        GFN2_XTB, scf_options={"strategy": scf_strategy("anderson", "fock")}
     )
     point = case.integrals.hcore.new_zeros(
         case.inputs.charge_layout.mono_shape
@@ -650,8 +650,7 @@ def test_fock_solver_vmap_matches_loop() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "fock"),
             "maxiter": 1,
             "mix_guess": False,
             "x_atol": 0.0,
@@ -663,7 +662,7 @@ def test_fock_solver_vmap_matches_loop() -> None:
     perturb = torch.arange(guess.numel(), dtype=guess.dtype).reshape_as(guess)
     perturb = (perturb + perturb.mT) * 1.0e-5
     guesses = torch.stack((guess, guess + perturb))
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
 
     def run(x: torch.Tensor):
         result = solve_scf_fock_simple(x, case.inputs, settings)
@@ -690,8 +689,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "fock"),
             "maxiter": 1,
             "mix_guess": False,
             "fermi_etemp": 300.0,
@@ -720,7 +718,7 @@ def test_fock_raw_failure_survives_valid_later_and_final_spectra(
         return result
 
     monkeypatch.setattr(functional_problem, "fock_map", fail_initial)
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_fock_simple(guess, case.inputs, settings)
     assert calls == 2
     assert not bool(result.converged)
@@ -742,14 +740,13 @@ def test_fock_zero_budget_uses_final_status_only(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_FOCK,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "fock"),
             "maxiter": 0,
             "fermi_etemp": 300.0,
         },
     )
     guess = _fock_guess(case)
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
     original = functional_solver.evaluate_hamiltonian
 
     def fail_final(hamiltonian: torch.Tensor, inputs: object):

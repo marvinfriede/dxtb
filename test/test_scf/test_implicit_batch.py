@@ -39,7 +39,7 @@ def test_zero_gradient_for_one_system(dtype: torch.dtype) -> None:
         [mols["LiH"]["positions"].to(**dd), mols["H2O"]["positions"].to(**dd)]
     ).requires_grad_(True)
 
-    opts = {"scf_mode": "implicit", "verbosity": 0}
+    opts = {"differentiation": "implicit", "verbosity": 0}
     calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
     q = calc.singlepoint(positions).charges.mono
 

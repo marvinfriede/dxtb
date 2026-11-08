@@ -27,6 +27,8 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.wavefunction.filling import get_alpha_beta_occupation
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _system(
     method: object,
@@ -35,8 +37,8 @@ def _system(
     maxiter: int = 2,
     temperature: float = 0.0,
     intlevel: int = labels.INTLEVEL_HCORE,
-    mixer: int = labels.MIXER_LINEAR,
-    scp_mode: int = labels.SCP_MODE_CHARGE,
+    converger: str = "linear",
+    variable: str = "charge",
     par: ParamModule | None = None,
 ):
     """Build an independent production PyTorch System."""
@@ -45,9 +47,8 @@ def _system(
         method=(labels.GFN1_XTB if method is GFN1_XTB else labels.GFN2_XTB),
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=intlevel,
-        mixer=mixer,
-        scp_mode=scp_mode,
-        scf_mode=labels.SCF_MODE_FULL,
+        strategy=scf_strategy(converger, variable),
+        differentiation="unrolled",
         maxiter=maxiter,
         force_convergence=False,
         fermi_etemp=temperature,
@@ -114,35 +115,25 @@ def _assert_result_batch_matches_serial(
 
 
 @pytest.mark.parametrize(
-    ("method", "numbers", "mixer", "scp_mode", "batch_size"),
+    ("method", "numbers", "converger", "variable", "batch_size"),
     [
-        (
-            GFN1_XTB,
-            (8, 1, 1),
-            labels.MIXER_LINEAR,
-            labels.SCP_MODE_CHARGE,
-            2,
-        ),
-        (GFN2_XTB, (1, 1), labels.MIXER_ANDERSON, labels.SCP_MODE_FOCK, 3),
-        (
-            GFN2_XTB,
-            (8, 1, 1),
-            labels.MIXER_ANDERSON,
-            labels.SCP_MODE_FOCK,
-            2,
-        ),
+        (GFN1_XTB, (8, 1, 1), "linear", "charge", 2),
+        (GFN2_XTB, (1, 1), "anderson", "fock", 3),
+        (GFN2_XTB, (8, 1, 1), "anderson", "fock", 2),
     ],
     ids=["gfn1-h2o", "gfn2-h2", "gfn2-h2o"],
 )
 def test_public_system_conformer_vmap_result_matches_serial(
     method: object,
     numbers: tuple[int, ...],
-    mixer: int,
-    scp_mode: int,
+    converger: str,
+    variable: str,
     batch_size: int,
 ) -> None:
     """GFN1/GFN2 public calls map complete Result trees over conformers."""
-    system = _system(method, numbers, mixer=mixer, scp_mode=scp_mode)
+    system = _system(
+        method, numbers, converger=converger, variable=variable
+    )
     positions = _geometries(numbers, count=batch_size)
     mapped = torch.func.vmap(system.singlepoint, in_dims=(0,))(positions)
     serial = [system.singlepoint(position) for position in positions]
@@ -270,8 +261,8 @@ def test_gfn2_anderson_public_vmap_position_gradients_match_serial() -> None:
     system = _system(
         GFN2_XTB,
         (1, 1),
-        mixer=labels.MIXER_ANDERSON,
-        scp_mode=labels.SCP_MODE_FOCK,
+        converger="anderson",
+        variable="fock",
     )
     positions = _geometries((1, 1), count=2)
 

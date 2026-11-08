@@ -14,18 +14,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from dxtb._src.calculators.config.scf import (
-    _GUESS,
-    _MIXER,
-    _SCF_MODE,
-    _SCP_MODE,
-    ConfigFermi,
-    _label,
-)
+from dxtb._src.calculators.config.scf import _GUESS, ConfigFermi, _label
 from dxtb._src.constants import defaults, labels
 
 
@@ -76,8 +69,7 @@ class ConfigSCF:
     """Public SCF configuration with a single authoritative strategy.
 
     The core stores immutable stages, derivative policy, response policy, and
-    named accuracy profile. Old ``mixer``/``scp_mode`` construction arguments
-    are accepted only by :meth:`create`, converted immediately, and discarded.
+    named accuracy profile.
 
     Example
     -------
@@ -198,52 +190,12 @@ class ConfigSCF:
         fermi_thresh: float | int | None = defaults.FERMI_THRESH,
         fermi_diff_order: int = defaults.FERMI_DIFF_ORDER,
         fermi_partition: str | int = defaults.FERMI_PARTITION,
-        mixer: str | int | None = None,
-        scp_mode: str | int | None = None,
-        scf_mode: str | int | None = None,
-        damp_init: float | None = None,
-        damp_soft_start: bool | None = None,
-        damp_generations: int | None = None,
-        damp_diagonal_offset: float | None = None,
     ) -> ConfigSCF:
         """Create a ConfigSCF from a named preset or immutable strategy."""
-        from dxtb.scf import (
-            AndersonMethod,
-            AndersonMethodSettings,
-            SCFRepresentation,
-            SCFStrategy,
-            strategy_preset,
-        )
+        from dxtb.scf import SCFStrategy, strategy_preset
 
-        explicit_strategy = strategy is not None
-        if strategy is not None and mixer is not None:
-            raise ValueError("Choose strategy or mixer construction, not both.")
-        if strategy is not None and scp_mode is not None:
-            raise ValueError("Choose strategy or legacy scp_mode, not both.")
-        legacy_anderson_options = any(
-            value is not None
-            for value in (
-                damp_init,
-                damp_soft_start,
-                damp_generations,
-                damp_diagonal_offset,
-            )
-        )
-        if explicit_strategy and legacy_anderson_options:
-            raise ValueError(
-                "Legacy Anderson options cannot be combined with strategy; "
-                "configure AndersonMethodSettings on an SCFStage instead."
-            )
         if strategy is None:
-            method_name = "anderson"
-            if mixer is not None:
-                code = _label(mixer, "mixer", _MIXER, "Unknown mixer")
-                method_name = {
-                    labels.MIXER_LINEAR: "linear",
-                    labels.MIXER_ANDERSON: "anderson",
-                    labels.MIXER_BROYDEN: "broyden",
-                }[code]
-            strategy_value = strategy_preset(method_name)
+            strategy_value = strategy_preset("anderson")
         elif isinstance(strategy, str):
             strategy_value = strategy_preset(strategy)
         elif isinstance(strategy, SCFStrategy):
@@ -251,100 +203,6 @@ class ConfigSCF:
         else:
             raise TypeError("strategy must be a preset name or SCFStrategy.")
 
-        if scp_mode is not None:
-            if len(strategy_value.stages) != 1:
-                raise ValueError(
-                    "Set representation on each SCFStage for a multi-stage strategy."
-                )
-            code = _label(
-                scp_mode,
-                "representation",
-                _SCP_MODE,
-                "Unknown SCF representation",
-            )
-            representation = {
-                labels.SCP_MODE_CHARGE: SCFRepresentation.CHARGE,
-                labels.SCP_MODE_POTENTIAL: SCFRepresentation.POTENTIAL,
-                labels.SCP_MODE_FOCK: SCFRepresentation.FOCK,
-            }[code]
-            configured = strategy_value.stages[0].representation
-            if explicit_strategy and configured is not None:
-                raise ValueError(
-                    "Choose strategy-stage representation or legacy scp_mode, "
-                    "not both."
-                )
-            strategy_value = SCFStrategy(
-                (
-                    replace(
-                        strategy_value.stages[0], representation=representation
-                    ),
-                )
-            )
-
-        if any(
-            value is not None
-            for value in (
-                damp_init,
-                damp_soft_start,
-                damp_generations,
-                damp_diagonal_offset,
-            )
-        ):
-            if len(strategy_value.stages) != 1 or not isinstance(
-                strategy_value.stages[0].method, AndersonMethod
-            ):
-                if explicit_strategy:
-                    raise ValueError(
-                        "Anderson options require an Anderson stage."
-                    )
-            else:
-                stage = strategy_value.stages[0]
-                old = stage.method.settings
-                updated = AndersonMethod(
-                    AndersonMethodSettings(
-                        damp_init=(
-                            old.damp_init if damp_init is None else damp_init
-                        ),
-                        generations=(
-                            old.generations
-                            if damp_generations is None
-                            else damp_generations
-                        ),
-                        soft_start=(
-                            old.soft_start
-                            if damp_soft_start is None
-                            else damp_soft_start
-                        ),
-                        diagonal_offset=(
-                            old.diagonal_offset
-                            if damp_diagonal_offset is None
-                            else damp_diagonal_offset
-                        ),
-                    )
-                )
-                strategy_value = SCFStrategy((replace(stage, method=updated),))
-
-        if scf_mode is not None and differentiation is not None:
-            raise ValueError(
-                "Choose differentiation or legacy scf_mode, not both."
-            )
-        if scf_mode is not None:
-            mode_code = _label(
-                scf_mode,
-                "SCF differentiation mode",
-                _SCF_MODE,
-                "Unknown SCF differentiation mode",
-            )
-            if mode_code == labels.SCF_MODE_EXPERIMENTAL:
-                raise ValueError(
-                    "Experimental single-shot SCF was retired; choose "
-                    "unrolled or implicit differentiation."
-                )
-            differentiation = (
-                "implicit"
-                if mode_code == labels.SCF_MODE_IMPLICIT
-                else "unrolled"
-            )
         if differentiation is None:
             differentiation = "unrolled"
 
@@ -391,53 +249,6 @@ class ConfigSCF:
     @property
     def initial_representation(self):
         return _first_representation(self.strategy)
-
-    @property
-    def _legacy_representation_code(self) -> int:
-        return {
-            "charge": labels.SCP_MODE_CHARGE,
-            "potential": labels.SCP_MODE_POTENTIAL,
-            "fock": labels.SCP_MODE_FOCK,
-        }[self.initial_representation.value]
-
-    @property
-    def _legacy_mode_code(self) -> int:
-        return (
-            labels.SCF_MODE_IMPLICIT
-            if self.differentiation is SCFDifferentiation.IMPLICIT
-            else labels.SCF_MODE_FULL
-        )
-
-    @property
-    def _legacy_method_code(self) -> int:
-        from dxtb._src.scf.functional.anderson import AndersonMethod
-        from dxtb._src.scf.functional.broyden import BroydenMethod
-        from dxtb._src.scf.functional.method import LinearMethod
-
-        method = self.strategy.stages[0].method
-        if isinstance(method, LinearMethod):
-            return labels.MIXER_LINEAR
-        if isinstance(method, AndersonMethod):
-            return labels.MIXER_ANDERSON
-        if isinstance(method, BroydenMethod):
-            return labels.MIXER_BROYDEN
-        raise NotImplementedError(
-            f"{type(method).__name__} has no legacy packed-SCF method code."
-        )
-
-    @property
-    def _anderson_settings(self):
-        from dxtb._src.scf.functional.anderson import (
-            AndersonMethod,
-            AndersonMethodSettings,
-        )
-
-        method = self.strategy.stages[0].method
-        return (
-            method.settings
-            if isinstance(method, AndersonMethod)
-            else AndersonMethodSettings()
-        )
 
     def info(self) -> dict[str, Any]:
         """Return stable, address-free strategy and convergence diagnostics."""

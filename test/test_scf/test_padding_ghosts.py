@@ -47,8 +47,8 @@ opts = {
 
 
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
-@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
-def test_anion_in_padded_batch(par, scf_mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["unrolled", "implicit"])
+def test_anion_in_padded_batch(par, differentiation: str) -> None:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
     numbers = [
         mols["H2O"]["numbers"].to(DEVICE),
@@ -60,7 +60,7 @@ def test_anion_in_padded_batch(par, scf_mode: str) -> None:
     ]
     charges = [torch.tensor(0.0, **dd), torch.tensor(-1.0, **dd)]
 
-    o = dict(opts, scf_mode=scf_mode)
+    o = dict(opts, differentiation=differentiation)
     ref = torch.stack(
         [
             Calculator(n, par, opts=o, **dd).get_energy(p, chrg=c)

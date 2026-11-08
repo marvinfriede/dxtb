@@ -100,30 +100,66 @@ The result's convergence flag and residual describe primal S2 physical
 certification and controller progress. A later implicit response failure is
 a derivative failure and does not change the primal convergence result.
 
-The older ``mixer`` and global ``scp_mode`` vocabulary is replaced by a
-strategy whose individual stages own their method and representation.
-``f_atol`` is retired; SCF convergence uses physical fixed-point and
-stationarity checks.
+Removed options
+---------------
 
-The configuration migration is:
+The older flat SCF options were removed, not converted. ``Config.create``,
+``ConfigSCF.create`` and ``Calculator(..., opts={...})`` no longer accept
+``mixer``, ``scp_mode``, ``scf_mode``, ``damp_init``, ``damp_soft_start``,
+``damp_generations``, ``damp_diagonal_offset`` or ``f_atol``; passing any of
+them raises a ``TypeError``. The integer label families ``SCF_MODE_*``,
+``SCP_MODE_*`` and ``MIXER_*`` were removed from :mod:`dxtb.labels` as well.
+A strategy whose Stages own their SCF converger and SCF variable replaces the
+global converger and representation options, and ``differentiation`` replaces
+the SCF mode. SCF convergence uses physical fixed-point and stationarity
+checks; there is no residual-norm (``f_atol``) or ``strict`` switch.
+
+Rewrite old configurations as follows:
 
 .. list-table::
    :header-rows: 1
 
-   * - Previous option
-     - Current option
-   * - ``mixer="simple"``
+   * - Removed option
+     - Replacement
+   * - ``mixer="simple"`` (or ``"linear"``)
      - ``strategy="linear"``
-   * - ``mixer="anderson"`` or ``mixer="broyden"``
-     - ``strategy="anderson"`` or ``strategy="broyden"``
-   * - ``scp_mode=...``
-     - Select a named preset or set ``SCFStage.representation``
-   * - ``scf_mode="FULL"`` / ``"IMPLICIT"``
-     - ``differentiation="unrolled"`` / ``"implicit"``
+   * - ``mixer="anderson"`` / ``mixer="broyden"``
+     - ``strategy="anderson"`` / ``strategy="broyden"``
+   * - ``scp_mode="charge"`` / ``"potential"`` / ``"fock"``
+     - Set ``SCFStage.representation`` to ``SCFRepresentation.CHARGE`` /
+       ``POTENTIAL`` / ``FOCK`` (see below)
+   * - ``damp_init``, ``damp_generations``, ``damp_soft_start``,
+       ``damp_diagonal_offset``
+     - ``AndersonMethodSettings(damp_init=..., generations=...,
+       soft_start=..., diagonal_offset=...)`` on an Anderson Stage
+   * - ``scf_mode="full"`` / ``scf_mode="implicit"``
+     - ``differentiation="unrolled"`` / ``differentiation="implicit"``
    * - ``f_atol`` or ``strict``
      - Use an explicit convergence profile; neither option controls SCF now
 
-Parser-edge compatibility accepts a limited set of the old names and converts
-them immediately to the strategy API. The functional configuration stores no
-``mixer`` or global representation field. Experimental single-shot SCF and
-legacy SCF engine overrides are rejected.
+A named preset keeps its own SCF variable (potential coordinates for
+``linear``, ``anderson`` and ``broyden``). To run a preset converger on
+another SCF variable, replace the representation of its Stage, for example
+the old ``mixer="anderson", scp_mode="charge", scf_mode="full"``:
+
+.. code-block:: python
+
+   from dataclasses import replace
+
+   from dxtb import scf
+   from dxtb.config import Config
+
+   stage = replace(
+       scf.strategy_preset("anderson").stages[0],
+       representation=scf.SCFRepresentation.CHARGE,
+   )
+   config = Config.create(
+       strategy=scf.SCFStrategy((stage,)),
+       differentiation="unrolled",
+   )
+
+The functional configuration stores no converger or global representation
+field: read them from the strategy (``config.scf.initial_representation`` and
+``config.scf.strategy.stages[0].method``) and the derivative policy from
+``config.scf.differentiation``. Experimental single-shot SCF and legacy SCF
+engine overrides no longer exist.

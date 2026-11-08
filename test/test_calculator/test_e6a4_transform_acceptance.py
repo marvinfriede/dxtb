@@ -26,13 +26,15 @@ from dxtb import GFN1_XTB, GFN2_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _system(
     method: object,
     numbers: tuple[int, ...],
     *,
-    mixer: int | None = None,
-    scp_mode: int | None = None,
+    converger: str | None = None,
+    variable: str | None = None,
     maxiter: int = 2,
     temperature: float = 0.0,
 ):
@@ -42,15 +44,17 @@ def _system(
         method=labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=(
-            mixer
-            if mixer is not None
-            else labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR
-        ),
-        scp_mode=(
-            scp_mode
-            if scp_mode is not None
-            else labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
+        strategy=scf_strategy(
+            (
+                converger
+                if converger is not None
+                else "anderson" if is_gfn2 else "linear"
+            ),
+            (
+                variable
+                if variable is not None
+                else "fock" if is_gfn2 else "charge"
+            ),
         ),
         maxiter=maxiter,
         fermi_etemp=temperature,
@@ -170,34 +174,26 @@ def test_gfn2_public_forward_and_mapped_derivatives(
 
 
 @pytest.mark.parametrize(
-    ("method", "mixer", "scp_mode"),
+    ("method", "converger", "variable"),
     [
-        (method, mixer, scp_mode)
+        (method, converger, variable)
         for method in (GFN1_XTB, GFN2_XTB)
-        for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON)
-        for scp_mode in (
-            labels.SCP_MODE_CHARGE,
-            labels.SCP_MODE_POTENTIAL,
-            labels.SCP_MODE_FOCK,
-        )
+        for converger in ("linear", "anderson")
+        for variable in ("charge", "potential", "fock")
     ],
     ids=[
-        f"{method}-{mixer}-{scp_mode}"
+        f"{method}-{converger}-{variable}"
         for method in (GFN1_XTB, GFN2_XTB)
-        for mixer in (labels.MIXER_LINEAR, labels.MIXER_ANDERSON)
-        for scp_mode in (
-            labels.SCP_MODE_CHARGE,
-            labels.SCP_MODE_POTENTIAL,
-            labels.SCP_MODE_FOCK,
-        )
+        for converger in ("linear", "anderson")
+        for variable in ("charge", "potential", "fock")
     ],
 )
-def test_h2_public_vmap_mixer_and_scp_modes(
-    method: object, mixer: int, scp_mode: int
+def test_h2_public_vmap_convergers_and_variables(
+    method: object, converger: str, variable: str
 ) -> None:
-    """Supported GFN1/GFN2 mixer and SCP modes preserve serial parity."""
+    """Supported GFN1/GFN2 SCF convergers and variables keep serial parity."""
     _, _, system = _system(
-        method, (1, 1), mixer=mixer, scp_mode=scp_mode, maxiter=1
+        method, (1, 1), converger=converger, variable=variable, maxiter=1
     )
     positions = torch.tensor(
         [

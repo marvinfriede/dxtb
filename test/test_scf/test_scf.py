@@ -30,19 +30,18 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 opts = {
     "verbosity": 0,
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 ##############################################################################
@@ -89,7 +88,9 @@ def test_single_gfn0(dtype: torch.dtype, name: str) -> None:
 ##############################################################################
 
 
-def single_medium(dtype: torch.dtype, name: str, mixer: str, gfn: str) -> None:
+def single_medium(
+    dtype: torch.dtype, name: str, converger: str, gfn: str
+) -> None:
     """Test a few larger system."""
     tol = sqrt(torch.finfo(dtype).eps) * 10
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -105,11 +106,10 @@ def single_medium(dtype: torch.dtype, name: str, mixer: str, gfn: str) -> None:
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
+            "damp": 0.05 if converger == "linear" else 0.4,
             "fermi_partition": "atomic",
             "maxiter": 300,
-            "mixer": mixer,
-            "scp_mode": "potential",
+            "strategy": scf_strategy(converger, "potential"),
             "x_atol": tol,
         },
     )
@@ -124,9 +124,11 @@ def single_medium(dtype: torch.dtype, name: str, mixer: str, gfn: str) -> None:
 @pytest.mark.parametrize(
     "name", ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao"]
 )
-@pytest.mark.parametrize("mixer", ["anderson", "broyden"])
-def test_single_medium_gfn1(dtype: torch.dtype, name: str, mixer: str) -> None:
-    single_medium(dtype, name, mixer, "gfn1")
+@pytest.mark.parametrize("converger", ["anderson", "broyden"])
+def test_single_medium_gfn1(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
+    single_medium(dtype, name, converger, "gfn1")
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
@@ -138,17 +140,17 @@ def test_single_medium_gfn0(dtype: torch.dtype, name: str) -> None:
 
 
 # On macOS, this test recently started failing for no apparent reason for
-# the simple mixer with the following error message:
+# the linear converger with the following error message:
 # "torch._C._LinAlgError: linalg.eigh: The algorithm failed to converge because
 # the input matrix is ill-conditioned or has too many repeated eigenvalues"
 @pytest.mark.slow
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["C60"])
-@pytest.mark.parametrize("mixer", ["anderson", "broyden"])
+@pytest.mark.parametrize("converger", ["anderson", "broyden"])
 def test_single_medium_2_gfn1(
-    dtype: torch.dtype, name: str, mixer: str
+    dtype: torch.dtype, name: str, converger: str
 ) -> None:
-    single_medium(dtype, name, mixer, "gfn1")
+    single_medium(dtype, name, converger, "gfn1")
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
@@ -164,15 +166,17 @@ def test_single_medium_2_gfn1(
     ],
 )
 @pytest.mark.parametrize(
-    "mixer",
+    "converger",
     [
         "anderson",
         "broyden",
-        pytest.param("simple", marks=pytest.mark.slow),
+        pytest.param("linear", marks=pytest.mark.slow),
     ],
 )
-def test_single_medium_gfn2(dtype: torch.dtype, name: str, mixer: str) -> None:
-    single_medium(dtype, name, mixer, "gfn2")
+def test_single_medium_gfn2(
+    dtype: torch.dtype, name: str, converger: str
+) -> None:
+    single_medium(dtype, name, converger, "gfn2")
 
 
 ##############################################################################
@@ -433,8 +437,8 @@ def test_batch_three_gfn0(
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
-@pytest.mark.parametrize("mixer", ["anderson", "broyden", "simple"])
-def test_batch_special(dtype: torch.dtype, mixer: str) -> None:
+@pytest.mark.parametrize("converger", ["anderson", "broyden", "linear"])
+def test_batch_special(dtype: torch.dtype, converger: str) -> None:
     """
     Test case for https://github.com/grimme-lab/dxtb/issues/67.
 
@@ -456,7 +460,9 @@ def test_batch_special(dtype: torch.dtype, mixer: str) -> None:
     chrg = torch.tensor([0.0, 0.0], **dd)
     ref = torch.tensor([-2.8629311088577, -4.1663539440167], **dd)
 
-    options = dict(opts, **{"mixer": mixer})
+    options = dict(
+        opts, **{"strategy": scf_strategy(converger, "potential")}
+    )
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )

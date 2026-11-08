@@ -51,7 +51,7 @@ def test_functional_implicit(
         positions = sample["positions"].clone().to(**dd)
         charges = torch.tensor(0.0, **dd)
 
-        options = dict(opts, **{"scf_mode": "implicit"})
+        options = dict(opts, **{"differentiation": "implicit"})
         calc = Calculator(numbers, GFN1_XTB, opts=options, **dd)
 
         # variables to be differentiated
@@ -97,7 +97,7 @@ def test_functional_implicit_energy(
         positions = sample["positions"].clone().to(**dd)
         charges = torch.tensor(0.0, **dd)
 
-        options = dict(opts, **{"scf_mode": "implicit"})
+        options = dict(opts, **{"differentiation": "implicit"})
         calc = Calculator(numbers, GFN1_XTB, opts=options, **dd)
 
         # variables to be differentiated
@@ -136,7 +136,9 @@ def skip_test_fulltracking(
         positions = sample["positions"].clone().to(**dd)
         charges = torch.tensor(0.0, **dd)
 
-        options = dict(opts, **{"scf_mode": "full", "mixer": "anderson"})
+        options = dict(
+            opts, **{"differentiation": "unrolled", "strategy": "anderson"}
+        )
         calc = Calculator(numbers, GFN1_XTB, opts=options, **dd)
 
         # variables to be differentiated

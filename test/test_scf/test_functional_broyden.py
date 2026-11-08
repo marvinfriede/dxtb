@@ -9,7 +9,7 @@ import pytest
 import torch
 from torch.func import jacfwd, jvp, vmap
 
-from dxtb import GFN1_XTB, GFN2_XTB, labels
+from dxtb import GFN1_XTB, GFN2_XTB
 from dxtb._src.scf.functional import (
     SCFCharges,
     SCFMapResult,
@@ -31,6 +31,7 @@ from dxtb._src.scf.functional.problem import (
     SCFMapResult,
     SCFPhysicalState,
     SCFProblem,
+    SCFRepresentation,
 )
 from dxtb._src.scf.functional.solver import _solve_map
 
@@ -389,7 +390,7 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     """Unrolled single-System Broyden keeps physical input graphs connected."""
     from test.test_scf.test_functional_root_derivatives import _case
 
-    from dxtb import GFN1_XTB, labels
+    from dxtb import GFN1_XTB
     from dxtb._src.param import ParamModule
     from dxtb._src.scf.functional.eager import run_functional_full_eager
 
@@ -408,8 +409,8 @@ def test_full_broyden_keeps_position_parameter_and_field_gradients() -> None:
     case = _case(
         "H2O",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=BroydenMethod,
         tolerance=0.0,
         maxiter=3,
         field=field,
@@ -508,8 +509,8 @@ def test_broyden_full_physical_case_matrix(
     case = _case(
         molecule,
         method=method,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=BroydenMethod,
         tolerance=1.0e-8,
         maxiter=150,
         temperature=temperature,

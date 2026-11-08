@@ -419,7 +419,6 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     sample_name: str, spin: float, temperature: float
 ) -> None:
     """S2 implicit preparation discards switched method history."""
-    from dxtb import labels
     from dxtb._src.scf.functional.implicit import (
         _prepare_scf_root,
         _SCFMapTensorTree,
@@ -487,7 +486,7 @@ def test_switched_certified_root_enters_history_free_implicit_boundary(
     assert switched.final_problem is not None
 
     adapter, flat_parameters = _SCFMapTensorTree.prepare(
-        case.inputs, labels.SCP_MODE_FOCK
+        case.inputs, SCFRepresentation.FOCK
     )
     hcore_index = adapter.parameter_paths.index("integrals.hcore")
     mutable_parameters = list(flat_parameters)

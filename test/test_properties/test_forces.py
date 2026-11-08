@@ -30,6 +30,7 @@ from dxtb import GFN1_XTB, Calculator
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .samples import samples
 
 slist = [
@@ -44,8 +45,8 @@ slist_large = ["HHe", "PbH4-BiH3", "MB16_43_01"]  # "LYS_xao"
 opts = {
     "fermi_diff_order": 0,
     "maxiter": 100,
-    "mixer": "anderson",
-    "scf_mode": "full",
+    "strategy": scf_strategy("anderson"),
+    "differentiation": "unrolled",
     "verbosity": 0,
     "x_atol": 1e-10,
 }

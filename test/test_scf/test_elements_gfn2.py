@@ -23,7 +23,8 @@ the corresponding function figure out the alpha/beta occupation automatically.
 
 Atoms generally converged rather badly. Hence, the threshold for comparison is
 significantly lower in this test suite. Additionally, I found that converging
-the potential works better than converging the charges (`scp_mode="potential"`).
+the potential works better than converging the charges (SCF variable
+``"potential"``).
 If the charges are converged, the orbtial-resolved charges usually stray quite
 far away from zero. Nevertheless, the energy often oscillates anyway.
 """
@@ -35,11 +36,11 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN2_XTB, Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..utils import scf_strategy
 from .element_sets import ALL_DOUBLE_REPS_FLOAT, reps_both_dtypes
 from .samples import samples
 from .uhf_table import uhf, uhf_anion, uhf_cation
@@ -154,8 +155,9 @@ ref_anion = torch.tensor(
 opts = {
     "fermi_etemp": 300,
     "fermi_maxiter": 500,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_FOCK,  # better convergence for atoms
+    "differentiation": "implicit",
+    # better convergence for atoms
+    "strategy": scf_strategy("anderson", "fock"),
     "verbosity": 0,
 }
 
@@ -196,13 +198,13 @@ def test_element_cation(dtype: torch.dtype, number: int) -> None:
     tol = 1e-2
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
-    scp_mode = labels.SCP_MODE_FOCK
+    variable = "fock"
 
     if number == 18:
         tol = 5e-2
 
     if number == 10 or number == 75:
-        scp_mode = labels.SCP_MODE_CHARGE
+        variable = "charge"
 
     numbers = torch.tensor([number], device=DEVICE)
     positions = torch.zeros((1, 3), **dd)
@@ -215,7 +217,7 @@ def test_element_cation(dtype: torch.dtype, number: int) -> None:
         **{
             "x_atol": 1e-5,  # avoids Jacobian inversion error
             "fermi_thresh": 1e-4 if dtype == torch.float32 else 1e-10,
-            "scp_mode": scp_mode,
+            "strategy": scf_strategy("anderson", variable),
             "damp": 0.95,
             "damp_dynamic": False,
         },

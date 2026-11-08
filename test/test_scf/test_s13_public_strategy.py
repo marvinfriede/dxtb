@@ -59,44 +59,18 @@ def test_named_presets_have_stable_method_and_representation() -> None:
         assert name in str(config.info()).casefold()
 
 
-def test_legacy_and_new_scf_authorities_cannot_be_mixed() -> None:
-    """Compatibility arguments translate only when new authorities are omitted."""
-    with pytest.raises(ValueError, match="differentiation or legacy scf_mode"):
+def test_removed_scf_options_are_rejected() -> None:
+    """Removed flat SCF options are not silently accepted."""
+    with pytest.raises(TypeError):
         Config.create(differentiation="implicit", scf_mode="full")
-    with pytest.raises(ValueError, match="differentiation or legacy scf_mode"):
-        Config.create(differentiation="unrolled", scf_mode="implicit")
-    with pytest.raises(ValueError, match="strategy or mixer"):
+    with pytest.raises(TypeError):
         Config.create(strategy="anderson", mixer="broyden")
-    with pytest.raises(ValueError, match="strategy or legacy scp_mode"):
+    with pytest.raises(TypeError):
         Config.create(strategy="anderson", scp_mode="potential")
-    with pytest.raises(ValueError, match="strategy or legacy scp_mode"):
-        Config.create(
-            strategy=scf.strategy_preset("anderson"), scp_mode="potential"
-        )
-    with pytest.raises(ValueError, match="Legacy Anderson options"):
+    with pytest.raises(TypeError):
         Config.create(strategy="anderson", damp_generations=8)
-    with pytest.raises(ValueError, match="differentiation or legacy scf_mode"):
+    with pytest.raises(TypeError):
         Config.from_dict({"differentiation": "implicit", "scf_mode": "full"})
-
-    assert (
-        Config.create().scf.differentiation is scf.SCFDifferentiation.UNROLLED
-    )
-    assert (
-        Config.create(scf_mode="implicit").scf.differentiation
-        is scf.SCFDifferentiation.IMPLICIT
-    )
-    legacy_broyden = Config.create(mixer="broyden", scp_mode="charge")
-    assert isinstance(
-        legacy_broyden.scf.strategy.stages[0].method, scf.BroydenMethod
-    )
-    assert (
-        legacy_broyden.scf.strategy.stages[0].representation
-        is scf.SCFRepresentation.CHARGE
-    )
-    legacy_anderson = Config.create(damp_generations=8)
-    assert (
-        legacy_anderson.scf.strategy.stages[0].method.settings.generations == 8
-    )
 
 
 def test_soscf_internal_safety_settings_are_not_public() -> None:
@@ -134,9 +108,9 @@ def test_soscf_preset_rejects_active_fermi_smearing() -> None:
         )
 
 
-def test_retired_f_atol_is_not_accepted_as_convergence_configuration() -> None:
-    """The old rootfinder tolerance is explicitly retired at the parser edge."""
-    with pytest.raises(ValueError, match="f_atol is retired"):
+def test_f_atol_is_not_accepted_as_convergence_configuration() -> None:
+    """The old rootfinder tolerance is not a convergence option."""
+    with pytest.raises(TypeError):
         Config.create(f_atol=1.0e-8)
 
 

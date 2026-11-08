@@ -53,13 +53,15 @@ from test.test_calculator.test_grouped_vmap_batching import (
     _setup,
 )
 
+from ..utils import scf_strategy
+
 # (method, settings): production GFN1 charge/potential and GFN2 Fock, every
 # fixed-trip capable method family.
 _CONFIGS = {
     "gfn1-potential-default": (labels.GFN1_XTB, {}),
     "gfn1-charge-anderson": (
         labels.GFN1_XTB,
-        {"mixer": "anderson", "scp_mode": "charge"},
+        {"strategy": scf_strategy("anderson", "charge")},
     ),
     "gfn1-potential-broyden": (labels.GFN1_XTB, {"strategy": "broyden"}),
     "gfn1-potential-linear": (labels.GFN1_XTB, {"strategy": "linear"}),

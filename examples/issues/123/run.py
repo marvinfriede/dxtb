@@ -21,12 +21,14 @@ https://github.com/grimme-lab/dxtb/issues/123
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import torch
 from tad_mctc import read, read_chrg
 
 import dxtb
+from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
 
 
 def main() -> int:
@@ -38,7 +40,11 @@ def main() -> int:
     numbers, positions = read(f, **dd)
     charge = read_chrg(f, **dd)
 
-    opts = {"verbosity": 6, "scp_mode": dxtb.labels.SCP_MODE_CHARGE}
+    stage = replace(
+        strategy_preset("anderson").stages[0],
+        representation=SCFRepresentation.CHARGE,
+    )
+    opts = {"verbosity": 6, "strategy": SCFStrategy((stage,))}
     calc = dxtb.calculators.GFN1Calculator(numbers, opts=opts, **dd)
 
     ref = -35.800705002354

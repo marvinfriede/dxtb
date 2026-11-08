@@ -297,7 +297,8 @@ class NewtonKrylovMethod:
         fermi = problem.inputs.fermi_settings
         if fermi is None or not fermi.smear:
             raise NotImplementedError(
-                "NewtonKrylovMethod currently requires active Fermi smearing."
+                "NewtonKrylovMethod currently requires Fermi smearing at nonzero "
+                "electronic temperature."
             )
         if not bool(context.transition_active):
             return SCFMethodProposal(physical_state.x, method_state)

@@ -25,9 +25,9 @@ import torch
 from tad_mctc.autograd import dgradcheck, dgradgradcheck
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD, Callable, Tensor
 
+from ..utils import scf_strategy
 from .samples import samples
 
 sample_list = ["H2", "LiH", "H2O", "CH4", "SiH4"]
@@ -37,8 +37,8 @@ tol = 1e-5
 opts = {
     "exclude": ["rep", "disp", "hal"],
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
 
@@ -64,7 +64,7 @@ def gradchecker(
 
     def func(p: Tensor) -> Tensor:
         result = calc.singlepoint(p, charges)
-        return result.total
+        return result.energy
 
     return func, pos
 

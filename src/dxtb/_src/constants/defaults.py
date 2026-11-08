@@ -179,44 +179,8 @@ will be disabled.
 MAXITER = 100
 """Maximum number of SCF iterations."""
 
-MIXER = labels.MIXER_BROYDEN
-"""SCF mixing scheme for convergence acceleration."""
-
-MIXER_CHOICES = ["anderson", "broyden", "simple"]
-"""List of possible choices for ``MIXER``."""
-
 MIX_GUESS = True
 """Whether to mix the initial guess."""
-
-SCF_MODE = labels.SCF_MODE_FULL
-"""
-Whether to use full gradient tracking in SCF, make use of the implicit
-function theorem (exact first and second derivatives), or use the
-experimental single-shot procedure.
-"""
-
-SCF_MODE_CHOICES = [
-    "default",
-    "implicit",
-    "full",
-    "full_tracking",
-    "full-tracking",
-    "experimental",
-    "single_shot",
-    "single-shot",
-]
-"""List of possible choices for ``SCF_MODE``."""
-
-SCP_MODE = labels.SCP_MODE_POTENTIAL
-"""
-Type of self-consistent parameter, i.e., which quantity is converged in the SCF
-iterations.
-"""
-
-SCP_MODE_CHOICES = ["charge", "charges", "potential", "fock"]
-"""
-List of possible choices for ``SCP_MODE``. 'charge' and 'charges' are identical.
-"""
 
 SCF_FORCE_CONVERGENCE = False
 """Whether to continue with un-converged results."""

@@ -23,7 +23,8 @@ it is rewritten when the API changes (TB), while the reference files and
 
 Generation rules: a fresh calculator for every quantity, no result cache,
 float64, tight SCF convergence. All derivatives are taken by
-autograd of the energy through the unrolled SCF (``scf_mode="full"``):
+autograd of the energy through the unrolled SCF
+(``differentiation="unrolled"``):
 
 - forces: first derivative of the energy (positions);
 - Hessian: derivative of the forces (``derived_quantity="forces"``);
@@ -114,7 +115,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
     chrg, spin = _args(system)
 
     res = calc.singlepoint(pos, chrg, spin)
-    out: dict[str, Tensor] = {"energy": res.total.sum(-1)}
+    out: dict[str, Tensor] = {"energy": res.energy.sum(-1)}
 
     for label, e in res.cenergies.items():
         out[f"energy.{label}"] = e.sum(-1)

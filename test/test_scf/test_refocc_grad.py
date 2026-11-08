@@ -50,7 +50,7 @@ ATOL = 1e-7
 
 def _energy(
     method: str,
-    scf_mode: str,
+    differentiation: str,
     name: str,
     symbol: str,
     value: torch.Tensor,
@@ -65,14 +65,14 @@ def _energy(
     del leaf._parameters["param"]  # pylint: disable=protected-access
     leaf.param = value
 
-    opts = {"scf_mode": scf_mode, "int_driver": "pytorch"}
+    opts = {"differentiation": differentiation, "int_driver": "pytorch"}
     calc = Calculator(numbers, par, opts=opts, **dd)
     spin = 1 if name == "NO2" else None
     return calc.energy(positions, spin=spin)
 
 
 @pytest.mark.parametrize("method", ["gfn1", "gfn2"])
-@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
+@pytest.mark.parametrize("differentiation", ["unrolled", "implicit"])
 @pytest.mark.parametrize(
     "name, symbol",
     [
@@ -86,7 +86,7 @@ def _energy(
     ],
 )
 def test_refocc_gradient(
-    method: str, scf_mode: str, name: str, symbol: str
+    method: str, differentiation: str, name: str, symbol: str
 ) -> None:
     dd: DD = {"device": DEVICE, "dtype": torch.double}
 
@@ -97,13 +97,17 @@ def test_refocc_gradient(
     direction = torch.linspace(0.3, 1.0, ref.numel(), **dd).reshape(ref.shape)
 
     x = ref.clone().requires_grad_(True)
-    energy = _energy(method, scf_mode, name, symbol, x, dd)
+    energy = _energy(method, differentiation, name, symbol, x, dd)
     (grad,) = torch.autograd.grad(energy, x)
     autograd = (grad * direction).sum()
 
     with torch.no_grad():
-        plus = _energy(method, scf_mode, name, symbol, ref + STEP * direction, dd)
-        minus = _energy(method, scf_mode, name, symbol, ref - STEP * direction, dd)
+        plus = _energy(
+            method, differentiation, name, symbol, ref + STEP * direction, dd
+        )
+        minus = _energy(
+            method, differentiation, name, symbol, ref - STEP * direction, dd
+        )
     numerical = (plus - minus) / (2 * STEP)
 
     assert pytest.approx(numerical.item(), rel=RTOL, abs=ATOL) == autograd.item()

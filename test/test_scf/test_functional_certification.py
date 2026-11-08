@@ -72,7 +72,7 @@ from dxtb._src.scf.functional.solver import (
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
-    setup_simple_solver_settings,
+    setup_solver_settings,
     solve_scf_simple,
 )
 from dxtb._src.typing.exceptions import SCFConvergenceError
@@ -1348,7 +1348,7 @@ def test_float32_effective_root_tolerance_is_reported() -> None:
         x_atol=requested,
         x_atol_max=requested,
     )
-    settings = setup_simple_solver_settings(config, state.x.dtype)
+    settings = setup_solver_settings(config, state.x.dtype)
     outcome = _solve_map(state.x, settings, problem.map, problem=problem)
     assert outcome.certification is not None
     diagnostic = outcome.certification

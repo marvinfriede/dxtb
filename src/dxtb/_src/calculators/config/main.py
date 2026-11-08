@@ -124,23 +124,13 @@ class Config:
         differentiation: str | None = None,
         convergence: str = "standard",
         response: object | None = None,
-        # Transitional input adapters are parsed into the strategy and
-        # discarded; they are not fields of ConfigSCF.
-        mixer: str | int | None = None,
         mix_guess: bool = defaults.MIX_GUESS,
         damp: float = defaults.DAMP,
-        damp_init: float | None = None,
         damp_dynamic: bool = defaults.DAMP_DYNAMIC,
         damp_dynamic_factor: float = defaults.DAMP_DYNAMIC_FACTOR,
-        damp_soft_start: bool | None = None,
-        damp_generations: int | None = None,
-        damp_diagonal_offset: float | None = None,
         guess: str | int = defaults.GUESS,
-        scf_mode: str | int | None = None,
-        scp_mode: str | int | None = None,
         x_atol: float | None = None,
         x_atol_max: float | None = None,
-        f_atol: float | None = None,
         force_convergence: bool = False,
         fermi_etemp: float = defaults.FERMI_ETEMP,
         fermi_maxiter: int = defaults.FERMI_MAXITER,
@@ -191,17 +181,10 @@ class Config:
             differentiation=differentiation,
             convergence=convergence,
             response=response,
-            mixer=mixer,
             mix_guess=mix_guess,
             damp=damp,
-            damp_init=damp_init,
             damp_dynamic=damp_dynamic,
             damp_dynamic_factor=damp_dynamic_factor,
-            damp_soft_start=damp_soft_start,
-            damp_generations=damp_generations,
-            damp_diagonal_offset=damp_diagonal_offset,
-            scf_mode=scf_mode,
-            scp_mode=scp_mode,
             x_atol=x_atol,
             x_atol_max=x_atol_max,
             force_convergence=force_convergence,
@@ -211,12 +194,6 @@ class Config:
             fermi_diff_order=fermi_diff_order,
             fermi_partition=fermi_partition,
         )
-
-        if f_atol is not None:
-            raise ValueError(
-                "f_atol is retired; SCF convergence uses physical fixed-point "
-                "and stationarity certification."
-            )
 
         return cls(
             file=file,

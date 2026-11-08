@@ -28,19 +28,18 @@ import torch
 
 from dxtb import Calculator
 from dxtb._src.calculators.singlepoint import singlepoint
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_npz
+from ..utils import get_param_module, load_from_npz, scf_strategy
 from .samples import samples
 
 opts = {
     "verbosity": 0,
     "maxiter": 50,
     "exclude": ["rep", "disp", "hal"],
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 ref_grad = np.load("test/test_scf/grad.npz")
@@ -51,12 +50,12 @@ ref_grad_param = np.load("test/test_scf/grad_param.npz")
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["LiH"])
-@pytest.mark.parametrize("scp_mode", ["potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("variable", ["potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_grad_backwards(
-    name: str, dtype: torch.dtype, scf_mode: str, scp_mode: str
+    name: str, dtype: torch.dtype, differentiation: str, variable: str
 ) -> None:
-    run_grad_backwards(name, dtype, scf_mode, scp_mode)
+    run_grad_backwards(name, dtype, differentiation, variable)
 
 
 @pytest.mark.grad
@@ -64,16 +63,16 @@ def test_grad_backwards(
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["SiH4"])
-@pytest.mark.parametrize("scp_mode", ["potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("variable", ["potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_grad_backwards_large(
-    name: str, dtype: torch.dtype, scf_mode: str, scp_mode: str
+    name: str, dtype: torch.dtype, differentiation: str, variable: str
 ) -> None:
-    run_grad_backwards(name, dtype, scf_mode, scp_mode)
+    run_grad_backwards(name, dtype, differentiation, variable)
 
 
 def run_grad_backwards(
-    name: str, dtype: torch.dtype, scf_mode: str, scp_mode: str
+    name: str, dtype: torch.dtype, differentiation: str, variable: str
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -89,10 +88,12 @@ def run_grad_backwards(
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "scp_mode": scp_mode,
+            "differentiation": differentiation,
+            "strategy": scf_strategy(
+                "anderson" if differentiation == "unrolled" else "broyden",
+                variable,
+            ),
             "x_atol": tol * 0.1,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
         },
     )
     calc = Calculator(

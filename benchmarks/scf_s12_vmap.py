@@ -33,7 +33,7 @@ from dxtb._src.calculators.model import Model
 from dxtb.config import Config
 
 
-def _system(mixer: int, maxiter: int) -> object:
+def _system(converger: str, maxiter: int) -> object:
     """Create one fixed-trip H2 System with static structure."""
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
@@ -42,8 +42,8 @@ def _system(mixer: int, maxiter: int) -> object:
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=mixer,
-        scf_mode=labels.SCF_MODE_FULL,
+        strategy=converger,
+        differentiation="unrolled",
         maxiter=maxiter,
         force_convergence=False,
         fermi_etemp=0.0,
@@ -67,8 +67,8 @@ def _max_error(actual: torch.Tensor, expected: torch.Tensor) -> float:
     return float((actual - expected).abs().max()) if actual.numel() else 0.0
 
 
-def _run(mixer_name: str, mixer: int, count: int, maxiter: int) -> dict:
-    system = _system(mixer, maxiter)
+def _run(name: str, converger: str, count: int, maxiter: int) -> dict:
+    system = _system(converger, maxiter)
     positions = _positions(count)
 
     started = time.perf_counter()
@@ -107,7 +107,7 @@ def _run(mixer_name: str, mixer: int, count: int, maxiter: int) -> dict:
     torch.testing.assert_close(mapped_gradient, serial_gradient)
 
     return {
-        "method": mixer_name,
+        "method": name,
         "conformers": count,
         "maxiter": maxiter,
         "certified_lanes": int(converged.sum()),
@@ -137,13 +137,13 @@ def main() -> None:
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
     methods = {
-        "Linear": labels.MIXER_LINEAR,
-        "Anderson": labels.MIXER_ANDERSON,
-        "Broyden": labels.MIXER_BROYDEN,
+        "Linear": "linear",
+        "Anderson": "anderson",
+        "Broyden": "broyden",
     }
     runs = [
-        _run(name, mixer, count, args.maxiter)
-        for name, mixer in methods.items()
+        _run(name, converger, count, args.maxiter)
+        for name, converger in methods.items()
         for count in args.counts
     ]
     result = {

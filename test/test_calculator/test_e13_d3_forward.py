@@ -32,6 +32,8 @@ from dxtb._src.components.classicals.dispersion.d3 import (
 )
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _system(
     numbers: tuple[int, ...], *, differentiable_s9: bool = False
@@ -44,8 +46,7 @@ def _system(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=labels.MIXER_LINEAR,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        strategy=scf_strategy("linear", "charge"),
         maxiter=2,
         fermi_etemp=0.0,
         x_atol=0.0,

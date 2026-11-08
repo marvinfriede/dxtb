@@ -32,7 +32,7 @@ from dxtb._src.typing import DD
 from ..conftest import DEVICE
 from .samples import samples
 
-OPTS = {"verbosity": 0, "scf_mode": "full", "x_atol": 1e-11}
+OPTS = {"verbosity": 0, "differentiation": "unrolled", "x_atol": 1e-11}
 
 
 def _calc(numbers, dd: DD, **opts):

@@ -40,7 +40,7 @@ from dxtb._src.components.interactions import (
 )
 from dxtb._src.constants import labels
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.typing import Any, Tensor
+from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling
 from dxtb.config import ConfigSCF
 
@@ -59,8 +59,6 @@ def _use_functional_implicit_route(
     ihelp: IndexHelper,
     numbers: Tensor,
     integrals: IntegralMatrices,
-    *,
-    legacy_engine_overrides: bool,
 ) -> bool:
     """Resolve the single or packed functional implicit route.
 
@@ -79,8 +77,7 @@ def _use_functional_implicit_route(
     ):
         return False
     return (
-        not legacy_engine_overrides
-        and eligible
+        eligible
         and config.fermi.etemp >= 0.0
         and config.fermi.maxiter >= 0
         and config.maxiter >= 0
@@ -100,9 +97,8 @@ def solve(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    *args: Any,
+    *,
     core_index: IndexHelper | None = None,
-    **kwargs: Any,
 ) -> SCFResult | FunctionalCoreResult:
     """
     Obtain self-consistent solution for a given Hamiltonian.
@@ -123,21 +119,12 @@ def solve(
         Configuration for the SCF calculation.
     integrals : Integrals
         Container for all integrals.
-    args : Tuple
-        Positional arguments to pass to the engine.
-    kwargs : dict
-        Keyword arguments to pass to the engine.
 
     Returns
     -------
     SCFResult | FunctionalCoreResult
     Legacy GFN0 result mapping or tensor-status functional iterative result.
     """
-    if args or kwargs:
-        raise NotImplementedError(
-            "Legacy SCF engine positional/keyword overrides are no longer "
-            "supported by functional SCF."
-        )
     return _solve_impl(
         numbers,
         positions,
@@ -240,7 +227,6 @@ def _solve_impl(
             ihelp,
             numbers,
             integrals,
-            legacy_engine_overrides=False,
         ):
             from .functional.data import functional_scf_interactions_eligible
 

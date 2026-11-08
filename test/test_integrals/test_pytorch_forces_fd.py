@@ -46,7 +46,7 @@ def test_forces_match_finite_differences(
         "verbosity": 0,
         "int_driver": "pytorch",
         "int_algorithm": algorithm,
-        "scf_mode": "full",
+        "differentiation": "unrolled",
         "x_atol": 1e-11,
     }
 

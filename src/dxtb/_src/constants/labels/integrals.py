@@ -27,8 +27,6 @@ __all__ = [
     "INTDRIVER_PYTORCH",
     "INTDRIVER_PYTORCH_STRS",
     "INTDRIVER_MAP",
-    "INTDRIVER_AUTOGRAD",
-    "INTDRIVER_AUTOGRAD_STRS",
     "INTALGORITHM_CHOICES",
     "INTALGORITHM_DEFAULT",
     #
@@ -53,12 +51,6 @@ INTDRIVER_PYTORCH = 1
 
 INTDRIVER_PYTORCH_STRS = ("autograd", "pytorch", "torch", "dxtb")
 """String codes for the PyTorch driver."""
-
-INTDRIVER_AUTOGRAD = INTDRIVER_PYTORCH
-"""Deprecated alias of :data:`INTDRIVER_PYTORCH`."""
-
-INTDRIVER_AUTOGRAD_STRS = INTDRIVER_PYTORCH_STRS
-"""Deprecated alias of :data:`INTDRIVER_PYTORCH_STRS`."""
 
 INTDRIVER_MAP = {
     INTDRIVER_LIBCINT: "libcint",

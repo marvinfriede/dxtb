@@ -38,6 +38,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -54,6 +55,11 @@ from dxtb import GFN1_XTB, ParamModule, labels  # noqa: E402
 from dxtb._src.calculators.model import Model  # noqa: E402
 from dxtb._src.calculators.result import Result  # noqa: E402
 from dxtb.config import Config  # noqa: E402
+from dxtb.scf import (  # noqa: E402
+    SCFRepresentation,
+    SCFStrategy,
+    strategy_preset,
+)
 
 DTYPE = torch.float64
 
@@ -97,9 +103,15 @@ def build_system(maxiter: int) -> tuple[Any, torch.Tensor, int]:
     config = Config.create(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
-        mixer=labels.MIXER_ANDERSON,
-        scf_mode=labels.SCF_MODE_FULL,
-        scp_mode=labels.SCP_MODE_CHARGE,
+        strategy=SCFStrategy(
+            (
+                replace(
+                    strategy_preset("anderson").stages[0],
+                    representation=SCFRepresentation.CHARGE,
+                ),
+            )
+        ),
+        differentiation="unrolled",
         maxiter=maxiter,
         x_atol=1.0e-8,
         x_atol_max=1.0e-5,
@@ -358,8 +370,8 @@ def main() -> None:
         seconds=time.perf_counter() - setup_started,
         rss_mb=current_rss_mb(),
         maxiter=system.config.scf.maxiter,
-        scp_mode=system.config.scf.scp_mode,
-        mixer=system.config.scf.mixer,
+        variable=system.config.scf.initial_representation.value,
+        converger=type(system.config.scf.strategy.stages[0].method).__name__,
         x_atol=system.config.scf.x_atol,
         x_atol_max=system.config.scf.x_atol_max,
         smear=system.config.scf.fermi.etemp > 0,

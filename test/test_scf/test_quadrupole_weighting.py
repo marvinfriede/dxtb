@@ -23,7 +23,7 @@ Covers:
   invariance, energy pairing preservation, GFN1/zero-quadrupole handling,
   PADNZ padding projection without 1-ULP drift, and AD transforms).
 - 1.6 B: Rotational invariance on non-linear molecules (H2O, glycine, PbH4-BiH3)
-  across Broyden and Anderson mixers and potential and charge SCP modes.
+  across Broyden and Anderson convergers and potential and charge SCF variables.
 - 1.5: Reproducible isolation of the charge-mode orbital-anisotropy effect at
   loose SCF tolerance (occurring identically in GFN1 without multipoles).
 - 1.6 D: Differentiability and PyTorch function transforms (autograd.grad,
@@ -68,6 +68,7 @@ from dxtb._src.scf.functional.solver import (
 
 from ..conftest import DEVICE
 from ..test_baseline.molecules import SYSTEMS
+from ..utils import scf_strategy
 
 pytestmark = [pytest.mark.scf]
 
@@ -707,9 +708,8 @@ def test_scf_convergence_stopping_predicate_near_max_abs_boundary() -> None:
     rot = _rotation_matrix(device=sys.positions.device)
     opts = {
         "int_driver": "pytorch",
-        "scf_mode": "full",
-        "scp_mode": "potential",
-        "mixer": "broyden",
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("broyden", "potential"),
         "x_atol": 1.0e-4,
         "x_atol_max": 1.0e-5,
         "maxiter": 50,
@@ -740,7 +740,7 @@ def test_scf_convergence_stopping_predicate_near_max_abs_boundary() -> None:
         sys.positions @ rot.T, chrg=sys.charge, spin=sys.spin
     )
     torch.testing.assert_close(
-        rf_rot.total, rf_orig.total, atol=1.0e-15, rtol=1.0e-15
+        rf_rot.energy, rf_orig.energy, atol=1.0e-15, rtol=1.0e-15
     )
 
 
@@ -750,8 +750,8 @@ def test_scf_convergence_stopping_predicate_near_max_abs_boundary() -> None:
 
 
 @pytest.mark.parametrize("name", ["H2O", "glycine", "PbH4-BiH3"])
-@pytest.mark.parametrize("mixer", ["broyden", "anderson"])
-@pytest.mark.parametrize("scp_mode", ["potential", "charge"])
+@pytest.mark.parametrize("converger", ["broyden", "anderson"])
+@pytest.mark.parametrize("variable", ["potential", "charge"])
 @pytest.mark.parametrize(
     ("x_atol", "grad_tol", "torque_tol"),
     [
@@ -762,21 +762,20 @@ def test_scf_convergence_stopping_predicate_near_max_abs_boundary() -> None:
 )
 def test_gfn2_rotational_invariance(
     name: str,
-    mixer: str,
-    scp_mode: str,
+    converger: str,
+    variable: str,
     x_atol: float,
     grad_tol: float,
     torque_tol: float,
 ) -> None:
-    """Verify GFN2-xTB rotational invariance across mixers, SCP modes, and tolerances."""
+    """Verify GFN2-xTB rotational invariance across convergers, SCF variables, and tolerances."""
     sys = SYSTEMS[name]
     rot = _rotation_matrix(device=sys.positions.device)
 
     opts = {
         "int_driver": "pytorch",
-        "scf_mode": "full",
-        "scp_mode": scp_mode,
-        "mixer": mixer,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy(converger, variable),
         "x_atol": x_atol,
         "x_atol_max": x_atol * 0.1,
         "maxiter": 200,
@@ -787,13 +786,13 @@ def test_gfn2_rotational_invariance(
     pos_orig = sys.positions.detach().clone().requires_grad_(True)
     calc_orig = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
     res_orig = calc_orig.singlepoint(pos_orig, chrg=sys.charge, spin=sys.spin)
-    e_orig = res_orig.total.sum(-1)
+    e_orig = res_orig.energy.sum(-1)
     (g_orig,) = torch.autograd.grad(e_orig, pos_orig)
 
     pos_rot = (sys.positions.detach().clone() @ rot.T).requires_grad_(True)
     calc_rot = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
     res_rot = calc_rot.singlepoint(pos_rot, chrg=sys.charge, spin=sys.spin)
-    e_rot = res_rot.total.sum(-1)
+    e_rot = res_rot.energy.sum(-1)
     (g_rot,) = torch.autograd.grad(e_rot, pos_rot)
 
     g_rot_back = g_rot @ rot
@@ -820,23 +819,23 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
 ):
     """Isolate the ~1e-12 loose-tolerance charge-mode sensitivity to AO populations.
 
-    In ``scp_mode="potential"``, Row 0 stores ``spread_shell_to_orbital(v_shell)``,
+    With the potential SCF variable, Row 0 stores ``spread_shell_to_orbital(v_shell)``,
     where every shell potential ``v_shell`` is an SO(3) scalar; combined with the
     sqrt(2) quadrupole Frobenius metric, the entire state space is an orthogonal
     representation of SO(3) at every SCF iteration.
 
-    In ``scp_mode="charge"``, Row 0 stores orbital-resolved Mulliken charges
+    With the charge SCF variable, Row 0 stores orbital-resolved Mulliken charges
     ``q_mu = n0_mu - (P S)_{mu,mu}``. Under a 3D rotation R, the p- and d-shell
     diagonal blocks of ``P S`` transform by ``D_l(R) M D_l(R)^T``. While the
     shell sum ``sum_{mu in s} q_mu`` is an SO(3) invariant, the orbital sum of
     squares ``sum_{mu in s} q_mu^2`` is not SO(3)-invariant.
 
     This test demonstrates:
-    1. In GFN1-xTB (which has NO dipoles and NO quadrupoles), ``scp_mode="potential"``
-       is invariant to ~1e-15 at loose ``x_atol=1e-4``, whereas ``scp_mode="charge"``
-       exhibits the exact same ~1e-12 orientation sensitivity.
+    1. In GFN1-xTB (which has NO dipoles and NO quadrupoles), the potential
+       variable is invariant to ~1e-15 at loose ``x_atol=1e-4``, whereas the
+       charge variable exhibits the exact same ~1e-12 orientation sensitivity.
     2. Projecting Row 0 onto the shell-isotropic subspace ``q_bar_mu = q_shell / N_s``
-       restores machine-precision (~1e-15) rotational invariance to ``scp_mode="charge"``
+       restores machine-precision (~1e-15) rotational invariance to the charge variable
        at ``x_atol=1e-4`` in both GFN1-xTB and GFN2-xTB (with sqrt(2) quadrupoles).
     """
     sys = SYSTEMS["glycine"]
@@ -850,21 +849,20 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
     ):
         opts = {
             "int_driver": "pytorch",
-            "scf_mode": "full",
-            "scp_mode": mode,
-            "mixer": "broyden",
+            "differentiation": "unrolled",
+            "strategy": scf_strategy("broyden", mode),
             "x_atol": 1.0e-4,
             "x_atol_max": 1.0e-5,
             "verbosity": 0,
         }
         p1 = sys.positions.detach().clone().requires_grad_(True)
         c1 = Calculator(sys.numbers, GFN1_XTB, opts=opts, **dd)
-        e1 = c1.singlepoint(p1).total.sum(-1)
+        e1 = c1.singlepoint(p1).energy.sum(-1)
         (g1,) = torch.autograd.grad(e1, p1)
 
         p2 = (sys.positions.detach().clone() @ rot.T).requires_grad_(True)
         c2 = Calculator(sys.numbers, GFN1_XTB, opts=opts, **dd)
-        e2 = c2.singlepoint(p2).total.sum(-1)
+        e2 = c2.singlepoint(p2).energy.sum(-1)
         (g2,) = torch.autograd.grad(e2, p2)
 
         grad_diff = float((g2 @ rot - g1).abs().max().item())
@@ -881,8 +879,7 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
         config = Config.create(
             method=labels.GFN2_XTB,
             int_driver=labels.INTDRIVER_PYTORCH,
-            scp_mode=labels.SCP_MODE_CHARGE,
-            mixer=labels.MIXER_BROYDEN,
+            strategy=scf_strategy("broyden", "charge"),
             x_atol=1.0e-4,
             x_atol_max=1.0e-5,
         )
@@ -982,9 +979,8 @@ def test_charge_mode_quadrupole_weighting_strictly_improves_invariance(
         dd = {"device": sys.positions.device, "dtype": DTYPE}
         opts = {
             "int_driver": "pytorch",
-            "scf_mode": "full",
-            "scp_mode": "charge",
-            "mixer": "broyden",
+            "differentiation": "unrolled",
+            "strategy": scf_strategy("broyden", "charge"),
             "x_atol": 1.0e-4,
             "x_atol_max": 1.0e-5,
             "verbosity": 0,
@@ -995,16 +991,16 @@ def test_charge_mode_quadrupole_weighting_strictly_improves_invariance(
         r2 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd).singlepoint(
             sys.positions @ rot.T, chrg=sys.charge, spin=sys.spin
         )
-        energy_diff = float((r2.total - r1.total).abs().max().item())
+        energy_diff = float((r2.energy - r1.energy).abs().max().item())
 
         p1 = sys.positions.detach().clone().requires_grad_(True)
         c1 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
-        e1 = c1.singlepoint(p1, chrg=sys.charge, spin=sys.spin).total.sum(-1)
+        e1 = c1.singlepoint(p1, chrg=sys.charge, spin=sys.spin).energy.sum(-1)
         (g1,) = torch.autograd.grad(e1, p1)
 
         p2 = (sys.positions.detach().clone() @ rot.T).requires_grad_(True)
         c2 = Calculator(sys.numbers, GFN2_XTB, opts=opts, **dd)
-        e2 = c2.singlepoint(p2, chrg=sys.charge, spin=sys.spin).total.sum(-1)
+        e2 = c2.singlepoint(p2, chrg=sys.charge, spin=sys.spin).energy.sum(-1)
         (g2,) = torch.autograd.grad(e2, p2)
 
         grad_diff = float((g2 @ rot - g1).abs().max().item())
@@ -1050,10 +1046,10 @@ def test_charge_mode_quadrupole_weighting_strictly_improves_invariance(
 # ============================================================================
 
 
-@pytest.mark.parametrize("scf_mode", ["full", "implicit"])
-@pytest.mark.parametrize("scp_mode", ["potential", "charge"])
+@pytest.mark.parametrize("differentiation", ["unrolled", "implicit"])
+@pytest.mark.parametrize("variable", ["potential", "charge"])
 def test_gfn2_differentiability_and_transforms(
-    scf_mode: str, scp_mode: str
+    differentiation: str, variable: str
 ) -> None:
     """Verify autograd.grad, torch.func.grad, jacrev, and vmap on GFN2-xTB."""
     sys = SYSTEMS["H2O"]
@@ -1061,9 +1057,8 @@ def test_gfn2_differentiability_and_transforms(
     dd = {"device": sys.positions.device, "dtype": DTYPE}
     opts = {
         "int_driver": "pytorch",
-        "scf_mode": scf_mode,
-        "scp_mode": scp_mode,
-        "mixer": "broyden",
+        "differentiation": differentiation,
+        "strategy": scf_strategy("broyden", variable),
         "x_atol": 1.0e-8,
         "x_atol_max": 1.0e-9,
         "verbosity": 0,
@@ -1072,11 +1067,11 @@ def test_gfn2_differentiability_and_transforms(
 
     # 1. torch.autograd.grad on original and rotated geometries.
     pos_orig = sys.positions.detach().clone().requires_grad_(True)
-    e_orig = calc.singlepoint(pos_orig).total.sum(-1)
+    e_orig = calc.singlepoint(pos_orig).energy.sum(-1)
     (g_autograd_orig,) = torch.autograd.grad(e_orig, pos_orig)
 
     pos_rot = (sys.positions.detach().clone() @ rot.T).requires_grad_(True)
-    e_rot = calc.singlepoint(pos_rot).total.sum(-1)
+    e_rot = calc.singlepoint(pos_rot).energy.sum(-1)
     (g_autograd_rot,) = torch.autograd.grad(e_rot, pos_rot)
     torch.testing.assert_close(
         g_autograd_rot @ rot, g_autograd_orig, atol=1.0e-10, rtol=1.0e-10
@@ -1086,9 +1081,8 @@ def test_gfn2_differentiability_and_transforms(
     config = Config.create(
         method=labels.GFN2_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
-        scf_mode=scf_mode,
-        scp_mode=scp_mode,
-        mixer="broyden",
+        differentiation=differentiation,
+        strategy=scf_strategy("broyden", variable),
         x_atol=1.0e-8,
         x_atol_max=1.0e-9,
     )
@@ -1096,7 +1090,7 @@ def test_gfn2_differentiability_and_transforms(
     system = Model(par=par, config=config).setup(sys.numbers, batch_mode=0)
 
     def energy_fn(pos: torch.Tensor) -> torch.Tensor:
-        return system.singlepoint(pos).total.sum()
+        return system.singlepoint(pos).energy.sum()
 
     base_pos = sys.positions.detach().clone()
     g_func = grad(energy_fn)(base_pos)
@@ -1106,7 +1100,7 @@ def test_gfn2_differentiability_and_transforms(
     )
     torch.testing.assert_close(j_rev, g_func, atol=1.0e-12, rtol=1.0e-12)
 
-    if scf_mode == "full":
+    if differentiation == "unrolled":
         # Fixed-trip unrolled SCF supports vmap over conformer geometries.
         batch_pos = torch.stack((base_pos, base_pos @ rot.T), dim=0)
         vmapped_energies = vmap(energy_fn)(batch_pos)

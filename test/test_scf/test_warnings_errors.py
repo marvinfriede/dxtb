@@ -31,13 +31,13 @@ from dxtb._src.typing.exceptions import (
 )
 
 from ..conftest import DEVICE
-from ..utils import coordfile_lih
+from ..utils import coordfile_lih, scf_strategy
 
 opts = {
     "verbosity": 0,
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 
@@ -51,10 +51,9 @@ def test_scf_full_unconverged_warning(dtype: torch.dtype) -> None:
     maxiter = 3
     opts = {
         "damp": 0.3,
-        "damp_init": 0.01,
-        "damp_soft_start": True,
+        "strategy": scf_strategy("anderson", damp_init=0.01, soft_start=True),
         "mix_guess": False,
-        "scf_mode": "full",
+        "differentiation": "unrolled",
         "maxiter": maxiter,
         "verbosity": 0,
         "int_driver": labels.INTDRIVER_PYTORCH,
@@ -85,7 +84,7 @@ def test_scf_full_unconverged_error(dtype: torch.dtype) -> None:
 
     maxiter = 3
     opts = {
-        "scf_mode": "full",
+        "differentiation": "unrolled",
         "maxiter": maxiter,
         "verbosity": 0,
         "force_convergence": True,

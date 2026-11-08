@@ -26,9 +26,9 @@ import pytest
 import torch
 from torch.utils import _pytree
 
-from dxtb import GFN1_XTB, labels
+from dxtb import GFN1_XTB
 from dxtb._src.scf.functional.anderson import AndersonState
-from dxtb._src.scf.functional.broyden import BroydenState
+from dxtb._src.scf.functional.broyden import BroydenMethod, BroydenState
 from dxtb._src.scf.functional.cdiis import CDIISState
 from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.problem import SCFProblem, SCFRepresentation
@@ -133,8 +133,8 @@ def test_compile_uses_static_fermi_path(
     case = _case(
         "NO2",
         method=GFN2_XTB,
-        representation=labels.SCP_MODE_FOCK,
-        mixer=labels.MIXER_LINEAR,
+        representation=SCFRepresentation.FOCK,
+        converger=LinearMethod,
         temperature=2000.0,
         maxiter=4,
     )
@@ -168,7 +168,7 @@ def test_broyden_vmap_lane_permutation_duplicate_and_isolation() -> None:
         _system,
     )
 
-    system = _system(maxiter=4, mixer=labels.MIXER_BROYDEN)
+    system = _system(maxiter=4, converger="broyden")
     positions = _positions()
     lanes = torch.stack((positions[0], positions[1], positions[0]))
 
@@ -207,8 +207,8 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
     case = _case(
         "H2",
         method=GFN1_XTB,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=BroydenMethod,
         tolerance=1.0e-11,
     )
     primal = _run_root(
@@ -217,7 +217,7 @@ def test_alternate_response_keeps_primal_residual_semantics() -> None:
         tolerance=1.0e-11,
         maxiter=120,
         eager=True,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
     )
     config = replace(
         case.system.config.scf,
@@ -260,14 +260,16 @@ def test_float32_fixed_trip_vmap_and_jvp_are_finite(name: str) -> None:
     from .test_functional_root_derivatives import _case, _initial_state
 
     mode = (
-        labels.SCP_MODE_POTENTIAL if name == "Broyden" else labels.SCP_MODE_FOCK
+        SCFRepresentation.POTENTIAL
+        if name == "Broyden"
+        else SCFRepresentation.FOCK
     )
-    mixer = labels.MIXER_BROYDEN if name == "Broyden" else labels.MIXER_LINEAR
+    converger = BroydenMethod if name == "Broyden" else LinearMethod
     case = _case(
         "H2",
         method=GFN1_XTB,
         representation=mode,
-        mixer=mixer,
+        converger=converger,
         maxiter=1,
         tolerance=1.0e-4,
         dtype=torch.float32,

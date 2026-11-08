@@ -29,7 +29,8 @@ from test.test_scf import test_functional_root_derivatives as root_reference
 
 import torch
 
-from dxtb import GFN1_XTB, GFN2_XTB, labels
+from dxtb import GFN1_XTB, GFN2_XTB
+from dxtb._src.scf.functional.broyden import BroydenMethod
 from dxtb._src.scf.functional.energy import (
     electronic_energy_from_spectral,
     free_energy_from_spectral,
@@ -61,8 +62,8 @@ def _case_record(name: str, method: int, temperature: float):
     case = root_reference._case(
         name,
         method=method,
-        representation=labels.SCP_MODE_POTENTIAL,
-        mixer=labels.MIXER_BROYDEN,
+        representation=SCFRepresentation.POTENTIAL,
+        converger=BroydenMethod,
         tolerance=1.0e-12,
         maxiter=300,
         temperature=temperature,
@@ -73,7 +74,7 @@ def _case_record(name: str, method: int, temperature: float):
         tolerance=1.0e-13,
         maxiter=300,
         eager=True,
-        mixer=labels.MIXER_BROYDEN,
+        converger=BroydenMethod,
     )
     if not record.converged:
         raise RuntimeError(f"{name} failed to certify at {temperature:g} K.")

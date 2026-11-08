@@ -28,28 +28,27 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 opts = {
     "verbosity": 0,
     "maxiter": 300,
-    "scf_mode": labels.SCF_MODE_FULL,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "unrolled",
+    "strategy": scf_strategy("anderson", "potential"),
 }
 
 
 def single(
     dtype: torch.dtype,
     name: str,
-    mixer: str,
+    converger: str,
     tol: float,
-    scp_mode: str,
-    scf_mode: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -62,10 +61,9 @@ def single(
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
-            "mixer": mixer,
-            "scf_mode": scf_mode,
-            "scp_mode": scp_mode,
+            "damp": 0.05 if converger == "linear" else 0.4,
+            "strategy": scf_strategy(converger, variable),
+            "differentiation": differentiation,
             "x_atol": tol,
             "int_driver": "pytorch",
         },
@@ -82,78 +80,94 @@ def single(
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["LiH"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["full"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["unrolled"])
 def test_single(
-    dtype: torch.dtype, name: str, mixer: str, scp_mode: str, scf_mode: str
+    dtype: torch.dtype,
+    name: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50
-    single(dtype, name, mixer, tol, scp_mode, scf_mode)
+    single(dtype, name, converger, tol, variable, differentiation)
 
 
 @pytest.mark.large
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["H2", "SiH4", "MB16_43_01", "LYS_xao"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["full"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["unrolled"])
 def test_single_medium(
-    dtype: torch.dtype, name: str, mixer: str, scp_mode: str, scf_mode: str
+    dtype: torch.dtype,
+    name: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     """Test a few larger system."""
     tol = sqrt(torch.finfo(dtype).eps) * 50
-    single(dtype, name, mixer, tol, scp_mode, scf_mode)
+    single(dtype, name, converger, tol, variable, differentiation)
 
 
 @pytest.mark.large
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["S2", "LYS_xao_dist"])
-@pytest.mark.parametrize("mixer", ["anderson", "simple"])
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["full"])
+@pytest.mark.parametrize("converger", ["anderson", "linear"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["unrolled"])
 def test_single_difficult(
-    dtype: torch.dtype, name: str, mixer: str, scp_mode: str, scf_mode: str
+    dtype: torch.dtype,
+    name: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     """These systems do not reproduce tblite energies to high accuracy."""
     tol = 5e-3
-    single(dtype, name, mixer, tol, scp_mode, scf_mode)
+    single(dtype, name, converger, tol, variable, differentiation)
 
 
-# Mixers are compared on C60; the (much slower) vancoh2 only runs with the
-# Anderson mixer. All SCP modes run on both systems.
+# Convergers are compared on C60; the (much slower) vancoh2 only runs with
+# the Anderson converger. All SCF variables run on both systems.
 large_cases = [
-    (name, mixer, scp_mode)
-    for name, mixers in (
-        ("C60", ["anderson", "simple"]),
+    (name, converger, variable)
+    for name, convergers in (
+        ("C60", ["anderson", "linear"]),
         ("vancoh2", ["anderson"]),
     )
-    for mixer in mixers
-    for scp_mode in ["charges", "potential", "fock"]
+    for converger in convergers
+    for variable in ["charge", "potential", "fock"]
 ]
 
 
 @pytest.mark.large
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float])
-@pytest.mark.parametrize("name, mixer, scp_mode", large_cases)
-@pytest.mark.parametrize("scf_mode", ["full"])
+@pytest.mark.parametrize("name, converger, variable", large_cases)
+@pytest.mark.parametrize("differentiation", ["unrolled"])
 def test_single_large(
-    dtype: torch.dtype, name: str, mixer: str, scp_mode: str, scf_mode: str
+    dtype: torch.dtype,
+    name: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50
-    single(dtype, name, mixer, tol, scp_mode, scf_mode)
+    single(dtype, name, converger, tol, variable, differentiation)
 
 
 def batched(
     dtype: torch.dtype,
     name1: str,
     name2: str,
-    mixer: str,
-    scp_mode: str,
-    scf_mode: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
     tol: float,
 ) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -182,10 +196,9 @@ def batched(
     options = dict(
         opts,
         **{
-            "damp": 0.05 if mixer == "simple" else 0.4,
-            "mixer": mixer,
-            "scf_mode": scf_mode,
-            "scp_mode": scp_mode,
+            "damp": 0.05 if converger == "linear" else 0.4,
+            "strategy": scf_strategy(converger, variable),
+            "differentiation": differentiation,
             "x_atol": tol,
         },
     )
@@ -198,16 +211,16 @@ def batched(
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
-# Full gradient tracking (from TBMaLT) has no Broyden implementation.
-mixer_scf_modes = [
+# Unrolled (full gradient tracking) runs are not combined with Broyden.
+converger_differentiations = [
     pytest.param(
-        mixer,
-        scf_mode,
-        marks=(pytest.mark.slow,) if mixer == "simple" else (),
+        converger,
+        differentiation,
+        marks=(pytest.mark.slow,) if converger == "linear" else (),
     )
-    for scf_mode in ["full", "implicit"]
-    for mixer in ["anderson", "broyden", "simple"]
-    if not (scf_mode == "full" and mixer == "broyden")
+    for differentiation in ["unrolled", "implicit"]
+    for converger in ["anderson", "broyden", "linear"]
+    if not (differentiation == "unrolled" and converger == "broyden")
 ]
 
 
@@ -215,39 +228,41 @@ mixer_scf_modes = [
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["SiH4"])  # padding
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("mixer, scf_mode", mixer_scf_modes)
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize(
+    "converger, differentiation", converger_differentiations
+)
 def test_batch(
     dtype: torch.dtype,
     name1: str,
     name2: str,
-    mixer: str,
-    scp_mode: str,
-    scf_mode: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50
-    batched(dtype, name1, name2, mixer, scp_mode, scf_mode, tol)
+    batched(dtype, name1, name2, converger, variable, differentiation, tol)
 
 
-# A batch of identical molecules (no padding) only needs every mixer and SCP
-# mode once; the full grid runs with padding in `test_batch`.
+# A batch of identical molecules (no padding) only needs every converger and
+# SCF variable once; the full grid runs with padding in `test_batch`.
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.double])
 @pytest.mark.parametrize("name1", ["LiH"])
 @pytest.mark.parametrize("name2", ["LiH"])
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("mixer", ["anderson", "broyden", "simple"])
-@pytest.mark.parametrize("scf_mode", ["implicit"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("converger", ["anderson", "broyden", "linear"])
+@pytest.mark.parametrize("differentiation", ["implicit"])
 def test_batch_no_padding(
     dtype: torch.dtype,
     name1: str,
     name2: str,
-    mixer: str,
-    scp_mode: str,
-    scf_mode: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50
-    batched(dtype, name1, name2, mixer, scp_mode, scf_mode, tol)
+    batched(dtype, name1, name2, converger, variable, differentiation, tol)
 
 
 @pytest.mark.filterwarnings("ignore")
@@ -256,18 +271,18 @@ def test_batch_no_padding(
 @pytest.mark.parametrize("name2", ["LiH"])
 @pytest.mark.parametrize("name3", ["SiH4"])
 @pytest.mark.parametrize(
-    "mixer", ["anderson", pytest.param("simple", marks=pytest.mark.slow)]
+    "converger", ["anderson", pytest.param("linear", marks=pytest.mark.slow)]
 )
-@pytest.mark.parametrize("scp_mode", ["charges", "potential", "fock"])
-@pytest.mark.parametrize("scf_mode", ["full"])
+@pytest.mark.parametrize("variable", ["charge", "potential", "fock"])
+@pytest.mark.parametrize("differentiation", ["unrolled"])
 def test_batch_three(
     dtype: torch.dtype,
     name1: str,
     name2: str,
     name3: str,
-    mixer: str,
-    scp_mode: str,
-    scf_mode: str,
+    converger: str,
+    variable: str,
+    differentiation: str,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -299,10 +314,9 @@ def test_batch_three(
     options = dict(
         opts,
         **{
-            "damp": 0.1 if mixer == "simple" else 0.4,
-            "mixer": mixer,
-            "scf_mode": scf_mode,
-            "scp_mode": scp_mode,
+            "damp": 0.1 if converger == "linear" else 0.4,
+            "strategy": scf_strategy(converger, variable),
+            "differentiation": differentiation,
             "x_atol": tol,
         },
     )

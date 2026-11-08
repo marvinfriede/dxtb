@@ -51,7 +51,7 @@ def _energy_from_disp_params(
     par: ParamModule,
     method: str,
     driver: str,
-    scf_mode: str,
+    differentiation: str,
     disp_values: tuple[Tensor, ...],
 ) -> Tensor:
     dkey = "d3" if method == "gfn1" else "d4"
@@ -60,31 +60,31 @@ def _energy_from_disp_params(
 
     opts = {
         "int_driver": driver,
-        "scf_mode": scf_mode,
-        "mixer": "anderson" if scf_mode == "full" else "broyden",
+        "differentiation": differentiation,
+        "strategy": "anderson" if differentiation == "unrolled" else "broyden",
         "x_atol": 1.0e-10,
         "maxiter": 100,
         "verbosity": 0,
     }
     calc = Calculator(NUMBERS, par, opts=opts, **DD_CPU)
-    return calc.singlepoint(POSITIONS).total.sum()
+    return calc.singlepoint(POSITIONS).energy.sum()
 
 
 @pytest.mark.parametrize(
-    ("method", "scf_mode", "driver"),
+    ("method", "differentiation", "driver"),
     [
-        ("gfn1", "full", "pytorch"),
+        ("gfn1", "unrolled", "pytorch"),
         ("gfn1", "implicit", "pytorch"),
-        ("gfn2", "full", "pytorch"),
+        ("gfn2", "unrolled", "pytorch"),
         ("gfn2", "implicit", "pytorch"),
-        ("gfn1", "full", "libcint"),
+        ("gfn1", "unrolled", "libcint"),
         ("gfn1", "implicit", "libcint"),
-        ("gfn2", "full", "libcint"),
+        ("gfn2", "unrolled", "libcint"),
         ("gfn2", "implicit", "libcint"),
     ],
 )
 def test_dftd_forward_jvp_matches_reverse_and_fd(
-    method: str, scf_mode: str, driver: str
+    method: str, differentiation: str, driver: str
 ) -> None:
     """Forward-mode jvp over DFT-D parameters matches reverse AD and central FD."""
     if driver == "libcint" and not has_libcint:
@@ -103,7 +103,9 @@ def test_dftd_forward_jvp_matches_reverse_and_fd(
     )
 
     def f(*vals: Tensor) -> Tensor:
-        return _energy_from_disp_params(base_par, method, driver, scf_mode, vals)
+        return _energy_from_disp_params(
+            base_par, method, driver, differentiation, vals
+        )
 
     # Reverse-mode gradient across all 5 dispersion parameters
     energy = f(*primals)

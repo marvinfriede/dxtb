@@ -39,6 +39,8 @@ from dxtb._src.typing import Tensor
 from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
 from dxtb.config import ConfigSCF
 
+from ..utils import scf_strategy
+
 from ..utils import get_param_module
 from .samples import Record, samples
 
@@ -165,7 +167,7 @@ def test_exactly_one_diagonalization_and_no_initial_guess() -> None:
     config = ConfigSCF.create(
         method=labels.GFN0_XTB,
         maxiter=999,
-        mixer=labels.MIXER_BROYDEN,
+        strategy=scf_strategy("broyden"),
     )
 
     with patch(
@@ -182,22 +184,22 @@ def test_exactly_one_diagonalization_and_no_initial_guess() -> None:
 
 
 @pytest.mark.parametrize(
-    ("maxiter", "mixer"),
+    ("maxiter", "converger"),
     [
-        (0, labels.MIXER_LINEAR),
-        (1, labels.MIXER_ANDERSON),
-        (999, labels.MIXER_BROYDEN),
+        (0, "linear"),
+        (1, "anderson"),
+        (999, "broyden"),
     ],
 )
-def test_mixer_and_maxiter_are_inert(maxiter: int, mixer: int) -> None:
-    """Ignore mixer and iteration-limit settings for the GFN0 solver."""
+def test_converger_and_maxiter_are_inert(maxiter: int, converger: str) -> None:
+    """Ignore converger and iteration-limit settings for the GFN0 solver."""
     _, reference = run_problem("H2O")
     _, result = run_problem(
         "H2O",
         config=ConfigSCF.create(
             method=labels.GFN0_XTB,
             maxiter=maxiter,
-            mixer=mixer,
+            strategy=scf_strategy(converger),
         ),
     )
 
@@ -328,8 +330,8 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
     assert torch.count_nonzero(potential).item() == 0
 
 
-def test_gfn0_low_level_engine_overrides_are_retired() -> None:
-    """Verify GFN0 rejects retired low-level positional and keyword overrides."""
+def test_gfn0_low_level_engine_overrides_are_rejected() -> None:
+    """Verify GFN0 rejects low-level positional and keyword overrides."""
     from dxtb._src.scf.nonselfconsistent import solve_nonselfconsistent
 
     _, numbers, positions, ihelp, hcore, integrals = build_problem("H2")
@@ -343,7 +345,7 @@ def test_gfn0_low_level_engine_overrides_are_retired() -> None:
         {"eigen_options": {"method": "exacteig"}},
         {"eigen_options": None},
     ):
-        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        with pytest.raises(TypeError):
             solve(
                 numbers,
                 positions,
@@ -357,7 +359,7 @@ def test_gfn0_low_level_engine_overrides_are_retired() -> None:
                 hcore.refocc,
                 **kwargs,
             )
-        with pytest.raises(NotImplementedError, match="overrides are no longer"):
+        with pytest.raises(TypeError):
             solve_nonselfconsistent(
                 numbers,
                 interactions,
@@ -370,7 +372,7 @@ def test_gfn0_low_level_engine_overrides_are_retired() -> None:
                 **kwargs,
             )
 
-    with pytest.raises(NotImplementedError, match="overrides are no longer"):
+    with pytest.raises(TypeError):
         solve_nonselfconsistent(
             numbers,
             interactions,

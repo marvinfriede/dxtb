@@ -80,23 +80,6 @@ _REMOVED_STORE_OPTIONS = {
     "store_dipole",
     "store_quadrupole",
 }
-_REMOVED_CACHE_OPTIONS = {
-    "cache_enabled",
-    "cache_hcore",
-    "cache_overlap",
-    "cache_dipole",
-    "cache_quadrupole",
-    "cache_charges",
-    "cache_coefficients",
-    "cache_density",
-    "cache_fock",
-    "cache_iterations",
-    "cache_mo_energies",
-    "cache_occupation",
-    "cache_potential",
-}
-
-
 def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
     """Reject removed Calculator result-retention and grad_mode arguments."""
     if "grad_mode" in kwargs:
@@ -109,16 +92,6 @@ def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
         raise TypeError(
             "Calculator result caching has been removed; retain the returned "
             "Result instead. Unsupported arguments: " + ", ".join(removed)
-        )
-
-
-def reject_removed_cache_options(opts: dict[str, Any]) -> None:
-    """Explain that removed result-cache options are no longer supported."""
-    removed = sorted(_REMOVED_CACHE_OPTIONS.intersection(opts))
-    if removed:
-        raise TypeError(
-            "Calculator result caching has been removed; retain the returned "
-            "Result instead. Unsupported cache option: " + ", ".join(removed)
         )
 
 
@@ -458,7 +431,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
             # setup calculator options
             if isinstance(opts, dict):
-                reject_removed_cache_options(opts)
                 opts = Config.create(**opts)
             self.opts = opts
 

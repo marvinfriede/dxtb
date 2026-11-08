@@ -36,7 +36,7 @@ from dxtb._src.scf.functional.method import LinearMethod
 from dxtb._src.scf.functional.solver import (
     DynamicDampingSettings,
     _solve_map_control,
-    setup_simple_solver_settings,
+    setup_solver_settings,
 )
 
 from ._anderson_helpers import (
@@ -263,7 +263,7 @@ def test_dynamic_damping_setup_resolves_simple_and_anderson() -> None:
         damp_dynamic=True,
         damp_dynamic_factor=0.73,
     )
-    simple = setup_simple_solver_settings(linear, torch.float64)
+    simple = setup_solver_settings(linear, torch.float64)
     anderson = setup_anderson_solver_settings(anderson_config, torch.float64)
     assert simple.dynamic_damping.enabled
     assert anderson.dynamic_damping.enabled

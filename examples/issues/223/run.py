@@ -19,11 +19,14 @@
 https://github.com/grimme-lab/dxtb/issues/223
 """
 
+from dataclasses import replace
+
 import torch
 from tad_mctc import read
 from tad_mctc.batch import pack
 
 import dxtb
+from dxtb.scf import SCFRepresentation, SCFStrategy, strategy_preset
 
 torch.set_printoptions(precision=10)
 
@@ -31,8 +34,15 @@ dd = {"dtype": torch.double, "device": torch.device("cpu")}
 
 opts = {
     "verbosity": 0,
-    "scf_mode": dxtb.labels.SCF_MODE_FULL,
-    "scp_mode": dxtb.labels.SCP_MODE_CHARGE,
+    "differentiation": "unrolled",
+    "strategy": SCFStrategy(
+        (
+            replace(
+                strategy_preset("anderson").stages[0],
+                representation=SCFRepresentation.CHARGE,
+            ),
+        )
+    ),
     "damp": 0.1,
 }
 

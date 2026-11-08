@@ -29,12 +29,11 @@ from tad_mctc import read, read_chrg
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 slist = ["H2", "H2O", "CH4", "SiH4"]
@@ -51,16 +50,22 @@ batch_triples = [
 
 opts = {
     "verbosity": 0,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
 }
+
+
+def _strategy(differentiation: str):
+    """Anderson for unrolled, Broyden for implicit SCF differentiation."""
+    converger = "anderson" if differentiation == "unrolled" else "broyden"
+    return scf_strategy(converger, "potential")
 
 
 def single(
     dtype: torch.dtype,
     name: str,
     gfn: str,
-    scf_mode: str = labels.SCF_MODE_IMPLICIT,
+    differentiation: str = "implicit",
     int_driver: str | None = None,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
@@ -79,8 +84,8 @@ def single(
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
         },
     )
     if int_driver is not None:
@@ -88,23 +93,27 @@ def single(
     calc = Calculator(numbers, par, opts=options, **dd)
 
     result = calc.singlepoint(positions, charge)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_single_gfn1(dtype: torch.dtype, name: str, scf_mode: str) -> None:
-    single(dtype, name, "gfn1", scf_mode)
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_single_gfn1(
+    dtype: torch.dtype, name: str, differentiation: str
+) -> None:
+    single(dtype, name, "gfn1", differentiation)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_single_gfn2(dtype: torch.dtype, name: str, scf_mode: str) -> None:
-    single(dtype, name, "gfn2", scf_mode)
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_single_gfn2(
+    dtype: torch.dtype, name: str, differentiation: str
+) -> None:
+    single(dtype, name, "gfn2", differentiation)
 
 
 @pytest.mark.parametrize("name", ["H2O", "SiH4"])
@@ -126,7 +135,7 @@ def single_large(
     dtype: torch.dtype,
     name: str,
     gfn: str,
-    scf_mode: str = labels.SCF_MODE_IMPLICIT,
+    differentiation: str = "implicit",
     int_driver: str | None = None,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
@@ -145,8 +154,8 @@ def single_large(
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
         },
     )
     if int_driver is not None:
@@ -154,29 +163,29 @@ def single_large(
     calc = Calculator(numbers, par, opts=options, **dd)
 
     result = calc.singlepoint(positions, charge)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_large)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_single_large_gfn1(
-    dtype: torch.dtype, name: str, scf_mode: str
+    dtype: torch.dtype, name: str, differentiation: str
 ) -> None:
-    single_large(dtype, name, "gfn1", scf_mode)
+    single_large(dtype, name, "gfn1", differentiation)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.large
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", slist_large)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_single_large_gfn2(
-    dtype: torch.dtype, name: str, scf_mode: str
+    dtype: torch.dtype, name: str, differentiation: str
 ) -> None:
-    single_large(dtype, name, "gfn2", scf_mode)
+    single_large(dtype, name, "gfn2", differentiation)
 
 
 @pytest.mark.large
@@ -195,7 +204,7 @@ def batch(
     name2: str,
     name3: str,
     gfn: str,
-    scf_mode: str = labels.SCF_MODE_IMPLICIT,
+    differentiation: str = "implicit",
     int_driver: str | None = None,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
@@ -228,8 +237,8 @@ def batch(
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
         },
     )
     if int_driver is not None:
@@ -237,27 +246,35 @@ def batch(
     calc = Calculator(numbers, par, opts=options, **dd)
 
     result = calc.singlepoint(positions, charge)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1, name2, name3", batch_triples)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch_gfn1(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, scf_mode: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    differentiation: str,
 ) -> None:
-    batch(dtype, name1, name2, name3, "gfn1", scf_mode)
+    batch(dtype, name1, name2, name3, "gfn1", differentiation)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name1, name2, name3", batch_triples)
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch_gfn2(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, scf_mode: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    differentiation: str,
 ) -> None:
-    batch(dtype, name1, name2, name3, "gfn2", scf_mode)
+    batch(dtype, name1, name2, name3, "gfn2", differentiation)
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
@@ -277,7 +294,7 @@ def batch_large(
     name2: str,
     name3: str,
     gfn: str,
-    scf_mode: str = labels.SCF_MODE_IMPLICIT,
+    differentiation: str = "implicit",
     int_driver: str | None = None,
 ) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 10
@@ -311,8 +328,8 @@ def batch_large(
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
         },
     )
     if int_driver is not None:
@@ -320,7 +337,7 @@ def batch_large(
     calc = Calculator(numbers, par, opts=options, **dd)
 
     result = calc.singlepoint(positions, charge)
-    res = result.total.sum(-1)
+    res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
@@ -329,11 +346,15 @@ def batch_large(
 @pytest.mark.parametrize("name1", ["H2"])
 @pytest.mark.parametrize("name2", ["CH4"])
 @pytest.mark.parametrize("name3", ["LYS_xao"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch_large(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, scf_mode: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    differentiation: str,
 ) -> None:
-    batch_large(dtype, name1, name2, name3, "gfn1", scf_mode)
+    batch_large(dtype, name1, name2, name3, "gfn1", differentiation)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
@@ -342,11 +363,15 @@ def test_batch_large(
 @pytest.mark.parametrize("name1", ["H2"])
 @pytest.mark.parametrize("name2", ["CH4"])
 @pytest.mark.parametrize("name3", ["LYS_xao"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 def test_batch_large_gfn2(
-    dtype: torch.dtype, name1: str, name2: str, name3: str, scf_mode: str
+    dtype: torch.dtype,
+    name1: str,
+    name2: str,
+    name3: str,
+    differentiation: str,
 ) -> None:
-    batch_large(dtype, name1, name2, name3, "gfn2", scf_mode)
+    batch_large(dtype, name1, name2, name3, "gfn2", differentiation)
 
 
 @pytest.mark.large

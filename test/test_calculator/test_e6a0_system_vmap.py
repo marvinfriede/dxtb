@@ -26,6 +26,8 @@ from dxtb import GFN1_XTB, Calculator, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 
 def _system(
     *,
@@ -33,8 +35,7 @@ def _system(
     temperature: float = 0.0,
     intlevel: int | None = None,
     force_convergence: bool = False,
-    scf_mode: int = labels.SCF_MODE_FULL,
-    mixer: int = labels.MIXER_LINEAR,
+    converger: str = "linear",
     fermi_maxiter: int | None = None,
 ):
     """Construct an independent PyTorch-backed GFN1/H2 System."""
@@ -45,8 +46,8 @@ def _system(
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=(labels.INTLEVEL_HCORE if intlevel is None else intlevel),
-        mixer=mixer,
-        scf_mode=scf_mode,
+        strategy=scf_strategy(converger),
+        differentiation="unrolled",
         maxiter=maxiter,
         force_convergence=force_convergence,
         fermi_etemp=temperature,
@@ -195,7 +196,7 @@ def test_system_fixed_trip_and_calculator_eager_force_policy() -> None:
         method=labels.GFN1_XTB,
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
-        mixer=labels.MIXER_LINEAR,
+        strategy=scf_strategy("linear"),
         maxiter=1,
         force_convergence=True,
         fermi_etemp=0.0,
@@ -216,7 +217,7 @@ def test_system_fixed_trip_and_calculator_eager_force_policy() -> None:
             "verbosity": 0,
             "int_driver": labels.INTDRIVER_PYTORCH,
             "int_level": labels.INTLEVEL_HCORE,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear"),
             "maxiter": 1,
             "force_convergence": True,
             "x_atol": 0.0,
@@ -315,41 +316,13 @@ def test_system_negative_fermi_maxiter_fails_before_transform_guess(
     assert solve_calls == 0
 
 
-def test_experimental_single_shot_is_rejected_during_config_parsing(
-    monkeypatch,
-) -> None:
-    """The removed single-shot policy fails before any SCF setup."""
-    import dxtb._src.scf.functional.eager as eager
-
-    guess_calls = 0
-
-    def unexpected_guess(*args, **kwargs):
-        nonlocal guess_calls
-        guess_calls += 1
-        pytest.fail("retired experimental mode must fail before guessing")
-
-    monkeypatch.setattr(eager, "get_guess", unexpected_guess)
-
-    with pytest.raises(
-        ValueError,
-        match="Experimental single-shot SCF was retired",
-    ):
-        Config.create(
-            method=labels.GFN1_XTB,
-            int_driver=labels.INTDRIVER_PYTORCH,
-            scf_mode=labels.SCF_MODE_EXPERIMENTAL,
-        )
-
-    assert guess_calls == 0
-
-
 def test_system_broyden_uses_native_functional_route(
     monkeypatch,
 ) -> None:
-    """Broyden reaches its native method without mixer substitution."""
+    """Broyden reaches its native method without converger substitution."""
     from dxtb._src.scf.functional.broyden import BroydenMethod
 
-    system = _system(maxiter=2, mixer=labels.MIXER_BROYDEN)
+    system = _system(maxiter=2, converger="broyden")
     original_propose = BroydenMethod.propose
     propose_calls = 0
 
@@ -390,7 +363,7 @@ def test_calculator_retains_eager_single_system_adapter() -> None:
             "verbosity": 0,
             "int_driver": labels.INTDRIVER_PYTORCH,
             "int_level": labels.INTLEVEL_HCORE,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear"),
             "maxiter": 2,
             "x_atol": 0.0,
             "x_atol_max": 0.0,

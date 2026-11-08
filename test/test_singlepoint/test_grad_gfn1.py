@@ -29,12 +29,11 @@ import torch
 from tad_mctc import read, read_chrg
 
 from dxtb import Calculator
-from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_npz
+from ..utils import get_param_module, load_from_npz, scf_strategy
 
 HERE = Path(__file__).resolve().parent / "refs" / "gfn1"
 ref_grad = np.load(HERE / "grad.npz")
@@ -43,21 +42,29 @@ ref_grad = np.load(HERE / "grad.npz")
 
 opts = {
     "maxiter": 50,
-    "scf_mode": labels.SCF_MODE_IMPLICIT,
-    "scp_mode": labels.SCP_MODE_POTENTIAL,
+    "differentiation": "implicit",
+    "strategy": scf_strategy("anderson", "potential"),
     "verbosity": 0,
 }
+
+
+def _strategy(differentiation: str):
+    """Anderson for unrolled, Broyden for implicit SCF differentiation."""
+    converger = "anderson" if differentiation == "unrolled" else "broyden"
+    return scf_strategy(converger, "potential")
 
 
 @pytest.mark.grad
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["H2", "H2O", "CH4"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
-def test_analytical(dtype: torch.dtype, name: str, scf_mode: str) -> None:
+def test_analytical(
+    dtype: torch.dtype, name: str, differentiation: str
+) -> None:
     atol, rtol = 1e-5, 1e-4
-    analytical(dtype, name, atol, rtol, scf_mode)
+    analytical(dtype, name, atol, rtol, differentiation)
 
 
 @pytest.mark.grad
@@ -65,11 +72,13 @@ def test_analytical(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["C60"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
-def test_analytical_large(dtype: torch.dtype, name: str, scf_mode: str) -> None:
+def test_analytical_large(
+    dtype: torch.dtype, name: str, differentiation: str
+) -> None:
     atol = rtol = sqrt(torch.finfo(dtype).eps)
-    analytical(dtype, name, atol, rtol, scf_mode)
+    analytical(dtype, name, atol, rtol, differentiation)
 
 
 @pytest.mark.grad
@@ -77,10 +86,10 @@ def test_analytical_large(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["AD7en+", "LYS_xao"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_analytical_large2(
-    dtype: torch.dtype, name: str, scf_mode: str
+    dtype: torch.dtype, name: str, differentiation: str
 ) -> None:
     if "cuda" in str(DEVICE) and dtype == torch.float:
         atol = 1e-4
@@ -88,7 +97,7 @@ def test_analytical_large2(
         atol = 1e-5
 
     rtol = 1e-3
-    analytical(dtype, name, atol, rtol, scf_mode)
+    analytical(dtype, name, atol, rtol, differentiation)
 
 
 def analytical(
@@ -96,7 +105,7 @@ def analytical(
     name: str,
     atol: float,
     rtol: float,
-    scf_mode: str,
+    differentiation: str,
     int_driver: str | None = None,
 ) -> None:
     dd: DD = {"device": DEVICE, "dtype": dtype}
@@ -112,9 +121,9 @@ def analytical(
     options = dict(
         opts,
         **{
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "strategy": _strategy(differentiation),
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
-            "scf_mode": scf_mode,
+            "differentiation": differentiation,
         },
     )
     if int_driver is not None:
@@ -134,8 +143,8 @@ def analytical(
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["H2", "H2O", "SiH4"])
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_backward(dtype: torch.dtype, name: str, differentiation: str) -> None:
     tol = sqrt(torch.finfo(dtype).eps) * 50  # slightly larger for H2O!
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -151,16 +160,16 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
     options = dict(
         opts,
         **{
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "strategy": _strategy(differentiation),
             "x_atol": 1e-5 if dtype == torch.float else 1e-10,
-            "scf_mode": scf_mode,
+            "differentiation": differentiation,
         },
     )
     calc = Calculator(
         numbers, get_param_module("gfn1", **dd), opts=options, **dd
     )
     result = calc.singlepoint(positions, charge)
-    energy = result.total.sum(-1)
+    energy = result.energy.sum(-1)
 
     # autograd
     energy.backward()
@@ -181,8 +190,8 @@ def test_backward(dtype: torch.dtype, name: str, scf_mode: str) -> None:
 @pytest.mark.parametrize(
     "name", ["H2", "H2O", pytest.param("CH4", marks=pytest.mark.slow)]
 )
-@pytest.mark.parametrize("scf_mode", ["implicit", "full"])
-def test_num(name: str, scf_mode: str) -> None:
+@pytest.mark.parametrize("differentiation", ["implicit", "unrolled"])
+def test_num(name: str, differentiation: str) -> None:
     dtype = torch.double
     dd: DD = {"device": DEVICE, "dtype": dtype}
 
@@ -193,22 +202,26 @@ def test_num(name: str, scf_mode: str) -> None:
     charge = read_chrg(Path(base, ".CHRG"), **dd)
 
     # do calc
-    gradient = num_grad(numbers, positions, charge, scf_mode, dd)
+    gradient = num_grad(numbers, positions, charge, differentiation, dd)
 
     ref = load_from_npz(ref_grad, name, dtype)
     assert pytest.approx(ref.cpu(), abs=1e-6, rel=1e-4) == gradient.cpu()
 
 
 def num_grad(
-    numbers: Tensor, positions: Tensor, charge: Tensor, scf_mode: str, dd: DD
+    numbers: Tensor,
+    positions: Tensor,
+    charge: Tensor,
+    differentiation: str,
+    dd: DD,
 ) -> Tensor:
     """Calculate gradient numerically for reference."""
 
     options = dict(
         opts,
         **{
-            "scf_mode": scf_mode,
-            "mixer": "anderson" if scf_mode == "full" else "broyden",
+            "differentiation": differentiation,
+            "strategy": _strategy(differentiation),
         },
     )
     calc = Calculator(
@@ -222,11 +235,11 @@ def num_grad(
         for j in range(3):
             positions[i, j] += step
             result = calc.singlepoint(positions, charge)
-            er = result.total.sum(-1)
+            er = result.energy.sum(-1)
 
             positions[i, j] -= 2 * step
             result = calc.singlepoint(positions, charge)
-            el = result.total.sum(-1)
+            el = result.energy.sum(-1)
 
             positions[i, j] += step
             gradient[i, j] = 0.5 * (er - el) / step

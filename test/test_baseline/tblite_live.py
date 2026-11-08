@@ -38,6 +38,7 @@ from dxtb import GFN1_XTB, GFN2_XTB, Calculator
 from dxtb._src.typing import Tensor
 from dxtb.components.field import new_efield
 
+from ..utils import scf_strategy
 from .refdata import Deviation, Tolerance, compare
 
 __all__ = [
@@ -314,8 +315,8 @@ def evaluate_dxtb_reference(
     charge: Tensor | float | int | None = None,
     spin: Tensor | float | int | None = None,
     int_driver: str = "pytorch",
-    scp_mode: str = "potential",
-    mixer: str = "broyden",
+    variable: str = "potential",
+    converger: str = "broyden",
     x_atol: float = 1.0e-10,
     maxiter: int = 300,
     fermi_etemp: float = 300.0,
@@ -340,11 +341,12 @@ def evaluate_dxtb_reference(
         Number of unpaired electrons. Defaults to ``None`` (singlet).
     int_driver : str, optional
         Integral driver (``"pytorch"`` or ``"libcint"``). Defaults to ``"pytorch"``.
-    scp_mode : str, optional
-        SCF representation mode (``"potential"`` or ``"charge"``). Defaults to
+    variable : str, optional
+        SCF variable (``"potential"`` or ``"charge"``). Defaults to
         ``"potential"``.
-    mixer : str, optional
-        SCF mixer (``"broyden"`` or ``"anderson"``). Defaults to ``"broyden"``.
+    converger : str, optional
+        SCF converger (``"broyden"`` or ``"anderson"``). Defaults to
+        ``"broyden"``.
     x_atol : float, optional
         SCF root tolerance. Defaults to ``1.0e-10``.
     maxiter : int, optional
@@ -372,9 +374,8 @@ def evaluate_dxtb_reference(
     param = _DXTB_METHODS[method]
     opts: dict[str, Any] = {
         "int_driver": int_driver,
-        "scp_mode": scp_mode,
-        "mixer": mixer,
-        "scf_mode": "full",
+        "strategy": scf_strategy(converger, variable),
+        "differentiation": "unrolled",
         "x_atol": x_atol,
         "x_atol_max": x_atol * 0.1,
         "maxiter": maxiter,
@@ -396,7 +397,7 @@ def evaluate_dxtb_reference(
     )
     pos = positions.detach().clone().requires_grad_(True)
     res = calc.singlepoint(pos, chrg=charge, spin=spin)
-    energy = res.total.sum(-1)
+    energy = res.energy.sum(-1)
     (gradient,) = torch.autograd.grad(energy, pos)
     mono = res.charges.mono
     atomic_charges = calc.ihelp.reduce_orbital_to_atom(mono)

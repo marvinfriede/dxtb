@@ -23,13 +23,14 @@ from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import GFN1_XTB, labels
 from dxtb._src.scf.functional import (
-    functional_converged_and_valid,
+    functional_return_valid,
     functional_subsolves_ok,
-    setup_simple_solver_settings,
+    setup_solver_settings,
     solve_scf_simple,
 )
 from dxtb._src.wavefunction import filling
 
+from ..utils import scf_strategy
 from .test_functional_map import _prepare_case
 
 
@@ -40,7 +41,7 @@ def test_positive_subcutoff_temperature_matches_low_temperature_entropy() -> (
     cutoff_kelvin = 3.0e-7 / KELVIN2AU
     temperature = 0.5 * cutoff_kelvin
     options = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 0,
         "fermi_etemp": temperature,
         "fermi_partition": labels.FERMI_PARTITION_EQUAL,
@@ -49,7 +50,7 @@ def test_positive_subcutoff_temperature_matches_low_temperature_entropy() -> (
     actual = solve_scf_simple(
         case.x,
         case.inputs,
-        setup_simple_solver_settings(
+        setup_solver_settings(
             case.system.config.scf, case.positions.dtype
         ),
     )
@@ -79,7 +80,7 @@ def test_subcutoff_entropy_fractional_charge_gradient_matches_reference() -> (
     """Sub-cutoff entropy has the reference fractional-charge derivative."""
     cutoff_kelvin = 3.0e-7 / KELVIN2AU
     options = {
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 0,
         "fermi_etemp": 0.5 * cutoff_kelvin,
         "fermi_partition": labels.FERMI_PARTITION_EQUAL,
@@ -89,7 +90,7 @@ def test_subcutoff_entropy_fractional_charge_gradient_matches_reference() -> (
     actual = solve_scf_simple(
         case.x,
         case.inputs,
-        setup_simple_solver_settings(
+        setup_solver_settings(
             case.system.config.scf, case.positions.dtype
         ),
     )
@@ -122,7 +123,7 @@ def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
             GFN1_XTB,
             sample_name="H2",
             scf_options={
-                "mixer": labels.MIXER_LINEAR,
+                "strategy": scf_strategy("linear", "charge"),
                 "fermi_etemp": temperature,
                 "maxiter": 0,
             },
@@ -133,7 +134,7 @@ def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
             result = solve_scf_simple(
                 case.x,
                 case.inputs,
-                setup_simple_solver_settings(
+                setup_solver_settings(
                     case.system.config.scf, case.positions.dtype
                 ),
             )
@@ -141,14 +142,14 @@ def test_temperature_cutoff_boundaries_preserve_spectral_contract() -> None:
             assert result.trajectory_status is None
             assert result.final_evaluation.fermi_status is None
             assert functional_subsolves_ok(result).item() is True
-            assert functional_converged_and_valid(result).item() is False
+            assert functional_return_valid(result).item() is False
         else:
             assert settings is not None
             assert settings.smear is expected_smear
             result = solve_scf_simple(
                 case.x,
                 case.inputs,
-                setup_simple_solver_settings(
+                setup_solver_settings(
                     case.system.config.scf, case.positions.dtype
                 ),
             )
@@ -180,7 +181,7 @@ def test_raw_fixed_point_and_fermi_status_remain_separate() -> None:
         sample_name="H2O",
         charge=0.3,
         scf_options={
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "charge"),
             "maxiter": 1,
             "x_atol": 1.0e6,
             "x_atol_max": 1.0e6,
@@ -192,7 +193,7 @@ def test_raw_fixed_point_and_fermi_status_remain_separate() -> None:
     result = solve_scf_simple(
         case.x,
         case.inputs,
-        setup_simple_solver_settings(
+        setup_solver_settings(
             case.system.config.scf, case.positions.dtype
         ),
     )
@@ -205,4 +206,4 @@ def test_raw_fixed_point_and_fermi_status_remain_separate() -> None:
     assert status is not None
     assert not bool(status.converged.all())
     assert functional_subsolves_ok(result).item() is False
-    assert functional_converged_and_valid(result).item() is False
+    assert functional_return_valid(result).item() is False

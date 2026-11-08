@@ -76,6 +76,7 @@ from dxtb._src.scf.functional.map import (
     _transitional_diagonalize,
     evaluate_hamiltonian,
 )
+from dxtb._src.scf.functional.problem import SCFRepresentation
 from dxtb._src.scf.functional.solver import (
     SCFSolverSettings,
     free_energy_from_spectral,
@@ -87,7 +88,7 @@ from dxtb._src.scf.utils import get_density
 from dxtb._src.wavefunction import filling
 
 from ..molecules import mols
-from ..utils import get_param_module
+from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 
@@ -131,8 +132,8 @@ def _prepare_case(
         )
     opts: dict[str, object] = {
         "verbosity": 0,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_CHARGE,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson", "charge"),
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": int_level,
         "fermi_etemp": 0.0,
@@ -207,12 +208,12 @@ def _prepare_case(
                 else guess.new_zeros(inputs.charge_layout.quadrupole_shape)
             ),
         )
-        rep = system.config.scf._legacy_representation_code
-        if rep == labels.SCP_MODE_CHARGE:
+        rep = system.config.scf.initial_representation
+        if rep == SCFRepresentation.CHARGE:
             x = pack_charges(initial_charges, inputs.charge_layout)
-        elif rep == labels.SCP_MODE_POTENTIAL:
+        elif rep == SCFRepresentation.POTENTIAL:
             x, _ = potential_initial_guess(initial_charges, inputs)
-        elif rep == labels.SCP_MODE_FOCK:
+        elif rep == SCFRepresentation.FOCK:
             x = fock_initial_guess(initial_charges, inputs)
         else:
             raise ValueError(f"Unknown representation {rep!r}.")
@@ -1102,8 +1103,7 @@ def test_potential_layout_rejects_incompatible_components() -> None:
 def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
     """Each GFN2 potential row affects the next physical map."""
     options = {
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "potential"),
         "maxiter": 0,
         "fermi_etemp": 0.0,
     }

@@ -36,6 +36,7 @@ from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
 
 from .core import replace_tensor_leaves, tensor_leaves
+from .problem import SCFRepresentation
 
 __all__ = ["LinearSolveResult", "implicit_root", "solve_linear"]
 
@@ -276,7 +277,7 @@ class _SCFMapTensorTree:
     """
 
     template: object
-    representation: int
+    representation: SCFRepresentation
     potential_layout: object | None
     input_fields: tuple[str, ...]
     interaction_tensor_paths: tuple[str, ...]
@@ -286,7 +287,7 @@ class _SCFMapTensorTree:
     def prepare(
         cls,
         inputs: object,
-        representation: int,
+        representation: SCFRepresentation,
         potential_layout: object | None = None,
     ) -> tuple[_SCFMapTensorTree, tuple[Tensor, ...]]:
         from .data import SCFInputs
@@ -371,7 +372,6 @@ class _SCFMapTensorTree:
         return tuple(value.contiguous().clone() for value in values)
 
     def _rebuild(self, parameters: tuple[Tensor, ...]):
-        from dxtb._src.constants import labels
         from dxtb._src.integral.container import IntegralMatrices
 
         from .data import SCFInputs
@@ -426,13 +426,13 @@ class _SCFMapTensorTree:
             fermi_settings=fermi_settings,
             **changes,
         )
-        if self.representation == labels.SCP_MODE_CHARGE:
+        if self.representation == SCFRepresentation.CHARGE:
             return inputs, scf_map
-        if self.representation == labels.SCP_MODE_POTENTIAL:
+        if self.representation == SCFRepresentation.POTENTIAL:
             return inputs, lambda x, current: potential_map(
                 x, current, self.potential_layout
             )
-        if self.representation == labels.SCP_MODE_FOCK:
+        if self.representation == SCFRepresentation.FOCK:
             return inputs, fock_map
         raise ValueError(
             f"Unsupported implicit representation {self.representation}."

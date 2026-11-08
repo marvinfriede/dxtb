@@ -249,7 +249,7 @@ class Driver:
             result = calc.singlepoint(positions, chrg)
 
             timer.start("grad")
-            (g,) = torch.autograd.grad(result.total.sum(), positions)
+            (g,) = torch.autograd.grad(result.energy.sum(), positions)
             timer.stop("grad")
 
             timer.print()

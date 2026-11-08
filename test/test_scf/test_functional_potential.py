@@ -35,20 +35,21 @@ from dxtb._src.scf.functional import (
 )
 from dxtb._src.scf.functional import anderson as functional_anderson
 from dxtb._src.scf.functional import (
-    functional_converged_and_valid,
+    functional_return_valid,
     functional_subsolves_ok,
 )
 from dxtb._src.scf.functional import map as functional_map
 from dxtb._src.scf.functional import potential_initial_guess
 from dxtb._src.scf.functional import problem as functional_problem
 from dxtb._src.scf.functional import (
-    setup_simple_solver_settings,
+    setup_solver_settings,
     simple_mix,
     solve_scf_potential_simple,
 )
 from dxtb._src.scf.functional.map import potential_map as apply_potential_map
 from dxtb.scf import LinearMethod
 
+from ..utils import scf_strategy
 from ._anderson_helpers import from_config as setup_anderson_solver_settings
 from ._anderson_helpers import solve_physical as solve_scf_anderson
 from ._anderson_helpers import solve_potential as solve_scf_potential_anderson
@@ -78,15 +79,22 @@ def _initial_guess(case: SimpleNamespace) -> tuple[torch.Tensor, object]:
 
 
 def _run_functional(
-    options: dict[str, object], *, method: int = GFN1_XTB
+    options: dict[str, object],
+    *,
+    method: int = GFN1_XTB,
+    converger: str = "anderson",
+    **anderson: object,
 ) -> tuple[SimpleNamespace, object]:
-    options = {"scp_mode": labels.SCP_MODE_POTENTIAL, **options}
+    options = {
+        "strategy": scf_strategy(converger, "potential", **anderson),
+        **options,
+    }
     functional = _prepare_case(method, scf_options=options)
     guess, layout = _initial_guess(functional)
     _assert_tensor_equal(guess, functional.x)
     config = functional.system.config.scf
     if isinstance(config.strategy.stages[0].method, LinearMethod):
-        settings = setup_simple_solver_settings(config, guess.dtype)
+        settings = setup_solver_settings(config, guess.dtype)
         result = solve_scf_potential_simple(
             guess, functional.inputs, layout, settings
         )
@@ -106,12 +114,12 @@ def test_potential_simple_finite_budget(
     """Potential Simple retains expected finite-budget iteration counts."""
     _, result = _run_functional(
         {
-            "mixer": labels.MIXER_LINEAR,
             "maxiter": maxiter,
             "mix_guess": mix_guess,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
-        }
+        },
+        converger="linear",
     )
     assert int(result.iterations) == maxiter + 1
     assert not bool(result.converged)
@@ -123,13 +131,12 @@ def test_potential_maxiter_zero_runs_one_final_spectrum(monkeypatch) -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "potential"),
             "maxiter": 0,
         },
     )
     guess, layout = _initial_guess(case)
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
     calls = 0
     original = functional_map._transitional_diagonalize
 
@@ -149,10 +156,10 @@ def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
     """Zero-budget fixed-trip potential mode has no trajectory status."""
     _, result = _run_functional(
         {
-            "mixer": labels.MIXER_LINEAR,
             "maxiter": 0,
             "fermi_etemp": 300.0,
-        }
+        },
+        converger="linear",
     )
     assert not bool(result.converged)
     assert result.trajectory_status is None
@@ -161,7 +168,7 @@ def test_potential_maxiter_zero_reports_final_fermi_status_only() -> None:
     assert bool(result.final_evaluation.fermi_status.converged.all())
     assert int(result.iterations) == 1
     assert bool(functional_subsolves_ok(result))
-    assert not bool(functional_converged_and_valid(result))
+    assert not bool(functional_return_valid(result))
 
 
 def test_potential_initial_guess_has_no_spectral_evaluation(
@@ -170,7 +177,7 @@ def test_potential_initial_guess_has_no_spectral_evaluation(
     """Initial representation conversion only evaluates interaction data."""
     case = _prepare_case(
         GFN2_XTB,
-        scf_options={"scp_mode": labels.SCP_MODE_POTENTIAL},
+        scf_options={"strategy": scf_strategy("anderson", "potential")},
     )
 
     def forbidden(*args: object, **kwargs: object) -> None:
@@ -182,31 +189,27 @@ def test_potential_initial_guess_has_no_spectral_evaluation(
 
 
 @pytest.mark.parametrize(
-    "mixer,options",
+    "converger,anderson,options",
     [
         (
-            labels.MIXER_LINEAR,
+            "linear",
+            {},
             {"maxiter": 80, "x_atol": 1e-8, "x_atol_max": 1e-8},
         ),
         (
-            labels.MIXER_ANDERSON,
-            {
-                "maxiter": 12,
-                "damp_generations": 2,
-                "damp_soft_start": False,
-                "x_atol": 1e-8,
-                "x_atol_max": 1e-8,
-            },
+            "anderson",
+            {"generations": 2, "soft_start": False},
+            {"maxiter": 12, "x_atol": 1e-8, "x_atol_max": 1e-8},
         ),
     ],
     ids=["simple-converged", "anderson-accelerated"],
 )
 def test_potential_solver_converged(
-    mixer: int, options: dict[str, object]
+    converger: str, anderson: dict[str, object], options: dict[str, object]
 ) -> None:
     """Potential Simple/Anderson finalization converges cleanly."""
     _, result = _run_functional(
-        {"mixer": mixer, "mix_guess": True, **options}
+        {"mix_guess": True, **options}, converger=converger, **anderson
     )
     assert bool(result.converged)
     assert torch.isfinite(result.energy).all()
@@ -216,7 +219,6 @@ def test_potential_anderson_gfn2_multipole_finite_budget() -> None:
     """Potential Anderson keeps all GFN2 multipole rows through solving."""
     _, result = _run_functional(
         {
-            "mixer": labels.MIXER_ANDERSON,
             "maxiter": 2,
             "mix_guess": False,
             "x_atol": 0.0,
@@ -237,12 +239,11 @@ def test_gfn2_potential_padding_is_invariant_under_mixing(
     case = _prepare_case(
         GFN2_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_ANDERSON,
+            "strategy": scf_strategy(
+                "anderson", "potential", generations=2, soft_start=False
+            ),
             "maxiter": 2,
             "mix_guess": True,
-            "damp_generations": 2,
-            "damp_soft_start": False,
         },
     )
     guess, layout = _initial_guess(case)
@@ -317,14 +318,14 @@ def test_potential_final_finite_temperature_partition(partition: int) -> None:
     """Potential final conversion owns partitioned finite-T free energy."""
     _, result = _run_functional(
         {
-            "mixer": labels.MIXER_LINEAR,
             "maxiter": 1,
             "mix_guess": False,
             "fermi_etemp": 300.0,
             "fermi_partition": partition,
             "x_atol": 1.0,
             "x_atol_max": 1.0,
-        }
+        },
+        converger="linear",
     )
     assert torch.isfinite(result.fenergy).all()
     assert result.final_evaluation.fermi_status is not None
@@ -357,8 +358,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "potential"),
             "maxiter": 1,
             "mix_guess": False,
             "fermi_etemp": 300.0,
@@ -390,7 +390,7 @@ def test_potential_trajectory_failure_survives_valid_final_spectrum(
         return result
 
     monkeypatch.setattr(functional_problem, "potential_map", fail_initial_map)
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
     result = solve_scf_potential_simple(guess, case.inputs, layout, settings)
     assert map_calls == 2
     assert result.map_result.fermi_status is not None
@@ -408,8 +408,7 @@ def test_potential_solver_vmap_over_fixed_system_guesses() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "potential"),
             "maxiter": 1,
             "x_atol": 0.0,
             "x_atol_max": 0.0,
@@ -419,7 +418,7 @@ def test_potential_solver_vmap_over_fixed_system_guesses() -> None:
     guesses = torch.stack((guess, guess.clone(), guess.clone()))
     guesses[1, 0, 0] += 0.01
     guesses[2, 0, 0] -= 0.015
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
 
     def solve(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         result = solve_scf_potential_simple(
@@ -440,8 +439,7 @@ def test_potential_atomic_partition_vmap() -> None:
     case = _prepare_case(
         GFN1_XTB,
         scf_options={
-            "scp_mode": labels.SCP_MODE_POTENTIAL,
-            "mixer": labels.MIXER_LINEAR,
+            "strategy": scf_strategy("linear", "potential"),
             "maxiter": 1,
             "fermi_etemp": 300.0,
             "fermi_partition": labels.FERMI_PARTITION_ATOMIC,
@@ -452,7 +450,7 @@ def test_potential_atomic_partition_vmap() -> None:
     guess, layout = _initial_guess(case)
     guesses = torch.stack((guess, guess.clone()))
     guesses[1, 0, 0] += 0.01
-    settings = setup_simple_solver_settings(case.system.config.scf, guess.dtype)
+    settings = setup_solver_settings(case.system.config.scf, guess.dtype)
 
     def solve(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         result = solve_scf_potential_simple(
@@ -471,8 +469,7 @@ def test_potential_atomic_partition_vmap() -> None:
 def test_potential_position_parameter_and_field_gradients() -> None:
     """Potential solving preserves geometry, parameter, and field graphs."""
     options = {
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "potential"),
         "maxiter": 1,
         "mix_guess": False,
         "x_atol": 0.0,
@@ -483,7 +480,7 @@ def test_potential_position_parameter_and_field_gradients() -> None:
         GFN1_XTB, positions=positions, scf_options=options
     )
     guess, layout = _initial_guess(functional)
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         functional.system.config.scf, positions.dtype
     )
     energy = solve_scf_potential_simple(
@@ -499,7 +496,7 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     def energy_at_positions(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, positions=value, scf_options=options)
         initial, initial_layout = _initial_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, value.dtype
         )
         return solve_scf_potential_simple(
@@ -516,7 +513,7 @@ def test_potential_position_parameter_and_field_gradients() -> None:
         GFN1_XTB, par=par, scf_options=finite_options
     )
     parameter_guess, parameter_layout = _initial_guess(parameter_case)
-    parameter_settings = setup_simple_solver_settings(
+    parameter_settings = setup_solver_settings(
         parameter_case.system.config.scf, torch.float64
     )
     parameter_result = solve_scf_potential_simple(
@@ -537,7 +534,7 @@ def test_potential_position_parameter_and_field_gradients() -> None:
         GFN1_XTB, field=field, scf_options=finite_options
     )
     field_guess, field_layout = _initial_guess(field_case)
-    field_settings = setup_simple_solver_settings(
+    field_settings = setup_solver_settings(
         field_case.system.config.scf, torch.float64
     )
     field_result = solve_scf_potential_simple(
@@ -551,7 +548,7 @@ def test_potential_position_parameter_and_field_gradients() -> None:
     def total_at_field(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, field=value, scf_options=finite_options)
         initial, initial_layout = _initial_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, value.dtype
         )
         result = solve_scf_potential_simple(
@@ -573,8 +570,7 @@ def test_potential_fractional_charge_gradient_at_finite_temperature(
     """Potential final-spectrum free energy preserves fractional-charge AD."""
     charge = torch.tensor(0.5, dtype=torch.float64, requires_grad=True)
     options = {
-        "scp_mode": labels.SCP_MODE_POTENTIAL,
-        "mixer": labels.MIXER_LINEAR,
+        "strategy": scf_strategy("linear", "potential"),
         "maxiter": 1,
         "mix_guess": False,
         "fermi_etemp": temperature,
@@ -583,7 +579,7 @@ def test_potential_fractional_charge_gradient_at_finite_temperature(
     }
     functional = _prepare_case(GFN1_XTB, charge=charge, scf_options=options)
     guess, layout = _initial_guess(functional)
-    settings = setup_simple_solver_settings(
+    settings = setup_solver_settings(
         functional.system.config.scf, torch.float64
     )
     total = solve_scf_potential_simple(
@@ -598,7 +594,7 @@ def test_potential_fractional_charge_gradient_at_finite_temperature(
     def total_at_charge(value: torch.Tensor) -> torch.Tensor:
         case = _prepare_case(GFN1_XTB, charge=value, scf_options=options)
         initial, initial_layout = _initial_guess(case)
-        local_settings = setup_simple_solver_settings(
+        local_settings = setup_solver_settings(
             case.system.config.scf, torch.float64
         )
         result = solve_scf_potential_simple(
@@ -619,7 +615,7 @@ def test_potential_map_reverse_jvp_and_jacfwd() -> None:
     """Potential map packing and spectral outputs retain derivative graphs."""
     case = _prepare_case(
         GFN1_XTB,
-        scf_options={"scp_mode": labels.SCP_MODE_POTENTIAL},
+        scf_options={"strategy": scf_strategy("anderson", "potential")},
     )
     guess, layout = _initial_guess(case)
 

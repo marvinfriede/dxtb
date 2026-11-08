@@ -630,7 +630,7 @@ def test_batched_calculator_keeps_legacy_integral_adapter(
 
     charges = torch.tensor([0.0, 1.0], dtype=positions.dtype)
     result = calc.singlepoint(positions, chrg=charges)
-    assert torch.isfinite(result.total).all()
+    assert torch.isfinite(result.energy).all()
 
     separate = []
     for geometry, charge in zip(positions, charges):
@@ -641,9 +641,9 @@ def test_batched_calculator_keeps_legacy_integral_adapter(
             opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
         )
         separate.append(
-            single.singlepoint(geometry, chrg=float(charge)).total.sum()
+            single.singlepoint(geometry, chrg=float(charge)).energy.sum()
         )
-    torch.testing.assert_close(result.total.sum(-1), torch.stack(separate))
+    torch.testing.assert_close(result.energy.sum(-1), torch.stack(separate))
 
     geometry = positions[0]
     single = Calculator(
@@ -652,8 +652,8 @@ def test_batched_calculator_keeps_legacy_integral_adapter(
         dtype=positions.dtype,
         opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
     )
-    neutral = single.singlepoint(geometry, chrg=0.0).total.sum()
-    charged = single.singlepoint(geometry, chrg=1.0).total.sum()
+    neutral = single.singlepoint(geometry, chrg=0.0).energy.sum()
+    charged = single.singlepoint(geometry, chrg=1.0).energy.sum()
     assert not torch.isclose(neutral, charged)
 
 

@@ -28,6 +28,8 @@ from dxtb._src.calculators.properties.functional import (
 )
 from dxtb.config import Config
 
+from ..utils import scf_strategy
+
 _DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
 
@@ -37,11 +39,12 @@ def _setup_model_and_calculator(method: object, numbers: tuple[int, ...]):
         "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": (
-            labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
+        "differentiation": "unrolled",
+        "strategy": (
+            scf_strategy("anderson", "fock")
+            if is_gfn2
+            else scf_strategy("linear", "charge")
         ),
-        "mixer": (labels.MIXER_ANDERSON if is_gfn2 else labels.MIXER_LINEAR),
         "maxiter": 3,
         "x_atol": 0.0,
         "x_atol_max": 0.0,
@@ -232,11 +235,8 @@ def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
         "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": (
-            labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
-        ),
-        "mixer": labels.MIXER_ANDERSON,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson", "fock" if is_gfn2 else "charge"),
         "maxiter": 40,
         "fermi_etemp": 5000.0,
         "x_atol": 1.0e-12,
@@ -333,11 +333,8 @@ def _setup_converged_model_and_calculator(
         "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": (
-            labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
-        ),
-        "mixer": labels.MIXER_ANDERSON,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson", "fock" if is_gfn2 else "charge"),
         "maxiter": maxiter,
         "x_atol": 1.0e-12,
         "x_atol_max": 1.0e-12,
@@ -656,18 +653,15 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
 
     def _make_system(
         maxiter: int,
-        scf_mode: int = labels.SCF_MODE_FULL,
+        differentiation: str = "unrolled",
         x_atol: float = 1.0e-12,
     ):
         opts = {
             "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
             "int_driver": labels.INTDRIVER_PYTORCH,
             "int_level": labels.INTLEVEL_QUADRUPOLE,
-            "scf_mode": scf_mode,
-            "scp_mode": (
-                labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE
-            ),
-            "mixer": labels.MIXER_ANDERSON,
+            "differentiation": differentiation,
+            "strategy": scf_strategy("anderson", "fock" if is_gfn2 else "charge"),
             "maxiter": maxiter,
             "x_atol": x_atol,
             "x_atol_max": x_atol,
@@ -715,9 +709,8 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
         "method": labels.GFN2_XTB if is_gfn2 else labels.GFN1_XTB,
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_FOCK if is_gfn2 else labels.SCP_MODE_CHARGE,
-        "mixer": labels.MIXER_ANDERSON,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("anderson", "fock" if is_gfn2 else "charge"),
         "x_atol": 1.0e-14,
         "x_atol_max": 1.0e-14,
     }
@@ -732,9 +725,7 @@ def test_section5_primal_vs_derivative_fixed_point_convergence(
     torch.testing.assert_close(t_deep, t_ref, atol=1.0e-8, rtol=1.0e-8)
 
     # Compare against implicit differentiation at the converged root (1st derivative)
-    sys_imp = _make_system(
-        40, scf_mode=labels.SCF_MODE_IMPLICIT, x_atol=1.0e-14
-    )
+    sys_imp = _make_system(40, differentiation="implicit", x_atol=1.0e-14)
     pos_imp = pos.clone().requires_grad_(True)
     e_imp = sys_imp.singlepoint(pos_imp).energy.sum()
     (g_imp,) = torch.autograd.grad(e_imp, pos_imp)
@@ -782,9 +773,8 @@ def test_batched_calculator_autograd_properties_after_cutover(
         "method": labels.GFN1_XTB,
         "int_driver": labels.INTDRIVER_PYTORCH,
         "int_level": labels.INTLEVEL_QUADRUPOLE,
-        "scf_mode": labels.SCF_MODE_FULL,
-        "scp_mode": labels.SCP_MODE_CHARGE,
-        "mixer": labels.MIXER_LINEAR,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("linear", "charge"),
         "maxiter": 3,
         "x_atol": 0.0,
         "x_atol_max": 0.0,
