@@ -321,3 +321,105 @@ def test_search_status_is_separate_from_scf_electron_count_guard() -> None:
     assert bool(result.status.converged.all())
     assert not bool(result.status.electron_count_ok.all())
     assert torch.isfinite(result.occupation).all()
+
+
+def _count_search_trips(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Count the trips of the fixed-trip Fermi search."""
+    trips = [0]
+    step = filling._fermi_search_step
+
+    def counted(*args, **kwargs):
+        trips[0] += 1
+        return step(*args, **kwargs)
+
+    monkeypatch.setattr(filling, "_fermi_search_step", counted)
+    return trips
+
+
+def _core_state(electrons, spectra, kt, mask, maxiter=200):
+    return filling._get_fermi_occupation_core_state(
+        electrons, spectra, kt, mask=mask, maxiter=maxiter
+    )
+
+
+def _assert_states_equal(actual, expected) -> None:
+    """Bitwise equality of the occupations, status and search state."""
+    assert torch.equal(actual.result.occupation, expected.result.occupation)
+    for name in (
+        "converged",
+        "residual",
+        "invalid_temperature",
+        "too_many_electrons",
+        "electron_count_ok",
+    ):
+        assert torch.equal(
+            getattr(actual.result.status, name),
+            getattr(expected.result.status, name),
+        ), name
+    assert torch.equal(
+        actual.chemical_potential_ref, expected.chemical_potential_ref
+    )
+    assert torch.equal(
+        actual.chemical_potential_offset, expected.chemical_potential_offset
+    )
+    assert torch.equal(actual.gap, expected.gap)
+
+
+@pytest.mark.parametrize("maxiter", [200, 2])
+def test_eager_search_stop_is_bitwise_equal_to_all_trips(
+    monkeypatch: pytest.MonkeyPatch, maxiter: int
+) -> None:
+    """Stopping once every channel is done changes no bit of the result.
+
+    With ``maxiter=2``, the search of the fractional Lanes does not converge
+    and runs all trips.
+    """
+    spectra, electrons, mask, kt = _case()
+    trips = _count_search_trips(monkeypatch)
+    assert filling._fermi_search_stops_early(spectra)
+
+    unconverged = 0
+    for lane in range(spectra.shape[0]):
+        args = (electrons[lane], spectra[lane], kt, mask, maxiter)
+        trips[0] = 0
+        early = _core_state(*args)
+        early_trips = trips[0]
+
+        with monkeypatch.context() as patch:
+            patch.setattr(filling, "_fermi_search_stops_early", lambda _: False)
+            trips[0] = 0
+            full = _core_state(*args)
+        assert trips[0] == maxiter + 1
+
+        if bool(early.result.status.converged.all()):
+            assert early_trips <= min(maxiter + 1, 20)
+        else:
+            unconverged += 1
+            assert early_trips == maxiter + 1
+        _assert_states_equal(early, full)
+
+    assert unconverged == (0 if maxiter == 200 else 2)
+
+
+def test_search_runs_all_trips_under_transforms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``vmap`` and ``jacrev`` keep the static search without host reads."""
+    spectra, electrons, mask, kt = _case()
+    trips = _count_search_trips(monkeypatch)
+    maxiter = 30
+
+    vmap(
+        lambda e, n: filling.get_fermi_occupation_core(
+            n, e, kt, mask=mask, maxiter=maxiter
+        )
+    )(spectra, electrons)
+    assert trips[0] == maxiter + 1
+
+    trips[0] = 0
+    jacrev(
+        lambda e: filling.get_fermi_occupation_core(
+            electrons[0], e, kt, mask=mask, maxiter=maxiter
+        ).occupation
+    )(spectra[0])
+    assert trips[0] == maxiter + 1

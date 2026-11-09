@@ -46,6 +46,7 @@ from numbers import Integral
 import torch
 from tad_mctc.convert import any_to_tensor
 from torch.utils import _pytree
+from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Tensor
@@ -877,9 +878,13 @@ def _get_fermi_occupation_core_state(
 ) -> _FermiCoreState:
     """Evaluate Fermi occupations with fixed-trip tensor-only control flow.
 
-    Unlike :func:`get_fermi_occupation`, this function never reads tensor
-    status on the host and returns invalid or unconverged inputs as finite
-    diagnostic values.
+    Unlike :func:`get_fermi_occupation`, this function never raises on
+    tensor status and returns invalid or unconverged inputs as finite
+    diagnostic values. Inside ``torch.func`` transforms, ``torch.compile``
+    and tracing, or off the CPU, the search runs all ``maxiter + 1`` trips
+    without host reads. In eager CPU evaluation, it reads one convergence
+    flag per trip and stops once every channel is done, with bitwise the
+    same result (see `_fermi_energy_search_until_done`).
     """
     if not isinstance(kt, Tensor):
         raise TypeError("Electronic temperature must be `Tensor`.")
@@ -920,7 +925,12 @@ def _get_fermi_occupation_core_state(
     emo_d, kt_d, target_d = emo.detach(), safe_kt.detach(), target.detach()
     n0, below, above = _partition(target_d, emo_d, valid)
     e_fermi = _initial_fermi_energy(target_d, emo_d, mask)
-    (ref, offset), resid, done, lo, hi = _fermi_energy_search_fixed(
+    search = (
+        _fermi_energy_search_until_done
+        if _fermi_search_stops_early(emo)
+        else _fermi_energy_search_fixed
+    )
+    (ref, offset), resid, done, lo, hi = search(
         target_d - n0,
         below,
         above,
@@ -1029,20 +1039,9 @@ def _fermi_energy_search_fixed(
     maxiter: int,
 ) -> tuple[tuple[Tensor, Tensor], Tensor, Tensor, Tensor, Tensor]:
     """Run the shared safeguarded search for a static number of trips."""
-    if valid is None:
-        emin, emax = emo.amin(-1, keepdim=True), emo.amax(-1, keepdim=True)
-    else:
-        inf = torch.full_like(emo, torch.inf)
-        emin = torch.where(valid, emo, inf).amin(-1, keepdim=True)
-        emax = torch.where(valid, emo, -inf).amax(-1, keepdim=True)
-        emin = torch.where(torch.isfinite(emin), emin, 0.0)
-        emax = torch.where(torch.isfinite(emax), emax, 0.0)
-    lo = emin - 60.0 * kt
-    hi = emax + 60.0 * kt
-    e_fermi, lo, hi, active = torch.broadcast_tensors(e_fermi, lo, hi, active)
-    ref = torch.minimum(torch.maximum(e_fermi, lo), hi)
-    emo, lo, hi = emo - ref, lo - ref, hi - ref
-    e_fermi = torch.zeros_like(ref)
+    ref, emo, e_fermi, lo, hi, active = _fermi_search_start(
+        emo, kt, e_fermi, active, valid
+    )
     resid = torch.zeros_like(ref)
     done = ~active
     for step in range(maxiter + 1):
@@ -1061,6 +1060,104 @@ def _fermi_energy_search_fixed(
         if step < maxiter:
             e_fermi, lo, hi = next_e, next_lo, next_hi
     return (ref, e_fermi), resid, done, lo, hi
+
+
+def _fermi_search_stops_early(emo: Tensor) -> bool:
+    """
+    Whether the fixed-trip search may stop on a host read of its flags.
+
+    Only in eager evaluation on the CPU: inside ``torch.func`` transforms,
+    ``torch.compile``, ``torch.jit.trace`` or a dispatch mode (e.g., fake
+    tensors or ``make_fx``), the search is part of a traced computation and
+    cannot stop on tensor values. On other devices, every read synchronizes
+    the device, and the cost has not been measured.
+    """
+    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
+    return (
+        emo.device.type == "cpu"
+        and not torch.compiler.is_compiling()
+        and not torch.jit.is_tracing()
+        and ft.maybe_current_level() is None
+        and not ft.is_functorch_wrapped_tensor(emo)
+        and _get_current_dispatch_mode() is None
+    )
+
+
+def _fermi_energy_search_until_done(
+    delta: Tensor,
+    below: Tensor,
+    above: Tensor,
+    emo: Tensor,
+    kt: Tensor,
+    e_fermi: Tensor,
+    active: Tensor,
+    valid: Tensor | None,
+    thresh: Tensor,
+    maxiter: int,
+) -> tuple[tuple[Tensor, Tensor], Tensor, Tensor, Tensor, Tensor]:
+    """
+    Run `_fermi_energy_search_fixed`, but stop once every channel is done.
+
+    `_fermi_search_step` freezes the Fermi energy and the bracket of a done
+    channel, so a done channel stays done and every later trip recomputes
+    the same residual. After the first trip in which all channels are done,
+    the remaining trips change nothing, i.e., the result equals that of all
+    ``maxiter + 1`` trips bit for bit. The convergence flag is read on the
+    host after every trip; only for eager CPU evaluation (see
+    `_fermi_search_stops_early`).
+    """
+    ref, emo, e_fermi, lo, hi, active = _fermi_search_start(
+        emo, kt, e_fermi, active, valid
+    )
+    for step in range(maxiter + 1):
+        resid, done, next_e, next_lo, next_hi = _fermi_search_step(
+            delta,
+            below,
+            emo,
+            kt,
+            e_fermi,
+            lo,
+            hi,
+            active,
+            valid,
+            thresh,
+        )
+        if step == maxiter:
+            break
+        e_fermi, lo, hi = next_e, next_lo, next_hi
+        if bool(torch.all(done).item()):
+            break
+    return (ref, e_fermi), resid, done, lo, hi
+
+
+def _fermi_search_start(
+    emo: Tensor,
+    kt: Tensor,
+    e_fermi: Tensor,
+    active: Tensor,
+    valid: Tensor | None,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """
+    Bracket and reference of the fixed-trip search.
+
+    Returns the reference of the Fermi energy, the orbital energies, the
+    offset of the Fermi energy (zero) and the bracket relative to the
+    reference, and the broadcast active channels.
+    """
+    if valid is None:
+        emin, emax = emo.amin(-1, keepdim=True), emo.amax(-1, keepdim=True)
+    else:
+        inf = torch.full_like(emo, torch.inf)
+        emin = torch.where(valid, emo, inf).amin(-1, keepdim=True)
+        emax = torch.where(valid, emo, -inf).amax(-1, keepdim=True)
+        emin = torch.where(torch.isfinite(emin), emin, 0.0)
+        emax = torch.where(torch.isfinite(emax), emax, 0.0)
+    lo = emin - 60.0 * kt
+    hi = emax + 60.0 * kt
+    e_fermi, lo, hi, active = torch.broadcast_tensors(e_fermi, lo, hi, active)
+    ref = torch.minimum(torch.maximum(e_fermi, lo), hi)
+    emo, lo, hi = emo - ref, lo - ref, hi - ref
+    return ref, emo, torch.zeros_like(ref), lo, hi, active
 
 
 def _fermi_search_step(
