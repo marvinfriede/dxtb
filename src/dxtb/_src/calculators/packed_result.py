@@ -49,8 +49,8 @@ from dxtb._src.calculators.singlepoint import _call_tensor
 from dxtb._src.calculators.types.base import (
     _convert_eval_system_dtype,
     _convert_system_dtype,
-    reject_removed_store_kwargs,
 )
+from dxtb._src.calculators.types.energy import check_singlepoint_options
 from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 
@@ -72,16 +72,6 @@ __all__ = [
 ]
 
 _UNSET = object()
-
-_KNOWN_PUBLIC_SINGLEPOINT_KWARGS = frozenset(
-    {
-        "write_overlap",
-        "write_dipole",
-        "write_quadrupole",
-        "write_hcore",
-        "cuda_sync_in_scf",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -978,7 +968,6 @@ def evaluate_packed_systems(
     field_grad: Tensor | Sequence[Tensor | None] | None = None,
     *,
     eager_status_policy: bool = False,
-    ignore_unknown_kwargs: bool = False,
     target_atoms: int | None = None,
     atom_masks: Sequence[Tensor] | None = None,
     **kwargs: Any,
@@ -1005,19 +994,7 @@ def evaluate_packed_systems(
         )
 
     # Stage 1: Public Calculator option validation.
-    reject_removed_store_kwargs(kwargs)
-    removed_store = sorted(k for k in kwargs if k.startswith("store_"))
-    if removed_store:
-        raise TypeError(
-            f"Removed store_* keyword arguments are not supported: {removed_store}"
-        )
-
-    unknown_public = sorted(set(kwargs) - _KNOWN_PUBLIC_SINGLEPOINT_KWARGS)
-    if unknown_public and not ignore_unknown_kwargs:
-        raise TypeError(
-            f"evaluate_packed_systems() got unexpected keyword arguments "
-            f"{unknown_public}: unexpected keyword argument {unknown_public[0]!r}"
-        )
+    check_singlepoint_options(kwargs, "evaluate_packed_systems")
 
     # Stage 2: Normalize and validate per-lane positions, charges, spins, fields.
     # Structural atom masks are resolved once for positions and packing.
@@ -1364,8 +1341,6 @@ def evaluate_calculator_packed_singlepoint(
     spin: Tensor | float | int | None = defaults.SPIN,
     field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
     field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-    *,
-    ignore_unknown_kwargs: bool = True,
     **kwargs: Any,
 ) -> Result:
     """Evaluate a batched Calculator Lane by Lane over its Systems.
@@ -1375,7 +1350,7 @@ def evaluate_calculator_packed_singlepoint(
     :func:`evaluate_packed_systems`, and returns the packed Result for batched
     ``Calculator.singlepoint`` calls.
     """
-    reject_removed_store_kwargs(kwargs)
+    check_singlepoint_options(kwargs, "singlepoint")
     resolve_kwargs: dict[str, Any] = {}
     if field is not _UNSET:
         resolve_kwargs["field"] = field
@@ -1414,7 +1389,6 @@ def evaluate_calculator_packed_singlepoint(
         field=resolved_field,
         field_grad=resolved_field_grad,
         eager_status_policy=True,
-        ignore_unknown_kwargs=ignore_unknown_kwargs,
         target_atoms=target_atoms,
         atom_masks=atom_masks,
         **kwargs,

@@ -24,6 +24,7 @@ Base calculator for the energy calculation of an extended tight-binding Method.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import inspect
 
 import torch
 from tad_mctc.convert import any_to_tensor
@@ -41,7 +42,56 @@ from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
 
 from ..result import Result
-from .base import BaseCalculator, reject_removed_store_kwargs
+from .base import BaseCalculator
+
+SINGLEPOINT_OPTIONS = frozenset(
+    {
+        "write_overlap",
+        "write_dipole",
+        "write_quadrupole",
+        "write_hcore",
+        "cuda_sync_in_scf",
+    }
+)
+"""Keyword options that a Calculator single point accepts besides its inputs."""
+
+_ENERGY_KWARGS = SINGLEPOINT_OPTIONS | {"field", "field_grad", "keepdim"}
+"""Keyword arguments of :meth:`EnergyCalculator.energy`."""
+
+
+def check_singlepoint_options(kwargs: dict[str, Any], owner: str) -> None:
+    """Raise a ``TypeError`` for keyword arguments that no single point takes."""
+    unknown = sorted(set(kwargs) - SINGLEPOINT_OPTIONS)
+    if unknown:
+        raise TypeError(
+            f"{owner}() got an unexpected keyword argument {unknown[0]!r}"
+        )
+
+
+def accepted_kwargs(method: Any) -> frozenset[str]:
+    """
+    Keyword arguments that a property method takes.
+
+    These are its named parameters besides the positions, charge and spin,
+    and, if it forwards ``**kwargs`` (down to the energy), the keyword
+    arguments of the energy.
+    """
+    params = inspect.signature(method).parameters.values()
+    names = {
+        p.name
+        for p in params
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    } - {"self", "positions", "chrg", "spin"}
+    if any(p.kind is p.VAR_KEYWORD for p in params):
+        names |= _ENERGY_KWARGS
+    return frozenset(names)
+
+
+def kwargs_for(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Select the keyword arguments that a property method takes."""
+    names = accepted_kwargs(method)
+    return {k: v for k, v in kwargs.items() if k in names}
+
 
 __all__ = ["EnergyCalculator"]
 
@@ -101,8 +151,13 @@ class EnergyCalculator(BaseCalculator):
             differentiable with respect to it.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to 0.
+        options : Any
+            ``write_overlap``, ``write_dipole``, ``write_quadrupole`` and
+            ``write_hcore`` write the matrix to the given path;
+            ``cuda_sync_in_scf`` synchronizes CUDA in the SCF timer. Any other
+            keyword argument raises a ``TypeError``.
         """
-        reject_removed_store_kwargs(kwargs)
+        check_singlepoint_options(kwargs, "singlepoint")
         field, field_grad = self._resolve_fields(field, field_grad)
 
         # shape checks
@@ -206,6 +261,7 @@ class EnergyCalculator(BaseCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
         field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        keepdim: bool = False,
         **kwargs: Any,
     ) -> Tensor:
         """
@@ -219,6 +275,10 @@ class EnergyCalculator(BaseCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
+        keepdim : bool, optional
+            Keep the summed atom dimension. Defaults to ``False``.
+        kwargs : Any
+            Single-point options (see :meth:`singlepoint`).
 
         Returns
         -------
@@ -228,7 +288,7 @@ class EnergyCalculator(BaseCalculator):
         result = self.singlepoint(
             positions, chrg, spin, field=field, field_grad=field_grad, **kwargs
         )
-        return result.energy.sum(-1, keepdim=kwargs.get("keepdim", False))
+        return result.energy.sum(-1, keepdim=keepdim)
 
     def _validate_resolved_perturbation(
         self,
@@ -415,6 +475,10 @@ class EnergyCalculator(BaseCalculator):
 
         return get_bond_order(result.overlap, result.density, self.ihelp)
 
+    def _calculate_methods(self, properties: list[str]) -> list[str]:
+        """Names of the property methods that `calculate` calls."""
+        return []
+
     def calculate(
         self,
         properties: list[str],
@@ -437,13 +501,22 @@ class EnergyCalculator(BaseCalculator):
             Total charge. Defaults to 0.
         spin : Tensor | float | int, optional
             Number of unpaired electrons. Defaults to ``None``.
+        kwargs : Any
+            Keyword arguments of the property methods. Each method (and the
+            single point for the energy and the Result fields) receives the
+            ones it takes; every keyword argument must be taken by at least
+            one requested property.
 
         Returns
         -------
         dict[str, Any]
             Values for the requested properties, returned explicitly.
+
+        Raises
+        ------
+        TypeError
+            A keyword argument is taken by none of the requested properties.
         """
-        reject_removed_store_kwargs(kwargs)
         values: dict[str, Any] = {}
         result_fields = {
             "charges": "charges",
@@ -457,8 +530,27 @@ class EnergyCalculator(BaseCalculator):
         needs_result = bool(
             set(properties) & (set(result_fields) | {"energy", "bond_orders"})
         )
+
+        accepted = set(_ENERGY_KWARGS) if needs_result else set()
+        for name in self._calculate_methods(properties):
+            accepted |= accepted_kwargs(getattr(self, name))
+        unknown = sorted(set(kwargs) - accepted)
+        if unknown:
+            raise TypeError(
+                f"calculate() got an unexpected keyword argument "
+                f"{unknown[0]!r} (none of the requested properties takes it)"
+            )
         result = (
-            self.singlepoint(positions, chrg, spin, **kwargs)
+            self.singlepoint(
+                positions,
+                chrg,
+                spin,
+                **{
+                    k: v
+                    for k, v in kwargs.items()
+                    if k in _ENERGY_KWARGS and k != "keepdim"
+                },
+            )
             if needs_result
             else None
         )

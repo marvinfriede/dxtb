@@ -173,12 +173,12 @@ def test_bond_orders_use_result_matrices_directly() -> None:
     ],
 )
 def test_removed_store_options_raise(option: str) -> None:
-    """Removed result-retention kwargs cannot be silently ignored."""
+    """Removed result-retention kwargs are unknown keyword arguments."""
     numbers, positions = _system()
     calc = Calculator(
         numbers, GFN1_XTB, opts={"verbosity": 0}, dtype=positions.dtype
     )
-    with pytest.raises(TypeError, match="result caching has been removed"):
+    with pytest.raises(TypeError, match=f"unexpected keyword argument '{option}'"):
         calc.energy(positions, **{option: True})
 
 
@@ -190,7 +190,7 @@ def test_calculator_has_no_result_cache_state() -> None:
     )
     assert not hasattr(calc, "cache")
     assert not hasattr(calc.opts, "cache")
-    with pytest.raises(TypeError, match="result caching has been removed"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'cache'"):
         Calculator(
             numbers,
             GFN1_XTB,

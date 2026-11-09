@@ -66,34 +66,6 @@ from dxtb.config import Config
 
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
 
-_REMOVED_STORE_OPTIONS = {
-    "store_charges",
-    "store_coefficients",
-    "store_density",
-    "store_iterations",
-    "store_mo_energies",
-    "store_occupation",
-    "store_potential",
-    "store_fock",
-    "store_hcore",
-    "store_overlap",
-    "store_dipole",
-    "store_quadrupole",
-}
-def reject_removed_store_kwargs(kwargs: dict[str, Any]) -> None:
-    """Reject removed Calculator result-retention and grad_mode arguments."""
-    if "grad_mode" in kwargs:
-        raise TypeError(
-            "Unsupported keyword argument 'grad_mode': public force "
-            "differentiation mode selection has been removed."
-        )
-    removed = sorted(_REMOVED_STORE_OPTIONS.intersection(kwargs))
-    if removed:
-        raise TypeError(
-            "Calculator result caching has been removed; retain the returned "
-            "Result instead. Unsupported arguments: " + ", ".join(removed)
-        )
-
 
 def _convert_system_dtype(
     system: System,
@@ -341,20 +313,22 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
               ``DXTB_TIMER`` to ``1``.
 
         """
-        if "cache" in kwargs:
+        auto_int_level = kwargs.pop("auto_int_level", True)
+        enable_timer = kwargs.pop("timer", False)
+        batch_mode = kwargs.pop("batch_mode", None)
+        if kwargs:
             raise TypeError(
-                "Calculator result caching has been removed; retain the "
-                "returned Result instead."
+                "Calculator() got an unexpected keyword argument "
+                f"{next(iter(kwargs))!r}"
             )
 
-        if not timer.enabled and kwargs.pop("timer", False):
+        if not timer.enabled and enable_timer:
             timer.enable()
 
         timer.start("Calculator", parent_uid="Setup")
 
         # setup verbosity first
         opts = opts if opts is not None else {}
-        batch_mode = kwargs.pop("batch_mode", None)
         if isinstance(opts, dict):
             opts = dict(opts)
             OutputHandler.verbosity = opts.pop("verbosity", 1)
@@ -507,7 +481,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 config=self.opts,
                 classical=classical,
                 interaction=interaction,
-                auto_int_level=kwargs.pop("auto_int_level", True),
+                auto_int_level=auto_int_level,
             )
             self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
 
@@ -659,7 +633,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             If True and the value is a tensor, return a local clone.
             Defaults to ``False``.
         """
-        reject_removed_store_kwargs(kwargs)
         if name not in self.implemented_properties:
             raise PropertyNotImplementedError(
                 f"Property '{name}' not implemented. Use one of: "

@@ -1531,20 +1531,22 @@ def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> N
         assert hasattr(calc_1d, f"get_{prop}")
 
     for prop in ("energy", "forces", "dipole", "polarizability", "hyperpolarizability"):
+        # energy and forces do not take ``use_functorch``
+        extra = {} if prop in ("energy", "forces") else {"use_functorch": False}
         val_gp = calc_1d.get_property(
             prop,
             pos_1d.clone().requires_grad_(True),
-            use_functorch=False,
             field=f_1d,
             field_grad=fg_1d,
+            **extra,
         )
         assert type(val_gp) is type(all_1d[prop])
         getter = getattr(calc_1d, f"get_{prop}")
         val_getter = getter(
             pos_1d.clone().requires_grad_(True),
-            use_functorch=False,
             field=f_1d,
             field_grad=fg_1d,
+            **extra,
         )
         assert val_getter is not None
 

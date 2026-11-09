@@ -1072,22 +1072,18 @@ def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
         evaluate_packed_systems(
             (sys_h2,), (pos_h2,), unknown_public_option=True
         )
-    # Removed store_* always rejected even with ignore_unknown_kwargs=True
-    with pytest.raises(TypeError, match="store_"):
+    # removed store_* options are unknown keyword arguments
+    with pytest.raises(
+        TypeError, match="unexpected keyword argument 'store_overlap'"
+    ):
+        evaluate_packed_systems((sys_h2,), (pos_h2,), store_overlap=True)
+    # unknown keyword arguments can no longer be ignored on request
+    with pytest.raises(
+        TypeError, match="unexpected keyword argument 'ignore_unknown_kwargs'"
+    ):
         evaluate_packed_systems(
-            (sys_h2,),
-            (pos_h2,),
-            ignore_unknown_kwargs=True,
-            store_overlap=True,
+            (sys_h2,), (pos_h2,), ignore_unknown_kwargs=True
         )
-    # ignore_unknown_kwargs ignores unknown PUBLIC kwargs
-    res_ignored = evaluate_packed_systems(
-        (sys_h2,),
-        (pos_h2,),
-        ignore_unknown_kwargs=True,
-        ignored_public_extra=123,
-    )
-    assert res_ignored.energy.shape == (1, 2)
 
     # 2. Charge rules: a scalar charge (Python or 0D tensor) is broadcast
     res_default_chrg = evaluate_packed_systems(
@@ -1510,19 +1506,13 @@ def test_option_ownership_and_side_effects_contract(
 
     # 4. Option separation: unknown public kwargs
     lane_systems = pr_mod.build_calculator_lane_systems(calc)
-    # Unknown public kwargs are rejected unless ignore_unknown_kwargs is set
+    # Unknown public kwargs are rejected
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         evaluate_packed_systems(
             lane_systems,
             source_positions,
             unknown_public_kw=1,
         )
-    evaluate_packed_systems(
-        lane_systems,
-        source_positions,
-        ignore_unknown_kwargs=True,
-        unknown_public_kw=1,
-    )
 
 
 def test_classical_display_key_collision_resolution() -> None:

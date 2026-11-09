@@ -34,7 +34,8 @@ from dxtb._src.typing import Any, Tensor
 
 from ..properties import vibration as vib
 from . import decorators as cdec
-from .energy import _UNSET, EnergyCalculator
+from .autograd import _PROPERTY_METHODS
+from .energy import _UNSET, EnergyCalculator, kwargs_for
 
 __all__ = ["NumericalCalculator"]
 
@@ -981,6 +982,15 @@ class NumericalCalculator(EnergyCalculator):
 
         return vib.RamanResult(vib_res.freqs, intensities, depol)
 
+    def _calculate_methods(self, properties: list[str]) -> list[str]:
+        """Names of the property methods that `calculate` calls."""
+        requested = set(properties)
+        return [
+            f"{name}_numerical"
+            for names, name in _PROPERTY_METHODS
+            if requested & names
+        ]
+
     def calculate(
         self,
         properties: list[str],
@@ -1000,12 +1010,15 @@ class NumericalCalculator(EnergyCalculator):
             "hyperpolarizability",
         ):
             if name in properties:
-                values[name] = getattr(self, f"{name}_numerical")(
-                    positions, chrg, spin, **kwargs
+                values[name] = (method := getattr(self, f"{name}_numerical"))(
+                    positions, chrg, spin, **kwargs_for(method, kwargs)
                 )
         if {"vibration", "frequencies", "normal_modes"} & set(properties):
             vib_result = self.vibration_numerical(
-                positions, chrg, spin, **kwargs
+                positions,
+                chrg,
+                spin,
+                **kwargs_for(self.vibration_numerical, kwargs),
             )
             for name, value in (
                 ("vibration", vib_result),
@@ -1015,17 +1028,29 @@ class NumericalCalculator(EnergyCalculator):
                 if name in properties:
                     values[name] = value
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
-            value = self.dipole_deriv_numerical(positions, chrg, spin, **kwargs)
+            value = self.dipole_deriv_numerical(
+                positions,
+                chrg,
+                spin,
+                **kwargs_for(self.dipole_deriv_numerical, kwargs),
+            )
             for name in ("dipole_derivatives", "dipole_deriv"):
                 if name in properties:
                     values[name] = value
         if {"polarizability_derivatives", "pol_deriv"} & set(properties):
-            value = self.pol_deriv_numerical(positions, chrg, spin, **kwargs)
+            value = self.pol_deriv_numerical(
+                positions,
+                chrg,
+                spin,
+                **kwargs_for(self.pol_deriv_numerical, kwargs),
+            )
             for name in ("polarizability_derivatives", "pol_deriv"):
                 if name in properties:
                     values[name] = value
         if {"ir", "ir_intensities", "ir_intensity"} & set(properties):
-            ir_result = self.ir_numerical(positions, chrg, spin, **kwargs)
+            ir_result = self.ir_numerical(
+                positions, chrg, spin, **kwargs_for(self.ir_numerical, kwargs)
+            )
             if "ir" in properties:
                 values["ir"] = ir_result
             for name in ("ir_intensities", "ir_intensity"):
@@ -1038,7 +1063,12 @@ class NumericalCalculator(EnergyCalculator):
             "raman_depol",
             "rama_depol",
         } & set(properties):
-            raman_result = self.raman_numerical(positions, chrg, spin, **kwargs)
+            raman_result = self.raman_numerical(
+                positions,
+                chrg,
+                spin,
+                **kwargs_for(self.raman_numerical, kwargs),
+            )
             if "raman" in properties:
                 values["raman"] = raman_result
             for name in ("raman_intensities", "raman_intensity"):

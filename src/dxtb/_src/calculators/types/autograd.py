@@ -41,8 +41,33 @@ from ..properties.vibration import (
     vib_analysis,
 )
 from . import decorators as cdec
-from .base import reject_removed_store_kwargs
-from .energy import _UNSET, EnergyCalculator
+from .energy import _UNSET, EnergyCalculator, kwargs_for
+
+_PROPERTY_METHODS: tuple[tuple[frozenset[str], str], ...] = (
+    (frozenset({"forces"}), "forces"),
+    (frozenset({"hessian"}), "hessian"),
+    (frozenset({"vibration", "frequencies", "normal_modes"}), "vibration"),
+    (frozenset({"dipole"}), "dipole"),
+    (frozenset({"quadrupole"}), "quadrupole"),
+    (frozenset({"polarizability"}), "polarizability"),
+    (frozenset({"hyperpolarizability"}), "hyperpolarizability"),
+    (frozenset({"dipole_derivatives", "dipole_deriv"}), "dipole_deriv"),
+    (frozenset({"polarizability_derivatives", "pol_deriv"}), "pol_deriv"),
+    (frozenset({"ir", "ir_intensities", "ir_intensity"}), "ir"),
+    (
+        frozenset(
+            {
+                "raman",
+                "raman_intensities",
+                "raman_intensity",
+                "raman_depol",
+                "rama_depol",
+            }
+        ),
+        "raman",
+    ),
+)
+"""Property names and the method that `calculate` calls for them."""
 
 __all__ = ["AutogradCalculator"]
 
@@ -122,7 +147,6 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Atomic forces of shape ``(..., nat, 3)``.
         """
-        reject_removed_store_kwargs(kwargs)
         OutputHandler.write_stdout("\nForces", v=5)
         OutputHandler.write_stdout("------\n", v=5)
         logger.debug("Forces: Starting.")
@@ -196,7 +220,6 @@ class AutogradCalculator(EnergyCalculator):
         RuntimeError
             Positions tensor does not have ``requires_grad=True``.
         """
-        reject_removed_store_kwargs(kwargs)
         if self.ihelp.batch_mode > 0:
             raise NotImplementedError(
                 "Hessian calculation is not supported in batch mode. "
@@ -566,7 +589,6 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Cartesian dipole derivative of shape ``(..., 3, nat, 3)``.
         """
-        reject_removed_store_kwargs(kwargs)
         field, field_grad = self._resolve_response_fields(
             field, field_grad, needs_field=True
         )
@@ -834,7 +856,6 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Polarizability derivative shape ``(..., 3, 3, nat, 3)``.
         """
-        reject_removed_store_kwargs(kwargs)
         if derived_quantity not in ("dipole", "energy"):
             raise ValueError(
                 f"Unknown `derived_quantity` '{derived_quantity}'. The "
@@ -1223,6 +1244,13 @@ class AutogradCalculator(EnergyCalculator):
 
     ##########################################################################
 
+    def _calculate_methods(self, properties: list[str]) -> list[str]:
+        """Names of the property methods that `calculate` calls."""
+        requested = set(properties)
+        return [
+            f"{name}" for names, name in _PROPERTY_METHODS if requested & names
+        ]
+
     def calculate(
         self,
         properties: list[str],
@@ -1236,11 +1264,17 @@ class AutogradCalculator(EnergyCalculator):
             self, properties, positions, chrg, spin, **kwargs
         )
         if "forces" in properties:
-            values["forces"] = self.forces(positions, chrg, spin, **kwargs)
+            values["forces"] = self.forces(
+                positions, chrg, spin, **kwargs_for(self.forces, kwargs)
+            )
         if "hessian" in properties:
-            values["hessian"] = self.hessian(positions, chrg, spin, **kwargs)
+            values["hessian"] = self.hessian(
+                positions, chrg, spin, **kwargs_for(self.hessian, kwargs)
+            )
         if {"vibration", "frequencies", "normal_modes"} & set(properties):
-            vib_result = self.vibration(positions, chrg, spin, **kwargs)
+            vib_result = self.vibration(
+                positions, chrg, spin, **kwargs_for(self.vibration, kwargs)
+            )
             for name, value in (
                 ("vibration", vib_result),
                 ("frequencies", vib_result.freqs),
@@ -1255,21 +1289,27 @@ class AutogradCalculator(EnergyCalculator):
             "hyperpolarizability",
         ):
             if name in properties:
-                values[name] = getattr(self, name)(
-                    positions, chrg, spin, **kwargs
+                values[name] = (method := getattr(self, name))(
+                    positions, chrg, spin, **kwargs_for(method, kwargs)
                 )
         if {"dipole_derivatives", "dipole_deriv"} & set(properties):
-            value = self.dipole_deriv(positions, chrg, spin, **kwargs)
+            value = self.dipole_deriv(
+                positions, chrg, spin, **kwargs_for(self.dipole_deriv, kwargs)
+            )
             for name in ("dipole_derivatives", "dipole_deriv"):
                 if name in properties:
                     values[name] = value
         if {"polarizability_derivatives", "pol_deriv"} & set(properties):
-            value = self.pol_deriv(positions, chrg, spin, **kwargs)
+            value = self.pol_deriv(
+                positions, chrg, spin, **kwargs_for(self.pol_deriv, kwargs)
+            )
             for name in ("polarizability_derivatives", "pol_deriv"):
                 if name in properties:
                     values[name] = value
         if {"ir", "ir_intensities", "ir_intensity"} & set(properties):
-            ir_result = self.ir(positions, chrg, spin, **kwargs)
+            ir_result = self.ir(
+                positions, chrg, spin, **kwargs_for(self.ir, kwargs)
+            )
             if "ir" in properties:
                 values["ir"] = ir_result
             for name in ("ir_intensities", "ir_intensity"):
@@ -1282,7 +1322,9 @@ class AutogradCalculator(EnergyCalculator):
             "raman_depol",
             "rama_depol",
         } & set(properties):
-            raman_result = self.raman(positions, chrg, spin, **kwargs)
+            raman_result = self.raman(
+                positions, chrg, spin, **kwargs_for(self.raman, kwargs)
+            )
             if "raman" in properties:
                 values["raman"] = raman_result
             for name in ("raman_intensities", "raman_intensity"):
