@@ -49,6 +49,7 @@ Broad suite (`-n logical --dist worksteal -m "not large and not slow"
 | `5e5d2993` | 92 failed, 4 errors, 5466 passed | the known 96 |
 | `5021af85` (with 4b) | 90 failed, 4 errors, 5383 passed | the known 96 minus `test_integrals/test_driver/test_pytorch.py::test_batch_mode_fail[dtype0,dtype1]` (file deleted: it tested the stateful driver) |
 | `e124e0a1` (4b reverted, plus the peer `tad_dftd` commit `ce86301f`) | 90 failed, 4 errors, 5379 passed | identical to the row above |
+| `e124e0a1` (rebased onto upstream, 4b reverted again) | 23 failed, 4 errors, 5447 passed | a subset of the rows above: the upstream changes fix 67 of them (basis export, Fe(CO)5 reference, libcint precision/permutation, two batch-lifecycle tests); no new failure |
 
 The known 96 are the pre-existing failures recorded in
 [`test-suite-cost.md`](test-suite-cost.md) (libcint precision,
@@ -64,8 +65,5 @@ Independent review was not run (skipped on this workstation). The
 - The `get_cache`/`get_energy` component API that the built-in
   Components use to build their setups.
 - `xtb/BaseHamiltonian` and `GFN*Hamiltonian` are now used only by tests.
-- Three integral tests compare against a stale p-shell permutation
-  (`PERM_BY_L`): `test_multipole_matrix::test_matches_libcint`,
-  `test_pytorch_gfn2::test_integral_wrappers` and
-  `test_driver_precision::test_overlap_matches_libcint`. They fail before
-  and after this change, and fixing them means changing the tests.
+- The three integral tests that compared against a stale p-shell
+  permutation (`PERM_BY_L`) pass after the rebase onto upstream.
