@@ -73,8 +73,7 @@ def test_single(dtype: torch.dtype):
     assert drv._positions is not None
 
 
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-def test_batch_mode_fail(dtype: torch.dtype) -> None:
+def test_batch_mode_fail() -> None:
     numbers = torch.tensor([[3, 1], [1, 0]], device=DEVICE)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
