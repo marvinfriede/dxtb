@@ -23,7 +23,6 @@ from __future__ import annotations
 from math import sqrt
 
 import pytest
-import tblite.interface as tblite
 import torch
 from tad_mctc.data import VDW_D3
 from tad_mctc.units import AA2AU
@@ -34,6 +33,7 @@ from dxtb._src.constants import labels
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..tblite import Structure, get_tblite_energy, tblite_singlepoint
 from ..utils import scf_strategy
 from .samples import samples
 
@@ -198,20 +198,14 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
     tb_kind = "gbe-solvation" if alpb_flag else "gb-solvation"
     tb_kernel = "p16" if alpb_flag else "still"
 
-    tb_vac = tblite.Calculator(
-        "GFN2-xTB", numbers.cpu().numpy(), positions.cpu().numpy()
+    mol = Structure(numbers, positions)
+    e_tb_vac = get_tblite_energy(mol, "GFN2-xTB", accuracy=1.0e-8)
+    res_tb_sol = tblite_singlepoint(
+        mol,
+        "GFN2-xTB",
+        accuracy=1.0e-8,
+        solvation=(tb_kind, eps, tb_kernel),
     )
-    tb_vac.set("accuracy", 1.0e-8)
-    tb_vac.set("verbosity", 0)
-    res_tb_vac = tb_vac.singlepoint()
-
-    tb_sol = tblite.Calculator(
-        "GFN2-xTB", numbers.cpu().numpy(), positions.cpu().numpy()
-    )
-    tb_sol.set("accuracy", 1.0e-8)
-    tb_sol.set("verbosity", 0)
-    tb_sol.add(tb_kind, eps, tb_kernel)
-    res_tb_sol = tb_sol.singlepoint()
 
     gfn2_opts = {
         "int_driver": labels.INTDRIVER_PYTORCH,
@@ -238,20 +232,22 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
     (grad_dx_sol,) = torch.autograd.grad(e_dx_sol, pos_sol)
     q_dx_sol = calc_sol.ihelp.reduce_orbital_to_atom(res_dx_sol.charges.mono)
 
-    gsolv_tb = res_tb_sol.get("energy") - res_tb_vac.get("energy")
+    gsolv_tb = float((res_tb_sol.energy - e_tb_vac).item())
     gsolv_dx = float((e_dx_sol - e_dx_vac).item())
 
-    assert abs(res_tb_sol.get("energy") - float(e_dx_sol.item())) < 1.0e-6
+    assert (
+        abs(float(res_tb_sol.energy.item()) - float(e_dx_sol.item())) < 1.0e-6
+    )
     assert abs(gsolv_tb - gsolv_dx) < 1.0e-9
     torch.testing.assert_close(
-        q_dx_sol.detach().cpu(),
-        torch.tensor(res_tb_sol.get("charges"), dtype=torch.double),
+        q_dx_sol.detach(),
+        res_tb_sol.charges,
         atol=3.0e-8,
         rtol=0.0,
     )
     torch.testing.assert_close(
-        grad_dx_sol.detach().cpu(),
-        torch.tensor(res_tb_sol.get("gradient"), dtype=torch.double),
+        grad_dx_sol.detach(),
+        res_tb_sol.gradient,
         atol=1.0e-8,
         rtol=0.0,
     )

@@ -52,6 +52,12 @@ from typing import Any
 
 import numpy as np
 
+from ..tblite import (
+    Structure,
+    get_tblite_dipole,
+    get_tblite_gradient,
+    tblite_singlepoint,
+)
 from .molecules import SYSTEMS, System
 from .refdata import REFERENCE_DIR, save_reference
 
@@ -86,32 +92,48 @@ class Molecule:
         self.charge = charge
         self.uhf = uhf
 
+    def _structure(self, positions: np.ndarray | None = None) -> Structure:
+        pos = self.positions if positions is None else positions
+        return Structure(
+            numbers=self.numbers,
+            positions=pos,
+            charge=self.charge,
+            uhf=self.uhf,
+        )
+
     def run(
         self, positions: np.ndarray | None = None, field: Any = None
     ) -> Any:
-        # pylint: disable=import-outside-toplevel
-        from tblite.interface import Calculator
-        from tblite.library import ffi
-
-        pos = self.positions if positions is None else positions
-        calc = Calculator(
-            self.method, self.numbers, pos, charge=self.charge, uhf=self.uhf
+        return tblite_singlepoint(
+            self._structure(positions),
+            self.method,
+            accuracy=ACCURACY,
+            electric_field=field,
+            as_tensor=False,
         )
-        calc.set("verbosity", 0)
-        calc.set("accuracy", ACCURACY)
-        if field is not None:
-            # tblite 0.7.0 passes the argument on as `double *` unconverted
-            vec = ffi.new("double[]", [float(f) for f in field])
-            calc.add("electric-field", vec)
-        return calc.singlepoint()
 
     def dipole(
         self, positions: np.ndarray | None = None, field: Any = None
     ) -> np.ndarray:
-        return np.asarray(self.run(positions, field).get("dipole"))
+        return np.asarray(
+            get_tblite_dipole(
+                self._structure(positions),
+                self.method,
+                accuracy=ACCURACY,
+                electric_field=field,
+                as_tensor=False,
+            )
+        )
 
     def gradient(self, positions: np.ndarray) -> np.ndarray:
-        return np.asarray(self.run(positions).get("gradient"))
+        return np.asarray(
+            get_tblite_gradient(
+                self._structure(positions),
+                self.method,
+                accuracy=ACCURACY,
+                as_tensor=False,
+            )
+        )
 
     def polarizability(
         self,

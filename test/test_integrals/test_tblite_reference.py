@@ -29,14 +29,16 @@ tested in ``test_pytorch_gfn2.py``.
 from __future__ import annotations
 
 import pytest
-import tblite.interface as tblite
 import torch
 
 import dxtb
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from ..tblite import Structure, get_tblite_quadrupole, tblite_singlepoint
 from .samples import samples
+
+pytestmark = [pytest.mark.tblite]
 
 ALGOS = ["md", "os"]
 
@@ -64,12 +66,8 @@ def test_energy_gradient_dipole_match_tblite(name: str, algorithm: str) -> None:
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
-    ref = tblite.Calculator(
-        "GFN2-xTB", numbers.cpu().numpy(), positions.cpu().numpy()
-    )
-    ref.set("verbosity", 0)
-    ref.set("accuracy", 1e-4)
-    res = ref.singlepoint()
+    mol = Structure(numbers, positions)
+    res = tblite_singlepoint(mol, "GFN2-xTB", accuracy=1e-4)
 
     def fresh():
         return positions.detach().clone().requires_grad_(True)
@@ -81,14 +79,9 @@ def test_energy_gradient_dipole_match_tblite(name: str, algorithm: str) -> None:
     calc, field = _calculator(numbers, algorithm, dd)
     dipole = calc.get_dipole(fresh(), field=field)
 
-    def expected(key: str) -> torch.Tensor:
-        return torch.from_numpy(res.get(key)).to(**dd)
-
-    assert energy.detach().cpu() == pytest.approx(
-        float(res.get("energy")), abs=1e-6
-    )
-    assert torch.allclose(-forces, expected("gradient"), atol=1e-7, rtol=0.0)
-    assert torch.allclose(dipole, expected("dipole"), atol=1e-7, rtol=0.0)
+    assert energy.detach().cpu() == pytest.approx(float(res.energy), abs=1e-6)
+    assert torch.allclose(-forces, res.gradient, atol=1e-7, rtol=0.0)
+    assert torch.allclose(dipole, res.dipole, atol=1e-7, rtol=0.0)
 
 
 @pytest.mark.parametrize("rotate", [False, True])
@@ -116,12 +109,8 @@ def test_quadrupole_matches_tblite(
         rot = torch.linalg.qr(rot)[0]  # exactly orthogonal
         positions = positions @ rot.T
 
-    ref = tblite.Calculator(
-        "GFN2-xTB", numbers.cpu().numpy(), positions.cpu().numpy()
-    )
-    ref.set("verbosity", 0)
-    ref.set("accuracy", 1e-6)  # tight: tblite's default SCF is loose (~1e-5)
-    expected = torch.from_numpy(ref.singlepoint().get("quadrupole")).to(**dd)
+    mol = Structure(numbers, positions)
+    expected = get_tblite_quadrupole(mol, "GFN2-xTB", accuracy=1e-6)
 
     field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
     calc = dxtb.calculators.GFN2Calculator(

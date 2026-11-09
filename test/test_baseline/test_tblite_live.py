@@ -33,9 +33,21 @@ import math
 from unittest.mock import patch
 
 import pytest
-import tblite.interface
 import torch
 
+from ..tblite import (
+    Options,
+    Structure,
+    get_tblite_charges,
+    get_tblite_dipole,
+    get_tblite_energy,
+    get_tblite_forces,
+    get_tblite_gradient,
+    get_tblite_hamiltonian_matrix,
+    get_tblite_overlap_matrix,
+    get_tblite_quadrupole,
+    tblite_singlepoint,
+)
 from .molecules import SYSTEMS
 from .refdata import Tolerance
 from .tblite_live import (
@@ -153,12 +165,17 @@ def test_gfn1_live_4sp_fe_co_5() -> None:
         (
             "RbH",
             torch.tensor([37, 1]),
-            torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 4.47]], dtype=torch.float64),
+            torch.tensor(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 4.47]], dtype=torch.float64
+            ),
         ),
         (
             "SrH2",
             torch.tensor([38, 1, 1]),
-            torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [0.0, 0.0, -4.0]], dtype=torch.float64),
+            torch.tensor(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [0.0, 0.0, -4.0]],
+                dtype=torch.float64,
+            ),
         ),
     ],
 )
@@ -397,6 +414,8 @@ def test_tblite_live_failure_reporting() -> None:
 
 def test_tblite_live_executes_singlepoint_dynamically() -> None:
     """Confirm each live call invokes tblite.interface.Calculator.singlepoint() dynamically."""
+    import tblite.interface
+
     sys = SYSTEMS["H2O"]
     orig_singlepoint = tblite.interface.Calculator.singlepoint
     with patch.object(
@@ -412,3 +431,54 @@ def test_tblite_live_executes_singlepoint_dynamically() -> None:
 
     assert spy_singlepoint.call_count == 2
     assert abs(res_stretched.energy - res_eq.energy) > 1.0e-4
+
+
+def test_tblite_structure_and_property_getters() -> None:
+    """Verify the Structure, Options, and get_tblite_* testsuite interface."""
+    sys = SYSTEMS["H2O"]
+    mol = Structure(sys.numbers, sys.positions, charge=sys.charge, uhf=sys.spin)
+    opts = Options(method="GFN2-xTB", accuracy=1.0e-6, max_iter=300)
+
+    res = tblite_singlepoint(mol, options=opts)
+    energy = get_tblite_energy(mol, options=opts)
+    gradient = get_tblite_gradient(mol, options=opts)
+    forces = get_tblite_forces(mol, options=opts)
+    charges = get_tblite_charges(mol, options=opts)
+    dipole = get_tblite_dipole(mol, options=opts)
+    quadrupole = get_tblite_quadrupole(mol, options=opts)
+    overlap = get_tblite_overlap_matrix(mol, options=opts)
+    hcore = get_tblite_hamiltonian_matrix(mol, options=opts)
+
+    assert isinstance(energy, torch.Tensor)
+    torch.testing.assert_close(energy, res.energy, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(gradient, res.gradient, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(forces, -gradient, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(charges, res.charges, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(dipole, res.dipole, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(quadrupole, res.quadrupole, atol=0.0, rtol=0.0)
+    assert overlap.shape == (6, 6)
+    assert hcore.shape == (6, 6)
+    torch.testing.assert_close(
+        torch.diagonal(overlap),
+        torch.ones(6, dtype=overlap.dtype, device=overlap.device),
+        atol=1.0e-9,
+        rtol=0.0,
+    )
+
+    # Also verify hyphenated tblite option dict keys
+    energy_dict = get_tblite_energy(
+        mol,
+        "GFN2-xTB",
+        options={"accuracy": 1.0e-6, "max-iter": 300, "mixer-damping": 0.4},
+    )
+    torch.testing.assert_close(energy_dict, energy, atol=1.0e-12, rtol=0.0)
+
+    # Verify electric_field interaction via CFFI pointer conversion
+    efield = torch.tensor([0.0, 0.0, 1.0e-3], dtype=torch.float64)
+    energy_field = get_tblite_energy(
+        mol,
+        "GFN2-xTB",
+        accuracy=1.0e-6,
+        electric_field=efield,
+    )
+    assert abs(float((energy_field - energy).item())) > 1.0e-4

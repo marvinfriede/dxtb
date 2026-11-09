@@ -29,14 +29,16 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-import tblite.library
 import torch
-from tad_mctc.units.energy import KELVIN2AU
-from tblite.interface import Calculator as TbliteCalculator
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.typing import Tensor
 
+from ..tblite import (
+    Structure,
+    get_tblite_version,
+    tblite_singlepoint,
+)
 from ..utils import scf_strategy
 from .refdata import Deviation, Tolerance, compare
 
@@ -90,18 +92,6 @@ _DXTB_METHODS = {
     "GFN2-xTB": GFN2_XTB,
 }
 
-_METHOD_MAP: dict[str, str] = {
-    "gfn1": "GFN1-xTB",
-    "gfn1-xtb": "GFN1-xTB",
-    "GFN1-xTB": "GFN1-xTB",
-    "gfn2": "GFN2-xTB",
-    "gfn2-xtb": "GFN2-xTB",
-    "GFN2-xTB": "GFN2-xTB",
-    "ipea1": "IPEA1-xTB",
-    "ipea1-xtb": "IPEA1-xTB",
-    "IPEA1-xTB": "IPEA1-xTB",
-}
-
 
 @dataclass(frozen=True)
 class TbliteLiveResult:
@@ -131,44 +121,6 @@ class TbliteLiveResult:
             "charges": self.charges,
             "dipole": self.dipole,
         }
-
-
-def get_tblite_version() -> tuple[int, int, int]:
-    """Return the active native tblite library version tuple."""
-    ver = tblite.library.get_version()
-    return int(ver[0]), int(ver[1]), int(ver[2])
-
-
-def _to_numpy_numbers(
-    numbers: Tensor | np.ndarray | Sequence[int],
-) -> np.ndarray:
-    if isinstance(numbers, torch.Tensor):
-        return numbers.detach().cpu().numpy().astype(np.int32, copy=False)
-    return np.asarray(numbers, dtype=np.int32)
-
-
-def _to_numpy_positions(
-    positions: Tensor | np.ndarray | Sequence[Sequence[float]],
-) -> np.ndarray:
-    if isinstance(positions, torch.Tensor):
-        return positions.detach().cpu().numpy().astype(np.float64, copy=True)
-    return np.asarray(positions, dtype=np.float64)
-
-
-def _to_scalar_float(value: Tensor | float | int | None) -> float:
-    if value is None:
-        return 0.0
-    if isinstance(value, torch.Tensor):
-        return float(value.detach().cpu().item())
-    return float(value)
-
-
-def _to_scalar_int(value: Tensor | float | int | None) -> int:
-    if value is None:
-        return 0
-    if isinstance(value, torch.Tensor):
-        return int(round(float(value.detach().cpu().item())))
-    return int(round(float(value)))
 
 
 def run_tblite_live(
@@ -229,80 +181,46 @@ def run_tblite_live(
         Computed energy, Cartesian gradient, forces, atomic charges, dipole,
         quadrupole, and orbital quantities.
     """
-    resolved_method: str | dict[str, Any]
-    method_label: str
-    if isinstance(method, str):
-        resolved_method = _METHOD_MAP.get(method, method)
-        method_label = str(resolved_method)
-    else:
-        resolved_method = method
-        method_label = "custom-xTB"
-
-    nums_np = _to_numpy_numbers(numbers)
-    pos_np = _to_numpy_positions(positions)
-    chrg_val = _to_scalar_float(charge)
-    uhf_val = _to_scalar_int(uhf)
-
-    calc = TbliteCalculator(
-        resolved_method,
-        nums_np,
-        pos_np,
-        charge=chrg_val,
-        uhf=uhf_val,
+    mol = Structure(
+        numbers=numbers,
+        positions=positions,
+        charge=0.0 if charge is None else charge,
+        uhf=0 if uhf is None else uhf,
     )
-    calc.set("verbosity", 0)
-    calc.set("accuracy", float(accuracy))
-    calc.set("max-iter", int(max_iter))
-    calc.set("temperature", float(temperature_kelvin) * KELVIN2AU)
-
-    if mixer_damping is not None:
-        calc.set("mixer-damping", float(mixer_damping))
-    if guess is not None:
-        guess_code = (
-            {"sad": 0, "eeq": 1}[guess.lower()]
-            if isinstance(guess, str)
-            else int(guess)
-        )
-        calc.set("guess", guess_code)
-    if save_integrals:
-        calc.set("save-integrals", 1)
-
-    if solvation is not None:
-        calc.add(solvation[0], *solvation[1:])
-    if electric_field is not None:
-        field_np = (
-            electric_field.detach().cpu().numpy().astype(np.float64)
-            if isinstance(electric_field, torch.Tensor)
-            else np.asarray(electric_field, dtype=np.float64)
-        )
-        calc.add("electric-field", field_np)
-
-    res = calc.singlepoint()
-    grad = np.asarray(res.get("gradient"), dtype=np.float64)
-    overlap = (
-        np.asarray(res.get("overlap-matrix"), dtype=np.float64)
-        if save_integrals
-        else None
+    res = tblite_singlepoint(
+        mol,
+        method,
+        accuracy=accuracy,
+        max_iter=max_iter,
+        temperature_kelvin=temperature_kelvin,
+        mixer_damping=mixer_damping,
+        guess=guess,
+        save_integrals=save_integrals,
+        solvation=solvation,
+        electric_field=electric_field,
+        as_tensor=False,
     )
     return TbliteLiveResult(
-        method=method_label,
-        version=get_tblite_version(),
-        energy=float(res.get("energy")),
-        energies=np.asarray(res.get("energies"), dtype=np.float64),
-        gradient=grad,
-        forces=-grad,
-        charges=np.asarray(res.get("charges"), dtype=np.float64),
-        dipole=np.asarray(res.get("dipole"), dtype=np.float64),
-        quadrupole=np.asarray(res.get("quadrupole"), dtype=np.float64),
-        orbital_energies=np.asarray(
-            res.get("orbital-energies"), dtype=np.float64
-        ),
+        method=res.method,
+        version=res.version,
+        energy=float(res.energy),
+        energies=np.asarray(res.energies, dtype=np.float64),
+        gradient=np.asarray(res.gradient, dtype=np.float64),
+        forces=np.asarray(res.forces, dtype=np.float64),
+        charges=np.asarray(res.charges, dtype=np.float64),
+        dipole=np.asarray(res.dipole, dtype=np.float64),
+        quadrupole=np.asarray(res.quadrupole, dtype=np.float64),
+        orbital_energies=np.asarray(res.orbital_energies, dtype=np.float64),
         orbital_occupations=np.asarray(
-            res.get("orbital-occupations"), dtype=np.float64
+            res.orbital_occupations, dtype=np.float64
         ),
-        density_matrix=np.asarray(res.get("density-matrix"), dtype=np.float64),
-        overlap_matrix=overlap,
-        post_processing=res.get("post-processing-dict"),
+        density_matrix=np.asarray(res.density_matrix, dtype=np.float64),
+        overlap_matrix=(
+            np.asarray(res.overlap_matrix, dtype=np.float64)
+            if res.overlap_matrix is not None
+            else None
+        ),
+        post_processing=res.post_processing,
     )
 
 
