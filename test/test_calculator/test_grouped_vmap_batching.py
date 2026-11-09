@@ -417,20 +417,33 @@ def test_public_padded_mode1_trailing_and_noncontiguous_padding() -> None:
     positions[1, 0] = h2[0]
     positions[1, 2] = h2[1]
     positions[1, 1] = torch.tensor([9.0, 9.0, 9.0], dtype=DTYPE)
+    positions.requires_grad_(True)
 
     packed = noncontiguous.singlepoint(positions)
+    (packed_grad,) = torch.autograd.grad(packed.energy.sum(), positions)
 
     systems = build_calculator_lane_systems(noncontiguous)
     assert systems[0] is systems[2]
     assert systems[1].numbers.tolist() == [1, 1]
-    reference_h2 = systems[1].singlepoint(h2)
+    h2_grad = h2.detach().clone().requires_grad_(True)
+    reference_h2 = systems[1].singlepoint(h2_grad)
+    (reference_h2_grad,) = torch.autograd.grad(
+        reference_h2.energy.sum(), h2_grad
+    )
     torch.testing.assert_close(
         packed.energy[1, [0, 2]], reference_h2.energy, **TOL
     )
+    torch.testing.assert_close(packed_grad[1, [0, 2]], reference_h2_grad, **TOL)
     assert packed.energy[1, 1] == 0.0
+    assert torch.count_nonzero(packed_grad[1, 1]) == 0
     for lane in (0, 2):
-        reference = systems[0].singlepoint(positions[lane])
+        lane_pos = positions[lane].detach().clone().requires_grad_(True)
+        reference = systems[0].singlepoint(lane_pos)
+        (reference_grad,) = torch.autograd.grad(
+            reference.energy.sum(), lane_pos
+        )
         torch.testing.assert_close(packed.energy[lane], reference.energy, **TOL)
+        torch.testing.assert_close(packed_grad[lane], reference_grad, **TOL)
 
 
 def test_mixed_gfn1_gfn2_groups_are_separate() -> None:
@@ -598,6 +611,80 @@ def test_position_gradients_are_lane_local() -> None:
     assert float(grad[0, :3].abs().max()) > 0.0
     assert torch.count_nonzero(grad[1]) == 0
     assert torch.count_nonzero(grad[2]) == 0
+
+
+def test_higher_order_directional_derivatives_with_multi_lane_tangents_match_serial() -> (
+    None
+):
+    """First-, second-, and third-order directional derivatives with simultaneous
+    nonzero tangents across mapped and singleton lanes match serial evaluation.
+    """
+    model = _model(maxiter=40)
+    water = _setup(model, H2O)
+    hydrogen = _setup(model, H2)
+    systems = (water, hydrogen, water)
+    base_positions = (_geometry(H2O, 0), _geometry(H2, 0), _geometry(H2O, 1))
+    generator = torch.Generator().manual_seed(17)
+    tangents = tuple(
+        torch.randn(pos.shape, generator=generator, dtype=DTYPE)
+        for pos in base_positions
+    )
+
+    positions = tuple(
+        pos.clone().requires_grad_(True) for pos in base_positions
+    )
+    packed = evaluate_packed_systems(systems, positions)
+    assert bool(packed.converged.all())
+
+    first_grads = torch.autograd.grad(
+        packed.energy.sum(), positions, create_graph=True
+    )
+    d1 = sum(
+        (grad * tangent).sum() for grad, tangent in zip(first_grads, tangents)
+    )
+    second_grads = torch.autograd.grad(d1, positions, create_graph=True)
+    d2 = sum(
+        (grad * tangent).sum() for grad, tangent in zip(second_grads, tangents)
+    )
+    third_grads = torch.autograd.grad(d2, positions)
+    d3 = sum(
+        (grad * tangent).sum() for grad, tangent in zip(third_grads, tangents)
+    )
+
+    serial_d1 = torch.zeros((), dtype=DTYPE)
+    serial_d2 = torch.zeros((), dtype=DTYPE)
+    serial_d3 = torch.zeros((), dtype=DTYPE)
+    for lane, (system, base_pos, tangent) in enumerate(
+        zip(systems, base_positions, tangents)
+    ):
+        pos = base_pos.clone().requires_grad_(True)
+        ref = system.singlepoint(pos)
+        (g1,) = torch.autograd.grad(ref.energy.sum(), pos, create_graph=True)
+        lane_d1 = (g1 * tangent).sum()
+        (g2,) = torch.autograd.grad(lane_d1, pos, create_graph=True)
+        lane_d2 = (g2 * tangent).sum()
+        (g3,) = torch.autograd.grad(lane_d2, pos)
+        lane_d3 = (g3 * tangent).sum()
+
+        assert float(g3.abs().max()) > 0.0
+        torch.testing.assert_close(first_grads[lane], g1, **TOL)
+        torch.testing.assert_close(second_grads[lane], g2, **TOL)
+        torch.testing.assert_close(third_grads[lane], g3, **TOL)
+        serial_d1 = serial_d1 + lane_d1.detach()
+        serial_d2 = serial_d2 + lane_d2.detach()
+        serial_d3 = serial_d3 + lane_d3.detach()
+
+    torch.testing.assert_close(d1.detach(), serial_d1, **TOL)
+    torch.testing.assert_close(d2.detach(), serial_d2, **TOL)
+    torch.testing.assert_close(d3.detach(), serial_d3, **TOL)
+
+    def packed_total_energy(
+        p0: torch.Tensor, p1: torch.Tensor, p2: torch.Tensor
+    ) -> torch.Tensor:
+        return evaluate_packed_systems(systems, (p0, p1, p2)).energy.sum()
+
+    _, jvp_d1 = torch.func.jvp(packed_total_energy, base_positions, tangents)
+    torch.testing.assert_close(jvp_d1, serial_d1, **TOL)
 
 
 def test_shared_model_parameter_gradients_match_serial_sum() -> None:

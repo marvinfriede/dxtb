@@ -18,8 +18,8 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
 from dxtb._src.wavefunction import filling
@@ -401,28 +401,195 @@ def test_eager_search_stop_is_bitwise_equal_to_all_trips(
     assert unconverged == (0 if maxiter == 200 else 2)
 
 
+def test_eager_search_stop_matches_full_trips_for_invalid_and_boundary_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid temperatures, excess electrons, and empty/full channels match
+    the full fixed-trip schedule bitwise and stop after the first trip when
+    no active channel remains unconverged.
+    """
+    spectra, electrons, mask, kt = _case()
+    trips = _count_search_trips(monkeypatch)
+    maxiter = 25
+    cases = (
+        (electrons[0], spectra[0], -kt, mask),
+        (electrons[0], spectra[0], torch.zeros_like(kt), mask),
+        (
+            torch.tensor([4.0, 0.5], dtype=torch.float64),
+            spectra[0],
+            kt,
+            mask,
+        ),
+        (
+            torch.tensor([0.0, 3.0], dtype=torch.float64),
+            spectra[0],
+            kt,
+            mask,
+        ),
+    )
+
+    for nel, emo, temp, msk in cases:
+        trips[0] = 0
+        early = _core_state(nel, emo, temp, msk, maxiter)
+        early_trips = trips[0]
+
+        with monkeypatch.context() as patch:
+            patch.setattr(filling, "_fermi_search_stops_early", lambda _: False)
+            trips[0] = 0
+            full = _core_state(nel, emo, temp, msk, maxiter)
+        assert trips[0] == maxiter + 1
+        assert early_trips <= maxiter + 1
+        _assert_states_equal(early, full)
+
+
+def test_eager_search_stop_multi_channel_different_iteration_counts_and_derivatives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-channel inputs with different per-channel trip counts and their
+    1st-, 2nd-, and 3rd-order derivatives match the full fixed-trip schedule
+    bitwise.
+    """
+    spectra, _, mask, kt = _case()
+    # Channel 0 has integer electrons (1.0) in a wide gap and converges in 1
+    # trip; channel 1 has fractional electrons (0.75) and requires multiple
+    # safeguarded Newton/bisection trips.
+    nel_base = torch.tensor([1.0, 0.75], dtype=torch.float64)
+    emo_base = spectra[1]
+    trips = _count_search_trips(monkeypatch)
+
+    trips[0] = 0
+    ch0 = _core_state(nel_base[:1], emo_base[:1], kt, mask[:1], maxiter=50)
+    ch0_trips = trips[0]
+
+    trips[0] = 0
+    ch1 = _core_state(nel_base[1:], emo_base[1:], kt, mask[1:], maxiter=50)
+    ch1_trips = trips[0]
+    assert bool(ch0.result.status.converged.all())
+    assert bool(ch1.result.status.converged.all())
+    assert ch0_trips < ch1_trips
+
+    trips[0] = 0
+    early = _core_state(nel_base, emo_base, kt, mask, maxiter=50)
+    assert trips[0] == max(ch0_trips, ch1_trips)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(filling, "_fermi_search_stops_early", lambda _: False)
+        trips[0] = 0
+        full = _core_state(nel_base, emo_base, kt, mask, maxiter=50)
+    assert trips[0] == 51
+    _assert_states_equal(early, full)
+
+    direction_emo = torch.arange(
+        1, emo_base.numel() + 1, dtype=torch.float64
+    ).reshape_as(emo_base)
+    direction_nel = torch.tensor([0.3, -0.7], dtype=torch.float64)
+    weights = torch.arange(
+        1, emo_base.numel() + 1, dtype=torch.float64
+    ).reshape_as(emo_base)
+
+    def derivatives(stop_early: bool) -> tuple[torch.Tensor, ...]:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                filling, "_fermi_search_stops_early", lambda _: stop_early
+            )
+            emo = emo_base.clone().requires_grad_(True)
+            nel = nel_base.clone().requires_grad_(True)
+            temp = kt.clone().requires_grad_(True)
+            occ = filling.get_fermi_occupation_core(
+                nel, emo, temp, mask=mask, maxiter=50
+            ).occupation
+            scalar = (occ * weights).sum()
+            g1_emo, g1_nel, g1_kt = torch.autograd.grad(
+                scalar, (emo, nel, temp), create_graph=True
+            )
+            proj1 = (
+                (g1_emo * direction_emo).sum()
+                + (g1_nel * direction_nel).sum()
+                + g1_kt * 0.5
+            )
+            g2_emo, g2_nel, g2_kt = torch.autograd.grad(
+                proj1, (emo, nel, temp), create_graph=True
+            )
+            proj2 = (
+                (g2_emo * direction_emo).sum()
+                + (g2_nel * direction_nel).sum()
+                + g2_kt * 0.5
+            )
+            g3_emo, g3_nel, g3_kt = torch.autograd.grad(proj2, (emo, nel, temp))
+            return (
+                occ.detach(),
+                g1_emo.detach(),
+                g1_nel.detach(),
+                g1_kt.detach(),
+                g2_emo.detach(),
+                g2_nel.detach(),
+                g2_kt.detach(),
+                g3_emo.detach(),
+                g3_nel.detach(),
+                g3_kt.detach(),
+            )
+
+    early_derivs = derivatives(True)
+    full_derivs = derivatives(False)
+    for actual, expected in zip(early_derivs, full_derivs):
+        assert torch.isfinite(actual).all()
+        assert torch.equal(actual, expected)
+
+
 def test_search_runs_all_trips_under_transforms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``vmap`` and ``jacrev`` keep the static search without host reads."""
+    """``vmap``, ``jacrev``, ``jacfwd``, ``jvp`` and nested transforms keep
+    the static search without host reads and match eager results.
+    """
     spectra, electrons, mask, kt = _case()
     trips = _count_search_trips(monkeypatch)
     maxiter = 30
 
-    vmap(
-        lambda e, n: filling.get_fermi_occupation_core(
+    def map_fn(
+        e: torch.Tensor, n: torch.Tensor
+    ) -> filling.FermiOccupationResult:
+        return filling.get_fermi_occupation_core(
             n, e, kt, mask=mask, maxiter=maxiter
         )
-    )(spectra, electrons)
+
+    def occ_fn(e: torch.Tensor) -> torch.Tensor:
+        return filling.get_fermi_occupation_core(
+            electrons[1], e, kt, mask=mask, maxiter=maxiter
+        ).occupation
+
+    def scalar_fn(e: torch.Tensor) -> torch.Tensor:
+        return occ_fn(e)[1, 1]
+
+    vmap(map_fn)(spectra, electrons)
     assert trips[0] == maxiter + 1
 
     trips[0] = 0
-    jacrev(
-        lambda e: filling.get_fermi_occupation_core(
-            electrons[0], e, kt, mask=mask, maxiter=maxiter
-        ).occupation
-    )(spectra[0])
+    jac_rev = jacrev(occ_fn)(spectra[1])
     assert trips[0] == maxiter + 1
+
+    trips[0] = 0
+    jac_fwd = jacfwd(occ_fn)(spectra[1])
+    assert trips[0] == maxiter + 1
+    torch.testing.assert_close(jac_fwd, jac_rev, rtol=1e-9, atol=1e-10)
+
+    trips[0] = 0
+    direction = torch.full_like(spectra[1], 0.25)
+    _, jvp_out = jvp(occ_fn, (spectra[1],), (direction,))
+    assert trips[0] == maxiter + 1
+    expected_jvp = (jac_rev * direction.unsqueeze(0).unsqueeze(0)).sum(
+        dim=(-2, -1)
+    )
+    torch.testing.assert_close(jvp_out, expected_jvp, rtol=1e-9, atol=1e-10)
+
+    trips[0] = 0
+    vmap(jacrev(scalar_fn))(spectra)
+    assert trips[0] == maxiter + 1
+
+    trips[0] = 0
+    hess = jacfwd(jacrev(scalar_fn))(spectra[1])
+    assert trips[0] == maxiter + 1
+    assert torch.isfinite(hess).all()
 
 
 def test_search_runs_all_trips_under_compile(
