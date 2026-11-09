@@ -1,7 +1,7 @@
 # Test-suite memory and run time
 
-Status: complete on `claude/tender-dijkstra-cda42s` (commits `9dd5cb37`,
-`8c840c67` and the Fermi search commit after them).
+Status: complete on `claude/tender-dijkstra-cda42s` (commits `68ed8e32`,
+`a810ad98` and the Fermi search commit after them).
 
 ## Memory
 

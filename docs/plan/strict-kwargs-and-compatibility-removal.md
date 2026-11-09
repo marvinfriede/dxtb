@@ -11,10 +11,10 @@ All changes are hard breaks without aliases.
 
 | Commit | Package |
 |---|---|
-| `317713f7` | **Strict kwargs.** `Calculator()` takes only `auto_int_level`, `timer` and `batch_mode` besides its named arguments. `singlepoint` (1D and 2D) and `evaluate_packed_systems` take only `write_overlap`, `write_dipole`, `write_quadrupole`, `write_hcore` and `cuda_sync_in_scf`; property methods consume their named arguments and forward the rest, so every unknown keyword raises `TypeError`. `energy` takes `keepdim` by name. `calculate`/`get_property` give each property method only the keyword arguments it takes, and raise if no requested property takes one. Removed: `reject_removed_store_kwargs`, the `cache` message and `ignore_unknown_kwargs`. |
-| `1a328bc2` | **No Calculator field defaults.** `Calculator(interaction=[ElectricField(f)])` is rejected by `Model.setup`; fields are `field=`/`field_grad=` call inputs only. Omitting them means no field, and the integral level is no longer raised implicitly. `_field_default`, the `_UNSET` sentinel of the Calculator methods and the dead custom field-label branches are removed. The CLI, the W5 benchmark and the module example pass `field=` per call. Six tests of the default mechanism are deleted. |
-| `522b68f9`, reverted by `78b602ac` | **Padded System of a batched Calculator: kept.** The commit set `calc.system`/`classicals`/`interactions` to `None` for a 2D Calculator. Reverted on review: the padded System is the batch-agnostic view of the Calculator (the same Components and `IndexHelper` API for 1D and 2D), not a compatibility path, and removing it forced batch branches into batch-agnostic code. |
-| `eb3329fa` | **No stateful integral layer.** `DriverManager`, the stateful drivers, the integral classes with `build()` state, their factories, the `Integrals` container and `dxtb.integrals.factories/types` are deleted. `dxtb.integrals.wrappers` (`overlap`, `dipint`, `quadint`, `hcore`) is rebuilt on the stateless core builders, with one convention for both drivers: multipoles about the origin, all nine quadrupole components, normalized with the overlap norm. With libcint, `dipint`/`quadint` used to be ket-centred (`quadint` with 6 packed components), contrary to their docstring. Tests of the stateful API are deleted; value tests use the core builders, bitwise equal. |
+| `43d17204` | **Strict kwargs.** `Calculator()` takes only `auto_int_level`, `timer` and `batch_mode` besides its named arguments. `singlepoint` (1D and 2D) and `evaluate_packed_systems` take only `write_overlap`, `write_dipole`, `write_quadrupole`, `write_hcore` and `cuda_sync_in_scf`; property methods consume their named arguments and forward the rest, so every unknown keyword raises `TypeError`. `energy` takes `keepdim` by name. `calculate`/`get_property` give each property method only the keyword arguments it takes, and raise if no requested property takes one. Removed: `reject_removed_store_kwargs`, the `cache` message and `ignore_unknown_kwargs`. |
+| `5e5d2993` | **No Calculator field defaults.** `Calculator(interaction=[ElectricField(f)])` is rejected by `Model.setup`; fields are `field=`/`field_grad=` call inputs only. Omitting them means no field, and the integral level is no longer raised implicitly. `_field_default`, the `_UNSET` sentinel of the Calculator methods and the dead custom field-label branches are removed. The CLI, the W5 benchmark and the module example pass `field=` per call. Six tests of the default mechanism are deleted. |
+| `1b2feddb`, reverted by `e124e0a1` | **Padded System of a batched Calculator: kept.** The commit set `calc.system`/`classicals`/`interactions` to `None` for a 2D Calculator. Reverted on review: the padded System is the batch-agnostic view of the Calculator (the same Components and `IndexHelper` API for 1D and 2D), not a compatibility path, and removing it forced batch branches into batch-agnostic code. |
+| `5021af85` | **No stateful integral layer.** `DriverManager`, the stateful drivers, the integral classes with `build()` state, their factories, the `Integrals` container and `dxtb.integrals.factories/types` are deleted. `dxtb.integrals.wrappers` (`overlap`, `dipint`, `quadint`, `hcore`) is rebuilt on the stateless core builders, with one convention for both drivers: multipoles about the origin, all nine quadrupole components, normalized with the overlap norm. With libcint, `dipint`/`quadint` used to be ket-centred (`quadint` with 6 packed components), contrary to their docstring. Tests of the stateful API are deleted; value tests use the core builders, bitwise equal. |
 
 ## Decisions recorded
 
@@ -36,15 +36,19 @@ at the same time, so every package was validated in a clean git worktree
 of its own commit. With `PYTHONPATH` pointing at the worktree's `src`,
 pytest imports the worktree's `dxtb` and `tad_dftd`.
 
+The branch was later rebased onto upstream changes (54 files); the
+hashes here are the rebased ones. The rows below were measured before
+the rebase, except the last one.
+
 Broad suite (`-n logical --dist worksteal -m "not large and not slow"
 --random-order-bucket=global`, one 20G scope):
 
 | After | Result | Failing ids |
 |---|---|---|
-| `317713f7` | 92 failed, 4 errors, 5471 passed | the known 96 |
-| `1a328bc2` | 92 failed, 4 errors, 5466 passed | the known 96 |
-| `eb3329fa` (with 4b) | 90 failed, 4 errors, 5383 passed | the known 96 minus `test_integrals/test_driver/test_pytorch.py::test_batch_mode_fail[dtype0,dtype1]` (file deleted: it tested the stateful driver) |
-| `78b602ac` (4b reverted, plus the peer `tad_dftd` commit `5897aa56`) | 90 failed, 4 errors, 5379 passed | identical to the row above |
+| `43d17204` | 92 failed, 4 errors, 5471 passed | the known 96 |
+| `5e5d2993` | 92 failed, 4 errors, 5466 passed | the known 96 |
+| `5021af85` (with 4b) | 90 failed, 4 errors, 5383 passed | the known 96 minus `test_integrals/test_driver/test_pytorch.py::test_batch_mode_fail[dtype0,dtype1]` (file deleted: it tested the stateful driver) |
+| `e124e0a1` (4b reverted, plus the peer `tad_dftd` commit `ce86301f`) | 90 failed, 4 errors, 5379 passed | identical to the row above |
 
 The known 96 are the pre-existing failures recorded in
 [`test-suite-cost.md`](test-suite-cost.md) (libcint precision,
