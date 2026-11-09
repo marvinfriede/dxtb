@@ -19,7 +19,13 @@ positions = torch.tensor(
 # FIX
 opts = {"differentiation": "unrolled"}
 
-calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts, **dd)
+par = dxtb.ParamModule(dxtb.GFN1_XTB, **dd)
+par.set_differentiable("charge", "effective", "gexp")
+par.set_differentiable("element", "O", "levels")
+gexp = par.get("charge", "effective", "gexp")
+levels_o = par.get("element", "O", "levels")
+
+calc = dxtb.Calculator(numbers, par, opts=opts, **dd)
 
 
 def get_energy_force(calc):
@@ -28,41 +34,24 @@ def get_energy_force(calc):
     return energy, force
 
 
-for c in calc.interactions.components:
-    if isinstance(c, dxtb._src.components.interactions.coulomb.secondorder.ES2):
-        break
-c.gexp = c.gexp.clone().detach().requires_grad_(True)
-
-hcore = calc.integrals.hcore
-hcore.selfenergy = hcore.selfenergy.clone().detach().requires_grad_(True)
-
 # energy and AD force
 energy, force = get_energy_force(calc)
 
 # AD gradient w.r.t. params
-de_dparam = torch.autograd.grad(
-    energy, (c.gexp, hcore.selfenergy), retain_graph=True
-)
-dfnorm_dparam = torch.autograd.grad(
-    torch.norm(force), (c.gexp, hcore.selfenergy)
-)
+de_dparam = torch.autograd.grad(energy, (gexp, levels_o), retain_graph=True)
+dfnorm_dparam = torch.autograd.grad(torch.norm(force), (gexp, levels_o))
 
 # Numerical gradient w.r.t. params
 dparam = 2e-6
-calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, **dd)
-for c in calc.interactions.components:
-    if isinstance(c, dxtb._src.components.interactions.coulomb.secondorder.ES2):
-        break
-
-c.gexp += dparam / 2
+with torch.no_grad():
+    orig_gexp = gexp.item()
+    gexp.fill_(orig_gexp + dparam / 2)
 energy1, force1 = get_energy_force(calc)
-calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, **dd)
-for c in calc.interactions.components:
-    if isinstance(c, dxtb._src.components.interactions.coulomb.secondorder.ES2):
-        break
-
-c.gexp -= dparam / 2
+with torch.no_grad():
+    gexp.fill_(orig_gexp - dparam / 2)
 energy2, force2 = get_energy_force(calc)
+with torch.no_grad():
+    gexp.fill_(orig_gexp)
 
 print(
     f"dE / dgexp = {de_dparam[0].item()} (AD) {(energy1-energy2)/dparam} (Numerical)"
@@ -71,16 +60,19 @@ print(
     f"d|F| / dgexp = {dfnorm_dparam[0].item()} (AD) {(torch.norm(force1)-torch.norm(force2)).item()/dparam} (Numerical)"
 )
 
-calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, **dd)
-calc.integrals.hcore.selfenergy[0] += dparam / 2
+with torch.no_grad():
+    orig_level = levels_o[0].item()
+    levels_o[0] = orig_level + dparam / 2
 energy1, force1 = get_energy_force(calc)
-calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, **dd)
-calc.integrals.hcore.selfenergy[0] -= dparam / 2
+with torch.no_grad():
+    levels_o[0] = orig_level - dparam / 2
 energy2, force2 = get_energy_force(calc)
+with torch.no_grad():
+    levels_o[0] = orig_level
 
 print(
-    f"dE / dselfenergy[0] = {de_dparam[1][0].item()} (AD) {(energy1-energy2)/dparam} (Numerical)"
+    f"dE / dlevels_O[0] = {de_dparam[1][0].item()} (AD) {(energy1-energy2)/dparam} (Numerical)"
 )
 print(
-    f"d|F| / dselfenergy[0] = {dfnorm_dparam[1][0].item()} (AD) {(torch.norm(force1)-torch.norm(force2)).item()/dparam} (Numerical)"
+    f"d|F| / dlevels_O[0] = {dfnorm_dparam[1][0].item()} (AD) {(torch.norm(force1)-torch.norm(force2)).item()/dparam} (Numerical)"
 )

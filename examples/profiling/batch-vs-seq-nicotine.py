@@ -39,7 +39,8 @@ if "molecules" not in [x.name for x in p.iterdir()]:
 f = p / "molecules" / "nicotine.xyz"
 
 
-numbers, positions = read(f, **dd)
+structure = read(f, **dd)
+numbers, positions = structure.numbers, structure.positions
 charge = read_chrg(f, **dd)
 
 # create batched input

@@ -172,9 +172,7 @@ rebuild the Calculator after reset if gradients to the original leaves matter.
 -------------------------------------------------
 
 ``Calculator.to`` converts the components, but not every internal object
-(e.g., the :class:`~dxtb.IndexHelper` stays on the original device). Legacy
-constructor-field defaults are also retained at their original device because
-they are compatibility call inputs rather than interaction components.
+(e.g., the :class:`~dxtb.IndexHelper` stays on the original device).
 (Changing floating-point precision via ``Calculator.type(dtype)`` is supported.)
 
 **Workaround:** create the calculator on the target device

@@ -28,7 +28,7 @@ import torch
 from tad_mctc import read, read_chrg
 
 import dxtb
-from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
+from dxtb.scf import SCFStrategy, SCFVariable, strategy_preset
 
 
 def main() -> int:
@@ -37,7 +37,8 @@ def main() -> int:
 
     # read molecule from file
     f = Path(__file__).parent / "coord"
-    numbers, positions = read(f, **dd)
+    structure = read(f, **dd)
+    numbers, positions = structure.numbers, structure.positions
     charge = read_chrg(f, **dd)
 
     stage = replace(

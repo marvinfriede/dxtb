@@ -418,9 +418,7 @@ class AutogradCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         if field is None:
-            raise RuntimeError(
-                "dipole requires field= or a Calculator field default."
-            )
+            raise RuntimeError("dipole requires field=.")
         if not use_functorch and not field.requires_grad:
             raise RuntimeError(
                 "field tensor needs requires_grad=True for dipole."
@@ -478,8 +476,8 @@ class AutogradCalculator(EnergyCalculator):
 
             \Theta_{ij} = -3 \, \dfrac{\partial E}{\partial G_{ij}}
 
-        where :math:`G` is the electric field gradient of the
-        :class:`~dxtb.components.field.ElectricFieldGrad` interaction. The
+        where :math:`G` is the electric field gradient passed via
+        ``field_grad=``. The
         result is packed in the order ``xx, yx, yy, zx, zy, zz``.
 
         .. note::
@@ -511,8 +509,7 @@ class AutogradCalculator(EnergyCalculator):
         )
         if field_grad is None:
             raise RuntimeError(
-                "An electric field gradient is required; pass field_grad= or "
-                "provide a Calculator field-gradient default."
+                "An electric field gradient is required; pass field_grad=."
             )
         if not use_functorch and not field_grad.requires_grad:
             raise RuntimeError(
@@ -718,9 +715,7 @@ class AutogradCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         if field is None:
-            raise RuntimeError(
-                "polarizability requires field= or a Calculator field default."
-            )
+            raise RuntimeError("polarizability requires field=.")
         if not use_functorch and not field.requires_grad:
             raise RuntimeError(
                 "field tensor needs requires_grad=True for polarizability."
@@ -1007,10 +1002,7 @@ class AutogradCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         if field is None:
-            raise RuntimeError(
-                "hyperpolarizability requires field= or a Calculator field "
-                "default."
-            )
+            raise RuntimeError("hyperpolarizability requires field=.")
         if not use_functorch and not field.requires_grad:
             raise RuntimeError(
                 "field tensor needs requires_grad=True for hyperpolarizability."

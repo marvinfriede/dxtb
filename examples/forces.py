@@ -30,7 +30,8 @@ from dxtb.typing import DD
 dd: DD = {"device": torch.device("cpu"), "dtype": torch.double}
 
 f = Path(__file__).parent / "molecules" / "vancoh2.coord"
-numbers, positions = read(f, ftype="tm", **dd)
+structure = read(f, ftype="tm", **dd)
+numbers, positions = structure.numbers, structure.positions
 charge = read_chrg(f, **dd)
 
 opts = {"verbosity": 3}

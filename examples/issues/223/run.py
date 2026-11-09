@@ -26,24 +26,33 @@ from tad_mctc import read
 from tad_mctc.batch import pack
 
 import dxtb
-from dxtb.scf import SCFVariable, SCFStrategy, strategy_preset
+from dxtb.scf import (
+    AndersonConverger,
+    SCFStrategy,
+    SCFVariable,
+    strategy_preset,
+)
 
 torch.set_printoptions(precision=10)
 
 dd = {"dtype": torch.double, "device": torch.device("cpu")}
 
+base_stage = strategy_preset("anderson").stages[0]
+assert isinstance(base_stage.converger, AndersonConverger)
 opts = {
     "verbosity": 0,
     "differentiation": "unrolled",
     "strategy": SCFStrategy(
         (
             replace(
-                strategy_preset("anderson").stages[0],
+                base_stage,
                 variable=SCFVariable.CHARGE,
+                converger=AndersonConverger(
+                    replace(base_stage.converger.settings, damp=0.1)
+                ),
             ),
         )
     ),
-    "damp": 0.1,
 }
 
 
@@ -54,8 +63,10 @@ charge = torch.tensor([0.0, 0.0], **dd)
 # small systems
 # --------------------------------------------------------------
 
-num1, pos1 = read("coord1_small.xyz", **dd)
-num2, pos2 = read("coord2_small.xyz", **dd)
+s1 = read("coord1_small.xyz", **dd)
+s2 = read("coord2_small.xyz", **dd)
+num1, pos1 = s1.numbers, s1.positions
+num2, pos2 = s2.numbers, s2.positions
 
 # RUN 1
 
@@ -83,8 +94,10 @@ print(f"Calculated 2 small: {energy}")
 # large systems
 # ------------------------------------------------------------
 
-num3, pos3 = read("coord1.xyz", **dd)
-num4, pos4 = read("coord2.xyz", **dd)
+s3 = read("coord1.xyz", **dd)
+s4 = read("coord2.xyz", **dd)
+num3, pos3 = s3.numbers, s3.positions
+num4, pos4 = s4.numbers, s4.positions
 
 # RUN 1
 

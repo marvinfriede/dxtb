@@ -25,24 +25,14 @@ For development, additionally install the development tools in your environment,
 
     pip install -e .[dev]
 
-The refactor development stack uses ``tad-mctc==0.11.3``,
-``tad-multicharge==0.8.0``, and (when testing libcint) ``tad-libcint==0.4.0``.
-Install the official D3/D4 wheels after dxtb because their currently published
-metadata pins older, incompatible utility packages. The local dxtb compatibility
-shim must load before importing either dispersion package.
+The development stack uses ``tad-mctc==0.11.3``, ``tad-multicharge==0.8.0``,
+and (when testing libcint) ``tad-libcint==0.4.0``. Unified DFT-D dispersion
+(``tad_dftd``) is bundled directly in the repository under ``src/tad_dftd/``.
 
 .. code-block:: shell
 
     python -m pip install -e ".[dev,libcint]"
-    python -m pip install --no-deps --index-url https://pypi.org/simple tad-dftd3==0.7.0 tad-dftd4==0.8.0
-    python -c "import dxtb; import tad_dftd3, tad_dftd4; print(dxtb.__version__)"
-
-This is a controlled development/test installation only. The published D3/D4
-metadata conflicts are expected in ``pip check``; no other dependency conflict
-is accepted. A resolver-clean public release remains blocked until compatible
-official dispersion releases are available. The documented command order is
-required: importing D3/D4 before dxtb bypasses the temporary compatibility
-shim.
+    python -c "import dxtb, tad_dftd; print(dxtb.__version__)"
 
 The pre-commit hooks are initialized by running the following command in the root of the repository.
 

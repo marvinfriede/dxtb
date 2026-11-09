@@ -29,8 +29,8 @@ matching tblite), which requires the quadrupole integral.
 
 The quadrupole moment is also available as the derivative of the energy with
 respect to an electric field gradient, via autograd (``calc.quadrupole``) and
-finite differences (``calc.quadrupole_numerical``). Both need the
-``ElectricFieldGrad`` interaction (with ``requires_grad=True`` for autograd).
+finite differences (``calc.quadrupole_numerical``). Both take an explicit
+``field_grad=`` tensor (with ``requires_grad=True`` for autograd).
 They agree with the analytical diagonal elements; the analytical off-diagonal
 elements follow tblite and count the point-charge and dipole contribution
 twice.

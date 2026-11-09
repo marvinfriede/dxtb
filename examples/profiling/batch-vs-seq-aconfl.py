@@ -31,7 +31,8 @@ dd: DD = {"device": torch.device("cpu"), "dtype": torch.double}
 
 # subset of ACONFL benchmark set (conformers, same number of atoms)
 f = Path(__file__).parent.parent / "molecules" / "aconf20.xyz"
-numbers, positions = read(f, **dd)
+structure = read(f, **dd)
+numbers, positions = structure.numbers, structure.positions
 
 # manually create the corresponding charge tensor
 nbatch = numbers.shape[0]

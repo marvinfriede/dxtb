@@ -49,7 +49,8 @@ print(f"Overlap integral of SiH4 has shape: {s.shape}\n\n")
 torch.set_printoptions(linewidth=200)
 
 path = Path(__file__).resolve().parent / "molecules" / "lih.xyz"
-numbers, positions = read(path)
+structure = read(path)
+numbers, positions = structure.numbers, structure.positions
 
 s = overlap(numbers, positions, GFN1_XTB)
 print(f"Overlap integral of LiH has shape: {s.shape}\n")

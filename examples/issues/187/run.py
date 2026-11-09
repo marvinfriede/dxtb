@@ -51,7 +51,6 @@ opts = {"verbosity": 0}
 
 def main() -> int:
     calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts, **dd)
-    assert calc.integrals.hcore is not None
 
     minpos = positions.detach().clone().requires_grad_(True)
     for iteration in range(200):

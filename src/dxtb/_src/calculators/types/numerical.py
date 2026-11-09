@@ -365,9 +365,7 @@ class NumericalCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         if field is None:
-            raise RuntimeError(
-                "dipole_numerical requires field= or a field default."
-            )
+            raise RuntimeError("dipole_numerical requires field=.")
 
         # (..., 3)
         deriv = torch.zeros((*self.numbers.shape[:-1], 3), **self.dd)
@@ -448,8 +446,7 @@ class NumericalCalculator(EnergyCalculator):
         )
         if field_grad is None:
             raise RuntimeError(
-                "An electric field gradient is required; pass field_grad= or "
-                "provide a Calculator field-gradient default."
+                "An electric field gradient is required; pass field_grad=."
             )
 
         # (..., 6)
@@ -621,9 +618,7 @@ class NumericalCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         if field is None:
-            raise RuntimeError(
-                "polarizability_numerical requires field= or a field default."
-            )
+            raise RuntimeError("polarizability_numerical requires field=.")
 
         # (..., 3, 3)
         deriv = torch.zeros(*(*self.numbers.shape[:-1], 3, 3), **self.dd)
@@ -810,7 +805,7 @@ class NumericalCalculator(EnergyCalculator):
         )
         if field is None:
             raise RuntimeError(
-                "hyperpolarizability_numerical requires field= or a field default."
+                "hyperpolarizability_numerical requires field=."
             )
 
         # (..., 3, 3, 3)
