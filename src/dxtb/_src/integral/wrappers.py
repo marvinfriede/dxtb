@@ -61,7 +61,7 @@ Example
 from __future__ import annotations
 
 import torch
-from tad_mctc.batch import deflate, pack
+from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
@@ -189,6 +189,9 @@ def hcore(
     # pylint: disable=import-outside-toplevel
     from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
+    _validate_inputs(numbers, positions, allow_batch=False)
+    numbers, positions = _extract_active_atoms(numbers, positions)
+
     dd = {"device": positions.device, "dtype": positions.dtype}
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
@@ -196,6 +199,63 @@ def hcore(
     setup = setup_h0(numbers, pm, ihelp, **dd)
     s = overlap(numbers, positions, pm, driver=driver)
     return build_hcore(setup, positions, s.to(**dd), charge)[0]
+
+
+def _validate_inputs(
+    numbers: Tensor, positions: Tensor, *, allow_batch: bool
+) -> None:
+    """Validate atomic numbers and Cartesian coordinates for integral wrappers."""
+    if not isinstance(numbers, Tensor) or not isinstance(positions, Tensor):
+        raise ValueError(
+            "numbers and positions must be torch.Tensor instances."
+        )
+    if (
+        numbers.is_floating_point()
+        or numbers.is_complex()
+        or numbers.dtype == torch.bool
+    ):
+        raise ValueError(
+            f"numbers must have an integer dtype, got {numbers.dtype}."
+        )
+    if not positions.is_floating_point():
+        raise ValueError(
+            f"positions must have a floating-point dtype, got {positions.dtype}."
+        )
+    allowed_ndims = (1, 2) if allow_batch else (1,)
+    if numbers.ndim not in allowed_ndims:
+        expected = "1D or 2D" if allow_batch else "1D"
+        raise ValueError(
+            f"Expected {expected} atomic numbers tensor, "
+            f"got shape {tuple(numbers.shape)}."
+        )
+    if (
+        positions.ndim != numbers.ndim + 1
+        or positions.shape[:-1] != numbers.shape
+        or positions.shape[-1] != 3
+    ):
+        raise ValueError(
+            "Expected positions of shape (*numbers.shape, 3) matching "
+            f"numbers shape {tuple(numbers.shape)}, "
+            f"got {tuple(positions.shape)}."
+        )
+    if numbers.numel() == 0:
+        raise ValueError("Atomic numbers tensor must not be empty.")
+    if bool((numbers < 0).any()):
+        raise ValueError("Atomic numbers must be non-negative.")
+    if not bool((numbers > 0).any(dim=-1).all()):
+        raise ValueError(
+            "Every structure must contain at least one positive atomic number."
+        )
+
+
+def _extract_active_atoms(
+    numbers: Tensor, positions: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Select active atoms (Z > 0) and their corresponding coordinates."""
+    mask = numbers > 0
+    if bool(mask.all()):
+        return numbers, positions
+    return numbers[mask], positions[mask]
 
 
 def _integral(
@@ -219,17 +279,22 @@ def _integral(
     if driver not in (labels.INTDRIVER_LIBCINT, labels.INTDRIVER_PYTORCH):
         raise ValueError(f"Unknown integral driver '{driver}'.")
 
+    _validate_inputs(numbers, positions, allow_batch=True)
+
     dd = {"device": positions.device, "dtype": positions.dtype}
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
 
     if numbers.ndim == 1:
-        return _single(kind, numbers, positions, pm, driver, normalize)
+        n_active, p_active = _extract_active_atoms(numbers, positions)
+        return _single(kind, n_active, p_active, pm, driver, normalize)
 
     matrices = []
-    for n, p in zip(numbers, positions):
-        n = deflate(n)
+    for batch_idx in range(numbers.shape[0]):
+        n_active, p_active = _extract_active_atoms(
+            numbers[batch_idx], positions[batch_idx]
+        )
         matrices.append(
-            _single(kind, n, p[: n.shape[-1]], pm, driver, normalize)
+            _single(kind, n_active, p_active, pm, driver, normalize)
         )
     return pack(matrices)
 
