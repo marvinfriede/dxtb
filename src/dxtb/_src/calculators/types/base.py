@@ -239,11 +239,17 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     numbers: Tensor
     """Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``)."""
 
-    classicals: ClassicalList
-    """Classical contributions."""
+    system: System | None
+    """
+    System of a single Structure. ``None`` for a batched Calculator, which
+    sets up one System per distinct Lane composition in every call.
+    """
 
-    interactions: InteractionList
-    """Interactions to minimize in self-consistent iterations."""
+    classicals: ClassicalList | None
+    """Classical contributions of `system` (``None`` if batched)."""
+
+    interactions: InteractionList | None
+    """Interactions of `system` (``None`` if batched)."""
 
     ihelp: IndexHelper
     """Helper class for indexing."""
@@ -405,44 +411,41 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 interaction=interaction,
                 auto_int_level=auto_int_level,
             )
-            self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
+            if numbers.ndim == 1:
+                self.system = self.model.setup(
+                    numbers, batch_mode=batch_mode, dd=dd
+                )
+                self.opts = self.system.config
+                self.ihelp = self.system.ihelp
+                self.classicals = self.system.classicals
+                self.interactions = self.system.interactions
+            else:
+                # A batched Calculator sets up one System per distinct Lane
+                # composition in every call. Setting them up once here
+                # validates the Components; the padded IndexHelper reduces
+                # the packed Results (charges, bond orders).
+                if batch_mode is None or batch_mode == 0:
+                    batch_mode = 1
+                self.system = None
+                self.classicals = None
+                self.interactions = None
+                self.opts = self.model.resolve_config()
+                self.ihelp = IndexHelper.from_numbers(
+                    numbers, self.model.par, batch_mode
+                )
+                from dxtb._src.calculators.packed_result import (
+                    build_calculator_lane_systems,
+                )
 
-            self.opts = self.system.config
-            self.ihelp = self.system.ihelp
-            self.classicals = self.system.classicals
-            self.interactions = self.system.interactions
+                build_calculator_lane_systems(self)
 
         self._ncalcs = 0
         timer.stop("Calculator")
 
     def _prepare_eval_system(self) -> System:
         """Build a call-local System setup for 1D single-System evaluation."""
-        from dxtb._src.calculators.packed_result import (
-            _sync_lane_system_labels,
-        )
-
-        source_classicals = tuple(self.classicals.components)
-        source_interactions = tuple(self.interactions.components)
-        caller_owned_ids = {
-            id(c)
-            for c in (
-                *self.model.classical,
-                *self.model.interaction,
-                *source_classicals,
-                *source_interactions,
-            )
-        }
-        current_labels = [c.label for c in source_classicals]
-        has_label_collision = len(set(current_labels)) < len(current_labels)
-
-        eval_classicals = []
-        for idx, comp in enumerate(self.model.classical):
-            # Caller-owned Components are never mutated in place.
-            c_copy = copy.copy(comp)
-            if has_label_collision:
-                c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
-            eval_classicals.append(c_copy)
-
+        # Caller-owned Components are never mutated in place.
+        eval_classicals = [copy.copy(comp) for comp in self.model.classical]
         eval_interactions = [copy.copy(inter) for inter in self.model.interaction]
         setup_model = Model(
             par=self.model.par,
@@ -461,12 +464,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             batch_mode=self.ihelp.batch_mode,
             dd=setup_dd,
         )
-        eval_sys = _sync_lane_system_labels(
-            eval_sys,
-            source_classicals,
-            source_interactions,
-            caller_owned_ids,
-        )
         if self.dtype != self.model.par.dtype:
             eval_sys = _convert_eval_system_dtype(eval_sys, self.dtype)
         return eval_sys
@@ -483,6 +480,10 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             ES2 and ES3 setup-derived parameters are not reset. See
             :ref:`help_known_issues`.
         """
+        if self.classicals is None or self.interactions is None:
+            for component in (*self.model.classical, *self.model.interaction):
+                component.reset()
+            return
         self.classicals.reset_all()
         self.interactions.reset_all()
 
@@ -654,6 +655,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"Only '{self.allowed_dtypes}' allowed (received '{dtype}')."
             )
 
+        if self.system is None:
+            # batched: the Lane Systems are set up and converted per call
+            self.override_dtype(dtype)
+            return self
+
         self.classicals = self.classicals.type(dtype)
         self.interactions = self.interactions.type(dtype)
 
@@ -692,8 +698,18 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         device = self.device
         dtype = self.dtype
         num_calculations = self._ncalcs
-        num_classicals = len(self.classicals)
-        num_interactions = len(self.interactions)
+        classicals = (
+            self.classicals
+            if self.classicals is not None
+            else ClassicalList(*self.model.classical)
+        )
+        interactions = (
+            self.interactions
+            if self.interactions is not None
+            else InteractionList(*self.model.interaction)
+        )
+        num_classicals = len(classicals)
+        num_interactions = len(interactions)
         int_labels = []
         if self.opts.ints.level >= labels.INTLEVEL_OVERLAP:
             int_labels.extend(["hcore", "overlap"])
@@ -709,8 +725,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             f"  Device: {device}\n"
             f"  Data Type: {dtype}\n"
             f"  Calculations Performed: {num_calculations}\n"
-            f"  Classical Contributions: {num_classicals} {self.classicals.labels}\n"
-            f"  Interactions: {num_interactions} {self.interactions.labels}\n"
+            f"  Classical Contributions: {num_classicals} {classicals.labels}\n"
+            f"  Interactions: {num_interactions} {interactions.labels}\n"
             f"  Integrals: {num_integrals} {int_labels}\n"
             f")"
         )

@@ -1129,73 +1129,6 @@ def evaluate_packed_systems(
     return packed_result
 
 
-def _sync_lane_system_labels(
-    lane_sys: System,
-    source_classicals: Sequence[Any],
-    source_interactions: Sequence[Any],
-    caller_owned_ids: set[int],
-) -> System:
-    """Restore source classical/interaction labels on a lane System without mutating caller components."""
-    classical_changed = False
-    interaction_changed = False
-    if len(lane_sys.classicals.components) == len(source_classicals):
-        new_classicals = list(lane_sys.classicals.components)
-        for idx, (lane_comp, orig_comp) in enumerate(
-            zip(new_classicals, source_classicals)
-        ):
-            if lane_comp.label != orig_comp.label:
-                if id(lane_comp) in caller_owned_ids:
-                    lane_comp = copy.copy(lane_comp)
-                    new_classicals[idx] = lane_comp
-                lane_comp.label = orig_comp.label
-                classical_changed = True
-        if classical_changed:
-            lane_sys.classicals.components = new_classicals
-
-    if len(lane_sys.interactions.components) == len(source_interactions):
-        new_interactions = list(lane_sys.interactions.components)
-        for idx, (lane_inter, orig_inter) in enumerate(
-            zip(new_interactions, source_interactions)
-        ):
-            if lane_inter.label != orig_inter.label:
-                if id(lane_inter) in caller_owned_ids:
-                    lane_inter = copy.copy(lane_inter)
-                    new_interactions[idx] = lane_inter
-                lane_inter.label = orig_inter.label
-                interaction_changed = True
-        if interaction_changed:
-            lane_sys.interactions.components = new_interactions
-
-    if not (classical_changed or interaction_changed):
-        return lane_sys
-
-    exact_core = lane_sys.exact_core
-    if exact_core is not None:
-        new_c_terms = tuple(
-            replace(
-                term,
-                label=lane_sys.classicals.components[term.position].label,
-            )
-            for term in exact_core.classical_terms
-        )
-        new_i_terms = tuple(
-            replace(
-                term,
-                label=lane_sys.interactions.components[term.position].label,
-            )
-            for term in exact_core.interaction_terms
-        )
-        exact_core = exact_core.replace(
-            classical_terms=new_c_terms,
-            interaction_terms=new_i_terms,
-        )
-
-    return replace(
-        lane_sys,
-        exact_core=exact_core,
-    )
-
-
 def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     """Construct deduplicated per-lane single-System instances from a Calculator.
 
@@ -1212,22 +1145,8 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     from dxtb._src.calculators.types.base import _convert_eval_system_dtype
 
     batch_size = int(calc.numbers.shape[0])
-    source_classicals = tuple(calc.classicals.components)
-    source_interactions = tuple(calc.interactions.components)
     model_classicals = tuple(calc.model.classical)
     model_interactions = tuple(calc.model.interaction)
-    caller_owned_ids = {
-        id(c)
-        for c in (
-            *model_classicals,
-            *model_interactions,
-            *source_classicals,
-            *source_interactions,
-        )
-    }
-
-    current_labels = [c.label for c in source_classicals]
-    has_label_collision = len(set(current_labels)) < len(current_labels)
 
     # Atomic numbers are structural metadata: resolve them on the host with
     # one transfer per tensor instead of one scalar transfer per atom. The
@@ -1256,8 +1175,8 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
             calc.opts,
             calc.dtype,
             calc.device,
-            tuple((id(c), c.label) for c in source_classicals),
-            tuple((id(c), c.label) for c in source_interactions),
+            tuple((id(c), c.label) for c in model_classicals),
+            tuple((id(c), c.label) for c in model_interactions),
         )
         lane_sys = lane_memo.get(dedup_key)
         if lane_sys is None:
@@ -1268,7 +1187,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
             )
             row_nums = calc.numbers[idx].index_select(0, slots)
             lane_classical_list = []
-            for c_idx, comp in enumerate(model_classicals):
+            for comp in model_classicals:
                 has_2d_nums = (
                     getattr(comp, "numbers", None) is not None
                     and isinstance(comp.numbers, Tensor)
@@ -1280,8 +1199,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     c_copy.numbers = comp.numbers[idx].index_select(
                         0, slots.to(comp.numbers.device)
                     )
-                if has_label_collision:
-                    c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
                 lane_classical_list.append(c_copy)
 
             lane_interaction_list = [
@@ -1301,12 +1218,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 else calc.dd
             )
             lane_sys = lane_model.setup(row_nums, batch_mode=0, dd=setup_dd)
-            lane_sys = _sync_lane_system_labels(
-                lane_sys,
-                source_classicals,
-                source_interactions,
-                caller_owned_ids,
-            )
             if calc.dtype != calc.model.par.dtype:
                 lane_sys = _convert_eval_system_dtype(lane_sys, calc.dtype)
             lane_memo[dedup_key] = lane_sys
