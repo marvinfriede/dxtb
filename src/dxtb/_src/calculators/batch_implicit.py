@@ -411,7 +411,7 @@ class PreparedConvergedRootBatch:
     parameter_snapshots: tuple[tuple[_TensorValueSnapshot, ...], ...]
     root_snapshots: tuple[_TensorValueSnapshot, ...]
     response_root_snapshots: tuple[_TensorValueSnapshot | None, ...]
-    input_tensor_versions: tuple[dict[str, int], ...]
+    input_tensor_versions: tuple[dict[str, int | None], ...]
     valid_lane_mask: Tensor
     all_roots_valid: bool
 
@@ -440,7 +440,10 @@ def _tensor_version(value: Tensor | None) -> int | None:
     """Return the storage version counter of a primal tensor."""
     if value is None:
         return None
-    return int(_unwrap_primal_tensor(value)._version)
+    primal = _unwrap_primal_tensor(value)
+    if primal.is_inference():
+        return None
+    return int(primal._version)
 
 
 def _tensor_raw_bytes(value: Tensor) -> bytes:
@@ -1347,6 +1350,33 @@ def _make_representation_projections(
 
 
 @torch._dynamo.disable
+def _validate_prepared_system_owner(prepared: PreparedConvergedRootBatch) -> None:
+    """Reject configuration or atomic-number replacement before structural setup validation."""
+    system = prepared.system
+    if not isinstance(system, System):
+        return
+    if (
+        id(system.config) != prepared.config_identity
+        or repr(system.config) != prepared.config_repr
+    ):
+        raise RuntimeError(
+            "Prepared physical roots cannot be reused after the System "
+            "configuration has changed; prepare roots again."
+        )
+    if (
+        (
+            prepared.numbers_version is not None
+            and _tensor_version(system.numbers) != prepared.numbers_version
+        )
+        or not _matches_snapshot(system.numbers, prepared.numbers_snapshot)
+    ):
+        raise RuntimeError(
+            "Prepared physical roots cannot be reused after atomic numbers "
+            "have changed; prepare roots again."
+        )
+
+
+@torch._dynamo.disable
 def _validate_prepared_primal(
     prepared: PreparedConvergedRootBatch,
     positions: Tensor,
@@ -1377,32 +1407,16 @@ def _validate_prepared_primal(
                 return False
         return _matches_snapshot(actual, expected)
 
-    system = prepared.system
-    if isinstance(system, System):
-        sys_cfg_mismatch = (
-            id(system.config) != prepared.config_identity
-            or repr(system.config) != prepared.config_repr
-        )
-        sys_num_mismatch = not same(
-            system.numbers,
-            prepared.numbers_snapshot,
-            prepared.numbers_version,
-            system.numbers,
-        )
-    else:
-        sys_cfg_mismatch = False
-        sys_num_mismatch = False
-
+    _validate_prepared_system_owner(prepared)
     if (
-        sys_cfg_mismatch
-        or id(config) != prepared.config_identity
+        id(config) != prepared.config_identity
         or repr(config) != prepared.config_repr
     ):
         raise RuntimeError(
             "Prepared physical roots cannot be reused after the System "
             "configuration has changed; prepare roots again."
         )
-    if sys_num_mismatch or not same(
+    if not same(
         numbers,
         prepared.numbers_snapshot,
         prepared.numbers_version,
@@ -1477,7 +1491,7 @@ def _validate_prepared_primal(
         prepared.lanes, prepared.input_tensor_versions
     ):
         actual_versions = {
-            path: int(_unwrap_primal_tensor(value)._version)
+            path: _tensor_version(value)
             for path, value in tensor_leaves(lane.inputs)
         }
         if set(actual_versions) != set(expected_versions):
@@ -2215,7 +2229,7 @@ def prepare_converged_root_batch(
         ),
         input_tensor_versions=tuple(
             {
-                path: int(_unwrap_primal_tensor(value)._version)
+                path: _tensor_version(value)
                 for path, value in tensor_leaves(lane.inputs)
             }
             for lane in lanes
@@ -2461,6 +2475,7 @@ def _refresh_prepared_batch_inputs(
     strict_mode: bool,
 ) -> tuple[ConvergedRootLaneRecord, ...]:
     """Validate prepared primal state and rebuild call-local differentiable lane inputs."""
+    _validate_prepared_system_owner(prepared)
     system = prepared.system
     first_lane = prepared.lanes[0]
     val_field = first_lane.field if field is _UNSET else field

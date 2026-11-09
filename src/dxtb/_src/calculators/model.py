@@ -458,7 +458,7 @@ class _SetupIndexToken:
     backend_index: IndexHelper | None
     es2_shells_to_atom: Tensor | None
     tensor_states: tuple[
-        tuple[Tensor, int, torch.Size, torch.dtype, torch.device], ...
+        tuple[Tensor, int | None, torch.Size, torch.dtype, torch.device], ...
     ]
     unique_angular_snapshot: Tensor
     ushells_per_unique_snapshot: Tensor
@@ -509,7 +509,14 @@ def _build_setup_index_token(
         backend_index=backend_index,
         es2_shells_to_atom=es2_shells,
         tensor_states=tuple(
-            (t, t._version, t.shape, t.dtype, t.device) for t in tracked
+            (
+                t,
+                None if t.is_inference() else t._version,
+                t.shape,
+                t.dtype,
+                t.device,
+            )
+            for t in tracked
         ),
         unique_angular_snapshot=ihelp.unique_angular.detach().clone(),
         ushells_per_unique_snapshot=ihelp.ushells_per_unique.detach().clone(),
@@ -1140,7 +1147,9 @@ class System:
             and backend_index is token.backend_index
             and es2_shells is token.es2_shells_to_atom
             and all(
-                t._version == ver
+                ver is not None
+                and not t.is_inference()
+                and t._version == ver
                 and t.shape == shape
                 and t.dtype == dtype
                 and t.device == dev
