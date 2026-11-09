@@ -22,17 +22,17 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.batch import pack
+from tad_mctc.batch import deflate, pack
 from torch.autograd import gradcheck, gradgradcheck
 from torch.nn import Parameter
 
-from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule, labels
+from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.factory import new_driver
 from dxtb._src.integral.driver.libcint.driver import (
-    IntDriverLibcint,
     LibcintCallData,
+    LibcintIntegralSetup,
+    setup_libcint,
 )
 from dxtb._src.typing import DD, Callable, Tensor
 
@@ -153,10 +153,19 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
         assert isinstance(p, Parameter)
         p.data = slater
 
-        drv = new_driver(labels.INTDRIVER_LIBCINT, numbers, par)
-        assert isinstance(drv, IntDriverLibcint)
+        basis_setups = []
+        for nums in numbers:
+            nums = deflate(nums)
+            ihelp = IndexHelper.from_numbers(nums, par)
+            basis_setups.append(Basis(nums, par, ihelp, **dd).setup_data())
+        setup = LibcintIntegralSetup(
+            numbers=numbers,
+            ihelp=IndexHelper.from_numbers(numbers, par),
+            basis_setups=tuple(basis_setups),
+            force_cpu=False,
+        )
 
-        call_data = drv.setup(positions)
+        call_data = setup_libcint(setup, positions)
         return overlap(call_data)
 
     return func, slater

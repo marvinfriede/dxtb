@@ -23,60 +23,14 @@ Quadrupole integral implementation based on `libcint`.
 
 from __future__ import annotations
 
-from dxtb._src.integral.base import IntDriver
-from dxtb._src.typing import Any, Tensor
+from dxtb._src.typing import Tensor
 
-from ...types import QuadrupoleIntegral
 from .driver import LibcintCallData
-from .multipole import MultipoleLibcint, build_multipole_libcint
+from .multipole import build_multipole_libcint
 
-__all__ = ["QuadrupoleLibcint", "build_quadrupole_libcint"]
+__all__ = ["build_quadrupole_libcint"]
 
 
 def build_quadrupole_libcint(call_data: LibcintCallData) -> Tensor:
     """Build native packed ket-centered quadrupoles from call-local inputs."""
     return build_multipole_libcint(call_data, "jj")
-
-
-class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
-    """
-    Quadrupole integral from atomic orbitals.
-    """
-
-    def build(
-        self,
-        call_data: LibcintCallData,
-        *,
-        intstring: str = "r0r0",
-        packed: bool = False,
-    ) -> Tensor:
-        """
-        Calculation of quadrupole integral using libcint.
-
-        Parameters
-        ----------
-        call_data : LibcintCallData
-            Call-local wrappers for the current geometry.
-
-        Returns
-        -------
-        Tensor
-            Quadrupole integral.
-        """
-        return self.multipole(call_data, intstring, packed=packed)
-
-    def get_gradient(self, driver: IntDriver, **kwargs: Any) -> Tensor:
-        """
-        Calculation of quadrupole gradient using libcint.
-
-        Parameters
-        ----------
-        driver : IntDriverLibcint
-            The integral driver for the calculation.
-
-        Returns
-        -------
-        Tensor
-            Quadrupole gradient.
-        """
-        raise NotImplementedError("Gradient calculation not implemented.")

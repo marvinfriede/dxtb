@@ -18,8 +18,7 @@
 Driver: Libcint
 ===============
 
-Base class for a `libcint`-based integral implementation
-Calculation and modification of multipole integrals.
+Setup data and call-local inputs for `libcint`-based integrals.
 """
 
 from __future__ import annotations
@@ -28,33 +27,24 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-from tad_mctc.batch import deflate
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis, BasisSetup
+from dxtb._src.basis.bas import BasisSetup
 from dxtb._src.basis.ortho import orthogonalize
 from dxtb._src.basis.slater import slater_to_gauss
-from dxtb._src.param import ParamModule
 from dxtb._src.typing import Any, Literal, Tensor
-
-from ...base import IntDriver
-from .base import LibcintImplementation
 
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
 __all__ = [
-    "BaseIntDriverLibcint",
-    "IntDriverLibcint",
     "LibcintCallData",
     "LibcintBasisNode",
     "LibcintIntegralSetupNode",
     "LibcintIntegralSetup",
-    "LibcintDriverSetup",
     "core_libcint_setup",
     "setup_libcint",
-    "setup_libcint_driver",
 ]
 
 
@@ -265,16 +255,6 @@ def core_libcint_setup(
 
 
 @dataclass(frozen=True, eq=False)
-class LibcintDriverSetup:
-    """Calculator-local inputs used by the transitional libcint driver."""
-
-    numbers: Tensor
-    par: ParamModule
-    ihelp: IndexHelper
-    force_cpu: bool
-
-
-@dataclass(frozen=True, eq=False)
 class LibcintInput:
     """One call-local new-API basis/structure pair."""
 
@@ -347,97 +327,3 @@ def setup_libcint(
         inputs.append(LibcintInput(libcint_basis, structure))
 
     return LibcintCallData(inputs=tuple(inputs), ihelp=setup.ihelp)
-
-
-def setup_libcint_driver(
-    setup: LibcintDriverSetup,
-    positions: Tensor,
-    *,
-    mask: Tensor | None = None,
-) -> LibcintCallData:
-    """Rebuild Calculator-local libcint wrappers and basis values per call."""
-    from dxtb._src.exlibs import libcint
-
-    if setup.force_cpu and positions.device.type != "cpu":
-        positions = positions.to(device=torch.device("cpu"))
-
-    if setup.ihelp.batch_mode == 0:
-        # Build parameter-dependent CGTO values for this call. Keeping them
-        # on the persistent driver would retain an autograd graph and could
-        # become stale after parameter updates.
-        basis = Basis(
-            setup.numbers,
-            setup.par,
-            setup.ihelp,
-            device=positions.device,
-            dtype=positions.dtype,
-        )
-        libcint_basis, structure = basis.create_libcint(positions)
-        return LibcintCallData(
-            inputs=(LibcintInput(libcint_basis, structure),),
-            ihelp=setup.ihelp,
-        )
-
-    if setup.ihelp.batch_mode not in (1, 2):
-        raise ValueError(f"Unknown batch mode '{setup.ihelp.batch_mode}'.")
-
-    inputs = []
-    for batch_index, numbers in enumerate(setup.numbers):
-        if setup.ihelp.batch_mode == 1:
-            numbers = deflate(numbers)
-            if mask is not None:
-                position = torch.masked_select(
-                    positions[batch_index], mask[batch_index]
-                ).reshape((-1, 3))
-            else:
-                position = positions[batch_index, : numbers.shape[-1]]
-        else:
-            position = positions[batch_index]
-
-        ihelp = IndexHelper.from_numbers(numbers, setup.par)
-        basis = Basis(
-            numbers,
-            setup.par,
-            ihelp,
-            device=positions.device,
-            dtype=positions.dtype,
-        )
-        libcint_basis, structure = basis.create_libcint(position)
-        inputs.append(LibcintInput(libcint_basis, structure))
-
-    return LibcintCallData(inputs=tuple(inputs), ihelp=setup.ihelp)
-
-
-class BaseIntDriverLibcint(LibcintImplementation, IntDriver):
-    """
-    Implementation of `libcint`-based integral driver.
-    """
-
-    __slots__ = ["_integral_setup"]
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        force_cpu = kwargs.pop("force_cpu", False)
-        super().__init__(*args, **kwargs)
-        self._integral_setup = LibcintDriverSetup(
-            numbers=self.numbers,
-            par=self.par,
-            ihelp=self.ihelp,
-            force_cpu=force_cpu,
-        )
-
-    @property
-    def integral_setup(self) -> LibcintDriverSetup:
-        """Driver-local libcint setup data."""
-        return self._integral_setup
-
-    def setup(self, positions: Tensor, **kwargs: Any) -> LibcintCallData:
-        """Create call-local libcint wrappers for ``positions``."""
-        return setup_libcint_driver(
-            self.integral_setup, positions, mask=kwargs.get("mask")
-        )
-
-
-class IntDriverLibcint(BaseIntDriverLibcint):
-    """
-    Implementation of ``libcint``-based integral driver.
-    """

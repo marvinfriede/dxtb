@@ -24,15 +24,15 @@ import pytest
 import torch
 from tad_mctc.autograd import dgradcheck, dgradgradcheck
 from tad_mctc.batch import pack
+from tad_mctc.convert import symmetrize
 
-from dxtb import IndexHelper
-from dxtb._src.integral.driver.pytorch import IntDriverPytorch as IntDriver
-from dxtb._src.integral.driver.pytorch import OverlapPytorch as Overlap
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.typing import DD, Callable, Tensor
 
 from ..conftest import DEVICE, NONDET_TOL
 from ..utils import get_param_module
 from .samples import samples
+from .utils import calc_overlap, overlap_setup
 
 slist = ["LiH", "H2O"]
 slist_large = ["H2", "HHe", "Li2", "S2", "SiH4"]
@@ -51,16 +51,13 @@ def gradchecker(
     positions = sample["positions"].to(**dd)
 
     par = get_param_module("gfn1", **dd)
-    ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriver(numbers, par, ihelp, **dd)
-    overlap = Overlap(uplo="n", **dd)
+    setup = overlap_setup(numbers, par, dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        driver.setup(p)
-        return overlap.build(driver)
+        return symmetrize(build_overlap(setup, p), force=False)
 
     return func, pos
 
@@ -138,16 +135,12 @@ def gradchecker_batch(
     )
 
     par = get_param_module("gfn1", **dd)
-    ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriver(numbers, par, ihelp, **dd)
-    overlap = Overlap(uplo="n", **dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        driver.setup(p, mask=mask)
-        return overlap.build(driver)
+        return calc_overlap(numbers, p, par, dd, uplo="n", mask=mask)
 
     return func, pos
 

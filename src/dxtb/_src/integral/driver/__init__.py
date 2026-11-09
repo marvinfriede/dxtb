@@ -18,18 +18,10 @@
 Integrals: Drivers
 ==================
 
-Integral drivers are the main interface to the integral implementations. They
-provide a unified interface to the integral implementations, and are responsible
-for the calculation of the integrals.
-
-There are two main types of integral drivers: `PyTorch` and `Libcint`. Note that
-the `Libcint` drivers are only available if the
+Stateless integral builders. There are two backends: `PyTorch` and `libcint`.
+Note that the `libcint` builders are only available if the
 `tad-libcint <https://github.com/tad-mctc/tad-libcint>`__ library is installed.
-The `PyTorch` drivers are implemented in pure Python, but are currently only
-available for overlap integrals.
+
+Each backend gathers composition-dependent setup data once and builds the
+integral matrices from that setup and the current positions.
 """
-
-from .base import IntDriver
-
-# no specific driver imports here to allow lazy loading of drivers
-from .manager import DriverManager

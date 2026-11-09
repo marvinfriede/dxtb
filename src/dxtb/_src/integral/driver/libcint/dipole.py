@@ -25,53 +25,12 @@ from __future__ import annotations
 
 from dxtb._src.typing import Tensor
 
-from ...types import DipoleIntegral
 from .driver import LibcintCallData
-from .multipole import MultipoleLibcint, build_multipole_libcint
+from .multipole import build_multipole_libcint
 
-__all__ = ["DipoleLibcint", "build_dipole_libcint"]
+__all__ = ["build_dipole_libcint"]
 
 
 def build_dipole_libcint(call_data: LibcintCallData) -> Tensor:
     """Build native ket-centered dipoles from call-local inputs."""
     return build_multipole_libcint(call_data, "j")
-
-
-class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
-    """
-    Dipole integral from atomic orbitals.
-    """
-
-    def build(
-        self, call_data: LibcintCallData, *, intstring: str = "r0"
-    ) -> Tensor:
-        """
-        Calculation of dipole integral using libcint.
-
-        Parameters
-        ----------
-        call_data : LibcintCallData
-            Call-local wrappers for the current geometry.
-
-        Returns
-        -------
-        Tensor
-            Dipole integral.
-        """
-        return self.multipole(call_data, intstring)
-
-    def get_gradient(self, call_data: LibcintCallData) -> Tensor:
-        """
-        Calculation of dipole gradient using libcint.
-
-        Parameters
-        ----------
-        call_data : LibcintCallData
-            Call-local wrappers for the current geometry.
-
-        Returns
-        -------
-        Tensor
-            Dipole gradient.
-        """
-        raise NotImplementedError("Gradient calculation not implemented.")

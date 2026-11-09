@@ -443,30 +443,29 @@ def _alpb_positions() -> Target:
 def _integral(kind: str, algorithm: str = "os", method: str = "gfn2") -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb import labels
-        from dxtb._src.integral.driver.manager import DriverManager
-        from dxtb.integrals import factories
+        from dxtb._src.basis.bas import Basis
+        from dxtb._src.integral.driver.pytorch import (
+            build_dipole,
+            build_overlap,
+            build_quadrupole,
+            setup_integrals,
+        )
 
         numbers, positions = _lih()
         par = _par(method)
         ihelp = IndexHelper.from_numbers(numbers, par)
 
         def f(x: Tensor) -> Tensor:
-            mgr = DriverManager(
-                labels.INTDRIVER_PYTORCH, algorithm=algorithm, **DD
+            setup = setup_integrals(
+                Basis(numbers, par, ihelp, **DD), algorithm=algorithm
             )
-            mgr.create_driver(numbers, par, ihelp)
-            mgr.driver.setup(x)
             if kind == "overlap":
-                integral = factories.new_overlap(mgr.driver_type, **DD)
-            elif kind == "dipint":
-                integral = factories.new_dipint(mgr.driver_type, **DD)
-            elif kind == "quadint":
-                integral = factories.new_quadint(mgr.driver_type, **DD)
-            else:
-                raise KeyError(kind)
-            integral.build(mgr.driver)
-            return integral.matrix
+                return build_overlap(setup, x)
+            if kind == "dipint":
+                return build_dipole(setup, x)
+            if kind == "quadint":
+                return build_quadrupole(setup, x)
+            raise KeyError(kind)
 
         return f, _leaf(positions)
 
@@ -503,9 +502,11 @@ def _basis_exponent() -> Target:
 
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb import labels
-        from dxtb._src.integral.driver.manager import DriverManager
-        from dxtb.integrals import factories
+        from dxtb._src.basis.bas import Basis
+        from dxtb._src.integral.driver.pytorch import (
+            build_overlap,
+            setup_integrals,
+        )
 
         numbers, positions = _lih()
         par = _par("gfn1")
@@ -518,12 +519,8 @@ def _basis_exponent() -> Target:
             mod = p.get("element.Li.slater", unwrapped=False)
             del mod._parameters["param"]  # pylint: disable=protected-access
             mod.param = x
-            mgr = DriverManager(labels.INTDRIVER_PYTORCH, **DD)
-            mgr.create_driver(numbers, p, ihelp)
-            mgr.driver.setup(positions)
-            ovlp = factories.new_overlap(mgr.driver_type, **DD)
-            ovlp.build(mgr.driver)
-            return ovlp.matrix
+            setup = setup_integrals(Basis(numbers, p, ihelp, **DD))
+            return build_overlap(setup, positions)
 
         return f, _leaf(x0)
 

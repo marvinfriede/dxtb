@@ -26,12 +26,12 @@ from tad_mctc.autograd import dgradcheck, dgradgradcheck
 from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
-from dxtb._src.integral.driver.pytorch import IntDriverPytorch as IntDriver
-from dxtb._src.integral.driver.pytorch import OverlapPytorch as Overlap
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.typing import DD, Callable, Tensor
 from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
 
 from ..conftest import DEVICE
+from ..test_overlap.utils import calc_overlap, overlap_setup
 from ..utils import get_param_module
 from .samples import samples
 
@@ -53,16 +53,13 @@ def gradchecker(
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     h0 = GFN1Hamiltonian(numbers, par, ihelp, **dd)
-    overlap = Overlap(**dd)
-
-    driver = IntDriver(numbers, par, ihelp, **dd)
+    setup = overlap_setup(numbers, par, dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        driver.setup(p)
-        s = overlap.build(driver)
+        s = build_overlap(setup, p)
         return h0.build(p, s)
 
     return func, pos
@@ -142,16 +139,12 @@ def gradchecker_batch(
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     h0 = GFN1Hamiltonian(numbers, par, ihelp, **dd)
-    overlap = Overlap(**dd)
-
-    driver = IntDriver(numbers, par, ihelp, **dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        driver.setup(p, mask=mask)
-        s = overlap.build(driver)
+        s = calc_overlap(numbers, p, par, dd, mask=mask)
         return h0.build(p, s)
 
     return func, pos

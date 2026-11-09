@@ -29,14 +29,13 @@ from tad_mctc.batch import pack
 from dxtb import IndexHelper, labels
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.integral.factory import new_hcore
 from dxtb._src.integral.wrappers import overlap
 from dxtb._src.param import GFN0_XTB
 from dxtb._src.scf.iterator import solve
 from dxtb._src.scf.nonscf_conversions import diagonalize
 from dxtb._src.scf.result import SCFResult
 from dxtb._src.typing import Tensor
-from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
+from dxtb._src.xtb.h0 import H0Setup, build_hcore, setup_h0
 from dxtb.config import ConfigSCF
 
 from ..utils import scf_strategy
@@ -52,7 +51,7 @@ def build_problem(
     Tensor,
     Tensor,
     IndexHelper,
-    GFN0Hamiltonian,
+    H0Setup,
     IntegralMatrices,
 ]:
     """Build the neutral GFN0 H0/S problem from the shared SCF samples."""
@@ -62,25 +61,24 @@ def build_problem(
     charge = torch.tensor(0.0, dtype=torch.float64)
 
     ihelp = IndexHelper.from_numbers(numbers, GFN0_XTB)
-    hcore = new_hcore(
+    h0_setup = setup_h0(
         numbers,
         get_param_module("gfn0", dtype=torch.float64),
         ihelp,
         dtype=torch.float64,
     )
-    assert isinstance(hcore, GFN0Hamiltonian)
     ovlp = overlap(
         numbers,
         positions,
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
-    h0 = hcore.build(positions, ovlp, charge=charge)
+    h0 = build_hcore(h0_setup, positions, ovlp, charge=charge)[0]
     integrals = IntegralMatrices(
         hcore=h0,
         overlap=ovlp,
     )
-    return sample, numbers, positions, ihelp, hcore, integrals
+    return sample, numbers, positions, ihelp, h0_setup, integrals
 
 
 def run_problem(
@@ -90,7 +88,7 @@ def run_problem(
     interactions: InteractionList | None = None,
 ) -> tuple[Record, SCFResult]:
     """Run the non-self-consistent solver for one neutral molecule."""
-    sample, numbers, positions, ihelp, hcore, integrals = build_problem(name)
+    sample, numbers, positions, ihelp, h0_setup, integrals = build_problem(name)
     if config is None:
         config = ConfigSCF(method=labels.GFN0_XTB)
     if interactions is None:
@@ -106,7 +104,7 @@ def run_problem(
         ihelp,
         config,
         integrals,
-        hcore.refocc,
+        h0_setup.refocc,
     )
     return sample, result
 
@@ -225,7 +223,7 @@ def test_converger_and_maxiter_are_inert(maxiter: int, converger: str) -> None:
 
 def test_gfn0_generalized_eigensolve_has_position_gradient() -> None:
     """The tensor-only generalized eigensolve retains geometry gradients."""
-    _, numbers, positions, ihelp, hcore, _ = build_problem("H2O")
+    _, numbers, positions, ihelp, h0_setup, _ = build_problem("H2O")
     positions = positions.detach().clone().requires_grad_()
     overlap_matrix = overlap(
         numbers,
@@ -233,11 +231,12 @@ def test_gfn0_generalized_eigensolve_has_position_gradient() -> None:
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
-    hamiltonian = hcore.build(
+    hamiltonian = build_hcore(
+        h0_setup,
         positions,
         overlap_matrix,
         charge=torch.tensor(0.0, dtype=torch.float64),
-    )
+    )[0]
     integrals = IntegralMatrices(
         hcore=hamiltonian,
         overlap=overlap_matrix,
@@ -253,7 +252,7 @@ def test_gfn0_generalized_eigensolve_has_position_gradient() -> None:
         ihelp,
         ConfigSCF(method=labels.GFN0_XTB),
         integrals,
-        hcore.refocc,
+        h0_setup.refocc,
     )
     gradient = torch.autograd.grad(result["energy"].sum(), positions)[0]
     assert torch.isfinite(gradient).all()
@@ -283,20 +282,19 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
     charges = torch.zeros((len(names), 1), dtype=torch.float64)
 
     ihelp = IndexHelper.from_numbers(numbers, GFN0_XTB)
-    hcore = new_hcore(
+    h0_setup = setup_h0(
         numbers,
         get_param_module("gfn0", dtype=torch.float64),
         ihelp,
         dtype=torch.float64,
     )
-    assert isinstance(hcore, GFN0Hamiltonian)
     ovlp = overlap(
         numbers,
         positions,
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
-    h0 = hcore.build(positions, ovlp, charge=charges)
+    h0 = build_hcore(h0_setup, positions, ovlp, charge=charges)[0]
     integrals = IntegralMatrices(
         hcore=h0,
         overlap=ovlp,
@@ -314,7 +312,7 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
             method=labels.GFN0_XTB,
         ),
         integrals,
-        hcore.refocc,
+        h0_setup.refocc,
     )
 
     separate = [run_problem(name)[1] for name in names]
@@ -334,7 +332,7 @@ def test_gfn0_low_level_engine_overrides_are_rejected() -> None:
     """Verify GFN0 rejects low-level positional and keyword overrides."""
     from dxtb._src.scf.nonselfconsistent import solve_nonselfconsistent
 
-    _, numbers, positions, ihelp, hcore, integrals = build_problem("H2")
+    _, numbers, positions, ihelp, h0_setup, integrals = build_problem("H2")
     interactions = InteractionList()
     cache = interactions.get_cache(numbers, positions, ihelp)
     config = ConfigSCF(method=labels.GFN0_XTB)
@@ -356,7 +354,7 @@ def test_gfn0_low_level_engine_overrides_are_rejected() -> None:
                 ihelp,
                 config,
                 integrals,
-                hcore.refocc,
+                h0_setup.refocc,
                 **kwargs,
             )
         with pytest.raises(TypeError):
@@ -367,8 +365,8 @@ def test_gfn0_low_level_engine_overrides_are_rejected() -> None:
                 ihelp,
                 config,
                 integrals,
-                hcore.refocc,
-                hcore.refocc,
+                h0_setup.refocc,
+                h0_setup.refocc,
                 **kwargs,
             )
 
@@ -380,7 +378,7 @@ def test_gfn0_low_level_engine_overrides_are_rejected() -> None:
             ihelp,
             config,
             integrals,
-            hcore.refocc,
-            hcore.refocc,
+            h0_setup.refocc,
+            h0_setup.refocc,
             "extra_positional",
         )

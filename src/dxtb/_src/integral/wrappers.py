@@ -18,20 +18,17 @@
 Integrals: Wrappers/Shortcuts
 =============================
 
-A simple collection of convenience functions to obtain all integral matrices.
+Stateless convenience functions for the integral matrices of a Structure
+(or a padded batch of Structures).
 
-This is intended for testing and developing. In these functions, defaults will
-be applied. Although (some) settings can be accessed through keyword arguments,
-it is recommended to follow the internal integral builds as used in the
-:class:`~dxtb.integrals.Integrals` class for more direct control.
+Conventions (the same for both drivers):
 
-Note that there are several peculiarities for the multipole integrals:
-
-- The multipole operators are centered on ``(0, 0, 0)`` (r0) and not on the ket
-  (rj), the latter being the default in ``dxtb``.
-- An overlap calculation is executed for the normalization of the multipole
-  integral every time :func:`.dipole` or :func:`.quadrupole` are called.
-- The quadrupole integral is **not** in its traceless representation.
+- The multipole operators are centred on the origin ``(0, 0, 0)``, not on
+  the ket as inside the xTB methods.
+- The dipole integral has 3 components, the quadrupole integral all 9
+  Cartesian components (``xx, xy, xz, yx, ...``), not traceless.
+- With ``normalize=True`` (default), all matrices are normalized with the
+  norm of the overlap.
 
 Example
 -------
@@ -51,266 +48,243 @@ Example
         [-1.61768389755830, 1.61768389755830, 1.61768389755830],
     ])
 
-    # Calculate the overlap integrals using the GFN1_XTB parameters
     s = overlap(numbers, positions, par)
     print(s.shape)  # Output: torch.Size([17, 17])
 
-    # Calculate the dipole integrals
     d = dipint(numbers, positions, par)
     print(d.shape)  # Output: torch.Size([3, 17, 17])
 
-    # Calculate the quadrupole integrals
     q = quadint(numbers, positions, par)
     print(q.shape)  # Output: torch.Size([9, 17, 17])
 """
 
 from __future__ import annotations
 
+import torch
+from tad_mctc.batch import deflate, pack
+
 from dxtb import IndexHelper
+from dxtb._src.basis.bas import Basis
 from dxtb._src.constants import labels
-from dxtb._src.param import Param
-from dxtb._src.typing import DD, Any, Literal, Tensor
-from dxtb._src.xtb.base import BaseHamiltonian
-from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
-from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
-from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
+from dxtb._src.param import Param, ParamModule
+from dxtb._src.typing import Literal, Tensor
 
-from .driver.manager import DriverManager
-from .factory import new_dipint, new_overlap, new_quadint
+from .driver.libcint.driver import LibcintIntegralSetup, setup_libcint
+from .driver.libcint.overlap import build_overlap_libcint
+from .driver.pytorch.multipole import build_dipole, build_quadrupole
+from .driver.pytorch.overlap import build_overlap
+from .driver.pytorch.setup import setup_integrals
+from .utils import normalize_integral_matrix, snorm
 
-__all__ = ["hcore", "overlap", "dipint", "quadint"]
+__all__ = ["dipint", "hcore", "overlap", "quadint"]
+
+_Kind = Literal["overlap", "dipole", "quadrupole"]
+
+
+def overlap(
+    numbers: Tensor,
+    positions: Tensor,
+    par: Param | ParamModule,
+    *,
+    driver: int | None = None,
+    normalize: bool = True,
+) -> Tensor:
+    """
+    Overlap integral.
+
+    Parameters
+    ----------
+    numbers : Tensor
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
+    positions : Tensor
+        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
+    par : Param | ParamModule
+        Parametrization of an extended tight-binding (xTB) Method.
+    driver : int | None, optional
+        Integral driver (:data:`~dxtb.labels.INTDRIVER_LIBCINT` or
+        :data:`~dxtb.labels.INTDRIVER_PYTORCH`). Defaults to libcint if it is
+        installed, PyTorch otherwise.
+    normalize : bool, optional
+        Normalize with the norm of the overlap. Defaults to ``True``.
+
+    Returns
+    -------
+    Tensor
+        Overlap matrix of shape ``(..., nao, nao)``.
+    """
+    return _integral("overlap", numbers, positions, par, driver, normalize)
+
+
+def dipint(
+    numbers: Tensor,
+    positions: Tensor,
+    par: Param | ParamModule,
+    *,
+    driver: int | None = None,
+    normalize: bool = True,
+) -> Tensor:
+    """
+    Dipole integral about the origin.
+
+    Parameters are those of :func:`overlap`.
+
+    Returns
+    -------
+    Tensor
+        Dipole integral of shape ``(..., 3, nao, nao)``.
+    """
+    return _integral("dipole", numbers, positions, par, driver, normalize)
+
+
+def quadint(
+    numbers: Tensor,
+    positions: Tensor,
+    par: Param | ParamModule,
+    *,
+    driver: int | None = None,
+    normalize: bool = True,
+) -> Tensor:
+    """
+    Quadrupole integral about the origin (all nine Cartesian components).
+
+    Parameters are those of :func:`overlap`.
+
+    Returns
+    -------
+    Tensor
+        Quadrupole integral of shape ``(..., 9, nao, nao)``.
+    """
+    return _integral("quadrupole", numbers, positions, par, driver, normalize)
 
 
 def hcore(
     numbers: Tensor,
     positions: Tensor,
-    par: Param,
+    par: Param | ParamModule,
     charge: Tensor | float | int | None = None,
-    **kwargs: Any,
+    *,
+    driver: int | None = None,
 ) -> Tensor:
     """
-    Shortcut for the core Hamiltonian matrix calculation.
+    Core Hamiltonian of a single Structure.
 
     Parameters
     ----------
     numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
+        Atomic numbers for all atoms in the Structure (shape: ``(nat,)``).
     positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    par : Param
+        Cartesian coordinates of all atoms (shape: ``(nat, 3)``).
+    par : Param | ParamModule
         Parametrization of an extended tight-binding (xTB) Method.
     charge : Tensor | float | int | None, optional
-        Total molecular charge required by GFN0 H0.
+        Total charge (required by GFN0-xTB).
+    driver : int | None, optional
+        Integral driver of the overlap (see :func:`overlap`).
 
     Returns
     -------
     Tensor
-        Core Hamiltonian matrix of shape ``(nb, nao, nao)``.
-
-    Raises
-    ------
-    ValueError
-        If the Hamiltonian parametrization does not contain meta data or if the
-        meta data does not contain a name to select the correct Hamiltonian.
-    ValueError
-        If the Hamiltonian name is unknown.
+        Core Hamiltonian of shape ``(nao, nao)``.
     """
-    if par.meta is None:
-        raise ValueError(
-            "Meta data of Hamiltonian parametrization must contain a name. "
-            "Otherwise, the correct Hamiltonian cannot be selected internally."
-        )
+    # pylint: disable=import-outside-toplevel
+    from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
-    if par.meta.name is None:
-        raise ValueError(
-            "The name field of the meta data of the Hamiltonian "
-            "parametrization must contain a name. Otherwise, the correct "
-            "Hamiltonian cannot be selected internally."
-        )
-
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    ihelp = IndexHelper.from_numbers(numbers, par)
-
-    name = par.meta.name.casefold()
-    h0: BaseHamiltonian
-    if name == "gfn0-xtb":
-        h0 = GFN0Hamiltonian(numbers, par, ihelp, **dd, **kwargs)
-    elif name == "gfn1-xtb":
-        h0 = GFN1Hamiltonian(numbers, par, ihelp, **dd, **kwargs)
-    elif name == "gfn2-xtb":
-        h0 = GFN2Hamiltonian(numbers, par, ihelp, **dd, **kwargs)
-    else:
-        raise ValueError(f"Unknown Hamiltonian type '{name}'.")
-
-    ovlp = overlap(numbers, positions, par)
-    return h0.build(positions, ovlp.to(h0.device), charge=charge)
-
-
-def overlap(
-    numbers: Tensor, positions: Tensor, par: Param, **kwargs: Any
-) -> Tensor:
-    """
-    Shortcut for overlap integral calculations.
-
-    Parameters
-    ----------
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    par : Param
-        Parametrization of an extended tight-binding (xTB) Method.
-
-    Returns
-    -------
-    Tensor
-        Overlap integral (matrix) of shape ``(nb, nao, nao)``.
-    """
-    return _integral("_overlap", numbers, positions, par, **kwargs)
-
-
-def dipint(
-    numbers: Tensor, positions: Tensor, par: Param, **kwargs: Any
-) -> Tensor:
-    """
-    Shortcut for dipole integral calculations.
-
-    Parameters
-    ----------
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    par : Param
-        Parametrization of an extended tight-binding (xTB) Method.
-
-    Returns
-    -------
-    Tensor
-        Dipole integral (matrix) of shape ``(nb, 3, nao, nao)``.
-    """
-    return _integral("_dipole", numbers, positions, par, **kwargs)
-
-
-def quadint(
-    numbers: Tensor, positions: Tensor, par: Param, **kwargs: Any
-) -> Tensor:
-    """Shortcut for quadrupole integral calculations.
-
-    Parameters
-    ----------
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    par : Param
-        Parametrization of an extended tight-binding (xTB) Method.
-
-    Returns
-    -------
-    Tensor
-        Quadrupole integral (matrix) of shape ``(nb, 9, nao, nao)``.
-    """
-    return _integral("_quadrupole", numbers, positions, par, **kwargs)
+    dd = {"device": positions.device, "dtype": positions.dtype}
+    pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
+    ihelp = IndexHelper.from_numbers(numbers, pm)
+    # set up H0 first: it validates the method name of the parametrization
+    setup = setup_h0(numbers, pm, ihelp, **dd)
+    s = overlap(numbers, positions, pm, driver=driver)
+    return build_hcore(setup, positions, s.to(**dd), charge)[0]
 
 
 def _integral(
-    integral_type: Literal["_overlap", "_dipole", "_quadrupole"],
+    kind: _Kind,
     numbers: Tensor,
     positions: Tensor,
-    par: Param,
-    **kwargs: Any,
+    par: Param | ParamModule,
+    driver: int | None,
+    normalize: bool,
 ) -> Tensor:
-    """Shortcut for integral calculations.
-
-    Parameters
-    ----------
-    integral_type : Literal['_overlap', '_dipole', '_quadrupole']
-        Type of integral to calculate.
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-    par : Param
-        Parametrization of an extended tight-binding (xTB) Method.
-
-    Returns
-    -------
-    Tensor
-        Integral matrix of shape ``(..., nao, nao)`` for overlap,
-        ``(..., 3, nao, nao)`` for dipole, and ``(..., 9, nao, nao)`` for
-        quadrupole.
-
-    Raises
-    ------
-    ValueError
-        If the integral type is unknown.
-    """
-
-    if integral_type not in ("_overlap", "_dipole", "_quadrupole"):
-        raise ValueError(f"Unknown integral type '{integral_type}'.")
-
-    dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    ihelp = IndexHelper.from_numbers(numbers, par)
-
-    normalize = kwargs.pop("normalize", True)
-
-    ##########
-    # Driver #
-    ##########
-
-    # Determine which driver class to instantiate
-    # (defaults to libcint if available)
-    driver_name = kwargs.pop("driver", None)
-    if driver_name is None:
+    """Build one integral for a Structure or each Structure of a batch."""
+    if driver is None:
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs.available import has_libcint
 
-        if has_libcint is True:
-            driver_name = labels.INTDRIVER_LIBCINT
+        driver = (
+            labels.INTDRIVER_LIBCINT
+            if has_libcint is True
+            else labels.INTDRIVER_PYTORCH
+        )
+    if driver not in (labels.INTDRIVER_LIBCINT, labels.INTDRIVER_PYTORCH):
+        raise ValueError(f"Unknown integral driver '{driver}'.")
+
+    dd = {"device": positions.device, "dtype": positions.dtype}
+    pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
+
+    if numbers.ndim == 1:
+        return _single(kind, numbers, positions, pm, driver, normalize)
+
+    matrices = []
+    for n, p in zip(numbers, positions):
+        n = deflate(n)
+        matrices.append(
+            _single(kind, n, p[: n.shape[-1]], pm, driver, normalize)
+        )
+    return pack(matrices)
+
+
+def _single(
+    kind: _Kind,
+    numbers: Tensor,
+    positions: Tensor,
+    par: ParamModule,
+    driver: int,
+    normalize: bool,
+) -> Tensor:
+    """Build one integral of a single Structure."""
+    if driver == labels.INTDRIVER_PYTORCH:
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        basis = Basis(
+            numbers, par, ihelp, device=positions.device, dtype=positions.dtype
+        )
+        setup = setup_integrals(basis)
+        raw = build_overlap(setup, positions)
+        if kind == "dipole":
+            matrix = build_dipole(setup, positions)
+        elif kind == "quadrupole":
+            matrix = build_quadrupole(setup, positions)
         else:
-            driver_name = labels.INTDRIVER_PYTORCH
-
-    # setup driver for integral calculation
-    drv_mgr = DriverManager(driver_name, **dd)
-    drv_mgr.create_driver(numbers, par, ihelp)
-    driver_data = drv_mgr.setup_driver(positions)
-
-    ###########
-    # Overlap #
-    ###########
-
-    if integral_type == "_overlap":
-        integral = new_overlap(drv_mgr.driver_type, **dd, **kwargs)
-
-        # actual integral calculation
-        integral.build(driver_data)
-
-        if normalize is True:
-            integral.normalize(integral.norm)
-
-        return integral.matrix
-
-    #############
-    # Multipole #
-    #############
-
-    # multipole integrals require the overlap for normalization
-    ovlp = new_overlap(drv_mgr.driver_type, **dd, **kwargs)
-    if ovlp._matrix is None or ovlp.norm is None:
-        ovlp.build(driver_data)
-
-    if integral_type == "_dipole":
-        integral = new_dipint(driver=drv_mgr.driver_type, **dd, **kwargs)
-    elif integral_type == "_quadrupole":
-        integral = new_quadint(driver=drv_mgr.driver_type, **dd, **kwargs)
+            matrix = raw
     else:
-        raise ValueError(f"Unknown integral type '{integral_type}'.")
+        # pylint: disable=import-outside-toplevel
+        from dxtb._src.exlibs import libcint
 
-    # actual integral calculation
-    integral.build(driver_data)
+        # libcint runs on the CPU (as in `setup_integral_evaluation`)
+        cpu = torch.device("cpu")
+        numbers = numbers.to(device=cpu)
+        ihelp = IndexHelper.from_numbers(numbers, par).to(device=cpu)
+        basis = Basis(numbers, par, ihelp, device=cpu, dtype=positions.dtype)
+        call = setup_libcint(
+            LibcintIntegralSetup(
+                numbers=numbers,
+                ihelp=ihelp,
+                basis_setups=(basis.setup_data(),),
+                force_cpu=True,
+            ),
+            positions,
+        )
+        raw = build_overlap_libcint(call)
+        (item,) = call.inputs
+        if kind == "dipole":
+            matrix = libcint.int1e("r0", item.basis, item.structure)
+        elif kind == "quadrupole":
+            matrix = libcint.int1e(
+                "r0r0", item.basis, item.structure, packed=False
+            )
+        else:
+            matrix = raw
 
     if normalize is True:
-        integral.normalize(ovlp.norm)
-
-    return integral.matrix
+        matrix = normalize_integral_matrix(matrix, snorm(raw))
+    return matrix.to(device=positions.device)

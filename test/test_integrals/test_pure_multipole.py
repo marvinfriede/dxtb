@@ -26,8 +26,6 @@ from torch.func import jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.driver.pytorch.dipole import DipolePytorch
-from dxtb._src.integral.driver.pytorch.driver import IntDriverPytorch
 from dxtb._src.integral.driver.pytorch.impls.kernels import (
     ALGORITHMS,
     get_kernel,
@@ -42,7 +40,6 @@ from dxtb._src.integral.driver.pytorch.multipole import (
     build_quadrupole,
 )
 from dxtb._src.integral.driver.pytorch.overlap import PytorchOverlapSetup
-from dxtb._src.integral.driver.pytorch.quadrupole import QuadrupolePytorch
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
     setup_integrals,
@@ -55,18 +52,11 @@ from .samples import samples
 
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB])
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
-@pytest.mark.parametrize(
-    ("build", "legacy"),
-    [
-        (build_dipole, DipolePytorch),
-        (build_quadrupole, QuadrupolePytorch),
-    ],
-)
+@pytest.mark.parametrize("build", [build_dipole, build_quadrupole])
 def test_pure_multipole_reuses_setup_without_call_state(
     par: Param | ParamModule,
     algorithm: str,
     build: Callable[[PytorchIntegralSetup, torch.Tensor], torch.Tensor],
-    legacy: type[DipolePytorch] | type[QuadrupolePytorch],
 ) -> None:
     """One setup gives raw multipoles independent of geometry call history."""
     dd = {"device": DEVICE, "dtype": torch.double}
@@ -96,14 +86,8 @@ def test_pure_multipole_reuses_setup_without_call_state(
     second = build(setup, changed)
     repeated = build(setup, positions.clone())
 
-    driver = IntDriverPytorch(numbers, par, ihelp, **dd)
-    driver.algorithm = algorithm
-    driver.setup(positions)
-    old = legacy(**dd).build(driver)
-
     assert first.shape[0] == (3 if build is build_dipole else 9)
     assert torch.allclose(first, direct, atol=1.0e-12, rtol=1.0e-12)
-    assert torch.allclose(first, old, atol=1.0e-12, rtol=1.0e-12)
     assert torch.allclose(first, repeated, atol=1.0e-12, rtol=1.0e-12)
     assert not torch.allclose(first, second, atol=1.0e-10, rtol=1.0e-10)
 
@@ -162,23 +146,3 @@ def test_pure_multipole_supports_jvp_and_vmap(
     assert torch.isfinite(value).all()
     assert torch.isfinite(derivative).all()
     assert torch.allclose(batched[0], value, atol=1.0e-12, rtol=1.0e-12)
-
-
-def test_legacy_driver_algorithm_change_refreshes_setup() -> None:
-    """Changing the legacy algorithm updates the explicit setup value."""
-    dd = {"device": DEVICE, "dtype": torch.double}
-    sample = samples["H2O"]
-    numbers = sample["numbers"].to(DEVICE)
-    positions = sample["positions"].to(**dd)
-    ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    driver = IntDriverPytorch(numbers, GFN1_XTB, ihelp, **dd)
-    driver.algorithm = "os"
-    driver.setup(positions)
-    driver.algorithm = "md"
-
-    assert driver._integral_setup is not None
-    assert driver._integral_setup.algorithm == "md"
-    expected = build_dipole(driver._integral_setup, positions)
-    actual = driver.eval_matrix(DIPOLE_COMPONENTS)
-
-    assert torch.allclose(actual, expected, atol=1.0e-12, rtol=1.0e-12)

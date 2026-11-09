@@ -61,25 +61,16 @@ def test_fail(par: Param) -> None:
         wrappers.hcore(numbers, positions, _par)
 
     with pytest.raises(ValueError):
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.integral.wrappers import _integral
-
-        _integral("fail", numbers, positions, _par)  # type: ignore
+        wrappers.overlap(numbers, positions, par, driver=-1)
 
 
 def test_h0_gfn1() -> None:
     h0 = wrappers.hcore(numbers, positions, GFN1_XTB)
     assert h0.shape == (17, 17)
 
-    h0 = wrappers.hcore(numbers, positions, GFN1_XTB, cn=None)
-    assert h0.shape == (17, 17)
-
 
 def test_h0_gfn2() -> None:
     h0 = wrappers.hcore(numbers, positions, GFN2_XTB)
-    assert h0.shape == (13, 13)
-
-    h0 = wrappers.hcore(numbers, positions, GFN2_XTB, cn=None)
     assert h0.shape == (13, 13)
 
 

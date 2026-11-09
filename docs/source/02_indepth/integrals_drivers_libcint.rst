@@ -6,8 +6,8 @@ Libcint
 .. automodule:: dxtb._src.integral.driver.libcint
    :no-index:
 
-Drivers
--------
+Setup
+-----
 
 .. automodule:: dxtb._src.integral.driver.libcint.driver
    :members:

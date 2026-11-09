@@ -23,23 +23,17 @@ Template for calculation and modification of multipole integrals.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from tad_mctc.batch import pack
 
 from dxtb._src.typing import Tensor
 
-from .base import IntegralLibcint
 from .driver import LibcintCallData
 
-if TYPE_CHECKING:
-    from .driver import IntDriverLibcint
-
-__all__ = ["MultipoleLibcint", "build_multipole_libcint"]
+__all__ = ["build_multipole_libcint"]
 
 
 def build_multipole_libcint(
-    call_data: LibcintCallData, intstring: str, *, packed: bool = True
+    call_data: LibcintCallData, intstring: str
 ) -> Tensor:
     """Build a raw libcint multipole matrix for the requested center."""
     from dxtb._src.exlibs import libcint
@@ -52,7 +46,7 @@ def build_multipole_libcint(
         )
 
     matrices = [
-        libcint.int1e(intstring, item.basis, item.structure, packed=packed)
+        libcint.int1e(intstring, item.basis, item.structure)
         for item in call_data.inputs
     ]
     if call_data.batch_mode > 0:
@@ -60,42 +54,3 @@ def build_multipole_libcint(
     if len(matrices) != 1:
         raise RuntimeError("Single-system libcint setup needs one wrapper.")
     return matrices[0]
-
-
-class MultipoleLibcint(IntegralLibcint):
-    """
-    Base class for multipole integrals calculated with `libcint`.
-    """
-
-    def multipole(
-        self,
-        call_data: LibcintCallData,
-        intstring: str,
-        *,
-        packed: bool = True,
-    ) -> Tensor:
-        """
-        Calculation of multipole integral. The integral is normalized, using
-        the diagonal of the overlap integral.
-
-        Parameters
-        ----------
-        call_data : LibcintCallData
-            Call-local wrappers for the current geometry.
-        intstring : str
-            String for `libcint` integral engine.
-        packed : bool, optional
-            Whether quadrupole components are packed to 6 components.
-            Defaults to ``True``.
-
-        Returns
-        -------
-        Tensor
-            Normalized multipole integral.
-        """
-        super().checks(call_data)
-
-        self.matrix = build_multipole_libcint(
-            call_data, intstring, packed=packed
-        )
-        return self.matrix

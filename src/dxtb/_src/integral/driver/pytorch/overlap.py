@@ -24,15 +24,9 @@ PyTorch-based overlap implementations.
 from __future__ import annotations
 
 
-from tad_mctc.convert import symmetrize
-
 from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import Tensor
 
-from ...types import OverlapIntegral
-from ...utils import snorm
-from .base import IntegralPytorch
-from .driver import IntDriverPytorch
 from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
 from .impls.pairs import assemble_matrix
 from .setup import (
@@ -42,7 +36,6 @@ from .setup import (
 )
 
 __all__ = [
-    "OverlapPytorch",
     "PytorchIntegralSetup",
     "PytorchOverlapSetup",
     "setup_overlap",
@@ -77,49 +70,3 @@ def build_overlap(
         plan=setup.pair_plan,
     )[0]
     return raw
-
-
-class OverlapPytorch(OverlapIntegral, IntegralPytorch):
-    """
-    Overlap integral from atomic orbitals.
-
-    Use the :meth:`.build` method to calculate the overlap integral, which is
-    differentiable with autograd. There is no analytical overlap gradient in
-    the PyTorch driver; the analytical calculator needs the libcint driver.
-    """
-
-    def build(self, driver: IntDriverPytorch) -> Tensor:
-        """
-        Overlap calculation with the driver's overlap function.
-
-        Parameters
-        ----------
-        driver : IntDriverPytorch
-            The integral driver for the calculation.
-
-        Returns
-        -------
-        Tensor
-            Overlap integral matrix of shape ``(..., norb, norb)``.
-        """
-        super().checks(driver)
-
-        self.matrix = driver.eval_matrix()[..., 0, :, :]
-
-        # force symmetry to avoid problems through numerical errors
-        if self.uplo == "n":
-            return symmetrize(self.matrix, force=False)
-
-        self.norm = snorm(self.matrix)
-        return self.matrix
-
-    def get_gradient(self, driver: IntDriverPytorch) -> Tensor:
-        """
-        Not available: differentiate :meth:`.build` with autograd, or use the
-        libcint driver for the analytical overlap gradient.
-        """
-        super().checks(driver)
-        raise NotImplementedError(
-            "The PyTorch integral driver has no analytical overlap gradient. "
-            "Use autograd on the overlap or the libcint driver."
-        )

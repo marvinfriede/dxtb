@@ -102,9 +102,14 @@ intentionally retired the following stateful legacy APIs:
 - ``Calculator.integrals``: integral matrices produced during a calculation are
   returned on ``Result`` (``result.overlap``, ``result.hcore``,
   ``result.dipole_integrals``, ``result.quadrupole_integrals``). Standalone
-  integral objects and shortcut functions remain available through the public
-  :mod:`dxtb.integrals` package (:class:`dxtb.integrals.Integrals`,
-  :mod:`dxtb.integrals.wrappers`, :mod:`dxtb.integrals.types`).
+  integral matrices are available through the stateless shortcut functions
+  in :mod:`dxtb.integrals.wrappers`.
+- Stateful integral layer (``dxtb.integrals.Integrals``, ``DriverManager``,
+  the integral drivers and classes such as ``OverlapPytorch`` or
+  ``DipoleLibcint``, and ``dxtb.integrals.factories`` /
+  ``dxtb.integrals.types``): use :mod:`dxtb.integrals.wrappers`. The multipole
+  wrappers return origin-centred integrals (nine quadrupole components, not
+  traceless) for both drivers.
 - Stateful SCF and mixer classes (``SelfConsistentField``,
   ``SelfConsistentFieldFull``, ``SelfConsistentFieldSingleShot``, ``BaseSCF``,
   ``Anderson``, ``Broyden``, ``Simple``, ``BaseMixer``): use functional SCF

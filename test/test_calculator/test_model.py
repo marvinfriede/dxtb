@@ -476,15 +476,12 @@ def test_calculator_type_does_not_convert_es2_es3_setup() -> None:
 
 def test_system_does_not_retain_mutable_integral_layer() -> None:
     """System retains setup values, not mutable integral builders."""
-    from dxtb._src.integral.base import BaseIntegral
-    from dxtb._src.integral.container import Integrals
-    from dxtb._src.integral.driver import DriverManager
     from dxtb._src.xtb.base import BaseHamiltonian
 
     system = Model(par=ParamModule(GFN2_XTB, **DD)).setup(
         torch.tensor([3, 1], device=DEVICE)
     )
-    forbidden = (Integrals, DriverManager, BaseHamiltonian, BaseIntegral)
+    forbidden = (BaseHamiltonian,)
     for field in dataclasses.fields(system):
         assert not isinstance(getattr(system, field.name), forbidden)
 
@@ -505,9 +502,6 @@ def test_system_does_not_retain_mutable_integral_layer() -> None:
 def test_system_integral_setup_is_narrow(driver: str) -> None:
     """System's integral setup retains values, not model or adapter objects."""
     from dxtb._src.basis.bas import BasisSetup
-    from dxtb._src.integral.base import BaseIntegral
-    from dxtb._src.integral.container import Integrals
-    from dxtb._src.integral.driver import DriverManager
     from dxtb._src.integral.driver.libcint import (
         LibcintBasisNode,
         LibcintIntegralSetupNode,
@@ -527,9 +521,9 @@ def test_system_integral_setup_is_narrow(driver: str) -> None:
     assert not hasattr(system, "integrals")
     setup = system.integral_setup
     assert isinstance(setup, IntegralSetup)
-    assert not isinstance(setup, (ParamModule, DriverManager))
+    assert not isinstance(setup, ParamModule)
     assert not hasattr(setup, "par")
-    legacy_types = (Integrals, DriverManager, BaseHamiltonian, BaseIntegral)
+    legacy_types = (BaseHamiltonian,)
     assert not isinstance(setup.pytorch, legacy_types)
     assert not isinstance(setup.libcint, legacy_types)
     if setup.libcint is not None:

@@ -29,13 +29,12 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN1_XTB, IndexHelper
-from dxtb._src.integral.driver.pytorch import IntDriverPytorch as IntDriver
-from dxtb._src.integral.driver.pytorch import OverlapPytorch as Overlap
 from dxtb._src.param import Param
 from dxtb._src.typing import DD, Tensor
 from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
 
 from ..conftest import DEVICE
+from ..test_overlap.utils import calc_overlap
 from ..utils import get_param_module, load_from_npz
 from .samples import samples
 
@@ -64,12 +63,9 @@ def run(
     tol = sqrt(torch.finfo(dd["dtype"]).eps) * 10
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriver(numbers, par, ihelp, **dd)
-    overlap = Overlap(**dd)
     h0 = GFN1Hamiltonian(numbers, par, ihelp, **dd)
 
-    driver.setup(positions)
-    s = overlap.build(driver)
+    s = calc_overlap(numbers, positions, par, dd)
 
     h = h0.build(positions, s)
     assert pytest.approx(h.cpu(), abs=tol) == h.mT.cpu()
@@ -208,13 +204,10 @@ def test_no_cn(dtype: torch.dtype) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriver(numbers, par, ihelp, **dd)
-    overlap = Overlap(**dd)
     h0 = GFN1Hamiltonian(numbers, par, ihelp, cn=None, **dd)
     assert h0.cn is None
 
-    driver.setup(positions)
-    s = overlap.build(driver)
+    s = calc_overlap(numbers, positions, par, dd)
 
     h = h0.build(positions, s)
     assert pytest.approx(h.cpu(), abs=tol) == h.mT.cpu()

@@ -28,13 +28,12 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN2_XTB, IndexHelper
-from dxtb._src.integral.driver.pytorch import IntDriverPytorch as IntDriver
-from dxtb._src.integral.driver.pytorch import OverlapPytorch as Overlap
 from dxtb._src.param import Param
 from dxtb._src.typing import DD, Tensor
 from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
 
 from ..conftest import DEVICE
+from ..test_overlap.utils import calc_overlap
 from .samples import samples
 
 small = ["H2", "LiH", "S2", "SiH4"]
@@ -251,13 +250,13 @@ def run(
     tol = sqrt(torch.finfo(dd["dtype"]).eps) * 10
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriver(numbers, par, ihelp, **dd)
-    overlap = Overlap(**dd)
     h0 = GFN2Hamiltonian(numbers, par, ihelp, **dd)
 
-    driver.setup(positions)
-
-    s = None if skip_overlap is True else overlap.build(driver)
+    s = (
+        None
+        if skip_overlap is True
+        else calc_overlap(numbers, positions, par, dd)
+    )
     h = h0.build(positions, s)
     assert pytest.approx(h.cpu(), abs=tol) == h.mT.cpu()
     assert pytest.approx(h.cpu(), abs=tol) == ref.cpu()

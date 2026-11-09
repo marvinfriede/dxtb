@@ -18,8 +18,8 @@
 Integrals: Overview
 ===================
 
-This module stores the container, drivers and underlying
-implementations of the integrals.
+Stateless shortcut functions for the integral matrices of a Structure, see
+:mod:`dxtb.integrals.wrappers`.
 
 For the GFNn-xTB family of methods, only two-center one-electron integrals
 are required.
@@ -49,24 +49,23 @@ options:
     calc = Calculator(numbers, opts=opts)
 
     print(calc.opts.ints.driver)  # 0
+
+Within a calculation, the integral matrices are returned on the result
+(``result.overlap``, ``result.hcore``, ``result.dipole_integrals``,
+``result.quadrupole_integrals``).
 """
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dxtb.integrals import factories as factories
-    from dxtb.integrals import types as types
     from dxtb.integrals import wrappers as wrappers
 else:
     import dxtb._src.loader.lazy as _lazy
 
     __getattr__, __dir__, __all__ = _lazy.attach_module(
         __name__,
-        ["factories", "types", "wrappers"],
+        ["wrappers"],
     )
     del _lazy
 
 del TYPE_CHECKING
-
-from dxtb._src.integral.container import Integrals as Integrals
-from dxtb._src.integral.driver import DriverManager as DriverManager

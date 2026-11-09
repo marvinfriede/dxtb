@@ -31,7 +31,6 @@ from dxtb._src.param import Param, ParamModule
 
 from ..conftest import DEVICE
 from .samples import samples
-from .utils import calc_overlap
 
 
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB])
@@ -52,9 +51,7 @@ def test_pure_overlap_reuses_setup_without_call_state(
     changed[1, 0] += 0.17
     second = build_overlap(setup, changed)
     repeated = build_overlap(setup, positions.clone())
-    legacy = calc_overlap(numbers, positions, par, dd, uplo="n")
 
-    assert torch.allclose(first, legacy, atol=1.0e-12, rtol=1.0e-12)
     assert torch.allclose(first, repeated, atol=1.0e-12, rtol=1.0e-12)
     assert not torch.allclose(first, second, atol=1.0e-10, rtol=1.0e-10)
 

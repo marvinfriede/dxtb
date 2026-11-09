@@ -117,8 +117,8 @@ def solve(
         Index helper object.
     config : ConfigSCF
         Configuration for the SCF calculation.
-    integrals : Integrals
-        Container for all integrals.
+    integrals : IntegralMatrices
+        Integral matrices (core Hamiltonian, overlap and multipoles).
 
     Returns
     -------

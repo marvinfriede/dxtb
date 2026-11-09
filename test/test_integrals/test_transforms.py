@@ -24,20 +24,11 @@ from torch.func import jvp, vmap
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.base import (
-    normalize_integral_gradient,
-    normalize_integral_matrix,
-)
-from dxtb._src.integral.driver.pytorch.dipole import DipolePytorch
 from dxtb._src.integral.driver.pytorch.multipole import (
     build_dipole,
     build_quadrupole,
 )
-from dxtb._src.integral.driver.pytorch.overlap import (
-    OverlapPytorch,
-    build_overlap,
-)
-from dxtb._src.integral.driver.pytorch.quadrupole import QuadrupolePytorch
+from dxtb._src.integral.driver.pytorch.overlap import build_overlap
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
     setup_integrals,
@@ -49,72 +40,37 @@ from dxtb._src.integral.types.quadrupole import (
     reduce_quadrupole_9_to_6,
     shift_quadrupole_origin,
 )
-from dxtb._src.integral.utils import snorm
+from dxtb._src.integral.utils import normalize_integral_matrix, snorm
 
 from ..conftest import DEVICE
 from .samples import samples
 
 
 @pytest.mark.parametrize("batched", [False, True])
-def test_pure_normalization_matches_legacy_without_mutating_inputs(
-    batched: bool,
-) -> None:
-    """Matrix and gradient normalization return new tensor values."""
+def test_pure_normalization_without_mutating_inputs(batched: bool) -> None:
+    """Matrix normalization returns new tensor values."""
     dd = {"device": DEVICE, "dtype": torch.double}
     seed = torch.randn((2, 4, 4) if batched else (4, 4), **dd)
     raw = seed @ seed.mT + torch.eye(4, **dd)
     norm = torch.rand((2, 4) if batched else (4,), **dd) + 0.5
-    gradient = torch.randn((*raw.shape[:-2], 4, 4, 3), **dd)
     raw_before = raw.clone()
     norm_before = norm.clone()
-    gradient_before = gradient.clone()
 
-    expected = normalize_integral_matrix(raw, norm)
-    actual_gradient = normalize_integral_gradient(gradient, norm)
+    normalize_integral_matrix(raw, norm)
 
-    legacy = OverlapPytorch(**dd)
-    legacy.matrix = raw.clone()
-    legacy.norm = norm.clone()
-    legacy.normalize()
-    legacy.gradient = gradient.clone()
-    legacy.normalize_gradient(norm)
-
-    assert torch.allclose(legacy.matrix, expected, atol=1e-14, rtol=1e-14)
-    assert torch.allclose(
-        legacy.gradient, actual_gradient, atol=1e-14, rtol=1e-14
-    )
     assert torch.equal(raw, raw_before)
     assert torch.equal(norm, norm_before)
-    assert torch.equal(gradient, gradient_before)
-    assert actual_gradient.shape == gradient.shape
 
     if not batched:
-        legacy_without_norm = OverlapPytorch(**dd)
-        legacy_without_norm.matrix = raw.clone()
-        legacy_without_norm.gradient = gradient.clone()
-        normalized_without_norm = normalize_integral_matrix(raw)
-        gradient_without_norm = normalize_integral_gradient(
-            gradient, snorm(normalized_without_norm)
-        )
-
-        legacy_without_norm.normalize()
-        legacy_without_norm.normalize_gradient()
-
-        assert torch.allclose(
-            legacy_without_norm.matrix,
-            normalized_without_norm,
-            atol=1e-14,
-            rtol=1e-14,
-        )
-        assert torch.allclose(
-            legacy_without_norm.gradient,
-            gradient_without_norm,
+        torch.testing.assert_close(
+            normalize_integral_matrix(raw),
+            normalize_integral_matrix(raw, snorm(raw)),
             atol=1e-14,
             rtol=1e-14,
         )
 
 
-def test_pure_dipole_shift_matches_legacy_without_mutation() -> None:
+def test_pure_dipole_shift_without_mutation() -> None:
     """Dipole origin shifts use explicit matrices and positions."""
     dd = {"device": DEVICE, "dtype": torch.double}
     overlap = torch.eye(3, **dd)
@@ -122,13 +78,8 @@ def test_pure_dipole_shift_matches_legacy_without_mutation() -> None:
     positions = torch.randn(3, 3, **dd)
     originals = (dipole.clone(), overlap.clone(), positions.clone())
 
-    expected = shift_dipole_origin(dipole, overlap, positions)
-    legacy = DipolePytorch(**dd)
-    legacy.matrix = dipole.clone()
-    actual = legacy.shift_r0_rj(overlap, positions)
+    shift_dipole_origin(dipole, overlap, positions)
 
-    assert torch.allclose(actual, expected, atol=1e-14, rtol=1e-14)
-    assert torch.allclose(legacy.matrix, expected, atol=1e-14, rtol=1e-14)
     assert torch.equal(dipole, originals[0])
     assert torch.equal(overlap, originals[1])
     assert torch.equal(positions, originals[2])
@@ -153,7 +104,7 @@ def test_pure_quadrupole_reduction_preserves_component_order(
     assert torch.equal(result, _reduce_9_to_6(raw, uplo=uplo))  # type: ignore[arg-type]
 
 
-def test_pure_quadrupole_transforms_match_legacy_without_mutation() -> None:
+def test_pure_quadrupole_transforms_without_mutation() -> None:
     """Quadrupole reduction, shift and traceless conversion are pure."""
     dd = {"device": DEVICE, "dtype": torch.double}
     raw9 = torch.randn(9, 3, 3, **dd)
@@ -170,21 +121,11 @@ def test_pure_quadrupole_transforms_match_legacy_without_mutation() -> None:
     shifted_from_9 = shift_quadrupole_origin(
         reduce_quadrupole_9_to_6(raw9), dipole, overlap, positions
     )
-    traceless = make_quadrupole_traceless(shifted)
+    shifted_before = shifted.clone()
+    make_quadrupole_traceless(shifted)
 
-    legacy = QuadrupolePytorch(**dd)
-    legacy.matrix = raw9.clone()
-    legacy.shift_r0r0_rjrj(dipole, overlap, positions)
-    legacy.traceless()
-
-    reduced_legacy = QuadrupolePytorch(**dd)
-    reduced_legacy.matrix = raw9.clone()
-    reduced_result = reduced_legacy.reduce_9_to_6()
-
-    assert torch.allclose(legacy.matrix, traceless, atol=1e-14, rtol=1e-14)
     assert torch.allclose(shifted_from_9, shifted, atol=1e-14, rtol=1e-14)
-    assert torch.equal(reduced_result, raw6)
-    assert torch.equal(reduced_legacy.matrix, raw6)
+    assert torch.equal(shifted, shifted_before)
     assert torch.equal(reduced, raw6)
     for tensor, original in zip(
         (raw9, raw6, overlap, dipole, positions), originals

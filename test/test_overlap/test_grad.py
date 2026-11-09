@@ -24,20 +24,20 @@ from math import sqrt
 
 import pytest
 import torch
-from tad_mctc.convert import tensor_to_numpy
+from tad_mctc.convert import symmetrize, tensor_to_numpy
 from torch.func import jacrev
 
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.basis.slater import slater_to_gauss
-from dxtb._src.integral.driver.pytorch import IntDriverPytorch as IntDriver
-from dxtb._src.integral.driver.pytorch import OverlapPytorch as Overlap
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch.impls.kernels import ALGORITHMS
-from dxtb._src.typing import DD, Tensor
+from dxtb._src.typing import DD, Callable, Tensor
 from dxtb._src.utils import t2int
 
 from ..conftest import DEVICE
 from ..utils import overlap_1d
 from .samples import samples
+from .utils import overlap_setup
 
 
 @pytest.mark.parametrize("dtype", [torch.double])
@@ -104,18 +104,17 @@ def test_overlap_jacobian(dtype: torch.dtype, name: str):
     positions = sample["positions"].to(**dd)
 
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    driver = IntDriver(numbers, GFN1_XTB, ihelp, **dd)
-    overlap = Overlap(uplo="n", **dd)
+    setup = overlap_setup(numbers, GFN1_XTB, dd)
+
+    def func(pos: Tensor) -> Tensor:
+        return symmetrize(build_overlap(setup, pos), force=False)
 
     # numerical gradient: [natm, norb, norb, 3]
-    ngrad = calc_numerical_gradient(overlap, driver, positions)
+    norb = t2int(ihelp.orbitals_per_shell.sum())
+    ngrad = calc_numerical_gradient(func, positions, norb)
 
     # autograd jacobian
     pos = positions.detach().clone().requires_grad_(True)
-
-    def func(pos: Tensor) -> Tensor:
-        driver.setup(pos)
-        return overlap.build(driver)
 
     # [norb, norb, natm, 3]
     j: Tensor = jacrev(func, argnums=0)(pos)  # type: ignore
@@ -133,23 +132,20 @@ def test_overlap_jacobian(dtype: torch.dtype, name: str):
 
 
 def calc_numerical_gradient(
-    overlap: Overlap, driver: IntDriver, positions: Tensor
+    func: Callable[[Tensor], Tensor], positions: Tensor, norb: int
 ) -> Tensor:
     step = 1.0e-4
     natm = positions.shape[0]
-    norb = t2int(driver.ihelp.orbitals_per_shell.sum())
     gradient = positions.new_zeros((natm, norb, norb, 3))
 
     # coordinates shift preferred to orbitals shift
     for i in range(natm):
         for j in range(3):
             positions[i, j] += step
-            driver.setup(positions)
-            sr = overlap.build(driver)  # [norb, norb]
+            sr = func(positions)  # [norb, norb]
 
             positions[i, j] -= 2 * step
-            driver.setup(positions)
-            sl = overlap.build(driver)
+            sl = func(positions)
 
             positions[i, j] += step
             gradient[i, :, :, j] = 0.5 * (sr - sl) / step

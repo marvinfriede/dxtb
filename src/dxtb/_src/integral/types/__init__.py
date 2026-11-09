@@ -18,17 +18,10 @@
 Integrals: Types
 ================
 
-Integral objects for the calculation of various molecular integrals.
-
-Currently, the following integral types are supported:
-
-- :class:`.Overlap`
-- :class:`.Dipole`
-- :class:`.Quadrupole`
-
-Note that the Hamiltonian is different as it does not require a driver.
+Pure transformations of the multipole integrals: the shift of the moment
+operator from the origin to the ket atom, the reduction of the quadrupole to
+its six independent components, and its traceless representation.
 """
 
 from .dipole import *
-from .overlap import *
 from .quadrupole import *

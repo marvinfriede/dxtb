@@ -22,12 +22,15 @@ builder.
 from __future__ import annotations
 
 import torch
-from tad_mctc.batch import pack
+from tad_mctc.batch import deflate, pack
 
 from dxtb import GFN1_XTB as par
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.driver.pytorch.driver import IntDriverPytorch
+from dxtb._src.integral.driver.pytorch.impls.kernels import (
+    DEFAULT_ALGORITHM,
+    get_kernel,
+)
 from dxtb._src.integral.driver.pytorch.impls.kernels.os import compute_1d_os
 from dxtb._src.integral.driver.pytorch.impls.pairs import assemble_matrix
 from dxtb._src.integral.driver.pytorch.impls.pipeline import (
@@ -50,12 +53,19 @@ def batch_matrix(
     positions: Tensor,
     components: tuple[tuple[int, int, int], ...],
 ) -> Tensor:
-    """Integral of a zero-padded batch, built by the PyTorch driver."""
+    """Integral of a zero-padded batch, built per Structure and packed."""
     dd: DD = {"dtype": positions.dtype, "device": positions.device}
-    ihelp = IndexHelper.from_numbers(numbers, par, batch_mode=1)
-    driver = IntDriverPytorch(numbers, par, ihelp, **dd)
-    driver.setup(positions)
-    return driver.eval_matrix(components)
+    kernel = get_kernel(DEFAULT_ALGORITHM)
+    matrices = []
+    for nums, pos in zip(numbers, positions):
+        nums = deflate(nums)
+        ihelp, alphas, coeffs = setup(nums, dd)
+        matrices.append(
+            assemble_matrix(
+                kernel, ihelp, alphas, coeffs, pos[: nums.shape[-1]], components
+            )
+        )
+    return pack(matrices)
 
 
 def two_molecules(dd: DD, gap: float) -> tuple[Tensor, Tensor]:

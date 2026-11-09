@@ -23,12 +23,16 @@ from __future__ import annotations
 import pytest
 import torch
 from tad_mctc.autograd import dgradcheck, dgradgradcheck
-from tad_mctc.batch import pack
+from tad_mctc.batch import deflate, pack
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import IntDriverLibcint, OverlapLibcint
+from dxtb._src.integral.driver.libcint import (
+    LibcintIntegralSetup,
+    build_overlap_libcint,
+    setup_libcint,
+)
 from dxtb._src.typing import DD, Callable, Tensor
 
 if has_libcint is True:
@@ -124,15 +128,24 @@ def gradchecker_batch(
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    driver = IntDriverLibcint(numbers, par, ihelp, **dd)
-    overlap = OverlapLibcint(**dd)
+    basis_setups = []
+    for nums in numbers:
+        nums = deflate(nums)
+        ih = IndexHelper.from_numbers(nums, par)
+        basis_setups.append(Basis(nums, par, ih, **dd).setup_data())
+    setup = LibcintIntegralSetup(
+        numbers=numbers,
+        ihelp=ihelp,
+        basis_setups=tuple(basis_setups),
+        force_cpu=False,
+    )
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        call_data = driver.setup(p, mask=mask)
-        return overlap.build(call_data)
+        call_data = setup_libcint(setup, p, mask=mask)
+        return build_overlap_libcint(call_data)
 
     return func, pos
 

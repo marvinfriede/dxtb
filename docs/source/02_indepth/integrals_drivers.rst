@@ -9,6 +9,5 @@ Integral Drivers
    Libcint <integrals_drivers_libcint>
    PyTorch <integrals_drivers_pytorch>
 
-.. automodule:: dxtb._src.integral.base
+.. automodule:: dxtb._src.integral.utils
    :members:
-   :show-inheritance:

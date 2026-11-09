@@ -124,7 +124,7 @@ class Basis(TensorLike):
         # When a CUDA device is used, the parametrization remains on CPU, even
         # when the libcint library is requested via the `force_cpu_for_libcint`
         # flag. This flag only moves the positions and the IndexHelper (see
-        # `DriverManager.create_driver`). We are moving here, because we do not
+        # `setup_integral_evaluation`). We are moving here, because we do not
         # want to move the whole parametrization back and forth.
         self.ngauss = self.ngauss.to(device=self.device)
         self.slater = self.slater.to(device=self.device)

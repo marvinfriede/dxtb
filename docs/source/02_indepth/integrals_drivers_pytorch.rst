@@ -21,9 +21,7 @@ of two interchangeable algorithms, selected with the ``int_algorithm`` option
 Both algorithms agree with libcint to ``1e-12`` in double precision, support
 CPU and CUDA, padded batches, and derivatives of any order (also with
 ``torch.func``) with respect to the positions and the basis parameters, and
-work with ``torch.compile``. The analytical nuclear gradient of the
-calculator needs the overlap gradient of the libcint driver; with the PyTorch
-driver, use the autograd forces.
+work with ``torch.compile``.
 
 The GFN2 calculator also provides the molecular traceless quadrupole moment
 (``calc.get_quadrupole(positions)``, six components ``xx, yx, yy, zx, zy, zz``,
@@ -57,12 +55,11 @@ The option is only valid for the PyTorch driver; it is rejected for libcint.
 On the CPU, libcint is faster than the PyTorch driver, in particular for the
 multipole integrals of large systems.
 
-Drivers
--------
+Setup
+-----
 
-.. automodule:: dxtb._src.integral.driver.pytorch.driver
+.. automodule:: dxtb._src.integral.driver.pytorch.setup
    :members:
-   :show-inheritance:
 
 Implementations
 ---------------

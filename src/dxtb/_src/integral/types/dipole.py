@@ -18,7 +18,7 @@
 Integral Types: Dipole
 ======================
 
-Dipole integral.
+Shift of the dipole integral from the origin to the ket atom.
 """
 
 from __future__ import annotations
@@ -27,9 +27,7 @@ from tad_mctc.math import einsum
 
 from dxtb._src.typing import Tensor
 
-from ..base import BaseIntegral
-
-__all__ = ["DipoleIntegral", "shift_dipole_origin"]
+__all__ = ["shift_dipole_origin"]
 
 
 def shift_dipole_origin(
@@ -46,48 +44,3 @@ def shift_dipole_origin(
 
     shift = einsum("...jx,...ij->...xij", orbital_positions, overlap)
     return dipole - shift
-
-
-class DipoleIntegral(BaseIntegral):
-    """
-    Dipole integral from atomic orbitals.
-    """
-
-    def shift_r0_rj(self, overlap: Tensor, pos: Tensor) -> Tensor:
-        r"""
-        Shift the centering of the dipole integral (moment operator) from the
-        origin (:math:`r0 = r - (0, 0, 0)`) to atoms (ket index,
-        :math:`rj = r - r_j`).
-
-        .. math::
-
-            \begin{align}
-            D &= D^{r_j}  \\
-            &= \langle i | r_j | j \rangle  \\
-            &= \langle i | r | j \rangle - r_j \langle i | j \rangle \\
-            &= \langle i | r_0 | j \rangle - r_j S_{ij}  \\
-            &= D^{r_0} - r_j S_{ij}
-            \end{align}
-
-        Parameters
-        ----------
-        r0 : Tensor
-            Origin centered dipole integral.
-        overlap : Tensor
-            Overlap integral.
-        pos : Tensor
-            Orbital-resolved atomic positions.
-
-        Raises
-        ------
-        RuntimeError
-            Shape mismatch between ``positions`` and `overlap`.
-            The positions must be orbital-resolved.
-
-        Returns
-        -------
-        Tensor
-            Second-index (ket) atom-centered dipole integral.
-        """
-        self.matrix = shift_dipole_origin(self.matrix, overlap, pos)
-        return self.matrix

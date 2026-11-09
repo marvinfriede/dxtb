@@ -25,7 +25,6 @@ from tad_mctc.batch import deflate
 
 from dxtb import IndexHelper, labels
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.base import normalize_integral_matrix
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
@@ -56,7 +55,7 @@ from dxtb._src.integral.types.quadrupole import (
     reduce_quadrupole_9_to_6,
     shift_quadrupole_origin,
 )
-from dxtb._src.integral.utils import snorm
+from dxtb._src.integral.utils import normalize_integral_matrix, snorm
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
 from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, build_hcore
