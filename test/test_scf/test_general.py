@@ -78,10 +78,7 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
         overlap=torch.eye(2, dtype=torch.float64).expand(2, 2, 2),
     )
     refocc_batch = torch.ones((2, 2), dtype=torch.float64)
-    interactions_batch = calc_batch.model.setup(
-        numbers_batch, batch_mode=2
-    ).interactions
-    cache_batch = interactions_batch.get_cache(
+    cache_batch = calc_batch.interactions.get_cache(
         numbers=numbers_batch, positions=positions_batch, ihelp=calc_batch.ihelp
     )
     with pytest.raises(
@@ -93,7 +90,7 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
             positions_batch,
             charge_batch,
             spin_batch,
-            interactions_batch,
+            calc_batch.interactions,
             cache_batch,
             calc_batch.ihelp,
             calc_batch.opts.scf,

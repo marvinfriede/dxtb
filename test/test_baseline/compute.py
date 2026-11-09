@@ -120,16 +120,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
     for label, e in res.cenergies.items():
         out[f"energy.{label}"] = e.sum(-1)
 
-    # a batched Calculator has no padded System; set one up for the
-    # decomposition of the interaction energies
-    interactions = (
-        calc.interactions
-        if calc.system is not None
-        else calc.model.setup(
-            calc.numbers, batch_mode=calc.ihelp.batch_mode
-        ).interactions
-    )
-    icache = interactions.get_cache(
+    icache = calc.interactions.get_cache(
         numbers=calc.numbers, positions=pos, ihelp=calc.ihelp
     )
     # The reference decomposition still calls the mutable SCF interaction API.
@@ -143,7 +134,7 @@ def _energy(system: System, method: str, driver: str) -> dict[str, Tensor]:
         quad=result_charges.quadrupole,
         batch_mode=calc.ihelp.batch_mode,
     )
-    eint = interactions.get_energy_as_dict(scf_charges, icache, calc.ihelp)
+    eint = calc.interactions.get_energy_as_dict(scf_charges, icache, calc.ihelp)
     for label, e in eint.items():
         out[f"energy.{label}"] = e.sum(-1)
 

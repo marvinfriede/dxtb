@@ -1378,7 +1378,7 @@ def test_inference_mode_param_module_ownership_and_identity() -> None:
 
 
 def test_call_local_setup_preserves_component_labels_and_state() -> None:
-    """Evaluation never mutates caller-owned components or their labels."""
+    """Label restoration and repeated evaluation never mutate caller-owned components."""
     num_w, pos_w = _water_geometry(0.0)
     _, pos_l = _lih_geometry(0.0)
     padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
@@ -1411,8 +1411,12 @@ def test_call_local_setup_preserves_component_labels_and_state() -> None:
         opts={"verbosity": 0, "exclude": ["disp", "es2"], "batch_mode": 1},
         **DD,
     )
+    # Replace calc.classicals component with a renamed instance while Model
+    # still holds the caller's extra_cls with its caller-owned label:
     extra_cls.label = "CallerOwnedD3"
     es2_a.label = "CallerOwnedES2"
+    copy_cls = extra_d3("RenamedD3OnCalc")
+    calc_b.classicals.components[-1] = copy_cls
 
     e_b = calc_b.energy(padded_pos)
     (g_s8,) = torch.autograd.grad(e_b.sum(), s8)
@@ -1420,6 +1424,51 @@ def test_call_local_setup_preserves_component_labels_and_state() -> None:
     assert extra_cls.label == "CallerOwnedD3"
     assert es2_a.label == "CallerOwnedES2"
     assert d3_a.label == "DispersionD3"
+
+    # Also verify Interaction label isolation on 1D _prepare_eval_system
+    # and 2D build_calculator_lane_systems
+    def renamed_es2(numbers: Tensor, label: str):
+        component = new_es2(torch.unique(numbers[numbers > 0]), par, **DD)
+        assert component is not None
+        component.label = label
+        return component
+
+    caller_int = renamed_es2(num_w, "ES2")
+    calc_int_1d = Calculator(
+        num_w,
+        par,
+        interaction=(caller_int,),
+        opts={"verbosity": 0, "exclude": ["scf", "es2"]},
+        **DD,
+    )
+    caller_int.label = "CallerOwnedES2"
+    calc_int_1d.interactions.components[-1] = renamed_es2(
+        num_w, "RenamedES2OnCalc"
+    )
+    eval_sys_1d = calc_int_1d._prepare_eval_system()
+    assert eval_sys_1d.interactions.components[-1].label == "RenamedES2OnCalc"
+    assert caller_int.label == "CallerOwnedES2"
+
+    caller_int_2d = renamed_es2(padded_nums, "ES2")
+    calc_int_2d = Calculator(
+        padded_nums,
+        par,
+        interaction=(caller_int_2d,),
+        opts={
+            "verbosity": 0,
+            "exclude": ["scf", "es2"],
+            "batch_mode": 1,
+        },
+        **DD,
+    )
+    caller_int_2d.label = "CallerOwnedES2"
+    calc_int_2d.interactions.components[-1] = renamed_es2(
+        padded_nums, "RenamedES2OnCalc"
+    )
+    lanes_2d = build_calculator_lane_systems(calc_int_2d)
+    for lane in lanes_2d:
+        assert lane.interactions.components[-1].label == "RenamedES2OnCalc"
+    assert caller_int_2d.label == "CallerOwnedES2"
 
 
 def test_all_implemented_properties_dispatch_and_unsupported_batch_errors() -> None:

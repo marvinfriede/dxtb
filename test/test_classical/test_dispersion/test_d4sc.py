@@ -130,9 +130,7 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     )
 
     result = calc.singlepoint(positions)
-    # a batched Calculator has no padded System
-    padded = calc.model.setup(numbers, batch_mode=calc.ihelp.batch_mode)
-    d4sc = padded.interactions.get_interaction("DispersionD4SC")
+    d4sc = calc.interactions.get_interaction("DispersionD4SC")
     cache = d4sc.get_cache(numbers=numbers, positions=positions)
 
     edisp = d4sc.get_energy(

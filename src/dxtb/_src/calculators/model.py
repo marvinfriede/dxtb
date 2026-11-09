@@ -1538,31 +1538,6 @@ class Model:
         if not isinstance(self.interaction, tuple):
             raise TypeError("The additional interactions must be a tuple.")
 
-    def resolve_config(self) -> Config:
-        """
-        Configuration of the Systems that this Model sets up.
-
-        With `auto_int_level`, the integral level is raised to the one the
-        parametrization requires. It is turned off in tests, since otherwise
-        all GFN2-xTB tests fail without `libcint`, even when integrals are
-        not tested (e.g. D4SC).
-        """
-        config = self.config
-        par = self.par
-        if self.auto_int_level:
-            if par.meta is not None and par.meta.name is not None:
-                name = par.meta.name.casefold()
-                if any(method in name for method in ("gfn0", "gfn1")):
-                    config = _with_int_level(
-                        config, max(labels.INTLEVEL_HCORE, config.ints.level)
-                    )
-                elif "gfn2" in name:
-                    config = _with_int_level(
-                        config,
-                        max(labels.INTLEVEL_QUADRUPOLE, config.ints.level),
-                    )
-        return config
-
     @property
     @_serialize_parameter_setup
     def parameter_tree(self) -> ModelParameterNode:
@@ -1758,7 +1733,8 @@ class Model:
                 strict=True,
             )
 
-        exclude = set(self.config.exclude)
+        config = self.config
+        exclude = set(config.exclude)
         dd = par.dd if dd is None else dd
         unique = torch.unique(numbers)
 
@@ -1769,7 +1745,21 @@ class Model:
                 f"Invalid batch mode '{batch_mode}'. Must be one of [0, 1, 2]."
             )
 
-        config = self.resolve_config()
+        # Set integral level based on parametrization. For the tests, we want
+        # to turn this off. Otherwise, all GFN2-xTB tests will fail without
+        # `libcint`, even when integrals are not tested (e.g. D4SC).
+        if self.auto_int_level:
+            if par.meta is not None and par.meta.name is not None:
+                name = par.meta.name.casefold()
+                if any(method in name for method in ("gfn0", "gfn1")):
+                    config = _with_int_level(
+                        config, max(labels.INTLEVEL_HCORE, config.ints.level)
+                    )
+                elif "gfn2" in name:
+                    config = _with_int_level(
+                        config,
+                        max(labels.INTLEVEL_QUADRUPOLE, config.ints.level),
+                    )
 
         # PERF: The IndexHelper is created on CPU and moved to the device of
         # the `number` tensor. This is required for the instantiation of the

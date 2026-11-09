@@ -604,10 +604,10 @@ assert "tad_libcint" not in sys.modules
 
 
 @pytest.mark.parametrize("batch_mode", [1, 2])
-def test_batched_calculator_sets_up_no_padded_system(
+def test_batched_calculator_keeps_legacy_integral_adapter(
     batch_mode: int,
 ) -> None:
-    """A batched Calculator evaluates per-Lane Systems only."""
+    """Existing batch modes remain on Calculator-local legacy builders."""
     positions = torch.tensor(
         [
             [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]],
@@ -623,7 +623,7 @@ def test_batched_calculator_sets_up_no_padded_system(
         opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
         batch_mode=batch_mode,
     )
-    assert calc.system is None
+    assert calc.system.integral_setup is None
     assert not hasattr(calc, "integrals")
 
     charges = torch.tensor([0.0, 1.0], dtype=positions.dtype)
