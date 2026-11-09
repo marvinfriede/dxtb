@@ -525,6 +525,20 @@ def _gap_electron_response(
     kt: Tensor,
 ) -> Tensor:
     """Build the stable fixed-count electron response inside a wide gap."""
+    return _gap_electron_response_and_mu(
+        matrix, spectral, active, below, gap, kt
+    )[0]
+
+
+def _gap_electron_response_and_mu(
+    matrix: Tensor,
+    spectral: Tensor,
+    active: Tensor,
+    below: Tensor,
+    gap: Tensor,
+    kt: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Build the fixed-count electron response and chemical potential in a gap."""
     n = matrix.shape[-1]
     active_count = active.sum(-1)
     rank = below.sum(-1).to(torch.long)
@@ -566,17 +580,26 @@ def _gap_electron_response(
     virtual_sum = virtual_tail.diagonal(dim1=-2, dim2=-1).sum(-1)
     occupied_sum = occupied_tail.diagonal(dim1=-2, dim2=-1).sum(-1)
     tiny = torch.finfo(matrix.dtype).tiny
-    virtual_part = virtual_tail / virtual_sum.clamp_min(tiny)[..., None, None]
-    occupied_part = (
-        occupied_tail / occupied_sum.clamp_min(tiny)[..., None, None]
-    )
+    occupied_clamped = occupied_sum.clamp_min(tiny)
+    virtual_clamped = virtual_sum.clamp_min(tiny)
+    virtual_part = virtual_tail / virtual_clamped[..., None, None]
+    occupied_part = occupied_tail / occupied_clamped[..., None, None]
     has_both = (rank > 0) & (rank < active_count)
     response = torch.where(
         has_both[..., None, None],
         0.5 * (virtual_part + occupied_part),
         virtual_part + occupied_part,
     )
-    return torch.where(gap[..., None, None], response, 0.0)
+    response = torch.where(gap[..., None, None], response, 0.0)
+    mu_occ = homo + kt * torch.log(occupied_clamped)
+    mu_virt = lumo - kt * torch.log(virtual_clamped)
+    mu_gap = torch.where(
+        has_both,
+        0.5 * (mu_occ + mu_virt),
+        torch.where(rank > 0, mu_occ, mu_virt),
+    )
+    mu_gap = torch.where(gap, mu_gap, 0.0)
+    return response, mu_gap
 
 
 def _tracks_derivatives(x: Tensor) -> bool:
@@ -1085,9 +1108,19 @@ def _fermi_free_energy_closure(
     )
 
 
-def _gap_relative_mu(setup: _FermiFreeEnergySetup, identity: Tensor) -> Tensor:
-    mu_gap = setup.ref + setup.offset + setup.shift
-    return (mu_gap[..., None, None] * identity - setup.spectral) / setup.safe_kt
+def _gap_relative_mu(
+    setup: _FermiFreeEnergySetup,
+    identity: Tensor,
+    mu_gap: Tensor | None = None,
+) -> Tensor:
+    mu_base = setup.ref + setup.offset + setup.shift
+    if mu_gap is None:
+        mu = mu_base
+    else:
+        mu = mu_base + torch.where(
+            setup.gap_mask, mu_gap - mu_gap.detach(), 0.0
+        )
+    return (mu[..., None, None] * identity - setup.spectral) / setup.safe_kt
 
 
 def fermi_free_energy_matrix(
@@ -1117,7 +1150,7 @@ def fermi_free_energy_matrix(
     identity = torch.diag_embed(active.to(torch.float64))
     count_delta = setup.target - setup.target.detach()
     if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
-        gap_response = _gap_electron_response(
+        gap_response, mu_gap = _gap_electron_response_and_mu(
             setup.h,
             setup.spectral,
             active,
@@ -1125,7 +1158,7 @@ def fermi_free_energy_matrix(
             setup.gap_mask,
             setup.safe_kt,
         )
-        gap_term = _gap_relative_mu(setup, identity) @ gap_response
+        gap_term = _gap_relative_mu(setup, identity, mu_gap) @ gap_response
     else:
         gap_term = torch.zeros_like(setup.x)
     q = _fermi_free_energy_closure(
@@ -1193,7 +1226,7 @@ def fermi_free_energy_trace(
     )
     count_delta = setup.target - setup.target.detach()
     if _tracks_derivatives(nel) or _tracks_derivatives(count_delta):
-        gap_response = _gap_electron_response(
+        gap_response, mu_gap = _gap_electron_response_and_mu(
             setup.h,
             setup.spectral,
             active,
@@ -1202,7 +1235,8 @@ def fermi_free_energy_trace(
             setup.safe_kt,
         )
         gap_term = (
-            _gap_relative_mu(setup, identity) * gap_response.transpose(-2, -1)
+            _gap_relative_mu(setup, identity, mu_gap)
+            * gap_response.transpose(-2, -1)
         ).sum((-2, -1))
     else:
         gap_term = torch.zeros_like(setup.shift)
@@ -1329,10 +1363,10 @@ def _projector(
     # Newton-Schulz sign iteration. The fixed iteration count avoids
     # data-dependent control flow. The detached spectral-gap preconditioner
     # balances the smallest and largest magnitudes before the iteration,
-    # keeping the inverse systems nonsingular. Since x is symmetric and
-    # invertible, solve (x @ x) y = x for y = x**-1 with Cholesky.
+    # keeping the inverse systems nonsingular without squaring the condition
+    # number of x.
     for _ in range(14):
-        inverse = _solve_positive_definite(x @ x, x)
+        inverse = torch.linalg.inv(x)
         x = 0.5 * (x + inverse)
     result = 0.5 * (eye - x)
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)
@@ -1353,8 +1387,7 @@ def aufbau_density_matrix(
     frontier projector, preserving dxtb's fractional-electron convention.
     An exact degeneracy across differently occupied states is outside the
     differentiable contract: the matrix-sign projector becomes singular and
-    its positive-definite Cholesky factorization raises rather than
-    manufacturing a response.
+    its matrix inversion raises rather than manufacturing a response.
     """
     work_dtype = (
         torch.float64

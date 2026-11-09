@@ -42,7 +42,9 @@ STATUS: dict[str, dict] = (
 
 # Validated capability improvements over the frozen Track-0 matrix.json
 # snapshot: unified pure-PyTorch tad_dftd supports forward-mode AD (jvp) for
-# GFN1-xTB (D3) and GFN2-xTB (D4SC) dispersion parameter derivatives.
+# GFN1-xTB (D3) and GFN2-xTB (D4SC) dispersion parameter derivatives, and the
+# transform-compatible SCF/integral pipeline supports forward-mode JVP and
+# functorch implicit differentiation on single systems.
 _VALIDATED_DFT_D_FORWARD_CELLS: frozenset[str] = frozenset(
     {
         "dE_dparam-forward-gfn1-libcint-full-single",
@@ -51,12 +53,44 @@ _VALIDATED_DFT_D_FORWARD_CELLS: frozenset[str] = frozenset(
         "dE_dparam-forward-gfn2-libcint-full-single",
         "dE_dparam-forward-gfn2-libcint-implicit-single",
         "dE_dparam-forward-gfn2-pytorch-implicit-single",
+        "dforces_dparam-forward-gfn1-libcint-full-single",
+        "dforces_dparam-forward-gfn2-libcint-full-single",
+        "dforces_dparam-forward-gfn2-pytorch-full-single",
+    }
+)
+
+_VALIDATED_POST_TRACK0_CELLS: frozenset[str] = frozenset(
+    {
+        "dforces_dparam-autograd-gfn1-libcint-full-single",
+        "dforces_dparam-autograd-gfn1-libcint-implicit-single",
+        "dforces_dparam-autograd-gfn2-libcint-full-single",
+        "dforces_dparam-autograd-gfn2-libcint-implicit-single",
+        "dipole-functorch-gfn1-libcint-implicit-single",
+        "dipole-functorch-gfn1-pytorch-implicit-single",
+        "dipole-functorch-gfn2-libcint-implicit-single",
+        "dipole-functorch-gfn2-pytorch-implicit-single",
+        "dipole_deriv-forward-gfn1-libcint-full-single",
+        "dipole_deriv-forward-gfn1-pytorch-full-single",
+        "dipole_deriv-forward-gfn2-libcint-full-single",
+        "forces-forward-gfn1-libcint-full-single",
+        "forces-forward-gfn1-pytorch-full-single",
+        "forces-forward-gfn2-libcint-full-single",
+        "forces-functorch-gfn1-libcint-implicit-single",
+        "forces-functorch-gfn1-pytorch-implicit-single",
+        "forces-functorch-gfn2-libcint-implicit-single",
+        "forces-functorch-gfn2-pytorch-implicit-single",
+        "hessian-forward-gfn1-libcint-full-single",
+        "hessian-forward-gfn1-pytorch-full-single",
+        "hessian-forward-gfn2-libcint-full-single",
     }
 )
 
 
 def _expected_status(cell: Cell) -> str | None:
-    if cell.id in _VALIDATED_DFT_D_FORWARD_CELLS:
+    if (
+        cell.id in _VALIDATED_DFT_D_FORWARD_CELLS
+        or cell.id in _VALIDATED_POST_TRACK0_CELLS
+    ):
         return "pass"
     recorded = STATUS.get(cell.id)
     return None if recorded is None else recorded["status"]
