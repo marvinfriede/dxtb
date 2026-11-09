@@ -95,6 +95,20 @@ BIG = ("LYS_xao", "batch_H2O_CH4", "batch_H2_LYS", "slow", "slow_gap")
 LARGE = ("H2", "LiH", "LYS_xao", "slow", "slow_gap")
 SLOW = ("H2O+", "batch_H2_LYS")
 
+# Cells of the remaining systems that run in the routine suite. Per mode they
+# cover every derivative kind and every quantity once, plus a batch; all other
+# cells of these systems are marked `slow` (nightly), because each cell is a
+# full SCF plus derivatives (about 25 s on a loaded 16-core machine).
+ROUTINE = {
+    ("H2O", "pos", "q"),
+    ("H2O", "field", "dip"),
+    ("H2O", "param", "E"),
+    ("H2O", "hvp_pos", "q2"),
+    ("H2O", "mixed", "E"),
+    ("batch_H2O_CH4", "pos", "E"),
+    ("batch_H2O_CH4", "hvp_pos", "q2"),
+}
+
 QUANTITIES = ["E", "q", "q2", "dip"]
 FIRST = ["pos", "field", "param"]
 SECOND = [("hvp_pos", "E"), ("hvp_pos", "q2"), ("mixed", "E")]
@@ -486,7 +500,9 @@ def _all_cells() -> list:
                 marks = []
                 if system in LARGE:
                     marks.append(pytest.mark.large)
-                if system in SLOW:
+                if system in SLOW or (
+                    system not in LARGE and (system, d, q) not in ROUTINE
+                ):
                     marks.append(pytest.mark.slow)
                 key = (mode, system, d, q)
                 if key in KNOWN_FAILURES:
