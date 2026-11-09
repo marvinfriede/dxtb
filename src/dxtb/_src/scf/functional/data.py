@@ -386,6 +386,11 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
     inverse square root without eigenvector derivatives. Frobenius scaling
     puts every positive overlap spectrum in the convergence interval.
     """
+    input_dtype = overlap.dtype
+    work_dtype = (
+        torch.float64 if input_dtype != torch.float64 else input_dtype
+    )
+    overlap = overlap.to(dtype=work_dtype)
     overlap = 0.5 * (overlap + overlap.transpose(-2, -1))
     size = overlap.shape[-1]
     identity = torch.eye(
@@ -399,7 +404,8 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
         y = y @ correction
         z = correction @ z
     inverse_root = z / scale.sqrt()[..., None, None]
-    return 0.5 * (inverse_root + inverse_root.transpose(-2, -1))
+    result = 0.5 * (inverse_root + inverse_root.transpose(-2, -1))
+    return result.to(dtype=input_dtype)
 
 
 def validate_functional_scf_interactions(
