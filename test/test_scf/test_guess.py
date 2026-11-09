@@ -47,10 +47,21 @@ def test_fail() -> None:
     with pytest.raises(ValueError):
         guess.get_guess(numbers, positions, charge, ihelp, name=1000)
 
-    # charges change because IndexHelper is broken
+    # direct mutation is rejected by the frozen IndexHelper Node
+    with pytest.raises(AttributeError):
+        ihelp.orbitals_to_shell = torch.tensor(  # type: ignore[misc]
+            [1, 2, 3], device=DEVICE
+        )
+
+    # charges change because IndexHelper orbital-to-shell mapping is broken
     with pytest.raises(RuntimeError):
-        ih = IndexHelper.from_numbers_angular(numbers, {1: [0, 0], 6: [0, 1]})
-        ih.orbitals_to_shell = torch.tensor([1, 2, 3])
+        ih = ihelp.replace(
+            orbitals_to_shell=torch.tensor(
+                [1, 2, 3],
+                dtype=ihelp.orbitals_to_shell.dtype,
+                device=DEVICE,
+            )
+        )
         guess.get_guess(numbers, positions, charge, ih)
 
 

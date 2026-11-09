@@ -37,6 +37,7 @@ from tad_mctc.batch import pack
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.constants import labels
 from dxtb._src.typing import DD
+from dxtb._src.typing.exceptions import SCFConvergenceError
 
 from ..conftest import DEVICE
 from .element_sets import ALL_DOUBLE_REPS_FLOAT, reps_both_dtypes
@@ -420,9 +421,28 @@ def test_element_anion(dtype: torch.dtype, number: int) -> None:
 
 
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("number", [1, 2, 10, 25, 26, 50, 86])
 @pytest.mark.parametrize("mol", ["SiH4"])
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
+@pytest.mark.parametrize(
+    "dtype, number",
+    [
+        pytest.param(
+            dtype,
+            number,
+            marks=pytest.mark.xfail(
+                raises=SCFConvergenceError,
+                strict=True,
+                reason=(
+                    "Neutral Mn (Z=25) does not converge with potential "
+                    "mixing in float64."
+                ),
+            ),
+        )
+        if (dtype is torch.double and number == 25)
+        else (dtype, number)
+        for dtype in (torch.float, torch.double)
+        for number in (1, 2, 10, 25, 26, 50, 86)
+    ],
+)
 def test_element_batch(dtype: torch.dtype, number: int, mol: str) -> None:
     tol = 1e-1
     dd: DD = {"device": DEVICE, "dtype": dtype}

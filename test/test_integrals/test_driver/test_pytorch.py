@@ -75,19 +75,15 @@ def test_single(dtype: torch.dtype):
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 def test_batch_mode_fail(dtype: torch.dtype) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-
     numbers = torch.tensor([[3, 1], [1, 0]], device=DEVICE)
-    positions = torch.zeros((2, 2, 3), **dd)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
-    # set to invalid value
-    ihelp.batch_mode = -99
+    # IndexHelper is a frozen Node and validates batch_mode on init/replace
+    with pytest.raises(AttributeError):
+        ihelp.batch_mode = -99  # type: ignore[misc]
 
-    drv = IntDriverPytorch(numbers, GFN1_XTB, ihelp, **dd)
-
-    with pytest.raises(ValueError):
-        drv.setup(positions)
+    with pytest.raises(ValueError, match="IndexHelper.batch_mode"):
+        ihelp.replace(batch_mode=-99)
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])

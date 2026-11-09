@@ -15,9 +15,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-The unrolled SCF computes the inverse Cholesky factor of the overlap matrix
-once and passes it to the eigensolver, instead of solving with the overlap in
-every iteration.
+The SCF solver computes the symmetric inverse square root of the overlap matrix
+once per geometry and passes it to the eigensolver, instead of solving a
+generalized eigenproblem with the overlap in every iteration.
 """
 
 from __future__ import annotations
@@ -27,10 +27,12 @@ import torch
 from tad_mctc.convert import symbol_to_number
 
 from dxtb import GFN1_XTB, Calculator
+from dxtb._src.integral.wrappers import overlap
 from dxtb._src.scf.functional import data as scf_data
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
+from .samples import samples
 
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
@@ -57,3 +59,20 @@ def test_factor_computed_once(
     calc.get_energy(positions.clone().requires_grad_(True))
 
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("dtype", [torch.float, torch.double])
+def test_symmetric_inverse_sqrt_orthogonality(dtype: torch.dtype) -> None:
+    dd: DD = {"device": DEVICE, "dtype": dtype}
+    sample = samples["LYS_xao_dist"]
+    numbers = sample["numbers"].to(device=DEVICE)
+    positions = sample["positions"].to(**dd)
+
+    s = overlap(numbers, positions, GFN1_XTB)
+    x = scf_data._symmetric_inverse_sqrt(s)
+    assert x.dtype == dtype
+
+    eye = torch.eye(s.shape[-1], **dd)
+    orth_err = torch.linalg.matrix_norm(x @ s @ x.mT - eye, ord=float("inf"))
+    tol = 4e-6 if dtype == torch.float else 1e-12
+    assert float(orth_err) < tol

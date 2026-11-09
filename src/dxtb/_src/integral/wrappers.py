@@ -195,7 +195,7 @@ def dipint(
 def quadint(
     numbers: Tensor, positions: Tensor, par: Param, **kwargs: Any
 ) -> Tensor:
-    """Shortcut for dipole integral calculations.
+    """Shortcut for quadrupole integral calculations.
 
     Parameters
     ----------
@@ -209,7 +209,7 @@ def quadint(
     Returns
     -------
     Tensor
-        Dipole integral (matrix) of shape ``(nb, 3, nao, nao)``.
+        Quadrupole integral (matrix) of shape ``(nb, 9, nao, nao)``.
     """
     return _integral("_quadrupole", numbers, positions, par, **kwargs)
 
@@ -225,7 +225,7 @@ def _integral(
 
     Parameters
     ----------
-    integral_type : Literal['overlap', 'dipole', 'quadrupole']
+    integral_type : Literal['_overlap', '_dipole', '_quadrupole']
         Type of integral to calculate.
     numbers : Tensor
         Atomic numbers for all atoms in the system (shape: ``(..., nat)``).
@@ -237,8 +237,9 @@ def _integral(
     Returns
     -------
     Tensor
-        Integral matrix of shape ``(..., nao, nao)`` for overlap and
-        ``(..., 3, nao, nao)`` for dipole and quadrupole.
+        Integral matrix of shape ``(..., nao, nao)`` for overlap,
+        ``(..., 3, nao, nao)`` for dipole, and ``(..., 9, nao, nao)`` for
+        quadrupole.
 
     Raises
     ------
