@@ -423,3 +423,32 @@ def test_search_runs_all_trips_under_transforms(
         ).occupation
     )(spectra[0])
     assert trips[0] == maxiter + 1
+
+
+def test_search_runs_all_trips_under_compile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``torch.compile`` traces the static search and matches eager values."""
+    spectra, electrons, mask, kt = _case()
+    maxiter = 12
+    eager = filling.get_fermi_occupation_core(
+        electrons[1], spectra[1], kt, mask=mask, maxiter=maxiter
+    )
+
+    torch._dynamo.reset()
+    trips = _count_search_trips(monkeypatch)
+    compiled = torch.compile(
+        lambda n, e: filling.get_fermi_occupation_core(
+            n, e, kt, mask=mask, maxiter=maxiter
+        ),
+        backend="aot_eager",
+    )
+    result = compiled(electrons[1], spectra[1])
+    torch._dynamo.reset()
+
+    # the counter runs once per traced trip
+    assert trips[0] == maxiter + 1
+    torch.testing.assert_close(
+        result.occupation, eager.occupation, rtol=0.0, atol=1e-12
+    )
+    assert torch.equal(result.status.converged, eager.status.converged)

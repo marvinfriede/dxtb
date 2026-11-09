@@ -35,6 +35,9 @@ flag per trip and stops once every channel is done. Done channels are
 frozen by `_fermi_search_step`, so the result is bitwise that of all
 trips. `test_functional_filling.py` checks this with `torch.equal` on the
 occupations, status and search state, including unconverged searches.
+Trip counters check that `vmap`, `jacrev` and `torch.compile` (`aot_eager`)
+keep all trips. The compile test fails if the compile guard is removed (5
+instead of 13 trips).
 
 `_fermi_search_stops_early` keeps all trips, without host reads, inside
 `torch.func` transforms, `torch.compile`, `torch.jit.trace`, dispatch
