@@ -13,7 +13,6 @@ import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
-from dxtb._src.components.interactions import new_efield, new_efield_grad
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
@@ -530,37 +529,36 @@ def test_autograd_properties_after_pure_singlepoint(
 ) -> None:
     """Autograd Calculator properties remain usable after pure evaluation."""
     positions = samples["H2"]["positions"].to(dtype=torch.float64)
-    interactions = None
+    field = None
+    field_grad = None
+    opts = {"verbosity": 0, "int_driver": driver}
     if property_name == "dipole":
-        interactions = [
-            new_efield(
-                torch.zeros(3, dtype=positions.dtype, requires_grad=True)
-            )
-        ]
+        field = torch.zeros(3, dtype=positions.dtype, requires_grad=True)
+        opts["int_level"] = labels.INTLEVEL_DIPOLE
     elif property_name == "quadrupole":
-        interactions = [
-            new_efield_grad(
-                torch.zeros((3, 3), dtype=positions.dtype, requires_grad=True)
-            )
-        ]
+        field_grad = torch.zeros(
+            (3, 3), dtype=positions.dtype, requires_grad=True
+        )
+        opts["int_level"] = labels.INTLEVEL_QUADRUPOLE
     calc = Calculator(
         samples["H2"]["numbers"],
         GFN1_XTB if property_name == "forces" else GFN2_XTB,
-        interaction=interactions,
         dtype=positions.dtype,
-        opts={"verbosity": 0, "int_driver": driver},
+        opts=opts,
     )
     calc.singlepoint(
         positions,
         chrg=0.0,
+        field=field,
+        field_grad=field_grad,
     )
 
     if property_name == "forces":
         value = calc.forces(positions.clone().requires_grad_())
     elif property_name == "dipole":
-        value = calc.dipole(positions)
+        value = calc.dipole(positions, field=field)
     else:
-        value = calc.quadrupole(positions)
+        value = calc.quadrupole(positions, field_grad=field_grad)
     assert torch.isfinite(value).all()
 
 

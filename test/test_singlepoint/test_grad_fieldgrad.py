@@ -26,7 +26,6 @@ from tad_mctc.autograd import dgradcheck, dgradgradcheck
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
-from dxtb._src.components.interactions import new_efield, new_efield_grad
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Callable, Tensor
@@ -36,7 +35,7 @@ from ..utils import get_param_module, scf_strategy
 from .samples import samples
 
 opts = {
-    "int_level": labels.INTLEVEL_DIPOLE,
+    "int_level": labels.INTLEVEL_QUADRUPOLE,
     "x_atol": 1.0e-8,
     "maxiter": 100,
     "strategy": scf_strategy("anderson", "potential"),
@@ -73,12 +72,10 @@ def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
     par = get_param_module(gfn, **dd)
 
     def func(fieldgrad: Tensor) -> Tensor:
-        efield = new_efield(field_vector)
-        efield_grad = new_efield_grad(fieldgrad)
-        calc = Calculator(
-            numbers, par, interaction=[efield, efield_grad], opts=opts, **dd
+        calc = Calculator(numbers, par, opts=opts, **dd)
+        result = calc.singlepoint(
+            positions, charge, field=field_vector, field_grad=fieldgrad
         )
-        result = calc.singlepoint(positions, charge)
         energy = result.energy.sum(-1)
         return energy
 
@@ -145,12 +142,10 @@ def gradchecker_batch(
     par = get_param_module(gfn, **dd)
 
     def func(fieldgrad: Tensor) -> Tensor:
-        efield = new_efield(field_vector)
-        efield_grad = new_efield_grad(fieldgrad)
-        calc = Calculator(
-            numbers, par, interaction=[efield, efield_grad], opts=opts, **dd
+        calc = Calculator(numbers, par, opts=opts, **dd)
+        result = calc.singlepoint(
+            positions, charge, field=field_vector, field_grad=fieldgrad
         )
-        result = calc.singlepoint(positions, charge)
         energy = result.energy.sum(-1)
         return energy
 

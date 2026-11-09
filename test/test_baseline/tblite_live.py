@@ -34,9 +34,8 @@ import torch
 from tad_mctc.units.energy import KELVIN2AU
 from tblite.interface import Calculator as TbliteCalculator
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.typing import Tensor
-from dxtb.components.field import new_efield
 
 from ..utils import scf_strategy
 from .refdata import Deviation, Tolerance, compare
@@ -415,18 +414,22 @@ def evaluate_dxtb_reference(
 
     if include_dipole:
         field = torch.zeros(3, **dd, requires_grad=True)
-        dipole_interactions = [new_efield(field)]
-        if extra_interactions is not None:
-            dipole_interactions.extend(extra_interactions)
+        dipole_opts = dict(
+            opts,
+            int_level=max(
+                opts.get("int_level", labels.INTLEVEL_DIPOLE),
+                labels.INTLEVEL_DIPOLE,
+            ),
+        )
         calc_dip = Calculator(
             numbers,
             param,
-            opts=opts,
-            interaction=dipole_interactions,
+            opts=dipole_opts,
+            interaction=interactions_list,
             **dd,
         )
         dipole = calc_dip.dipole(
-            positions.detach().clone(), chrg=charge, spin=spin
+            positions.detach().clone(), chrg=charge, spin=spin, field=field
         )
         out["dipole"] = dipole.detach()
 

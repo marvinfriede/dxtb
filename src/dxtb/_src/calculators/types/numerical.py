@@ -35,7 +35,7 @@ from dxtb._src.typing import Any, Tensor
 from ..properties import vibration as vib
 from . import decorators as cdec
 from .autograd import _PROPERTY_METHODS
-from .energy import _UNSET, EnergyCalculator, kwargs_for
+from .energy import EnergyCalculator, kwargs_for
 
 __all__ = ["NumericalCalculator"]
 
@@ -83,8 +83,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -113,7 +113,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._check_fields(field, field_grad)
 
         # (..., nat, 3)
         deriv = torch.zeros(positions.shape, **self.dd)
@@ -184,8 +184,8 @@ class NumericalCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
         matrix: bool = False,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
     ) -> Tensor:
         """
         Numerically calculate the Hessian.
@@ -219,7 +219,7 @@ class NumericalCalculator(EnergyCalculator):
                 "Please use the single system mode."
             )
 
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._check_fields(field, field_grad)
 
         def _gradfcn(pos: Tensor) -> Tensor:
             return -self.forces_numerical(
@@ -277,8 +277,8 @@ class NumericalCalculator(EnergyCalculator):
         step_size: int | float = defaults.STEP_SIZE,
         project_translational: bool = True,
         project_rotational: bool = True,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
     ) -> vib.VibResult:
         r"""
         Perform vibrational analysis via numerical Hessian.
@@ -332,8 +332,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Numerically calculate the electric dipole moment :math:`\mu`.
@@ -361,7 +361,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:
@@ -410,8 +410,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        field: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Numerically calculate the traceless electric quadrupole moment
@@ -443,7 +443,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field_grad=True
         )
         if field_grad is None:
@@ -524,9 +524,9 @@ class NumericalCalculator(EnergyCalculator):
 
         _dipfcn = self.dipole_numerical
 
-        field, field_grad = self._resolve_response_fields(
-            kwargs.pop("field", _UNSET),
-            kwargs.pop("field_grad", _UNSET),
+        field, field_grad = self._response_fields(
+            kwargs.pop("field", None),
+            kwargs.pop("field_grad", None),
             needs_field=True,
         )
         kwargs["field"] = field
@@ -586,8 +586,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Numerically calculate the polarizability tensor :math:`\alpha`.
@@ -617,7 +617,7 @@ class NumericalCalculator(EnergyCalculator):
 
         _dipfcn = self.dipole_numerical
 
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:
@@ -670,8 +670,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = 2e-4,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Numerically calculate the cartesian polarizability derivative
@@ -703,7 +703,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
 
@@ -774,8 +774,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = 2e-4,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Numerically calculate the hyper polarizability tensor :math:`\beta`.
@@ -805,7 +805,7 @@ class NumericalCalculator(EnergyCalculator):
         # pylint: disable=import-outside-toplevel
         import gc
 
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:
@@ -860,8 +860,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
     ) -> vib.IRResult:
         """
         Numerically calculate the frequencies and intensities of IR spectra.
@@ -886,7 +886,7 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nIR Spectrum")
         OutputHandler.write_stdout("-----------")
         logger.debug("IR spectrum (numerical): Start.")
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
 
@@ -923,8 +923,8 @@ class NumericalCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         step_size: int | float = defaults.STEP_SIZE,
-        field: Tensor | None | object = _UNSET,
-        field_grad: Tensor | None | object = _UNSET,
+        field: Tensor | None = None,
+        field_grad: Tensor | None = None,
     ) -> vib.RamanResult:
         """
         Numerically calculate the frequencies, static intensities and
@@ -952,7 +952,7 @@ class NumericalCalculator(EnergyCalculator):
         OutputHandler.write_stdout("\nRaman Spectrum")
         OutputHandler.write_stdout("--------------")
         logger.debug("Raman spectrum (numerical): All finished.")
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
 

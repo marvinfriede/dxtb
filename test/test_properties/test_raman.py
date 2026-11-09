@@ -27,7 +27,6 @@ from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.units import VAA2AU
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 from dxtb.labels import INTLEVEL_DIPOLE
@@ -112,12 +111,10 @@ def execute(
     atol2: float,
     rtol2: float,
 ) -> None:
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
-    calc = Calculator(numbers, GFN1_XTB, interaction=[efield], opts=opts, **dd)
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     # field is cloned and detached and updated inside
-    numres = calc.raman_numerical(positions, charge)
+    numres = calc.raman_numerical(positions, charge, field=field_vector)
     assert numres.freqs.grad_fn is None
     assert numres.ints.grad_fn is None
     assert numres.depol.grad_fn is None
@@ -131,7 +128,7 @@ def execute(
     pos = positions.clone().detach().requires_grad_(True)
 
     # manual jacobian
-    res1 = calc.raman(pos, charge, use_functorch=False)
+    res1 = calc.raman(pos, charge, field=field_vector, use_functorch=False)
     freqs1, ints1, depol1 = res1.freqs, res1.ints, res1.depol
     freqs1 = tensor_to_numpy(freqs1)
     ints1 = tensor_to_numpy(ints1)
@@ -146,7 +143,7 @@ def execute(
     pos = positions.clone().detach().requires_grad_(True)
 
     # jacrev of energy
-    res2 = calc.raman(pos, charge, use_functorch=True)
+    res2 = calc.raman(pos, charge, field=field_vector, use_functorch=True)
     freqs2, ints2, depol2 = res2.freqs, res2.ints, res2.depol
     freqs2 = tensor_to_numpy(freqs2)
     ints2 = tensor_to_numpy(ints2)

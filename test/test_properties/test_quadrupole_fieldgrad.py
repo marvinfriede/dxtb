@@ -31,9 +31,9 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN2_XTB, Calculator
-from dxtb._src.components.interactions import new_efield_grad
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
+from dxtb.labels import INTLEVEL_QUADRUPOLE
 
 from ..conftest import DEVICE
 from ..utils import scf_strategy
@@ -45,6 +45,7 @@ opts = {
     "differentiation": "unrolled",
     "verbosity": 0,
     "x_atol": 1.0e-10,
+    "int_level": INTLEVEL_QUADRUPOLE,
 }
 
 DIAG = [0, 2, 5]  # xx, yy, zz of (xx, yx, yy, zx, zy, zz)
@@ -60,10 +61,7 @@ def _calc(
     numbers: Tensor, dd: DD, grad: bool, **kwargs
 ) -> tuple[Calculator, Tensor]:
     field_grad = torch.zeros((3, 3), **dd).requires_grad_(grad)
-    efg = new_efield_grad(field_grad)
-    calc = Calculator(
-        numbers, GFN2_XTB, interaction=[efg], opts=opts, **kwargs, **dd
-    )
+    calc = Calculator(numbers, GFN2_XTB, opts=opts, **kwargs, **dd)
     return calc, field_grad
 
 
@@ -73,21 +71,23 @@ def test_autograd_vs_numerical(name: str) -> None:
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
-    calc, _ = _calc(numbers, dd, grad=True)
-    auto = calc.quadrupole(positions).detach()
+    calc, fg = _calc(numbers, dd, grad=True)
+    auto = calc.quadrupole(positions, field_grad=fg).detach()
     assert auto.shape == (6,)
 
-    via_get = calc.get_quadrupole(positions).detach()
+    via_get = calc.get_quadrupole(positions, field_grad=fg).detach()
     via_sys = calc.system.quadrupole(positions).detach()
     assert pytest.approx(auto.cpu(), abs=1e-8) == via_get.cpu()
     assert pytest.approx(auto.cpu(), abs=1e-8) == via_sys.cpu()
 
-    calc_ft, _ = _calc(numbers, dd, grad=True)
-    quad_ft = calc_ft.quadrupole(positions, use_functorch=True).detach()
+    calc_ft, fg_ft = _calc(numbers, dd, grad=True)
+    quad_ft = calc_ft.quadrupole(
+        positions, field_grad=fg_ft, use_functorch=True
+    ).detach()
     assert pytest.approx(auto.cpu(), abs=1e-8) == quad_ft.cpu()
 
-    calc, _ = _calc(numbers, dd, grad=False)
-    num = calc.quadrupole_numerical(positions, step_size=1e-4)
+    calc, fg = _calc(numbers, dd, grad=False)
+    num = calc.quadrupole_numerical(positions, field_grad=fg, step_size=1e-4)
 
     assert pytest.approx(auto.cpu(), abs=2e-4) == num.cpu()
 
@@ -101,17 +101,19 @@ def test_batch() -> None:
     numbers = pack([samples[n]["numbers"].to(DEVICE) for n in names])
     positions = pack([samples[n]["positions"].to(**dd) for n in names])
 
-    calc, _ = _calc(numbers, dd, grad=True)
-    auto = calc.quadrupole(positions).detach()
+    calc, fg = _calc(numbers, dd, grad=True)
+    auto = calc.quadrupole(positions, field_grad=fg).detach()
     assert auto.shape == (2, 6)
 
-    calc, _ = _calc(numbers, dd, grad=False)
-    num = calc.quadrupole_numerical(positions, step_size=1e-4)
+    calc, fg = _calc(numbers, dd, grad=False)
+    num = calc.quadrupole_numerical(positions, field_grad=fg, step_size=1e-4)
     assert pytest.approx(auto.cpu(), abs=2e-4) == num.cpu()
 
     for i, name in enumerate(names):
-        calc, _ = _calc(samples[name]["numbers"].to(DEVICE), dd, grad=True)
-        single = calc.quadrupole(samples[name]["positions"].to(**dd)).detach()
+        calc, fg = _calc(samples[name]["numbers"].to(DEVICE), dd, grad=True)
+        single = calc.quadrupole(
+            samples[name]["positions"].to(**dd), field_grad=fg
+        ).detach()
         assert pytest.approx(single.cpu(), abs=1e-6) == auto[i].cpu()
 
 
@@ -133,19 +135,17 @@ def test_drivers(driver: str) -> None:
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
-    calc, _ = _calc(numbers, dd, grad=True)
-    ref = calc.quadrupole(positions).detach()
+    calc, fg = _calc(numbers, dd, grad=True)
+    ref = calc.quadrupole(positions, field_grad=fg).detach()
 
     field_grad = torch.zeros((3, 3), **dd).requires_grad_(True)
-    efg = new_efield_grad(field_grad)
     calc = Calculator(
         numbers,
         GFN2_XTB,
-        interaction=[efg],
         opts={**opts, "int_driver": driver},
         **dd,
     )
-    quad = calc.quadrupole(positions).detach()
+    quad = calc.quadrupole(positions, field_grad=field_grad).detach()
 
     assert pytest.approx(ref.cpu(), abs=1e-6) == quad.cpu()
 
@@ -169,6 +169,6 @@ def test_requires_grad() -> None:
     numbers = samples["H2O"]["numbers"].to(DEVICE)
     positions = samples["H2O"]["positions"].to(**dd)
 
-    calc, _ = _calc(numbers, dd, grad=False)
+    calc, fg = _calc(numbers, dd, grad=False)
     with pytest.raises(RuntimeError, match="requires_grad"):
-        calc.quadrupole(positions)
+        calc.quadrupole(positions, field_grad=fg)

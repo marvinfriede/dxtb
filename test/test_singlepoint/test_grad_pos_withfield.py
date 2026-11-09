@@ -27,7 +27,6 @@ from tad_mctc.batch import pack
 from tad_mctc.units import VAA2AU
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Callable, Tensor
@@ -71,15 +70,13 @@ def gradchecker(dtype: torch.dtype, name: str, gfn: str) -> tuple[
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
 
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
-    calc = Calculator(numbers, par, opts=opts, interaction=efield, **dd)
+    calc = Calculator(numbers, par, opts=opts, **dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        result = calc.singlepoint(p, charge)
+        result = calc.singlepoint(p, charge, field=field_vector)
         energy = result.energy.sum(-1)
         return energy
 
@@ -152,15 +149,13 @@ def gradchecker_batch(
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
 
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
-    calc = Calculator(numbers, par, interaction=[efield], opts=opts, **dd)
+    calc = Calculator(numbers, par, opts=opts, **dd)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        result = calc.singlepoint(p, charge)
+        result = calc.singlepoint(p, charge, field=field_vector)
         energy = result.energy.sum(-1)
         return energy
 
@@ -227,22 +222,20 @@ def full_vs_implicit_autograd(
     calc_imp = Calculator(
         numbers,
         GFN1_XTB,
-        interaction=new_efield(field_vector),
         opts=options_imp,
         **dd,
     )
     pos = positions.clone().requires_grad_(True)
-    ref = calc_imp.forces(pos, charge).detach()
+    ref = calc_imp.forces(pos, charge, field=field_vector).detach()
 
     calc_full = Calculator(
         numbers,
         GFN1_XTB,
-        interaction=new_efield(field_vector),
         opts=options_full,
         **dd,
     )
     pos = positions.clone().requires_grad_(True)
-    forces = calc_full.forces(pos, charge).detach()
+    forces = calc_full.forces(pos, charge, field=field_vector).detach()
 
     assert pytest.approx(ref.cpu(), abs=1e-7, rel=1e-5) == forces.cpu()
 

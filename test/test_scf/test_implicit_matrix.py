@@ -51,8 +51,7 @@ import pytest
 import torch
 from tad_mctc.batch import pack
 
-from dxtb import GFN1_XTB, Calculator, ParamModule
-from dxtb._src.components.interactions import new_efield
+from dxtb import GFN1_XTB, Calculator, ParamModule, labels
 
 from ..conftest import DEVICE
 from ..molecules import mols
@@ -127,6 +126,7 @@ def _opts(mode: str) -> dict:
         "x_atol": SCF_TOL,
         "x_atol_max": SCF_TOL,
         "force_convergence": True,
+        "int_level": labels.INTLEVEL_DIPOLE,
     }
 
 
@@ -219,12 +219,10 @@ def compute_cell(
     gexp = par.get("charge", "effective", "gexp")
 
     opts = _opts(mode)
-    calc = Calculator(
-        numbers, par, opts=opts, interaction=new_efield(field), **DD
-    )
+    calc = Calculator(numbers, par, opts=opts, **DD)
 
     try:
-        res = calc.singlepoint(pos, chrg)
+        res = calc.singlepoint(pos, chrg, field=field)
         fq = (quantity(calc, res, pos, q) * w).sum()
     except Exception as e:  # pylint: disable=broad-exception-caught
         return Failed(e)
@@ -268,10 +266,8 @@ def _scalars(system: str, pos=None, field=None, gexp=None) -> dict:
     if gexp is not None:
         with torch.no_grad():
             par.get("charge", "effective", "gexp").fill_(gexp)
-    calc = Calculator(
-        numbers, par, opts=_opts(REFERENCE), interaction=new_efield(field), **DD
-    )
-    res = calc.singlepoint(pos, chrg)
+    calc = Calculator(numbers, par, opts=_opts(REFERENCE), **DD)
+    res = calc.singlepoint(pos, chrg, field=field)
     return {
         q: (quantity(calc, res, pos, q) * w).sum().item() for q in QUANTITIES
     }
@@ -549,16 +545,16 @@ def test_float32_smoke(mode: str) -> None:
     ref_pos_e = compute_cell("unrolled", "H2O", "pos", "E")
 
     dd32 = {"device": DEVICE, "dtype": torch.float32}
-    opts = {"verbosity": 0, "maxiter": 100, "differentiation": mode}
+    opts = {
+        "verbosity": 0,
+        "maxiter": 100,
+        "differentiation": mode,
+        "int_level": labels.INTLEVEL_DIPOLE,
+    }
     pos = pos0.to(**dd32).requires_grad_(True)
-    calc = Calculator(
-        numbers,
-        GFN1_XTB,
-        opts=opts,
-        interaction=new_efield(torch.tensor(FIELD0, **dd32)),
-        **dd32,
-    )
-    res = calc.singlepoint(pos, chrg.to(**dd32))
+    field = torch.tensor(FIELD0, **dd32)
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd32)
+    res = calc.singlepoint(pos, chrg.to(**dd32), field=field)
 
     e = res.energy.sum(-1)
     (g,) = torch.autograd.grad(e, pos)

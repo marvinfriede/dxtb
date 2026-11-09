@@ -27,7 +27,6 @@ from tad_mctc.batch import pack
 from tad_mctc.units import VAA2AU
 
 from dxtb import Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Callable, Tensor
@@ -97,9 +96,8 @@ def gradchecker(
     field_vector.requires_grad_(True)
 
     def func(field_vector: Tensor) -> Tensor:
-        ef = new_efield(field_vector)
-        calc = Calculator(numbers, par, interaction=[ef], opts=options, **dd)
-        return calc.energy(positions, charge)
+        calc = Calculator(numbers, par, opts=options, **dd)
+        return calc.energy(positions, charge, field=field_vector)
 
     return func, field_vector
 
@@ -194,9 +192,8 @@ def gradchecker_batch(
     field_vector.requires_grad_(True)
 
     def func(field_vector: Tensor) -> Tensor:
-        ef = new_efield(field_vector)
-        calc = Calculator(numbers, par, interaction=[ef], opts=options, **dd)
-        return calc.energy(positions, charge)
+        calc = Calculator(numbers, par, opts=options, **dd)
+        return calc.energy(positions, charge, field=field_vector)
 
     return func, field_vector
 

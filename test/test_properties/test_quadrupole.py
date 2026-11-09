@@ -32,7 +32,6 @@ from tad_mctc.batch import pack
 from tad_mctc.units import VAA2AU
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.components.interactions import new_efield, new_efield_grad
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
@@ -86,13 +85,13 @@ def single(
     positions = samples[name]["positions"].to(**dd)
     ref = samples[name][key].to(**dd)
 
-    efield = new_efield(_field(key, dd))
-    efg = new_efield_grad(torch.zeros((3, 3), **dd, requires_grad=True))
-    calc = Calculator(
-        numbers, GFN1_XTB, interaction=[efield, efg], opts=opts, **dd
-    )
+    field = _field(key, dd)
+    field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
-    quad = calc.get_quadrupole(positions).detach()
+    quad = calc.get_quadrupole(
+        positions, field=field, field_grad=field_grad
+    ).detach()
 
     assert (
         pytest.approx(ref[DIAG].cpu(), abs=atol, rel=rtol)
@@ -125,20 +124,21 @@ def autograd_or_numerical(
     ref = samples[name][key].to(**dd)
 
     field_grad = torch.zeros((3, 3), **dd)
-    efield = new_efield(_field(key, dd))
+    field = _field(key, dd)
 
     if kind == "autograd":
         field_grad.requires_grad_(True)
 
-    efg = new_efield_grad(field_grad)
-    calc = Calculator(
-        numbers, GFN1_XTB, interaction=[efield, efg], opts=opts, **dd
-    )
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     if kind == "autograd":
-        quad = calc.quadrupole(positions).detach()
+        quad = calc.quadrupole(
+            positions, field=field, field_grad=field_grad
+        ).detach()
     else:
-        quad = calc.quadrupole_numerical(positions, step_size=1e-4)
+        quad = calc.quadrupole_numerical(
+            positions, field=field, field_grad=field_grad, step_size=1e-4
+        )
 
     assert (
         pytest.approx(ref[DIAG].cpu(), abs=atol, rel=1e-4) == quad[DIAG].cpu()
@@ -176,17 +176,18 @@ def batched(
     )
     ref = pack([sample1[key].to(**dd), sample2[key].to(**dd)])
 
-    efield = new_efield(_field(key, dd))
-    efg = new_efield_grad(torch.zeros((3, 3), **dd, requires_grad=True))
+    field = _field(key, dd)
+    field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
     calc = Calculator(
         numbers,
         GFN1_XTB,
-        interaction=[efield, efg],
         opts=opts if options is None else options,
         **dd,
     )
 
-    quad = calc.get_quadrupole(positions).detach()
+    quad = calc.get_quadrupole(
+        positions, field=field, field_grad=field_grad
+    ).detach()
 
     assert (
         pytest.approx(ref[:, DIAG].cpu(), abs=atol, rel=rtol)

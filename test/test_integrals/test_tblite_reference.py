@@ -44,16 +44,17 @@ ALGOS = ["md", "os"]
 def _calculator(numbers, algorithm: str, dd: DD):
     # the dipole is a derivative with respect to a (zero) field
     field = torch.zeros(3, **dd, requires_grad=True)
-    return dxtb.calculators.GFN2Calculator(
+    calc = dxtb.calculators.GFN2Calculator(
         numbers,
-        interaction=dxtb.components.field.new_efield(field, **dd),
         opts={
             "verbosity": 0,
             "int_driver": "pytorch",
             "int_algorithm": algorithm,
+            "int_level": dxtb.labels.INTLEVEL_DIPOLE,
         },
         **dd,
     )
+    return calc, field
 
 
 @pytest.mark.parametrize("algorithm", ALGOS)
@@ -73,9 +74,12 @@ def test_energy_gradient_dipole_match_tblite(name: str, algorithm: str) -> None:
     def fresh():
         return positions.detach().clone().requires_grad_(True)
 
-    energy = _calculator(numbers, algorithm, dd).get_energy(fresh())
-    forces = _calculator(numbers, algorithm, dd).get_forces(fresh())
-    dipole = _calculator(numbers, algorithm, dd).get_dipole(fresh())
+    calc, field = _calculator(numbers, algorithm, dd)
+    energy = calc.get_energy(fresh(), field=field)
+    calc, field = _calculator(numbers, algorithm, dd)
+    forces = calc.get_forces(fresh(), field=field)
+    calc, field = _calculator(numbers, algorithm, dd)
+    dipole = calc.get_dipole(fresh(), field=field)
 
     def expected(key: str) -> torch.Tensor:
         return torch.from_numpy(res.get(key)).to(**dd)
@@ -122,17 +126,17 @@ def test_quadrupole_matches_tblite(
     field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
     calc = dxtb.calculators.GFN2Calculator(
         numbers,
-        interaction=dxtb.components.field.new_efield_grad(field_grad, **dd),
         opts={
             "verbosity": 0,
             "int_driver": "pytorch",
             "int_algorithm": algorithm,
             "differentiation": "unrolled",
             "x_atol": 1e-11,
+            "int_level": dxtb.labels.INTLEVEL_QUADRUPOLE,
         },
         **dd,
     )
-    quad = calc.get_quadrupole(positions)
+    quad = calc.get_quadrupole(positions, field_grad=field_grad)
 
     assert quad.shape == (6,)
     # Diagonal elements (xx, yy, zz) agree directly with tblite; off-diagonal

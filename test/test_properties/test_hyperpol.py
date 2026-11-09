@@ -27,7 +27,6 @@ from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.units import VAA2AU
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 from dxtb.labels import INTLEVEL_DIPOLE
@@ -105,12 +104,12 @@ def execute(
     atol: float,
     rtol: float,
 ) -> None:
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
-    calc = Calculator(numbers, GFN1_XTB, interaction=[efield], opts=opts, **dd)
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     # field is cloned and detached and updated inside
-    num_hypol = calc.hyperpolarizability_numerical(positions, charge)
+    num_hypol = calc.hyperpolarizability_numerical(
+        positions, charge, field=field_vector
+    )
     assert num_hypol.grad_fn is None
     num = tensor_to_numpy(num_hypol)
 
@@ -122,6 +121,7 @@ def execute(
         calc.hyperpolarizability(
             positions,
             charge,
+            field=field_vector,
             use_functorch=False,
         )
     )
@@ -132,6 +132,7 @@ def execute(
         calc.hyperpolarizability(
             positions,
             charge,
+            field=field_vector,
             use_functorch=True,
             derived_quantity="energy",
         )
@@ -144,6 +145,7 @@ def execute(
         calc.hyperpolarizability(
             positions,
             charge,
+            field=field_vector,
             use_functorch=True,
             derived_quantity="dipole",
         )
@@ -156,6 +158,7 @@ def execute(
         calc.hyperpolarizability(
             positions,
             charge,
+            field=field_vector,
             use_functorch=True,
             derived_quantity="pol",
         )
@@ -182,15 +185,16 @@ def test_single_pytorch_driver(dtype: torch.dtype) -> None:
     positions = samples["LiH"]["positions"].to(**dd)
     charge = torch.tensor(0.0, **dd)
     field_vector = torch.tensor([0.0, 0.0, 0.0], **dd)
-    efield = new_efield(field_vector)
     pt_opts = dict(opts, int_driver="pytorch")
-    calc = Calculator(
-        numbers, GFN1_XTB, interaction=[efield], opts=pt_opts, **dd
+    calc = Calculator(numbers, GFN1_XTB, opts=pt_opts, **dd)
+    num_hypol = calc.hyperpolarizability_numerical(
+        positions, charge, field=field_vector
     )
-    num_hypol = calc.hyperpolarizability_numerical(positions, charge)
     assert num_hypol.grad_fn is None
     field_vector.requires_grad_(True)
-    ana_hypol = calc.hyperpolarizability(positions, charge, use_functorch=False)
+    ana_hypol = calc.hyperpolarizability(
+        positions, charge, field=field_vector, use_functorch=False
+    )
     assert pytest.approx(
         tensor_to_numpy(num_hypol), abs=1e-2, rel=1e-2
     ) == tensor_to_numpy(ana_hypol)

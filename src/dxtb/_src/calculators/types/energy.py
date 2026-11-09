@@ -35,8 +35,6 @@ from dxtb._src.calculators.singlepoint import (
     _call_tensor,
     _singlepoint_eager,
 )
-from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
-from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
 from dxtb._src.constants import defaults
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
@@ -95,7 +93,6 @@ def kwargs_for(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = ["EnergyCalculator"]
 
-_UNSET = object()
 
 
 class EnergyCalculator(BaseCalculator):
@@ -134,8 +131,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
@@ -158,7 +155,7 @@ class EnergyCalculator(BaseCalculator):
             keyword argument raises a ``TypeError``.
         """
         check_singlepoint_options(kwargs, "singlepoint")
-        field, field_grad = self._resolve_fields(field, field_grad)
+        field, field_grad = self._check_fields(field, field_grad)
 
         # shape checks
         assert shape_checks(
@@ -259,8 +256,8 @@ class EnergyCalculator(BaseCalculator):
         positions: Tensor,
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         keepdim: bool = False,
         **kwargs: Any,
     ) -> Tensor:
@@ -326,32 +323,28 @@ class EnergyCalculator(BaseCalculator):
                     f"{(batch_size, *expected_shape)}, got {tuple(value.shape)}."
                 )
 
-    def _resolve_fields(
+    def _check_fields(
         self,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> tuple[
         Tensor | Sequence[Tensor | None] | None,
         Tensor | Sequence[Tensor | None] | None,
     ]:
-        """Resolve omitted Calculator fields against constructor defaults."""
-        resolved_field = self._field_default if field is _UNSET else field
-        resolved_grad = (
-            self._field_grad_default if field_grad is _UNSET else field_grad
-        )
+        """Validate the per-call electric field and field gradient."""
         self._validate_resolved_perturbation(
-            resolved_field,
+            field,
             name="field",
             display_name="Electric field",
             expected_shape=(3,),
         )
         self._validate_resolved_perturbation(
-            resolved_grad,
+            field_grad,
             name="field_grad",
             display_name="Electric field gradient",
             expected_shape=(3, 3),
         )
-        return resolved_field, resolved_grad
+        return field, field_grad
 
     def _stack_response_perturbation(
         self,
@@ -383,46 +376,16 @@ class EnergyCalculator(BaseCalculator):
             )
         return torch.stack(list(value), dim=0)
 
-    def _resolve_response_fields(
+    def _response_fields(
         self,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         *,
         needs_field: bool = False,
         needs_field_grad: bool = False,
     ) -> tuple[Any, Any]:
-        """Resolve standard response inputs and explain custom extensions."""
-        resolved_field, resolved_grad = self._resolve_fields(field, field_grad)
-        component_labels = {
-            component.label for component in self.interactions.components
-        }
-
-        if (
-            needs_field
-            and resolved_field is None
-            and LABEL_EFIELD in component_labels
-        ):
-            raise RuntimeError(
-                "This Calculator contains a custom ElectricField-labelled "
-                "interaction. Generic dipole/polarizability response "
-                "differentiates the standard explicit field= input and cannot "
-                "infer a perturbation variable from a custom interaction. "
-                "Pass/use an exact ElectricField compatibility default or "
-                "provide a custom response implementation."
-            )
-        if (
-            needs_field_grad
-            and resolved_grad is None
-            and LABEL_EFIELD_GRAD in component_labels
-        ):
-            raise RuntimeError(
-                "This Calculator contains a custom ElectricFieldGrad-labelled "
-                "interaction. Generic quadrupole response differentiates the "
-                "standard explicit field_grad= input and cannot infer a "
-                "perturbation variable from a custom interaction. Pass/use an "
-                "exact ElectricFieldGrad compatibility default or provide a "
-                "custom response implementation."
-            )
+        """Validate the fields of a response and stack per-Lane sequences."""
+        resolved_field, resolved_grad = self._check_fields(field, field_grad)
 
         if needs_field:
             resolved_field = self._stack_response_perturbation(

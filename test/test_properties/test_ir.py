@@ -27,7 +27,6 @@ from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.units import VAA2AU
 
 from dxtb import GFN1_XTB, Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 from dxtb.labels import INTLEVEL_DIPOLE
@@ -111,12 +110,12 @@ def execute(
     atol2: float,
     rtol2: float,
 ) -> None:
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
-    calc = Calculator(numbers, GFN1_XTB, interaction=[efield], opts=opts, **dd)
+    calc = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
 
     # field is cloned and detached and updated inside
-    num_freqs, num_ints = calc.ir_numerical(positions, charge)
+    num_freqs, num_ints = calc.ir_numerical(
+        positions, charge, field=field_vector
+    )
     assert num_freqs.grad_fn is None
     assert num_ints.grad_fn is None
     numfreqs, numints = tensor_to_numpy(num_freqs), tensor_to_numpy(num_ints)
@@ -127,7 +126,9 @@ def execute(
     pos = positions.clone().detach().requires_grad_(True)
 
     # manual jacobian
-    freqs1, ints1 = calc.ir(pos, charge, use_functorch=False)
+    freqs1, ints1 = calc.ir(
+        pos, charge, field=field_vector, use_functorch=False
+    )
     freqs1, ints1 = tensor_to_numpy(freqs1), tensor_to_numpy(ints1)
 
     assert pytest.approx(numfreqs, abs=atol, rel=rtol) == freqs1
@@ -138,7 +139,7 @@ def execute(
     pos = positions.clone().detach().requires_grad_(True)
 
     # jacrev of energy
-    freqs2, ints2 = calc.ir(pos, charge, use_functorch=True)
+    freqs2, ints2 = calc.ir(pos, charge, field=field_vector, use_functorch=True)
     freqs2, ints2 = tensor_to_numpy(freqs2), tensor_to_numpy(ints2)
 
     assert pytest.approx(numfreqs, abs=atol, rel=rtol) == freqs2

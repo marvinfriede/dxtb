@@ -74,7 +74,8 @@ To configure settings, a dictionary of settings can be passed to the calculator.
     settings = {"maxiter": 100}
     calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=settings)
 
-Additional tight binding components can also be added.
+An external electric field is an input of each call. It requires dipole
+integrals.
 
 .. code-block:: python
 
@@ -83,9 +84,12 @@ Additional tight binding components can also be added.
 
     dd = {"device": torch.device("cpu"), "dtype": torch.double}
     numbers = torch.tensor([1, 1])
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], **dd)
 
-    ef = dxtb.components.field.new_efield(torch.tensor([0.0, 0.0, 0.0], **dd))
-    calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, interaction=[ef], **dd)
+    opts = {"int_level": dxtb.labels.INTLEVEL_DIPOLE}
+    calc = dxtb.Calculator(numbers, dxtb.GFN1_XTB, opts=opts, **dd)
+    field = torch.tensor([0.0, 0.0, 0.01], **dd)
+    energy = calc.get_energy(positions, field=field)
 
 
 Calculators: Get Properties

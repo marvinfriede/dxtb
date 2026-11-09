@@ -783,14 +783,11 @@ def test_batched_calculator_autograd_properties_after_cutover(
     sys_a = model.setup(nums_a)
     sys_b = model.setup(nums_b)
 
-    from dxtb.components.field import new_efield, new_efield_grad
-
     ef0 = torch.zeros(3, **_DD, requires_grad=True)
     fg0 = torch.zeros((3, 3), **_DD, requires_grad=True)
     calc_batch = Calculator(
         batch_nums,
         par,
-        interaction=[new_efield(ef0), new_efield_grad(fg0)],
         opts=dict(opts, batch_mode=batch_mode, verbosity=0),
         **_DD,
     )

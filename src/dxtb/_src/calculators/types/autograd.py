@@ -41,7 +41,7 @@ from ..properties.vibration import (
     vib_analysis,
 )
 from . import decorators as cdec
-from .energy import _UNSET, EnergyCalculator, kwargs_for
+from .energy import EnergyCalculator, kwargs_for
 
 _PROPERTY_METHODS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"forces"}), "forces"),
@@ -383,8 +383,8 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Calculate the electric dipole moment :math:`\mu` via AD.
@@ -414,7 +414,7 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Electric dipole moment of shape ``(..., 3)``.
         """
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:
@@ -467,8 +467,8 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        field: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Calculate the traceless electric quadrupole moment :math:`\Theta` via
@@ -506,7 +506,7 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Traceless quadrupole moment of shape ``(..., 6)``.
         """
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field_grad=True
         )
         if field_grad is None:
@@ -557,8 +557,8 @@ class AutogradCalculator(EnergyCalculator):
         chrg: Tensor | float | int = defaults.CHRG,
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -589,7 +589,7 @@ class AutogradCalculator(EnergyCalculator):
         Tensor
             Cartesian dipole derivative of shape ``(..., 3, nat, 3)``.
         """
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         is_batched = self.numbers.ndim > 1
@@ -665,8 +665,8 @@ class AutogradCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
         derived_quantity: Literal["energy", "dipole"] = "dipole",
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Calculate the polarizability tensor :math:`\alpha`.
@@ -714,7 +714,7 @@ class AutogradCalculator(EnergyCalculator):
                 "polarizability with use_functorch=False only supports "
                 "derived_quantity='dipole'."
             )
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:
@@ -813,8 +813,8 @@ class AutogradCalculator(EnergyCalculator):
         spin: Tensor | float | int | None = defaults.SPIN,
         use_functorch: bool = False,
         derived_quantity: Literal["energy", "dipole"] = "dipole",
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -867,7 +867,7 @@ class AutogradCalculator(EnergyCalculator):
                 "pol_deriv with use_functorch=False only supports "
                 "derived_quantity='dipole'."
             )
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         is_batched = self.numbers.ndim > 1
@@ -946,8 +946,8 @@ class AutogradCalculator(EnergyCalculator):
         derived_quantity: Literal[
             "energy", "dipole", "polarizability", "pol"
         ] = "pol",
-        field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-        field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+        field: Tensor | Sequence[Tensor | None] | None = None,
+        field_grad: Tensor | Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         r"""
         Calculate the hyper polarizability tensor :math:`\beta`.
@@ -1003,7 +1003,7 @@ class AutogradCalculator(EnergyCalculator):
                 "hyperpolarizability with use_functorch=False only supports "
                 "derived_quantity in ('pol', 'polarizability')."
             )
-        field, field_grad = self._resolve_response_fields(
+        field, field_grad = self._response_fields(
             field, field_grad, needs_field=True
         )
         if field is None:

@@ -58,9 +58,8 @@ import numpy as np
 import torch
 from tad_mctc.batch import pack
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule, labels
 from dxtb._src.typing import Tensor
-from dxtb.components.field import new_efield
 
 from ..molecules import mols
 from .molecules import get_system
@@ -262,7 +261,7 @@ def calculator(
     scf: str,
     numbers: Tensor,
     batch_mode: int = 0,
-    field: Tensor | None = None,
+    in_field: bool = False,
     par: ParamModule | None = None,
 ) -> Calculator:
     opts = dict(
@@ -272,12 +271,13 @@ def calculator(
         int_driver=driver,
         batch_mode=batch_mode,
     )
-    interaction = [new_efield(field)] if field is not None else None
+    if in_field:
+        # field perturbations need (at least) dipole integrals
+        opts["int_level"] = labels.INTLEVEL_DIPOLE
     return Calculator(
         numbers,
         PARAMS[method] if par is None else par,
         opts=opts,
-        interaction=interaction,
         **DD,
     )
 
@@ -292,8 +292,8 @@ def energy(method, driver, scf, numbers, positions, charge, bm=0) -> Tensor:
 
 
 def energy_in_field(method, driver, scf, numbers, positions, charge, field):
-    calc = calculator(method, driver, scf, numbers, field=field)
-    return calc.energy(positions, charge)
+    calc = calculator(method, driver, scf, numbers, in_field=True)
+    return calc.energy(positions, charge, field=field)
 
 
 def forces_ad(method, driver, scf, numbers, positions, charge) -> Tensor:
@@ -497,8 +497,8 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
     m, d, s = cell.method, cell.driver, cell.scf
     q, path = cell.quantity, cell.path
 
-    def calc(field: Tensor | None = None) -> Calculator:
-        return calculator(m, d, s, numbers, bm, field=field)
+    def calc(in_field: bool = False) -> Calculator:
+        return calculator(m, d, s, numbers, bm, in_field=in_field)
 
     def pos_grad() -> Tensor:
         return positions.detach().clone().requires_grad_(True)
@@ -520,18 +520,23 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
 
     if q == "dipole":
         if path == "autograd":
-            return calc(zero_field()).dipole(positions.clone(), charge)
+            return calc(True).dipole(
+                positions.clone(), charge, field=zero_field()
+            )
         if path == "functorch":
-            return calc(zero_field()).dipole(
-                positions.clone(), charge, use_functorch=True
+            return calc(True).dipole(
+                positions.clone(),
+                charge,
+                field=zero_field(),
+                use_functorch=True,
             )
         if path == "forward":
-            c = calc(zero_field(False))
+            c = calc(True)
             f = _func_field_energy(c, positions.clone(), charge)
             return -jacfwd(f)(zero_field(False))
         if path == "numerical":
-            return calc(zero_field(False)).dipole_numerical(
-                positions.clone(), charge
+            return calc(True).dipole_numerical(
+                positions.clone(), charge, field=zero_field(False)
             )
 
     if q == "hessian":
@@ -548,29 +553,31 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
 
     if q == "polarizability":
         if path in ("autograd", "functorch"):
-            return calc(zero_field()).polarizability(
+            return calc(True).polarizability(
                 positions.clone(),
                 charge,
+                field=zero_field(),
                 use_functorch=path == "functorch",
             )
         if path == "forward":
-            c = calc(zero_field(False))
+            c = calc(True)
             f = _func_field_energy(c, positions.clone(), charge)
             return -jacfwd(jacrev(f))(zero_field(False))
         if path == "numerical":
-            return calc(zero_field(False)).polarizability_numerical(
-                positions.clone(), charge
+            return calc(True).polarizability_numerical(
+                positions.clone(), charge, field=zero_field(False)
             )
 
     if q == "dipole_deriv":
         if path in ("autograd", "functorch"):
-            return calc(zero_field()).dipole_deriv(
+            return calc(True).dipole_deriv(
                 pos_grad(),
                 charge,
+                field=zero_field(),
                 use_functorch=path == "functorch",
             )
         if path == "forward":
-            c = calc(zero_field(False))
+            c = calc(True)
 
             def mu(pos: Tensor) -> Tensor:
                 f = _func_field_energy(c, pos, charge)
@@ -579,31 +586,37 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
             out = jacfwd(mu)(positions.clone())
             return _block_diag(out, nb, 1) if nb else out
         if path == "numerical":
-            return calc(zero_field(False)).dipole_deriv_numerical(
-                positions.clone(), charge
+            return calc(True).dipole_deriv_numerical(
+                positions.clone(), charge, field=zero_field(False)
             )
 
     if q == "hyperpolarizability":
         if path in ("autograd", "functorch"):
-            return calc(zero_field()).hyperpolarizability(
-                positions.clone(), charge, use_functorch=path == "functorch"
+            return calc(True).hyperpolarizability(
+                positions.clone(),
+                charge,
+                field=zero_field(),
+                use_functorch=path == "functorch",
             )
         if path == "forward":
-            c = calc(zero_field(False))
+            c = calc(True)
             f = _func_field_energy(c, positions.clone(), charge)
             return -jacfwd(jacfwd(jacrev(f)))(zero_field(False))
         if path == "numerical":
-            return calc(zero_field(False)).hyperpolarizability_numerical(
-                positions.clone(), charge
+            return calc(True).hyperpolarizability_numerical(
+                positions.clone(), charge, field=zero_field(False)
             )
 
     if q == "pol_deriv":
         if path in ("autograd", "functorch"):
-            return calc(zero_field()).pol_deriv(
-                pos_grad(), charge, use_functorch=path == "functorch"
+            return calc(True).pol_deriv(
+                pos_grad(),
+                charge,
+                field=zero_field(),
+                use_functorch=path == "functorch",
             )
         if path == "forward":
-            c = calc(zero_field(False))
+            c = calc(True)
 
             def alpha(pos: Tensor) -> Tensor:
                 f = _func_field_energy(c, pos, charge)
@@ -612,8 +625,8 @@ def _run(cell: Cell) -> Tensor | dict[str, Tensor]:
             out = jacfwd(alpha)(positions.clone())
             return _block_diag(out, nb, 2) if nb else out
         if path == "numerical":
-            return calc(zero_field(False)).pol_deriv_numerical(
-                positions.clone(), charge
+            return calc(True).pol_deriv_numerical(
+                positions.clone(), charge, field=zero_field(False)
             )
 
     if q == "third_order":

@@ -27,7 +27,6 @@ from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.units import VAA2AU
 
 from dxtb import Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
 from dxtb.labels import INTLEVEL_DIPOLE
@@ -112,30 +111,33 @@ def execute(
 ) -> None:
     npref = tensor_to_numpy(ref)
 
-    # create additional interaction and pass to Calculator
-    efield = new_efield(field_vector)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=opts,
         **dd,
     )
 
     # field is cloned and detached and updated inside
-    num = tensor_to_numpy(calc.dipole_numerical(positions, charge))
+    num = tensor_to_numpy(
+        calc.dipole_numerical(positions, charge, field=field_vector)
+    )
     assert pytest.approx(npref, abs=atol, rel=rtol) == num
 
     # Explicit field values remain differentiable without list mutation.
     field_vector.requires_grad_(True)
 
     # manual jacobian
-    dip1 = tensor_to_numpy(calc.dipole(positions, charge, use_functorch=False))
+    dip1 = tensor_to_numpy(
+        calc.dipole(positions, charge, field=field_vector, use_functorch=False)
+    )
     assert pytest.approx(npref, abs=atol, rel=rtol) == dip1
     assert pytest.approx(num, abs=atol, rel=rtol) == dip1
 
     # jacrev of energy
-    dip2 = tensor_to_numpy(calc.dipole(positions, charge, use_functorch=True))
+    dip2 = tensor_to_numpy(
+        calc.dipole(positions, charge, field=field_vector, use_functorch=True)
+    )
     assert pytest.approx(npref, abs=atol, rel=rtol) == dip2
     assert pytest.approx(num, abs=atol, rel=rtol) == dip2
     assert pytest.approx(dip1, abs=atol, rel=rtol) == dip2
@@ -249,17 +251,15 @@ def test_batch_settings(
     # required for autodiff of energy w.r.t. efield
     field_vector.requires_grad_(True)
 
-    efield = new_efield(field_vector)
     options = dict(opts, strategy=scf_strategy(converger, variable))
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=options,
         **dd,
     )
 
-    dipole = tensor_to_numpy(calc.dipole(positions, charge))
+    dipole = tensor_to_numpy(calc.dipole(positions, charge, field=field_vector))
     assert pytest.approx(ref.cpu(), abs=1e-4) == dipole
 
 
@@ -303,14 +303,12 @@ def test_batch_unconverged(dtype: torch.dtype, name1: str, name2: str) -> None:
     # with 5 iterations, both do not converge, but pass the test
     options = dict(opts, maxiter=5, strategy=scf_strategy("linear"))
 
-    efield = new_efield(field_vector)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=options,
         **dd,
     )
 
-    dipole = tensor_to_numpy(calc.dipole(positions, charge))
+    dipole = tensor_to_numpy(calc.dipole(positions, charge, field=field_vector))
     assert pytest.approx(ref.cpu(), abs=1e-2, rel=1e-3) == dipole

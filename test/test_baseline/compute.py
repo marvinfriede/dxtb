@@ -46,10 +46,9 @@ from typing import Any, Callable
 import numpy as np
 import torch
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.typing import Tensor
-from dxtb.components.field import new_efield
 
 from .molecules import System
 
@@ -92,15 +91,16 @@ DD = {"device": torch.device("cpu"), "dtype": torch.float64}
 
 
 def _calculator(
-    system: System, method: str, driver: str, field: Tensor | None = None
+    system: System, method: str, driver: str, in_field: bool = False
 ) -> Calculator:
     opts = dict(SCF_OPTIONS, int_driver=driver, batch_mode=system.batch_mode)
-    interaction = [new_efield(field)] if field is not None else None
+    if in_field:
+        # field perturbations need (at least) dipole integrals
+        opts["int_level"] = labels.INTLEVEL_DIPOLE
     return Calculator(
         system.numbers,
         METHODS[method],
         opts=opts,
-        interaction=interaction,
         **DD,
     )
 
@@ -165,8 +165,9 @@ def _field() -> Tensor:
 
 
 def _dipole(system: System, method: str, driver: str) -> dict[str, Tensor]:
-    calc = _calculator(system, method, driver, field=_field())
-    return {"dipole": calc.dipole(system.positions.clone(), *_args(system))}
+    calc = _calculator(system, method, driver, in_field=True)
+    pos = system.positions.clone()
+    return {"dipole": calc.dipole(pos, *_args(system), field=_field())}
 
 
 def _hessian(system: System, method: str, driver: str) -> dict[str, Tensor]:
@@ -178,35 +179,34 @@ def _hessian(system: System, method: str, driver: str) -> dict[str, Tensor]:
 def _polarizability(
     system: System, method: str, driver: str
 ) -> dict[str, Tensor]:
-    calc = _calculator(system, method, driver, field=_field())
+    calc = _calculator(system, method, driver, in_field=True)
     pos = system.positions.clone()
-    alpha = calc.polarizability(pos, *_args(system))
+    alpha = calc.polarizability(pos, *_args(system), field=_field())
     return {"polarizability": alpha}
 
 
 def _dipole_deriv(
     system: System, method: str, driver: str
 ) -> dict[str, Tensor]:
-    calc = _calculator(system, method, driver, field=_field())
+    calc = _calculator(system, method, driver, in_field=True)
     pos = system.positions.clone().requires_grad_(True)
-    dmu = calc.dipole_deriv(pos, *_args(system))
+    dmu = calc.dipole_deriv(pos, *_args(system), field=_field())
     return {"dipole_deriv": dmu}
 
 
 def _hyperpolarizability(
     system: System, method: str, driver: str
 ) -> dict[str, Tensor]:
-    calc = _calculator(system, method, driver, field=_field())
+    calc = _calculator(system, method, driver, in_field=True)
     pos = system.positions.clone()
-    return {
-        "hyperpolarizability": calc.hyperpolarizability(pos, *_args(system))
-    }
+    beta = calc.hyperpolarizability(pos, *_args(system), field=_field())
+    return {"hyperpolarizability": beta}
 
 
 def _pol_deriv(system: System, method: str, driver: str) -> dict[str, Tensor]:
-    calc = _calculator(system, method, driver, field=_field())
+    calc = _calculator(system, method, driver, in_field=True)
     pos = system.positions.clone().requires_grad_(True)
-    return {"pol_deriv": calc.pol_deriv(pos, *_args(system))}
+    return {"pol_deriv": calc.pol_deriv(pos, *_args(system), field=_field())}
 
 
 _FUNCS: dict[str, Callable[[System, str, str], dict[str, Tensor]]] = {

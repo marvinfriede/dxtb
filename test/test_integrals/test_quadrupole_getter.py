@@ -32,17 +32,22 @@ from dxtb._src.typing import DD
 from ..conftest import DEVICE
 from .samples import samples
 
-OPTS = {"verbosity": 0, "differentiation": "unrolled", "x_atol": 1e-11}
+OPTS = {
+    "verbosity": 0,
+    "differentiation": "unrolled",
+    "x_atol": 1e-11,
+    "int_level": dxtb.labels.INTLEVEL_QUADRUPOLE,
+}
 
 
 def _calc(numbers, dd: DD, **opts):
     field_grad = torch.zeros((3, 3), **dd, requires_grad=True)
-    return dxtb.calculators.GFN2Calculator(
+    calc = dxtb.calculators.GFN2Calculator(
         numbers,
-        interaction=dxtb.components.field.new_efield_grad(field_grad, **dd),
         opts={**OPTS, **opts},
         **dd,
     )
+    return calc, field_grad
 
 
 def test_quadrupole_shape_traceless_and_alias() -> None:
@@ -50,11 +55,13 @@ def test_quadrupole_shape_traceless_and_alias() -> None:
     numbers = samples["H2O"]["numbers"].to(DEVICE)
     positions = samples["H2O"]["positions"].to(**dd)
 
-    calc = _calc(numbers, dd)
-    quad = calc.get_quadrupole(positions)
+    calc, field_grad = _calc(numbers, dd)
+    quad = calc.get_quadrupole(positions, field_grad=field_grad)
     assert quad.shape == (6,)
     assert abs(float(quad.detach()[0] + quad.detach()[2] + quad.detach()[5])) < 1e-10
-    assert torch.equal(calc.get_quadrupole_moment(positions), quad)
+    assert torch.equal(
+        calc.get_quadrupole_moment(positions, field_grad=field_grad), quad
+    )
 
 
 def test_quadrupole_batch_equals_single() -> None:
@@ -63,12 +70,14 @@ def test_quadrupole_batch_equals_single() -> None:
     numbers = pack([samples[n]["numbers"] for n in names]).to(DEVICE)
     positions = pack([samples[n]["positions"] for n in names]).to(**dd)
 
-    batch = _calc(numbers, dd).get_quadrupole(positions)
+    calc, field_grad = _calc(numbers, dd)
+    batch = calc.get_quadrupole(positions, field_grad=field_grad)
     assert batch.shape == (2, 6)
 
     for i, name in enumerate(names):
-        single = _calc(samples[name]["numbers"].to(DEVICE), dd).get_quadrupole(
-            samples[name]["positions"].to(**dd)
+        calc, field_grad = _calc(samples[name]["numbers"].to(DEVICE), dd)
+        single = calc.get_quadrupole(
+            samples[name]["positions"].to(**dd), field_grad=field_grad
         )
         assert torch.allclose(batch[i], single, atol=1e-8, rtol=0.0)
 
@@ -80,11 +89,13 @@ def test_quadrupole_pytorch_matches_libcint_driver(name: str) -> None:
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
-    ref = _calc(numbers, dd, int_driver="libcint").get_quadrupole(positions)
+    calc, field_grad = _calc(numbers, dd, int_driver="libcint")
+    ref = calc.get_quadrupole(positions, field_grad=field_grad)
     for algorithm in ("md", "os"):
-        out = _calc(
+        calc, field_grad = _calc(
             numbers, dd, int_driver="pytorch", int_algorithm=algorithm
-        ).get_quadrupole(positions)
+        )
+        out = calc.get_quadrupole(positions, field_grad=field_grad)
         assert torch.allclose(out, ref, atol=1e-8, rtol=0.0)
 
 

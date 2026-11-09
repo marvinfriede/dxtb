@@ -11,13 +11,11 @@ from dxtb import GFN1_XTB, Calculator, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.field.efield import (
-    LABEL_EFIELD,
     ElectricField,
     build_electric_field_data,
     new_efield,
 )
 from dxtb._src.components.interactions.field.efieldgrad import (
-    LABEL_EFIELD_GRAD,
     ElectricFieldGrad,
     build_electric_field_grad_data,
     new_efield_grad,
@@ -26,7 +24,6 @@ from dxtb._src.components.interactions.list import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb.components.coulomb import new_es2
 from dxtb.config import Config
 
 
@@ -280,55 +277,6 @@ def test_field_gradient_geometry_mixed_derivative() -> None:
     assert torch.count_nonzero(mixed) > 0
 
 
-def test_numerical_responses_leave_calculator_defaults_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Numerical property perturbations are local values, never state writes."""
-    numbers = torch.tensor([8, 1, 1])
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
-        dtype=torch.double,
-    )
-    field = torch.tensor([0.01, -0.02, 0.03], dtype=torch.double)
-    field_grad = torch.tensor(
-        [[0.01, 0.02, 0.0], [0.03, -0.01, 0.01], [0.0, 0.02, 0.0]],
-        dtype=torch.double,
-    )
-    calc = _calc(
-        numbers,
-        interaction=[new_efield(field), new_efield_grad(field_grad)],
-    )
-
-    def energy_stub(
-        self,
-        positions: torch.Tensor,
-        chrg=0,
-        spin=None,
-        field=None,
-        field_grad=None,
-        **kwargs,
-    ) -> torch.Tensor:
-        value = positions.new_zeros(())
-        if field is not None:
-            value = value + torch.pow(field, 3).sum()
-        if field_grad is not None:
-            value = value + torch.pow(field_grad, 3).sum()
-        return value
-
-    monkeypatch.setattr(type(calc), "energy", energy_stub)
-    for property_function in (
-        calc.dipole_numerical,
-        calc.quadrupole_numerical,
-        calc.polarizability_numerical,
-        calc.hyperpolarizability_numerical,
-    ):
-        property_function(positions)
-        assert calc._field_default is field
-        assert calc._field_grad_default is field_grad
-        torch.testing.assert_close(calc._field_default, field)
-        torch.testing.assert_close(calc._field_grad_default, field_grad)
-
-
 def test_parammodule_field_mixed_derivative() -> None:
     """A real GFN1 leaf differentiates through field response and setup."""
 
@@ -426,8 +374,19 @@ def test_explicit_field_validation_and_integral_level() -> None:
         )
 
 
+def test_calculator_rejects_field_interactions() -> None:
+    """Fields are call inputs; the Calculator has no field defaults."""
+    numbers = torch.tensor([8, 1, 1])
+    for interaction in (
+        new_efield(torch.ones(3, dtype=torch.double)),
+        new_efield_grad(torch.eye(3, dtype=torch.double)),
+    ):
+        with pytest.raises(ValueError, match="Pass field= or field_grad="):
+            _calc(numbers, interaction=interaction)
+
+
 def test_direct_model_rejects_exact_field_components() -> None:
-    """Only Calculator can translate legacy field components to defaults."""
+    """Model does not store fields as Components."""
     numbers = torch.tensor([8, 1, 1])
     field = torch.ones(3, dtype=torch.double)
     field_grad = torch.eye(3, dtype=torch.double)
@@ -446,52 +405,6 @@ def test_direct_model_rejects_exact_field_components() -> None:
             interaction=(new_efield_grad(field_grad),),
             auto_int_level=False,
         ).setup(numbers)
-
-
-def test_calculator_legacy_promotion_ignores_auto_int_level() -> None:
-    """Constructor-field compatibility promotes explicit low levels."""
-    numbers = torch.tensor([8, 1, 1])
-    field = torch.ones(3, dtype=torch.double)
-    field_grad = torch.eye(3, dtype=torch.double)
-    options = {
-        "verbosity": 0,
-        "int_driver": "pytorch",
-        "int_level": labels.INTLEVEL_HCORE,
-    }
-
-    dipole_calc = Calculator(
-        numbers,
-        GFN1_XTB,
-        interaction=new_efield(field),
-        opts=options,
-        dtype=torch.double,
-        auto_int_level=False,
-    )
-    assert dipole_calc.opts.ints.level >= labels.INTLEVEL_DIPOLE
-    assert not any(
-        type(x) is ElectricField for x in dipole_calc.model.interaction
-    )
-    assert not any(
-        type(x) is ElectricField
-        for x in dipole_calc.system.interactions.components
-    )
-
-    quadrupole_calc = Calculator(
-        numbers,
-        GFN1_XTB,
-        interaction=new_efield_grad(field_grad),
-        opts=options,
-        dtype=torch.double,
-        auto_int_level=False,
-    )
-    assert quadrupole_calc.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE
-    assert not any(
-        type(x) is ElectricFieldGrad for x in quadrupole_calc.model.interaction
-    )
-    assert not any(
-        type(x) is ElectricFieldGrad
-        for x in quadrupole_calc.system.interactions.components
-    )
 
 
 def test_field_subclasses_are_rejected() -> None:
@@ -545,89 +458,6 @@ def test_calculate_forwards_explicit_field_and_grad() -> None:
     torch.testing.assert_close(dispatched_polarizability, direct_polarizability)
 
 
-def test_legacy_calculator_defaults_overrides_and_reset_graph() -> None:
-    """Legacy field defaults resolve per call and survive Calculator.reset."""
-    numbers = torch.tensor([8, 1, 1])
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
-        dtype=torch.double,
-    )
-    default = torch.tensor([0.01, 0.02, -0.01], dtype=torch.double)
-    override = torch.tensor([-0.02, 0.01, 0.03], dtype=torch.double)
-    calc = _calc(numbers, interaction=new_efield(default))
-    assert calc._field_default is default
-    assert calc.opts.ints.level >= labels.INTLEVEL_DIPOLE
-    assert not any(
-        type(x) is ElectricField for x in calc.system.interactions.components
-    )
-    e0 = calc.energy(positions)
-    e_override = calc.energy(positions, field=override)
-    e_none = calc.energy(positions, field=None)
-    e_again = calc.energy(positions)
-    torch.testing.assert_close(e0, e_again)
-    assert not torch.allclose(e0, e_override)
-    assert not torch.allclose(e0, e_none)
-
-    default_grad = torch.tensor(
-        [[0.01, 0.0, 0.02], [0.0, -0.01, 0.01], [0.0, 0.0, 0.0]],
-        dtype=torch.double,
-    )
-    calc_grad = _calc(
-        numbers,
-        interaction=[new_efield(default), new_efield_grad(default_grad)],
-    )
-    assert calc_grad._field_grad_default is default_grad
-    assert calc_grad.opts.ints.level >= labels.INTLEVEL_QUADRUPOLE
-    assert not any(
-        type(x) is ElectricFieldGrad
-        for x in calc_grad.system.interactions.components
-    )
-
-    grad_override = torch.triu(default_grad) * -0.5
-    grad_default_energy = calc_grad.energy(positions)
-    grad_override_energy = calc_grad.energy(positions, field_grad=grad_override)
-    grad_none_energy = calc_grad.energy(positions, field_grad=None)
-    grad_default_again = calc_grad.energy(positions)
-    torch.testing.assert_close(grad_default_energy, grad_default_again)
-    assert not torch.allclose(grad_default_energy, grad_override_energy)
-    assert not torch.allclose(grad_default_energy, grad_none_energy)
-
-    leaf = torch.tensor(
-        [0.02, -0.01, 0.03], dtype=torch.double, requires_grad=True
-    )
-    calc_graph = _calc(numbers, interaction=new_efield(leaf))
-    energy = calc_graph.energy(positions)
-    calc_graph.reset()
-    repeated = calc_graph.energy(positions)
-    (gradient,) = torch.autograd.grad(repeated, leaf)
-    torch.testing.assert_close(energy, repeated)
-    assert torch.isfinite(gradient).all()
-    assert gradient.abs().sum() > 0
-
-    grad_leaf = torch.eye(3, dtype=torch.double, requires_grad=True)
-    calc_grad_graph = _calc(numbers, interaction=new_efield_grad(grad_leaf))
-    first = calc_grad_graph.energy(positions)
-    (first_grad,) = torch.autograd.grad(first, grad_leaf)
-    calc_grad_graph.reset()
-    second = calc_grad_graph.energy(positions)
-    (second_grad,) = torch.autograd.grad(second, grad_leaf)
-    torch.testing.assert_close(first, second)
-    torch.testing.assert_close(first_grad, second_grad)
-
-
-def test_calculator_type_keeps_legacy_field_default_dtype() -> None:
-    """Field defaults follow the documented incomplete ``Calculator.type``."""
-    numbers = torch.tensor([8, 1, 1])
-    field = torch.ones(3, dtype=torch.double)
-    calc = _calc(numbers, interaction=new_efield(field))
-
-    calc.type(torch.float32)
-
-    assert calc.dtype == torch.float32
-    assert calc._field_default is field
-    assert calc._field_default.dtype == torch.double
-
-
 def test_field_get_cache_is_fresh_and_update_reset_are_rejected() -> None:
     """Field compatibility caches are fresh and exact fields are immutable."""
     numbers = torch.tensor([8, 1, 1])
@@ -657,47 +487,3 @@ def test_field_get_cache_is_fresh_and_update_reset_are_rejected() -> None:
     assert not hasattr(grad, "cache")
     assert not hasattr(grad, "_cachevars")
     assert not hasattr(grad, "_cachegrad")
-
-
-def test_duplicate_legacy_field_defaults_are_rejected() -> None:
-    """Duplicate exact field defaults fail at the Calculator boundary."""
-    numbers = torch.tensor([8, 1, 1])
-    with pytest.raises(ValueError, match="Only one exact ElectricField"):
-        _calc(
-            numbers,
-            interaction=[
-                new_efield(torch.zeros(3, dtype=torch.double)),
-                new_efield(torch.ones(3, dtype=torch.double)),
-            ],
-        )
-    with pytest.raises(ValueError, match="Only one exact ElectricFieldGrad"):
-        _calc(
-            numbers,
-            interaction=[
-                new_efield_grad(torch.zeros((3, 3), dtype=torch.double)),
-                new_efield_grad(torch.ones((3, 3), dtype=torch.double)),
-            ],
-        )
-
-
-def test_constructor_field_defaults_reject_same_label_conflicts() -> None:
-    """Exact defaults cannot coexist with another term carrying their label."""
-    numbers = torch.tensor([8, 1, 1])
-    field = torch.ones(3, dtype=torch.double)
-    field_grad = torch.eye(3, dtype=torch.double)
-    par = ParamModule(GFN1_XTB, dtype=torch.double)
-
-    for default, label in (
-        (new_efield(field), LABEL_EFIELD),
-        (new_efield_grad(field_grad), LABEL_EFIELD_GRAD),
-    ):
-        same_label = new_es2(torch.unique(numbers), par, dtype=torch.double)
-        assert same_label is not None
-        same_label.label = label
-        with pytest.raises(ValueError, match="cannot both represent the same"):
-            _calc(numbers, interaction=[default, same_label])
-
-    # Every unambiguous adapter configuration remains constructible.
-    _calc(numbers, interaction=new_efield(field))
-    _calc(numbers, interaction=new_efield_grad(field_grad))
-    _calc(numbers, interaction=[new_efield(field), new_efield_grad(field_grad)])

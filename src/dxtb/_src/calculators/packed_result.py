@@ -51,9 +51,6 @@ from dxtb._src.calculators.types.base import (
     _convert_system_dtype,
 )
 from dxtb._src.calculators.types.energy import check_singlepoint_options
-from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
-from dxtb._src.components.interactions.field.efieldgrad import LABEL_EFIELD_GRAD
-
 from dxtb._src.constants import defaults
 from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
@@ -70,8 +67,6 @@ __all__ = [
     "evaluate_packed_systems",
     "pack_system_results",
 ]
-
-_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -1086,20 +1081,6 @@ def evaluate_packed_systems(
                 "Construct the System with an integral level of at least "
                 f"{labels.INTLEVEL_QUADRUPOLE}."
             )
-        if f_val is not None and any(
-            c.label == LABEL_EFIELD for c in sys.interactions.components
-        ):
-            raise ValueError(
-                "Explicit field= cannot be combined with a custom interaction "
-                f"using the '{LABEL_EFIELD}' label."
-            )
-        if fg_val is not None and any(
-            c.label == LABEL_EFIELD_GRAD for c in sys.interactions.components
-        ):
-            raise ValueError(
-                "Explicit field_grad= cannot be combined with a custom "
-                f"interaction using the '{LABEL_EFIELD_GRAD}' label."
-            )
 
     # Stage 4: Partition lanes into execution groups. Lanes sharing one
     # System run together under vmap; all others are evaluated independently.
@@ -1339,8 +1320,8 @@ def evaluate_calculator_packed_singlepoint(
     positions: Tensor,
     chrg: Tensor | float | int = defaults.CHRG,
     spin: Tensor | float | int | None = defaults.SPIN,
-    field: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
-    field_grad: Tensor | Sequence[Tensor | None] | None | object = _UNSET,
+    field: Tensor | Sequence[Tensor | None] | None = None,
+    field_grad: Tensor | Sequence[Tensor | None] | None = None,
     **kwargs: Any,
 ) -> Result:
     """Evaluate a batched Calculator Lane by Lane over its Systems.
@@ -1351,13 +1332,8 @@ def evaluate_calculator_packed_singlepoint(
     ``Calculator.singlepoint`` calls.
     """
     check_singlepoint_options(kwargs, "singlepoint")
-    resolve_kwargs: dict[str, Any] = {}
-    if field is not _UNSET:
-        resolve_kwargs["field"] = field
-    if field_grad is not _UNSET:
-        resolve_kwargs["field_grad"] = field_grad
-    resolved_field, resolved_field_grad = calc._resolve_fields(
-        **resolve_kwargs
+    resolved_field, resolved_field_grad = calc._check_fields(
+        field, field_grad
     )
     assert shape_checks(calc.numbers, positions, allow_batched=True)
     assert content_checks(

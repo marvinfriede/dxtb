@@ -61,7 +61,7 @@ from tad_mctc.units import AA2AU
 
 import dxtb
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule
-from dxtb.components.field import new_efield
+from dxtb import labels
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from test.molecules import mols  # noqa: E402  # isort: skip
@@ -351,13 +351,16 @@ def w5(args, rec: Recorder) -> dict:
     calc = Calculator(
         numbers,
         PARAMS[args.method],
-        interaction=[new_efield(field)],
-        opts=dict(OPTS, int_driver=args.driver),
+        opts=dict(
+            OPTS, int_driver=args.driver, int_level=labels.INTLEVEL_DIPOLE
+        ),
         **dd,
     )
     rec.run(
         "hyperpolarizability (autograd)",
-        lambda: rec.profiled(lambda: calc.hyperpolarizability(positions)),
+        lambda: rec.profiled(
+            lambda: calc.hyperpolarizability(positions, field=field)
+        ),
     )
     return {"natoms": int(numbers.numel())}
 

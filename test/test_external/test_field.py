@@ -28,9 +28,9 @@ from tad_mctc.batch import pack
 from tad_mctc.units import VAA2AU
 
 from dxtb import Calculator
-from dxtb._src.components.interactions import new_efield
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD
+from dxtb.labels import INTLEVEL_DIPOLE
 
 from ..conftest import DEVICE
 from ..utils import get_param_module, scf_strategy
@@ -43,6 +43,7 @@ opts = {
     "maxiter": 50,
     "differentiation": "implicit",
     "strategy": scf_strategy("anderson", "potential"),
+    "int_level": INTLEVEL_DIPOLE,
 }
 
 
@@ -62,16 +63,14 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     # ref1 = sample["energy_monopole"].to(**dd)
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
-    efield = new_efield(field_vector)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=opts,
         **dd,
     )
 
-    result = calc.singlepoint(positions, charges)
+    result = calc.singlepoint(positions, charges, field=field_vector)
     res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
@@ -110,17 +109,15 @@ def test_batch(
     )
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
-    efield = new_efield(field_vector)
     options = dict(opts, differentiation=differentiation)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=options,
         **dd,
     )
 
-    result = calc.singlepoint(positions, charges)
+    result = calc.singlepoint(positions, charges, field=field_vector)
     res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
@@ -167,16 +164,14 @@ def test_batch_three(
     )
 
     field_vector = torch.tensor([-2.0, 0.0, 0.0], **dd) * VAA2AU
-    efield = new_efield(field_vector)
     options = dict(opts, differentiation=differentiation)
     calc = Calculator(
         numbers,
         get_param_module("gfn1", **dd),
-        interaction=[efield],
         opts=options,
         **dd,
     )
 
-    result = calc.singlepoint(positions, charges)
+    result = calc.singlepoint(positions, charges, field=field_vector)
     res = result.energy.sum(-1)
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()

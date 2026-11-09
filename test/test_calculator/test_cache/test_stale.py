@@ -29,10 +29,9 @@ import pytest
 import torch
 from tad_mctc.batch import pack
 
-from dxtb import GFN1_XTB, GFN2_XTB, Calculator
+from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Tensor
-from dxtb.components.field import new_efield
 
 from ...conftest import DEVICE
 
@@ -210,11 +209,10 @@ def test_numerical_dipole_without_result_cache() -> None:
     calc = Calculator(
         numbers,
         GFN1_XTB,
-        interaction=[new_efield(field)],
-        opts={"verbosity": 0},
+        opts={"verbosity": 0, "int_level": labels.INTLEVEL_DIPOLE},
         **dd,
     )
-    value = calc.dipole_numerical(positions)
+    value = calc.dipole_numerical(positions, field=field)
     assert torch.isfinite(value).all()
     assert value.abs().max() > 0.5
 
