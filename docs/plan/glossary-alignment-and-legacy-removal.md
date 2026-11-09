@@ -67,9 +67,10 @@ Local workstation, CPU only, `.venv-grouped-cpu` (Python 3.12, torch
 
 ## Follow-up
 
-`reject_removed_store_kwargs` and the compatibility behaviour listed here
-before (Calculator field defaults, the padded System of a 2D Calculator,
-the stateful `DriverManager` layer) were removed afterwards; see
+`reject_removed_store_kwargs`, the Calculator field defaults and the
+stateful `DriverManager` layer were removed afterwards. The padded System
+of a 2D Calculator is kept: it is the batch-agnostic view of the
+Calculator, not a compatibility path. See
 [`strict-kwargs-and-compatibility-removal.md`](strict-kwargs-and-compatibility-removal.md).
 The `get_cache`/`get_energy` component API that the built-in Components
 use to build their setups remains.
