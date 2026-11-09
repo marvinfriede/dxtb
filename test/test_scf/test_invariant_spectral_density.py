@@ -2690,16 +2690,26 @@ def test_cold_gap_newton_step_is_bounded_against_roundoff_division() -> None:
         )
     assert bool(torch.isfinite(setup_static.shift).all())
     assert bool(torch.isfinite(setup_spectral.shift).all())
+    assert bool(setup_static.gap_mask.all())
+    assert bool(setup_spectral.gap_mask.all())
     assert float(setup_static.shift.abs().max()) <= float(3.0 * kt)
     assert float(setup_spectral.shift.abs().max()) <= float(3.0 * kt)
 
+    nel_grad = electrons.clone().requires_grad_(True)
     density = fermi_density_matrix(
-        h_rot, electrons, kt, perturbed_state, diff_steps=2
+        h_rot, nel_grad, kt, perturbed_state, diff_steps=2
     )
     assert bool(torch.isfinite(density).all())
     torch.testing.assert_close(
         density.trace(),
         electrons.sum(),
+        atol=1.0e-12,
+        rtol=0.0,
+    )
+    (grad_nel,) = torch.autograd.grad(density.trace(), nel_grad)
+    torch.testing.assert_close(
+        grad_nel,
+        torch.ones_like(electrons),
         atol=1.0e-12,
         rtol=0.0,
     )

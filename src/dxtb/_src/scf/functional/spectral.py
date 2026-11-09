@@ -889,7 +889,7 @@ def _fermi_free_energy_setup(
             2**_FERMI_MAX_SCALE_POWER
         )
 
-        for _ in range(diff_steps):
+        for step in range(diff_steps):
             finite_sh_kt = (
                 torch.isfinite(shift) & torch.isfinite(safe_kt) & (safe_kt > 0.0)
             )
@@ -954,6 +954,9 @@ def _fermi_free_energy_setup(
             )
             nonfinite_step = ~torch.isfinite(count) | ~torch.isfinite(slope)
             slope_ok = slope > (slope_floor_numer / s_kt)
+            if step == 0:
+                gap_mask = gap_mask | (diff_mask & ~nonfinite_step & ~slope_ok)
+                diff_mask = diff_mask & ~gap_mask
             safe_slope = torch.where(slope_ok, slope, 1.0)
             raw_correction = (target - count) / safe_slope
             step_ok = slope_ok & (
@@ -975,7 +978,7 @@ def _fermi_free_energy_setup(
         )
         slope_floor = slope_floor_numer / safe_kt
         step_bound = _MAX_DIFF_STEP_KT * safe_kt
-        for _ in range(diff_steps):
+        for step in range(diff_steps):
             density = matrix_fermi(relative, shift, safe_kt, active)
             diag_density = density.diagonal(dim1=-2, dim2=-1)
             count = diag_density.sum(-1)
@@ -984,6 +987,9 @@ def _fermi_free_energy_setup(
             ) / safe_kt
             nonfinite_step = ~torch.isfinite(count) | ~torch.isfinite(slope)
             slope_ok = slope > slope_floor
+            if step == 0:
+                gap_mask = gap_mask | (diff_mask & ~nonfinite_step & ~slope_ok)
+                diff_mask = diff_mask & ~gap_mask
             safe_slope = torch.where(slope_ok, slope, 1.0)
             raw_correction = (target - count) / safe_slope
             step_ok = slope_ok & (raw_correction.abs() <= step_bound)
