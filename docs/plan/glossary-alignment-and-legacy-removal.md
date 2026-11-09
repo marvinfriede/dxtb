@@ -62,18 +62,14 @@ Local workstation, CPU only, `.venv-grouped-cpu` (Python 3.12, torch
 
 ## Kept on purpose
 
-- `reject_removed_store_kwargs` (`store_*`, `grad_mode`) stays. Calculator
-  methods ignore unknown keyword arguments, so without it those inputs
-  would be accepted silently.
 - Private solver parameters that receive a converger are still named
   `method`. Internal `response_*` names inside `cpscf.py` are unchanged.
 
-## Remaining compatibility behaviour (not part of the decision)
+## Follow-up
 
-- `ElectricField`/`ElectricFieldGrad` in `Calculator(interaction=...)`
-  still turn into per-call field defaults.
-- A 2D `Calculator` still builds a padded "compatibility" System for
-  `calc.system`/`calc.ihelp` beside its per-Lane Systems.
-- The stateful `DriverManager` path behind `dxtb.integrals`.
-- The `get_cache`/`get_energy` component API that the built-in
-  Components still use to build their setups.
+`reject_removed_store_kwargs` and the compatibility behaviour listed here
+before (Calculator field defaults, the padded System of a 2D Calculator,
+the stateful `DriverManager` layer) were removed afterwards; see
+[`strict-kwargs-and-compatibility-removal.md`](strict-kwargs-and-compatibility-removal.md).
+The `get_cache`/`get_energy` component API that the built-in Components
+use to build their setups remains.
