@@ -562,10 +562,10 @@ def weight_references_d4s(
 
     cn_diff2 = (cn.unsqueeze(-1).unsqueeze(-1) - refcn.unsqueeze(-2)) ** 2  # (..., nat, 1, 7)
     gwk = _d4_cngw(
-        cn_diff2.expand_as(mask.to(cn.dtype)),
+        cn_diff2.expand_as(mask),
         wf.unsqueeze(-1),
         ngw.unsqueeze(-2).expand_as(mask),
-        refcn.unsqueeze(-2).expand_as(mask.to(cn.dtype)),
+        refcn.unsqueeze(-2).expand_as(mask),
         mask,
     )
 

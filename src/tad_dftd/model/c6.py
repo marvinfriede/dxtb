@@ -157,15 +157,11 @@ def factored_c6(
     """
     Atomic dispersion coefficients for D3 or D4, factored per atom.
     """
-    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
-        elements = torch.arange(reference.c6.shape[0], device=numbers.device)
-        return _factors(numbers, weights, reference, elements, numbers)
-
-    elements = torch.unique(numbers)
-    element = torch.searchsorted(elements, numbers.contiguous())
-    width = _reference_width(reference, elements)
+    elements, element, width = _element_axis(
+        numbers, reference, reference.c6.shape[0]
+    )
     return _factors(
-        numbers, weights[..., :width], reference, elements, element, width
+        numbers, weights, reference, elements, element, width, _SUBSCRIPTS_D3
     )
 
 
@@ -190,41 +186,27 @@ def factored_c6_d3s(
     element.
     """
     if weights is not None:
-        if (
-            is_compiling()
-            or is_vmapped(numbers)
-            or is_functorch_tensor(reference.c6)
-            or weights.shape[-2] == wfpair.shape[0]
-            or weights.shape[-2] == reference.c6.shape[0]
-        ):
-            nel = weights.shape[-2]
-            elements = torch.arange(nel, device=numbers.device)
-            return _factors_d3s(
-                numbers, weights, reference, elements, numbers
-            )
-        elements = torch.unique(numbers)
-        element = torch.searchsorted(elements, numbers.contiguous())
-        width = _reference_width(reference, elements)
-        return _factors_d3s(
+        nel = weights.shape[-2]
+        elements, element, width = _element_axis(
             numbers,
-            weights[..., :width],
+            reference,
+            nel,
+            static=nel in (wfpair.shape[0], reference.c6.shape[0]),
+        )
+        return _factors(
+            numbers,
+            weights,
             reference,
             elements,
             element,
             width,
+            _SUBSCRIPTS_D3S,
         )
 
-    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
-        elements = torch.arange(wfpair.shape[0], device=numbers.device)
-        w = weight_references_d3s(numbers, cn, reference, wfpair, elements)
-        return _factors_d3s(numbers, w, reference, elements, numbers)
-
-    elements = torch.unique(numbers)
-    element = torch.searchsorted(elements, numbers.contiguous())
+    elements, element, width = _element_axis(numbers, reference, wfpair.shape[0])
     w = weight_references_d3s(numbers, cn, reference, wfpair, elements)
-    width = _reference_width(reference, elements)
-    return _factors_d3s(
-        numbers, w[..., :width], reference, elements, element, width
+    return _factors(
+        numbers, w, reference, elements, element, width, _SUBSCRIPTS_D3S
     )
 
 
@@ -263,26 +245,7 @@ def factored_c6_d4s(
             numbers, cn, reference, wfpair, weights=weights
         )
 
-    if is_compiling() or is_vmapped(numbers) or is_functorch_tensor(reference.c6):
-        elements = torch.arange(wfpair.shape[0], device=numbers.device)
-        w = weight_references_d4s(
-            numbers,
-            cn,
-            q,
-            reference,
-            wfpair,
-            elements,
-            ga=ga,
-            gc=gc,
-            is_srev=is_srev,
-            zeff_table=zeff_table,
-            gam_table=gam_table,
-            tanh_table=tanh_table,
-        )
-        return _factors_d3s(numbers, w, reference, elements, numbers)
-
-    elements = torch.unique(numbers)
-    element = torch.searchsorted(elements, numbers.contiguous())
+    elements, element, width = _element_axis(numbers, reference, wfpair.shape[0])
     w = weight_references_d4s(
         numbers,
         cn,
@@ -297,9 +260,8 @@ def factored_c6_d4s(
         gam_table=gam_table,
         tanh_table=tanh_table,
     )
-    width = _reference_width(reference, elements)
-    return _factors_d3s(
-        numbers, w[..., :width], reference, elements, element, width
+    return _factors(
+        numbers, w, reference, elements, element, width, _SUBSCRIPTS_D3S
     )
 
 
@@ -354,33 +316,55 @@ def _reference_width(
     return max(int(last.max()), 1)
 
 
+_SUBSCRIPTS_D3 = "...ia,...iuab->...iub"
+"""Contraction of D3/D4 weights ``(..., nat, nref)`` with the references."""
+
+_SUBSCRIPTS_D3S = "...iua,...iuab->...iub"
+"""Contraction of D3S/D4S weights ``(..., nat, nel, nref)``."""
+
+
+def _element_axis(
+    numbers: Tensor,
+    reference: Reference | D4Reference,
+    nel: int,
+    *,
+    static: bool = False,
+) -> tuple[Tensor, Tensor, int | None]:
+    """
+    The element axis of the factored coefficients: ``(elements, element,
+    width)``, with the elements on the axis, the index of the element of every
+    atom on it, and the number of leading references to keep (``None`` for all).
+
+    Under tracing (``torch.compile``, ``vmap``, functorch) or if `static`, the
+    axis holds all `nel` elements and no data-dependent shape is derived.
+    Otherwise it holds only the elements present in `numbers`.
+    """
+    if (
+        static
+        or is_compiling()
+        or is_vmapped(numbers)
+        or is_functorch_tensor(reference.c6)
+    ):
+        return torch.arange(nel, device=numbers.device), numbers, None
+
+    elements = torch.unique(numbers)
+    element = torch.searchsorted(elements, numbers.contiguous())
+    return elements, element, _reference_width(reference, elements)
+
+
 def _factors(
     numbers: Tensor,
     weights: Tensor,
     reference: Reference | D4Reference,
     elements: Tensor,
     element: Tensor,
-    width: int | None = None,
+    width: int | None,
+    subscripts: str,
 ) -> AtomicC6:
     table = reference.c6
     if width is not None:
         table = table[..., :width, :width]
+        weights = weights[..., :width]
     rc6 = table[numbers.unsqueeze(-1), elements]
-    g = torch.einsum("...ia,...iuab->...iub", weights, rc6)
-    return AtomicC6(partial=g, weights=weights, element=element)
-
-
-def _factors_d3s(
-    numbers: Tensor,
-    weights: Tensor,
-    reference: Reference | D4Reference,
-    elements: Tensor,
-    element: Tensor,
-    width: int | None = None,
-) -> AtomicC6:
-    table = reference.c6
-    if width is not None:
-        table = table[..., :width, :width]
-    rc6 = table[numbers.unsqueeze(-1), elements]
-    g = torch.einsum("...iua,...iuab->...iub", weights, rc6)
+    g = torch.einsum(subscripts, weights, rc6)
     return AtomicC6(partial=g, weights=weights, element=element)

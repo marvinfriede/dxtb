@@ -34,6 +34,43 @@ from . import defaults
 
 __all__ = ["Cutoff", "smooth_cutoff"]
 
+D5_NOT_IMPLEMENTED_MESSAGE = (
+    "Dispersion model 'D5' is not yet implemented because the "
+    "upstream reference is not finalized."
+)
+"""Shared message of every refusal of the (intentionally excluded) D5 model."""
+
+_D5_NAMES = ("d5", "dft-d5", "dftd5")
+
+
+def _model_defaults(model: str) -> tuple[float, float, float, float]:
+    """
+    Default ``(disp2, disp3, cn, cn_eeq)`` cutoffs of a model, matching
+    ``dftd/cutoff.f90``. Read from :mod:`~tad_dftd.defaults` on every call.
+    """
+    d3 = (
+        defaults.D3_DISP2_CUTOFF,
+        defaults.D3_DISP3_CUTOFF,
+        defaults.D3_CN_CUTOFF,
+        defaults.D4_CN_EEQ_CUTOFF,
+    )
+    d4 = (
+        defaults.D4_DISP2_CUTOFF,
+        defaults.D4_DISP3_CUTOFF,
+        defaults.D4_CN_CUTOFF,
+        defaults.D4_CN_EEQ_CUTOFF,
+    )
+    table = {
+        "d1": (defaults.D1_DISP2_CUTOFF, *d3[1:]),
+        "d2": (defaults.D2_DISP2_CUTOFF, *d3[1:]),
+        "d3": d3,
+        "d3s": d3,
+        "d4": d4,
+        "d4s": d4,
+        "d4srev": d4,
+    }
+    return table[model]
+
 
 @dataclass(frozen=True)
 class Cutoff:
@@ -102,32 +139,12 @@ class Cutoff:
         Grimme-lab ``dftd/cutoff.f90``.
         """
         m = model.lower().strip()
-        if m in ("d1", "d2"):
-            def_disp2 = (
-                defaults.D1_DISP2_CUTOFF
-                if m == "d1"
-                else defaults.D2_DISP2_CUTOFF
-            )
-            def_disp3 = defaults.D3_DISP3_CUTOFF
-            def_cn = defaults.D3_CN_CUTOFF
-            def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF
-        elif m in ("d3", "d3s"):
-            def_disp2 = defaults.D3_DISP2_CUTOFF
-            def_disp3 = defaults.D3_DISP3_CUTOFF
-            def_cn = defaults.D3_CN_CUTOFF
-            def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF
-        elif m in ("d4", "d4s", "d4srev"):
-            def_disp2 = defaults.D4_DISP2_CUTOFF
-            def_disp3 = defaults.D4_DISP3_CUTOFF
-            def_cn = defaults.D4_CN_CUTOFF
-            def_cn_eeq = defaults.D4_CN_EEQ_CUTOFF
-        elif m in ("d5", "dft-d5", "dftd5"):
-            raise NotImplementedError(
-                "Dispersion model 'D5' is not yet implemented because the "
-                "upstream reference is not finalized."
-            )
-        else:
-            raise ValueError(f"Unknown dispersion model '{model}'.")
+        if m in _D5_NAMES:
+            raise NotImplementedError(D5_NOT_IMPLEMENTED_MESSAGE)
+        try:
+            def_disp2, def_disp3, def_cn, def_cn_eeq = _model_defaults(m)
+        except KeyError:
+            raise ValueError(f"Unknown dispersion model '{model}'.") from None
 
         return cls(
             cn=def_cn if cn is None else cn,

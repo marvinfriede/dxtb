@@ -69,7 +69,7 @@ def pair_term(
     kernel = damping(pairs, param)
     if width > 0.0:
         kernel = smooth_cutoff(distances, cutoff, width) * kernel
-    return torch.where(keep, kernel, torch.zeros_like(kernel))
+    return torch.where(keep, kernel, 0.0)
 
 
 def _dispersion2_dense(
@@ -111,6 +111,8 @@ def _dispersion2_dense(
         rdamp_table=rdamp_table,
         rvdw=rvdw,
         r4r2=r4r2,
+        with_rvdw=damping.reads_rvdw,
+        with_znum=damping.reads_znum,
     )
     if c8 is not None:
         qq = torch.where(c6 != 0, c8 / nonzero(c6), radii.qq)
@@ -217,6 +219,8 @@ def dispersion2_sparse(
         r4r2_table,
         rdamp_table=rdamp_table,
         c8=c8,
+        with_rvdw=damping.reads_rvdw,
+        with_znum=damping.reads_znum,
     )
 
     def pair_contributions(

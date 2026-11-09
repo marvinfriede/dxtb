@@ -34,7 +34,8 @@ polarizabilities :math:`\alpha_{dd}(i\omega)`.
 from __future__ import annotations
 
 import math
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeAlias
 
 import torch
 from tad_mctc import storch
@@ -101,12 +102,34 @@ def _sides(table: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     return table.unsqueeze(-1), table.unsqueeze(-2), table.unsqueeze(-3)
 
 
+_Radii: TypeAlias = tuple[Tensor | None, Tensor | None]
+"""``(rdamp, rvdw)`` of the pairs, ``None`` for the one a damping does not
+read."""
+
+
+def _read_radii(damping: ThreeBodyDamping, radii: PairRadii) -> _Radii:
+    """The radii of `radii` that `damping` reads, and ``None`` for the rest."""
+    return (
+        radii.rdamp if damping.reads_rdamp else None,
+        radii.rvdw if damping.reads_rvdw else None,
+    )
+
+
+def _map_radii(fn: Callable[[Tensor], Tensor], radii: _Radii) -> _Radii:
+    """`fn` applied to the radii that are not ``None``."""
+    rdamp, rvdw = radii
+    return (
+        None if rdamp is None else fn(rdamp),
+        None if rvdw is None else fn(rvdw),
+    )
+
+
 def atm_term(
     r2ij: Tensor,
     r2ik: Tensor,
     r2jk: Tensor,
-    rdamp: tuple[Tensor, Tensor, Tensor],
-    rvdw: tuple[Tensor, Tensor, Tensor],
+    rdamp: tuple[Tensor, Tensor, Tensor] | None,
+    rvdw: tuple[Tensor, Tensor, Tensor] | None,
     damping: ThreeBodyDamping,
     param: DampingParam,
     cutoff: float | Tensor,
@@ -117,8 +140,9 @@ def atm_term(
     Angular part, damping (with `s9`) and switch of triples, without the
     :math:`C_9`, from their squared side lengths and the two radii a
     three-body damping reads of their pairs ij, ik and jk (`rdamp` and
-    `rvdw`), which must be positive. Zero for a triple that is not `valid` or
-    has a side beyond `cutoff`.
+    `rvdw`), which must be positive. A radius that `damping` does not read
+    (``reads_rdamp``, ``reads_rvdw``) may be ``None``. Zero for a triple that
+    is not `valid` or has a side beyond `cutoff`.
     """
     cutoff2 = cutoff * cutoff
     if isinstance(cutoff2, Tensor) and cutoff2.ndim > 0:
@@ -146,11 +170,19 @@ def atm_term(
     r3 = r1 * r2
     r5 = r2 * r3
 
-    triples = TripleData(r1, r2ij, r2ik, r2jk, *rdamp, *rvdw)
+    # What the damping does not read is a placeholder of the right shape.
+    rdamp_sides = (
+        rdamp
+        if rdamp is not None
+        else (rvdw if rvdw is not None else (r2ij, r2ik, r2jk))
+    )
+    rvdw_sides = rvdw if rvdw is not None else rdamp_sides
+
+    triples = TripleData(r1, r2ij, r2ik, r2jk, *rdamp_sides, *rvdw_sides)
     fdamp = damping(triples, param)
 
     s = (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) * (-r2ij + r2jk + r2ik)
-    ang = torch.where(mask, 0.375 * s / r5 + 1.0 / r3, torch.zeros_like(r5))
+    ang = torch.where(mask, 0.375 * s / r5 + 1.0 / r3, 0.0)
 
     if width > 0.0:
         ang = (
@@ -202,6 +234,9 @@ def dispersion_atm(
         rvdw=rvdw,
         r4r2=r4r2,
         rdamp=rdamp,
+        with_rdamp=damping.reads_rdamp,
+        with_rvdw=damping.reads_rvdw,
+        with_znum=False,
     )
 
     mask_pairs = real_pairs(numbers, mask_diagonal=True)
@@ -283,8 +318,17 @@ def dispersion_atm_periodic(
 
     shifts.check_compatible(structure, cutoff)
 
-    radii = pair_radii(
-        structure, rvdw_table, r4r2_table, rdamp_table=rdamp_table
+    radii = _read_radii(
+        damping,
+        pair_radii(
+            structure,
+            rvdw_table,
+            r4r2_table,
+            rdamp_table=rdamp_table,
+            with_rdamp=damping.reads_rdamp,
+            with_rvdw=damping.reads_rvdw,
+            with_znum=False,
+        ),
     )
 
     images = _periodic_images(
@@ -301,11 +345,8 @@ def dispersion_atm_periodic(
     valid = valid.expand(n_system, nat, nat, n_shift)
 
     c6_systems = c6.reshape(-1, nat, nat).expand(n_system, nat, nat)
-    radii_systems = PairRadii(
-        qq=radii.qq.reshape(-1, nat, nat).expand(n_system, nat, nat),
-        rdamp=radii.rdamp.reshape(-1, nat, nat).expand(n_system, nat, nat),
-        rvdw=radii.rvdw.reshape(-1, nat, nat).expand(n_system, nat, nat),
-        znum=radii.znum.reshape(-1, nat, nat).expand(n_system, nat, nat),
+    radii_systems = _map_radii(
+        lambda t: t.reshape(-1, nat, nat).expand(n_system, nat, nat), radii
     )
     adiw_systems = (
         adiw.reshape(-1, nat, adiw.shape[-1]).expand(
@@ -337,12 +378,7 @@ def dispersion_atm_periodic(
     energies = []
     for system in range(n_system):
         c6_sys = c6_systems[system]
-        radii_sys = PairRadii(
-            qq=radii_systems.qq[system],
-            rdamp=radii_systems.rdamp[system],
-            rvdw=radii_systems.rvdw[system],
-            znum=radii_systems.znum[system],
-        )
+        radii_sys = _map_radii(lambda t: t[system], radii_systems)
         adiw_sys = adiw_systems[system] if adiw_systems is not None else None
 
         for i in range(nat):
@@ -359,23 +395,9 @@ def dispersion_atm_periodic(
                 atoms = static_atoms
                 legs = vectors.reshape(-1, 3)
                 c6_i = c6_sys[i].unsqueeze(1).expand(nat, n_shift).reshape(-1)
-                radii_i = PairRadii(
-                    qq=radii_sys.qq[i]
-                    .unsqueeze(1)
-                    .expand(nat, n_shift)
-                    .reshape(-1),
-                    rdamp=radii_sys.rdamp[i]
-                    .unsqueeze(1)
-                    .expand(nat, n_shift)
-                    .reshape(-1),
-                    rvdw=radii_sys.rvdw[i]
-                    .unsqueeze(1)
-                    .expand(nat, n_shift)
-                    .reshape(-1),
-                    znum=radii_sys.znum[i]
-                    .unsqueeze(1)
-                    .expand(nat, n_shift)
-                    .reshape(-1),
+                radii_i = _map_radii(
+                    lambda t: t[i].unsqueeze(1).expand(nat, n_shift).reshape(-1),
+                    radii_sys,
                 )
                 keep_legs: Tensor | None = keep.reshape(-1)
             else:
@@ -386,11 +408,8 @@ def dispersion_atm_periodic(
                     0, atoms * n_shift + shift_idx
                 )
                 c6_i = c6_sys[i].index_select(0, atoms)
-                radii_i = PairRadii(
-                    qq=radii_sys.qq[i].index_select(0, atoms),
-                    rdamp=radii_sys.rdamp[i].index_select(0, atoms),
-                    rvdw=radii_sys.rvdw[i].index_select(0, atoms),
-                    znum=radii_sys.znum[i].index_select(0, atoms),
+                radii_i = _map_radii(
+                    lambda t: t[i].index_select(0, atoms), radii_sys
                 )
                 keep_legs = None
 
@@ -411,24 +430,14 @@ def dispersion_atm_periodic(
                 legs_a = legs[rows]
                 atoms_a = atoms[rows]
                 c6_a = c6_i[rows]
-                radii_a = PairRadii(
-                    qq=radii_i.qq[rows],
-                    rdamp=radii_i.rdamp[rows],
-                    rvdw=radii_i.rvdw[rows],
-                    znum=radii_i.znum[rows],
-                )
+                radii_a = _map_radii(lambda t: t[rows], radii_i)
                 keep_rows = keep_legs[rows] if keep_legs is not None else None
                 for col_start in range(0, n_leg, col_block):
                     cols = slice(col_start, min(col_start + col_block, n_leg))
                     legs_b = legs[cols]
                     atoms_b = atoms[cols]
                     c6_b = c6_i[cols]
-                    radii_b = PairRadii(
-                        qq=radii_i.qq[cols],
-                        rdamp=radii_i.rdamp[cols],
-                        rvdw=radii_i.rvdw[cols],
-                        znum=radii_i.znum[cols],
-                    )
+                    radii_b = _map_radii(lambda t: t[cols], radii_i)
                     keep_cols = (
                         keep_legs[cols] if keep_legs is not None else None
                     )
@@ -474,10 +483,10 @@ def _periodic_block_energy(
     atom_b: Tensor,
     c6_a: Tensor,
     c6_b: Tensor,
-    radii_a: PairRadii,
-    radii_b: PairRadii,
+    radii_a: _Radii,
+    radii_b: _Radii,
     c6: Tensor,
-    radii: PairRadii,
+    radii: _Radii,
     damping: ThreeBodyDamping,
     param: DampingParam,
     cutoff: float,
@@ -525,16 +534,15 @@ def _periodic_block_energy(
         )
         c9 = storch.safe_sqrt(c6_prod)
 
-    rdamp_sides = (
-        radii_a.rdamp.unsqueeze(1),
-        radii_b.rdamp.unsqueeze(0),
-        radii.rdamp[jk],
-    )
-    rvdw_sides = (
-        radii_a.rvdw.unsqueeze(1),
-        radii_b.rvdw.unsqueeze(0),
-        radii.rvdw[jk],
-    )
+    def sides(
+        a: Tensor | None, b: Tensor | None, table: Tensor | None
+    ) -> tuple[Tensor, Tensor, Tensor] | None:
+        if a is None or b is None or table is None:
+            return None
+        return a.unsqueeze(1), b.unsqueeze(0), table[jk]
+
+    rdamp_sides = sides(radii_a[0], radii_b[0], radii[0])
+    rvdw_sides = sides(radii_a[1], radii_b[1], radii[1])
 
     term = atm_term(
         r2ij,
@@ -586,9 +594,17 @@ def dispersion_atm_sparse(
     total_atoms = flat_positions.shape[0]
 
     pairs = triples.pairs
-    r2, c6_pairs, radii = slot_values(
-        structure, c6, rvdw_table, r4r2_table, rdamp_table=rdamp_table
+    r2, c6_pairs, pair_radii_values = slot_values(
+        structure,
+        c6,
+        rvdw_table,
+        r4r2_table,
+        rdamp_table=rdamp_table,
+        with_rdamp=damping.reads_rdamp,
+        with_rvdw=damping.reads_rvdw,
+        with_znum=False,
     )(gather_index(pairs.idx_i), gather_index(pairs.idx_j), pairs.shift)
+    radii = _read_radii(damping, pair_radii_values)
 
     flat_adiw: Tensor | None = None
     if adiw is not None and gl_weights is not None:
@@ -637,7 +653,7 @@ def dispersion_atm_sparse(
 def _triple_energy(
     r2: Tensor,
     c6: Tensor,
-    radii: PairRadii,
+    radii: _Radii,
     side_ij: Tensor,
     side_jk: Tensor,
     side_ik: Tensor,
@@ -668,8 +684,8 @@ def _triple_energy(
         r2ij,
         r2ik,
         r2jk,
-        of(radii.rdamp),
-        of(radii.rvdw),
+        None if radii[0] is None else of(radii[0]),
+        None if radii[1] is None else of(radii[1]),
         damping,
         param,
         cutoff,

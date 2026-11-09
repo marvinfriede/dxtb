@@ -30,7 +30,7 @@ from tad_mctc.typing import Tensor
 
 from .. import defaults
 from .base import PairData, TwoBodyDamping, pow6
-from .param import DampingParam, ParamInput, as_damping_param
+from .param import DampingParam
 
 __all__ = ["CSOTwoBody"]
 
@@ -49,6 +49,9 @@ class CSOTwoBody(TwoBodyDamping):
         ("rs8", defaults.CSO_RS8),
     )
     label: ClassVar[str] = "CSO damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = False
+    has_d8: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances
@@ -80,22 +83,3 @@ class CSOTwoBody(TwoBodyDamping):
         sigmoid = torch.sigmoid(rad_scale * r0 - r)
         scale = self.value(param, "s6") + amp * sigmoid
         return scale / (pow6(r) + pow6(d6))
-
-    def damp(
-        self, param: ParamInput, r2: Tensor, rdamp: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        p = as_damping_param(param)
-        mask = r2 > 0
-        r = torch.sqrt(torch.where(mask, r2, torch.ones_like(r2)))
-        one = torch.ones_like(r)
-        zero = torch.zeros_like(r)
-        rdamp_safe = torch.where(rdamp > 0, rdamp, one)
-        pairs = PairData(
-            distances=r,
-            qq=zero,
-            c6=one,
-            rvdw=rdamp_safe,
-            znum=one,
-            rdamp=rdamp_safe,
-        )
-        return torch.where(mask, self(pairs, p), zero), zero

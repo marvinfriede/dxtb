@@ -49,6 +49,8 @@ class ModifiedZeroTwoBody(TwoBodyDamping):
         *DFTD_RADIUS_DEFAULTS,
     )
     label: ClassVar[str] = "Modified zero damping"
+    reads_rvdw: ClassVar[bool] = True
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances

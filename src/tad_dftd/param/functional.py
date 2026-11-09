@@ -25,6 +25,7 @@ Grimme-lab ``dftd/param/functionals.f90``.
 
 from __future__ import annotations
 
+from functools import cache
 from importlib.resources import as_file, files
 from typing import Any
 
@@ -39,10 +40,6 @@ except ModuleNotFoundError:  # pragma: no cover
 __all__ = ["get_functional_params", "get_params"]
 
 _META_KEYS = ("mbd", "damping", "doi")
-
-_d3_parameters: dict[str, Any] | None = None
-_d4_parameters: dict[str, Any] | None = None
-_aliases: dict[str, str] | None = None
 
 # D1 functional parameters from dftd/param/d1.f90 (S. Grimme, JCC 25, 1463 (2004))
 _D1_PARAMETERS: dict[str, dict[str, Any]] = {
@@ -151,26 +148,19 @@ def _load_pkg_toml(filename: str) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+@cache
 def _load_d3_parameters() -> dict[str, Any]:
-    global _d3_parameters
-    if _d3_parameters is None:
-        _d3_parameters = _load_pkg_toml("d3_parameters.toml")
-    return _d3_parameters
+    return _load_pkg_toml("d3_parameters.toml")
 
 
+@cache
 def _load_d4_parameters() -> dict[str, Any]:
-    global _d4_parameters
-    if _d4_parameters is None:
-        _d4_parameters = _load_pkg_toml("d4_parameters.toml")
-    return _d4_parameters
+    return _load_pkg_toml("d4_parameters.toml")
 
 
+@cache
 def _load_aliases() -> dict[str, str]:
-    global _aliases
-    if _aliases is None:
-        _aliases = dict(_load_pkg_toml("aliases.toml")["alias"])
-    assert _aliases is not None
-    return _aliases
+    return dict(_load_pkg_toml("aliases.toml")["alias"])
 
 
 def _normalize(functional: str) -> str:

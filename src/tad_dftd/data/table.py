@@ -23,6 +23,8 @@ element parameters ``rcov_table``, ``rvdw_table`` and ``r4r2_table`` are given a
 """
 from __future__ import annotations
 
+from importlib.resources import as_file, files
+
 import torch
 from tad_mctc.data import radii, resolve_table
 from tad_mctc.typing import TableFunction, Tensor
@@ -33,7 +35,13 @@ from .r4r2 import R4R2
 from .radii import VDW_PAIRWISE_119
 from .zeff import ZEFF
 
-__all__ = ["TABLES", "element_table", "guard_numbers"]
+__all__ = [
+    "TABLES",
+    "element_table",
+    "guard_numbers",
+    "load_pkg_tensor",
+    "validate_max_elem",
+]
 
 
 def _unwrap_functorch(x: Tensor) -> Tensor:
@@ -72,6 +80,29 @@ def guard_numbers(
             raise ValueError(message.format(bad=bad))
         raise ValueError(message)
     return numbers
+
+
+def validate_max_elem(numbers: Tensor, label: str, max_elem: int) -> Tensor:
+    """
+    Validate that all atomic `numbers` are in ``0..max_elem`` (zero is
+    padding), see :func:`guard_numbers`. `label` names the model in the error.
+    """
+    invalid = (numbers < 0) | (numbers > max_elem)
+    return guard_numbers(
+        numbers,
+        invalid,
+        f"Unsupported atomic number {{bad}} for {label} dispersion model "
+        f"(supported: Z in 1..{max_elem}).",
+        format_bad=True,
+    )
+
+
+def load_pkg_tensor(package: str, filename: str) -> Tensor:
+    """Load the tensor file `filename` that is shipped in `package` (the
+    ``__package__`` of the caller), onto the CPU."""
+    res = files(package).joinpath(filename)
+    with as_file(res) as path:
+        return torch.load(path, map_location="cpu", weights_only=True)
 
 
 TABLES: dict[str, tuple[TableFunction, tuple[int, ...]]] = {

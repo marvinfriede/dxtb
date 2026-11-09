@@ -43,6 +43,8 @@ class OptimizedPowerTwoBody(TwoBodyDamping):
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = (("s6", defaults.S6),)
     label: ClassVar[str] = "Optimized power damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances

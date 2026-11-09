@@ -45,7 +45,12 @@ __all__ = [
 
 class PairRadii(NamedTuple):
     """The values of :class:`~tad_dftd.damping.PairData` that follow from
-    the elements of the two atoms alone, all finite and positive."""
+    the elements of the two atoms alone, all finite and positive.
+
+    A field that the damping does not read (see ``reads_rvdw`` and
+    ``reads_znum`` of :class:`~tad_dftd.damping.TwoBodyDamping`) is not
+    computed, but is a copy of `qq`.
+    """
 
     qq: Tensor
     """``3 * r4r2[i] * r4r2[j]``."""
@@ -72,10 +77,13 @@ def nonzero(x: Tensor) -> Tensor:
 def pair_radii_of(
     z_i: Tensor,
     z_j: Tensor,
-    rvdw: Tensor,
+    rvdw: Tensor | None,
     r4r2: Tensor,
     *,
     rdamp: Tensor | None = None,
+    with_rdamp: bool = True,
+    with_rvdw: bool = True,
+    with_znum: bool = True,
 ) -> PairRadii:
     """
     The element-dependent values of the pairs ``(z_i, z_j)``.
@@ -84,13 +92,18 @@ def pair_radii_of(
     ----------
     z_i, z_j : Tensor
         Atomic numbers of the two atoms of each pair, zero for padding.
-    rvdw : Tensor
-        Van-der-Waals radii, ``(nelem, nelem)``.
+    rvdw : Tensor | None
+        Van-der-Waals radii, ``(nelem, nelem)``. May be ``None`` if
+        `with_rvdw` is ``False``.
     r4r2 : Tensor
         Expectation values ``<r4>/<r2>``, ``(nelem,)``.
     rdamp : Tensor | None, optional
         Explicit pairwise damping radius table ``(nelem, nelem)`` (e.g. for
         D1, D2). Defaults to ``None`` (``sqrt(qq)``).
+    with_rdamp, with_rvdw, with_znum : bool, optional
+        Whether to compute the damping radius, the Van-der-Waals radius and
+        the sum of the atomic numbers. A value that is not computed is a copy
+        of ``qq``. Defaults to ``True``.
 
     Returns
     -------
@@ -101,15 +114,19 @@ def pair_radii_of(
     r4r2_i = nonzero(r4r2[z_i])
     r4r2_j = nonzero(r4r2[z_j])
     qq = 3 * r4r2_i * r4r2_j
-    rdamp_val = (
-        torch.sqrt(qq) if rdamp is None else nonzero(rdamp[z_i, z_j])
-    )
-    return PairRadii(
-        qq=qq,
-        rdamp=rdamp_val,
-        rvdw=nonzero(rvdw[z_i, z_j]),
-        znum=nonzero(z_i + z_j).to(qq.dtype),
-    )
+    if not with_rdamp:
+        rdamp_val = qq
+    elif rdamp is None:
+        rdamp_val = torch.sqrt(qq)
+    else:
+        rdamp_val = nonzero(rdamp[z_i, z_j])
+    if with_rvdw:
+        assert rvdw is not None
+        rvdw_val = nonzero(rvdw[z_i, z_j])
+    else:
+        rvdw_val = qq
+    znum = nonzero(z_i + z_j).to(qq.dtype) if with_znum else qq
+    return PairRadii(qq=qq, rdamp=rdamp_val, rvdw=rvdw_val, znum=znum)
 
 
 def pair_radii(
@@ -121,6 +138,9 @@ def pair_radii(
     rvdw: Tensor | None = None,
     r4r2: Tensor | None = None,
     rdamp: Tensor | None = None,
+    with_rdamp: bool = True,
+    with_rvdw: bool = True,
+    with_znum: bool = True,
 ) -> PairRadii:
     """
     The radii of all pairs of atoms of `structure`, ``(..., nat, nat)``.
@@ -128,20 +148,28 @@ def pair_radii(
     Optional pre-gathered per-pair `rvdw` / `rdamp` (shape ``(..., nat, nat)``)
     and per-atom `r4r2` (shape ``(..., nat)``) may be supplied directly to
     avoid re-indexing element tables when setup data has already been gathered.
+
+    A radius that `with_rdamp`, `with_rvdw` or `with_znum` switches off is a
+    copy of ``qq`` (see :class:`PairRadii`).
     """
     numbers, positions = structure.numbers, structure.positions
     rdamp_tbl = (
         element_table(rdamp_table, "rdamp_table", positions)
-        if rdamp_table is not None
+        if rdamp_table is not None and with_rdamp
         else None
     )
     if rvdw is None and r4r2 is None and rdamp is None:
         return pair_radii_of(
             numbers.unsqueeze(-1),
             numbers.unsqueeze(-2),
-            element_table(rvdw_table, "rvdw_table", positions),
+            element_table(rvdw_table, "rvdw_table", positions)
+            if with_rvdw
+            else None,
             element_table(r4r2_table, "r4r2_table", positions),
             rdamp=rdamp_tbl,
+            with_rdamp=with_rdamp,
+            with_rvdw=with_rvdw,
+            with_znum=with_znum,
         )
 
     z_i = numbers.unsqueeze(-1)
@@ -156,7 +184,9 @@ def pair_radii(
         r4r2_tbl = element_table(r4r2_table, "r4r2_table", positions)
         qq = 3 * nonzero(r4r2_tbl[z_i]) * nonzero(r4r2_tbl[z_j])
 
-    if rvdw is not None:
+    if not with_rvdw:
+        rvdw_val = qq
+    elif rvdw is not None:
         rvdw_val = nonzero(
             rvdw.to(device=positions.device, dtype=positions.dtype)
         )
@@ -164,7 +194,9 @@ def pair_radii(
         rvdw_tbl = element_table(rvdw_table, "rvdw_table", positions)
         rvdw_val = nonzero(rvdw_tbl[z_i, z_j])
 
-    if rdamp is not None:
+    if not with_rdamp:
+        rdamp_val = qq
+    elif rdamp is not None:
         rdamp_val = nonzero(
             rdamp.to(device=positions.device, dtype=positions.dtype)
         )
@@ -173,12 +205,8 @@ def pair_radii(
     else:
         rdamp_val = torch.sqrt(qq)
 
-    return PairRadii(
-        qq=qq,
-        rdamp=rdamp_val,
-        rvdw=rvdw_val,
-        znum=nonzero(z_i + z_j).to(qq.dtype),
-    )
+    znum = nonzero(z_i + z_j).to(qq.dtype) if with_znum else qq
+    return PairRadii(qq=qq, rdamp=rdamp_val, rvdw=rvdw_val, znum=znum)
 
 
 class SlotValues(NamedTuple):
@@ -202,17 +230,27 @@ def slot_values(
     *,
     rdamp_table: Tensor | TableFunction | None = None,
     c8: Tensor | Any | None = None,
+    with_rdamp: bool = True,
+    with_rvdw: bool = True,
+    with_znum: bool = True,
 ) -> Callable[[Tensor, Tensor, Tensor], SlotValues]:
     """
     The values of the slots ``(idx_i, idx_j, shift)`` of a list, for any
     batch of its slots (a chunk of the list, or all its slots at once).
+
+    A radius that `with_rdamp`, `with_rvdw` or `with_znum` switches off is
+    not computed (see :class:`PairRadii`).
     """
     numbers, positions = structure.numbers, structure.positions
-    rvdw = element_table(rvdw_table, "rvdw_table", positions)
+    rvdw = (
+        element_table(rvdw_table, "rvdw_table", positions)
+        if with_rvdw
+        else None
+    )
     r4r2 = element_table(r4r2_table, "r4r2_table", positions)
     rdamp = (
         element_table(rdamp_table, "rdamp_table", positions)
-        if rdamp_table is not None
+        if rdamp_table is not None and with_rdamp
         else None
     )
 
@@ -248,6 +286,9 @@ def slot_values(
             rvdw,
             r4r2,
             rdamp=rdamp,
+            with_rdamp=with_rdamp,
+            with_rvdw=with_rvdw,
+            with_znum=with_znum,
         )
         c6_pair = _pair_c6(c6, real_i, real_j, nat)
         if c8 is not None:

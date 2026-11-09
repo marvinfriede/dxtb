@@ -19,8 +19,6 @@ Charge model dispatch (`eeq`) for charge-dependent DFT-D models.
 """
 from __future__ import annotations
 
-import torch
-from tad_mctc.tools import is_compiling
 from tad_mctc.typing import Tensor
 from tad_multicharge.model.base import SolveMode
 
@@ -33,11 +31,33 @@ __all__ = [
     "get_charges",
     "get_charges_eeq",
     "get_eeq_charges",
+    "normalize_qmodel",
 ]
 
 MAX_ELEM_EEQ: int = 103
 
 get_charges_eeq = get_eeq_charges
+
+
+def normalize_qmodel(qmod: str) -> str:
+    """
+    Canonical key of a charge model name: lower case and stripped, with
+    ``"eeq2019"`` mapped to ``"eeq"``.
+
+    Raises
+    ------
+    NotImplementedError
+        For ``"eeqbc"`` and ``"eeqbc2025"``, which are not supported.
+    """
+    qkey = qmod.lower().strip()
+    if qkey == "eeq2019":
+        return "eeq"
+    if qkey in ("eeqbc", "eeqbc2025"):
+        raise NotImplementedError(
+            f"Charge model '{qmod}' is not supported in this release "
+            "because the upstream model is not finalized."
+        )
+    return qkey
 
 
 def get_charges(
@@ -78,14 +98,7 @@ def get_charges(
     Tensor
         Atomic partial charges of shape ``(..., nat)``.
     """
-    qkey = qmod.lower().strip()
-    if qkey == "eeq2019":
-        qkey = "eeq"
-    elif qkey in ("eeqbc", "eeqbc2025"):
-        raise NotImplementedError(
-            f"Charge model '{qmod}' is not supported in this release "
-            "because the upstream model is not finalized."
-        )
+    qkey = normalize_qmodel(qmod)
     if qkey in ("gfn2", "gxtb"):
         raise ValueError("This dispersion model requires external charges")
     if qkey != "eeq":

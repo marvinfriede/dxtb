@@ -77,6 +77,8 @@ class ScreenedTwoBody(TwoBodyDamping):
         *DFTD_RADIUS_DEFAULTS,
     )
     label: ClassVar[str] = "Screened damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances
@@ -100,14 +102,12 @@ class ScreenedThreeBody(ThreeBodyDamping):
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = DFTD_RADIUS_DEFAULTS
     label: ClassVar[str] = "Screened damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = True
+    reads_rvdw: ClassVar[bool] = False
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         damp = torch.ones_like(triples.r)
-        for r2, rdamp in (
-            (triples.r2ij, triples.rdampij),
-            (triples.r2ik, triples.rdampik),
-            (triples.r2jk, triples.rdampjk),
-        ):
+        for r2, rdamp in triples.legs:
             r = torch.sqrt(r2)
             reff = _effective_radius(self, param, r, rdamp, three_body=True)
             ratio = r / (r + reff)

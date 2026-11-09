@@ -43,6 +43,8 @@ class ZTwoBody(TwoBodyDamping):
         ("s8", defaults.S8),
     )
     label: ClassVar[str] = "Z damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = True
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances

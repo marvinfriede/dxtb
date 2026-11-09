@@ -115,6 +115,17 @@ class TripleData(NamedTuple):
     rvdwjk: Tensor
     """Van-der-Waals radius of the pair ``(j, k)``."""
 
+    @property
+    def legs(
+        self,
+    ) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+        """``(r2, rdamp)`` of the pairs ij, ik and jk, in this order."""
+        return (
+            (self.r2ij, self.rdampij),
+            (self.r2ik, self.rdampik),
+            (self.r2jk, self.rdampjk),
+        )
+
 
 class _Damping:
     """
@@ -154,6 +165,17 @@ class TwoBodyDamping(_Damping):
     of the pair is ``-c6`` times this.
     """
 
+    reads_rvdw: ClassVar[bool] = True
+    """Whether the damping reads :attr:`PairData.rvdw`. If ``False``, the
+    evaluation of the dispersion fills that field with a placeholder."""
+
+    reads_znum: ClassVar[bool] = True
+    """Whether the damping reads :attr:`PairData.znum`. If ``False``, the
+    evaluation of the dispersion fills that field with a placeholder."""
+
+    has_d8: ClassVar[bool] = True
+    """Whether :meth:`damp` has an eighth-order term when `s8` is set."""
+
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         raise NotImplementedError
 
@@ -171,7 +193,9 @@ class TwoBodyDamping(_Damping):
         one = torch.ones_like(r)
         zero = torch.zeros_like(r)
         rdamp_safe = torch.where(rdamp > 0, rdamp, one)
-        has_s8 = p.s8 is not None or any(k == "s8" for k, _ in self.defaults)
+        has_s8 = self.has_d8 and (
+            p.s8 is not None or any(k == "s8" for k, _ in self.defaults)
+        )
         p_d6 = p if has_s8 else p.replace(s8=0.0)
         pairs_d6 = PairData(
             distances=r,
@@ -202,6 +226,16 @@ class ThreeBodyDamping(_Damping):
 
     Returns the damping factor of each triple, including `s9`.
     """
+
+    reads_rdamp: ClassVar[bool] = True
+    """Whether the damping reads the ``rdamp*`` fields of :class:`TripleData`.
+    If ``False``, the evaluation of the dispersion fills them with
+    placeholders."""
+
+    reads_rvdw: ClassVar[bool] = True
+    """Whether the damping reads the ``rvdw*`` fields of :class:`TripleData`.
+    If ``False``, the evaluation of the dispersion fills them with
+    placeholders."""
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         raise NotImplementedError

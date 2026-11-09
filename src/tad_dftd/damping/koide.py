@@ -35,6 +35,7 @@ from .base import (
     ThreeBodyDamping,
     TripleData,
     TwoBodyDamping,
+    pow6_pow8,
     scaled_radius,
     scaled_radius3,
 )
@@ -137,14 +138,14 @@ class KoideTwoBody(TwoBodyDamping):
         ("rsxc", 1.0),
     )
     label: ClassVar[str] = "Koide damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances
         rpoly = scaled_radius(self, param, pairs.rdamp, qq=pairs.qq)
 
-        r2 = r * r
-        r6 = r2 * r2 * r2
-        r8 = r6 * r2
+        r6, r8 = pow6_pow8(r)
 
         chi_11 = _chi11(self.value(param, "rs6") * r / rpoly)
         chi_12 = _chi12(self.value(param, "rs8") * r / rpoly)
@@ -172,6 +173,8 @@ class KoideThreeBody(ThreeBodyDamping):
         ("rsxc", 1.0),
     )
     label: ClassVar[str] = "Koide damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = True
+    reads_rvdw: ClassVar[bool] = False
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         rs9 = self.value(param, "rs9")
@@ -180,17 +183,14 @@ class KoideThreeBody(ThreeBodyDamping):
         damp = torch.ones_like(triples.r)
         overlap = torch.ones_like(triples.r)
         positive = torch.ones_like(triples.r, dtype=torch.bool)
-        for r2, rdamp in (
-            (triples.r2ij, triples.rdampij),
-            (triples.r2ik, triples.rdampik),
-            (triples.r2jk, triples.rdampjk),
-        ):
+        for r2, rdamp in triples.legs:
             r = torch.sqrt(r2)
             rpoly = scaled_radius3(self, param, rdamp)
             chi = _chi11(rs9 * r / rpoly)
 
-            positive = positive & (chi > 0.0)
-            damp = damp * torch.sqrt(torch.where(chi > 0.0, chi, 1.0))
+            is_pos = chi > 0.0
+            positive = positive & is_pos
+            damp = damp * torch.sqrt(torch.where(is_pos, chi, 1.0))
 
             if screened:
                 rsxc = self.value(param, "rsxc")

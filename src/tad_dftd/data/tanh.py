@@ -23,6 +23,8 @@ from __future__ import annotations
 import torch
 from tad_mctc.typing import Tensor, get_default_dtype
 
+from .d1 import _lookup
+
 __all__ = ["TANH_PARAMS", "get_tanh_params"]
 
 _TANH_RAW: list[list[float]] = [
@@ -151,7 +153,5 @@ def get_tanh_params(
     dtype: torch.dtype | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Look up ``(a, b, c, d)`` tanh interpolation parameters for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = TANH_PARAMS(device=dev, dtype=dtype)
-    vals = table[numbers]
+    vals = _lookup(TANH_PARAMS, numbers, device, dtype)
     return vals[..., 0], vals[..., 1], vals[..., 2], vals[..., 3]

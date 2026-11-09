@@ -88,6 +88,8 @@ class ZeroTwoBody(TwoBodyDamping):
         *DFTD_RADIUS_DEFAULTS,
     )
     label: ClassVar[str] = "Zero damping"
+    reads_rvdw: ClassVar[bool] = True
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r = pairs.distances
@@ -121,6 +123,8 @@ class ZeroThreeBodyD3(ThreeBodyDamping):
         ("alp", defaults.ALP),
     )
     label: ClassVar[str] = "Zero damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = False
+    reads_rvdw: ClassVar[bool] = True
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         rs9 = self.value(param, "rs9")
@@ -156,6 +160,8 @@ class ZeroThreeBodyD4(ThreeBodyDamping):
         ("alp", defaults.D4_ALP),
     )
     label: ClassVar[str] = "D4 zero damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = True
+    reads_rvdw: ClassVar[bool] = False
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         rs9 = self.value(param, "rs9")
@@ -182,16 +188,14 @@ class ZeroProductThreeBody(ThreeBodyDamping):
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = DFTD_RADIUS_DEFAULTS
     label: ClassVar[str] = "Product zero damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = True
+    reads_rvdw: ClassVar[bool] = False
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         rs9 = self.value(param, "rs9")
         alp = param.alp3 if param.alp3 is not None else self.value(param, "alp")
         damp = torch.ones_like(triples.r)
-        for r2, rdamp in (
-            (triples.r2ij, triples.rdampij),
-            (triples.r2ik, triples.rdampik),
-            (triples.r2jk, triples.rdampjk),
-        ):
+        for r2, rdamp in triples.legs:
             rpoly = scaled_radius3(self, param, rdamp)
             t3 = (rs9 * rpoly / torch.sqrt(r2)) ** alp
             damp = damp * (1.0 / (1.0 + 6.0 * t3))

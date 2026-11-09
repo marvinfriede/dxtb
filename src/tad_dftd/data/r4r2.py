@@ -23,6 +23,8 @@ from __future__ import annotations
 import torch
 from tad_mctc.typing import Tensor, get_default_dtype
 
+from .d1 import _lookup
+
 __all__ = ["R4R2", "R4_OVER_R2", "SQRT_Z_R4_OVER_R2", "get_r4r2_val"]
 
 _R4_OVER_R2_RAW: list[float] = [
@@ -88,6 +90,4 @@ def get_r4r2_val(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Look up ``sqrt_z_r4_over_r2`` for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = R4R2(device=dev, dtype=dtype)
-    return table[numbers]
+    return _lookup(R4R2, numbers, device, dtype)

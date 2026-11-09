@@ -21,6 +21,7 @@ Atomic van-der-Waals radii and :math:`C_6` coefficients for the DFT-D1 model
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 from tad_mctc.typing import Tensor, get_default_dtype
@@ -46,6 +47,50 @@ _AATOAU = 1.0 / (_BOHR * 1.0e10)
 _KJTOAU = 1.0 / (_HARTREE * _NA * 1.0e-3)
 _C6CONV = 1.0e-3 * _KJTOAU * ((10.0 * _AATOAU) ** 6)
 
+
+def _lookup(
+    table_fn: Callable[..., Tensor],
+    numbers: Tensor,
+    device: torch.device | None,
+    dtype: torch.dtype | None,
+) -> Tensor:
+    """Entries of the table `table_fn` for the atomic `numbers`, on the
+    device of `numbers` unless `device` is given."""
+    dev = numbers.device if device is None else device
+    return table_fn(device=dev, dtype=dtype)[numbers]
+
+
+def _scaled_table(
+    raw: list[float],
+    factor: float,
+    device: torch.device | None,
+    dtype: torch.dtype | None,
+) -> Tensor:
+    """`raw * factor`, multiplied in double precision and then cast."""
+    dt = get_default_dtype() if dtype is None else dtype
+    return (torch.tensor(raw, device=device, dtype=torch.float64) * factor).to(
+        dtype=dt
+    )
+
+
+def _pairwise_radii(raw_aa: list[float]) -> Tensor:
+    """Pairwise damping radii ``r_i + r_j`` in Bohr, zero where either atom
+    has no radius, in double precision on the CPU."""
+    rad = torch.tensor(raw_aa, dtype=torch.float64) * _AATOAU
+    valid = (rad.unsqueeze(-1) > 0) & (rad.unsqueeze(-2) > 0)
+    return torch.where(
+        valid, rad.unsqueeze(-1) + rad.unsqueeze(-2), torch.zeros_like(rad)
+    )
+
+
+def _cast(
+    table: Tensor, device: torch.device | None, dtype: torch.dtype | None
+) -> Tensor:
+    """A precomputed CPU `table` on `device`, in `dtype` (default dtype if
+    ``None``)."""
+    dt = get_default_dtype() if dtype is None else dtype
+    return table.to(device=device, dtype=dt)
+
 # Tabulated for Z=0..10 (padded to Z=0..118 with zeros)
 _D1_RADIUS_AA: list[float] = [
     0.0,
@@ -65,20 +110,10 @@ def D1_RADII(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Atomic van-der-Waals radii of D1 in Bohr for Z=0..118."""
-    dt = get_default_dtype() if dtype is None else dtype
-    rad_64 = torch.tensor(_D1_RADIUS_AA, device=device, dtype=torch.float64) * _AATOAU
-    return rad_64.to(dtype=dt)
+    return _scaled_table(_D1_RADIUS_AA, _AATOAU, device, dtype)
 
 
-def _build_d1_radii_pairwise_cpu() -> Tensor:
-    rad = torch.tensor(_D1_RADIUS_AA, dtype=torch.float64) * _AATOAU
-    valid = (rad.unsqueeze(-1) > 0) & (rad.unsqueeze(-2) > 0)
-    return torch.where(
-        valid, rad.unsqueeze(-1) + rad.unsqueeze(-2), torch.zeros_like(rad)
-    )
-
-
-_D1_RADII_PAIRWISE_CPU: Tensor = _build_d1_radii_pairwise_cpu()
+_D1_RADII_PAIRWISE_CPU: Tensor = _pairwise_radii(_D1_RADIUS_AA)
 
 
 def D1_RADII_PAIRWISE(
@@ -86,8 +121,7 @@ def D1_RADII_PAIRWISE(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Pairwise D1 damping radii ``r_i + r_j`` in Bohr of shape ``(119, 119)``."""
-    dt = get_default_dtype() if dtype is None else dtype
-    return _D1_RADII_PAIRWISE_CPU.to(device=device, dtype=dt)
+    return _cast(_D1_RADII_PAIRWISE_CPU, device, dtype)
 
 
 def D1_C6(
@@ -95,9 +129,7 @@ def D1_C6(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Atomic C6 coefficients of D1 in Hartree * Bohr^6 for Z=0..118."""
-    dt = get_default_dtype() if dtype is None else dtype
-    c6_64 = torch.tensor(_D1_C6_JNM6, device=device, dtype=torch.float64) * _C6CONV
-    return c6_64.to(dtype=dt)
+    return _scaled_table(_D1_C6_JNM6, _C6CONV, device, dtype)
 
 
 def get_d1_radius(
@@ -106,9 +138,7 @@ def get_d1_radius(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Look up D1 van-der-Waals radii in Bohr for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = D1_RADII(device=dev, dtype=dtype)
-    return table[numbers]
+    return _lookup(D1_RADII, numbers, device, dtype)
 
 
 def get_d1_c6(
@@ -117,6 +147,4 @@ def get_d1_c6(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Look up D1 atomic C6 coefficients in Hartree * Bohr^6 for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = D1_C6(device=dev, dtype=dtype)
-    return table[numbers]
+    return _lookup(D1_C6, numbers, device, dtype)

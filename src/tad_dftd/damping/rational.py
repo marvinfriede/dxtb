@@ -60,6 +60,8 @@ class RationalTwoBody(TwoBodyDamping):
         ("s6", defaults.S6),
     )
     label: ClassVar[str] = "Rational damping"
+    reads_rvdw: ClassVar[bool] = False
+    reads_znum: ClassVar[bool] = False
 
     def __call__(self, pairs: PairData, param: DampingParam) -> Tensor:
         r0 = scaled_radius(self, param, pairs.rdamp, qq=pairs.qq)
@@ -90,6 +92,8 @@ class CallableTwoBodyDamping(TwoBodyDamping):
         ("a2", defaults.A2),
     )
     label: ClassVar[str] = "Custom callable two-body damping"
+    reads_rvdw: ClassVar[bool] = True
+    reads_znum: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -138,14 +142,12 @@ class RationalThreeBody(ThreeBodyDamping):
 
     defaults: ClassVar[tuple[tuple[str, float], ...]] = DFTD_RADIUS_DEFAULTS
     label: ClassVar[str] = "Rational damping of the three-body term"
+    reads_rdamp: ClassVar[bool] = True
+    reads_rvdw: ClassVar[bool] = False
 
     def __call__(self, triples: TripleData, param: DampingParam) -> Tensor:
         damp = torch.ones_like(triples.r)
-        for r2, rdamp in (
-            (triples.r2ij, triples.rdampij),
-            (triples.r2ik, triples.rdampik),
-            (triples.r2jk, triples.rdampjk),
-        ):
+        for r2, rdamp in triples.legs:
             r3 = r2 * torch.sqrt(r2)
             rpoly = scaled_radius3(self, param, rdamp)
             rpoly3 = rpoly * rpoly * rpoly

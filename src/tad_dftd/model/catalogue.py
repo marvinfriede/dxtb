@@ -29,7 +29,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 from .. import defaults
-from ..cutoff import Cutoff
+from ..charge import normalize_qmodel
+from ..cutoff import D5_NOT_IMPLEMENTED_MESSAGE, Cutoff
 
 __all__ = [
     "CHARGE_MODELS",
@@ -93,7 +94,29 @@ class ModelMetadata:
     default_cutoff: Cutoff
     allowed_dampings: tuple[str, ...]
     allowed_qmodels: tuple[ChargeModelId, ...]
+    functional_dampings: tuple[str, ...] = ()
+    """Two-body dampings with tabulated functional parameters."""
 
+    @property
+    def atm_damping(self) -> str:
+        """Three-body damping used when ATM is requested without a name."""
+        return self.default_damping_3b or "zero_d4"
+
+
+# Canonical names only: `validate_model_damping` resolves aliases first.
+_DAMPINGS_BASE: tuple[str, ...] = (
+    "rational",
+    "zero",
+    "mzero",
+    "optimizedpower",
+)
+"""Two-body dampings every D3- and D4-type model accepts."""
+
+_DAMPINGS_D4: tuple[str, ...] = (*_DAMPINGS_BASE, "screened", "koide")
+_DAMPINGS_D3S: tuple[str, ...] = (*_DAMPINGS_BASE, "cso", "screened", "koide")
+_DAMPINGS_D3: tuple[str, ...] = (*_DAMPINGS_D3S, "z")
+
+_FUNCTIONAL_D3: tuple[str, ...] = (*_DAMPINGS_BASE, "cso")
 
 DISPERSION_MODELS: dict[str, ModelMetadata] = {
     "d1": ModelMetadata(
@@ -108,8 +131,9 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="fermi",
         default_damping_3b=None,
         default_cutoff=Cutoff.from_model("d1"),
-        allowed_dampings=("fermi", "d1"),
+        allowed_dampings=("fermi",),
         allowed_qmodels=(),
+        functional_dampings=("fermi",),
     ),
     "d2": ModelMetadata(
         model_id=DispersionModelId.D2,
@@ -123,8 +147,9 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="fermi",
         default_damping_3b=None,
         default_cutoff=Cutoff.from_model("d2"),
-        allowed_dampings=("fermi", "d2"),
+        allowed_dampings=("fermi",),
         allowed_qmodels=(),
+        functional_dampings=("fermi",),
     ),
     "d3": ModelMetadata(
         model_id=DispersionModelId.D3,
@@ -138,23 +163,9 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="rational",
         default_damping_3b="zero_d3",
         default_cutoff=Cutoff.from_model("d3"),
-        allowed_dampings=(
-            "rational",
-            "bj",
-            "bjm",
-            "zero",
-            "chg",
-            "mzero",
-            "zerom",
-            "optimizedpower",
-            "optimisedpower",
-            "op",
-            "cso",
-            "screened",
-            "koide",
-            "z",
-        ),
+        allowed_dampings=_DAMPINGS_D3,
         allowed_qmodels=(),
+        functional_dampings=_FUNCTIONAL_D3,
     ),
     "d3s": ModelMetadata(
         model_id=DispersionModelId.D3S,
@@ -168,22 +179,9 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="rational",
         default_damping_3b="zero_d3",
         default_cutoff=Cutoff.from_model("d3s"),
-        allowed_dampings=(
-            "rational",
-            "bj",
-            "bjm",
-            "zero",
-            "chg",
-            "mzero",
-            "zerom",
-            "optimizedpower",
-            "optimisedpower",
-            "op",
-            "cso",
-            "screened",
-            "koide",
-        ),
+        allowed_dampings=_DAMPINGS_D3S,
         allowed_qmodels=(),
+        functional_dampings=_FUNCTIONAL_D3,
     ),
     "d4": ModelMetadata(
         model_id=DispersionModelId.D4,
@@ -197,24 +195,12 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="rational",
         default_damping_3b="zero_d4",
         default_cutoff=Cutoff.from_model("d4"),
-        allowed_dampings=(
-            "rational",
-            "bj",
-            "bjm",
-            "zero",
-            "chg",
-            "mzero",
-            "zerom",
-            "optimizedpower",
-            "optimisedpower",
-            "op",
-            "screened",
-            "koide",
-        ),
+        allowed_dampings=_DAMPINGS_D4,
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
         ),
+        functional_dampings=("rational",),
     ),
     "d4s": ModelMetadata(
         model_id=DispersionModelId.D4S,
@@ -228,24 +214,12 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="rational",
         default_damping_3b="zero_d4",
         default_cutoff=Cutoff.from_model("d4s"),
-        allowed_dampings=(
-            "rational",
-            "bj",
-            "bjm",
-            "zero",
-            "chg",
-            "mzero",
-            "zerom",
-            "optimizedpower",
-            "optimisedpower",
-            "op",
-            "screened",
-            "koide",
-        ),
+        allowed_dampings=_DAMPINGS_D4,
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
         ),
+        functional_dampings=("rational",),
     ),
     "d4srev": ModelMetadata(
         model_id=DispersionModelId.D4SREV,
@@ -259,20 +233,7 @@ DISPERSION_MODELS: dict[str, ModelMetadata] = {
         default_damping_2b="rational",
         default_damping_3b="zero_d4",
         default_cutoff=Cutoff.from_model("d4srev"),
-        allowed_dampings=(
-            "rational",
-            "bj",
-            "bjm",
-            "zero",
-            "chg",
-            "mzero",
-            "zerom",
-            "optimizedpower",
-            "optimisedpower",
-            "op",
-            "screened",
-            "koide",
-        ),
+        allowed_dampings=_DAMPINGS_D4,
         allowed_qmodels=(
             ChargeModelId.EEQ,
             ChargeModelId.GFN2,
@@ -311,11 +272,7 @@ def resolve_model_id(
         )
     if isinstance(model, int):
         try:
-            model_id = (
-                model
-                if isinstance(model, DispersionModelId)
-                else DispersionModelId(model)
-            )
+            model_id = DispersionModelId(model)
         except ValueError as exc:
             valid = ", ".join(
                 f"{m.value} ({m.name})"
@@ -326,10 +283,7 @@ def resolve_model_id(
                 f"Unknown dispersion model ID '{model}'; expected one of: {valid}."
             ) from exc
         if model_id == DispersionModelId.D5:
-            raise NotImplementedError(
-                "Dispersion model 'D5' is not yet implemented because the "
-                "upstream reference is not finalized."
-            )
+            raise NotImplementedError(D5_NOT_IMPLEMENTED_MESSAGE)
         return model_id
     if not isinstance(model, str):
         raise _InvalidModelTypeError(
@@ -342,10 +296,7 @@ def resolve_model_id(
     elif key.startswith("dft"):
         key = key[3:]
     if key == "d5":
-        raise NotImplementedError(
-            "Dispersion model 'D5' is not yet implemented because the "
-            "upstream reference is not finalized."
-        )
+        raise NotImplementedError(D5_NOT_IMPLEMENTED_MESSAGE)
     meta = DISPERSION_MODELS.get(key)
     if meta is None:
         known = ", ".join(sorted(DISPERSION_MODELS))
@@ -380,11 +331,7 @@ def resolve_charge_model_id(
     qid: ChargeModelId
     if isinstance(qmodel, int):
         try:
-            qid = (
-                qmodel
-                if isinstance(qmodel, ChargeModelId)
-                else ChargeModelId(qmodel)
-            )
+            qid = ChargeModelId(qmodel)
         except ValueError as exc:
             raise ValueError(f"Unknown charge model ID '{qmodel}'.") from exc
         if qid == ChargeModelId.EEQBC:
@@ -393,12 +340,7 @@ def resolve_charge_model_id(
                 "because the upstream model is not finalized."
             )
     elif isinstance(qmodel, str):
-        key = qmodel.lower().strip()
-        if key in ("eeqbc", "eeqbc2025"):
-            raise NotImplementedError(
-                f"Charge model '{qmodel}' is not supported in this release "
-                "because the upstream model is not finalized."
-            )
+        key = normalize_qmodel(qmodel)
         if key not in CHARGE_MODELS:
             known = ", ".join(sorted(CHARGE_MODELS))
             raise ValueError(

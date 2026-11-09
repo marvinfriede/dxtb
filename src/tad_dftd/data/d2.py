@@ -21,9 +21,16 @@ Atomic van-der-Waals radii and :math:`C_6` coefficients for the DFT-D2 model
 from __future__ import annotations
 
 import torch
-from tad_mctc.typing import Tensor, get_default_dtype
+from tad_mctc.typing import Tensor
 
-from .d1 import _AATOAU, _C6CONV
+from .d1 import (
+    _AATOAU,
+    _C6CONV,
+    _cast,
+    _lookup,
+    _pairwise_radii,
+    _scaled_table,
+)
 
 __all__ = [
     "D2_C6",
@@ -76,20 +83,10 @@ def D2_RADII(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Atomic van-der-Waals radii of D2 in Bohr for Z=0..118."""
-    dt = get_default_dtype() if dtype is None else dtype
-    rad_64 = torch.tensor(_D2_RADIUS_AA, device=device, dtype=torch.float64) * _AATOAU
-    return rad_64.to(dtype=dt)
+    return _scaled_table(_D2_RADIUS_AA, _AATOAU, device, dtype)
 
 
-def _build_d2_radii_pairwise_cpu() -> Tensor:
-    rad = torch.tensor(_D2_RADIUS_AA, dtype=torch.float64) * _AATOAU
-    valid = (rad.unsqueeze(-1) > 0) & (rad.unsqueeze(-2) > 0)
-    return torch.where(
-        valid, rad.unsqueeze(-1) + rad.unsqueeze(-2), torch.zeros_like(rad)
-    )
-
-
-_D2_RADII_PAIRWISE_CPU: Tensor = _build_d2_radii_pairwise_cpu()
+_D2_RADII_PAIRWISE_CPU: Tensor = _pairwise_radii(_D2_RADIUS_AA)
 
 
 def D2_RADII_PAIRWISE(
@@ -97,8 +94,7 @@ def D2_RADII_PAIRWISE(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Pairwise D2 damping radii ``r_i + r_j`` in Bohr of shape ``(119, 119)``."""
-    dt = get_default_dtype() if dtype is None else dtype
-    return _D2_RADII_PAIRWISE_CPU.to(device=device, dtype=dt)
+    return _cast(_D2_RADII_PAIRWISE_CPU, device, dtype)
 
 
 def D2_C6(
@@ -106,9 +102,7 @@ def D2_C6(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Atomic C6 coefficients of D2 in Hartree * Bohr^6 for Z=0..118."""
-    dt = get_default_dtype() if dtype is None else dtype
-    c6_64 = torch.tensor(_D2_C6_JNM6, device=device, dtype=torch.float64) * _C6CONV
-    return c6_64.to(dtype=dt)
+    return _scaled_table(_D2_C6_JNM6, _C6CONV, device, dtype)
 
 
 def get_d2_radius(
@@ -117,9 +111,7 @@ def get_d2_radius(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Look up D2 van-der-Waals radii in Bohr for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = D2_RADII(device=dev, dtype=dtype)
-    return table[numbers]
+    return _lookup(D2_RADII, numbers, device, dtype)
 
 
 def get_d2_c6(
@@ -128,6 +120,4 @@ def get_d2_c6(
     dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Look up D2 atomic C6 coefficients in Hartree * Bohr^6 for given atomic numbers."""
-    dev = numbers.device if device is None else device
-    table = D2_C6(device=dev, dtype=dtype)
-    return table[numbers]
+    return _lookup(D2_C6, numbers, device, dtype)

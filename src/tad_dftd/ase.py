@@ -77,7 +77,8 @@ Example
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from numbers import Real
 from typing import Any
@@ -144,6 +145,17 @@ class _InvalidTypeConfigurationError(InputError, TypeError, ValueError):
     """Exception raised when a configuration option has an invalid type."""
 
 
+@contextmanager
+def _config_errors(
+    *exc_types: type[Exception],
+) -> Iterator[None]:
+    """Re-raise `exc_types` (default ``ValueError``) as `_ConfigurationError`."""
+    try:
+        yield
+    except exc_types or (ValueError,) as exc:
+        raise _ConfigurationError(str(exc)) from exc
+
+
 class _StressNotDefinedError(PropertyNotImplementedError, ValueError):
     """Exception raised when stress is requested but not defined for the system."""
 
@@ -174,25 +186,11 @@ _STATELESS_3B_TYPES: frozenset[type[ThreeBodyDamping]] = frozenset(
 )
 
 
-def _is_stateless_builtin_damping(damping: Damping) -> bool:
-    """
-    Return ``True`` if ``damping`` and its two-body/three-body components are
-    unmodified instances of the built-in stateless catalogue damping classes.
-    """
-    if type(damping) is not Damping:
-        return False
-    two = damping.two
-    if type(two) not in _STATELESS_2B_TYPES or bool(
-        getattr(two, "__dict__", None)
-    ):
-        return False
-    three = damping.three
-    if three is not None and (
-        type(three) not in _STATELESS_3B_TYPES
-        or bool(getattr(three, "__dict__", None))
-    ):
-        return False
-    return True
+def _is_real_numeric(dtype: np.dtype) -> bool:
+    """Return whether ``dtype`` is a real (non-complex, non-bool) number type."""
+    return dtype.kind not in ("b", "c", "O", "S", "U", "V") and np.issubdtype(
+        dtype, np.number
+    )
 
 
 def _snapshot_damping_param(
@@ -232,12 +230,45 @@ class _ResolvedConfig:
 
     @property
     def cacheable_damping(self) -> bool:
-        """Return whether ``self.damping`` is an unmodified stateless built-in damping."""
-        return _is_stateless_builtin_damping(self.damping)
+        """
+        Return whether ``self.damping`` and its two-body/three-body components
+        are unmodified instances of the built-in stateless catalogue dampings.
+        """
+        if type(self.damping) is not Damping:
+            return False
+        two = self.damping.two
+        if type(two) not in _STATELESS_2B_TYPES or getattr(
+            two, "__dict__", None
+        ):
+            return False
+        three = self.damping.three
+        if three is not None and (
+            type(three) not in _STATELESS_3B_TYPES
+            or getattr(three, "__dict__", None)
+        ):
+            return False
+        return True
 
     def has_param_drift(self, parameters: Mapping[str, Any]) -> bool:
-        """Return whether ``params_tweaks`` or ``self.param`` has drifted since resolution."""
-        return _has_mutable_param_drift(parameters, self)
+        """
+        Return whether ``params_tweaks`` (e.g., a :class:`DampingParam` or
+        mapping with tensor values) or ``self.param`` has been modified in
+        place since this configuration was resolved.
+        """
+        try:
+            current_tweaks = tuple(
+                sorted(
+                    _validate_tweaks_mapping(
+                        parameters.get("params_tweaks")
+                    ).items()
+                )
+            )
+            return (
+                current_tweaks != self.tweaks_snapshot
+                or _snapshot_damping_param(self.param) != self.param_snapshot
+            )
+        except Exception:
+            return True
 
 
 def _resolve_device(device: str | torch.device | Any) -> torch.device:
@@ -420,25 +451,19 @@ def _resolve_damping(
 
     if raw_2b is None:
         d2_name: str | None = meta.default_damping_2b
-        try:
+        with _config_errors():
             validate_model_damping(model_id, d2_name)
-        except ValueError as exc:
-            raise _ConfigurationError(str(exc)) from exc
-    elif not isinstance(raw_2b, bool) and isinstance(raw_2b, str):
+    elif isinstance(raw_2b, str):
         raw_2b_clean = raw_2b.lower().strip()
-        try:
+        with _config_errors():
             validate_model_damping(model_id, raw_2b_clean)
             d2_name = get_damping_id(raw_2b_clean, three_body=False)
-        except ValueError as exc:
-            raise _ConfigurationError(str(exc)) from exc
-    elif not isinstance(raw_2b, bool) and isinstance(raw_2b, TwoBodyDamping):
+    elif isinstance(raw_2b, TwoBodyDamping):
         two_obj = raw_2b
         d2_name = identify_damping(raw_2b)
         if d2_name is not None:
-            try:
+            with _config_errors():
                 validate_model_damping(model_id, d2_name)
-            except ValueError as exc:
-                raise _ConfigurationError(str(exc)) from exc
         elif meta.name in ("d1", "d2"):
             raise _ConfigurationError(
                 f"Custom two-body damping '{type(raw_2b).__name__}' is "
@@ -451,7 +476,7 @@ def _resolve_damping(
         )
 
     three_obj: ThreeBodyDamping | None = None
-    default_3b = meta.default_damping_3b or "zero_d4"
+    default_3b = meta.atm_damping
 
     if raw_3b is not None:
         if raw_3b is False or (
@@ -464,16 +489,12 @@ def _resolve_damping(
             and raw_3b.lower().strip() in ("zero_avg", "zero-avg")
         ):
             d3_spec = default_3b
-        elif not isinstance(raw_3b, bool) and isinstance(raw_3b, str):
-            try:
+        elif isinstance(raw_3b, str):
+            with _config_errors():
                 d3_spec = get_damping_id(
                     raw_3b.lower().strip(), three_body=True
                 )
-            except ValueError as exc:
-                raise _ConfigurationError(str(exc)) from exc
-        elif not isinstance(raw_3b, bool) and isinstance(
-            raw_3b, ThreeBodyDamping
-        ):
+        elif isinstance(raw_3b, ThreeBodyDamping):
             three_obj = raw_3b
             d3_name = identify_damping(raw_3b)
             d3_spec = d3_name if d3_name is not None else "custom"
@@ -492,7 +513,7 @@ def _resolve_damping(
             d3_spec = False if tweaks["s9"] == 0.0 else default_3b
         elif raw_2b is not None:
             d3_spec = False
-        elif method is not None and meta.name in ("d4", "d4s", "d4srev"):
+        elif method is not None and meta.charge_dep_2b:
             d3_spec = default_3b
         else:
             d3_spec = False
@@ -503,27 +524,21 @@ def _resolve_damping(
     if two_obj is None and three_obj is None:
         assert d2_name is not None
         assert isinstance(d3_spec, (str, bool))
-        try:
+        with _config_errors():
             resolved = damping_from_name(d2_name, d3_spec, model=meta.name)
-        except ValueError as exc:
-            raise _ConfigurationError(str(exc)) from exc
         return resolved, d2_name, d3_spec, raw_2b_clean
 
     if two_obj is None:
         assert d2_name is not None
-        try:
+        with _config_errors():
             two_obj = damping_from_name(d2_name, False, model=meta.name).two
-        except ValueError as exc:
-            raise _ConfigurationError(str(exc)) from exc
 
     if three_obj is None and d3_spec is not False:
         assert isinstance(d3_spec, str)
-        try:
+        with _config_errors():
             three_obj = damping_from_name(
                 meta.default_damping_2b, d3_spec, model=meta.name
             ).three
-        except ValueError as exc:
-            raise _ConfigurationError(str(exc)) from exc
 
     return Damping(two=two_obj, three=three_obj), d2_name, d3_spec, raw_2b_clean
 
@@ -554,12 +569,7 @@ def _resolve_parameters(
             raise _ConfigurationError(
                 "Expected 'method' to be a non-empty functional name string or None."
             )
-        has_method = True
-    else:
-        method_clean = ""
-        has_method = False
 
-    if has_method:
         if meta.model_id == DispersionModelId.D4SREV:
             raise _ConfigurationError(
                 "No functional damping parameter tables are available for model "
@@ -573,56 +583,38 @@ def _resolve_parameters(
                 "explicit parameters via 'params_tweaks' with 'method=None'."
             )
 
-        if meta.name in ("d1", "d2"):
-            if d3_spec is not False and "s9" not in tweaks:
-                raise _ConfigurationError(
-                    f"No {meta.label} functional parameters are available for "
+        if d2_name not in meta.functional_dampings or (
+            meta.charge_dep_2b
+            and raw_2b_hint is not None
+            and raw_2b_hint not in ("rational", "bj")
+        ):
+            raise _ConfigurationError(
+                f"No {meta.label} functional parameters are available for "
+                f"two-body damping '{raw_2b_hint or d2_name}'."
+            )
+        if d3_spec not in (False, meta.default_damping_3b) and (
+            "s9" not in tweaks
+        ):
+            raise _ConfigurationError(
+                f"No {meta.label} functional parameters are available for "
+                + (
                     "three-body dispersion."
+                    if meta.default_damping_3b is None
+                    else f"three-body damping '{d3_spec}'."
                 )
-            damping_lookup: str | list[str] | None = "fermi"
+            )
 
-        elif meta.name in ("d3", "d3s"):
-            if d2_name not in (
-                "rational",
-                "zero",
-                "mzero",
-                "optimizedpower",
-                "cso",
-            ):
-                raise _ConfigurationError(
-                    f"No {meta.label} functional parameters are available for "
-                    f"two-body damping '{d2_name}'."
-                )
-            if d3_spec not in (False, "zero_d3") and "s9" not in tweaks:
-                raise _ConfigurationError(
-                    f"No {meta.label} functional parameters are available for "
-                    f"three-body damping '{d3_spec}'."
-                )
-            damping_lookup = "bjm" if raw_2b_hint == "bjm" else d2_name
-
-        elif meta.name in ("d4", "d4s"):
-            if d2_name != "rational" or (
-                raw_2b_hint is not None
-                and raw_2b_hint not in ("rational", "bj")
-            ):
-                raise _ConfigurationError(
-                    f"No {meta.label} functional parameters are available for "
-                    f"two-body damping '{raw_2b_hint or d2_name}'."
-                )
-            if d3_spec not in (False, "zero_d4") and "s9" not in tweaks:
-                raise _ConfigurationError(
-                    f"No {meta.label} functional parameters are available for "
-                    f"three-body damping '{d3_spec}'."
-                )
+        damping_lookup: str | list[str]
+        if meta.charge_dep_2b:
             damping_lookup = (
                 ["bj-eeq-two", "bj-eeq-atm"]
                 if d3_spec is False
                 else ["bj-eeq-atm"]
             )
         else:
-            damping_lookup = None
+            damping_lookup = "bjm" if raw_2b_hint == "bjm" else d2_name
 
-        try:
+        with _config_errors(KeyError, ValueError):
             merged_params = get_params(
                 method_clean,
                 model=meta.name,
@@ -631,8 +623,6 @@ def _resolve_parameters(
                 dtype=dtype,
                 device=device,
             )
-        except (KeyError, ValueError) as exc:
-            raise _ConfigurationError(str(exc)) from exc
 
         if d3_spec is False:
             merged_params.pop("s9", None)
@@ -668,7 +658,7 @@ def _resolve_parameters(
         znum=one,
         rdamp=one,
     )
-    try:
+    with _config_errors():
         damping.two(dummy_pairs, dparam)
         if damping.three is not None:
             dummy_triples = TripleData(
@@ -684,8 +674,6 @@ def _resolve_parameters(
                 rvdwjk=one,
             )
             damping.three(dummy_triples, dparam)
-    except ValueError as exc:
-        raise _ConfigurationError(str(exc)) from exc
 
     return dparam
 
@@ -898,32 +886,6 @@ def _resolve_config(
         )
 
 
-def _has_mutable_param_drift(
-    parameters: Mapping[str, Any],
-    cfg: _ResolvedConfig,
-) -> bool:
-    """
-    Return ``True`` if ``params_tweaks`` (e.g., a :class:`DampingParam` or
-    mapping with tensor values) or ``cfg.param`` has been modified in place
-    since ``cfg`` was resolved.
-    """
-    try:
-        current_tweaks = tuple(
-            sorted(
-                _validate_tweaks_mapping(
-                    parameters.get("params_tweaks")
-                ).items()
-            )
-        )
-        if current_tweaks != cfg.tweaks_snapshot:
-            return True
-        if _snapshot_damping_param(cfg.param) != cfg.param_snapshot:
-            return True
-    except Exception:
-        return True
-    return False
-
-
 def _copy_parameter_value(value: Any) -> Any:
     """Copy mutable mapping containers while preserving object instances."""
     if isinstance(value, Mapping):
@@ -1000,14 +962,7 @@ def _resolve_external_charges(
         )
 
     raw_arr = np.asarray(atoms.arrays[cfg.charges_key])
-    if raw_arr.dtype.kind in (
-        "b",
-        "c",
-        "O",
-        "S",
-        "U",
-        "V",
-    ) or not np.issubdtype(raw_arr.dtype, np.number):
+    if not _is_real_numeric(raw_arr.dtype):
         raise ValueError(
             f"External atomic partial charges '{cfg.charges_key}' must have a "
             f"real numeric dtype, got '{raw_arr.dtype}'."
@@ -1486,10 +1441,8 @@ class DFTD(Calculator):
                         if cached_ref is not None
                         else np.asarray(self.atoms.arrays[key])
                     )
-                    if (
-                        curr.shape != ref.shape
-                        or curr.dtype.kind in ("b", "c", "O", "S", "U", "V")
-                        or not np.issubdtype(curr.dtype, np.number)
+                    if curr.shape != ref.shape or not _is_real_numeric(
+                        curr.dtype
                     ):
                         changes.append(change_tag)
                     else:

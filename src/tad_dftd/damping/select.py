@@ -134,7 +134,7 @@ def damping_from_name(
     if three_body is True:
         from ..model.catalogue import get_model_metadata
 
-        three_body = get_model_metadata(model).default_damping_3b or "zero_d4"
+        three_body = get_model_metadata(model).atm_damping
 
     three = None
     if three_body is not False and three_body is not None:

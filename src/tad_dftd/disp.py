@@ -47,15 +47,15 @@ from .damping import (
     as_damping_param,
     rational_damping,
 )
-from .model.base import DispersionProperties
+from .model.base import DispersionModel, DispersionProperties
 from .model.c6 import AtomicC6
 from .model.catalogue import (
     DispersionModelId,
     get_model_metadata,
     resolve_model_id,
 )
-from .model.d1 import D1Model, _default_d1_cutoff, _validate_d1_numbers
-from .model.d2 import D2Model, _default_d2_cutoff, _validate_d2_numbers
+from .model.d1 import D1Model, _validate_d1_numbers
+from .model.d2 import D2Model, _validate_d2_numbers
 from .model.d3 import (
     D3Model,
     D3SModel,
@@ -71,7 +71,6 @@ from .model.d4 import (
     D4Model,
     D4SModel,
     D4SrevModel,
-    _default_d4_cutoff,
     _validate_d4_numbers,
     _validate_d4srev_numbers,
 )
@@ -109,6 +108,13 @@ __all__ = [
 Param: TypeAlias = DampingParam | Mapping[str, Any]
 
 
+def _cutoff_or_default(
+    cutoff: Cutoff | None, model: str | DispersionModelId
+) -> Cutoff:
+    """`cutoff`, or the default real-space cutoffs of `model`."""
+    return get_model_metadata(model).default_cutoff if cutoff is None else cutoff
+
+
 def dftd1(
     structure: Structure,
     param: Param,
@@ -126,7 +132,7 @@ def dftd1(
     """
     Evaluate atom-resolved DFT-D1 dispersion energy for a structure or batch.
     """
-    cut = _default_d1_cutoff() if cutoff is None else cutoff
+    cut = _cutoff_or_default(cutoff, "d1")
     return D1Model(
         c6_table=c6_table,
         rdamp_table=rdamp_table,
@@ -155,7 +161,7 @@ def dftd2(
     """
     Evaluate atom-resolved DFT-D2 dispersion energy for a structure or batch.
     """
-    cut = _default_d2_cutoff() if cutoff is None else cutoff
+    cut = _cutoff_or_default(cutoff, "d2")
     return D2Model(
         c6_table=c6_table,
         rdamp_table=rdamp_table,
@@ -179,19 +185,20 @@ def dftd3(
     rcov_table: Tensor | TableFunction | None = None,
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
-    cutoff: Cutoff = Cutoff(),
+    cutoff: Cutoff | None = None,
     counting_function: CountingFunction = ncoord.exp_count,
     weighting_function: WeightingFunction = gaussian_log_weight,
 ) -> Tensor:
     """
     Evaluate atom-resolved DFT-D3 dispersion energy for a structure or batch.
     """
+    cut = _cutoff_or_default(cutoff, "d3")
     return D3Model(
         rcov_table=rcov_table,
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         ref=ref,
-        cutoff=cutoff,
+        cutoff=cut,
         counting_function=counting_function,
         weighting_function=weighting_function,
         max_triples=max_triples,
@@ -212,19 +219,20 @@ def dftd3s(
     rvdw_table: Tensor | TableFunction | None = None,
     r4r2_table: Tensor | TableFunction | None = None,
     wfpair_table: Tensor | TableFunction | None = None,
-    cutoff: Cutoff = Cutoff(),
+    cutoff: Cutoff | None = None,
     counting_function: CountingFunction = ncoord.exp_count,
 ) -> Tensor:
     """
     Evaluate atom-resolved DFT-D3S dispersion energy for a structure or batch.
     """
+    cut = _cutoff_or_default(cutoff, "d3s")
     return D3SModel(
         rcov_table=rcov_table,
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         wfpair_table=wfpair_table,
         ref=ref,
-        cutoff=cutoff,
+        cutoff=cut,
         counting_function=counting_function,
         max_triples=max_triples,
         checkpoint=checkpoint,
@@ -257,7 +265,7 @@ def dftd4(
     """
     Evaluate atom-resolved DFT-D4 dispersion energy for a structure or batch.
     """
-    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    cut = _cutoff_or_default(cutoff, "d4")
     return D4Model(
         ga=ga,
         gc=gc,
@@ -303,7 +311,7 @@ def dftd4s(
     """
     Evaluate atom-resolved DFT-D4S dispersion energy for a structure or batch.
     """
-    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    cut = _cutoff_or_default(cutoff, "d4s")
     return D4SModel(
         ga=ga,
         gc=gc,
@@ -346,7 +354,7 @@ def dftd4srev(
     Evaluate atom-resolved DFT-D4Srev dispersion energy for a structure or
     batch.
     """
-    cut = _default_d4_cutoff() if cutoff is None else cutoff
+    cut = _cutoff_or_default(cutoff, "d4srev")
     return D4SrevModel(
         qmodel=qmodel,
         rcov_table=rcov_table,
@@ -372,18 +380,7 @@ _DFTD_DISPATCH: dict[DispersionModelId, Any] = {
     DispersionModelId.D4SREV: dftd4srev,
 }
 
-_MODEL_CLASSES: dict[
-    DispersionModelId,
-    type[
-        D1Model
-        | D2Model
-        | D3Model
-        | D3SModel
-        | D4Model
-        | D4SModel
-        | D4SrevModel
-    ],
-] = {
+_MODEL_CLASSES: dict[DispersionModelId, type[DispersionModel]] = {
     DispersionModelId.D1: D1Model,
     DispersionModelId.D2: D2Model,
     DispersionModelId.D3: D3Model,
@@ -410,11 +407,7 @@ def dftd(
     Unified dispersion energy dispatcher across the DFT-D model catalogue.
     """
     model_id = resolve_model_id(model)
-    cut = (
-        get_model_metadata(model_id).default_cutoff
-        if cutoff is None
-        else cutoff
-    )
+    cut = _cutoff_or_default(cutoff, model_id)
     fn = _DFTD_DISPATCH.get(model_id)
     if fn is not None:
         return fn(
@@ -435,18 +428,7 @@ def dftd(
 def get_properties(
     structure: Structure,
     *,
-    model: (
-        str
-        | int
-        | DispersionModelId
-        | D1Model
-        | D2Model
-        | D3Model
-        | D3SModel
-        | D4Model
-        | D4SModel
-        | D4SrevModel
-    ) = "d3",
+    model: str | int | DispersionModelId | DispersionModel = "d3",
     pairs: Pairs | None = None,
     cutoff: Cutoff | None = None,
     cn: Tensor | None = None,
@@ -457,18 +439,11 @@ def get_properties(
     Evaluate dispersion model properties (`cn`, `c6`, `c8`, and optional `q`,
     `alphadd`, `alphaqq`) matching ``get_properties`` in ``dftd/disp.f90``.
     """
-    if isinstance(
-        model,
-        (D1Model, D2Model, D3Model, D3SModel, D4Model, D4SModel, D4SrevModel),
-    ):
+    if isinstance(model, DispersionModel):
         model_inst = model
     else:
         model_id = resolve_model_id(model)
-        cut = (
-            get_model_metadata(model_id).default_cutoff
-            if cutoff is None
-            else cutoff
-        )
+        cut = _cutoff_or_default(cutoff, model_id)
         cls = _MODEL_CLASSES.get(model_id)
         if cls is None:
             raise NotImplementedError(
@@ -476,8 +451,6 @@ def get_properties(
             )
         model_inst = cls(cutoff=cut, **kwargs)
 
-    if isinstance(model_inst, (D1Model, D2Model, D3Model, D3SModel)):
-        return model_inst.get_properties(structure, pairs=pairs, cn=cn)
     return model_inst.get_properties(structure, pairs=pairs, cn=cn, q=q)
 
 
@@ -538,8 +511,6 @@ def dispersion(
         mol = structure
         raw_param: Param = param  # type: ignore[assignment]
         c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
-        rvdw_val = rvdw
-        r4r2_val = r4r2
         cut = Cutoff() if cutoff is None else cutoff
     else:
         assert isinstance(param, Tensor)
@@ -547,8 +518,6 @@ def dispersion(
         mol = Structure(numbers=structure, positions=param)
         raw_param = c6  # type: ignore[assignment]
         c6_val = c6_pos
-        rvdw_val = rvdw
-        r4r2_val = r4r2
         cut = (
             Cutoff(
                 disp2=defaults.D3_DISP_CUTOFF,
@@ -600,8 +569,8 @@ def dispersion(
         damp.two,
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
-        rvdw=rvdw_val,
-        r4r2=r4r2_val,
+        rvdw=rvdw,
+        r4r2=r4r2,
         cutoff=cut,
         checkpoint=checkpoint,
     )
@@ -614,8 +583,8 @@ def dispersion(
             damp.three,
             rvdw_table=rvdw_table,
             r4r2_table=r4r2_table,
-            rvdw=rvdw_val,
-            r4r2=r4r2_val,
+            rvdw=rvdw,
+            r4r2=r4r2,
             cutoff=cut,
             max_triples=max_triples,
             checkpoint=checkpoint,
@@ -649,7 +618,6 @@ def dispersion2(
         mol = structure
         raw_param: Param = param  # type: ignore[assignment]
         c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
-        r4r2_val = r4r2
         cut_arg = cutoff
         cut: Cutoff | Tensor | float = Cutoff() if cut_arg is None else cut_arg
         dparam = as_damping_param(raw_param)
@@ -659,7 +627,6 @@ def dispersion2(
         mol = Structure(numbers=structure, positions=param)
         raw_param = c6  # type: ignore[assignment]
         c6_val = r4r2_or_c6
-        r4r2_val = r4r2
         cut_arg = cutoff if cutoff is not None else cutoff_pos
         cut = (
             Cutoff(disp2=defaults.D3_DISP_CUTOFF)
@@ -696,7 +663,7 @@ def dispersion2(
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
         rvdw=rvdw,
-        r4r2=r4r2_val,
+        r4r2=r4r2,
         cutoff=cut,
         checkpoint=checkpoint,
         as_matrix=as_matrix,
@@ -728,7 +695,6 @@ def dispersion3(
         mol = structure
         raw_param: Param = param  # type: ignore[assignment]
         c6_val: Tensor | AtomicC6 = c6  # type: ignore[assignment]
-        rvdw_val = rvdw
         cut_arg = cutoff
         cut: Cutoff | Tensor | float = Cutoff() if cut_arg is None else cut_arg
         dparam = as_damping_param(raw_param)
@@ -738,7 +704,6 @@ def dispersion3(
         mol = Structure(numbers=structure, positions=param)
         raw_param = c6  # type: ignore[assignment]
         c6_val = rvdw_or_c6
-        rvdw_val = rvdw
         cut_arg = cutoff if cutoff is not None else cutoff_pos
         cut = (
             Cutoff(disp3=defaults.D3_DISP_CUTOFF)
@@ -756,7 +721,7 @@ def dispersion3(
         rvdw_table=rvdw_table,
         r4r2_table=r4r2_table,
         rdamp_table=rdamp_table,
-        rvdw=rvdw_val,
+        rvdw=rvdw,
         r4r2=r4r2,
         cutoff=cut,
         max_triples=max_triples,

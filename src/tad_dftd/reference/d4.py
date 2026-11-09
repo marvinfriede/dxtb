@@ -22,9 +22,7 @@ Matches ``dftd/src/dftd/model/d4/reference/{orig,srev}.f90`` and
 """
 from __future__ import annotations
 
-import contextlib
 import math
-from importlib.resources import as_file, files
 
 import torch
 from tad_mctc.tools import is_compiling
@@ -32,7 +30,9 @@ from tad_mctc.tree import Node, child
 from tad_mctc.typing import Self, Tensor, get_default_device, get_default_dtype
 
 from .. import defaults
+from ..charge import normalize_qmodel
 from ..data.hardness import GAM
+from ..data.table import load_pkg_tensor
 from ..data.tanh import TANH_PARAMS
 from ..data.zeff import ZEFF
 from ..integrator.trapezoid import TrapezoidIntegrator
@@ -47,30 +47,12 @@ __all__ = [
 ]
 
 
-def _load_pkg_dict(filename: str) -> dict[str, Tensor]:
-    res = files(__package__).joinpath(filename)
-    with as_file(res) as path:
-        return torch.load(path, map_location="cpu", weights_only=True)
-
-
-_D4_RAW: dict[str, Tensor] = _load_pkg_dict("d4-ref.pt")
-_D4SREV_RAW: dict[str, Tensor] = _load_pkg_dict("d4srev-ref.pt")
+_D4_RAW: dict[str, Tensor] = load_pkg_tensor(__package__, "d4-ref.pt")
+_D4SREV_RAW: dict[str, Tensor] = load_pkg_tensor(__package__, "d4srev-ref.pt")
 
 _DEFAULT_INTEGRATOR_64 = TrapezoidIntegrator(
     device=torch.device("cpu"), dtype=torch.float64
 )
-
-
-def _normalize_qmod(qmod: str) -> str:
-    qkey = qmod.lower().strip()
-    if qkey == "eeq2019":
-        return "eeq"
-    if qkey in ("eeqbc", "eeqbc2025"):
-        raise NotImplementedError(
-            f"Charge model '{qmod}' is not supported in this release "
-            "because the upstream model is not finalized."
-        )
-    return qkey
 
 
 def _compute_d4_aiw_and_c6(
@@ -86,7 +68,7 @@ def _compute_d4_aiw_and_c6(
     """
     Compute ``(refn, ngw, cn, q, aiw, c6)`` for D4/D4S or D4Srev.
     """
-    qkey = _normalize_qmod(qmod)
+    qkey = normalize_qmodel(qmod)
     if is_srev:
         q_map = {
             "eeq": ("clsq", "clsh"),
@@ -206,6 +188,79 @@ class D4Reference(Node):
         return int(self.cn.shape[1])
 
     @classmethod
+    def _from_computed(
+        cls,
+        computed: tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor],
+        dtype: torch.dtype,
+    ) -> Self:
+        """The reference of freshly computed tensors, floats cast to `dtype`."""
+        refn, ngw, cn, q, aiw, c6 = computed
+        return cls(
+            refn=refn,
+            ngw=ngw,
+            cn=cn.to(dtype=dtype),
+            q=q.to(dtype=dtype),
+            aiw=aiw.to(dtype=dtype),
+            c6=c6.to(dtype=dtype),
+        )
+
+    @classmethod
+    def _load_default(
+        cls,
+        qkey: str,
+        *,
+        is_srev: bool,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Self:
+        """
+        The reference with the default charge scaling of the model, from the
+        module cache `_D4_CACHE` (filled once, on the CPU in double precision).
+        """
+        cache_key = (qkey, is_srev)
+        if is_srev:
+            raw, ga, gc = _D4SREV_RAW, 0.0, 0.0
+        else:
+            raw, ga, gc = _D4_RAW, defaults.D4_GA, defaults.D4_GC
+
+        if cache_key not in _D4_CACHE:
+            if is_compiling():
+                return cls._from_computed(
+                    _compute_d4_aiw_and_c6(
+                        raw,
+                        qkey,
+                        ga,
+                        gc,
+                        is_srev=is_srev,
+                        device=device,
+                        dtype=torch.float64,
+                    ),
+                    dtype,
+                )
+            with torch._C._DisableFuncTorch(), torch.no_grad():  # pyright: ignore[reportAttributeAccessIssue]
+                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
+                    raw,
+                    qkey,
+                    ga,
+                    gc,
+                    is_srev=is_srev,
+                    device=torch.device("cpu"),
+                    dtype=torch.float64,
+                )
+                _D4_CACHE[cache_key] = D4Reference(
+                    refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
+                )
+        cached = _D4_CACHE[cache_key]
+        return cls(
+            refn=cached.refn.to(device=device),
+            ngw=cached.ngw.to(device=device),
+            cn=cached.cn.to(device=device, dtype=dtype),
+            q=cached.q.to(device=device, dtype=dtype),
+            aiw=cached.aiw.to(device=device, dtype=dtype),
+            c6=cached.c6.to(device=device, dtype=dtype),
+        )
+
+    @classmethod
     def load_d4(
         cls,
         qmod: str = "eeq",
@@ -220,7 +275,7 @@ class D4Reference(Node):
         """
         dev = get_default_device() if device is None else device
         dt = get_default_dtype() if dtype is None else dtype
-        qkey = _normalize_qmod(qmod)
+        qkey = normalize_qmodel(qmod)
 
         is_default_scalars = (
             not isinstance(ga, Tensor)
@@ -229,67 +284,23 @@ class D4Reference(Node):
             and float(gc) == defaults.D4_GC
         )
         if is_default_scalars:
-            cache_key = (qkey, False)
-            if cache_key not in _D4_CACHE:
-                if is_compiling():
-                    refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                        _D4_RAW,
-                        qkey,
-                        defaults.D4_GA,
-                        defaults.D4_GC,
-                        is_srev=False,
-                        device=dev,
-                        dtype=torch.float64,
-                    )
-                    return cls(
-                        refn=refn,
-                        ngw=ngw,
-                        cn=cn.to(dtype=dt),
-                        q=q.to(dtype=dt),
-                        aiw=aiw.to(dtype=dt),
-                        c6=c6.to(dtype=dt),
-                    )
-                with torch._C._DisableFuncTorch(), torch.no_grad():  # pyright: ignore[reportAttributeAccessIssue]
-                    refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                        _D4_RAW,
-                        qkey,
-                        defaults.D4_GA,
-                        defaults.D4_GC,
-                        is_srev=False,
-                        device=torch.device("cpu"),
-                        dtype=torch.float64,
-                    )
-                    _D4_CACHE[cache_key] = D4Reference(
-                        refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
-                    )
-            cached = _D4_CACHE[cache_key]
-            return cls(
-                refn=cached.refn.to(device=dev),
-                ngw=cached.ngw.to(device=dev),
-                cn=cached.cn.to(device=dev, dtype=dt),
-                q=cached.q.to(device=dev, dtype=dt),
-                aiw=cached.aiw.to(device=dev, dtype=dt),
-                c6=cached.c6.to(device=dev, dtype=dt),
+            return cls._load_default(
+                qkey, is_srev=False, device=dev, dtype=dt
             )
 
         # Compute in float64 if inputs are Python floats, or in `dt` if Tensor
         compute_dt = dt if (isinstance(ga, Tensor) or isinstance(gc, Tensor)) else torch.float64
-        refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-            _D4_RAW,
-            qkey,
-            ga,
-            gc,
-            is_srev=False,
-            device=dev,
-            dtype=compute_dt,
-        )
-        return cls(
-            refn=refn,
-            ngw=ngw,
-            cn=cn.to(dtype=dt),
-            q=q.to(dtype=dt),
-            aiw=aiw.to(dtype=dt),
-            c6=c6.to(dtype=dt),
+        return cls._from_computed(
+            _compute_d4_aiw_and_c6(
+                _D4_RAW,
+                qkey,
+                ga,
+                gc,
+                is_srev=False,
+                device=dev,
+                dtype=compute_dt,
+            ),
+            dt,
         )
 
     @classmethod
@@ -304,49 +315,8 @@ class D4Reference(Node):
         """
         dev = get_default_device() if device is None else device
         dt = get_default_dtype() if dtype is None else dtype
-        qkey = _normalize_qmod(qmod)
-
-        cache_key = (qkey, True)
-        if cache_key not in _D4_CACHE:
-            if is_compiling():
-                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                    _D4SREV_RAW,
-                    qkey,
-                    0.0,
-                    0.0,
-                    is_srev=True,
-                    device=dev,
-                    dtype=torch.float64,
-                )
-                return cls(
-                    refn=refn,
-                    ngw=ngw,
-                    cn=cn.to(dtype=dt),
-                    q=q.to(dtype=dt),
-                    aiw=aiw.to(dtype=dt),
-                    c6=c6.to(dtype=dt),
-                )
-            with torch._C._DisableFuncTorch(), torch.no_grad():  # pyright: ignore[reportAttributeAccessIssue]
-                refn, ngw, cn, q, aiw, c6 = _compute_d4_aiw_and_c6(
-                    _D4SREV_RAW,
-                    qkey,
-                    0.0,
-                    0.0,
-                    is_srev=True,
-                    device=torch.device("cpu"),
-                    dtype=torch.float64,
-                )
-                _D4_CACHE[cache_key] = D4Reference(
-                    refn=refn, ngw=ngw, cn=cn, q=q, aiw=aiw, c6=c6
-                )
-        cached = _D4_CACHE[cache_key]
-        return cls(
-            refn=cached.refn.to(device=dev),
-            ngw=cached.ngw.to(device=dev),
-            cn=cached.cn.to(device=dev, dtype=dt),
-            q=cached.q.to(device=dev, dtype=dt),
-            aiw=cached.aiw.to(device=dev, dtype=dt),
-            c6=cached.c6.to(device=dev, dtype=dt),
+        return cls._load_default(
+            normalize_qmodel(qmod), is_srev=True, device=dev, dtype=dt
         )
 
 

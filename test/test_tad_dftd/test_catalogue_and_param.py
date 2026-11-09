@@ -833,3 +833,34 @@ def test_a1h_dispatch_and_parameter_resolution_equivalence() -> None:
         torch.testing.assert_close(
             pr_str.alphaqq, pr_inst.alphaqq, atol=0.0, rtol=0.0
         )
+
+
+def test_catalogue_metadata_is_consistent() -> None:
+    """Derived metadata agrees with the explicit per-model catalogue entries."""
+    for name, meta in DISPERSION_MODELS.items():
+        # Only canonical damping names; aliases are resolved before the lookup.
+        assert len(set(meta.allowed_dampings)) == len(meta.allowed_dampings)
+        assert {"bj", "bjm", "chg", "zerom", "op", "d1", "d2"}.isdisjoint(
+            meta.allowed_dampings
+        ), name
+        # Functional parameter tables exist only for allowed dampings.
+        assert set(meta.functional_dampings) <= set(meta.allowed_dampings)
+        # ATM damping falls back to the D4 one for models without ATM.
+        assert meta.atm_damping == (meta.default_damping_3b or "zero_d4")
+
+    assert get_model_metadata("d4srev").functional_dampings == ()
+    assert get_model_metadata("d1").functional_dampings == ("fermi",)
+    assert get_model_metadata("d3").atm_damping == "zero_d3"
+    assert get_model_metadata("d2").atm_damping == "zero_d4"
+
+    # Aliases of allowed dampings are still accepted by the validation.
+    for alias in ("bj", "bjm", "chg", "zerom", "op", "optimisedpower"):
+        validate_model_damping("d3", alias)
+    validate_model_damping("d1", "d1")
+
+
+def test_eeq2019_alias_and_eeqbc_refusal_share_normalisation() -> None:
+    """The charge model name goes through ``charge.normalize_qmodel``."""
+    assert resolve_charge_model_id(" EEQ2019 ", model="d4") == ChargeModelId.EEQ
+    with pytest.raises(NotImplementedError, match="'EEQBC2025'"):
+        resolve_charge_model_id("EEQBC2025", model="d4")

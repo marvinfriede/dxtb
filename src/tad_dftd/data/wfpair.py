@@ -19,22 +19,16 @@ Pairwise Gaussian weighting factors for D3S and D4S (from ``dftd/data/wfpair_*.f
 """
 from __future__ import annotations
 
-from importlib.resources import as_file, files
-
 import torch
 from tad_mctc.typing import Tensor, get_default_dtype
+
+from .table import load_pkg_tensor
 
 __all__ = ["WFPAIR_D3S", "WFPAIR_D4S", "get_wfpair_d3s", "get_wfpair_d4s"]
 
 
-def _load_pkg_tensor(filename: str) -> Tensor:
-    res = files(__package__).joinpath(filename)
-    with as_file(res) as path:
-        return torch.load(path, map_location="cpu", weights_only=True)
-
-
-_WFPAIR_D3S_CPU = _load_pkg_tensor("wfpair-d3s.pt")
-_WFPAIR_D4S_CPU = _load_pkg_tensor("wfpair-d4s.pt")
+_WFPAIR_D3S_CPU = load_pkg_tensor(__package__, "wfpair-d3s.pt")
+_WFPAIR_D4S_CPU = load_pkg_tensor(__package__, "wfpair-d4s.pt")
 
 
 def WFPAIR_D3S(
