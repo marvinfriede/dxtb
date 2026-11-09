@@ -43,7 +43,7 @@ class DipoleLibcint(DipoleIntegral, MultipoleLibcint):
     """
 
     def build(
-        self, call_data: LibcintCallData, *, intstring: str = "j"
+        self, call_data: LibcintCallData, *, intstring: str = "r0"
     ) -> Tensor:
         """
         Calculation of dipole integral using libcint.

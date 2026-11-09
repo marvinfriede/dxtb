@@ -26,7 +26,7 @@ import pytest
 import torch
 from tad_mctc.batch import pack
 
-from dxtb import GFN2_XTB, Calculator, IndexHelper
+from dxtb import GFN2_XTB, Calculator
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch.impls.kernels import ALGORITHMS
 from dxtb._src.typing import DD, Tensor
@@ -40,9 +40,6 @@ from .samples import samples
 pytestmark = pytest.mark.skipif(
     not has_libcint, reason="libcint is the reference"
 )
-
-# libcint order -> pytorch order of the components within a shell
-PERM_BY_L = {0: [0], 1: [1, 2, 0], 2: [0, 1, 2, 3, 4]}
 
 
 def calculator(numbers: Tensor, opts: dict, dd: DD) -> Calculator:
@@ -107,16 +104,9 @@ def test_integral_wrappers() -> None:
     numbers = samples["SiH4"]["numbers"].to(DEVICE)
     positions = samples["SiH4"]["positions"].to(**dd)
 
-    ihelp = IndexHelper.from_numbers(numbers, GFN2_XTB)
-    orbs = ihelp.orbitals_per_shell.tolist()
-    p = torch.zeros((sum(orbs), sum(orbs)), **dd)
-    off = 0
-    for l, nao in zip(ihelp.angular.tolist(), orbs):
-        for k, pk in enumerate(PERM_BY_L[l]):
-            p[off + k, off + pk] = 1.0
-        off += nao
-
     for fn in (dipint, quadint):
-        ref = fn(numbers, positions, GFN2_XTB, driver=INTDRIVER_LIBCINT)
+        ref = fn(numbers, positions, GFN2_XTB, driver=INTDRIVER_LIBCINT).to(
+            DEVICE
+        )
         out = fn(numbers, positions, GFN2_XTB, driver=INTDRIVER_PYTORCH)
-        assert torch.allclose(out, p @ ref.to(DEVICE) @ p.mT, atol=1e-11)
+        assert torch.allclose(out, ref, atol=1e-11)

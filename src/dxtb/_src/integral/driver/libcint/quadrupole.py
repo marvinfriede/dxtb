@@ -44,7 +44,11 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
     """
 
     def build(
-        self, call_data: LibcintCallData, *, intstring: str = "jj"
+        self,
+        call_data: LibcintCallData,
+        *,
+        intstring: str = "r0r0",
+        packed: bool = False,
     ) -> Tensor:
         """
         Calculation of quadrupole integral using libcint.
@@ -59,7 +63,7 @@ class QuadrupoleLibcint(QuadrupoleIntegral, MultipoleLibcint):
         Tensor
             Quadrupole integral.
         """
-        return self.multipole(call_data, intstring)
+        return self.multipole(call_data, intstring, packed=packed)
 
     def get_gradient(self, driver: IntDriver, **kwargs: Any) -> Tensor:
         """

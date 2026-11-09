@@ -103,7 +103,7 @@ def test_dipole() -> None:
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_quad() -> None:
     s = wrappers.quadint(numbers, positions, GFN1_XTB)
-    assert s.shape == (6, 17, 17)
+    assert s.shape == (9, 17, 17)
 
     s = wrappers.quadint(numbers, positions, GFN2_XTB)
-    assert s.shape == (6, 13, 13)
+    assert s.shape == (9, 13, 13)

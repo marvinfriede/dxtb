@@ -17,11 +17,8 @@
 """
 Element-wise agreement of the overlap of all pytorch drivers with libcint.
 
-The pytorch drivers follow the CCA ordering of tblite (spherical components
-in ascending m), which libcint shares for l >= 2. Only the p-orbitals differ:
-y, z, x in the pytorch drivers and x, y, z in libcint. Energies and forces are
-invariant to this fixed permutation, so the comparison is done after
-reordering.
+Both the pytorch drivers and tad-libcint 0.4 follow the CCA ordering of tblite
+(spherical components in ascending m, with y, z, x for p-orbitals).
 
 Guards the double precision of the cartesian-to-spherical transformation
 matrices and the exact normalization of the contracted shells; either would
@@ -35,42 +32,17 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB as par
-from dxtb import IndexHelper
 from dxtb._src.constants.labels import (
     INTDRIVER_LIBCINT,
     INTDRIVER_PYTORCH,
 )
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch.impls.trafo import TRAFO
-from dxtb._src.typing import DD, Tensor
+from dxtb._src.typing import DD
 from dxtb.integrals.wrappers import overlap
 
 from ..conftest import DEVICE
 from .samples import samples
-
-# permutation of within-shell components (libcint -> pytorch), indexed by l
-PERM_BY_L = {
-    0: [0],
-    1: [1, 2, 0],
-    2: [0, 1, 2, 3, 4],
-}
-
-
-def permutation_matrix(ihelp: IndexHelper, dd: DD) -> Tensor:
-    """AO permutation matrix mapping the libcint to the pytorch order."""
-    angular = ihelp.angular.tolist()
-    orbs_per_shell = ihelp.orbitals_per_shell.tolist()
-
-    n = sum(orbs_per_shell)
-    p = torch.zeros((n, n), **dd)
-
-    off = 0
-    for l, nao in zip(angular, orbs_per_shell):
-        for k, pk in enumerate(PERM_BY_L[l]):
-            p[off + k, off + pk] = 1.0
-        off += nao
-
-    return p
 
 
 def test_trafo_is_double() -> None:
@@ -95,12 +67,9 @@ def test_overlap_matches_libcint(name: str) -> None:
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
 
-    ihelp = IndexHelper.from_numbers(numbers, par)
-
-    s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT)
+    s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
+        DEVICE
+    )
     s_pt = overlap(numbers, positions, par, driver=INTDRIVER_PYTORCH)
-
-    p = permutation_matrix(ihelp, dd)
-    s_lib = p @ s_lib.to(DEVICE) @ p.mT
 
     assert torch.allclose(s_pt, s_lib, atol=1e-12, rtol=0.0)

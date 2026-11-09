@@ -39,7 +39,7 @@ __all__ = ["MultipoleLibcint", "build_multipole_libcint"]
 
 
 def build_multipole_libcint(
-    call_data: LibcintCallData, intstring: str
+    call_data: LibcintCallData, intstring: str, *, packed: bool = True
 ) -> Tensor:
     """Build a raw libcint multipole matrix for the requested center."""
     from dxtb._src.exlibs import libcint
@@ -52,7 +52,7 @@ def build_multipole_libcint(
         )
 
     matrices = [
-        libcint.int1e(intstring, item.basis, item.structure)
+        libcint.int1e(intstring, item.basis, item.structure, packed=packed)
         for item in call_data.inputs
     ]
     if call_data.batch_mode > 0:
@@ -67,7 +67,13 @@ class MultipoleLibcint(IntegralLibcint):
     Base class for multipole integrals calculated with `libcint`.
     """
 
-    def multipole(self, call_data: LibcintCallData, intstring: str) -> Tensor:
+    def multipole(
+        self,
+        call_data: LibcintCallData,
+        intstring: str,
+        *,
+        packed: bool = True,
+    ) -> Tensor:
         """
         Calculation of multipole integral. The integral is normalized, using
         the diagonal of the overlap integral.
@@ -78,6 +84,9 @@ class MultipoleLibcint(IntegralLibcint):
             Call-local wrappers for the current geometry.
         intstring : str
             String for `libcint` integral engine.
+        packed : bool, optional
+            Whether quadrupole components are packed to 6 components.
+            Defaults to ``True``.
 
         Returns
         -------
@@ -86,5 +95,7 @@ class MultipoleLibcint(IntegralLibcint):
         """
         super().checks(call_data)
 
-        self.matrix = build_multipole_libcint(call_data, intstring)
+        self.matrix = build_multipole_libcint(
+            call_data, intstring, packed=packed
+        )
         return self.matrix

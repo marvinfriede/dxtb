@@ -53,9 +53,6 @@ COMPONENTS = {
     "quadrupole": QUADRUPOLE_COMPONENTS,
 }
 
-# libcint order -> pytorch order of the components within a shell
-PERM_BY_L = {0: [0], 1: [1, 2, 0], 2: [0, 1, 2, 3, 4]}
-
 
 class Matrices:
     """Integral matrices of one molecule with one algorithm."""
@@ -80,19 +77,6 @@ class Matrices:
         )
 
 
-def permutation(ihelp: IndexHelper, dd: DD) -> Tensor:
-    angular = ihelp.angular.tolist()
-    orbs = ihelp.orbitals_per_shell.tolist()
-
-    p = torch.zeros((sum(orbs), sum(orbs)), **dd)
-    off = 0
-    for l, nao in zip(angular, orbs):
-        for k, pk in enumerate(PERM_BY_L[l]):
-            p[off + k, off + pk] = 1.0
-        off += nao
-    return p
-
-
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
 @pytest.mark.parametrize("name", ["LiH", "SiH4", "C6H5I-CH3SH"])
@@ -102,15 +86,15 @@ def test_matches_libcint(name: str, algorithm: str) -> None:
     positions = samples[name]["positions"].to(**dd)
 
     mats = Matrices(numbers, algorithm, dd)
-    p = permutation(mats.ihelp, dd)
 
     for kind, ref_fn in (
         ("overlap", overlap),
         ("dipole", dipint),
         ("quadrupole", quadint),
     ):
-        ref = ref_fn(numbers, positions, par, driver=INTDRIVER_LIBCINT)
-        ref = p @ ref.to(DEVICE) @ p.mT
+        ref = ref_fn(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
+            DEVICE
+        )
         if kind == "overlap":
             ref = ref.unsqueeze(0)
 

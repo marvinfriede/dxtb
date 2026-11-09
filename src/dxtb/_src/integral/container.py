@@ -475,7 +475,9 @@ class Integrals(IntegralContainer):
         native_ket_moments = self.mgr.driver_type == labels.INTDRIVER_LIBCINT
         if native_ket_moments:
             self.quadrupole.build(
-                driver_data, intstring="jj" if shift else "r0r0"
+                driver_data,
+                intstring="jj" if shift else "r0r0",
+                packed=True,
             )
         else:
             self.quadrupole.build(driver_data)
