@@ -184,13 +184,12 @@ class Structure:
             "lattice": self.lattice,
             "periodic": self.periodic,
         }
-        if "spin" in changes and "uhf" in changes:
-            _resolve_uhf(changes["uhf"], changes["spin"])
+        if "uhf" in changes or "spin" in changes:
             changes = dict(changes)
-            changes.pop("spin")
-        elif "spin" in changes:
-            changes = dict(changes)
-            changes["uhf"] = changes.pop("spin")
+            changes["uhf"] = _resolve_uhf(
+                changes.pop("uhf", None),
+                changes.pop("spin", None),
+            )
         kwargs.update(changes)
         return Structure(**kwargs)
 
@@ -249,7 +248,7 @@ class Options:
     gb_solvation : float | Sequence[Any] | None, optional
         Arguments for ``"gb-solvation"``, e.g. ``(eps, "still")``. Defaults to
         ``None``.
-    solvation : tuple[str, *tuple[Any, ...]] | None, optional
+    solvation : tuple[Any, ...] | None, optional
         Interaction tuple ``(name, *args)`` passed to ``calc.add(name, *args)``.
         Defaults to ``None``.
     """
@@ -269,7 +268,7 @@ class Options:
     gbsa_solvation: str | float | Sequence[Any] | None = None
     gbe_solvation: float | Sequence[Any] | None = None
     gb_solvation: float | Sequence[Any] | None = None
-    solvation: tuple[str, *tuple[Any, ...]] | None = None
+    solvation: tuple[Any, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.temperature is not None and self.temperature_kelvin is not None:
@@ -474,13 +473,11 @@ def _coerce_structure(
     if isinstance(structure, Structure):
         out = structure
     elif isinstance(structure, Mapping):
-        if "uhf" in structure and "spin" in structure:
-            _resolve_uhf(structure["uhf"], structure["spin"])
         out = Structure(
             numbers=structure["numbers"],
             positions=structure["positions"],
             charge=structure.get("charge"),
-            uhf=structure.get("uhf", structure.get("spin")),
+            uhf=_resolve_uhf(structure.get("uhf"), structure.get("spin")),
             lattice=structure.get("lattice"),
             periodic=structure.get("periodic"),
         )
@@ -528,7 +525,7 @@ def _resolve_options(
     gbsa_solvation: str | float | Sequence[Any] | None = None,
     gbe_solvation: float | Sequence[Any] | None = None,
     gb_solvation: float | Sequence[Any] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
 ) -> Options:
     if temperature is not None and temperature_kelvin is not None:
         raise ValueError(
@@ -632,7 +629,7 @@ def tblite_singlepoint(
     gbsa_solvation: str | float | Sequence[Any] | None = None,
     gbe_solvation: float | Sequence[Any] | None = None,
     gb_solvation: float | Sequence[Any] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -681,7 +678,7 @@ def tblite_singlepoint(
         Spin-polarization scaling factor.
     alpb_solvation, gbsa_solvation, gbe_solvation, gb_solvation : Any, optional
         Implicit solvation specification for the corresponding ``tblite`` model.
-    solvation : tuple[str, *tuple[Any, ...]] | None, optional
+    solvation : tuple[Any, ...] | None, optional
         Interaction tuple ``(name, *args)`` passed to ``calc.add(name, *args)``.
     as_tensor : bool | None, optional
         If ``True``, return array quantities as :class:`~torch.Tensor` (and
@@ -877,7 +874,7 @@ def get_tblite_energy(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -919,7 +916,7 @@ def get_tblite_gradient(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -961,7 +958,7 @@ def get_tblite_forces(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -1003,7 +1000,7 @@ def get_tblite_charges(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -1045,7 +1042,7 @@ def get_tblite_dipole(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,
@@ -1087,7 +1084,7 @@ def get_tblite_quadrupole(
     temperature: float | None = None,
     temperature_kelvin: float | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     as_tensor: bool | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | None = None,

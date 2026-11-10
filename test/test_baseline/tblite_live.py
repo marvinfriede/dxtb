@@ -135,7 +135,7 @@ def run_tblite_live(
     mixer_damping: float | None = None,
     guess: str | int | None = None,
     save_integrals: bool = False,
-    solvation: tuple[str, *tuple[Any, ...]] | None = None,
+    solvation: tuple[Any, ...] | None = None,
     electric_field: Tensor | np.ndarray | Sequence[float] | None = None,
 ) -> TbliteLiveResult:
     """
