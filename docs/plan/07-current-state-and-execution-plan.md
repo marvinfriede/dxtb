@@ -4104,6 +4104,7 @@ Public `Calculator` migration and analytical-layer removal are complete on
    - **PR validation (`ubuntu.yaml` / `baseline.yaml` push & PR)**: `OMP_NUM_THREADS=1 pytest -n logical --dist worksteal -m "not large and not slow and not baseline" test` (plus `pytest -n auto -m "not large and not slow"` in `baseline.yaml`)
    - **Slow scientific regression**: `OMP_NUM_THREADS=1 pytest -n logical --dist worksteal -m "slow" test`
    - **Full nightly / release acceptance (`baseline.yaml` schedule / `workflow_dispatch`)**: `OMP_NUM_THREADS=1 pytest -n logical --dist worksteal test` (runs all `default`, `slow`, `large`, and `baseline` markers).
+   - **Resource-constrained 256-CPU workstation exception**: `-n logical --dist worksteal` remains the general default, except on the 256-logical-CPU development workstation where project-owner-authorized validation runs are capped at `-n 32 --dist worksteal` (with `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and `OPENBLAS_NUM_THREADS=1`) to prevent worker process memory exhaustion under host/cgroup memory limits.
 
 ### Legacy Architecture Retirement, Structural Consistency, and API Closure
 
