@@ -30,9 +30,12 @@ import torch
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import BasisSetup
-from dxtb._src.basis.ortho import orthogonalize
-from dxtb._src.basis.slater import slater_to_gauss
+from dxtb._src.basis.bas import (
+    Basis,
+    BasisSetup,
+    create_libcint_cgtos_from_data,
+    create_libcint_from_data,
+)
 from dxtb._src.typing import Any, Literal, Tensor
 
 if TYPE_CHECKING:
@@ -45,6 +48,7 @@ __all__ = [
     "LibcintIntegralSetup",
     "core_libcint_setup",
     "setup_libcint",
+    "setup_libcint_core",
 ]
 
 
@@ -56,6 +60,23 @@ class LibcintIntegralSetup:
     ihelp: IndexHelper
     basis_setups: tuple[BasisSetup, ...]
     force_cpu: bool
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> LibcintIntegralSetup:
+        """Return setup tensors converted to the requested dtype/device."""
+        target_device = torch.device("cpu") if self.force_cpu else device
+        return LibcintIntegralSetup(
+            numbers=self.numbers.to(device=target_device),
+            ihelp=self.ihelp.to(device=target_device),
+            basis_setups=tuple(
+                bs.to(device=target_device, dtype=dtype)
+                for bs in self.basis_setups
+            ),
+            force_cpu=self.force_cpu,
+        )
 
 
 class LibcintBasisNode(Node):
@@ -78,78 +99,30 @@ class LibcintBasisNode(Node):
         self,
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """Construct differentiable CGTO values from captured Slater data."""
-        alphas: list[Tensor] = []
-        coeffs: list[Tensor] = []
-        shell = 0
-
-        for unique_index in range(self.unique.size(0)):
-            shell_count = self.ushells_per_unique[unique_index]
-            if shell_count == 0:
-                zero = torch.tensor(
-                    0.0, dtype=self.slater.dtype, device=self.slater.device
-                )
-                alphas.append(zero)
-                coeffs.append(zero)
-                shell += 1
-                continue
-
-            for _ in range(shell_count):
-                alpha, coeff = slater_to_gauss(
-                    self.ngauss[shell],
-                    self.pqn[shell],
-                    self.unique_angular[shell],
-                    self.slater[shell],
-                    sto=self.sto,
-                )
-                if self.valence[shell].item() is False:
-                    alpha, coeff = orthogonalize(
-                        (alphas[shell - 1], alpha),
-                        (coeffs[shell - 1], coeff),
-                    )
-                alphas.append(alpha)
-                coeffs.append(coeff)
-                shell += 1
-        return tuple(alphas), tuple(coeffs)
+        return create_libcint_cgtos_from_data(
+            self.unique,
+            self.ushells_per_unique,
+            self.ngauss,
+            self.pqn,
+            self.unique_angular,
+            self.slater,
+            self.valence,
+            self.sto,
+        )
 
     def create_libcint(
         self, positions: Tensor
     ) -> tuple[libcint.Basis, libcint.Structure]:
         """Create a call-local basis and structure from captured data."""
-        from dxtb._src.exlibs import libcint
-
         alphas, coeffs = self.create_libcint_cgtos()
-        shells_by_element: dict[int, list[libcint.Shell]] = {}
-        shell = 0
-        unique_numbers = [int(x.item()) for x in self.unique]
-        shell_counts = [int(x.item()) for x in self.ushells_per_unique]
-        angular = [int(x.item()) for x in self.unique_angular]
-        for number, count in zip(unique_numbers, shell_counts):
-            number = int(number)
-            if int(count) == 0:
-                shell += 1  # preserve the setup's zero-shell placeholder
-                continue
-            element_shells = []
-            for _ in range(int(count)):
-                # ``slater_to_gauss`` already supplies dxtb-normalized
-                # coefficients; Shell.normalized() would normalize twice.
-                element_shells.append(
-                    libcint.Shell(
-                        angmom=int(angular[shell]),
-                        alphas=alphas[shell],
-                        coeffs=coeffs[shell],
-                    )
-                )
-                shell += 1
-            if number > 0:
-                shells_by_element[number] = element_shells
-            elif element_shells:
-                raise ValueError(
-                    "Padding atomic number zero cannot own shells."
-                )
-
-        return (
-            libcint.Basis(shells=shells_by_element),
-            libcint.Structure(numbers=self.numbers, positions=positions),
+        return create_libcint_from_data(
+            self.numbers,
+            self.unique,
+            self.ushells_per_unique,
+            self.unique_angular,
+            alphas,
+            coeffs,
+            positions,
         )
 
 
@@ -173,20 +146,17 @@ class LibcintIntegralSetupNode(Node):
         return super()._convert_child(name, value, device, dtype)
 
 
-def core_libcint_setup(
-    setup: LibcintIntegralSetup,
+def _build_libcint_setup_node(
+    numbers: Tensor,
+    basis: Basis | BasisSetup,
+    ihelp: IndexHelper,
     *,
-    copy_index: bool = True,
+    force_cpu: bool,
+    copy_index: bool,
 ) -> LibcintIntegralSetupNode:
-    """Snapshot a single-System driver setup as structural Node data."""
-    if setup.ihelp.batch_mode != 0 or len(setup.basis_setups) != 1:
-        raise ValueError("Core libcint setup requires one single System.")
-
-    basis = setup.basis_setups[0]
-    ihelp = basis.ihelp
-
+    """Build a LibcintIntegralSetupNode from gathered basis and index data."""
     source_tensors = (
-        setup.numbers,
+        numbers,
         basis.numbers,
         basis.unique,
         basis.ngauss,
@@ -201,7 +171,7 @@ def core_libcint_setup(
         ihelp.shells_to_atom,
         ihelp.orbitals_to_shell,
     )
-    if setup.force_cpu and any(
+    if force_cpu and any(
         tensor.device.type != "cpu" for tensor in source_tensors
     ):
         raise ValueError(
@@ -232,7 +202,7 @@ def core_libcint_setup(
     )
 
     return LibcintIntegralSetupNode(
-        numbers=snapshot(setup.numbers),
+        numbers=snapshot(numbers),
         basis_setups=(
             LibcintBasisNode(
                 numbers=snapshot(basis.numbers),
@@ -250,7 +220,44 @@ def core_libcint_setup(
             ),
         ),
         index=index,
+        force_cpu=force_cpu,
+    )
+
+
+def core_libcint_setup(
+    setup: LibcintIntegralSetup,
+    *,
+    copy_index: bool = True,
+) -> LibcintIntegralSetupNode:
+    """Snapshot a single-System driver setup as structural Node data."""
+    if setup.ihelp.batch_mode != 0 or len(setup.basis_setups) != 1:
+        raise ValueError("Core libcint setup requires one single System.")
+
+    basis = setup.basis_setups[0]
+    return _build_libcint_setup_node(
+        setup.numbers,
+        basis,
+        basis.ihelp,
         force_cpu=setup.force_cpu,
+        copy_index=copy_index,
+    )
+
+
+def setup_libcint_core(
+    basis: Basis,
+    *,
+    force_cpu: bool = True,
+    copy_index: bool = False,
+) -> LibcintIntegralSetupNode:
+    """Build the authoritative Node setup directly from a single-System Basis."""
+    if basis.ihelp.batch_mode != 0:
+        raise ValueError("Core libcint setup requires one single System.")
+    return _build_libcint_setup_node(
+        basis.numbers,
+        basis,
+        basis.ihelp,
+        force_cpu=force_cpu,
+        copy_index=copy_index,
     )
 
 

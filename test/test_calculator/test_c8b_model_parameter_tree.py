@@ -403,6 +403,8 @@ def test_integral_backend_node_matches_driver(
     system = model.setup(torch.tensor([1, 1], dtype=torch.int64))
     assert system.exact_core is not None
     assert system.exact_core.integral is not None
+    assert system.integral_setup is system.exact_core.integral
+    assert system.exact_core.integral_setup is system.integral_setup
     backend = system.exact_core.integral.backend
     assert isinstance(backend, expected_type)
     assert system.exact_core.integral.logical_device == system.numbers.device

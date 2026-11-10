@@ -236,39 +236,7 @@ class InteractionTermDescriptor(Node):
     geometry_inputs: tuple[str, ...] = context()
 
 
-class IntegralBackendNode(Node):
-    """Selected integral setup with transform-visible backend ownership."""
-
-    driver_type: int = context()
-    intlevel: int = context()
-    logical_device: torch.device = context()
-    backend: PytorchIntegralSetupNode | LibcintIntegralSetupNode | None = (
-        child()
-    )
-
-    def _validate(self) -> None:
-        """Require the selected backend Node to match its driver."""
-        expected_backend = {
-            labels.INTDRIVER_PYTORCH: PytorchIntegralSetupNode,
-            labels.INTDRIVER_LIBCINT: LibcintIntegralSetupNode,
-        }.get(self.driver_type)
-        if expected_backend is None:
-            raise ValueError(
-                f"Unsupported integral driver '{self.driver_type}'."
-            )
-        if (
-            self.backend is not None
-            and type(self.backend) is not expected_backend
-        ):
-            raise TypeError(
-                "Integral backend Node does not match driver "
-                f"'{self.driver_type}'."
-            )
-
-    @property
-    def device(self) -> torch.device:
-        """Return the System device while allowing force-CPU backend leaves."""
-        return self.logical_device
+IntegralBackendNode = IntegralSetup
 
 
 class ExactSystemCore(Node):
@@ -282,53 +250,25 @@ class ExactSystemCore(Node):
     numbers: Tensor = child(keep_dtype=True)
     effective_dtype: torch.dtype = context()
     config: Config = context()
-    integral: IntegralBackendNode | None = child()
+    integral: IntegralSetup | None = child()
     h0_setup: H0SetupNode | None = child()
     classical_terms: tuple[ClassicalTermDescriptor, ...] = child()
     interaction_terms: tuple[InteractionTermDescriptor, ...] = child()
 
-    def _convert_child(
-        self,
-        name: str,
-        value: object,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> object:
-        converted = super()._convert_child(name, value, device, dtype)
-        if name == "integral" and converted is not None and device is not None:
-            assert isinstance(converted, IntegralBackendNode)
-            logical_device = normalize_device(device)
-            assert isinstance(logical_device, torch.device)
-            converted = converted.replace(logical_device=logical_device)
-        return converted
-
     @property
     def index(self) -> IndexHelper | None:
         """Return the index owned by the selected backend, if present."""
-        if self.integral is None or self.integral.backend is None:
+        if self.integral is None or not isinstance(
+            self.integral.backend,
+            (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
+        ):
             return None
         return self.integral.backend.index
 
     @property
     def integral_setup(self) -> IntegralSetup | None:
-        """Build a lightweight view over the selected backend Node."""
-        if self.integral is None:
-            return None
-        backend = self.integral.backend
-        return IntegralSetup(
-            driver_type=self.integral.driver_type,
-            intlevel=self.integral.intlevel,
-            pytorch=(
-                backend
-                if isinstance(backend, PytorchIntegralSetupNode)
-                else None
-            ),
-            libcint=(
-                backend
-                if isinstance(backend, LibcintIntegralSetupNode)
-                else None
-            ),
-        )
+        """Return the selected integral setup Node."""
+        return self.integral
 
     def to(
         self,
@@ -503,20 +443,11 @@ def _build_setup_index_token(
 ) -> _SetupIndexToken:
     """Capture setup-time identity and version metadata for fast validation."""
     backend_index: IndexHelper | None = None
-    if integral_setup is not None:
-        backend = (
-            integral_setup.pytorch
-            if integral_setup.driver_type == labels.INTDRIVER_PYTORCH
-            else (
-                integral_setup.libcint
-                if integral_setup.driver_type == labels.INTDRIVER_LIBCINT
-                else None
-            )
-        )
-        if isinstance(
-            backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-        ):
-            backend_index = backend.index
+    if integral_setup is not None and isinstance(
+        integral_setup.backend,
+        (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
+    ):
+        backend_index = integral_setup.backend.index
 
     es2_shells = (
         es2_setup.shells_to_atom if es2_setup is not None else None
@@ -1123,21 +1054,11 @@ class System:
             return False
 
         backend_index = None
-        if self.integral_setup is not None:
-            backend = (
-                self.integral_setup.pytorch
-                if self.integral_setup.driver_type == labels.INTDRIVER_PYTORCH
-                else (
-                    self.integral_setup.libcint
-                    if self.integral_setup.driver_type
-                    == labels.INTDRIVER_LIBCINT
-                    else None
-                )
-            )
-            if isinstance(
-                backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-            ):
-                backend_index = backend.index
+        if self.integral_setup is not None and isinstance(
+            self.integral_setup.backend,
+            (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
+        ):
+            backend_index = self.integral_setup.backend.index
         if backend_index is not None and (
             backend_index.atom_to_unique.shape != (nat,)
             or backend_index.shells_to_ushell.shape != (n_shells,)
@@ -1368,35 +1289,26 @@ class System:
         ):
             return None
 
-        backend_setup = (
-            self.integral_setup.pytorch
-            if self.integral_setup is not None
-            and self.integral_setup.driver_type == labels.INTDRIVER_PYTORCH
-            else (
-                self.integral_setup.libcint
-                if self.integral_setup is not None
-                and self.integral_setup.driver_type == labels.INTDRIVER_LIBCINT
-                else None
-            )
-        )
         if core.integral is None:
             if self.integral_setup is not None:
                 return None
-        else:
-            expected_backend = {
+        elif self.integral_setup is None or (
+            core.integral is not self.integral_setup
+            and (
+                core.integral.driver_type != self.integral_setup.driver_type
+                or core.integral.intlevel != self.integral_setup.intlevel
+                or core.integral.backend is not self.integral_setup.backend
+            )
+        ):
+            return None
+        if core.integral is not None and (
+            type(core.integral.backend)
+            is not {
                 labels.INTDRIVER_PYTORCH: PytorchIntegralSetupNode,
                 labels.INTDRIVER_LIBCINT: LibcintIntegralSetupNode,
             }.get(core.integral.driver_type)
-            if (
-                self.integral_setup is None
-                or core.integral.backend is None
-                or expected_backend is None
-                or type(core.integral.backend) is not expected_backend
-                or core.integral.driver_type != self.integral_setup.driver_type
-                or core.integral.intlevel != self.integral_setup.intlevel
-                or core.integral.backend is not backend_setup
-            ):
-                return None
+        ):
+            return None
 
         d3_components = tuple(
             component
@@ -1478,8 +1390,9 @@ class System:
             return None
 
         expected_index = (
-            backend_setup.index
-            if type(backend_setup)
+            self.integral_setup.backend.index
+            if self.integral_setup is not None
+            and type(self.integral_setup.backend)
             in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
             else None
         )
@@ -2105,35 +2018,11 @@ class Model:
                         )
                     )
 
-            core_integral = None
-            if integral_setup is not None:
-                if integral_setup.driver_type == labels.INTDRIVER_PYTORCH:
-                    selected_backend = integral_setup.pytorch
-                elif integral_setup.driver_type == labels.INTDRIVER_LIBCINT:
-                    selected_backend = integral_setup.libcint
-                else:
-                    selected_backend = None
-                core_integral = IntegralBackendNode(
-                    driver_type=integral_setup.driver_type,
-                    intlevel=integral_setup.intlevel,
-                    logical_device=numbers.device,
-                    backend=(
-                        selected_backend
-                        if isinstance(
-                            selected_backend,
-                            (
-                                PytorchIntegralSetupNode,
-                                LibcintIntegralSetupNode,
-                            ),
-                        )
-                        else None
-                    ),
-                )
             exact_core = ExactSystemCore(
                 numbers=numbers,
                 effective_dtype=dd["dtype"],
                 config=config,
-                integral=core_integral,
+                integral=integral_setup,
                 h0_setup=(
                     h0_setup if isinstance(h0_setup, H0SetupNode) else None
                 ),

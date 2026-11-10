@@ -60,13 +60,11 @@ def build_overlap(
     positions: Tensor,
 ) -> Tensor:
     """Build an overlap matrix from immutable setup data and current positions."""
-    ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
-    raw = assemble_matrix(
+    return assemble_matrix(
         get_kernel(setup.algorithm),
-        ihelp,
+        None,
         list(setup.alphas),
         list(setup.coeffs),
         positions,
         plan=setup.pair_plan,
     )[0]
-    return raw

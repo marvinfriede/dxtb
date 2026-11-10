@@ -112,6 +112,38 @@ def _snapshot_index_helper(
     )
 
 
+def _build_pair_plan_node(
+    pair_plan: PairPlan,
+    *,
+    atom: Tensor,
+    weight_dtype: torch.dtype,
+    clone: bool,
+) -> PairPlanNode:
+    """Build a PairPlanNode from a PairPlan, optionally cloning class tensors."""
+    return PairPlanNode(
+        nao=pair_plan.nao,
+        unique_angular=tuple(pair_plan.unique_angular),
+        atom=atom,
+        classes=tuple(
+            PairClassNode(
+                ub=cls.ub,
+                uk=cls.uk,
+                lb=cls.lb,
+                lk=cls.lk,
+                ib=cls.ib.clone() if clone else cls.ib,
+                jk=cls.jk.clone() if clone else cls.jk,
+                idx=cls.idx.clone() if clone else cls.idx,
+                weight=(
+                    cls.weight.to(dtype=weight_dtype).clone()
+                    if clone
+                    else cls.weight.to(dtype=weight_dtype)
+                ),
+            )
+            for cls in pair_plan.classes
+        ),
+    )
+
+
 def core_pytorch_integral_setup(
     setup: PytorchIntegralSetup,
 ) -> PytorchIntegralSetupNode:
@@ -127,23 +159,11 @@ def core_pytorch_integral_setup(
         index=_snapshot_index_helper(setup.ihelp, shells_to_atom=atom),
         alphas=setup.alphas,
         coeffs=setup.coeffs,
-        pair_plan=PairPlanNode(
-            nao=setup.pair_plan.nao,
-            unique_angular=tuple(setup.pair_plan.unique_angular),
+        pair_plan=_build_pair_plan_node(
+            setup.pair_plan,
             atom=atom,
-            classes=tuple(
-                PairClassNode(
-                    ub=cls.ub,
-                    uk=cls.uk,
-                    lb=cls.lb,
-                    lk=cls.lk,
-                    ib=cls.ib.clone(),
-                    jk=cls.jk.clone(),
-                    idx=cls.idx.clone(),
-                    weight=cls.weight.to(dtype=setup.alphas[0].dtype).clone(),
-                )
-                for cls in setup.pair_plan.classes
-            ),
+            weight_dtype=setup.alphas[0].dtype,
+            clone=True,
         ),
         algorithm=setup.algorithm.casefold(),
     )
@@ -174,35 +194,22 @@ def setup_integrals_core(
     """Build the authoritative Node setup for a pure single-System path."""
     get_kernel(algorithm)
     alphas, coeffs = basis.create_cgtos()
-    dev = basis.numbers.device
+    dev = basis.device
     index = (
         basis.ihelp
         if basis.ihelp.device == dev
         else basis.ihelp.to(device=dev)
     )
     pair_plan = prepare(index, dev)
-    weight_dtype = alphas[0].dtype
     return PytorchIntegralSetupNode(
         index=index,
         alphas=tuple(alphas),
         coeffs=tuple(coeffs),
-        pair_plan=PairPlanNode(
-            nao=pair_plan.nao,
-            unique_angular=tuple(pair_plan.unique_angular),
+        pair_plan=_build_pair_plan_node(
+            pair_plan,
             atom=index.shells_to_atom,
-            classes=tuple(
-                PairClassNode(
-                    ub=cls.ub,
-                    uk=cls.uk,
-                    lb=cls.lb,
-                    lk=cls.lk,
-                    ib=cls.ib,
-                    jk=cls.jk,
-                    idx=cls.idx,
-                    weight=cls.weight.to(dtype=weight_dtype),
-                )
-                for cls in pair_plan.classes
-            ),
+            weight_dtype=alphas[0].dtype,
+            clone=False,
         ),
         algorithm=algorithm.casefold(),
     )

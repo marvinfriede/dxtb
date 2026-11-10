@@ -29,6 +29,7 @@ from .driver import (
     LibcintIntegralSetupNode,
     core_libcint_setup,
     setup_libcint,
+    setup_libcint_core,
 )
 from .multipole import build_multipole_libcint
 from .overlap import build_overlap_libcint
@@ -45,4 +46,5 @@ __all__ = [
     "build_quadrupole_libcint",
     "core_libcint_setup",
     "setup_libcint",
+    "setup_libcint_core",
 ]

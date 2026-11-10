@@ -185,7 +185,7 @@ def test_libcint_system_node_matches_legacy_matrices_and_history(
     legacy_outer = IntegralSetup(
         driver_type=labels.INTDRIVER_LIBCINT,
         intlevel=labels.INTLEVEL_QUADRUPOLE,
-        libcint=legacy_backend,
+        backend=legacy_backend,
     )
     system_outer = calc.system.integral_setup
     assert system_outer is not None and system_outer.libcint is not None
@@ -369,7 +369,7 @@ def test_libcint_singlepoint_matches_legacy_setup() -> None:
     assert system.integral_setup is not None
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
     legacy_backend = _legacy_setup(numbers, par, force_cpu=True)
-    component_setup = replace(system.integral_setup, libcint=legacy_backend)
+    component_setup = replace(system.integral_setup, backend=legacy_backend)
     legacy_system = replace(system, integral_setup=component_setup)
 
     core_result = system.singlepoint(positions)

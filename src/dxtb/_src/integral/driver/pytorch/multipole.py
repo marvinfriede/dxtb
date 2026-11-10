@@ -42,10 +42,9 @@ def _build_multipole(
     components: tuple[tuple[int, int, int], ...],
 ) -> Tensor:
     """Build a raw multipole matrix from setup data and current positions."""
-    ihelp = None if isinstance(setup, PytorchIntegralSetupNode) else setup.ihelp
     return assemble_matrix(
         get_kernel(setup.algorithm),
-        ihelp,
+        None,
         list(setup.alphas),
         list(setup.coeffs),
         positions,

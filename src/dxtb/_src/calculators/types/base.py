@@ -49,6 +49,8 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.constants import defaults
+from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
@@ -67,44 +69,57 @@ def _convert_system_dtype(
     interactions: InteractionList | None = None,
 ) -> System:
     """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
-    integral_setup = (
-        None
-        if system.integral_setup is None
-        else system.integral_setup.to(dtype=dtype)
-    )
-    h0_setup = (
-        None
-        if system.h0_setup is None
-        else system.h0_setup.to(dtype=dtype)
-    )
     exact_core = system.exact_core
     if exact_core is not None:
-        exact_core = exact_core.to(dtype=dtype)
-        backend_setup = (
-            integral_setup.pytorch
-            if integral_setup is not None and integral_setup.pytorch is not None
+        converted_core = exact_core.to(dtype=dtype)
+        integral_setup = (
+            converted_core.integral
+            if system.integral_setup is exact_core.integral
             else (
-                integral_setup.libcint
-                if integral_setup is not None
-                else None
+                None
+                if system.integral_setup is None
+                else system.integral_setup.to(dtype=dtype)
             )
         )
-        core_integral = None
-        if integral_setup is not None:
-            from dxtb._src.calculators.model import IntegralBackendNode
-
-            core_integral = IntegralBackendNode(
-                driver_type=integral_setup.driver_type,
-                intlevel=integral_setup.intlevel,
-                logical_device=system.numbers.device,
-                backend=backend_setup,
+        h0_setup = (
+            converted_core.h0_setup
+            if system.h0_setup is exact_core.h0_setup
+            else (
+                None
+                if system.h0_setup is None
+                else system.h0_setup.to(dtype=dtype)
             )
-        exact_core = exact_core.replace(
-            effective_dtype=dtype,
-            integral=core_integral,
-            h0_setup=(
-                h0_setup if isinstance(h0_setup, H0SetupNode) else None
-            ),
+        )
+        core_integral = (
+            integral_setup
+            if integral_setup is None
+            or isinstance(
+                integral_setup.backend,
+                (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
+            )
+            else None
+        )
+        core_h0 = h0_setup if isinstance(h0_setup, H0SetupNode) else None
+        if (
+            core_integral is not converted_core.integral
+            or core_h0 is not converted_core.h0_setup
+        ):
+            exact_core = converted_core.replace(
+                integral=core_integral,
+                h0_setup=core_h0,
+            )
+        else:
+            exact_core = converted_core
+    else:
+        integral_setup = (
+            None
+            if system.integral_setup is None
+            else system.integral_setup.to(dtype=dtype)
+        )
+        h0_setup = (
+            None
+            if system.h0_setup is None
+            else system.h0_setup.to(dtype=dtype)
         )
     return replace(
         system,

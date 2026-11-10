@@ -64,16 +64,15 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Literal, Tensor
 
-from .driver.libcint.driver import LibcintIntegralSetup, setup_libcint
+from .driver.libcint.driver import setup_libcint
 from .driver.libcint.overlap import build_overlap_libcint
 from .driver.pytorch.multipole import build_dipole, build_quadrupole
 from .driver.pytorch.overlap import build_overlap
-from .driver.pytorch.setup import setup_integrals
+from .evaluation import setup_integral_evaluation
 from .utils import normalize_integral_matrix, snorm
 
 __all__ = ["dipint", "hcore", "overlap", "quadint"]
@@ -308,12 +307,22 @@ def _single(
     normalize: bool,
 ) -> Tensor:
     """Build one integral of a single Structure."""
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    eval_setup = setup_integral_evaluation(
+        numbers,
+        par,
+        ihelp,
+        driver_type=driver,
+        intlevel=labels.INTLEVEL_OVERLAP,
+        force_cpu_for_libcint=True,
+        device=positions.device,
+        dtype=positions.dtype,
+    )
+    assert eval_setup is not None
+
     if driver == labels.INTDRIVER_PYTORCH:
-        ihelp = IndexHelper.from_numbers(numbers, par)
-        basis = Basis(
-            numbers, par, ihelp, device=positions.device, dtype=positions.dtype
-        )
-        setup = setup_integrals(basis)
+        assert eval_setup.pytorch is not None
+        setup = eval_setup.pytorch
         raw = build_overlap(setup, positions)
         if kind == "dipole":
             matrix = build_dipole(setup, positions)
@@ -325,20 +334,8 @@ def _single(
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
 
-        # libcint runs on the CPU (as in `setup_integral_evaluation`)
-        cpu = torch.device("cpu")
-        numbers = numbers.to(device=cpu)
-        ihelp = IndexHelper.from_numbers(numbers, par).to(device=cpu)
-        basis = Basis(numbers, par, ihelp, device=cpu, dtype=positions.dtype)
-        call = setup_libcint(
-            LibcintIntegralSetup(
-                numbers=numbers,
-                ihelp=ihelp,
-                basis_setups=(basis.setup_data(),),
-                force_cpu=True,
-            ),
-            positions,
-        )
+        assert eval_setup.libcint is not None
+        call = setup_libcint(eval_setup.libcint, positions)
         raw = build_overlap_libcint(call)
         (item,) = call.inputs
         if kind == "dipole":

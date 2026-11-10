@@ -573,7 +573,7 @@ def test_active_core_index_device_mismatch_uses_public_solver(
     backend = system.integral_setup.pytorch
     meta_backend = backend.to(device="meta")
     meta_index = meta_backend.index
-    meta_integrals = replace(system.integral_setup, pytorch=meta_backend)
+    meta_integrals = replace(system.integral_setup, backend=meta_backend)
     meta_integral = system.exact_core.integral.replace(backend=meta_backend)
     meta_core = system.exact_core.replace(integral=meta_integral)
     mismatched = replace(

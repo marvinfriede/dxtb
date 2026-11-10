@@ -43,7 +43,12 @@ from .slater import slater_to_gauss
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
-__all__ = ["Basis", "BasisSetup"]
+__all__ = [
+    "Basis",
+    "BasisSetup",
+    "create_libcint_cgtos_from_data",
+    "create_libcint_from_data",
+]
 
 
 angular2label = {
@@ -379,6 +384,106 @@ class Basis(TensorLike):
         return self.setup_data().create_libcint_cgtos()
 
 
+def create_libcint_cgtos_from_data(
+    unique: Tensor,
+    ushells_per_unique: Tensor,
+    ngauss: Tensor,
+    pqn: Tensor,
+    unique_angular: Tensor,
+    slater: Tensor,
+    valence: Tensor,
+    sto: Literal["gfn1", "gfn2"],
+) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+    """Construct parameter-differentiable CGTO values from gathered Slater data."""
+    alphas: list[Tensor] = []
+    coeffs: list[Tensor] = []
+    shell = 0
+
+    for unique_index in range(unique.size(0)):
+        shell_count = ushells_per_unique[unique_index]
+        if shell_count == 0:
+            zero = torch.tensor(0.0, dtype=slater.dtype, device=slater.device)
+            alphas.append(zero)
+            coeffs.append(zero)
+            shell += 1
+            continue
+
+        for _ in range(shell_count):
+            alpha, coeff = slater_to_gauss(
+                ngauss[shell],
+                pqn[shell],
+                unique_angular[shell],
+                slater[shell],
+                sto=sto,
+            )
+            if valence[shell].item() is False:
+                alpha, coeff = orthogonalize(
+                    (alphas[shell - 1], alpha),
+                    (coeffs[shell - 1], coeff),
+                )
+            alphas.append(alpha)
+            coeffs.append(coeff)
+            shell += 1
+    return tuple(alphas), tuple(coeffs)
+
+
+def create_libcint_from_data(
+    numbers: Tensor,
+    unique: Tensor,
+    ushells_per_unique: Tensor,
+    unique_angular: Tensor,
+    alphas: tuple[Tensor, ...],
+    coeffs: tuple[Tensor, ...],
+    positions: Tensor,
+    *,
+    mask: Tensor | None = None,
+) -> tuple[libcint.Basis, libcint.Structure]:
+    """Create a call-local libcint basis and structure from gathered data."""
+    from dxtb._src.exlibs import libcint
+
+    shells_by_element: dict[int, list[libcint.Shell]] = {}
+    shell = 0
+    unique_numbers = [int(x.item()) for x in unique]
+    shell_counts = [int(x.item()) for x in ushells_per_unique]
+    angular = [int(x.item()) for x in unique_angular]
+    for number, count in zip(unique_numbers, shell_counts):
+        number = int(number)
+        if int(count) == 0:
+            shell += 1  # preserve the zero-shell placeholder alignment
+            continue
+        element_shells = []
+        for _ in range(int(count)):
+            # ``slater_to_gauss`` already supplies dxtb-normalized
+            # coefficients; Shell.normalized() would normalize twice.
+            element_shells.append(
+                libcint.Shell(
+                    angmom=int(angular[shell]),
+                    alphas=alphas[shell],
+                    coeffs=coeffs[shell],
+                )
+            )
+            shell += 1
+        if number > 0:
+            shells_by_element[number] = element_shells
+        elif element_shells:
+            raise ValueError("Padding atomic number zero cannot own shells.")
+
+    physical_numbers = numbers
+    physical_positions = positions
+    if mask is not None:
+        physical_numbers = torch.masked_select(physical_numbers, mask)
+        physical_positions = torch.masked_select(
+            physical_positions, mask.unsqueeze(-1)
+        ).reshape((-1, 3))
+
+    return (
+        libcint.Basis(shells=shells_by_element),
+        libcint.Structure(
+            numbers=physical_numbers, positions=physical_positions
+        ),
+    )
+
+
 @dataclass(frozen=True, eq=False)
 class BasisSetup:
     """Narrow composition data required to create libcint basis wrappers."""
@@ -413,9 +518,6 @@ class BasisSetup:
         self, positions: Tensor, mask: Tensor | None = None
     ) -> tuple[libcint.Basis, libcint.Structure]:
         """Create a call-local basis and structure for current positions."""
-
-        from dxtb._src.exlibs import libcint
-
         if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
             raise NotImplementedError(
                 "Libcint BasisSetup conversion is per Structure; the Lanes "
@@ -423,85 +525,31 @@ class BasisSetup:
             )
 
         alphas, coeffs = self.create_libcint_cgtos()
-        shells_by_element: dict[int, list[libcint.Shell]] = {}
-        shell = 0
-        unique_numbers = [int(x.item()) for x in self.unique]
-        shell_counts = [int(x.item()) for x in self.ihelp.ushells_per_unique]
-        angular = [int(x.item()) for x in self.ihelp.unique_angular]
-        for number, count in zip(unique_numbers, shell_counts):
-            number = int(number)
-            if int(count) == 0:
-                shell += 1  # keep the zero-shell placeholder alignment
-                continue
-            element_shells = []
-            for _ in range(int(count)):
-                # ``slater_to_gauss`` already supplies dxtb-normalized
-                # coefficients; Shell.normalized() would normalize twice.
-                element_shells.append(
-                    libcint.Shell(
-                        angmom=int(angular[shell]),
-                        alphas=alphas[shell],
-                        coeffs=coeffs[shell],
-                    )
-                )
-                shell += 1
-            if number > 0:
-                shells_by_element[number] = element_shells
-            elif element_shells:
-                raise ValueError(
-                    "Padding atomic number zero cannot own shells."
-                )
-
-        physical_numbers = self.numbers
-        physical_positions = positions
-        if mask is not None:
-            physical_numbers = torch.masked_select(physical_numbers, mask)
-            physical_positions = torch.masked_select(
-                physical_positions, mask.unsqueeze(-1)
-            ).reshape((-1, 3))
-
-        basis = libcint.Basis(shells=shells_by_element)
-        structure = libcint.Structure(
-            numbers=physical_numbers, positions=physical_positions
+        return create_libcint_from_data(
+            self.numbers,
+            self.unique,
+            self.ihelp.ushells_per_unique,
+            self.ihelp.unique_angular,
+            alphas,
+            coeffs,
+            positions,
+            mask=mask,
         )
-        return basis, structure
 
     def create_libcint_cgtos(
         self,
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """Create parameter-differentiable Gaussian contractions."""
-        alphas: list[Tensor] = []
-        coeffs: list[Tensor] = []
-        shell = 0
-
-        for unique_index in range(self.unique.size(0)):
-            shell_count = self.ihelp.ushells_per_unique[unique_index]
-            if shell_count == 0:
-                zero = torch.tensor(
-                    0.0, dtype=self.slater.dtype, device=self.slater.device
-                )
-                alphas.append(zero)
-                coeffs.append(zero)
-                shell += 1
-                continue
-
-            for _ in range(shell_count):
-                alpha, coeff = slater_to_gauss(
-                    self.ngauss[shell],
-                    self.pqn[shell],
-                    self.ihelp.unique_angular[shell],
-                    self.slater[shell],
-                    sto=self.sto,
-                )
-                if self.valence[shell].item() is False:
-                    alpha, coeff = orthogonalize(
-                        (alphas[shell - 1], alpha),
-                        (coeffs[shell - 1], coeff),
-                    )
-                alphas.append(alpha)
-                coeffs.append(coeff)
-                shell += 1
-        return tuple(alphas), tuple(coeffs)
+        return create_libcint_cgtos_from_data(
+            self.unique,
+            self.ihelp.ushells_per_unique,
+            self.ngauss,
+            self.pqn,
+            self.ihelp.unique_angular,
+            self.slater,
+            self.valence,
+            self.sto,
+        )
 
 
 def format_contraction(shells: list[str], ngauss: Tensor) -> str:

@@ -245,7 +245,7 @@ def test_node_and_legacy_raw_and_normalized_integral_parity() -> None:
                 build_quadrupole(legacy, positions),
             )
 
-            legacy_outer = replace(system.integral_setup, pytorch=legacy)
+            legacy_outer = replace(system.integral_setup, backend=legacy)
             legacy_matrices, legacy_refocc, legacy_norm = (
                 build_integral_matrices(
                     legacy_outer, system.h0_setup, positions, charge=0.0
@@ -297,7 +297,7 @@ def test_singlepoint_total_energy_matches_legacy_integral_setup(
     legacy = _legacy_setup(calc, par, numbers)
     legacy_system = replace(
         system,
-        integral_setup=replace(system.integral_setup, pytorch=legacy),
+        integral_setup=replace(system.integral_setup, backend=legacy),
     )
     core_positions = positions.clone().requires_grad_(True)
     legacy_positions = positions.clone().requires_grad_(True)
