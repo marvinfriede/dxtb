@@ -60,7 +60,6 @@ from dxtb._src.utils.tensors import normalize_device
 from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, build_hcore
 
 __all__ = [
-    "IntegralBackendNode",
     "IntegralSetup",
     "build_integral_matrices",
     "setup_integral_evaluation",
@@ -185,9 +184,6 @@ class IntegralSetup(Node):
             if result.logical_device != logical_device:
                 result = result.replace(logical_device=logical_device)
         return result
-
-
-IntegralBackendNode = IntegralSetup
 
 
 def setup_integral_evaluation(

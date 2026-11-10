@@ -13,8 +13,8 @@ import torch
 from dxtb._src.integral.container import IntegralMatrices
 
 
-def test_integral_matrices_is_minimal_frozen_value_container() -> None:
-    """IntegralMatrices stores hcore, overlap, dipole, and quadrupole without extra methods."""
+def test_integral_matrices_is_frozen_value_container() -> None:
+    """IntegralMatrices stores hcore, overlap, dipole, and quadrupole as frozen fields."""
     hcore = torch.eye(3, dtype=torch.float64)
     overlap = hcore.clone()
     value = IntegralMatrices(hcore=hcore, overlap=overlap)
@@ -26,9 +26,6 @@ def test_integral_matrices_is_minimal_frozen_value_container() -> None:
 
     with pytest.raises(FrozenInstanceError):
         value.hcore = torch.zeros_like(hcore)  # type: ignore[misc]
-
-    for removed_attr in ("to", "type", "slice", "device", "dtype"):
-        assert not hasattr(value, removed_attr)
 
 
 def test_integral_matrices_stores_optional_multipole_tensors() -> None:

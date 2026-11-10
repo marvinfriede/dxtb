@@ -236,9 +236,6 @@ class InteractionTermDescriptor(Node):
     geometry_inputs: tuple[str, ...] = context()
 
 
-IntegralBackendNode = IntegralSetup
-
-
 class ExactSystemCore(Node):
     """Registered exact single-System setup, separate from the component setups.
 
