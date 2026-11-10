@@ -482,3 +482,83 @@ def test_tblite_structure_and_property_getters() -> None:
         electric_field=efield,
     )
     assert abs(float((energy_field - energy).item())) > 1.0e-4
+
+
+def test_tblite_interface_dtype_temperature_uhf_and_immutability() -> None:
+    """Verify WP3 contract: float64 default dtype, temperature/uhf validation, and input immutability."""
+    from tad_mctc.io.structure import Structure as MctcStructure
+    from tad_mctc.units import KELVIN2AU
+
+    sys = SYSTEMS["H2O"]
+    pos_f32 = sys.positions.to(dtype=torch.float32)
+    pos_f32_copy = pos_f32.clone()
+    num_copy = sys.numbers.clone()
+
+    mol_f32 = Structure(sys.numbers, pos_f32, charge=0.0, uhf=0)
+
+    # 1. Default return dtype is float64 even when Structure.positions is float32.
+    energy_default = get_tblite_energy(mol_f32, "GFN2-xTB", accuracy=1.0e-6)
+    grad_default = get_tblite_gradient(mol_f32, "GFN2-xTB", accuracy=1.0e-6)
+    assert energy_default.dtype == torch.float64
+    assert grad_default.dtype == torch.float64
+
+    # Explicit dtype=torch.float32 casts the output when requested.
+    energy_f32 = get_tblite_energy(
+        mol_f32, "GFN2-xTB", accuracy=1.0e-6, dtype=torch.float32
+    )
+    assert energy_f32.dtype == torch.float32
+
+    # Caller tensors are never mutated.
+    assert torch.equal(pos_f32, pos_f32_copy)
+    assert torch.equal(sys.numbers, num_copy)
+
+    # 2. tad_mctc.io.structure.Structure compatibility.
+    mctc_mol = MctcStructure(
+        numbers=sys.numbers, positions=sys.positions, charge=sys.charge
+    )
+    energy_mctc = get_tblite_energy(mctc_mol, "GFN2-xTB", accuracy=1.0e-6)
+    torch.testing.assert_close(
+        energy_mctc, energy_default, atol=1.0e-6, rtol=0.0
+    )
+
+    # 3. Temperature in Hartree vs Kelvin agreement and conflict rejection.
+    temp_k = 450.0
+    temp_au = temp_k * KELVIN2AU
+    e_kelvin = get_tblite_energy(
+        mctc_mol, "GFN2-xTB", accuracy=1.0e-6, temperature_kelvin=temp_k
+    )
+    e_au = get_tblite_energy(
+        mctc_mol, "GFN2-xTB", accuracy=1.0e-6, temperature=temp_au
+    )
+    torch.testing.assert_close(e_kelvin, e_au, atol=1.0e-14, rtol=0.0)
+
+    with pytest.raises(ValueError, match="Specify at most one"):
+        Options(temperature=temp_au, temperature_kelvin=temp_k)
+    with pytest.raises(ValueError, match="Specify at most one"):
+        get_tblite_energy(
+            mctc_mol,
+            "GFN2-xTB",
+            temperature=temp_au,
+            temperature_kelvin=temp_k,
+        )
+
+    # 4. Open-shell uhf/spin handling and non-integer rejection.
+    no2 = SYSTEMS["NO2"]
+    e_uhf = get_tblite_energy(
+        Structure(no2.numbers, no2.positions, charge=0.0, uhf=1),
+        "GFN2-xTB",
+        accuracy=1.0e-6,
+    )
+    e_spin = get_tblite_energy(
+        Structure(no2.numbers, no2.positions, charge=0.0, spin=1),
+        "GFN2-xTB",
+        accuracy=1.0e-6,
+    )
+    torch.testing.assert_close(e_uhf, e_spin, atol=0.0, rtol=0.0)
+
+    with pytest.raises(ValueError, match="Conflicting"):
+        Structure(no2.numbers, no2.positions, uhf=1, spin=2)
+    with pytest.raises(ValueError, match="integer number of unpaired electrons"):
+        Structure(no2.numbers, no2.positions, uhf=0.5)
+    with pytest.raises(ValueError, match="non-negative"):
+        Structure(no2.numbers, no2.positions, uhf=-1)

@@ -2825,3 +2825,92 @@ def test_spectral_positive_definite_solve_supports_forward_second_derivatives() 
     torch.testing.assert_close(
         forward_second, finite_difference, atol=1.0e-6, rtol=1.0e-6
     )
+
+
+def test_projector_direct_inverse_conditioning_invariants_and_float32() -> None:
+    """Direct-inverse sign projector preserves narrow-gap derivatives, invariants, and permutation covariance."""
+    dtype = torch.float64
+    gap = 1.0e-4
+    evals = torch.tensor(
+        [-2.0, -0.5 * gap, 0.5 * gap, 0.7, 1.5], dtype=dtype
+    )
+    gen = torch.Generator().manual_seed(42)
+    q5, _ = torch.linalg.qr(
+        torch.randn((5, 5), dtype=dtype, generator=gen)
+    )
+    h_active = q5 @ torch.diag(evals) @ q5.mT
+    h_active = 0.5 * (h_active + h_active.mT)
+    dh_active = torch.randn((5, 5), dtype=dtype, generator=gen)
+    dh_active = 0.5 * (dh_active + dh_active.mT)
+
+    h_padded = torch.zeros((6, 6), dtype=dtype)
+    h_padded[:5, :5] = h_active
+    dh_padded = torch.zeros((6, 6), dtype=dtype)
+    dh_padded[:5, :5] = dh_active
+    active_mask = torch.tensor(
+        [True, True, True, True, True, False], dtype=torch.bool
+    )
+    rank = torch.tensor(2, dtype=torch.long)
+
+    # Exact spectral reference for primal projector and first derivative
+    ev, u_eig = torch.linalg.eigh(h_active)
+    p_exact = torch.zeros((6, 6), dtype=dtype)
+    p_exact[:5, :5] = u_eig[:, :2] @ u_eig[:, :2].mT
+    dh_eig = u_eig.mT @ dh_active @ u_eig
+    de = ev[:2, None] - ev[None, 2:]
+    dp_eig = torch.zeros((5, 5), dtype=dtype)
+    dp_block = dh_eig[:2, 2:] / de
+    dp_eig[:2, 2:] = dp_block
+    dp_eig[2:, :2] = dp_block.mT
+    dp_exact = torch.zeros((6, 6), dtype=dtype)
+    dp_exact[:5, :5] = u_eig @ dp_eig @ u_eig.mT
+
+    def eval_projector(alpha: torch.Tensor) -> torch.Tensor:
+        """Evaluate rank-2 projector along perturbation direction."""
+        m_t, spec_t, act_t = _prepare_matrix(
+            h_padded + alpha * dh_padded, None, active_mask
+        )
+        return _projector(m_t, spec_t, act_t, rank)
+
+    zero = torch.zeros((), dtype=dtype)
+    one = torch.ones((), dtype=dtype)
+    p_val, dp_jvp = jvp(eval_projector, (zero,), (one,))
+    dp_fwd = jacfwd(eval_projector)(zero)
+    dp_rev = jacrev(eval_projector)(zero)
+    d2p_fwd_rev = jacfwd(jacrev(eval_projector))(zero)
+
+    # Conditioning & accuracy: direct inverse achieves <1e-11 primal and <1e-8 derivative error at gap=1e-4
+    torch.testing.assert_close(p_val, p_exact, atol=1.0e-11, rtol=1.0e-11)
+    torch.testing.assert_close(dp_jvp, dp_exact, atol=1.0e-8, rtol=1.0e-9)
+    torch.testing.assert_close(dp_fwd, dp_rev, atol=1.0e-11, rtol=1.0e-11)
+    assert bool(torch.isfinite(d2p_fwd_rev).all())
+
+    # Projector invariants: symmetry, idempotence, trace == rank
+    torch.testing.assert_close(p_val, p_val.mT, atol=1.0e-12, rtol=1.0e-12)
+    torch.testing.assert_close(dp_jvp, dp_jvp.mT, atol=1.0e-8, rtol=1.0e-9)
+    torch.testing.assert_close(
+        p_val @ p_val, p_val, atol=1.0e-12, rtol=1.0e-12
+    )
+    torch.testing.assert_close(
+        p_val.trace(), torch.tensor(2.0, dtype=dtype), atol=1.0e-12, rtol=0.0
+    )
+
+    # Permutation covariance with non-contiguous padding
+    perm = torch.tensor([2, 5, 0, 3, 1, 4], dtype=torch.long)
+    h_perm = h_padded[perm][:, perm]
+    act_perm = active_mask[perm]
+    m_p, spec_p, act_p = _prepare_matrix(h_perm, None, act_perm)
+    p_perm = _projector(m_p, spec_p, act_p, rank)
+    torch.testing.assert_close(
+        p_perm, p_val[perm][:, perm], atol=1.0e-12, rtol=1.0e-12
+    )
+
+    # Float32 promotion and clean return dtype in aufbau_density_matrix
+    h_f32 = h_active.to(torch.float32).requires_grad_(True)
+    nel_f32 = torch.tensor([2.0, 1.0], dtype=torch.float32)
+    d_f32 = aufbau_density_matrix(h_f32, nel_f32)
+    assert d_f32.dtype == torch.float32
+    (g_f32,) = torch.autograd.grad(d_f32.diagonal().sum(), h_f32)
+    assert g_f32.dtype == torch.float32
+    assert bool(torch.isfinite(g_f32).all())
+

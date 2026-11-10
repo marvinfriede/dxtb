@@ -40,13 +40,19 @@ STATUS: dict[str, dict] = (
     json.loads(_STATUS_FILE.read_text()) if _STATUS_FILE.exists() else {}
 )
 
-# Validated capability improvements over the frozen Track-0 matrix.json
-# snapshot: unified pure-PyTorch tad_dftd supports forward-mode AD (jvp) for
-# GFN1-xTB (D3) and GFN2-xTB (D4SC) dispersion parameter derivatives, and the
-# transform-compatible SCF/integral pipeline supports forward-mode JVP and
-# functorch implicit differentiation on single systems.
-_VALIDATED_DFT_D_FORWARD_CELLS: frozenset[str] = frozenset(
+# test/test_baseline/status/matrix.json is retained as an immutable historical
+# snapshot of the initial Track-0 derivative baseline. All cells whose status
+# improved to "pass" in subsequent work packages are consolidated into the
+# single validated override set below:
+# - Pure-PyTorch tad_dftd forward-mode AD (JVP) for GFN1-xTB (D3) and GFN2-xTB
+#   (D4SC) dispersion parameter derivatives (dE_dparam, dforces_dparam).
+# - Transform-compatible SCF/integral pipeline supporting single-system
+#   forward-mode JVP (forces, dipole_deriv, hessian), functorch implicit
+#   differentiation (dipole, forces), and reverse-mode parameter-force
+#   mixed derivatives (dforces_dparam-autograd).
+_VALIDATED_PASSING_CELLS: frozenset[str] = frozenset(
     {
+        # Dispersion parameter forward-mode JVP cells (9)
         "dE_dparam-forward-gfn1-libcint-full-single",
         "dE_dparam-forward-gfn1-libcint-implicit-single",
         "dE_dparam-forward-gfn1-pytorch-implicit-single",
@@ -56,11 +62,7 @@ _VALIDATED_DFT_D_FORWARD_CELLS: frozenset[str] = frozenset(
         "dforces_dparam-forward-gfn1-libcint-full-single",
         "dforces_dparam-forward-gfn2-libcint-full-single",
         "dforces_dparam-forward-gfn2-pytorch-full-single",
-    }
-)
-
-_VALIDATED_POST_TRACK0_CELLS: frozenset[str] = frozenset(
-    {
+        # Post-Track-0 SCF/integral transform cells (21)
         "dforces_dparam-autograd-gfn1-libcint-full-single",
         "dforces_dparam-autograd-gfn1-libcint-implicit-single",
         "dforces_dparam-autograd-gfn2-libcint-full-single",
@@ -87,10 +89,7 @@ _VALIDATED_POST_TRACK0_CELLS: frozenset[str] = frozenset(
 
 
 def _expected_status(cell: Cell) -> str | None:
-    if (
-        cell.id in _VALIDATED_DFT_D_FORWARD_CELLS
-        or cell.id in _VALIDATED_POST_TRACK0_CELLS
-    ):
+    if cell.id in _VALIDATED_PASSING_CELLS:
         return "pass"
     recorded = STATUS.get(cell.id)
     return None if recorded is None else recorded["status"]

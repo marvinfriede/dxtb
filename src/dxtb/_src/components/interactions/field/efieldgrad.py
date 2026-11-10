@@ -105,12 +105,13 @@ class ElectricFieldGradCache(InteractionCache):
 
 class ElectricFieldGrad(Interaction):
     r"""
-    Instantaneous electric field gradient :math:`G_{ij}` compatibility
+    Instantaneous electric field gradient :math:`G_{ij}` interaction
     adapter.
 
-    The single-System core accepts ``field_grad=`` on each evaluation. This
-    class remains supported as a legacy Calculator-constructor default and is
-    translated into that call input before System setup.
+    Public ``Calculator`` and ``System`` evaluations accept ``field_grad=`` as
+    a per-evaluation call input rather than a ``Calculator(..., interaction=...)``
+    constructor argument. This class remains available for direct
+    ``InteractionList`` construction and internal evaluation plumbing.
 
     The field gradient couples to the traceless quadrupole moment
     :math:`\Theta`:

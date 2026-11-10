@@ -88,11 +88,12 @@ class ElectricFieldCache(InteractionCache):
 
 class ElectricField(Interaction):
     """
-    Instantaneous electric field compatibility adapter.
+    Instantaneous electric field interaction adapter.
 
-    The single-System core accepts ``field=`` on each evaluation. This class
-    remains supported as a legacy Calculator-constructor default and is
-    translated into that call input before System setup.
+    Public ``Calculator`` and ``System`` evaluations accept ``field=`` as a
+    per-evaluation call input rather than a ``Calculator(..., interaction=...)``
+    constructor argument. This class remains available for direct
+    ``InteractionList`` construction and internal evaluation plumbing.
     """
 
     field: Tensor

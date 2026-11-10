@@ -110,7 +110,6 @@ class TbliteLiveResult:
     orbital_occupations: np.ndarray
     density_matrix: np.ndarray
     overlap_matrix: np.ndarray | None = None
-    post_processing: dict[str, Any] | None = None
 
     def as_reference_dict(self) -> dict[str, np.ndarray]:
         """Format primary quantities for ``refdata.compare``."""
@@ -220,7 +219,6 @@ def run_tblite_live(
             if res.overlap_matrix is not None
             else None
         ),
-        post_processing=res.post_processing,
     )
 
 

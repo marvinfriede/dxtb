@@ -26,7 +26,7 @@ dependencies:
   - pydantic
   - python>=3.10,<3.13
   - pytorch>=2.7.0,<3
-  - scipy # for xitorch
+  - scipy
   - pytest
   - tomli
   - tomli-w

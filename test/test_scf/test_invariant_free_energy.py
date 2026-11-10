@@ -32,6 +32,7 @@ from dxtb._src.scf.solver import free_energy_from_spectral
 from dxtb._src.scf.spectral import (
     _prepare_matrix,
     aufbau_free_energy_matrix,
+    fermi_density_matrix,
     fermi_free_energy_matrix,
     fermi_free_energy_trace,
 )
@@ -995,3 +996,75 @@ def test_fermi_free_energy_trace_electron_count_response(name: str) -> None:
         first_new, first_old, atol=1.0e-10 * scale, rtol=1.0e-8
     )
     torch.testing.assert_close(new, old, atol=1.0e-10 * scale, rtol=1.0e-8)
+
+
+def test_gap_chemical_potential_mixed_derivatives_match_finite_differences() -> (
+    None
+):
+    """Mixed (H, nel) derivatives of gap free energy include d(mu_gap)/dH and match FD in both orders."""
+    dtype = torch.float64
+    evals = torch.tensor([-0.6, -0.251, -0.250, 0.25], dtype=dtype)
+    gen = torch.Generator().manual_seed(11)
+    q_orth, _ = torch.linalg.qr(
+        torch.randn((4, 4), dtype=dtype, generator=gen)
+    )
+    h0 = q_orth @ torch.diag(evals) @ q_orth.mT
+    h0 = 0.5 * (h0 + h0.mT)
+    dh = torch.randn((4, 4), dtype=dtype, generator=gen)
+    dh = 0.5 * (dh + dh.mT)
+    l_inv = torch.eye(4, dtype=dtype)
+    nel0 = torch.tensor([3.0, 2.0], dtype=dtype)
+    dnel = torch.tensor([0.7, -0.3], dtype=dtype)
+    kt = torch.tensor(9.5e-4, dtype=dtype)
+
+    st0 = _fermi_state(h0, nel0, kt)
+    assert torch.equal(st0.gap, torch.tensor([True, False]))
+
+    def omega_matrix(alpha_h: torch.Tensor, alpha_n: torch.Tensor) -> torch.Tensor:
+        """Total electronic free energy Tr(H D) + Tr(F_ent) via matrix path."""
+        h = h0 + alpha_h * dh
+        nel = nel0 + alpha_n * dnel
+        st = _fermi_state(h.detach(), nel.detach(), kt)
+        d = fermi_density_matrix(h, nel, kt, st, l_inv=l_inv, diff_steps=2)
+        f = fermi_free_energy_matrix(h, nel, kt, st, l_inv=l_inv, diff_steps=2)
+        return (h * d).sum() + f.trace()
+
+    def omega_trace(alpha_h: torch.Tensor, alpha_n: torch.Tensor) -> torch.Tensor:
+        """Total electronic free energy Tr(H D) + F_ent via trace path."""
+        h = h0 + alpha_h * dh
+        nel = nel0 + alpha_n * dnel
+        st = _fermi_state(h.detach(), nel.detach(), kt)
+        d = fermi_density_matrix(h, nel, kt, st, l_inv=l_inv, diff_steps=2)
+        f = fermi_free_energy_trace(h, nel, kt, st, l_inv=l_inv, diff_steps=2)
+        return (h * d).sum() + f
+
+    zero = torch.zeros((), dtype=dtype)
+    step = torch.tensor(1.0e-5, dtype=dtype)
+
+    for fn in (omega_matrix, omega_trace):
+        d_n = jacrev(fn, argnums=1)
+        d_h = jacrev(fn, argnums=0)
+        d2_hn_rr = jacrev(d_n, argnums=0)(zero, zero)
+        d2_nh_rr = jacrev(d_h, argnums=1)(zero, zero)
+        d2_hn_fr = jacfwd(d_n, argnums=0)(zero, zero)
+        d2_nh_ff = jacfwd(jacfwd(fn, argnums=0), argnums=1)(zero, zero)
+
+        fd_hn = (d_n(step, zero) - d_n(-step, zero)) / (2.0 * step)
+        fd_nh = (d_h(zero, step) - d_h(zero, -step)) / (2.0 * step)
+
+        torch.testing.assert_close(
+            d2_hn_rr, d2_nh_rr, atol=1.0e-11, rtol=1.0e-11
+        )
+        torch.testing.assert_close(
+            d2_hn_rr, d2_hn_fr, atol=1.0e-11, rtol=1.0e-11
+        )
+        torch.testing.assert_close(
+            d2_hn_rr, d2_nh_ff, atol=1.0e-11, rtol=1.0e-11
+        )
+        torch.testing.assert_close(
+            d2_hn_rr, fd_hn, atol=5.0e-5, rtol=1.0e-4
+        )
+        torch.testing.assert_close(
+            d2_nh_rr, fd_nh, atol=5.0e-6, rtol=1.0e-5
+        )
+
