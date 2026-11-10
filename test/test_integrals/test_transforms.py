@@ -70,6 +70,48 @@ def test_pure_normalization_without_mutating_inputs(batched: bool) -> None:
         )
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_snorm_zero_diagonal_has_finite_gradients(dtype: torch.dtype) -> None:
+    """Zero diagonal elements in padded overlap do not produce NaN gradients."""
+    dd = {"device": DEVICE, "dtype": dtype}
+    ovlp = torch.diag(torch.tensor([0.0, 1.0, 4.0, 0.0], **dd)).requires_grad_(
+        True
+    )
+
+    norm = snorm(ovlp)
+    assert norm.dtype == dtype
+    expected_val = torch.tensor([0.0, 1.0, 0.5, 0.0], **dd)
+    torch.testing.assert_close(norm, expected_val, atol=1e-6, rtol=1e-6)
+
+    grad_1 = torch.autograd.grad(norm.sum(), ovlp, create_graph=True)[0]
+    grad_2 = torch.autograd.grad(grad_1.sum(), ovlp)[0]
+    assert torch.isfinite(grad_1).all()
+    assert torch.isfinite(grad_2).all()
+
+    expected_grad_diag = torch.tensor([0.0, -0.5, -0.5 * (4.0**-1.5), 0.0], **dd)
+    torch.testing.assert_close(
+        grad_1.diagonal(dim1=-1, dim2=-2),
+        expected_grad_diag,
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+    def _norm_sum(mat: torch.Tensor) -> torch.Tensor:
+        return normalize_integral_matrix(mat).sum()
+
+    primal_out, tangent_out = jvp(
+        _norm_sum, (ovlp.detach(),), (torch.eye(4, **dd),)
+    )
+    assert torch.isfinite(primal_out).all()
+    assert torch.isfinite(tangent_out).all()
+
+    neg_ovlp = torch.diag(torch.tensor([-1.0, 0.0, 1.0], **dd))
+    neg_norm = snorm(neg_ovlp)
+    assert torch.isnan(neg_norm[0])
+    assert neg_norm[1].item() == 0.0
+    assert neg_norm[2].item() == 1.0
+
+
 def test_pure_dipole_shift_without_mutation() -> None:
     """Dipole origin shifts use explicit matrices and positions."""
     dd = {"device": DEVICE, "dtype": torch.double}
@@ -150,7 +192,16 @@ def test_pure_transform_shape_errors_match_legacy_contract() -> None:
         make_quadrupole_traceless(torch.zeros(3, 2, 2, **dd))
 
     with pytest.raises(RuntimeError, match="shape"):
+        make_quadrupole_traceless(torch.zeros(6, 2, **dd))
+
+    with pytest.raises(RuntimeError, match="shape"):
         reduce_quadrupole_9_to_6(torch.zeros(6, 2, 2, **dd))
+
+    for bad_rank in (torch.zeros(9, 2, **dd), torch.zeros(1, 1, 9, 2, 2, **dd)):
+        with pytest.raises(RuntimeError, match="shape"):
+            reduce_quadrupole_9_to_6(bad_rank)
+        with pytest.raises(RuntimeError, match="shape"):
+            _reduce_9_to_6(bad_rank)
 
     with pytest.raises(ValueError, match="uplo"):
         reduce_quadrupole_9_to_6(torch.zeros(9, 2, 2, **dd), uplo="x")  # type: ignore[arg-type]
@@ -158,6 +209,14 @@ def test_pure_transform_shape_errors_match_legacy_contract() -> None:
     with pytest.raises(RuntimeError, match="tensor of shape"):
         shift_quadrupole_origin(
             torch.zeros(5, 2, 2, **dd),
+            torch.zeros(3, 2, 2, **dd),
+            torch.eye(2, **dd),
+            torch.zeros(2, 3, **dd),
+        )
+
+    with pytest.raises(RuntimeError, match="tensor of shape"):
+        shift_quadrupole_origin(
+            torch.zeros(1, 1, 6, 2, 2, **dd),
             torch.zeros(3, 2, 2, **dd),
             torch.eye(2, **dd),
             torch.zeros(2, 3, **dd),

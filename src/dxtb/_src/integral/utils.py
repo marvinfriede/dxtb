@@ -32,9 +32,11 @@ __all__ = ["normalize_integral_matrix", "snorm"]
 
 
 def snorm(ovlp: Tensor) -> Tensor:
+    """Return inverse square-root diagonal normalization factors."""
     d = ovlp.diagonal(dim1=-1, dim2=-2)
-    zero = torch.tensor(0.0, dtype=d.dtype, device=d.device)
-    return torch.where(d == 0.0, zero, torch.pow(d, -0.5))
+    mask = d != 0
+    safe = torch.where(mask, d, 1.0)
+    return torch.where(mask, safe.rsqrt(), 0.0)
 
 
 def normalize_integral_matrix(

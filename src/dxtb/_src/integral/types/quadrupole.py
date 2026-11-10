@@ -48,7 +48,7 @@ def make_quadrupole_traceless(quadrupole: Tensor) -> Tensor:
     """Return the traceless form of a lower-ordered six-component tensor."""
     if quadrupole.ndim not in (3, 4) or quadrupole.shape[-3] != 6:
         raise RuntimeError(
-            "Quadrupole integral must be a tensor tensor of shape "
+            "Quadrupole integral must be a tensor of shape "
             f"'(6, norb, norb)' but is {quadrupole.shape}."
         )
 
@@ -85,7 +85,7 @@ def shift_quadrupole_origin(
             "ihelp.spread_atom_to_orbital(positions, dim=-2, extra=True)"
         )
 
-    if quadrupole.shape[-3] != 6:
+    if quadrupole.ndim not in (3, 4) or quadrupole.shape[-3] != 6:
         raise RuntimeError(
             "Quadrupole integral must be a tensor of shape "
             f"'(6, norb, norb)' but is {quadrupole.shape}."
@@ -154,9 +154,9 @@ def _reduce_9_to_6(
     ValueError
         Invalid value for optional `uplo` parameter.
     """
-    if qpint.ndim in (3, 4) and qpint.shape[-3] != 9:
+    if qpint.ndim not in (3, 4) or qpint.shape[-3] != 9:
         raise RuntimeError(
-            "Quadrupole integral must be a tensor tensor of shape "
+            "Quadrupole integral must be a tensor of shape "
             f"'(..., 9, norb, norb)' but is '{qpint.shape}'."
         )
 
