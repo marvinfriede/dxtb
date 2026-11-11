@@ -50,6 +50,7 @@ from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 
 __all__ = [
     "FermiOccupationResult",
@@ -945,7 +946,7 @@ def _get_fermi_occupation_core_state(
         and (valid is None or valid_raw is not None)
         and (mask is None or mask_raw is not None)
     ):
-        with torch._C._DisableFuncTorch(), torch.no_grad():
+        with disable_functorch(), torch.no_grad():
             n0, below, above = _partition(target_raw, emo_raw, valid_raw)
             e_fermi = _initial_fermi_energy(target_raw, emo_raw, mask_raw)
             (ref, offset), resid, done, lo, hi = search(
@@ -1113,22 +1114,7 @@ def _unwrap_gradtracking_tensor(tensor: Tensor) -> Tensor | None:
     ``FunctionalTensor`` layer, or when compiling/tracing/in a dispatch mode,
     so ``vmap`` and compiler transforms remain on the wrapped tensor path.
     """
-    if (
-        torch.compiler.is_compiling()
-        or torch.jit.is_tracing()
-        or _get_current_dispatch_mode() is not None
-    ):
-        return None
-    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
-    raw = tensor
-    for _ in range(16):
-        if ft.is_batchedtensor(raw) or ft.is_functionaltensor(raw):
-            return None
-        if ft.is_gradtrackingtensor(raw):
-            raw = ft.get_unwrapped(raw)
-            continue
-        break
-    return raw if type(raw) is Tensor else None
+    return unwrap_functorch_tensor(tensor, allow_vmap=False)
 
 
 def _fermi_search_stops_early(emo: Tensor) -> bool:

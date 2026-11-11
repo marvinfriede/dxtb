@@ -2914,3 +2914,122 @@ def test_projector_direct_inverse_conditioning_invariants_and_float32() -> None:
     assert g_f32.dtype == torch.float32
     assert bool(torch.isfinite(g_f32).all())
 
+
+def test_spectral_scaling_truncation_matches_full_schedule_across_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded _matrix_fermi and _matrix_expm1 loops match full-schedule values and derivatives across all scaling boundaries."""
+    import dxtb._src.scf.spectral as spectral_mod
+    import dxtb._src.utils.tensors as tensors_mod
+    from dxtb._src.scf.spectral import _matrix_expm1
+
+    dtype = torch.float64
+    gen = torch.Generator().manual_seed(123)
+    q3, _ = torch.linalg.qr(torch.randn((3, 3), dtype=dtype, generator=gen))
+    dir_sym = q3 @ torch.diag(torch.tensor([0.3, -0.2, 0.1], dtype=dtype)) @ q3.mT
+    dir_sym = 0.5 * (dir_sym + dir_sym.mT)
+    w_sym = q3 @ torch.diag(torch.tensor([0.7, -0.4, 0.5], dtype=dtype)) @ q3.mT
+    w_sym = 0.5 * (w_sym + w_sym.mT)
+
+    # 1. _matrix_expm1 across every scale_power boundary 0..8 and out-of-range 9
+    norms = [0.0, 0.1, 0.25, 0.26, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 65.0]
+    batch_mats = torch.stack(
+        [
+            q3 @ torch.diag(torch.tensor([-n, 0.0, 0.5 * n], dtype=dtype)) @ q3.mT
+            for n in norms
+        ],
+        dim=0,
+    )
+    opt_expm1 = _matrix_expm1(batch_mats)
+    with monkeypatch.context() as m:
+        m.setattr(spectral_mod, "_max_scale_power_host", lambda _: None)
+        full_expm1 = _matrix_expm1(batch_mats)
+    assert torch.isnan(opt_expm1[-1]).all()
+    assert torch.isnan(full_expm1[-1]).all()
+    torch.testing.assert_close(
+        opt_expm1, full_expm1, atol=0.0, rtol=0.0, equal_nan=True
+    )
+
+    # 2. Mixed batch lanes requiring different scaling powers in _matrix_fermi
+    #    (near-zero, near-degenerate, moderate, wide spectrum) + nested derivatives
+    lane_evals = [
+        torch.tensor([0.0, 0.0, 0.0], dtype=dtype),
+        torch.tensor([-1.0e-8, 0.0, 1.0e-8], dtype=dtype),
+        torch.tensor([-0.5, 0.1, 0.8], dtype=dtype),
+        torch.tensor([-12.0, 0.0, 25.0], dtype=dtype),
+    ]
+    h_batch = torch.stack([q3 @ torch.diag(ev) @ q3.mT for ev in lane_evals], dim=0)
+    shifts = torch.zeros((4,), dtype=dtype)
+    kts = torch.tensor([9.5e-4, 2.0e-4, 9.5e-4, 9.5e-4], dtype=dtype)
+    active = torch.tensor(
+        [[True, True, True], [True, True, True], [True, True, False], [True, True, True]],
+        dtype=torch.bool,
+    )
+
+    def fermi_scalar(alpha: torch.Tensor) -> torch.Tensor:
+        mat = h_batch + alpha * dir_sym.unsqueeze(0)
+        res = _matrix_fermi(mat, shifts, kts, active)
+        return (res * w_sym.unsqueeze(0)).sum()
+
+    def fermi_lane(h_lane: torch.Tensor, kt_lane: torch.Tensor, act_lane: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        mat = h_lane + alpha * dir_sym
+        res = _matrix_fermi(mat, torch.zeros((), dtype=dtype), kt_lane, act_lane)
+        return (res * w_sym).sum()
+
+    z0 = torch.zeros((), dtype=dtype)
+
+    def vmap_lane_d2(
+        h_l: torch.Tensor, kt_l: torch.Tensor, act_l: torch.Tensor
+    ) -> torch.Tensor:
+        def eval_alpha(a: torch.Tensor) -> torch.Tensor:
+            return fermi_lane(h_l, kt_l, act_l, a)
+
+        return jacfwd(jacrev(eval_alpha))(z0)
+
+    opt_val = _matrix_fermi(h_batch, shifts, kts, active)
+    opt_d1 = jacfwd(fermi_scalar)(z0)
+    opt_d2 = jacfwd(jacrev(fermi_scalar))(z0)
+    opt_d3 = jacfwd(jacfwd(torch.func.grad(fermi_scalar)))(z0)
+    opt_vmap_d2 = torch.func.vmap(vmap_lane_d2)(h_batch, kts, active)
+
+    def return_none(_: torch.Tensor) -> None:
+        return None
+
+    with monkeypatch.context() as m:
+        m.setattr(spectral_mod, "_max_scale_power_host", return_none)
+        full_val = _matrix_fermi(h_batch, shifts, kts, active)
+        full_d1 = jacfwd(fermi_scalar)(z0)
+        full_d2 = jacfwd(jacrev(fermi_scalar))(z0)
+        full_d3 = jacfwd(jacfwd(torch.func.grad(fermi_scalar)))(z0)
+        full_vmap_d2 = torch.func.vmap(vmap_lane_d2)(h_batch, kts, active)
+
+    torch.testing.assert_close(opt_val, full_val, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(opt_d1, full_d1, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(opt_d2, full_d2, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(opt_d3, full_d3, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(opt_vmap_d2, full_vmap_d2, atol=0.0, rtol=0.0)
+
+    # 3. Invalid / nonfinite inputs produce lane-local NaNs identically
+    h_invalid = h_batch.clone()
+    h_invalid[0, 0, 0] = float("nan")
+    h_invalid[1, 1, 1] = float("inf")
+    kts_invalid = kts.clone()
+    kts_invalid[2] = -1.0e-3
+    opt_inv = _matrix_fermi(h_invalid, shifts, kts_invalid, active)
+    with monkeypatch.context() as m:
+        m.setattr(spectral_mod, "_max_scale_power_host", lambda _: None)
+        full_inv = _matrix_fermi(h_invalid, shifts, kts_invalid, active)
+    for lane_idx in (0, 1, 2):
+        assert torch.isnan(opt_inv[lane_idx]).all()
+        assert torch.isnan(full_inv[lane_idx]).all()
+    torch.testing.assert_close(opt_inv[3], full_inv[3], atol=0.0, rtol=0.0)
+
+    # 4. Missing private API fallback preserves exact values and derivatives
+    with monkeypatch.context() as m:
+        m.setattr(tensors_mod.torch._C, "_DisableFuncTorch", None, raising=False)
+        fallback_val = _matrix_fermi(h_batch, shifts, kts, active)
+        fallback_d3 = jacfwd(jacfwd(torch.func.grad(fermi_scalar)))(z0)
+    torch.testing.assert_close(fallback_val, full_val, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(fallback_d3, full_d3, atol=0.0, rtol=0.0)
+
+

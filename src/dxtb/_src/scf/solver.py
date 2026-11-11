@@ -26,13 +26,13 @@ from typing import ClassVar, cast
 import torch
 from tad_mctc.math import einsum
 from tad_mctc.tree import Node, child
-from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import defaults, labels
 from dxtb._src.scf.core import replace_tensor_leaves, tensor_leaves
 from dxtb._src.scf.status import SCFFailureCode
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import (
     FermiOccupationResult,
@@ -689,30 +689,17 @@ def _select_tensor(mask: Tensor, new: Tensor, old: Tensor) -> Tensor:
 
 def _unwrap_gradtracking_tree(tree: object) -> tuple[object, bool]:
     """Unwrap ``GradTrackingTensor`` leaves when no ``vmap`` is active."""
-    if (
-        torch.compiler.is_compiling()
-        or torch.jit.is_tracing()
-        or _get_current_dispatch_mode() is not None
-    ):
-        return tree, False
-    ft = torch._C._functorch  # pyright: ignore[reportAttributeAccessIssue]
     leaves = tensor_leaves(tree)
     unwrapped: dict[str, Tensor] = {}
-    any_gradtracking = False
+    any_wrapped = False
     for path, leaf in leaves:
-        raw = leaf
-        for _ in range(16):
-            if ft.is_batchedtensor(raw) or ft.is_functionaltensor(raw):
-                return tree, False
-            if ft.is_gradtrackingtensor(raw):
-                any_gradtracking = True
-                raw = ft.get_unwrapped(raw)
-                continue
-            break
-        if type(raw) is not Tensor:
+        raw = unwrap_functorch_tensor(leaf, allow_vmap=False)
+        if raw is None:
             return tree, False
+        if raw is not leaf:
+            any_wrapped = True
         unwrapped[path] = raw
-    if not any_gradtracking:
+    if not any_wrapped:
         return tree, True
     return replace_tensor_leaves(tree, unwrapped), True
 
@@ -735,7 +722,7 @@ def _certify_scf_core_state_primal(
         state_raw, state_ok = _unwrap_gradtracking_tree(state)
         res_raw, res_ok = _unwrap_gradtracking_tree(fixed_point_residual)
         if state_ok and res_ok:
-            with torch._C._DisableFuncTorch(), torch.no_grad():
+            with disable_functorch(), torch.no_grad():
                 return certify_scf_core_state(
                     cast(SCFProblem, prob_raw),
                     cast(SCFPhysicalState, state_raw),
@@ -761,7 +748,7 @@ def _select_core_certification(
         new_raw, new_ok = _unwrap_gradtracking_tree(new)
         old_raw, old_ok = _unwrap_gradtracking_tree(old)
         if new_ok and old_ok:
-            with torch._C._DisableFuncTorch(), torch.no_grad():
+            with disable_functorch(), torch.no_grad():
                 mask_u = cast(Tensor, mask_raw)
 
                 def select_unwrapped(new_value, old_value):

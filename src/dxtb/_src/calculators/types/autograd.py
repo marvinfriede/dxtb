@@ -810,6 +810,8 @@ class AutogradCalculator(EnergyCalculator):
         derived_quantity: Literal["energy", "dipole"] = "dipole",
         field: Tensor | Sequence[Tensor | None] | None = None,
         field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        *,
+        create_graph: bool = True,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -845,6 +847,13 @@ class AutogradCalculator(EnergyCalculator):
             ``'energy'`` differentiates
             :math:`\alpha = -\partial^2 E / \partial F^2` and requires
             ``use_functorch=True``. Defaults to ``'dipole'``.
+        create_graph : bool, optional
+            If ``True`` (default), constructs and retains the higher-order
+            derivative graph so the returned third-order tensor supports
+            subsequent differentiation. If ``False``, returns an explicitly
+            terminal third-order tensor (``grad_fn is None``) and releases
+            intermediate graphs after each row to reduce peak and retained
+            memory.
 
         Returns
         -------
@@ -866,6 +875,7 @@ class AutogradCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         is_batched = self.numbers.ndim > 1
+        build_graph = bool(create_graph) and torch.is_grad_enabled()
 
         if use_functorch is False:
             if field is None:
@@ -892,11 +902,12 @@ class AutogradCalculator(EnergyCalculator):
                 )
                 cols: list[Tensor] = []
                 for j in range(3):
+                    is_last = i == 2 and j == 2
                     (chi_ij,) = torch.autograd.grad(
                         alpha_i_red[j],
                         positions,
-                        create_graph=False,
-                        retain_graph=(i < 2 or j < 2),
+                        create_graph=build_graph,
+                        retain_graph=build_graph or not is_last,
                     )
                     cols.append(chi_ij)
                 rows.append(torch.stack(cols, dim=0))
@@ -925,6 +936,8 @@ class AutogradCalculator(EnergyCalculator):
             assert isinstance(chi, Tensor)
             if is_batched:
                 chi = chi.movedim(2, 0)
+            if not build_graph:
+                chi = chi.detach()
 
         if is_batched:
             pad_mask = (
@@ -955,6 +968,8 @@ class AutogradCalculator(EnergyCalculator):
         ] = "pol",
         field: Tensor | Sequence[Tensor | None] | None = None,
         field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        *,
+        create_graph: bool = True,
     ) -> Tensor:
         r"""
         Calculate the hyper polarizability tensor :math:`\beta`.
@@ -990,6 +1005,13 @@ class AutogradCalculator(EnergyCalculator):
             ``use_functorch=True``), and ``'energy'`` computes
             :math:`-\partial^3 E / \partial F^3` (requires
             ``use_functorch=True``). Defaults to ``'pol'``.
+        create_graph : bool, optional
+            If ``True`` (default), constructs and retains the higher-order
+            derivative graph so the returned third-order tensor supports
+            subsequent differentiation. If ``False``, returns an explicitly
+            terminal third-order tensor (``grad_fn is None``) and releases
+            intermediate graphs after each row to reduce peak and retained
+            memory.
 
         Returns
         -------
@@ -1021,6 +1043,7 @@ class AutogradCalculator(EnergyCalculator):
             )
 
         per_lane_field = field.ndim == 2
+        build_graph = bool(create_graph) and torch.is_grad_enabled()
 
         if use_functorch is False:
             mu = self.dipole(
@@ -1044,11 +1067,12 @@ class AutogradCalculator(EnergyCalculator):
                     alpha_i_red = alpha_i.sum(dim=0)
                     cols: list[Tensor] = []
                     for j in range(3):
+                        is_last = i == 2 and j == 2
                         (beta_ij,) = torch.autograd.grad(
                             alpha_i_red[j],
                             field,
-                            create_graph=False,
-                            retain_graph=(i < 2 or j < 2),
+                            create_graph=build_graph,
+                            retain_graph=build_graph or not is_last,
                         )
                         cols.append(beta_ij)
                     rows.append(torch.stack(cols, dim=0))
@@ -1075,8 +1099,8 @@ class AutogradCalculator(EnergyCalculator):
                             (beta_ij,) = torch.autograd.grad(
                                 alpha_i[j],
                                 field,
-                                create_graph=False,
-                                retain_graph=not is_last,
+                                create_graph=build_graph,
+                                retain_graph=build_graph or not is_last,
                             )
                             cols.append(beta_ij)
                         rows.append(torch.stack(cols, dim=0))
@@ -1183,6 +1207,8 @@ class AutogradCalculator(EnergyCalculator):
 
         if derived_quantity == "energy":
             beta = -beta
+        if not build_graph:
+            beta = beta.detach()
         return beta
 
     # SPECTRA

@@ -56,6 +56,7 @@ from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
     SCFConvergenceWarning,
@@ -1232,7 +1233,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     # Atomic numbers are structural metadata: resolve them on the host with
     # one transfer per tensor instead of one scalar transfer per atom. The
     # device tensors are still the ones passed to ``Model.setup``.
-    with torch._C._DisableFuncTorch():
+    with disable_functorch():
         host_numbers = calc.numbers.detach().cpu().tolist()
         host_component_numbers = [
             (id(c), c.numbers.detach().cpu().tolist())

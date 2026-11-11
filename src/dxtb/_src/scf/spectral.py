@@ -27,10 +27,9 @@ import torch
 from tad_mctc.autograd import attach_gradient
 from tad_mctc.storch.linsolve import dense_solve
 from tad_mctc.tools.compile import is_compiling
-from torch.overrides import has_torch_function_unary
-from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 
 if TYPE_CHECKING:
     from dxtb._src.wavefunction.filling import _FermiCoreState
@@ -458,29 +457,12 @@ def _max_scale_power_host(scale_power: Tensor) -> int | None:
     Returns ``None`` when compiling, tracing, or on non-CPU devices so those
     paths keep their static loop bounds.
     """
-    if (
-        scale_power.device.type != "cpu"
-        or is_compiling()
-        or torch.jit.is_tracing()
-        or _get_current_dispatch_mode() is not None
-        or has_torch_function_unary(scale_power)
-    ):
+    if scale_power.device.type != "cpu":
         return None
-    with torch._C._DisableFuncTorch():
-        raw = scale_power
-        for _ in range(16):
-            if torch._C._functorch.is_batchedtensor(raw):
-                raw = torch._C._functorch.get_unwrapped(raw)
-                continue
-            if torch._C._functorch.is_gradtrackingtensor(raw):
-                raw = torch._C._functorch.get_unwrapped(raw)
-                continue
-            if torch._C._functorch.is_functionaltensor(raw):
-                raw = torch._C._functorch.get_unwrapped(raw)
-                continue
-            break
-        if type(raw) is not Tensor or raw.numel() == 0:
-            return None
+    raw = unwrap_functorch_tensor(scale_power, allow_vmap=True)
+    if raw is None or raw.numel() == 0:
+        return None
+    with disable_functorch():
         return int(raw.amax().item())
 
 

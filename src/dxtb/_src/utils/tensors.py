@@ -23,24 +23,110 @@ Collection of utility functions for matrices/tensors.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 import weakref
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import torch
 from tad_mctc.autograd.checks import is_gradtracking
+from tad_mctc.tools.compile import is_compiling
+
+try:
+    from torch.utils._python_dispatch import _get_current_dispatch_mode
+except ImportError:  # pragma: no cover
+    _get_current_dispatch_mode = None  # type: ignore[assignment]
 
 from dxtb._src.typing import Tensor
 
 __all__ = [
+    "disable_functorch",
     "is_batched",
     "structure_charge",
     "t2int",
     "tensor_id",
+    "unwrap_functorch_tensor",
     "GradKey",
     "grad_key",
     "grad_key_matches",
     "normalize_device",
 ]
+
+
+def disable_functorch() -> AbstractContextManager[Any]:
+    """Return a context manager disabling ``torch.func`` dispatch if supported.
+
+    Standard ``torch.no_grad()`` and ``Tensor.detach()`` only suspend
+    PyTorch's autograd tape, not active ``torch.func`` interpreter layers
+    (``jvp``, ``vjp``, ``jacfwd``, ``jacrev``, ``vmap``). When executing
+    strictly primal or structural host operations on already-unwrapped
+    ``torch.Tensor`` instances, ``torch._C._DisableFuncTorch()`` prevents
+    the active functorch interpreter stack from intercepting those calls.
+    Falls back to a no-op context manager if the private C++ binding is
+    absent.
+    """
+    ctx_cls = getattr(torch._C, "_DisableFuncTorch", None)
+    if callable(ctx_cls):
+        return ctx_cls()
+    return nullcontext()
+
+
+def unwrap_functorch_tensor(
+    tensor: Tensor, *, allow_vmap: bool = False
+) -> Tensor | None:
+    """Unwrap ``torch.func`` tensor wrappers to a plain ``torch.Tensor``.
+
+    Parameters
+    ----------
+    tensor : Tensor
+        Input tensor that may be wrapped by ``GradTrackingTensor``
+        (``jvp``, ``vjp``, ``jacfwd``, ``jacrev``, ``grad``),
+        ``BatchedTensor`` (``vmap``), or ``FunctionalTensor``.
+    allow_vmap : bool, optional
+        If ``False`` (default), returns ``None`` whenever a
+        ``BatchedTensor`` or ``FunctionalTensor`` layer is encountered so
+        ``vmap`` batching and functionalization remain on the wrapped path.
+        If ``True``, also unwraps ``BatchedTensor`` and ``FunctionalTensor``
+        layers to expose the underlying storage tensor across all lanes
+        (used only for non-differentiable host schedule bounds).
+
+    Returns
+    -------
+    Tensor | None
+        The unwrapped plain ``torch.Tensor``, or ``None`` when compiling,
+        tracing, inside a Python dispatch mode, carrying a
+        ``__torch_function__`` override, encountering a disallowed wrapper,
+        or if private ``torch._C._functorch`` bindings are unavailable.
+    """
+    try:
+        if (
+            is_compiling()
+            or torch.jit.is_tracing()
+            or (
+                _get_current_dispatch_mode is not None
+                and _get_current_dispatch_mode() is not None
+            )
+            or torch.overrides.has_torch_function_unary(tensor)
+        ):
+            return None
+        if not callable(getattr(torch._C, "_DisableFuncTorch", None)):
+            return None
+        ft = getattr(torch._C, "_functorch", None)
+        if ft is None:
+            return None
+        raw = tensor
+        for _ in range(16):
+            if ft.is_batchedtensor(raw) or ft.is_functionaltensor(raw):
+                if not allow_vmap:
+                    return None
+                raw = ft.get_unwrapped(raw)
+                continue
+            if ft.is_gradtrackingtensor(raw):
+                raw = ft.get_unwrapped(raw)
+                continue
+            break
+    except AttributeError:
+        return None
+    return raw if type(raw) is Tensor else None
 
 
 def t2int(x: Tensor) -> int:

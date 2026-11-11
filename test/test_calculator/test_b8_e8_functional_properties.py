@@ -838,8 +838,8 @@ def test_batched_calculator_autograd_properties_after_cutover(
     )
 
 
-def test_batched_calculator_autograd_third_order_detached_rows() -> None:
-    """Batched Calculator hyperpolarizability and pol_deriv (use_functorch=False) match single-system references."""
+def test_batched_calculator_autograd_third_order_graph_and_terminal_modes() -> None:
+    """Batched Calculator hyperpolarizability and pol_deriv preserve graphs by default and detach when create_graph=False."""
     nums_a = torch.tensor([3, 1], dtype=torch.int64)
     nums_b = torch.tensor([1, 1], dtype=torch.int64)
     pos_a = torch.tensor([[0.0, 0.0, -1.5], [0.0, 0.0, 1.5]], **_DD)
@@ -869,23 +869,43 @@ def test_batched_calculator_autograd_third_order_detached_rows() -> None:
     ef0 = torch.zeros(3, **_DD, requires_grad=True)
     ef_lanes = torch.zeros((2, 3), **_DD, requires_grad=True)
 
+    # Default create_graph=True preserves the derivative graph
     hyp_batch = calc_batch.hyperpolarizability(
         batch_pos, field=ef0, use_functorch=False
     )
     hyp_lanes = calc_batch.hyperpolarizability(
         batch_pos, field=ef_lanes, use_functorch=False
     )
-    assert hyp_batch.grad_fn is None
-    assert hyp_lanes.grad_fn is None
+    assert hyp_batch.grad_fn is not None
+    assert hyp_lanes.grad_fn is not None
+
+    # Explicit create_graph=False returns terminal values with identical entries
+    hyp_batch_term = calc_batch.hyperpolarizability(
+        batch_pos, field=ef0, use_functorch=False, create_graph=False
+    )
+    hyp_lanes_term = calc_batch.hyperpolarizability(
+        batch_pos, field=ef_lanes, use_functorch=False, create_graph=False
+    )
+    assert hyp_batch_term.grad_fn is None
+    assert hyp_lanes_term.grad_fn is None
+    assert not hyp_batch_term.requires_grad
+    assert not hyp_lanes_term.requires_grad
+    torch.testing.assert_close(hyp_batch_term, hyp_batch, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(hyp_lanes_term, hyp_lanes, atol=0.0, rtol=0.0)
+
     torch.testing.assert_close(
         hyp_batch[0],
-        calc_a.hyperpolarizability(pos_a, field=ef0, use_functorch=False),
+        calc_a.hyperpolarizability(
+            pos_a, field=ef0, use_functorch=False, create_graph=False
+        ),
         atol=1e-10,
         rtol=1e-10,
     )
     torch.testing.assert_close(
         hyp_batch[1],
-        calc_b.hyperpolarizability(pos_b, field=ef0, use_functorch=False),
+        calc_b.hyperpolarizability(
+            pos_b, field=ef0, use_functorch=False, create_graph=False
+        ),
         atol=1e-10,
         rtol=1e-10,
     )
@@ -899,14 +919,203 @@ def test_batched_calculator_autograd_third_order_detached_rows() -> None:
         field=ef_lanes,
         use_functorch=False,
     )
-    assert pold_batch.grad_fn is None
-    assert pold_lanes.grad_fn is None
+    assert pold_batch.grad_fn is not None
+    assert pold_lanes.grad_fn is not None
+
+    pold_batch_term = calc_batch.pol_deriv(
+        batch_pos.clone().requires_grad_(True),
+        field=ef0,
+        use_functorch=False,
+        create_graph=False,
+    )
+    pold_lanes_term = calc_batch.pol_deriv(
+        batch_pos.clone().requires_grad_(True),
+        field=ef_lanes,
+        use_functorch=False,
+        create_graph=False,
+    )
+    assert pold_batch_term.grad_fn is None
+    assert pold_lanes_term.grad_fn is None
+    assert not pold_batch_term.requires_grad
+    assert not pold_lanes_term.requires_grad
+    torch.testing.assert_close(pold_batch_term, pold_batch, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(pold_lanes_term, pold_lanes, atol=0.0, rtol=0.0)
+
     torch.testing.assert_close(
         pold_batch[0],
         calc_a.pol_deriv(
-            pos_a.clone().requires_grad_(True), field=ef0, use_functorch=False
+            pos_a.clone().requires_grad_(True),
+            field=ef0,
+            use_functorch=False,
+            create_graph=False,
         ),
         atol=1e-10,
         rtol=1e-10,
     )
     torch.testing.assert_close(pold_lanes, pold_batch, atol=1e-11, rtol=1e-11)
+
+
+def test_calculator_third_order_graph_composition_and_terminal_contract() -> None:
+    """Default Calculator third-order outputs compose to fourth order; create_graph=False is explicitly terminal."""
+    numbers = torch.tensor([1, 1], dtype=torch.int64)
+    positions0 = torch.tensor([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]], **_DD)
+    field0 = torch.tensor([0.002, -0.001, 0.0015], **_DD)
+
+    par = ParamModule(GFN1_XTB, **_DD)
+    param_leaf = par.get("element.H.levels")
+    param_leaf.requires_grad_(True)
+    param_leaf0 = param_leaf.detach().clone()
+
+    opts = {
+        "method": labels.GFN1_XTB,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": labels.INTLEVEL_DIPOLE,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("linear", "charge"),
+        "maxiter": 2,
+        "x_atol": 0.0,
+        "x_atol_max": 0.0,
+        "fermi_diff_order": 3,
+        "verbosity": 0,
+    }
+    calc = Calculator(numbers, par, opts=opts, **_DD)
+
+    pos = positions0.clone().requires_grad_(True)
+    field = field0.clone().requires_grad_(True)
+    chrg = torch.tensor(0.0, **_DD, requires_grad=True)
+
+    beta = calc.hyperpolarizability(
+        pos, chrg=chrg, field=field, use_functorch=False
+    )
+    assert beta.grad_fn is not None
+    assert beta.requires_grad
+
+    w_beta = torch.linspace(0.1, 1.0, beta.numel(), **_DD).reshape_as(beta)
+    g_beta_field, g_beta_pos, g_beta_param, g_beta_chrg = torch.autograd.grad(
+        (beta * w_beta).sum(),
+        (field, pos, param_leaf, chrg),
+    )
+
+    # Verify pol_deriv graph preservation and 4th-order differentiation
+    pos_c = positions0.clone().requires_grad_(True)
+    field_c = field0.clone().requires_grad_(True)
+    chrg_c = torch.tensor(0.0, **_DD, requires_grad=True)
+    chi = calc.pol_deriv(
+        pos_c, chrg=chrg_c, field=field_c, use_functorch=False
+    )
+    assert chi.grad_fn is not None
+    assert chi.requires_grad
+
+    w_chi = torch.linspace(0.1, 1.0, chi.numel(), **_DD).reshape_as(chi)
+    g_chi_field, g_chi_pos, g_chi_param, g_chi_chrg = torch.autograd.grad(
+        (chi * w_chi).sum(),
+        (field_c, pos_c, param_leaf, chrg_c),
+    )
+
+    assert g_beta_field.abs().max() > 0.0
+    assert g_beta_pos.abs().max() > 0.0
+    assert g_beta_param.abs().max() > 0.0
+    assert g_beta_chrg.abs().max() > 0.0
+    assert g_chi_field.abs().max() > 0.0
+    assert g_chi_pos.abs().max() > 0.0
+    assert g_chi_param.abs().max() > 0.0
+    assert g_chi_chrg.abs().max() > 0.0
+
+    # Bounded independent central finite-difference reference on the 3rd-order quantities
+    step = 1.0e-5
+    direction_f = torch.tensor([0.6, -0.3, 0.7], **_DD)
+    direction_r = torch.tensor([[0.2, -0.4, 0.5], [-0.3, 0.1, -0.2]], **_DD)
+
+    def eval_third_order_scalars(
+        scale_f: float = 0.0,
+        scale_r: float = 0.0,
+        scale_p: float = 0.0,
+        chrg_val: float = 0.0,
+    ) -> tuple[Tensor, Tensor]:
+        with torch.no_grad():
+            param_leaf.copy_(param_leaf0 + scale_p * step)
+        try:
+            p_req = (
+                (positions0 + scale_r * step * direction_r)
+                .detach()
+                .clone()
+                .requires_grad_(True)
+            )
+            f_req = (
+                (field0 + scale_f * step * direction_f)
+                .detach()
+                .clone()
+                .requires_grad_(True)
+            )
+            c_t = torch.tensor(chrg_val, **_DD)
+            b_val = calc.hyperpolarizability(
+                p_req,
+                chrg=c_t,
+                field=f_req,
+                use_functorch=False,
+                create_graph=False,
+            )
+            c_val = calc.pol_deriv(
+                p_req,
+                chrg=c_t,
+                field=f_req,
+                use_functorch=False,
+                create_graph=False,
+            )
+            return (b_val.detach() * w_beta).sum(), (c_val.detach() * w_chi).sum()
+        finally:
+            with torch.no_grad():
+                param_leaf.copy_(param_leaf0)
+
+    b_plus, c_plus = eval_third_order_scalars(1.0, 1.0, 1.0)
+    b_minus, c_minus = eval_third_order_scalars(-1.0, -1.0, -1.0)
+    fd_beta_joint = (b_plus - b_minus) / (2.0 * step)
+    fd_chi_joint = (c_plus - c_minus) / (2.0 * step)
+    ad_beta_joint = (
+        (g_beta_field * direction_f).sum()
+        + (g_beta_pos * direction_r).sum()
+        + g_beta_param.sum()
+    )
+    ad_chi_joint = (
+        (g_chi_field * direction_f).sum()
+        + (g_chi_pos * direction_r).sum()
+        + g_chi_param.sum()
+    )
+    torch.testing.assert_close(
+        ad_beta_joint, fd_beta_joint, atol=1e-6, rtol=1e-5
+    )
+    torch.testing.assert_close(
+        ad_chi_joint, fd_chi_joint, atol=1e-6, rtol=1e-5
+    )
+
+    b_c_plus, c_c_plus = eval_third_order_scalars(chrg_val=step)
+    b_c_minus, c_c_minus = eval_third_order_scalars(chrg_val=-step)
+    fd_beta_chrg = (b_c_plus - b_c_minus) / (2.0 * step)
+    fd_chi_chrg = (c_c_plus - c_c_minus) / (2.0 * step)
+    torch.testing.assert_close(
+        g_beta_chrg, fd_beta_chrg, atol=1e-4, rtol=2e-4
+    )
+    torch.testing.assert_close(
+        g_chi_chrg, fd_chi_chrg, atol=1e-4, rtol=2e-4
+    )
+
+    # Explicit terminal pathway (create_graph=False) matches values and is non-composable
+    for use_ft in (False, True):
+        pos_t = positions0.clone().requires_grad_(True)
+        field_t = field0.clone().requires_grad_(True)
+        beta_term = calc.hyperpolarizability(
+            pos_t, field=field_t, use_functorch=use_ft, create_graph=False
+        )
+        chi_term = calc.pol_deriv(
+            pos_t, field=field_t, use_functorch=use_ft, create_graph=False
+        )
+        assert beta_term.grad_fn is None
+        assert not beta_term.requires_grad
+        assert chi_term.grad_fn is None
+        assert not chi_term.requires_grad
+        torch.testing.assert_close(beta_term, beta.detach(), atol=1e-11, rtol=1e-11)
+        torch.testing.assert_close(chi_term, chi.detach(), atol=1e-11, rtol=1e-11)
+        with pytest.raises(RuntimeError):
+            torch.autograd.grad(beta_term.sum(), field_t)
+        with pytest.raises(RuntimeError):
+            torch.autograd.grad(chi_term.sum(), pos_t)

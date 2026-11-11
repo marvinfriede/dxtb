@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import hashlib
 import json
 import os
@@ -50,6 +51,7 @@ DEFAULT_CASES = [
     "calculator_polarizability",
     "system_hyperpol",
     "calculator_hyperpol_autograd",
+    "calculator_hyperpol_autograd_terminal",
     "calculator_hyperpol_functorch_energy",
     "calculator_hyperpol_functorch_dipole",
     "calculator_hyperpol_functorch_pol",
@@ -322,6 +324,18 @@ def _run_worker(args: argparse.Namespace) -> int:
                 spin=uhf,
                 use_functorch=False,
                 field=f_req,
+                create_graph=True,
+            )
+        if case == "calculator_hyperpol_autograd_terminal":
+            assert calc_obj is not None
+            f_req = field.clone().requires_grad_(True)
+            return calc_obj.hyperpolarizability(
+                positions.clone(),
+                chrg=charge,
+                spin=uhf,
+                use_functorch=False,
+                field=f_req,
+                create_graph=False,
             )
         if case == "calculator_hyperpol_functorch_energy":
             assert calc_obj is not None
@@ -510,6 +524,8 @@ def _run_worker(args: argparse.Namespace) -> int:
     ru_peak_mb = _ru_maxrss_mb()
     peak_rss_mb = max(post_hwm_mb, ru_peak_mb)
     peak_additional_rss_mb = max(0.0, peak_rss_mb - baseline_rss_mb)
+    retained_additional_rss_mb = max(0.0, post_rss_mb - baseline_rss_mb)
+    graph_retained = bool(out.requires_grad or out.grad_fn is not None)
 
     first_counters = dict(counters)
 
@@ -526,6 +542,9 @@ def _run_worker(args: argparse.Namespace) -> int:
         repeat_peak_rss_mb = max(rep_hwm_mb, _ru_maxrss_mb())
 
     out_det = out.detach().cpu().to(torch.float64)
+    del out
+    gc.collect()
+    post_free_rss_mb, _ = _read_proc_status_mb()
     flat_vals = [float(x) for x in out_det.reshape(-1).tolist()]
     val_bytes = out_det.numpy().tobytes()
     checksum = hashlib.sha256(val_bytes).hexdigest()[:16]
@@ -549,6 +568,9 @@ def _run_worker(args: argparse.Namespace) -> int:
     primal_scf_iters = int(sp_res.iterations.item())
     primal_converged = bool(sp_res.converged.item())
     primal_res_norm = float(torch.linalg.norm(sp_res.residual).item())
+    is_eager_schedule = case.startswith("calculator_")
+    scf_schedule = "eager" if is_eager_schedule else "fixed_trip"
+    executed_scf_iters = primal_scf_iters if is_eager_schedule else int(args.maxiter)
 
     cuda_avail = bool(torch.cuda.is_available())
     cuda_alloc_mb = (
@@ -568,6 +590,9 @@ def _run_worker(args: argparse.Namespace) -> int:
         "differentiation": args.differentiation,
         "fermi_diff_order": args.fermi_diff_order,
         "maxiter": args.maxiter,
+        "scf_schedule": scf_schedule,
+        "executed_scf_iterations": executed_scf_iters,
+        "graph_retained": graph_retained,
         "setup_time_s": round(setup_time_s, 6),
         "first_call_time_s": round(first_call_time_s, 6),
         "repeat_call_time_s": (
@@ -575,6 +600,8 @@ def _run_worker(args: argparse.Namespace) -> int:
         ),
         "baseline_rss_mb": round(baseline_rss_mb, 3),
         "post_rss_mb": round(post_rss_mb, 3),
+        "post_free_rss_mb": round(post_free_rss_mb, 3),
+        "retained_additional_rss_mb": round(retained_additional_rss_mb, 3),
         "peak_rss_mb": round(peak_rss_mb, 3),
         "peak_additional_rss_mb": round(peak_additional_rss_mb, 3),
         "repeat_peak_rss_mb": (
