@@ -453,14 +453,22 @@ def create_libcint_from_data(
             continue
         element_shells = []
         for _ in range(int(count)):
-            # ``slater_to_gauss`` already supplies dxtb-normalized
-            # coefficients; Shell.normalized() would normalize twice.
+            # ``slater_to_gauss`` normalizes stretched 3D Cartesian Gaussians
+            # ``x^l exp(-alpha r^2)``, whereas ``tad-libcint`` combines the
+            # radial contraction ``sum_k c_k r^l exp(-alpha_k r^2)`` with real
+            # spherical harmonics of unit norm on the sphere, leaving an
+            # unnormalized shell self-overlap of ``(2l + 1) / (4 * pi)``.
+            # ``Shell.normalized()`` rescales the 1D shell coefficients by
+            # their exact analytical radial self-overlap ``overlap.rsqrt()``
+            # (differentiably w.r.t. ``alphas`` and ``coeffs``) rather than
+            # multiplying a second normalization factor on top, so do not
+            # remove ``.normalized()``.
             element_shells.append(
                 libcint.Shell(
                     angmom=int(angular[shell]),
                     alphas=alphas[shell],
                     coeffs=coeffs[shell],
-                )
+                ).normalized()
             )
             shell += 1
         if number > 0:

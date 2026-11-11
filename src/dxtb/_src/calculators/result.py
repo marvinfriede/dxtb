@@ -117,7 +117,6 @@ class Result:
     hcore: Tensor | None = None
     dipole_integrals: Tensor | None = None
     quadrupole_integrals: Tensor | None = None
-    overlap_norm: Tensor | None = None
     converged: Tensor | None = None
     residual: Tensor | None = None
     status: SCFStatus | None = None
@@ -142,7 +141,6 @@ class Result:
         hcore: Tensor | None = None,
         dipole_integrals: Tensor | None = None,
         quadrupole_integrals: Tensor | None = None,
-        overlap_norm: Tensor | None = None,
         converged: Tensor | None = None,
         residual: Tensor | None = None,
         status: SCFStatus | None = None,
@@ -189,7 +187,6 @@ class Result:
             hcore=hcore,
             dipole_integrals=dipole_integrals,
             quadrupole_integrals=quadrupole_integrals,
-            overlap_norm=overlap_norm,
             converged=converged,
             residual=residual,
             status=status,

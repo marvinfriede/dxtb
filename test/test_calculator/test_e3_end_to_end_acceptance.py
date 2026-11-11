@@ -637,7 +637,7 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
     def implicit_conv_energy(p: torch.Tensor) -> torch.Tensor:
         chrg = p.new_zeros((1,))
         spin = p.new_zeros((1,))
-        integrals, refocc, _ = build_integral_matrices(
+        integrals, refocc = build_integral_matrices(
             sys_conv.integral_setup, sys_conv.h0_setup, p, chrg
         )
         n0, occupation, nel = get_refocc(refocc, chrg, spin, sys_conv.ihelp)

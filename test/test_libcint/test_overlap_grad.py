@@ -25,7 +25,6 @@ from math import sqrt
 import numpy as np
 import pytest
 import torch
-from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
@@ -54,15 +53,9 @@ def explicit(name: str, dd: DD, tol: float) -> None:
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
     libcint_basis, structure = bas.create_libcint(positions)
-    s = libcint.overlap(libcint_basis, structure)
-    norm = torch.pow(s.diagonal(dim1=-1, dim2=-2), -0.5)
 
-    # (3, norb, norb)
-    grad = libcint.int1e("ipovlp", libcint_basis, structure)
-
-    # normalize and move xyz dimension to last, which is required for
-    # the reduction (only works with extra dimension in last)
-    grad = einsum("...xij,...i,...j->...ijx", grad, norm, norm)
+    # (3, norb, norb) -> (norb, norb, 3), required for reduction with extra=True
+    grad = libcint.int1e("ipovlp", libcint_basis, structure).movedim(0, -1)
 
     # (norb, norb, 3) -> (nat, norb, 3)
     grad = ihelp.reduce_orbital_to_atom(grad, dim=-3, extra=True)
@@ -105,8 +98,6 @@ def autograd(name: str, dd: DD, tol: float) -> None:
     pos = positions.clone().requires_grad_(True)
     libcint_basis, structure = bas.create_libcint(pos)
     s = libcint.overlap(libcint_basis, structure)
-    norm = torch.pow(s.diagonal(dim1=-1, dim2=-2), -0.5)
-    s = einsum("...ij,...i,...j->...ij", s, norm, norm)
 
     (g,) = torch.autograd.grad(s.sum(), pos)
     assert pytest.approx(ref.cpu(), abs=tol) == g.cpu()
@@ -146,9 +137,6 @@ def num_grad(bas: Basis, ihelp: IndexHelper, positions: Tensor) -> torch.Tensor:
 
     delta = 1e-6
 
-    # Compute the overlap integral for the original position
-    s_original = compute_overlap(positions)
-
     # Loop over all atoms and their x, y, z coordinates
     for atom in range(positions.shape[0]):
         for direction in range(3):
@@ -161,9 +149,4 @@ def num_grad(bas: Basis, ihelp: IndexHelper, positions: Tensor) -> torch.Tensor:
             positions[..., atom, direction] += delta
             numerical_grad[..., atom, direction] += (sr - sl) / delta
 
-    # normalize and move xyz dimension to last, which is required for
-    # the reduction (only works with extra dimension in last)
-    norm = torch.pow(s_original.diagonal(dim1=-1, dim2=-2), -0.5)
-    grad = einsum("...xij,...i,...j->...ijx", numerical_grad, norm, norm)
-
-    return grad
+    return numerical_grad.movedim(0, -1)

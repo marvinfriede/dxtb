@@ -172,10 +172,9 @@ def _assert_lane_matches(
             getattr(reference, name),
             **TOL,
         )
-    for name in ("emo", "overlap_norm"):
-        torch.testing.assert_close(
-            getattr(packed, name)[lane, :nao], getattr(reference, name), **TOL
-        )
+    torch.testing.assert_close(
+        packed.emo[lane, :nao], reference.emo, **TOL
+    )
     torch.testing.assert_close(
         packed.occupation[lane, ..., :nao], reference.occupation, **TOL
     )

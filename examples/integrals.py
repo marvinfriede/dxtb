@@ -54,7 +54,4 @@ numbers, positions = structure.numbers, structure.positions
 
 s = overlap(numbers, positions, GFN1_XTB)
 print(f"Overlap integral of LiH has shape: {s.shape}\n")
-print("The normalized overlap integral is:\n", s)
-
-s = overlap(numbers, positions, GFN1_XTB, normalize=False)
-print("\nThe non-normalized overlap integral is:\n", s)
+print("The overlap integral is:\n", s)

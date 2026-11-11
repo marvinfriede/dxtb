@@ -40,76 +40,9 @@ from dxtb._src.integral.types.quadrupole import (
     reduce_quadrupole_9_to_6,
     shift_quadrupole_origin,
 )
-from dxtb._src.integral.utils import normalize_integral_matrix, snorm
 
 from ..conftest import DEVICE
 from .samples import samples
-
-
-@pytest.mark.parametrize("batched", [False, True])
-def test_pure_normalization_without_mutating_inputs(batched: bool) -> None:
-    """Matrix normalization returns new tensor values."""
-    dd = {"device": DEVICE, "dtype": torch.double}
-    seed = torch.randn((2, 4, 4) if batched else (4, 4), **dd)
-    raw = seed @ seed.mT + torch.eye(4, **dd)
-    norm = torch.rand((2, 4) if batched else (4,), **dd) + 0.5
-    raw_before = raw.clone()
-    norm_before = norm.clone()
-
-    normalize_integral_matrix(raw, norm)
-
-    assert torch.equal(raw, raw_before)
-    assert torch.equal(norm, norm_before)
-
-    if not batched:
-        torch.testing.assert_close(
-            normalize_integral_matrix(raw),
-            normalize_integral_matrix(raw, snorm(raw)),
-            atol=1e-14,
-            rtol=1e-14,
-        )
-
-
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_snorm_zero_diagonal_has_finite_gradients(dtype: torch.dtype) -> None:
-    """Zero diagonal elements in padded overlap do not produce NaN gradients."""
-    dd = {"device": DEVICE, "dtype": dtype}
-    ovlp = torch.diag(torch.tensor([0.0, 1.0, 4.0, 0.0], **dd)).requires_grad_(
-        True
-    )
-
-    norm = snorm(ovlp)
-    assert norm.dtype == dtype
-    expected_val = torch.tensor([0.0, 1.0, 0.5, 0.0], **dd)
-    torch.testing.assert_close(norm, expected_val, atol=1e-6, rtol=1e-6)
-
-    grad_1 = torch.autograd.grad(norm.sum(), ovlp, create_graph=True)[0]
-    grad_2 = torch.autograd.grad(grad_1.sum(), ovlp)[0]
-    assert torch.isfinite(grad_1).all()
-    assert torch.isfinite(grad_2).all()
-
-    expected_grad_diag = torch.tensor([0.0, -0.5, -0.5 * (4.0**-1.5), 0.0], **dd)
-    torch.testing.assert_close(
-        grad_1.diagonal(dim1=-1, dim2=-2),
-        expected_grad_diag,
-        atol=1e-6,
-        rtol=1e-6,
-    )
-
-    def _norm_sum(mat: torch.Tensor) -> torch.Tensor:
-        return normalize_integral_matrix(mat).sum()
-
-    primal_out, tangent_out = jvp(
-        _norm_sum, (ovlp.detach(),), (torch.eye(4, **dd),)
-    )
-    assert torch.isfinite(primal_out).all()
-    assert torch.isfinite(tangent_out).all()
-
-    neg_ovlp = torch.diag(torch.tensor([-1.0, 0.0, 1.0], **dd))
-    neg_norm = snorm(neg_ovlp)
-    assert torch.isnan(neg_norm[0])
-    assert neg_norm[1].item() == 0.0
-    assert neg_norm[2].item() == 1.0
 
 
 def test_pure_dipole_shift_without_mutation() -> None:
@@ -180,9 +113,6 @@ def test_pure_transform_shape_errors_match_legacy_contract() -> None:
     dd = {"device": DEVICE, "dtype": torch.double}
     matrix = torch.eye(2, **dd)
 
-    with pytest.raises(ValueError, match="Invalid norm shape"):
-        normalize_integral_matrix(matrix, torch.ones(1, 2, 2, **dd))
-
     with pytest.raises(RuntimeError, match="orbital-resolution"):
         shift_dipole_origin(
             torch.zeros(3, 2, 2, **dd), matrix, torch.zeros(1, 3, **dd)
@@ -244,21 +174,15 @@ def _evaluate_multipoles(
     reverse_order: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Build and transform overlap and multipoles for one geometry."""
-    overlap_raw = build_overlap(setup, positions)
-    overlap_norm = snorm(overlap_raw)
-    overlap = normalize_integral_matrix(overlap_raw, overlap_norm)
+    overlap = build_overlap(setup, positions)
 
     if reverse_order:
-        quadrupole_raw = build_quadrupole(setup, positions)
-        dipole_raw = build_dipole(setup, positions)
+        quadrupole_centered = build_quadrupole(setup, positions)
+        dipole_centered = build_dipole(setup, positions)
     else:
-        dipole_raw = build_dipole(setup, positions)
-        quadrupole_raw = build_quadrupole(setup, positions)
+        dipole_centered = build_dipole(setup, positions)
+        quadrupole_centered = build_quadrupole(setup, positions)
 
-    dipole_centered = normalize_integral_matrix(dipole_raw, overlap_norm)
-    quadrupole_centered = normalize_integral_matrix(
-        quadrupole_raw, overlap_norm
-    )
     orbital_positions = ihelp.spread_atom_to_orbital(
         positions, dim=-2, extra=True
     )

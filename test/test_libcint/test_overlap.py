@@ -113,23 +113,19 @@ def run_single(dtype: torch.dtype, name: str) -> None:
     bas = Basis(numbers, par, ihelp, **dd)
     libcint_basis, structure = bas.create_libcint(positions)
 
-    # dxtb's libcint overlap
+    # dxtb's libcint overlap (shells are unit-normalized at construction)
     dxtb_overlap = libcint.overlap(libcint_basis, structure)
+    diag = dxtb_overlap.diagonal(dim1=-1, dim2=-2)
+    torch.testing.assert_close(
+        diag, torch.ones_like(diag), atol=tol, rtol=0.0
+    )
 
-    # pyscf reference overlap ("sph" needed, implicit in dxtb)
+    # PySCF's M(...) disables primitive normalization on the nwchem Cartesian
+    # coefficients, so normalize the PySCF reference before comparing.
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
     pyscf_overlap = reorder_pyscf_ao(
         numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
     )
-
-    assert dxtb_overlap.shape == pyscf_overlap.shape
-    assert pytest.approx(pyscf_overlap.cpu(), abs=tol) == dxtb_overlap.cpu()
-
-    # normalize dxtb's overlap
-    norm = snorm(dxtb_overlap)
-    dxtb_overlap = einsum("ij,i,j->ij", dxtb_overlap, norm, norm)
-
-    # normalize PySCF's reference overlap
     norm = snorm(pyscf_overlap)
     pyscf_overlap = einsum("ij,i,j->ij", pyscf_overlap, norm, norm)
     assert dxtb_overlap.shape == pyscf_overlap.shape
@@ -191,23 +187,18 @@ def run_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     bas = Basis(numbers, par, ihelp, **dd)
     libcint_basis, structure = bas.create_libcint(positions)
 
-    # dxtb's libcint overlap
+    # dxtb's libcint overlap (shells are unit-normalized at construction)
     dxtb_overlap = libcint.overlap(libcint_basis, structure)
+    diag = dxtb_overlap.diagonal(dim1=-1, dim2=-2)
+    torch.testing.assert_close(
+        diag, torch.ones_like(diag), atol=tol, rtol=0.0
+    )
 
-    # pyscf reference overlap ("sph" needed, implicit in dxtb)
+    # Normalize PySCF's unnormalized spherical reference overlap
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
     pyscf_overlap = reorder_pyscf_ao(
         numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
     )
-
-    assert dxtb_overlap.shape == pyscf_overlap.shape
-    assert pytest.approx(pyscf_overlap.cpu(), abs=tol) == dxtb_overlap.cpu()
-
-    # normalize dxtb's overlap
-    norm = snorm(dxtb_overlap)
-    dxtb_overlap = einsum("ij,i,j->ij", dxtb_overlap, norm, norm)
-
-    # normalize PySCF's reference overlap
     norm = snorm(pyscf_overlap)
     pyscf_overlap = einsum("ij,i,j->ij", pyscf_overlap, norm, norm)
 
@@ -266,9 +257,14 @@ def run_grad(dtype: torch.dtype, name: str) -> None:
     int1 = libcint.int1e("ipovlp", libcint_basis, structure)
 
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
+    pyscf_overlap = reorder_pyscf_ao(
+        numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
+    )
+    norm = snorm(pyscf_overlap)
     int2 = reorder_pyscf_ao(
         numpy_to_tensor(mol.intor("int1e_ipovlp"), **dd), ihelp
     )
+    int2 = einsum("xij,i,j->xij", int2, norm, norm)
 
     assert int1.shape == int2.shape
     assert pytest.approx(int2.cpu(), abs=tol) == int1.cpu()

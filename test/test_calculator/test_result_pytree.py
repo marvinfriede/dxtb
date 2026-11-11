@@ -72,9 +72,8 @@ def _full_result(*, offset: torch.Tensor | None = None) -> Result:
         hcore=_matrix(18),
         dipole_integrals=_matrix(19, leading=3),
         quadrupole_integrals=_matrix(20, leading=6),
-        overlap_norm=x + 21,
         converged=torch.tensor(True),
-        residual=x + 22,
+        residual=x + 21,
         status=SCFStatus(
             torch.tensor(0, dtype=torch.int64),
             torch.tensor(3, dtype=torch.int64),
@@ -129,7 +128,6 @@ def test_result_and_nested_values_round_trip() -> None:
         "hcore",
         "dipole_integrals",
         "quadrupole_integrals",
-        "overlap_norm",
         "converged",
         "residual",
         "status",
@@ -315,9 +313,8 @@ def _probe(x: torch.Tensor) -> Result:
         hcore=x + 15,
         dipole_integrals=x + 16,
         quadrupole_integrals=x + 17,
-        overlap_norm=x + 18,
         converged=torch.tensor(True),
-        residual=x + 19,
+        residual=x + 18,
         status=SCFStatus(failure, failure + 1),
     )
 

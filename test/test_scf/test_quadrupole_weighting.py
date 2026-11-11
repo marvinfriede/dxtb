@@ -892,7 +892,7 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
         from dxtb._src.scf.iterator import get_refocc
 
         chrg = positions.new_zeros((1,))
-        integrals, refocc, _ = build_integral_matrices(
+        integrals, refocc = build_integral_matrices(
             system.integral_setup, system.h0_setup, positions, chrg
         )
         n0, occupation, nel = get_refocc(refocc, chrg, None, system.ihelp)

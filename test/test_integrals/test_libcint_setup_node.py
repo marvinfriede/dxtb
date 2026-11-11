@@ -209,10 +209,10 @@ def test_libcint_system_node_matches_legacy_matrices_and_history(
     a = positions.clone().requires_grad_()
     b = positions.clone()
     b[1, 0] += 0.07
-    core_a, refocc_a, norm_a = build_integral_matrices(
+    core_a, refocc_a = build_integral_matrices(
         core_outer, calc.system.h0_setup, a, 0.0
     )
-    legacy_a, legacy_refocc, legacy_norm = build_integral_matrices(
+    legacy_a, legacy_refocc = build_integral_matrices(
         legacy_outer, calc.system.h0_setup, a, 0.0
     )
     for name in ("overlap", "dipole", "quadrupole", "hcore"):
@@ -220,10 +220,9 @@ def test_libcint_system_node_matches_legacy_matrices_and_history(
             getattr(core_a, name), getattr(legacy_a, name)
         )
     torch.testing.assert_close(refocc_a, legacy_refocc)
-    torch.testing.assert_close(norm_a, legacy_norm)
 
     build_integral_matrices(core_outer, calc.system.h0_setup, b, 0.0)
-    repeated, refocc_repeated, norm_repeated = build_integral_matrices(
+    repeated, refocc_repeated = build_integral_matrices(
         core_outer, calc.system.h0_setup, a, 0.0
     )
     for name in ("overlap", "dipole", "quadrupole", "hcore"):
@@ -231,7 +230,6 @@ def test_libcint_system_node_matches_legacy_matrices_and_history(
             getattr(repeated, name), getattr(core_a, name)
         )
     torch.testing.assert_close(refocc_repeated, refocc_a)
-    torch.testing.assert_close(norm_repeated, norm_a)
 
     core_loss = core_a.overlap.square().sum() + core_a.dipole.square().sum()
     legacy_loss = (
@@ -375,7 +373,7 @@ def test_libcint_singlepoint_matches_legacy_setup() -> None:
     core_result = system.singlepoint(positions)
     legacy_result = legacy_system.singlepoint(positions)
     torch.testing.assert_close(core_result.energy, legacy_result.energy)
-    for name in ("hcore", "overlap", "dipole_integrals", "overlap_norm"):
+    for name in ("hcore", "overlap", "dipole_integrals"):
         torch.testing.assert_close(
             getattr(core_result, name), getattr(legacy_result, name)
         )

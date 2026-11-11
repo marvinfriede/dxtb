@@ -246,12 +246,10 @@ def test_node_and_legacy_raw_and_normalized_integral_parity() -> None:
             )
 
             legacy_outer = replace(system.integral_setup, backend=legacy)
-            legacy_matrices, legacy_refocc, legacy_norm = (
-                build_integral_matrices(
-                    legacy_outer, system.h0_setup, positions, charge=0.0
-                )
+            legacy_matrices, legacy_refocc = build_integral_matrices(
+                legacy_outer, system.h0_setup, positions, charge=0.0
             )
-            core_matrices, core_refocc, core_norm = build_integral_matrices(
+            core_matrices, core_refocc = build_integral_matrices(
                 system.integral_setup, system.h0_setup, positions, charge=0.0
             )
             for field in ("overlap", "dipole", "quadrupole", "hcore"):
@@ -260,7 +258,6 @@ def test_node_and_legacy_raw_and_normalized_integral_parity() -> None:
                     getattr(legacy_matrices, field),
                 )
             _assert_matrix_parity(core_refocc, legacy_refocc)
-            _assert_matrix_parity(core_norm, legacy_norm)
 
 
 def test_legacy_pytorch_setup_conversion_remains_compatible() -> None:

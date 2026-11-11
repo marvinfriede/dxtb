@@ -228,8 +228,6 @@ def _orbital_extent(r: Result) -> int:
         return int(r.charges.mono.shape[-1])
     if r.potential is not None and r.potential.mono is not None:
         return int(r.potential.mono.shape[-1])
-    if r.overlap_norm is not None:
-        return int(r.overlap_norm.shape[-1])
     return 0
 
 
@@ -465,12 +463,6 @@ def _pack_lane_results(
         max_orbitals,
         like=ref,
     )
-    overlap_norm = _pad_optional_last_dim(
-        [r.overlap_norm for r in results],
-        max_orbitals,
-        zero_shapes=orb_shapes,
-        like=ref,
-    )
 
     iterations = torch.stack(
         [r.iterations.reshape(()) for r in results], dim=0
@@ -587,7 +579,6 @@ def _pack_lane_results(
         hcore=hcore,
         dipole_integrals=dipole_integrals,
         quadrupole_integrals=quadrupole_integrals,
-        overlap_norm=overlap_norm,
         converged=converged,
         residual=residual,
         status=status,

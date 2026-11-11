@@ -320,7 +320,6 @@ class ConvergedRootLaneRecord:
     field_grad: Tensor | None
     integrals: IntegralMatrices
     refocc: Tensor
-    overlap_norm: Tensor
     n0: Tensor
     occupation: Tensor
     nel: Tensor
@@ -844,7 +843,7 @@ def _build_lane_inputs(
     lane_field_grad: Tensor | None,
 ):
     """Build call-local integrals, interactions, and SCFInputs for one lane."""
-    matrices, refocc, overlap_norm = build_integral_matrices(
+    matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
         lane_positions,
@@ -897,7 +896,6 @@ def _build_lane_inputs(
     return (
         matrices,
         refocc,
-        overlap_norm,
         n0,
         occupation,
         nel,
@@ -1949,7 +1947,6 @@ def prepare_converged_root_batch(
             (
                 matrices,
                 refocc,
-                overlap_norm,
                 n0,
                 occupation,
                 nel,
@@ -1973,7 +1970,6 @@ def prepare_converged_root_batch(
 
         primal_inputs = _detach_scf_inputs(raw_inputs)
         primal_refocc = _unwrap_primal_tensor(refocc)
-        primal_overlap_norm = _unwrap_primal_tensor(overlap_norm)
 
         with torch.no_grad():
             guess = get_guess(
@@ -2063,7 +2059,6 @@ def prepare_converged_root_batch(
                 field_grad=lane_fgrad,
                 integrals=primal_inputs.integrals,
                 refocc=primal_refocc,
-                overlap_norm=primal_overlap_norm,
                 n0=primal_inputs.n0,
                 occupation=primal_inputs.occupation,
                 nel=primal_inputs.nel,
@@ -2542,7 +2537,6 @@ def _refresh_prepared_batch_inputs(
         (
             matrices,
             refocc,
-            overlap_norm,
             n0,
             occupation,
             nel,
@@ -2649,7 +2643,6 @@ def _refresh_prepared_batch_inputs(
                 field_grad=lane_fgrad,
                 integrals=matrices,
                 refocc=refocc,
-                overlap_norm=overlap_norm,
                 n0=n0,
                 occupation=occupation,
                 nel=nel,
@@ -3124,7 +3117,6 @@ def _assemble_batch_result(
             dim=0,
         )
     )
-    overlap_norm = torch.stack([lane.overlap_norm for lane in lanes], dim=0)
     iterations = torch.stack([lane.iterations for lane in lanes], dim=0)
     converged = torch.stack([lane.solver_converged for lane in lanes], dim=0)
     residual = torch.stack([lane.solver_residual for lane in lanes], dim=0)
@@ -3154,7 +3146,6 @@ def _assemble_batch_result(
         hcore=hcore,
         dipole_integrals=dipole_ints,
         quadrupole_integrals=quad_ints,
-        overlap_norm=overlap_norm,
         iterations=iterations,
         converged=converged,
         residual=residual,

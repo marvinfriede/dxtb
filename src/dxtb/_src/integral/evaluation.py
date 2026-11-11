@@ -53,7 +53,6 @@ from dxtb._src.integral.types.quadrupole import (
     reduce_quadrupole_9_to_6,
     shift_quadrupole_origin,
 )
-from dxtb._src.integral.utils import normalize_integral_matrix, snorm
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
 from dxtb._src.utils.tensors import normalize_device
@@ -273,33 +272,25 @@ def _evaluate_pytorch_moments(
     backend: PytorchIntegralSetup | PytorchIntegralSetupNode,
     positions: Tensor,
     intlevel: int,
-) -> tuple[Tensor, Tensor | None, Tensor | None, Tensor, IndexHelper]:
+) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
     """Evaluate normalized overlap and ket-centered moments with PyTorch."""
-    raw_overlap = build_overlap_pytorch(backend, positions)
+    overlap = build_overlap_pytorch(backend, positions)
     ihelp = (
         backend.index
         if isinstance(backend, PytorchIntegralSetupNode)
         else backend.ihelp
     )
-    backend_norm = snorm(raw_overlap)
-    overlap = normalize_integral_matrix(raw_overlap, backend_norm)
     dipole = None
     quadrupole = None
 
     if intlevel >= labels.INTLEVEL_DIPOLE:
-        raw_dipole = normalize_integral_matrix(
-            build_dipole_pytorch(backend, positions),
-            backend_norm,
-        )
+        raw_dipole = build_dipole_pytorch(backend, positions)
         orbital_positions = ihelp.spread_atom_to_orbital(
             positions, dim=-2, extra=True
         )
         dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
         if intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            raw_quadrupole = normalize_integral_matrix(
-                build_quadrupole_pytorch(backend, positions),
-                backend_norm,
-            )
+            raw_quadrupole = build_quadrupole_pytorch(backend, positions)
             quadrupole = shift_quadrupole_origin(
                 reduce_quadrupole_9_to_6(raw_quadrupole),
                 raw_dipole,
@@ -308,35 +299,29 @@ def _evaluate_pytorch_moments(
             )
             quadrupole = make_quadrupole_traceless(quadrupole)
 
-    return overlap, dipole, quadrupole, backend_norm, ihelp
+    return overlap, dipole, quadrupole, ihelp
 
 
 def _evaluate_libcint_moments(
     backend: LibcintIntegralSetup | LibcintIntegralSetupNode,
     positions: Tensor,
     intlevel: int,
-) -> tuple[Tensor, Tensor | None, Tensor | None, Tensor, IndexHelper]:
+) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
     """Evaluate normalized overlap and ket-centered moments with libcint."""
     call_data = setup_libcint(backend, positions)
-    raw_overlap = build_overlap_libcint(call_data)
-    backend_norm = snorm(raw_overlap)
-    overlap = normalize_integral_matrix(raw_overlap, backend_norm)
+    overlap = build_overlap_libcint(call_data)
     dipole = None
     quadrupole = None
 
     if intlevel >= labels.INTLEVEL_DIPOLE:
         # tad-libcint 0.4 returns native ket-centered j/jj moments;
         # jj is already packed as xx, yx, yy, zx, zy, zz.
-        dipole = normalize_integral_matrix(
-            build_dipole_libcint(call_data), backend_norm
-        )
+        dipole = build_dipole_libcint(call_data)
         if intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            raw_quadrupole = normalize_integral_matrix(
-                build_quadrupole_libcint(call_data), backend_norm
-            )
+            raw_quadrupole = build_quadrupole_libcint(call_data)
             quadrupole = make_quadrupole_traceless(raw_quadrupole)
 
-    return overlap, dipole, quadrupole, backend_norm, call_data.ihelp
+    return overlap, dipole, quadrupole, call_data.ihelp
 
 
 def build_integral_matrices(
@@ -344,7 +329,7 @@ def build_integral_matrices(
     h0_setup: H0Setup | H0SetupNode,
     positions: Tensor,
     charge: Tensor | float | int,
-) -> tuple[IntegralMatrices, Tensor, Tensor]:
+) -> tuple[IntegralMatrices, Tensor]:
     """Build all requested matrices from explicit setup and current inputs."""
     if setup.intlevel > labels.INTLEVEL_MAX:
         raise RuntimeError(
@@ -356,24 +341,19 @@ def build_integral_matrices(
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
-        overlap, dipole, quadrupole, backend_norm, ihelp = (
-            _evaluate_pytorch_moments(
-                setup.pytorch, positions, setup.intlevel
-            )
+        overlap, dipole, quadrupole, ihelp = _evaluate_pytorch_moments(
+            setup.pytorch, positions, setup.intlevel
         )
     elif setup.driver_type == labels.INTDRIVER_LIBCINT:
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
-        overlap, dipole, quadrupole, backend_norm, ihelp = (
-            _evaluate_libcint_moments(
-                setup.libcint, positions, setup.intlevel
-            )
+        overlap, dipole, quadrupole, ihelp = _evaluate_libcint_moments(
+            setup.libcint, positions, setup.intlevel
         )
     else:
         raise ValueError(f"Unknown integral driver '{setup.driver_type}'.")
 
     target_device = positions.device
-    overlap_norm = backend_norm.to(device=target_device)
     overlap = overlap.to(device=target_device)
     if dipole is not None:
         dipole = dipole.to(device=target_device)
@@ -396,4 +376,4 @@ def build_integral_matrices(
         dipole=dipole,
         quadrupole=quadrupole,
     )
-    return matrices, refocc, overlap_norm
+    return matrices, refocc

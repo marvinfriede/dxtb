@@ -589,7 +589,7 @@ def test_active_core_index_device_mismatch_uses_public_solver(
     monkeypatch.setattr(
         singlepoint_module,
         "build_integral_matrices",
-        lambda *args, **kwargs: (matrices, system.h0_setup.refocc, None),
+        lambda *args, **kwargs: (matrices, system.h0_setup.refocc),
     )
 
     class LegacySolverReached(RuntimeError):

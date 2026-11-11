@@ -115,7 +115,6 @@ class PreparedInputs:
     case: PhysicalCase
     integrals: Any
     refocc: torch.Tensor
-    overlap_norm: torch.Tensor
     n0: torch.Tensor
     occupation: torch.Tensor
     nel: torch.Tensor
@@ -352,7 +351,7 @@ def setup_shared_parameter_system(
 
 def prepare_call_inputs(case: PhysicalCase) -> PreparedInputs:
     """Prepare integrals, default interactions, occupations, and SCF state."""
-    integrals, refocc, overlap_norm = build_integral_matrices(
+    integrals, refocc = build_integral_matrices(
         case.system.integral_setup,
         case.system.h0_setup,
         case.positions,
@@ -397,7 +396,6 @@ def prepare_call_inputs(case: PhysicalCase) -> PreparedInputs:
         case=case,
         integrals=integrals,
         refocc=refocc,
-        overlap_norm=overlap_norm,
         n0=n0,
         occupation=occupation,
         nel=nel,
@@ -577,7 +575,6 @@ def finalize_physical_result(
         hcore=prepared.integrals.hcore,
         dipole_integrals=prepared.integrals.dipole,
         quadrupole_integrals=prepared.integrals.quadrupole,
-        overlap_norm=prepared.overlap_norm,
         iterations=solve_result.iterations,
         converged=solve_result.converged,
     )

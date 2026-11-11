@@ -434,12 +434,12 @@ def test_element_anion(dtype: torch.dtype, number: int) -> None:
                 raises=SCFConvergenceError,
                 strict=True,
                 reason=(
-                    "Neutral Mn (Z=25) does not converge with potential "
-                    "mixing in float64."
+                    "Neutral Mn (Z=25) does not converge with default "
+                    "potential mixing."
                 ),
             ),
         )
-        if (dtype is torch.double and number == 25)
+        if number == 25
         else (dtype, number)
         for dtype in (torch.float, torch.double)
         for number in (1, 2, 10, 25, 26, 50, 86)

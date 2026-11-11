@@ -155,7 +155,7 @@ def _prepare_case(
     else:
         charge_tensor = positions.new_tensor([charge])
     spin_tensor = positions.new_tensor([spin])
-    integrals, refocc, _ = build_integral_matrices(
+    integrals, refocc = build_integral_matrices(
         system.integral_setup,
         system.h0_setup,
         positions,
@@ -1438,7 +1438,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
             ElectricField(field),
             ElectricFieldGrad(field_grad),
         )
-        integrals, _, _ = build_integral_matrices(
+        integrals, _ = build_integral_matrices(
             current_system.integral_setup,
             current_system.h0_setup,
             positions,
@@ -1569,7 +1569,7 @@ def test_interaction_aggregates_match_legacy() -> None:
     all_interactions = InteractionList(
         *system.interactions.components, field, field_grad
     )
-    integrals, _, _ = build_integral_matrices(
+    integrals, _ = build_integral_matrices(
         system.integral_setup,
         system.h0_setup,
         case.positions,

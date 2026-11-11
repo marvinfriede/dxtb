@@ -95,18 +95,17 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     moved = positions.clone()
     moved[1, 0] += 0.08
 
-    first, refocc1, norm1 = build_integral_matrices(
+    first, refocc1 = build_integral_matrices(
         setup, h0_setup, positions, charge=0.0
     )
     assert first.overlap.device == positions.device
     assert first.hcore.device == positions.device
     assert refocc1.device == positions.device
-    assert norm1.device == positions.device
-    second, refocc2, norm2 = build_integral_matrices(
+    second, refocc2 = build_integral_matrices(
         setup, h0_setup, moved, charge=0.0
     )
     assert not hasattr(calc, "integrals")
-    repeated, refocc3, norm3 = build_integral_matrices(
+    repeated, refocc3 = build_integral_matrices(
         setup, h0_setup, positions.clone(), charge=0.0
     )
 
@@ -121,9 +120,6 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         assert not torch.equal(second_matrix, first_matrix)
     torch.testing.assert_close(refocc1, refocc2)
     torch.testing.assert_close(refocc1, refocc3)
-    torch.testing.assert_close(norm1, norm3)
-    assert torch.isfinite(norm1).all()
-    assert torch.isfinite(norm2).all()
 
     if isinstance(core_setup, PytorchIntegralSetupNode):
         assert setup.pytorch is core_setup
@@ -177,7 +173,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         )
         fresh_setup = fresh_calc.system.integral_setup
         assert fresh_setup is not None
-        fresh, _, _ = build_integral_matrices(
+        fresh, _ = build_integral_matrices(
             fresh_setup,
             fresh_calc.system.h0_setup,
             positions,
@@ -189,7 +185,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
             )
 
     def loss(geometry: Tensor) -> Tensor:
-        matrices, refocc, _ = build_integral_matrices(
+        matrices, refocc = build_integral_matrices(
             setup, h0_setup, geometry, charge=0.0
         )
         assert matrices.dipole is not None
@@ -370,24 +366,22 @@ def test_pure_integral_levels_match_legacy(
     )
     assert ref_calc.system.integral_setup is not None
     assert ref_calc.system.h0_setup is not None
-    ref_matrices, ref_refocc, ref_norm = build_integral_matrices(
+    ref_matrices, ref_refocc = build_integral_matrices(
         ref_calc.system.integral_setup,
         ref_calc.system.h0_setup,
         positions,
         charge=0.0,
     )
 
-    matrices, refocc, norm = build_integral_matrices(
+    matrices, refocc = build_integral_matrices(
         setup, h0_setup, positions, charge=0.0
     )
     assert matrices.overlap.device == positions.device
     assert matrices.hcore.device == positions.device
     assert refocc.device == positions.device
-    assert norm.device == positions.device
     torch.testing.assert_close(matrices.overlap, ref_matrices.overlap)
     torch.testing.assert_close(matrices.hcore, ref_matrices.hcore)
     torch.testing.assert_close(refocc, ref_refocc)
-    torch.testing.assert_close(norm, ref_norm)
     if level >= labels.INTLEVEL_DIPOLE:
         assert matrices.dipole is not None and ref_matrices.dipole is not None
         torch.testing.assert_close(matrices.dipole, ref_matrices.dipole)
@@ -496,7 +490,7 @@ def test_fresh_system_rebuild_preserves_basis_parameter_gradients(
         system = calc.model.setup(numbers, dd=calc.dd)
         assert system.integral_setup is not None
         assert system.h0_setup is not None
-        matrices, _, _ = build_integral_matrices(
+        matrices, _ = build_integral_matrices(
             system.integral_setup,
             system.h0_setup,
             positions,
@@ -594,7 +588,7 @@ calc = dxtb.Calculator(
 assert calc.system.integral_setup is not None
 assert calc.system.integral_setup.pytorch is not None
 assert calc.system.integral_setup.libcint is None
-matrices, _, _ = build_integral_matrices(
+matrices, _ = build_integral_matrices(
     calc.system.integral_setup, calc.system.h0_setup, positions, charge=0.0
 )
 assert torch.isfinite(matrices.overlap).all()
@@ -674,7 +668,7 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
     assert h0_setup is not None
 
     def evaluate(geometry: Tensor) -> tuple[Tensor, ...]:
-        matrices, refocc, norm = build_integral_matrices(
+        matrices, refocc = build_integral_matrices(
             setup, h0_setup, geometry, charge=0.0
         )
         assert matrices.dipole is not None
@@ -685,7 +679,6 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
             matrices.dipole,
             matrices.quadrupole,
             refocc,
-            norm,
         )
 
     def scalar(geometry: Tensor) -> Tensor:

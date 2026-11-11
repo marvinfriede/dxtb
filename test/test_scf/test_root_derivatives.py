@@ -210,7 +210,7 @@ def _case(
         opts=options,
     )
     system = calculator.model.setup(numbers, dd=calculator.dd)
-    integrals, refocc, _ = build_integral_matrices(
+    integrals, refocc = build_integral_matrices(
         system.integral_setup, system.h0_setup, positions, charge
     )
     n0, occupation, nel = get_refocc(refocc, charge, spin, system.ihelp)
@@ -835,7 +835,7 @@ def _no2_trajectory_energy(
     model_system = base_case.system
     positions = base_case.positions.clone()
     positions[0, 1] = positions[0, 1] + displacement
-    matrices, refocc, _ = build_integral_matrices(
+    matrices, refocc = build_integral_matrices(
         model_system.integral_setup,
         model_system.h0_setup,
         positions,

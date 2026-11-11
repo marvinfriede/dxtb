@@ -115,7 +115,7 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
     )
     charge_single = torch.zeros((1,), dtype=torch.float64)
     spin_single = torch.zeros_like(charge_single)
-    integrals_single, refocc_single, _ = build_integral_matrices(
+    integrals_single, refocc_single = build_integral_matrices(
         calc_single.system.integral_setup,
         calc_single.system.h0_setup,
         positions_single,

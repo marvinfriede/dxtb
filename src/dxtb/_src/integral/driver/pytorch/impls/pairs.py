@@ -230,10 +230,10 @@ def _normalized(
     for l, a, c in zip(plan.unique_angular, alphas, coeffs):
         vec0 = torch.zeros((1, 3), dtype=a.dtype, device=a.device)
         s = assemble_overlap_1d(kernel, (l, l), (a, a), (c, c), vec0)
-        # reciprocal square root with a clamp and an eps shift; the eps is a
-        # Python float, which `torch.compile` can trace
+        # reciprocal square root with a clamp; `eps` is a Python float so
+        # `torch.compile` can trace it without introducing a `+ eps` bias
         eps = torch.finfo(a.dtype).eps
-        out.append(c / (torch.sqrt(torch.clamp(s[0, 0, 0], min=eps)) + eps))
+        out.append(c * torch.clamp(s[0, 0, 0], min=eps).rsqrt())
     return out
 
 

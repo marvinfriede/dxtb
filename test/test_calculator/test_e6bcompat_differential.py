@@ -229,7 +229,7 @@ def _assert_packed_serial_parity(
                 lane,
                 orbitals,
             )
-        for field_name in ("emo", "occupation", "overlap_norm"):
+        for field_name in ("emo", "occupation"):
             _assert_vector_row(
                 getattr(public, field_name),
                 getattr(physical, field_name),
@@ -1274,7 +1274,6 @@ def test_complete_packed_result_adapter_all_fields_and_model_param_gradients() -
         "hcore",
         "dipole_integrals",
         "quadrupole_integrals",
-        "overlap_norm",
         "converged",
         "residual",
         "status",

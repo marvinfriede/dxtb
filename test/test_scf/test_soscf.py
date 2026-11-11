@@ -1067,7 +1067,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
     assert torch.linalg.vector_norm(soscf.root_x - root_state.x) < 3.0e-7
 
     def inputs_at_positions(positions: torch.Tensor):
-        integrals, _, _ = build_integral_matrices(
+        integrals, _ = build_integral_matrices(
             case.system.integral_setup,
             case.system.h0_setup,
             positions,
@@ -1501,7 +1501,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
     )
 
     def inputs_at_positions(positions: torch.Tensor):
-        integrals, _, _ = build_integral_matrices(
+        integrals, _ = build_integral_matrices(
             case.system.integral_setup,
             case.system.h0_setup,
             positions,

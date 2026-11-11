@@ -455,7 +455,6 @@ class _PreparedSinglepoint:
     classical_energy: Tensor
     matrices: Any
     refocc: Tensor
-    overlap_norm: Tensor | None
     numbers: Tensor
     charge: Tensor
     spin: Tensor | None
@@ -548,7 +547,6 @@ def _singlepoint_result(
         hcore=matrices.hcore,
         dipole_integrals=matrices.dipole,
         quadrupole_integrals=matrices.quadrupole,
-        overlap_norm=prepared.overlap_norm,
         iterations=scf_output.iterations,
         converged=scf_output.converged,
         residual=scf_output.residual,
@@ -799,7 +797,7 @@ def _prepare_singlepoint(
             f"to '{config.ints.level}'."
         )
 
-    matrices, refocc, overlap_norm = build_integral_matrices(
+    matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
         positions,
@@ -848,7 +846,6 @@ def _prepare_singlepoint(
         classical_energy=classical_energy,
         matrices=matrices,
         refocc=refocc,
-        overlap_norm=overlap_norm,
         numbers=numbers,
         charge=charge,
         spin=spin_tensor,

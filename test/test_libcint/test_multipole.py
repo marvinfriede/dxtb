@@ -36,7 +36,6 @@ from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
     build_multipole_libcint,
-    build_overlap_libcint,
     setup_libcint,
 )
 from dxtb._src.integral.types.quadrupole import (
@@ -45,10 +44,8 @@ from dxtb._src.integral.types.quadrupole import (
     reduce_quadrupole_9_to_6,
     shift_quadrupole_origin,
 )
-from dxtb._src.integral.utils import normalize_integral_matrix
-from dxtb._src.integral.utils import snorm as overlap_norm
 from dxtb._src.param import ParamModule
-from dxtb._src.typing import DD, Tensor
+from dxtb._src.typing import Any, DD, Tensor
 
 if has_pyscf is True:
     from dxtb._src.exlibs.pyscf.mol import M
@@ -68,14 +65,22 @@ def snorm(overlap: Tensor) -> Tensor:
     return torch.pow(overlap.diagonal(dim1=-1, dim2=-2), -0.5)
 
 
+def pyscf_overlap_norm(mol: Any, ihelp: IndexHelper, dd: DD) -> Tensor:
+    """Compute AO normalization factors for PySCF's unnormalized basis."""
+    pyscf_ovlp = reorder_pyscf_ao(
+        numpy_to_tensor(mol.intor("int1e_ovlp"), **dd), ihelp
+    )
+    return snorm(pyscf_ovlp)
+
+
 def libcint_moment(
     numbers: Tensor,
     positions: Tensor,
     par: ParamModule,
     dd: DD,
     intstring: str,
-) -> tuple[Tensor, Tensor]:
-    """Multipole integral normalized with the overlap norm, and that norm."""
+) -> Tensor:
+    """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
     setup = LibcintIntegralSetup(
         numbers=numbers,
@@ -84,9 +89,7 @@ def libcint_moment(
         force_cpu=True,
     )
     call_data = setup_libcint(setup, positions)
-    norm = overlap_norm(build_overlap_libcint(call_data))
-    matrix = build_multipole_libcint(call_data, intstring)
-    return normalize_integral_matrix(matrix, norm), norm
+    return build_multipole_libcint(call_data, intstring)
 
 
 @pytest.mark.skipif(
@@ -125,33 +128,29 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
     bas = Basis(numbers, par, ihelp, **dd)
     libcint_basis, structure = bas.create_libcint(positions)
 
-    def _run(i: int, atol: float) -> None:
-        # Native j/jj integrals are already ket-centered. Keep all nine
-        # quadrupole components here for direct comparison with PySCF.
+    def _run(i: int) -> None:
+        # Native j/jj integrals are already ket-centered and normalized via
+        # Shell.normalized(). Keep all nine quadrupole components here for
+        # direct comparison with PySCF.
         dxtb_mpint = libcint.int1e(
             i * "j", libcint_basis, structure, packed=False
         )
 
-        # pyscf reference integral
+        # PySCF's M(...) disables primitive normalization, so normalize the
+        # PySCF reference integral before comparing.
         assert M is not False
         mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
+        norm = pyscf_overlap_norm(mol, ihelp, dd)
         pyscf_mpint = reorder_pyscf_ao(
             numpy_to_tensor(mol.intor(f"int1e_{i*'r'}_origj"), **dd), ihelp
         )
-
-        assert dxtb_mpint.shape == pyscf_mpint.shape
-        assert pytest.approx(pyscf_mpint.cpu(), abs=atol) == dxtb_mpint.cpu()
-
-        # normalize
-        norm = snorm(libcint.overlap(libcint_basis, structure))
-        dxtb_mpint = einsum("xij,i,j->xij", dxtb_mpint, norm, norm)
         pyscf_mpint = einsum("xij,i,j->xij", pyscf_mpint, norm, norm)
 
         assert dxtb_mpint.shape == pyscf_mpint.shape
         assert pytest.approx(pyscf_mpint.cpu(), abs=tol) == dxtb_mpint.cpu()
 
-    _run(1, atol=tol * 1e-2)  # dipole
-    _run(2, atol=tol)  # quadrupole
+    _run(1)  # dipole
+    _run(2)  # quadrupole
 
 
 @pytest.mark.skipif(
@@ -174,11 +173,12 @@ def test_shift_r0_rj(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     ##########################################################################
 
-    dipole, norm = libcint_moment(numbers, positions, par, dd, "j")
+    dipole = libcint_moment(numbers, positions, par, dd, "j")
 
     # Native libcint j is already centered at the ket atom.
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
+    norm = pyscf_overlap_norm(mol, ihelp, dd)
     pyscf_rj = einsum(
         "xij,i,j->xij",
         reorder_pyscf_ao(
@@ -213,13 +213,14 @@ def test_no_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     ##########################################################################
 
-    quadrupole, norm = libcint_moment(numbers, positions, par, dd, "r0r0")
+    quadrupole = libcint_moment(numbers, positions, par, dd, "r0r0")
 
     ##########################################################################
 
     # PySCF reference integral, centered at r0
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
+    norm = pyscf_overlap_norm(mol, ihelp, dd)
     pyscf_r0r0 = einsum(
         "xij,i,j->xij",
         reorder_pyscf_ao(numpy_to_tensor(mol.intor("int1e_rr"), **dd), ihelp),
@@ -253,11 +254,12 @@ def test_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     ##########################################################################
 
-    quadrupole, norm = libcint_moment(numbers, positions, par, dd, "jj")
+    quadrupole = libcint_moment(numbers, positions, par, dd, "jj")
 
     # Native libcint jj is already packed and centered at the ket atom.
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
+    norm = pyscf_overlap_norm(mol, ihelp, dd)
     pyscf_qpint = einsum(
         "xij,i,j->xij",
         reorder_pyscf_ao(
@@ -293,12 +295,13 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
 
     ##########################################################################
 
-    quadrupole, norm = libcint_moment(numbers, positions, par, dd, "jj")
+    quadrupole = libcint_moment(numbers, positions, par, dd, "jj")
     quadrupole = make_quadrupole_traceless(quadrupole)
 
     # PySCF reference integral, centered at rj
     assert M is not False
     mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
+    norm = pyscf_overlap_norm(mol, ihelp, dd)
     pyscf_qp = einsum(
         "xij,i,j->xij",
         reorder_pyscf_ao(

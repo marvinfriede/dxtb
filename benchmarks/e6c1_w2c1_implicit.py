@@ -132,7 +132,7 @@ def main() -> None:
     model_parameter = case.system.h0_setup.selfenergy
     model_parameter.requires_grad_(True)
     positions = case.positions.detach().clone().requires_grad_(True)
-    integrals, reference_occupation, _ = build_integral_matrices(
+    integrals, reference_occupation = build_integral_matrices(
         case.system.integral_setup,
         case.system.h0_setup,
         positions,

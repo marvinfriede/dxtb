@@ -27,8 +27,8 @@ Conventions (the same for both drivers):
   the ket as inside the xTB methods.
 - The dipole integral has 3 components, the quadrupole integral all 9
   Cartesian components (``xx, xy, xz, yx, ...``), not traceless.
-- With ``normalize=True`` (default), all matrices are normalized with the
-  norm of the overlap.
+- Every shell is normalized to unit self-overlap, so the overlap matrix has
+  unit diagonal.
 
 Example
 -------
@@ -73,7 +73,6 @@ from .driver.libcint.overlap import build_overlap_libcint
 from .driver.pytorch.multipole import build_dipole, build_quadrupole
 from .driver.pytorch.overlap import build_overlap
 from .evaluation import setup_integral_evaluation
-from .utils import normalize_integral_matrix, snorm
 
 __all__ = ["dipint", "hcore", "overlap", "quadint"]
 
@@ -86,7 +85,6 @@ def overlap(
     par: Param | ParamModule,
     *,
     driver: int | None = None,
-    normalize: bool = True,
 ) -> Tensor:
     """
     Overlap integral.
@@ -103,15 +101,13 @@ def overlap(
         Integral driver (:data:`~dxtb.labels.INTDRIVER_LIBCINT` or
         :data:`~dxtb.labels.INTDRIVER_PYTORCH`). Defaults to libcint if it is
         installed, PyTorch otherwise.
-    normalize : bool, optional
-        Normalize with the norm of the overlap. Defaults to ``True``.
 
     Returns
     -------
     Tensor
         Overlap matrix of shape ``(..., nao, nao)``.
     """
-    return _integral("overlap", numbers, positions, par, driver, normalize)
+    return _integral("overlap", numbers, positions, par, driver)
 
 
 def dipint(
@@ -120,7 +116,6 @@ def dipint(
     par: Param | ParamModule,
     *,
     driver: int | None = None,
-    normalize: bool = True,
 ) -> Tensor:
     """
     Dipole integral about the origin.
@@ -132,7 +127,7 @@ def dipint(
     Tensor
         Dipole integral of shape ``(..., 3, nao, nao)``.
     """
-    return _integral("dipole", numbers, positions, par, driver, normalize)
+    return _integral("dipole", numbers, positions, par, driver)
 
 
 def quadint(
@@ -141,7 +136,6 @@ def quadint(
     par: Param | ParamModule,
     *,
     driver: int | None = None,
-    normalize: bool = True,
 ) -> Tensor:
     """
     Quadrupole integral about the origin (all nine Cartesian components).
@@ -153,7 +147,7 @@ def quadint(
     Tensor
         Quadrupole integral of shape ``(..., 9, nao, nao)``.
     """
-    return _integral("quadrupole", numbers, positions, par, driver, normalize)
+    return _integral("quadrupole", numbers, positions, par, driver)
 
 
 def hcore(
@@ -263,7 +257,6 @@ def _integral(
     positions: Tensor,
     par: Param | ParamModule,
     driver: int | None,
-    normalize: bool,
 ) -> Tensor:
     """Build one integral for a Structure or each Structure of a batch."""
     if driver is None:
@@ -285,16 +278,14 @@ def _integral(
 
     if numbers.ndim == 1:
         n_active, p_active = _extract_active_atoms(numbers, positions)
-        return _single(kind, n_active, p_active, pm, driver, normalize)
+        return _single(kind, n_active, p_active, pm, driver)
 
     matrices = []
     for batch_idx in range(numbers.shape[0]):
         n_active, p_active = _extract_active_atoms(
             numbers[batch_idx], positions[batch_idx]
         )
-        matrices.append(
-            _single(kind, n_active, p_active, pm, driver, normalize)
-        )
+        matrices.append(_single(kind, n_active, p_active, pm, driver))
     return pack(matrices)
 
 
@@ -304,7 +295,6 @@ def _single(
     positions: Tensor,
     par: ParamModule,
     driver: int,
-    normalize: bool,
 ) -> Tensor:
     """Build one integral of a single Structure."""
     ihelp = IndexHelper.from_numbers(numbers, par)
@@ -323,20 +313,18 @@ def _single(
     if driver == labels.INTDRIVER_PYTORCH:
         assert eval_setup.pytorch is not None
         setup = eval_setup.pytorch
-        raw = build_overlap(setup, positions)
         if kind == "dipole":
             matrix = build_dipole(setup, positions)
         elif kind == "quadrupole":
             matrix = build_quadrupole(setup, positions)
         else:
-            matrix = raw
+            matrix = build_overlap(setup, positions)
     else:
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
 
         assert eval_setup.libcint is not None
         call = setup_libcint(eval_setup.libcint, positions)
-        raw = build_overlap_libcint(call)
         (item,) = call.inputs
         if kind == "dipole":
             matrix = libcint.int1e("r0", item.basis, item.structure)
@@ -345,8 +333,6 @@ def _single(
                 "r0r0", item.basis, item.structure, packed=False
             )
         else:
-            matrix = raw
+            matrix = build_overlap_libcint(call)
 
-    if normalize is True:
-        matrix = normalize_integral_matrix(matrix, snorm(raw))
     return matrix.to(device=positions.device)

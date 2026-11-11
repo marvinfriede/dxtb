@@ -26,7 +26,6 @@ import torch
 from dxtb import GFN1_XTB, GFN2_XTB, Param
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.utils import normalize_integral_matrix, snorm
 from dxtb.integrals import wrappers
 
 numbers = torch.tensor([14, 1, 1, 1, 1])
@@ -349,30 +348,16 @@ def test_hcore_noncontiguous_padding_and_grad() -> None:
 
 
 def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
-    """Verify normalization flag, origin-centered multipoles, and 9-component ordering."""
+    """Verify unit diagonal, origin-centered multipoles, and 9-comp order."""
     s_norm = wrappers.overlap(
         h2o_numbers,
         h2o_positions,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
-        normalize=True,
-    )
-    s_raw = wrappers.overlap(
-        h2o_numbers,
-        h2o_positions,
-        GFN2_XTB,
-        driver=labels.INTDRIVER_PYTORCH,
-        normalize=False,
     )
     torch.testing.assert_close(
         torch.diagonal(s_norm),
         torch.ones(s_norm.shape[-1], dtype=torch.float64),
-        atol=1.0e-13,
-        rtol=0.0,
-    )
-    torch.testing.assert_close(
-        s_norm,
-        normalize_integral_matrix(s_raw, snorm(s_raw)),
         atol=1.0e-13,
         rtol=0.0,
     )
@@ -382,20 +367,6 @@ def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
         h2o_positions,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
-        normalize=True,
-    )
-    d_raw = wrappers.dipint(
-        h2o_numbers,
-        h2o_positions,
-        GFN2_XTB,
-        driver=labels.INTDRIVER_PYTORCH,
-        normalize=False,
-    )
-    torch.testing.assert_close(
-        d_norm,
-        normalize_integral_matrix(d_raw, snorm(s_raw)),
-        atol=1.0e-13,
-        rtol=0.0,
     )
 
     q_norm = wrappers.quadint(
@@ -403,7 +374,6 @@ def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
         h2o_positions,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
-        normalize=True,
     )
     # 9-component Cartesian ordering (xx, xy, xz, yx, yy, yz, zx, zy, zz)
     assert q_norm.shape == (9, 6, 6)
@@ -451,13 +421,26 @@ def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
 @pytest.mark.parametrize(
     "fn", [wrappers.overlap, wrappers.dipint, wrappers.quadint, wrappers.hcore]
 )
-def test_pytorch_libcint_parity_and_first_derivative(fn) -> None:
-    """PyTorch and libcint wrapper values and position gradients agree."""
-    pos_pt = h2o_positions.clone().requires_grad_(True)
-    pos_lc = h2o_positions.clone().requires_grad_(True)
+@pytest.mark.parametrize(
+    ("mol_numbers", "mol_positions"),
+    [
+        pytest.param(h2o_numbers, h2o_positions, id="H2O-sp"),
+        pytest.param(numbers, positions, id="SiH4-spd"),
+    ],
+)
+def test_pytorch_libcint_parity_and_first_derivative(
+    fn, mol_numbers: torch.Tensor, mol_positions: torch.Tensor
+) -> None:
+    """PyTorch and libcint wrapper values and gradients agree across s/p/d."""
+    pos_pt = mol_positions.clone().requires_grad_(True)
+    pos_lc = mol_positions.clone().requires_grad_(True)
 
-    out_pt = fn(h2o_numbers, pos_pt, GFN2_XTB, driver=labels.INTDRIVER_PYTORCH)
-    out_lc = fn(h2o_numbers, pos_lc, GFN2_XTB, driver=labels.INTDRIVER_LIBCINT)
+    out_pt = fn(
+        mol_numbers, pos_pt, GFN2_XTB, driver=labels.INTDRIVER_PYTORCH
+    )
+    out_lc = fn(
+        mol_numbers, pos_lc, GFN2_XTB, driver=labels.INTDRIVER_LIBCINT
+    )
     torch.testing.assert_close(out_pt, out_lc, atol=1.0e-11, rtol=1.0e-11)
 
     weights = torch.linspace(
