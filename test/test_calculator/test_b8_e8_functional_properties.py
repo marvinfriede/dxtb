@@ -836,3 +836,77 @@ def test_batched_calculator_autograd_properties_after_cutover(
     torch.testing.assert_close(
         pol_batch[1], sys_b.polarizability(pos_b), atol=1e-9, rtol=1e-9
     )
+
+
+def test_batched_calculator_autograd_third_order_detached_rows() -> None:
+    """Batched Calculator hyperpolarizability and pol_deriv (use_functorch=False) match single-system references."""
+    nums_a = torch.tensor([3, 1], dtype=torch.int64)
+    nums_b = torch.tensor([1, 1], dtype=torch.int64)
+    pos_a = torch.tensor([[0.0, 0.0, -1.5], [0.0, 0.0, 1.5]], **_DD)
+    pos_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.44]], **_DD)
+    batch_nums = torch.stack([nums_a, nums_b], dim=0)
+    batch_pos = torch.stack([pos_a, pos_b], dim=0)
+
+    par = ParamModule(GFN1_XTB, **_DD)
+    opts = {
+        "method": labels.GFN1_XTB,
+        "int_driver": labels.INTDRIVER_PYTORCH,
+        "int_level": labels.INTLEVEL_DIPOLE,
+        "differentiation": "unrolled",
+        "strategy": scf_strategy("linear", "charge"),
+        "maxiter": 2,
+        "x_atol": 0.0,
+        "x_atol_max": 0.0,
+        "fermi_diff_order": 0,
+        "verbosity": 0,
+    }
+    calc_a = Calculator(nums_a, par, opts=opts, **_DD)
+    calc_b = Calculator(nums_b, par, opts=opts, **_DD)
+    calc_batch = Calculator(
+        batch_nums, par, opts=dict(opts, batch_mode=1), **_DD
+    )
+
+    ef0 = torch.zeros(3, **_DD, requires_grad=True)
+    ef_lanes = torch.zeros((2, 3), **_DD, requires_grad=True)
+
+    hyp_batch = calc_batch.hyperpolarizability(
+        batch_pos, field=ef0, use_functorch=False
+    )
+    hyp_lanes = calc_batch.hyperpolarizability(
+        batch_pos, field=ef_lanes, use_functorch=False
+    )
+    assert hyp_batch.grad_fn is None
+    assert hyp_lanes.grad_fn is None
+    torch.testing.assert_close(
+        hyp_batch[0],
+        calc_a.hyperpolarizability(pos_a, field=ef0, use_functorch=False),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+    torch.testing.assert_close(
+        hyp_batch[1],
+        calc_b.hyperpolarizability(pos_b, field=ef0, use_functorch=False),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+    torch.testing.assert_close(hyp_lanes, hyp_batch, atol=1e-11, rtol=1e-11)
+
+    pold_batch = calc_batch.pol_deriv(
+        batch_pos.clone().requires_grad_(True), field=ef0, use_functorch=False
+    )
+    pold_lanes = calc_batch.pol_deriv(
+        batch_pos.clone().requires_grad_(True),
+        field=ef_lanes,
+        use_functorch=False,
+    )
+    assert pold_batch.grad_fn is None
+    assert pold_lanes.grad_fn is None
+    torch.testing.assert_close(
+        pold_batch[0],
+        calc_a.pol_deriv(
+            pos_a.clone().requires_grad_(True), field=ef0, use_functorch=False
+        ),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+    torch.testing.assert_close(pold_lanes, pold_batch, atol=1e-11, rtol=1e-11)
