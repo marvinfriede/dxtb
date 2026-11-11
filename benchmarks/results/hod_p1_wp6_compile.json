@@ -1,0 +1,67 @@
+[
+  {
+    "mode": "eager_system_hyperpol",
+    "maxiter": 5,
+    "status": "ok",
+    "first_call_s": 2.9927,
+    "warm_call_s": 2.9155,
+    "rss_before_mb": 371.38,
+    "rss_after_first_mb": 401.38,
+    "rss_after_warm_mb": 402.38,
+    "compile_additional_rss_mb": 30.0,
+    "xxz": 239.1685460146298,
+    "first_vs_warm_max_abs": 0.0
+  },
+  {
+    "mode": "explain_singlepoint",
+    "maxiter": 5,
+    "status": "timeout_90s",
+    "note": "Compilation exceeded 90s wall-clock budget"
+  },
+  {
+    "mode": "compile_singlepoint_aot_eager",
+    "maxiter": 5,
+    "status": "timeout_90s",
+    "note": "Compilation exceeded 90s wall-clock budget"
+  },
+  {
+    "mode": "compile_singlepoint_inductor",
+    "maxiter": 5,
+    "status": "timeout_90s",
+    "note": "Compilation exceeded 90s wall-clock budget"
+  },
+  {
+    "mode": "compile_hyperpol_aot_eager",
+    "backend": "aot_eager",
+    "maxiter": 5,
+    "status": "ok",
+    "first_call_s": 51.0849,
+    "warm_call_s": 3.1479,
+    "rss_before_mb": 401.27,
+    "rss_after_first_mb": 512.54,
+    "rss_after_warm_mb": 512.54,
+    "compile_additional_rss_mb": 111.27,
+    "xxz": 239.1685460146298,
+    "max_abs_err_vs_eager": 0.0
+  },
+  {
+    "mode": "compile_hyperpol_inductor",
+    "backend": "inductor",
+    "maxiter": 5,
+    "status": "ok",
+    "first_call_s": 59.6423,
+    "warm_call_s": 3.1638,
+    "rss_before_mb": 401.27,
+    "rss_after_first_mb": 557.46,
+    "rss_after_warm_mb": 557.46,
+    "compile_additional_rss_mb": 156.2,
+    "xxz": 239.1685460146298,
+    "max_abs_err_vs_eager": 0.0
+  },
+  {
+    "mode": "compile_calc_autograd_hyperpol",
+    "maxiter": 5,
+    "status": "timeout_90s",
+    "note": "Compilation exceeded 90s wall-clock budget"
+  }
+]

@@ -27,6 +27,8 @@ import torch
 from tad_mctc.autograd import attach_gradient
 from tad_mctc.storch.linsolve import dense_solve
 from tad_mctc.tools.compile import is_compiling
+from torch.overrides import has_torch_function_unary
+from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.typing import Tensor
 
@@ -426,7 +428,12 @@ def _matrix_fermi_impl(
     if eager:
         doubling_steps = max(0, int(scale_power.max()) - 1)
     else:
-        doubling_steps = _FERMI_MAX_SCALE_POWER - 1
+        max_power = _max_scale_power_host(scale_power)
+        doubling_steps = (
+            _FERMI_MAX_SCALE_POWER - 1
+            if max_power is None
+            else max(0, min(_FERMI_MAX_SCALE_POWER, max_power) - 1)
+        )
 
     for index in range(doubling_steps):
         denominator = eye + tangent @ tangent
@@ -439,6 +446,42 @@ def _matrix_fermi_impl(
     density = torch.where(pair, density, torch.zeros_like(density))
     nan = torch.full_like(density, float("nan"))
     return torch.where(in_range[..., None, None], density, nan)
+
+
+def _max_scale_power_host(scale_power: Tensor) -> int | None:
+    """Return the maximum integer scaling power across all batch/vmap lanes.
+
+    ``scale_power`` is a non-differentiable ``torch.long`` tensor computed from
+    detached spectral bounds. Unwrapping ``torch.func`` wrappers on CPU bounds
+    the loop count to the active maximum across all lanes without executing
+    no-op iterations where ``index < scale_power`` is identically ``False``.
+    Returns ``None`` when compiling, tracing, or on non-CPU devices so those
+    paths keep their static loop bounds.
+    """
+    if (
+        scale_power.device.type != "cpu"
+        or is_compiling()
+        or torch.jit.is_tracing()
+        or _get_current_dispatch_mode() is not None
+        or has_torch_function_unary(scale_power)
+    ):
+        return None
+    with torch._C._DisableFuncTorch():
+        raw = scale_power
+        for _ in range(16):
+            if torch._C._functorch.is_batchedtensor(raw):
+                raw = torch._C._functorch.get_unwrapped(raw)
+                continue
+            if torch._C._functorch.is_gradtrackingtensor(raw):
+                raw = torch._C._functorch.get_unwrapped(raw)
+                continue
+            if torch._C._functorch.is_functionaltensor(raw):
+                raw = torch._C._functorch.get_unwrapped(raw)
+                continue
+            break
+        if type(raw) is not Tensor or raw.numel() == 0:
+            return None
+        return int(raw.amax().item())
 
 
 def _matrix_expm1(matrix: Tensor) -> Tensor:
@@ -502,7 +545,9 @@ def _matrix_expm1(matrix: Tensor) -> Tensor:
     result = scaled @ result
     result = 0.5 * (result + result.transpose(-2, -1))
 
-    for index in range(8):
+    max_power = _max_scale_power_host(scale_power)
+    steps = 8 if max_power is None else min(8, max(0, max_power))
+    for index in range(steps):
         doubled = result @ (result + 2.0 * identity)
         doubled = 0.5 * (doubled + doubled.transpose(-2, -1))
         update = index < scale_power

@@ -1,0 +1,731 @@
+{
+  "pytorch_unrolled_maxiter10": {
+    "1_setup_s": 0.092695,
+    "0_system_energy": {
+      "total_s": 0.20714,
+      "rss_before_mb": 366.37,
+      "rss_after_mb": 374.37,
+      "hwm_after_mb": 374.37,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.003407,
+        "3a2_potential_from_charges": 0.005799,
+        "3b_anderson_mixer": 0.003426,
+        "4_spectral_eighb": 0.002863,
+        "5a1_matrix_expm1": 0.007452,
+        "5a2_matrix_fermi_dense_solve": 0.071816,
+        "5a_matrix_fermi_density": 0.10728,
+        "5b_fermi_occupation_search": 0.020484,
+        "6_finalize_scf_energy": 0.021426
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 1.64,
+        "3a2_potential_from_charges": 2.8,
+        "3b_anderson_mixer": 1.65,
+        "4_spectral_eighb": 1.38,
+        "5a1_matrix_expm1": 3.6,
+        "5a2_matrix_fermi_dense_solve": 34.67,
+        "5a_matrix_fermi_density": 51.79,
+        "5b_fermi_occupation_search": 9.89,
+        "6_finalize_scf_energy": 10.34
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 0.8814247971426821
+    },
+    "1_system_dipole": {
+      "total_s": 1.548729,
+      "rss_before_mb": 374.37,
+      "rss_after_mb": 394.37,
+      "hwm_after_mb": 394.37,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.005687,
+        "3a2_potential_from_charges": 0.012467,
+        "3b_anderson_mixer": 0.007103,
+        "4_spectral_eighb": 0.004058,
+        "5a1_matrix_expm1": 0.02094,
+        "5a2_matrix_fermi_dense_solve": 0.253262,
+        "5a_matrix_fermi_density": 0.340668,
+        "5b_fermi_occupation_search": 0.734845,
+        "6_finalize_scf_energy": 0.136213
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.37,
+        "3a2_potential_from_charges": 0.81,
+        "3b_anderson_mixer": 0.46,
+        "4_spectral_eighb": 0.26,
+        "5a1_matrix_expm1": 1.35,
+        "5a2_matrix_fermi_dense_solve": 16.35,
+        "5a_matrix_fermi_density": 22.0,
+        "5b_fermi_occupation_search": 47.45,
+        "6_finalize_scf_energy": 8.8
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 2.4793855656235797
+    },
+    "2_system_polarizability": {
+      "total_s": 4.367794,
+      "rss_before_mb": 394.37,
+      "rss_after_mb": 413.37,
+      "hwm_after_mb": 413.37,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.026972,
+        "3a2_potential_from_charges": 0.042889,
+        "3b_anderson_mixer": 0.02451,
+        "4_spectral_eighb": 0.016316,
+        "5a1_matrix_expm1": 0.200413,
+        "5a2_matrix_fermi_dense_solve": 0.669304,
+        "5a_matrix_fermi_density": 1.348897,
+        "5b_fermi_occupation_search": 1.011748,
+        "6_finalize_scf_energy": 0.32383
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.62,
+        "3a2_potential_from_charges": 0.98,
+        "3b_anderson_mixer": 0.56,
+        "4_spectral_eighb": 0.37,
+        "5a1_matrix_expm1": 4.59,
+        "5a2_matrix_fermi_dense_solve": 15.32,
+        "5a_matrix_fermi_density": 30.88,
+        "5b_fermi_occupation_search": 23.16,
+        "6_finalize_scf_energy": 7.41
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 20.007082358313887
+    },
+    "3_system_hyperpol": {
+      "total_s": 11.939382,
+      "rss_before_mb": 413.37,
+      "rss_after_mb": 436.37,
+      "hwm_after_mb": 436.37,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.082547,
+        "3a2_potential_from_charges": 0.09184,
+        "3b_anderson_mixer": 0.072946,
+        "4_spectral_eighb": 0.054516,
+        "5a1_matrix_expm1": 0.774456,
+        "5a2_matrix_fermi_dense_solve": 1.99186,
+        "5a_matrix_fermi_density": 4.467351,
+        "5b_fermi_occupation_search": 1.313282,
+        "6_finalize_scf_energy": 0.832903
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.69,
+        "3a2_potential_from_charges": 0.77,
+        "3b_anderson_mixer": 0.61,
+        "4_spectral_eighb": 0.46,
+        "5a1_matrix_expm1": 6.49,
+        "5a2_matrix_fermi_dense_solve": 16.68,
+        "5a_matrix_fermi_density": 37.42,
+        "5b_fermi_occupation_search": 11.0,
+        "6_finalize_scf_energy": 6.98
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998633246052
+    },
+    "3_calc_hyperpol_functorch_energy": {
+      "total_s": 7.219541,
+      "rss_before_mb": 436.37,
+      "rss_after_mb": 574.55,
+      "hwm_after_mb": 574.55,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.007318,
+        "3a2_potential_from_charges": 0.014901,
+        "3b_anderson_mixer": 0.009274,
+        "4_spectral_eighb": 0.005202,
+        "5a1_matrix_expm1": 0.029776,
+        "5a2_matrix_fermi_dense_solve": 0.403657,
+        "5a_matrix_fermi_density": 0.522922,
+        "5b_fermi_occupation_search": 1.072375,
+        "6_finalize_scf_energy": 0.178178
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.1,
+        "3a2_potential_from_charges": 0.21,
+        "3b_anderson_mixer": 0.13,
+        "4_spectral_eighb": 0.07,
+        "5a1_matrix_expm1": 0.41,
+        "5a2_matrix_fermi_dense_solve": 5.59,
+        "5a_matrix_fermi_density": 7.24,
+        "5b_fermi_occupation_search": 14.85,
+        "6_finalize_scf_energy": 2.47
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632959349
+    },
+    "3_calc_hyperpol_autograd": {
+      "total_s": 21.755011,
+      "rss_before_mb": 574.55,
+      "rss_after_mb": 2018.91,
+      "hwm_after_mb": 2018.91,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.003759,
+        "3a2_potential_from_charges": 0.006889,
+        "3b_anderson_mixer": 0.004034,
+        "4_spectral_eighb": 0.002916,
+        "5a1_matrix_expm1": 0.009497,
+        "5a2_matrix_fermi_dense_solve": 0.077419,
+        "5a_matrix_fermi_density": 0.122555,
+        "5b_fermi_occupation_search": 0.020492,
+        "6_finalize_scf_energy": 0.024033
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.02,
+        "3a2_potential_from_charges": 0.03,
+        "3b_anderson_mixer": 0.02,
+        "4_spectral_eighb": 0.01,
+        "5a1_matrix_expm1": 0.04,
+        "5a2_matrix_fermi_dense_solve": 0.36,
+        "5a_matrix_fermi_density": 0.56,
+        "5b_fermi_occupation_search": 0.09,
+        "6_finalize_scf_energy": 0.11
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632959348
+    }
+  },
+  "libcint_unrolled_maxiter10": {
+    "1_setup_s": 0.527374,
+    "0_system_energy": {
+      "total_s": 0.206063,
+      "rss_before_mb": 2026.2,
+      "rss_after_mb": 2028.2,
+      "hwm_after_mb": 2028.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.00346,
+        "3a2_potential_from_charges": 0.00613,
+        "3b_anderson_mixer": 0.00342,
+        "4_spectral_eighb": 0.002638,
+        "5a1_matrix_expm1": 0.007832,
+        "5a2_matrix_fermi_dense_solve": 0.072977,
+        "5a_matrix_fermi_density": 0.110086,
+        "5b_fermi_occupation_search": 0.021312,
+        "6_finalize_scf_energy": 0.022275
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 1.68,
+        "3a2_potential_from_charges": 2.97,
+        "3b_anderson_mixer": 1.66,
+        "4_spectral_eighb": 1.28,
+        "5a1_matrix_expm1": 3.8,
+        "5a2_matrix_fermi_dense_solve": 35.41,
+        "5a_matrix_fermi_density": 53.42,
+        "5b_fermi_occupation_search": 10.34,
+        "6_finalize_scf_energy": 10.81
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 0.8814247971426821
+    },
+    "1_system_dipole": {
+      "total_s": 1.592613,
+      "rss_before_mb": 2028.2,
+      "rss_after_mb": 2028.2,
+      "hwm_after_mb": 2028.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.005972,
+        "3a2_potential_from_charges": 0.012575,
+        "3b_anderson_mixer": 0.006714,
+        "4_spectral_eighb": 0.004208,
+        "5a1_matrix_expm1": 0.019711,
+        "5a2_matrix_fermi_dense_solve": 0.228188,
+        "5a_matrix_fermi_density": 0.312365,
+        "5b_fermi_occupation_search": 0.815618,
+        "6_finalize_scf_energy": 0.125049
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.37,
+        "3a2_potential_from_charges": 0.79,
+        "3b_anderson_mixer": 0.42,
+        "4_spectral_eighb": 0.26,
+        "5a1_matrix_expm1": 1.24,
+        "5a2_matrix_fermi_dense_solve": 14.33,
+        "5a_matrix_fermi_density": 19.61,
+        "5b_fermi_occupation_search": 51.21,
+        "6_finalize_scf_energy": 7.85
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 2.479385565623579
+    },
+    "2_system_polarizability": {
+      "total_s": 4.59654,
+      "rss_before_mb": 2028.2,
+      "rss_after_mb": 2028.2,
+      "hwm_after_mb": 2028.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.027552,
+        "3a2_potential_from_charges": 0.042059,
+        "3b_anderson_mixer": 0.024927,
+        "4_spectral_eighb": 0.017341,
+        "5a1_matrix_expm1": 0.20686,
+        "5a2_matrix_fermi_dense_solve": 0.675488,
+        "5a_matrix_fermi_density": 1.397981,
+        "5b_fermi_occupation_search": 1.160368,
+        "6_finalize_scf_energy": 0.336002
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.6,
+        "3a2_potential_from_charges": 0.92,
+        "3b_anderson_mixer": 0.54,
+        "4_spectral_eighb": 0.38,
+        "5a1_matrix_expm1": 4.5,
+        "5a2_matrix_fermi_dense_solve": 14.7,
+        "5a_matrix_fermi_density": 30.41,
+        "5b_fermi_occupation_search": 25.24,
+        "6_finalize_scf_energy": 7.31
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 20.007082358313895
+    },
+    "3_system_hyperpol": {
+      "total_s": 12.616835,
+      "rss_before_mb": 2028.2,
+      "rss_after_mb": 2030.2,
+      "hwm_after_mb": 2030.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.086941,
+        "3a2_potential_from_charges": 0.098453,
+        "3b_anderson_mixer": 0.076836,
+        "4_spectral_eighb": 0.059461,
+        "5a1_matrix_expm1": 0.815069,
+        "5a2_matrix_fermi_dense_solve": 1.862189,
+        "5a_matrix_fermi_density": 4.462896,
+        "5b_fermi_occupation_search": 1.537562,
+        "6_finalize_scf_energy": 1.04209
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.69,
+        "3a2_potential_from_charges": 0.78,
+        "3b_anderson_mixer": 0.61,
+        "4_spectral_eighb": 0.47,
+        "5a1_matrix_expm1": 6.46,
+        "5a2_matrix_fermi_dense_solve": 14.76,
+        "5a_matrix_fermi_density": 35.37,
+        "5b_fermi_occupation_search": 12.19,
+        "6_finalize_scf_energy": 8.26
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998633246066
+    },
+    "3_calc_hyperpol_functorch_energy": {
+      "total_s": 7.876151,
+      "rss_before_mb": 2030.2,
+      "rss_after_mb": 2039.2,
+      "hwm_after_mb": 2039.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.008054,
+        "3a2_potential_from_charges": 0.016742,
+        "3b_anderson_mixer": 0.010318,
+        "4_spectral_eighb": 0.005744,
+        "5a1_matrix_expm1": 0.034133,
+        "5a2_matrix_fermi_dense_solve": 0.411923,
+        "5a_matrix_fermi_density": 0.545961,
+        "5b_fermi_occupation_search": 1.247487,
+        "6_finalize_scf_energy": 0.198737
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.1,
+        "3a2_potential_from_charges": 0.21,
+        "3b_anderson_mixer": 0.13,
+        "4_spectral_eighb": 0.07,
+        "5a1_matrix_expm1": 0.43,
+        "5a2_matrix_fermi_dense_solve": 5.23,
+        "5a_matrix_fermi_density": 6.93,
+        "5b_fermi_occupation_search": 15.84,
+        "6_finalize_scf_energy": 2.52
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632959364
+    },
+    "3_calc_hyperpol_autograd": {
+      "total_s": 23.39873,
+      "rss_before_mb": 2039.2,
+      "rss_after_mb": 2067.2,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.004051,
+        "3a2_potential_from_charges": 0.007536,
+        "3b_anderson_mixer": 0.004222,
+        "4_spectral_eighb": 0.003144,
+        "5a1_matrix_expm1": 0.010571,
+        "5a2_matrix_fermi_dense_solve": 0.081277,
+        "5a_matrix_fermi_density": 0.128049,
+        "5b_fermi_occupation_search": 0.0225,
+        "6_finalize_scf_energy": 0.025609
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.02,
+        "3a2_potential_from_charges": 0.03,
+        "3b_anderson_mixer": 0.02,
+        "4_spectral_eighb": 0.01,
+        "5a1_matrix_expm1": 0.05,
+        "5a2_matrix_fermi_dense_solve": 0.35,
+        "5a_matrix_fermi_density": 0.55,
+        "5b_fermi_occupation_search": 0.1,
+        "6_finalize_scf_energy": 0.11
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 12,
+        "3a2_potential_from_charges": 12,
+        "3b_anderson_mixer": 11,
+        "4_spectral_eighb": 12,
+        "5a1_matrix_expm1": 13,
+        "5a2_matrix_fermi_dense_solve": 390,
+        "5a_matrix_fermi_density": 13,
+        "5b_fermi_occupation_search": 12,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632959364
+    }
+  },
+  "pytorch_unrolled_maxiter20": {
+    "1_setup_s": 0.067549,
+    "0_system_energy": {
+      "total_s": 0.376335,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2053.44,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.006516,
+        "3a2_potential_from_charges": 0.011416,
+        "3b_anderson_mixer": 0.007977,
+        "4_spectral_eighb": 0.004802,
+        "5a1_matrix_expm1": 0.013998,
+        "5a2_matrix_fermi_dense_solve": 0.131603,
+        "5a_matrix_fermi_density": 0.19792,
+        "5b_fermi_occupation_search": 0.039703,
+        "6_finalize_scf_energy": 0.022701
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 1.73,
+        "3a2_potential_from_charges": 3.03,
+        "3b_anderson_mixer": 2.12,
+        "4_spectral_eighb": 1.28,
+        "5a1_matrix_expm1": 3.72,
+        "5a2_matrix_fermi_dense_solve": 34.97,
+        "5a_matrix_fermi_density": 52.59,
+        "5b_fermi_occupation_search": 10.55,
+        "6_finalize_scf_energy": 6.03
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 22,
+        "3a2_potential_from_charges": 22,
+        "3b_anderson_mixer": 21,
+        "4_spectral_eighb": 22,
+        "5a1_matrix_expm1": 23,
+        "5a2_matrix_fermi_dense_solve": 690,
+        "5a_matrix_fermi_density": 23,
+        "5b_fermi_occupation_search": 22,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 0.8814247971426821
+    },
+    "1_system_dipole": {
+      "total_s": 2.937644,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2053.44,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.011138,
+        "3a2_potential_from_charges": 0.02345,
+        "3b_anderson_mixer": 0.015604,
+        "4_spectral_eighb": 0.007656,
+        "5a1_matrix_expm1": 0.035406,
+        "5a2_matrix_fermi_dense_solve": 0.408678,
+        "5a_matrix_fermi_density": 0.560426,
+        "5b_fermi_occupation_search": 1.512871,
+        "6_finalize_scf_energy": 0.126016
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.38,
+        "3a2_potential_from_charges": 0.8,
+        "3b_anderson_mixer": 0.53,
+        "4_spectral_eighb": 0.26,
+        "5a1_matrix_expm1": 1.21,
+        "5a2_matrix_fermi_dense_solve": 13.91,
+        "5a_matrix_fermi_density": 19.08,
+        "5b_fermi_occupation_search": 51.5,
+        "6_finalize_scf_energy": 4.29
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 22,
+        "3a2_potential_from_charges": 22,
+        "3b_anderson_mixer": 21,
+        "4_spectral_eighb": 22,
+        "5a1_matrix_expm1": 23,
+        "5a2_matrix_fermi_dense_solve": 690,
+        "5a_matrix_fermi_density": 23,
+        "5b_fermi_occupation_search": 22,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 2.479385565623579
+    },
+    "2_system_polarizability": {
+      "total_s": 8.48083,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2053.44,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.050795,
+        "3a2_potential_from_charges": 0.079099,
+        "3b_anderson_mixer": 0.058414,
+        "4_spectral_eighb": 0.031786,
+        "5a1_matrix_expm1": 0.368361,
+        "5a2_matrix_fermi_dense_solve": 1.374179,
+        "5a_matrix_fermi_density": 2.626881,
+        "5b_fermi_occupation_search": 2.147899,
+        "6_finalize_scf_energy": 0.334319
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.6,
+        "3a2_potential_from_charges": 0.93,
+        "3b_anderson_mixer": 0.69,
+        "4_spectral_eighb": 0.37,
+        "5a1_matrix_expm1": 4.34,
+        "5a2_matrix_fermi_dense_solve": 16.2,
+        "5a_matrix_fermi_density": 30.97,
+        "5b_fermi_occupation_search": 25.33,
+        "6_finalize_scf_energy": 3.94
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 22,
+        "3a2_potential_from_charges": 22,
+        "3b_anderson_mixer": 21,
+        "4_spectral_eighb": 22,
+        "5a1_matrix_expm1": 23,
+        "5a2_matrix_fermi_dense_solve": 690,
+        "5a_matrix_fermi_density": 23,
+        "5b_fermi_occupation_search": 22,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 20.007082358313973
+    },
+    "3_system_hyperpol": {
+      "total_s": 22.379848,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2053.44,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.161912,
+        "3a2_potential_from_charges": 0.18621,
+        "3b_anderson_mixer": 0.178929,
+        "4_spectral_eighb": 0.109151,
+        "5a1_matrix_expm1": 1.447004,
+        "5a2_matrix_fermi_dense_solve": 2.942788,
+        "5a_matrix_fermi_density": 7.547786,
+        "5b_fermi_occupation_search": 2.842268,
+        "6_finalize_scf_energy": 0.885587
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.72,
+        "3a2_potential_from_charges": 0.83,
+        "3b_anderson_mixer": 0.8,
+        "4_spectral_eighb": 0.49,
+        "5a1_matrix_expm1": 6.47,
+        "5a2_matrix_fermi_dense_solve": 13.15,
+        "5a_matrix_fermi_density": 33.73,
+        "5b_fermi_occupation_search": 12.7,
+        "6_finalize_scf_energy": 3.96
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 22,
+        "3a2_potential_from_charges": 22,
+        "3b_anderson_mixer": 21,
+        "4_spectral_eighb": 22,
+        "5a1_matrix_expm1": 23,
+        "5a2_matrix_fermi_dense_solve": 690,
+        "5a_matrix_fermi_density": 23,
+        "5b_fermi_occupation_search": 22,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632963616
+    },
+    "3_calc_hyperpol_functorch_energy": {
+      "total_s": 8.524498,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2053.44,
+      "hwm_after_mb": 2067.2,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.008838,
+        "3a2_potential_from_charges": 0.018249,
+        "3b_anderson_mixer": 0.011728,
+        "4_spectral_eighb": 0.006346,
+        "5a1_matrix_expm1": 0.0369,
+        "5a2_matrix_fermi_dense_solve": 0.623539,
+        "5a_matrix_fermi_density": 0.768526,
+        "5b_fermi_occupation_search": 1.354006,
+        "6_finalize_scf_energy": 0.196754
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.1,
+        "3a2_potential_from_charges": 0.21,
+        "3b_anderson_mixer": 0.14,
+        "4_spectral_eighb": 0.07,
+        "5a1_matrix_expm1": 0.43,
+        "5a2_matrix_fermi_dense_solve": 7.31,
+        "5a_matrix_fermi_density": 9.02,
+        "5b_fermi_occupation_search": 15.88,
+        "6_finalize_scf_energy": 2.31
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 13,
+        "3a2_potential_from_charges": 13,
+        "3b_anderson_mixer": 12,
+        "4_spectral_eighb": 13,
+        "5a1_matrix_expm1": 14,
+        "5a2_matrix_fermi_dense_solve": 420,
+        "5a_matrix_fermi_density": 14,
+        "5b_fermi_occupation_search": 13,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632963616
+    },
+    "3_calc_hyperpol_autograd": {
+      "total_s": 25.039818,
+      "rss_before_mb": 2053.44,
+      "rss_after_mb": 2179.44,
+      "hwm_after_mb": 2179.44,
+      "stage_timings_s": {
+        "3a1_potential_to_hamiltonian": 0.004339,
+        "3a2_potential_from_charges": 0.008339,
+        "3b_anderson_mixer": 0.004765,
+        "4_spectral_eighb": 0.003347,
+        "5a1_matrix_expm1": 0.011329,
+        "5a2_matrix_fermi_dense_solve": 0.086433,
+        "5a_matrix_fermi_density": 0.136433,
+        "5b_fermi_occupation_search": 0.024277,
+        "6_finalize_scf_energy": 0.025336
+      },
+      "stage_shares_pct": {
+        "3a1_potential_to_hamiltonian": 0.02,
+        "3a2_potential_from_charges": 0.03,
+        "3b_anderson_mixer": 0.02,
+        "4_spectral_eighb": 0.01,
+        "5a1_matrix_expm1": 0.05,
+        "5a2_matrix_fermi_dense_solve": 0.35,
+        "5a_matrix_fermi_density": 0.54,
+        "5b_fermi_occupation_search": 0.1,
+        "6_finalize_scf_energy": 0.1
+      },
+      "stage_counts": {
+        "3a1_potential_to_hamiltonian": 13,
+        "3a2_potential_from_charges": 13,
+        "3b_anderson_mixer": 12,
+        "4_spectral_eighb": 13,
+        "5a1_matrix_expm1": 14,
+        "5a2_matrix_fermi_dense_solve": 420,
+        "5a_matrix_fermi_density": 14,
+        "5b_fermi_occupation_search": 13,
+        "6_finalize_scf_energy": 1
+      },
+      "out_norm": 642.8998632963612
+    }
+  }
+}
