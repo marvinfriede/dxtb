@@ -304,6 +304,7 @@ def gather_hscale(
     par: ParamModule,
     dd: dict,
 ) -> Tensor:
+    """Obtain the shell-pair off-site scaling factor for the Hamiltonian."""
     angular = ihelp.unique_angular
     labels = {0: "s", 1: "p", 2: "d", 3: "f", 4: "g"}
     angular_labels = [labels.get(int(ang), PAD) for ang in angular]
@@ -311,18 +312,26 @@ def gather_hscale(
 
     if method == "gfn1":
         kpol = par.get("hamiltonian.xtb.kpol")
+
+        # precompute kii values outside loop (slightly faster)
         kii: list[Tensor] = []
         for i, label in enumerate(angular_labels):
+            # For non-valence shells, use kpol
             if valence[i] == 0:
                 kii.append(kpol)
             elif f"{label}{label}" in shell:
+                # Use view(-1)[0] to keep the value as a tensor.
                 kii.append(shell[f"{label}{label}"].param.view(-1)[0])
             else:
                 kii.append(torch.tensor(1.0, **dd))
+
         result = torch.empty((len(angular), len(angular)), **dd)
         for i in range(len(angular)):
             for j in range(i + 1):
+                # only if both belong to the valence shell,
+                # we will read from the parametrization
                 if valence[i] == 1 and valence[j] == 1:
+                    # check both "sp" and "ps"
                     key1 = f"{angular_labels[i]}{angular_labels[j]}"
                     key2 = f"{angular_labels[j]}{angular_labels[i]}"
                     if key1 in shell:
@@ -333,21 +342,36 @@ def gather_hscale(
                         value = (kii[i] + kii[j]) / 2.0
                 else:
                     value = (kii[i] + kii[j]) / 2.0
+
+                # Assign symmetrically.
                 result[i, j] = value
                 result[j, i] = value
         return result
 
     if method == "gfn2":
         wexp = par.get("hamiltonian.xtb.wexp")
+
+        # ----------------------
+        # Eq.37: Y(z^A_l, z^B_m)
+        # ----------------------
         zeta = par.get_elem_param(unique, "slater", pad_val=PAD)
         zi, zj = zeta.unsqueeze(-1), zeta.unsqueeze(-2)
         zmat = storch.safe_pow(
             2 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
         )
+
         result = torch.ones((len(angular), len(angular)), **dd)
         for i, label_i in enumerate(angular_labels):
             for j, label_j in enumerate(angular_labels):
                 key1, key2 = f"{label_i}{label_j}", f"{label_j}{label_i}"
+
+                # Since the parametrization only contains "sp" (not "ps"),
+                # we need to check both.
+                # For some reason, the parametrization does not contain "sp"
+                # or "ps", although the value is calculated from "ss" and "pp",
+                # and hence, always the same. The paper, however, specifically
+                # mentions this.
+                # tblite: xtb/gfn2.f90::new_gfn2_h0spec
                 if key1 in shell:
                     value = shell[key1].param.view(-1)[0]
                 elif key2 in shell:
@@ -366,17 +390,22 @@ def gather_hscale(
                         + shell[key_jj].param.view(-1)[0]
                     )
                 else:
-                    value = torch.tensor(1.0, **dd)
+                    value = torch.tensor(1.0, **dd)  # dummy for padding
                 result[i, j] = value * zmat[i, j]
         return result
 
     if method == "gfn0":
         wexp = par.get("hamiltonian.xtb.wexp")
+
+        # --------------------------------------------
+        # Eq.10 (GFN0) / Eq.37 (GFN2): Y(z^A_l, z^B_m)
+        # --------------------------------------------
         zeta = par.get_elem_param(unique, "slater", pad_val=1)
         zi, zj = zeta.unsqueeze(-1), zeta.unsqueeze(-2)
         zweight = storch.safe_pow(
             2.0 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
         )
+
         result = torch.ones((len(angular), len(angular)), **dd)
         for i, label_i in enumerate(angular_labels):
             for j, label_j in enumerate(angular_labels):
@@ -425,32 +454,40 @@ def setup_h0(
     unique = torch.unique(numbers)
     if par.is_none("hamiltonian"):
         raise RuntimeError("Parametrization does not specify Hamiltonian.")
-    if name == "gfn2":
-        valence = torch.ones(
-            len(ihelp.unique_angular), device=numbers.device, dtype=torch.bool
-        )
-    else:
-        valence = par.get_elem_valence(unique, pad_val=PAD)
-    hscale = gather_hscale(name, unique, ihelp, valence, par, dd)
+    # Initialize Hamiltonian parameters
+
+    # atom-resolved parameters
+    rad = ATOMIC_RADII(**dd)[unique]
     en = par.get_elem_param(unique, "en", pad_val=PAD)
     enscale = (
         torch.tensor(0.0, **dd)
         if par.is_none("hamiltonian.xtb.enscale")
         else par.get("hamiltonian.xtb.enscale")
     )
+
+    # shell-resolved element parameters
+    if name == "gfn2":
+        valence = torch.ones(
+            len(ihelp.unique_angular), device=numbers.device, dtype=torch.bool
+        )
+    else:
+        valence = par.get_elem_valence(unique, pad_val=PAD)
     element_pad = 0 if name == "gfn0" else PAD
     kcn = par.get_elem_param(unique, "kcn", pad_val=element_pad)
-    selfenergy = (
-        par.get_elem_param(unique, "levels", pad_val=element_pad) * EV2AU
-    )
+    selfenergy = par.get_elem_param(unique, "levels", pad_val=element_pad)
     shpoly = par.get_elem_param(unique, "shpoly", pad_val=PAD)
     refocc = par.get_elem_param(unique, "refocc", pad_val=PAD)
+
+    # shell-pair-resolved pair parameters
+    hscale = gather_hscale(name, unique, ihelp, valence, par, dd)
     # Tensor.tolist() requires storage and fails for the GradTrackingTensor
     # produced when Model.setup runs inside torch.func.grad (notably on older
     # supported PyTorch versions). Atomic numbers are structural integer
     # inputs, so extract their scalar values individually for the pair lookup.
     kpair = par.get_pair_param([int(number) for number in unique])
-    rad = ATOMIC_RADII(**dd)[unique]
+
+    # unit conversion (dxtb keeps H0 in Hartree; parameter tables are in eV)
+    selfenergy = selfenergy * EV2AU
     kcn = kcn * EV2AU
 
     cn_function = cn
@@ -481,6 +518,10 @@ def setup_h0(
             rad=par.get_elem_param(elements, "eeq_rad", pad_val=0).to(**dd),
         )
         extras = {
+            # The standalone reference keeps H0 in eV and converts its
+            # electronic energy afterwards. dxtb keeps H0 in Hartree, so
+            # convert every energy-like H0 table with tad-mctc's canonical
+            # conversion here.
             "kq": par.get_elem_param(unique, "kq", pad_val=0) * EV2AU,
             "kqat": par.get_elem_param(unique, "kqat", pad_val=0) * EV2AU,
             "h0rad": par.get_elem_param(unique, "h0rad", pad_val=1),
@@ -585,6 +626,8 @@ def _build_hcore(
         cn = cn_model(structure)
         charges = setup.eeq_model.solve(structure, cn)
         assert isinstance(charges, Tensor)
+
+        # Environment-shifted self-energies (CN + linear/quadratic EEQ charge)
         eps0 = ihelp.spread_ushell_to_shell(setup.selfenergy)
         kcn = ihelp.spread_ushell_to_shell(setup.kcn)
         kq = ihelp.spread_ushell_to_shell(setup.kq)
@@ -597,6 +640,9 @@ def _build_hcore(
         atom_pairs = real_pairs(setup.numbers, mask_diagonal=True)
         shell_pairs = ihelp.spread_atom_to_shell(atom_pairs, dim=(-2, -1))
         zero = torch.tensor(0.0, device=positions.device, dtype=positions.dtype)
+
+        # Exact GFN0 distance-dependent shell polynomial. The stored shpoly
+        # values already contain the reference function's factor of 0.01.
         distances = storch.cdist(positions, positions, p=2)
         h0rad = ihelp.spread_uspecies_to_atom(setup.h0rad)
         reduced = storch.safe_divide(
@@ -610,6 +656,8 @@ def _build_hcore(
         distance_scale = (1.0 + shpoly.unsqueeze(-1) * root_reduced) * (
             1.0 + shpoly.unsqueeze(-2) * root_reduced
         )
+
+        # Shell-dependent quadratic and quartic electronegativity polynomial.
         angular = ihelp.unique_angular.clamp(min=0)
         shell_en = setup.enshell[angular]
         enscale = 0.005 * (shell_en.unsqueeze(-1) + shell_en.unsqueeze(-2))
@@ -617,9 +665,11 @@ def _build_hcore(
         en = ihelp.spread_uspecies_to_shell(setup.en)
         den2 = (en.unsqueeze(-1) - en.unsqueeze(-2)) ** 2
         enpoly = 1.0 + enscale * den2 + setup.enscale4 * enscale * den2**2
+
         kpair = ihelp.spread_uspecies_to_shell(setup.kpair, dim=(-2, -1))
         hscale = ihelp.spread_ushell_to_shell(setup.hscale, dim=(-2, -1))
         scale = hscale * kpair * enpoly
+
         valence = ihelp.spread_ushell_to_shell(setup.valence)
         both_valence = valence.unsqueeze(-1) & valence.unsqueeze(-2)
         one_nonvalence = valence.unsqueeze(-1) ^ valence.unsqueeze(-2)
@@ -628,6 +678,7 @@ def _build_hcore(
             scale,
             torch.where(one_nonvalence, scale * setup.kdiff, zero),
         )
+
         average = 0.5 * (selfenergy.unsqueeze(-1) + selfenergy.unsqueeze(-2))
         shell_h0 = torch.where(
             shell_pairs, distance_scale * scale * average, zero
@@ -635,10 +686,24 @@ def _build_hcore(
         h0 = ihelp.spread_shell_to_orbital(shell_h0, dim=(-2, -1))
         if overlap is not None:
             h0 = h0 * overlap
+
+        # The reference sets only true orbital diagonals on-site. In
+        # particular, the duplicate hydrogen s shells have no on-site block.
         diagonal = ihelp.spread_shell_to_orbital(selfenergy)
         h0 = symmetrize(h0, force=True) + torch.diag_embed(diagonal)
         return h0, setup.refocc
 
+    # masks
+    atom_mask = real_pairs(setup.numbers, mask_diagonal=True)
+    shell_mask = real_pairs(
+        ihelp.spread_atom_to_shell(setup.numbers), mask_diagonal=False
+    )
+    shell_diagonal = ihelp.spread_atom_to_shell(atom_mask, dim=(-2, -1))
+    zero = torch.tensor(0.0, device=positions.device, dtype=positions.dtype)
+
+    # ----------------
+    # Eq.29: H_(mu,mu)
+    # ----------------
     if setup.cn is None:
         cn = torch.zeros_like(
             setup.numbers, device=positions.device, dtype=positions.dtype
@@ -652,26 +717,33 @@ def _build_hcore(
         )
     else:
         cn = setup.cn(setup.numbers, positions)
-    atom_mask = real_pairs(setup.numbers, mask_diagonal=True)
-    shell_mask = real_pairs(
-        ihelp.spread_atom_to_shell(setup.numbers), mask_diagonal=False
-    )
-    shell_diagonal = ihelp.spread_atom_to_shell(atom_mask, dim=(-2, -1))
-    zero = torch.tensor(0.0, device=positions.device, dtype=positions.dtype)
+
     kcn = ihelp.spread_ushell_to_shell(setup.kcn)
+
+    # formula differs from paper to be consistent with GFN2 -> "kcn" adapted
     selfenergy = ihelp.spread_ushell_to_shell(
         setup.selfenergy
     ) - kcn * ihelp.spread_atom_to_shell(cn)
+
+    # ----------------------
+    # Eq.24: PI(R_AB, l, l')
+    # ----------------------
     distances = storch.cdist(positions, positions, p=2)
     rad = ihelp.spread_uspecies_to_atom(setup.rad)
+
     rr = storch.safe_divide(distances, rad.unsqueeze(-1) + rad.unsqueeze(-2))
     rr_shell = ihelp.spread_atom_to_shell(
         torch.where(atom_mask, storch.safe_sqrt(rr), zero), (-2, -1)
     )
+
     shpoly = ihelp.spread_ushell_to_shell(setup.shpoly)
     var_pi = (1.0 + shpoly.unsqueeze(-1) * rr_shell) * (
         1.0 + shpoly.unsqueeze(-2) * rr_shell
     )
+
+    # --------------------
+    # Eq.28: X(EN_A, EN_B)
+    # --------------------
     en = ihelp.spread_uspecies_to_shell(setup.en)
     var_x = torch.where(
         shell_diagonal,
@@ -679,22 +751,40 @@ def _build_hcore(
         + setup.enscale * torch.pow(en.unsqueeze(-1) - en.unsqueeze(-2), 2.0),
         zero,
     )
+
+    # --------------------
+    # Eq.23: K_{AB}^{l,l'}
+    # --------------------
     kpair = ihelp.spread_uspecies_to_shell(setup.kpair, dim=(-2, -1))
     hscale = ihelp.spread_ushell_to_shell(setup.hscale, dim=(-2, -1))
     valence = ihelp.spread_ushell_to_shell(setup.valence)
+
     var_k = torch.where(
         valence.unsqueeze(-1) * valence.unsqueeze(-2),
         hscale * kpair * var_x,
         hscale,
     )
+
+    # ------------
+    # Eq.23: H_EHT
+    # ------------
     var_h = torch.where(
         shell_mask,
         0.5 * (selfenergy.unsqueeze(-1) + selfenergy.unsqueeze(-2)),
         zero,
     )
+
     hcore = ihelp.spread_shell_to_orbital(
-        torch.where(shell_diagonal, var_pi * var_k * var_h, var_h), dim=(-2, -1)
+        torch.where(
+            shell_diagonal,
+            var_pi * var_k * var_h,  # scale only off-diagonals
+            var_h,
+        ),
+        dim=(-2, -1),
     )
+
     if overlap is not None:
         hcore = hcore * overlap
+
+    # force symmetry to avoid problems through numerical errors
     return symmetrize(hcore, force=True), setup.refocc

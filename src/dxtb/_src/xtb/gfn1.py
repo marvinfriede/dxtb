@@ -74,6 +74,14 @@ class GFN1Hamiltonian(BaseHamiltonian):
             self.cn = cn_d3
 
     def _get_hscale(self, par: ParamModule) -> Tensor:
+        """
+        Obtain the off-site scaling factor for the Hamiltonian.
+
+        Returns
+        -------
+        Tensor
+            Off-site scaling factor for the Hamiltonian.
+        """
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
         return gather_hscale(

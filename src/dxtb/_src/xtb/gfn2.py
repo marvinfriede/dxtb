@@ -74,6 +74,19 @@ class GFN2Hamiltonian(BaseHamiltonian):
             self.cn = cn_gfn2
 
     def _get_hscale(self, par: ParamModule) -> Tensor:
+        """
+        Obtain the off-site scaling factor for the Hamiltonian.
+
+        Parameters
+        ----------
+        par : ParamModule
+            Parametrization of an extended tight-binding (xTB) Method.
+
+        Returns
+        -------
+        Tensor
+            Off-site scaling factor for the Hamiltonian.
+        """
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
         return gather_hscale(

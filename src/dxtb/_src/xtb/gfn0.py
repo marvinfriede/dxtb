@@ -153,6 +153,7 @@ class GFN0Hamiltonian(BaseHamiltonian):
 
     @override
     def _get_hscale(self, par: ParamModule) -> Tensor:
+        """Build shell-pair kScale multiplied by Slater-exponent weighting."""
         if par.is_none("hamiltonian"):
             raise RuntimeError("No Hamiltonian specified.")
         return gather_hscale(
